@@ -1,5 +1,7 @@
 [package]
-
 name = "tikv"
 version = "0.0.1"
 keywords = ["KV", "distributed-systems", "raft"]
+
+[dependencies]
+log = "0.3.4"
