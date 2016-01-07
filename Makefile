@@ -12,4 +12,4 @@ test:
 	cargo test
 
 format:
-	rustfmt --write-mode overwrite src/*.rs
+	rustfmt --write-mode overwrite src/lib.rs src/bin/*.rs
