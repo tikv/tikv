@@ -31,8 +31,8 @@ enum MessageType {
 	MsgPropose		= 2;
 	MsgApply 		= 3;
 	MsgApplyResponse	= 4;
-	MsgVote 		= 5;
-	MsgVoteResponse		= 6;
+	MsgRequestVote 		= 5;
+	MsgRequestVoteResponse	= 6;
 	MsgSnapshot		= 7;
 	MsgHeartbeat 		= 8;
 	MsgHeartbeatResponse   	= 9;
