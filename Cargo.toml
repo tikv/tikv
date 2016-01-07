@@ -3,5 +3,11 @@ name = "tikv"
 version = "0.0.1"
 keywords = ["KV", "distributed-systems", "raft"]
 
+[lib]
+name = "tikv"
+
+[[bin]]
+name = "server"
+
 [dependencies]
-log = "0.3.4"
+log = "0.3"
