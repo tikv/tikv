@@ -1,0 +1,79 @@
+syntax = "proto2";
+package raftpb;
+
+
+enum EntryType {
+	EntryNormal     = 0;
+	EntryConfChange = 1;
+}
+
+message Entry {
+	optional EntryType  Type  = 1; 
+	optional uint64     Term  = 2; 
+	optional uint64     Index = 3; 
+	optional bytes      Data  = 4;
+}
+
+message SnapshotMetadata {
+	optional ConfState conf_state = 1; 
+	optional uint64    index      = 2; 
+	optional uint64    term       = 3; 
+}
+
+message Snapshot {
+	optional bytes            data     = 1;
+	optional SnapshotMetadata metadata = 2;
+}
+
+enum MessageType {
+	MsgHup			= 0;
+	MsgBeat			= 1;
+	MsgPropose		= 2;
+	MsgApply 		= 3;
+	MsgApplyResponse	= 4;
+	MsgVote 		= 5;
+	MsgVoteResponse		= 6;
+	MsgSnapshot		= 7;
+	MsgHeartbeat 		= 8;
+	MsgHeartbeatResponse   	= 9;
+	MsgUnreachable 		= 10;
+	MsgSnapStatus		= 11;
+	MsgCheckQuorum		= 12;
+}
+
+message Message {
+	optional MessageType type        = 1;  
+	optional uint64      to          = 2;  
+	optional uint64      from        = 3;  
+	optional uint64      term        = 4;  
+	optional uint64      logTerm     = 5;  
+	optional uint64      index       = 6;  
+	repeated Entry       entries     = 7;  
+	optional uint64      commit      = 8;  
+	optional Snapshot    snapshot    = 9;  
+	optional bool        reject      = 10; 
+	optional uint64      rejectHint  = 11; 
+}
+
+message HardState {
+	optional uint64 term   = 1; 
+	optional uint64 vote   = 2; 
+	optional uint64 commit = 3; 
+}
+
+message ConfState {
+	repeated uint64 nodes = 1;
+}
+
+enum ConfChangeType {
+	ConfChangeAddNode    = 0;
+	ConfChangeRemoveNode = 1;
+	ConfChangeUpdateNode = 2;
+}
+
+message ConfChange {
+	optional uint64          ID      = 1; 
+	optional ConfChangeType  Type    = 2; 
+	optional uint64          NodeID  = 3; 
+	optional bytes           Context = 4;
+}
