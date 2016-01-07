@@ -1,5 +1,6 @@
 extern crate tikv;
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate log;
 
 use tikv::util::{self, LogLevelFilter};
 
