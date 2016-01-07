@@ -1,8 +1,8 @@
 use raft::raftpb::*;
-use std;
+use std::{result, error};
 use std::{io, fmt, ops};
 
-pub type Result<T> = std::result::Result<T, std::error::Error>;
+pub type Result<T> = result::Result<T, error::Error>;
 
 pub struct RaftState {
     hard_state: HardState,
