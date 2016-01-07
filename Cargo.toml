@@ -11,3 +11,6 @@ name = "server"
 
 [dependencies]
 log = "0.3"
+
+[dependencies.protobuf]
+git = "https://github.com/stepancheg/rust-protobuf.git"

@@ -3,6 +3,7 @@ name = "tikv"
 version = "0.0.1"
 dependencies = [
  "log 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protobuf 1.0.14 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]
 
 [[package]]
@@ -17,4 +18,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "libc 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "protobuf"
+version = "1.0.14"
+source = "git+https://github.com/stepancheg/rust-protobuf.git#27493292cecdc0fa4523a6110f2724f442962199"
 
