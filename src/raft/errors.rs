@@ -65,6 +65,6 @@ mod tests {
         let e = ProtobufError::WireError("a error".to_string());
         let err: Error = From::from(e);
 
-        assert_eq!(error::Error::cause(&err).is_none(), true);
+        assert!(error::Error::cause(&err).is_none());
     }
 }
