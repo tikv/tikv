@@ -7,7 +7,6 @@ use protobuf::ProtobufError;
 pub enum Error {
     Io(io::Error),
     NotFound,
-    Protobuf(ProtobufError),
     Other(String),
 }
 
@@ -27,7 +26,6 @@ impl error::Error for Error {
             // not sure that cause should be included in message
             &Error::Io(ref e) => e.description(),
             &Error::NotFound => "not found",
-            &Error::Protobuf(ref e) => e.description(),
             &Error::Other(ref e) => &e,
         }
     }
@@ -35,7 +33,6 @@ impl error::Error for Error {
     fn cause(&self) -> Option<&error::Error> {
         match self {
             &Error::Io(ref e) => Some(e),
-            &Error::Protobuf(ref e) => Some(e),
             _ => None,
         }
     }
@@ -49,8 +46,25 @@ impl From<io::Error> for Error {
 
 impl From<ProtobufError> for Error {
     fn from(err: ProtobufError) -> Error {
-        Error::Protobuf(err)
+        Error::Other(error::Error::description(&err).to_string())
     }
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use std::convert::From;
+    use std::error;
+    use protobuf::ProtobufError;
+
+    use super::Error;
+
+    #[test]
+    fn test_error() {
+        let e = ProtobufError::WireError("a error".to_string());
+        let err: Error = From::from(e);
+
+        assert_eq!(error::Error::cause(&err).is_none(), true);
+    }
+}
