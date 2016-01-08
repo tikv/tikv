@@ -42,15 +42,15 @@ impl error::Error for Error {
 }
 
 impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error{
+    fn from(err: io::Error) -> Error {
         Error::Io(err)
     }
- }
+}
 
 impl From<ProtobufError> for Error {
-    fn from(err: ProtobufError) -> Error{
+    fn from(err: ProtobufError) -> Error {
         Error::Protobuf(err)
     }
- } 
+}
 
 pub type Result<T> = result::Result<T, Error>;
