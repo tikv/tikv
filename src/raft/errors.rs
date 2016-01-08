@@ -1,5 +1,7 @@
 use std::{result, io, fmt};
 
+
+#[derive(Debug, Clone)]
 pub enum Error {
     Io(io::Error),
     NotFound,
