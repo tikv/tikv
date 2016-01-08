@@ -13,7 +13,7 @@ const MSG_VERSION_V1: u16 = 1;
 // Encodes message with message ID and protobuf body.
 // Message contains header + payload.
 // Header is 16 bytes, format:
-//  | 0xdaf4 (2 bytes)| 0x01 (version 2 bytes)| msg_len (4 bytes| msg_id (8 bytes)|, all use bigendian.
+//  | 0xdaf4 (2 bytes)| 0x01 (version 2 bytes)| msg_len (4 bytes) | msg_id (8 bytes)|, all use bigendian.
 // Payload is a protobuf message.
 pub fn encode_message<T: io::Write, M: Message>(w: &mut T, msg_id: u64, msg: &M) -> Result<()> {
     // Create a 16 bytes header and write it.
@@ -23,11 +23,13 @@ pub fn encode_message<T: io::Write, M: Message>(w: &mut T, msg_id: u64, msg: &M)
     BigEndian::write_u64(&mut buf[8..16], msg_id);
 
     try!(msg.write_to_vec(&mut buf));
+
     // Set payload length here
     let payload_len = (buf.len() - MSG_HEADER_LEN) as u32;
     BigEndian::write_u32(&mut buf[4..8], payload_len);
 
     try!(w.write(&buf));
+
     Ok(())
 }
 
@@ -40,13 +42,11 @@ pub fn decode_message<T: io::Read, M: Message>(r: &mut T, m: &mut M) -> Result<u
 
     let magic = BigEndian::read_u16(&header[0..2]);
     if MSG_MAGIC != magic {
-        // TODO: use our own error.
         return Err(Error::Other(format!("invalid magic {}, not {}", magic, MSG_MAGIC)));
     }
 
     let version = BigEndian::read_u16(&header[2..4]);
     if MSG_VERSION_V1 != version {
-        // TODO: use our own error.
         return Err(Error::Other(format!("unsupported version {}, we need {} now",
                                         version,
                                         MSG_VERSION_V1)));
