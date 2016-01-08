@@ -1,8 +1,7 @@
 use std::io;
-use std::vec::Vec;
 
 use byteorder::{ByteOrder, BigEndian};
-use protobuf::{Message, MessageStatic};
+use protobuf::Message;
 
 use raft::errors::{Result, Error};
 
