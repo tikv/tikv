@@ -23,33 +23,39 @@ pub struct MemStorage {
     entries: Vec<Entry>,
 }
 
-// pub fn new() -> MemStorage {
-// MemStorage { entries: Vec::new() }
-// }
-//
+impl MemStorage {
+    pub fn new() -> MemStorage {
+	MemStorage { 
+	    entries: vec![Entry::new()], 
+	    hard_state:HardState::new(),
+	    snapshot:Snapshot::new(),
+	}
+    }
+}
+
 
 impl Storage for MemStorage {
     fn initial_state() -> Result<RaftState> {
-        None
+	unimplemented!()
     }
 
     fn entries(low: u64, high: u64, max_size: u64) -> Vec<Entry> {
-        None
+	unimplemented!()
     }
 
     fn term(idx: u64) -> Result<u64> {
-        None
+	unimplemented!()
     }
 
     fn first_index() -> Result<u64> {
-        None
+	unimplemented!()
     }
 
     fn last_index() -> Result<u64> {
-        None
+	unimplemented!()
     }
 
     fn snapshot() -> Result<Snapshot> {
-        None
+	unimplemented!()
     }
 }
