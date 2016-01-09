@@ -40,7 +40,7 @@ impl MemStorage {
     }
 
     fn inner_last_index(&self) -> u64 {
-        return self.entries[0].Index.unwrap() + self.entries.len() as u64 - 1;
+        return self.entries[0].get_Index() + self.entries.len() as u64 - 1;
     }
 
     fn limit_size(entries: &[Entry], max: u64) -> Result<&[Entry]> {
@@ -72,33 +72,39 @@ impl Storage for MemStorage {
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<&[Entry]> {
-        let offset = self.entries[0].Index as u64;
+        let offset = self.entries[0].get_Index();
         if low <= offset {
-            Err(Error::Store(StorageError::Compacted))
+            return Err(Error::Store(StorageError::Compacted));
         }
 
         if high > self.inner_last_index() + 1 {
             panic!("index out of bound")
         }
         // only contains dummy entries.
-        if self.ents.len() == 1 {
-            Err(Error::Store(StorageError::Unavailable))
+        if self.entries.len() == 1 {
+            return Err(Error::Store(StorageError::Unavailable));
         }
 
-        let ents = self.ents[low - offset..high - offset];
-        Ok(self.limitSize(ents, max_size))
+        let lo = (low - offset) as usize;
+        let hi = (high - offset) as usize;
+        let ents: &[Entry] = &self.entries[lo..hi];
+        return MemStorage::limit_size(ents, max_size);
     }
 
     fn term(&self, idx: u64) -> Result<u64> {
-        unimplemented!()
+        let offset = self.entries[0].get_Index();
+        if idx < offset {
+            return Err(Error::Store(StorageError::Compacted));
+        }
+        Ok(self.entries[(idx - offset) as usize].get_Term())
     }
 
     fn first_index(&self) -> Result<u64> {
-        unimplemented!()
+        Ok(self.entries[0].get_Index() + 1)
     }
 
     fn last_index(&self) -> Result<u64> {
-        unimplemented!()
+        Ok(self.inner_last_index())
     }
 
     fn snapshot(&self) -> Result<Snapshot> {
