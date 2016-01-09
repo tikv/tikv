@@ -12,15 +12,49 @@ pub enum Error {
     Other(String),
 }
 
+
+#[derive(Debug)]
 pub enum StorageError {
     Compacted,
     Unavailable,
 }
 
+impl StorageError {
+    pub fn string(&self) -> &str {
+        match self {
+            &StorageError::Compacted => "log compacted",
+            &StorageError::Unavailable => "log unavailable",
+        }
+    }
+}
+
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(self.description)
+        match self {
+            &Error::Io(ref e) => fmt::Display::fmt(e, f),
+            &Error::Store(ref e) => fmt::Display::fmt(e, f),
+            &Error::Protobuf(ref e) => fmt::Display::fmt(e, f), 
+            &Error::Other(ref e) => fmt::Display::fmt(e, f),
+            &Error::NotFound => fmt::Display::fmt("not found", f),
+        }
+    }
+}
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(self.string(), f)
+    }
+}
+
+
+impl error::Error for StorageError {
+    fn description(&self) -> &str {
+        self.string()
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        None
     }
 }
 
