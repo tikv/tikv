@@ -7,17 +7,20 @@ use protobuf::ProtobufError;
 pub enum Error {
     Io(io::Error),
     NotFound,
+    Store(StorageError),
     Protobuf(ProtobufError),
     Other(String),
 }
 
+pub enum StorageError {
+    Compacted,
+    Unavailable,
+}
+
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Error::NotFound => write!(f, "not found"),
-            Error::Io(ref error) => fmt::Display::fmt(error, f),
-            _ => fmt::Display::fmt(self, f),
-        }
+        Ok(self.description)
     }
 }
 
@@ -26,9 +29,10 @@ impl error::Error for Error {
         match self {
             // not sure that cause should be included in message
             &Error::Io(ref e) => e.description(),
-            &Error::NotFound => "not found",
+            &Error::Store(ref e) => e.description(),
             &Error::Protobuf(ref e) => e.description(),
             &Error::Other(ref e) => &e,
+            &Error::NotFound => "not found",
         }
     }
 
