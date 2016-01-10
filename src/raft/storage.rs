@@ -16,7 +16,7 @@ pub trait Storage {
     fn term(&self, idx: u64) -> Result<u64>;
     fn first_index(&self) -> Result<u64>;
     fn last_index(&self) -> Result<u64>;
-    fn snapshot(&self) -> Result<Snapshot>;
+    fn snapshot(&self) -> Result<&Snapshot>;
 }
 
 pub struct MemStorage {
@@ -59,6 +59,15 @@ impl MemStorage {
         }
         let ents = &entries[..limit as usize];
         Ok(ents)
+    }
+
+    fn apply_snapshot(&mut self, snapshot: Snapshot) ->Result<()> {
+	let mut e = Entry::new();
+	e.set_Term(snapshot.get_metadata().get_term());
+	e.set_Index(snapshot.get_metadata().get_index());
+	self.entries = vec![e];
+	self.snapshot  = snapshot;
+	Ok(())
     }
 }
 
@@ -107,7 +116,7 @@ impl Storage for MemStorage {
         Ok(self.inner_last_index())
     }
 
-    fn snapshot(&self) -> Result<Snapshot> {
-        unimplemented!()
+    fn snapshot(&self) -> Result<&Snapshot> {
+	Ok(&self.snapshot)
     }
 }
