@@ -1,5 +1,6 @@
 use std::{result, io, fmt};
 use std::error;
+use std::boxed::Box;
 
 use protobuf::ProtobufError;
 
@@ -7,7 +8,7 @@ use protobuf::ProtobufError;
 pub enum Error {
     Io(io::Error),
     NotFound,
-    Other(String),
+    Other(Box<error::Error + Send + Sync>),
 }
 
 impl fmt::Display for Error {
@@ -15,7 +16,7 @@ impl fmt::Display for Error {
         match *self {
             Error::NotFound => write!(f, "not found"),
             Error::Io(ref error) => fmt::Display::fmt(error, f),
-            _ => fmt::Display::fmt(self, f),
+            Error::Other(ref error) => fmt::Display::fmt(error, f),
         }
     }
 }
@@ -26,16 +27,24 @@ impl error::Error for Error {
             // not sure that cause should be included in message
             &Error::Io(ref e) => e.description(),
             &Error::NotFound => "not found",
-            &Error::Other(ref e) => &e,
+            &Error::Other(ref e) => e.description(),
         }
     }
 
     fn cause(&self) -> Option<&error::Error> {
         match self {
             &Error::Io(ref e) => Some(e),
+            &Error::Other(ref e) => e.cause(),
             _ => None,
         }
     }
+}
+
+// Other can convert e to Error::Other.
+pub fn Other<E>(e: E) -> Error
+    where E: Into<Box<error::Error + Send + Sync>>
+{
+    Error::Other(e.into())
 }
 
 impl From<io::Error> for Error {
@@ -46,7 +55,7 @@ impl From<io::Error> for Error {
 
 impl From<ProtobufError> for Error {
     fn from(err: ProtobufError) -> Error {
-        Error::Other(error::Error::description(&err).to_string())
+        Other(err)
     }
 }
 
@@ -54,17 +63,18 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use std::convert::From;
     use std::error;
     use protobuf::ProtobufError;
 
-    use super::Error;
+    use super::*;
 
     #[test]
     fn test_error() {
         let e = ProtobufError::WireError("a error".to_string());
-        let err: Error = From::from(e);
-
+        let err: Error = Other(e);
         assert!(error::Error::cause(&err).is_none());
+
+        let err1 = Other("hello world");
+        assert!(error::Error::cause(&err1).is_none());
     }
 }
