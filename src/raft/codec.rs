@@ -3,7 +3,7 @@ use std::io;
 use byteorder::{ByteOrder, BigEndian};
 use protobuf::Message;
 
-use raft::errors::{Result, Error};
+use raft::errors::{Result, Error, Other};
 
 const MSG_HEADER_LEN: usize = 16;
 const MSG_MAGIC: u16 = 0xdaf4;
@@ -41,14 +41,14 @@ pub fn decode_message<T: io::Read, M: Message>(r: &mut T, m: &mut M) -> Result<u
 
     let magic = BigEndian::read_u16(&header[0..2]);
     if MSG_MAGIC != magic {
-        return Err(Error::Other(format!("invalid magic {}, not {}", magic, MSG_MAGIC)));
+        return Err(Other(format!("invalid magic {}, not {}", magic, MSG_MAGIC)));
     }
 
     let version = BigEndian::read_u16(&header[2..4]);
     if MSG_VERSION_V1 != version {
-        return Err(Error::Other(format!("unsupported version {}, we need {} now",
-                                        version,
-                                        MSG_VERSION_V1)));
+        return Err(Other(format!("unsupported version {}, we need {} now",
+                                 version,
+                                 MSG_VERSION_V1)));
     }
 
     let payload_len = BigEndian::read_u32(&header[4..8]) as usize;
