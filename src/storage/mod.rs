@@ -5,6 +5,7 @@ use self::engine::Engine;
 pub use self::engine::Dsn;
 
 mod engine;
+mod mvcc;
 
 pub struct Storage {
     engine: Box<Engine>,
@@ -31,26 +32,30 @@ impl Storage {
 #[derive(Debug)]
 pub enum Error {
     Engine(engine::Error),
+    Mvcc(String),
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Error::Engine(ref e) => Display::fmt(e, f),
+            Error::Mvcc(ref s) => Display::fmt(s, f),
         }
     }
 }
 
 impl error::Error for Error {
     fn description(&self) -> &str {
-        match self {
-            &Error::Engine(ref e) => e.description(),
+        match *self {
+            Error::Engine(ref e) => e.description(),
+            Error::Mvcc(..) => "mvcc",
         }
     }
 
     fn cause(&self) -> Option<&error::Error> {
         match self {
             &Error::Engine(ref e) => Some(e),
+            _ => None,
         }
     }
 }
