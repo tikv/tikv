@@ -8,16 +8,53 @@ use protobuf::ProtobufError;
 pub enum Error {
     Io(io::Error),
     NotFound,
+    Store(StorageError),
     Other(Box<error::Error + Send + Sync>),
+}
+
+
+#[derive(Debug)]
+pub enum StorageError {
+    Compacted,
+    Unavailable,
+    SnapshotOutOfDate,
+}
+
+impl StorageError {
+    pub fn string(&self) -> &str {
+        match self {
+            &StorageError::Compacted => "log compacted",
+            &StorageError::Unavailable => "log unavailable",
+            &StorageError::SnapshotOutOfDate => "log unavailable",
+        }
+    }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Error::NotFound => write!(f, "not found"),
-            Error::Io(ref error) => fmt::Display::fmt(error, f),
-            Error::Other(ref error) => fmt::Display::fmt(error, f),
+        match self {
+            &Error::Io(ref e) => fmt::Display::fmt(e, f),
+            &Error::Store(ref e) => fmt::Display::fmt(e, f),
+            &Error::Other(ref e) => fmt::Display::fmt(e, f),
+            &Error::NotFound => fmt::Display::fmt("not found", f),
         }
+    }
+}
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(self.string(), f)
+    }
+}
+
+
+impl error::Error for StorageError {
+    fn description(&self) -> &str {
+        self.string()
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        None
     }
 }
 
@@ -26,8 +63,9 @@ impl error::Error for Error {
         match self {
             // not sure that cause should be included in message
             &Error::Io(ref e) => e.description(),
-            &Error::NotFound => "not found",
+            &Error::Store(ref e) => e.description(),
             &Error::Other(ref e) => e.description(),
+            &Error::NotFound => "not found",
         }
     }
 
