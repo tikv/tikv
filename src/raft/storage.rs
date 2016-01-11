@@ -1,9 +1,9 @@
 use raft::raftpb::*;
-use std::{result, error};
-use std::{io, fmt, ops};
 
-pub type Result<T> = result::Result<T, error::Error>;
+use raft::errors::Result;
 
+
+#[derive(Debug, Clone)]
 pub struct RaftState {
     hard_state: HardState,
     conf_state: ConfState,
@@ -15,5 +15,5 @@ pub trait Storage {
     fn term(idx: u64) -> Result<u64>;
     fn first_index() -> Result<u64>;
     fn last_index() -> Result<u64>;
-    fn snapshot() -> Box<Snapshot>;
+    fn snapshot() -> Result<Snapshot>;
 }
