@@ -1,10 +1,9 @@
 
 #![feature(vec_push_all)]
 
-use raft::raftpb::{HardState, ConfState, Entry, Snapshot};
 use protobuf;
-use raft::errors::Result;
-use raft::errors::{Error, StorageError};
+use raft::raftpb::{HardState, ConfState, Entry, Snapshot};
+use raft::errors::{Result, Error, StorageError};
 
 
 
@@ -111,8 +110,8 @@ impl MemStorage {
                    self.last_index().unwrap())
         }
 
-        let i = compact_index - offset;
-        let mut old: Vec<Entry> = self.entries[i as usize + 1..].to_vec();
+        let i = (compact_index - offset) as usize;
+        let mut old: Vec<Entry> = self.entries[i + 1..].to_vec();
         self.entries = vec![Entry::new()];
         let index = self.entries[i as usize].get_Index();
         let term = self.entries[i as usize].get_Term();
