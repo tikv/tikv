@@ -61,13 +61,39 @@ impl MemStorage {
         Ok(ents)
     }
 
-    fn apply_snapshot(&mut self, snapshot: Snapshot) ->Result<()> {
-	let mut e = Entry::new();
-	e.set_Term(snapshot.get_metadata().get_term());
-	e.set_Index(snapshot.get_metadata().get_index());
-	self.entries = vec![e];
-	self.snapshot  = snapshot;
-	Ok(())
+
+    fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
+        let mut e = Entry::new();
+        e.set_Term(snapshot.get_metadata().get_term());
+        e.set_Index(snapshot.get_metadata().get_index());
+        self.entries = vec![e];
+        self.snapshot = snapshot;
+        Ok(())
+    }
+
+    fn create_snapshot(&mut self,
+                       idx: u64,
+                       cs: Option<ConfState>,
+                       data: Vec<u8>)
+                       -> Result<&Snapshot> {
+        if idx <= self.snapshot.get_metadata().get_index() {
+            return Err(Error::Store(StorageError::SnapshotOutOfDate));
+        }
+
+        let offset = self.entries[0].get_Index();
+        if idx > self.last_index().unwrap() {
+            panic!("snapshot {} is out of bound lastindex({})",
+                   idx,
+                   self.last_index().unwrap())
+        }
+        self.snapshot.mut_metadata().set_index(idx);
+        self.snapshot.mut_metadata().set_term(self.entries[(idx - offset) as usize].get_Term());
+        match cs {
+            Some(cs) => self.snapshot.mut_metadata().set_conf_state(cs),
+            None => {}
+        }
+        self.snapshot.set_data(data);
+        Ok(&self.snapshot)
     }
 }
 
@@ -117,6 +143,6 @@ impl Storage for MemStorage {
     }
 
     fn snapshot(&self) -> Result<&Snapshot> {
-	Ok(&self.snapshot)
+        Ok(&self.snapshot)
     }
 }
