@@ -1,4 +1,5 @@
 #![crate_type = "lib"]
+#![feature(vec_push_all)]
 
 #[macro_use]
 extern crate log;
