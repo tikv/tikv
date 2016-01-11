@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use super::{Engine, Modify};
+use super::{Engine, Modify, Result};
 
 #[derive(Debug)]
 pub struct BTreeEngine {
@@ -14,18 +14,18 @@ impl BTreeEngine {
 }
 
 impl Engine for BTreeEngine {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         trace!("BTreeEngine: get {:?}", key);
         Ok(self.map.get(key).map(|v| v.clone()))
     }
 
-    fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>, String> {
+    fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         trace!("BtreeEngine: seek {:?}", key);
         // TODO (disksing)
         panic!("BTreeEngine.seek not implemented.");
     }
 
-    fn write(&mut self, batch: Vec<Modify>) -> Result<(), String> {
+    fn write(&mut self, batch: Vec<Modify>) -> Result<()> {
         for rev in batch {
             match rev {
                 Modify::Delete(k) => {
