@@ -1,7 +1,11 @@
+
+#![feature(vec_push_all)]
+
 use raft::raftpb::{HardState, ConfState, Entry, Snapshot};
 use protobuf;
 use raft::errors::Result;
 use raft::errors::{Error, StorageError};
+
 
 
 #[derive(Debug, Clone)]
@@ -94,6 +98,63 @@ impl MemStorage {
         }
         self.snapshot.set_data(data);
         Ok(&self.snapshot)
+    }
+
+    fn compact(&mut self, compact_index: u64) -> Result<()> {
+        let offset = self.entries[0].get_Index();
+        if compact_index <= offset {
+            return Err(Error::Store(StorageError::Compacted));
+        }
+        if compact_index > self.last_index().unwrap() {
+            panic!("compact {} is out of bound lastindex({})",
+                   compact_index,
+                   self.last_index().unwrap())
+        }
+
+        let i = compact_index - offset;
+        let mut old: Vec<Entry> = self.entries[i as usize + 1..].to_vec();
+        self.entries = vec![Entry::new()];
+        let index = self.entries[i as usize].get_Index();
+        let term = self.entries[i as usize].get_Term();
+        self.entries[0].set_Index(index);
+        self.entries[0].set_Term(term);
+        self.entries.append(&mut old);
+        Ok(())
+    }
+
+    fn append(&mut self, ents: &[Entry]) -> Result<()> {
+        if ents.len() == 0 {
+            return Ok(());
+        }
+        let first: u64 = self.entries[0].get_Index() + 1;
+        let last: u64 = ents[0].get_Index() + ents.len() as u64 - 1;
+
+        if last < first {
+            return Ok(());
+        }
+        // truncate compacted entries
+        let mut te: &[Entry] = ents;
+        if first > ents[0].get_Index() {
+            let start = (first - ents[0].get_Index()) as usize;
+            te = &ents[start..ents.len()];
+        }
+
+
+        let offset = te[0].get_Index() - self.entries[0].get_Index();
+        if self.entries.len() as u64 > offset {
+            let mut new_entries: Vec<Entry> = vec![Entry::new()];
+            new_entries.push_all(&self.entries[..offset as usize]);
+            new_entries.push_all(te);
+            self.entries = new_entries;
+        } else if self.entries.len() as u64 == offset {
+            self.entries.push_all(te);
+        } else {
+            panic!("missing log entry [last: {}, append at: {}]",
+                   self.last_index().unwrap(),
+                   te[0].get_Index())
+        }
+
+        Ok(())
     }
 }
 
