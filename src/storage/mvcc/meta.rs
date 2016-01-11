@@ -1,7 +1,7 @@
 use std::cmp::{Ord, Ordering};
 use std::io::{Cursor, Write};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use storage::{Error, Result};
+use super::{Error, Result, MvccErrorKind};
 
 #[derive(Debug, Copy, Clone)]
 enum MetaItem {
@@ -9,20 +9,23 @@ enum MetaItem {
     Deleted(u64),
 }
 
+const FLAG_WITH_VALUE: u8 = b'v';
+const FLAG_DELETED: u8 = b'd';
+
 impl MetaItem {
     fn new(data: &[u8]) -> Result<MetaItem> {
-        match data.split_first() {
-            Some((flag, rest)) => {
-                let mut rdr = Cursor::new(rest);
-                // TODO(disksing): wrap returned error
-                let ver = rdr.read_u64::<BigEndian>().unwrap();
-                match *flag {
-                    b'v' => Ok(MetaItem::WithValue(ver)),
-                    b'd' => Ok(MetaItem::Deleted(ver)),
-                    _ => Err(Error::Mvcc("bad format meta".to_string())),
-                }
-            }
-            None => Err(Error::Mvcc("bad format meta".to_string())),
+        let (flag, rest) = match data.split_first() {
+            Some(x) => x,
+            None => return MvccErrorKind::MetaDataLength.as_result(),
+        };
+        let ver = match Cursor::new(rest).read_u64::<BigEndian>() {
+            Ok(x) => x,
+            Err(..) => return MvccErrorKind::MetaDataVersion.as_result(),
+        };
+        match *flag {
+            FLAG_WITH_VALUE => Ok(MetaItem::WithValue(ver)),
+            FLAG_DELETED => Ok(MetaItem::Deleted(ver)),
+            _ => MvccErrorKind::MetaDataFlag.as_result(),
         }
     }
 
@@ -30,11 +33,11 @@ impl MetaItem {
         let mut v = vec![];
         match *self {
             MetaItem::WithValue(ver) => {
-                v.write(b"v").unwrap();
+                v.push(FLAG_WITH_VALUE);
                 v.write_u64::<BigEndian>(ver).unwrap();
             }
             MetaItem::Deleted(ver) => {
-                v.write(b"d").unwrap();
+                v.push(FLAG_DELETED);
                 v.write_u64::<BigEndian>(ver).unwrap();
             }
         }
@@ -82,13 +85,16 @@ impl Meta {
     }
 
     #[allow(dead_code)]
-    pub fn parse(data: &[u8]) -> Result<Meta> {
+    pub fn parse(data: Option<&[u8]>) -> Result<Meta> {
         let mut v = vec![];
-        for chunk in data.chunks(9) {
-            let item = try!(MetaItem::new(chunk));
-            v.push(item);
+        if let Some(bytes) = data {
+            for chunk in bytes.chunks(9) {
+                let item = try!(MetaItem::new(chunk));
+                v.push(item);
+            }
+            v.sort();
         }
-        v.sort();
+
         Ok(Meta { items: v })
     }
 
@@ -103,15 +109,13 @@ impl Meta {
 
     #[allow(dead_code)]
     pub fn latest(&self, ver: u64) -> Option<u64> {
-        let mut index = self.items.binary_search(&MetaItem::WithValue(ver));
-        match index {
-            Err(0) => {
-                return None;
-            }
-            Err(i) => index = Ok(i - 1),
-            Ok(..) => {}
-        }
-        match self.items[index.unwrap()] {
+        let index = self.items.binary_search(&MetaItem::WithValue(ver));
+        let i = match index {
+            Err(0) => return None,
+            Err(x) => x - 1,
+            Ok(x) => x,
+        };
+        match self.items[i] {
             MetaItem::WithValue(ver) => Some(ver),
             MetaItem::Deleted(_) => None,
         }
@@ -181,7 +185,7 @@ mod tests {
         meta.delete(20);
 
         let bytes = meta.into_bytes();
-        let meta2 = Meta::parse(&bytes).unwrap();
+        let meta2 = Meta::parse(Some(&bytes)).unwrap();
         assert_eq!(bytes, meta2.into_bytes());
     }
 }
