@@ -3,6 +3,7 @@ use std::result::Result;
 use std::boxed::Box;
 use std::error::Error;
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::io::{Read, Write};
 
 use mio::{self, Token, EventLoop, EventSet, PollOpt, TryWrite, TryRead};
@@ -16,19 +17,19 @@ use util::codec::{self, encode_msg, decode_msg};
 const SERVER_TOKEN: Token = Token(0);
 
 pub trait Dispatcher {
-    fn Dispatch<M: protobuf::Message>(&self, m: M) -> Result<M, Box<Error + Send + Sync>>;
+    fn Dispatch<M: protobuf::Message>(&mut self, m: M) -> Result<M, Box<Error + Send + Sync>>;
 }
 
 struct Client<D: Dispatcher> {
     sock: TcpStream,
     interest: EventSet,
-    d: Rc<D>,
+    d: Rc<RefCell<D>>,
 
     res: MutByteBuf,
 }
 
 impl<D: Dispatcher> Client<D> {
-    fn new(sock: TcpStream, d: Rc<D>) -> Client<D> {
+    fn new(sock: TcpStream, d: Rc<RefCell<D>>) -> Client<D> {
         Client {
             sock: sock,
             interest: EventSet::readable(),
@@ -48,7 +49,7 @@ impl<D: Dispatcher> Client<D> {
         let mut m = Message::new();
         let msg_id = decode_msg(&mut self.sock, &mut m).unwrap();
 
-        let res = self.d.Dispatch(m).unwrap();
+        let res = self.d.borrow_mut().Dispatch(m).unwrap();
         self.res.clear();
         encode_msg(&mut self.res, msg_id, &res).unwrap();
 
@@ -63,7 +64,7 @@ struct Server<D: Dispatcher> {
     listener: TcpListener,
     clients: HashMap<Token, Client<D>>,
     token_counter: usize,
-    d: Rc<D>,
+    d: Rc<RefCell<D>>,
 }
 
 impl<D: Dispatcher> mio::Handler for Server<D> {
@@ -140,7 +141,7 @@ fn run<D: Dispatcher>(addr: &str, d: D) {
         listener: listener,
         token_counter: 1,
         clients: HashMap::new(),
-        d: Rc::new(d),
+        d: Rc::new(RefCell::new(d)),
     };
 
     event_loop.run(&mut server).unwrap();
