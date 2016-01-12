@@ -14,6 +14,7 @@ log = "0.3"
 rocksdb = "0.3"
 byteorder = "0.4"
 rand = "0.3"
+mio = "0.5"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"
