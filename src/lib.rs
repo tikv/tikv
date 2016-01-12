@@ -7,7 +7,7 @@ extern crate protobuf;
 extern crate bytes;
 extern crate byteorder;
 
-pub use storage::{Storage, Descriptor};
+pub use storage::{Storage, Dsn};
 
 pub mod util;
 pub mod raft;

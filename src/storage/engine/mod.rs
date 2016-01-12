@@ -27,15 +27,15 @@ pub trait Engine {
 }
 
 #[derive(Debug)]
-pub enum Descriptor<'a> {
+pub enum Dsn<'a> {
     Memory,
     RocksDBPath(&'a str),
 }
 
-pub fn new_engine(desc: Descriptor) -> Result<Box<Engine>> {
+pub fn new_engine(desc: Dsn) -> Result<Box<Engine>> {
     match desc {
-        Descriptor::Memory => Ok(Box::new(EngineBtree::new())),
-        Descriptor::RocksDBPath(path) => {
+        Dsn::Memory => Ok(Box::new(EngineBtree::new())),
+        Dsn::RocksDBPath(path) => {
             EngineRocksdb::new(path).map(|engine| -> Box<Engine> { Box::new(engine) })
         }
     }
@@ -72,18 +72,18 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use super::{Descriptor, Engine, Modify};
+    use super::{Dsn, Engine, Modify};
 
     #[test]
     fn memory() {
-        let mut e = super::new_engine(Descriptor::Memory).unwrap();
+        let mut e = super::new_engine(Dsn::Memory).unwrap();
         get_put(&mut *e);
         batch(&mut *e);
     }
 
     #[test]
     fn rocksdb() {
-        let mut e = super::new_engine(Descriptor::RocksDBPath("/tmp/rocks")).unwrap();
+        let mut e = super::new_engine(Dsn::RocksDBPath("/tmp/rocks")).unwrap();
         get_put(&mut *e);
         batch(&mut *e);
     }
