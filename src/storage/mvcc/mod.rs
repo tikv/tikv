@@ -1,11 +1,45 @@
 use std::{error, fmt, result};
-use storage::engine;
-
-pub use self::meta::Meta;
-pub use self::codec::{encode_key, decode_key};
+use storage::engine::{self, Engine, Modify};
+use self::meta::Meta;
+use self::codec::{encode_key, decode_key};
 
 mod meta;
 mod codec;
+
+pub fn get(eng: &Engine, key: &[u8], version: u64) -> Result<Option<Vec<u8>>> {
+    let mkey = encode_key(key, 0u64);
+    let mval = match try!(eng.get(&mkey)) {
+        Some(x) => x,
+        None => return Ok(None),
+    };
+    let meta = try!(Meta::parse(Some(&mval[..])));
+    let ver = match meta.latest(version) {
+        Some(x) => x,
+        None => return Ok(None),
+    };
+    let dkey = encode_key(key, ver);
+    match try!(eng.get(&dkey)) {
+        Some(x) => Ok(Some(x)),
+        None => MvccErrorKind::VersionDataMissing.as_result(),
+    }
+}
+
+pub fn put(eng: &mut Engine, key: &[u8], value: &[u8], version: u64) -> Result<()> {
+	let mkey = encode_key(key, 0u64);
+	let dkey = encode_key(key, version);
+	let mval = try!(eng.get(&mkey));
+	let mut meta = match mval {
+		Some(x) => try!(Meta::parse(Some(&x[..]))),
+		None => Meta::new(),
+	};
+	meta.add(version);
+    let mval = meta.into_bytes();
+	let batch = vec![
+		Modify::Put((&mkey[..], &mval[..])),
+		Modify::Put((&dkey[..], value))
+	];
+    eng.write(batch).map_err(|e| Error::from(e))
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -20,6 +54,7 @@ enum MvccErrorKind {
     MetaDataVersion,
     KeyLength,
     KeyVersion,
+    VersionDataMissing,
 }
 
 impl MvccErrorKind {
@@ -30,6 +65,7 @@ impl MvccErrorKind {
             MvccErrorKind::MetaDataVersion => "bad format meta data(version)",
             MvccErrorKind::KeyLength => "bad format key(length)",
             MvccErrorKind::KeyVersion => "bad format key(version)",
+            MvccErrorKind::VersionDataMissing => "version data missing",
         }
     }
 

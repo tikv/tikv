@@ -139,8 +139,8 @@ impl Meta {
         }
     }
 
-    // TODO(diskiing)
-    // remove all metaItems that version <= ver
+    // remove all metaItems that version <= ver (for GC)
+    // TODO(diskiing)    
     #[allow(dead_code)]
     #[allow(unused_variables)]
     fn clean(&mut self, ver: u64) {}
