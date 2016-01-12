@@ -12,6 +12,9 @@ enum MetaItem {
 const FLAG_WITH_VALUE: u8 = b'v';
 const FLAG_DELETED: u8 = b'd';
 
+// 1 byte for flag + 8 bytes for u64
+const META_ITEM_ENCODE_SIZE: usize = 9;
+
 impl MetaItem {
     fn new(data: &[u8]) -> Result<MetaItem> {
         let (flag, rest) = match data.split_first() {
@@ -29,19 +32,17 @@ impl MetaItem {
         }
     }
 
-    fn into_bytes(&self) -> Vec<u8> {
-        let mut v = vec![];
+    fn write(&self, buf: &mut Vec<u8>) {
         match *self {
             MetaItem::WithValue(ver) => {
-                v.push(FLAG_WITH_VALUE);
-                v.write_u64::<BigEndian>(ver).unwrap();
+                buf.push(FLAG_WITH_VALUE);
+                buf.write_u64::<BigEndian>(ver).unwrap();
             }
             MetaItem::Deleted(ver) => {
-                v.push(FLAG_DELETED);
-                v.write_u64::<BigEndian>(ver).unwrap();
+                buf.push(FLAG_DELETED);
+                buf.write_u64::<BigEndian>(ver).unwrap();
             }
         }
-        v
     }
 
     fn version(self) -> u64 {
@@ -83,19 +84,18 @@ impl Meta {
     }
 
     pub fn parse(data: &[u8]) -> Result<Meta> {
-        let mut v = vec![];
-        for chunk in data.chunks(9) {
+		let mut v = Vec::<MetaItem>::with_capacity(data.len() / META_ITEM_ENCODE_SIZE);
+        for chunk in data.chunks(META_ITEM_ENCODE_SIZE) {
             let item = try!(MetaItem::new(chunk));
             v.push(item);
         }
-        v.sort();
         Ok(Meta { items: v })
     }
 
     pub fn into_bytes(&self) -> Vec<u8> {
-        let mut v: Vec<u8> = vec![];
+		let mut v = Vec::<u8>::with_capacity(self.items.len() * META_ITEM_ENCODE_SIZE);
         for item in &self.items {
-            v.append(&mut item.into_bytes());
+            item.write(&mut v);
         }
         v
     }
@@ -150,9 +150,12 @@ mod tests {
     #[test]
     fn test_meta_item() {
         let v100 = MetaItem::WithValue(100);
-        let v100b = v100.into_bytes();
+        let mut v100b: Vec<u8> = vec![];
+        v100.write(&mut v100b);
+
         let d99 = MetaItem::Deleted(99);
-        let d99b = d99.into_bytes();
+        let mut d99b: Vec<u8> = vec![];
+        d99.write(&mut d99b);
 
         assert_eq!(MetaItem::new(&v100b).unwrap(), v100);
         assert_eq!(MetaItem::new(&d99b).unwrap(), d99);
@@ -184,5 +187,26 @@ mod tests {
         let bytes = meta.into_bytes();
         let meta2 = Meta::parse(&bytes).unwrap();
         assert_eq!(bytes, meta2.into_bytes());
+    }
+
+    use test::Bencher;
+
+    #[bench]
+    fn bench_into_bytes(b: &mut Bencher) {
+        let mut meta = Meta::new();
+        for v in 1..10 {
+            meta.add(v);
+        }
+        b.iter(|| meta.into_bytes());
+    }
+
+    #[bench]
+    fn bench_from_bytes(b: &mut Bencher) {
+        let mut meta = Meta::new();
+        for v in 1..10 {
+            meta.add(v);
+        }
+        let bytes = meta.into_bytes();
+        b.iter(|| Meta::parse(&bytes));
     }
 }
