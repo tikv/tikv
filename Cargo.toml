@@ -11,6 +11,7 @@ name = "server"
 
 [dependencies]
 log = "0.3"
+rocksdb = "0.3"
 byteorder = "0.4"
 
 [dependencies.protobuf]
@@ -18,5 +19,3 @@ git = "https://github.com/stepancheg/rust-protobuf.git"
 
 [dependencies.bytes]
 git = "https://github.com/carllerche/bytes"
-
-
