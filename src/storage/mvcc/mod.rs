@@ -51,7 +51,7 @@ pub fn delete(eng: &mut Engine, key: &[u8], version: u64) -> Result<()> {
     let mval = meta.into_bytes();
     let mut batch = vec![Modify::Put((&mkey, &mval))];
     if has_old_ver {
-        batch.push(Modify::Delete((&dkey)));
+        batch.push(Modify::Delete(&dkey));
     }
     eng.write(batch).map_err(|e| Error::from(e))
 }
@@ -121,3 +121,21 @@ impl From<engine::Error> for Error {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use storage::engine::{self, Dsn};
+    use super::{get, put, delete};
+    #[test]
+    fn test_mvcc() {
+        let mut eng = engine::new_engine(Dsn::Memory).unwrap();
+        assert_eq!(get(&*eng, b"x", 1).unwrap(), None);
+        put(&mut *eng, b"x", b"x10", 10).unwrap();
+        assert_eq!(get(&*eng, b"x", 10).unwrap().unwrap(), b"x10");
+        assert_eq!(get(&*eng, b"x", 11).unwrap().unwrap(), b"x10");
+        delete(&mut *eng, b"x", 20).unwrap();
+        assert_eq!(get(&*eng, b"x", 15).unwrap().unwrap(), b"x10");
+        assert_eq!(get(&*eng, b"x", 20).unwrap(), None);
+        assert_eq!(get(&*eng, b"x", 22).unwrap(), None);
+    }
+}
