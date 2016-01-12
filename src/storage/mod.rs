@@ -2,7 +2,7 @@ use std::error;
 use std::result;
 use std::fmt::{self, Display, Formatter};
 use self::engine::Engine;
-pub use self::engine::Descriptor;
+pub use self::engine::Dsn;
 
 mod engine;
 
@@ -11,7 +11,7 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn new(desc: Descriptor) -> Result<Storage> {
+    pub fn new(desc: Dsn) -> Result<Storage> {
         engine::new_engine(desc).map(|e| Storage { engine: e }).map_err(|e| Error::from(e))
     }
 
