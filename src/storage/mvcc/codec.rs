@@ -8,7 +8,8 @@ const ENC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
 
 // Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
 fn encode_bytes(key: &[u8]) -> Vec<u8> {
-    let mut encoded: Vec<u8> = vec![];
+	let cap = key.len() / (ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1);
+	let mut encoded = Vec::<u8>::with_capacity(cap);
     let len = key.len();
     let mut index = 0;
     while index <= len {
@@ -28,7 +29,7 @@ fn encode_bytes(key: &[u8]) -> Vec<u8> {
 }
 
 fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
-    let mut key: Vec<u8> = vec![];
+	let mut key = Vec::<u8>::with_capacity(data.len());
     let mut read: usize = 0;
     for chunk in data.chunks(ENC_GROUP_SIZE + 1) {
         if chunk.len() != ENC_GROUP_SIZE + 1 {
@@ -86,7 +87,7 @@ mod tests {
     fn test_encode_key() {
         let pairs: Vec<(&'static [u8], u64)> = vec![
           (b"abc", 0),
-          (b"\x00\x00", 100),  
+          (b"\x00\x00", 100),
         ];
 
         for (x, y) in pairs {
@@ -95,5 +96,20 @@ mod tests {
             assert_eq!(k, x);
             assert_eq!(ver, y);
         }
+    }
+
+    use test::Bencher;
+
+    #[bench]
+    fn bench_encode(b: &mut Bencher) {
+        let key = [b'x'; 20];
+        b.iter(|| encode_bytes(&key));
+    }
+
+    #[bench]
+    fn bench_decode(b: &mut Bencher) {
+        let key = [b'x'; 20];
+        let encoded = encode_bytes(&key);
+        b.iter(|| decode_bytes(&encoded));
     }
 }
