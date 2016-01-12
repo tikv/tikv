@@ -84,7 +84,7 @@ impl Meta {
     }
 
     pub fn parse(data: &[u8]) -> Result<Meta> {
-		let mut v = Vec::<MetaItem>::with_capacity(data.len() / META_ITEM_ENCODE_SIZE);
+        let mut v = Vec::<MetaItem>::with_capacity(data.len() / META_ITEM_ENCODE_SIZE);
         for chunk in data.chunks(META_ITEM_ENCODE_SIZE) {
             let item = try!(MetaItem::new(chunk));
             v.push(item);
@@ -93,7 +93,7 @@ impl Meta {
     }
 
     pub fn into_bytes(&self) -> Vec<u8> {
-		let mut v = Vec::<u8>::with_capacity(self.items.len() * META_ITEM_ENCODE_SIZE);
+        let mut v = Vec::<u8>::with_capacity(self.items.len() * META_ITEM_ENCODE_SIZE);
         for item in &self.items {
             item.write(&mut v);
         }
