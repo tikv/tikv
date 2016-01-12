@@ -1,6 +1,8 @@
 pub use log::LogLevelFilter;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
+pub mod codec;
+
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
         filter.set(level);
