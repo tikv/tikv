@@ -1,6 +1,6 @@
 use std::io::{Cursor, Write};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use super::{Error, Result, MvccErrorKind};
+use super::{Result, MvccErrorKind};
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
