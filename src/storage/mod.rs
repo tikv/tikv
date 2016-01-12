@@ -1,6 +1,6 @@
 use self::engine::Engine;
 pub use self::engine::Dsn;
-use self::mvcc::{Error, Result};
+use self::mvcc::Result;
 
 mod engine;
 mod mvcc;
@@ -12,7 +12,7 @@ pub struct Storage {
 impl Storage {
     pub fn new(desc: Dsn) -> Result<Storage> {
         let eng = try!(engine::new_engine(desc));
-        Ok(Storage{engine: eng})
+        Ok(Storage { engine: eng })
     }
 
     pub fn get(&self, key: &[u8], version: u64) -> Result<Option<Vec<u8>>> {
@@ -22,6 +22,11 @@ impl Storage {
 
     pub fn put(&mut self, key: &[u8], value: &[u8], version: u64) -> Result<()> {
         trace!("storage: put {:?}@{}", key, version);
-        mvcc::put(&mut*self.engine, key, value, version)
+        mvcc::put(&mut *self.engine, key, value, version)
+    }
+
+    pub fn delete(&mut self, key: &[u8], version: u64) -> Result<()> {
+        trace!("storage: delete {:?}@{}", key, version);
+        mvcc::delete(&mut *self.engine, key, version)
     }
 }

@@ -1,7 +1,7 @@
 use std::cmp::{Ord, Ordering};
-use std::io::{Cursor, Write};
+use std::io::Cursor;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use super::{Error, Result, MvccErrorKind};
+use super::{Result, MvccErrorKind};
 
 #[derive(Debug, Copy, Clone)]
 enum MetaItem {
@@ -73,32 +73,25 @@ impl PartialOrd for MetaItem {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct Meta {
     items: Vec<MetaItem>,
 }
 
 impl Meta {
-    #[allow(dead_code)]
     pub fn new() -> Meta {
         Meta { items: vec![] }
     }
 
-    #[allow(dead_code)]
-    pub fn parse(data: Option<&[u8]>) -> Result<Meta> {
+    pub fn parse(data: &[u8]) -> Result<Meta> {
         let mut v = vec![];
-        if let Some(bytes) = data {
-            for chunk in bytes.chunks(9) {
-                let item = try!(MetaItem::new(chunk));
-                v.push(item);
-            }
-            v.sort();
+        for chunk in data.chunks(9) {
+            let item = try!(MetaItem::new(chunk));
+            v.push(item);
         }
-
+        v.sort();
         Ok(Meta { items: v })
     }
 
-    #[allow(dead_code)]
     pub fn into_bytes(&self) -> Vec<u8> {
         let mut v: Vec<u8> = vec![];
         for item in &self.items {
@@ -107,7 +100,6 @@ impl Meta {
         v
     }
 
-    #[allow(dead_code)]
     pub fn latest(&self, ver: u64) -> Option<u64> {
         let index = self.items.binary_search(&MetaItem::WithValue(ver));
         let i = match index {
@@ -121,12 +113,17 @@ impl Meta {
         }
     }
 
-    #[allow(dead_code)]
+    pub fn has_version(&self, ver: u64) -> bool {
+        match self.items.binary_search(&MetaItem::WithValue(ver)) {
+            Ok(..) => true,
+            Err(..) => false,
+        }
+    }
+
     pub fn add(&mut self, ver: u64) {
         self.push(&MetaItem::WithValue(ver))
     }
 
-    #[allow(dead_code)]
     pub fn delete(&mut self, ver: u64) {
         self.push(&MetaItem::Deleted(ver))
     }
@@ -134,13 +131,13 @@ impl Meta {
     fn push(&mut self, item: &MetaItem) {
         let index = self.items.binary_search(item);
         match index {
-            Ok(i) => self.items[i] = *item,            
+            Ok(i) => self.items[i] = *item,
             Err(i) => self.items.insert(i, *item),
         }
     }
 
     // remove all metaItems that version <= ver (for GC)
-    // TODO(diskiing)    
+    // TODO(diskiing)
     #[allow(dead_code)]
     #[allow(unused_variables)]
     fn clean(&mut self, ver: u64) {}
@@ -185,7 +182,7 @@ mod tests {
         meta.delete(20);
 
         let bytes = meta.into_bytes();
-        let meta2 = Meta::parse(Some(&bytes)).unwrap();
+        let meta2 = Meta::parse(&bytes).unwrap();
         assert_eq!(bytes, meta2.into_bytes());
     }
 }
