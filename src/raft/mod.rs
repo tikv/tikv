@@ -1,6 +1,5 @@
 
 mod raft_log;
-mod raftpb;
+pub mod raftpb;
 mod storage;
 mod errors;
-mod codec;
