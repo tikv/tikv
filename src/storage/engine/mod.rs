@@ -1,7 +1,7 @@
-use self::memory::BTreeEngine;
+use self::memory::EngineBtree;
 use std::{error, result};
 use std::fmt::{self, Display, Formatter};
-use self::rocksdb::RocksEngine;
+use self::rocksdb::EngineRocksdb;
 
 mod memory;
 mod rocksdb;
@@ -34,9 +34,9 @@ pub enum Descriptor<'a> {
 
 pub fn new_engine(desc: Descriptor) -> Result<Box<Engine>> {
     match desc {
-        Descriptor::Memory => Ok(Box::new(BTreeEngine::new())),
+        Descriptor::Memory => Ok(Box::new(EngineBtree::new())),
         Descriptor::RocksDBPath(path) => {
-            RocksEngine::new(path).map(|engine| -> Box<Engine> { Box::new(engine) })
+            EngineRocksdb::new(path).map(|engine| -> Box<Engine> { Box::new(engine) })
         }
     }
 }

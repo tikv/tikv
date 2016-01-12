@@ -2,38 +2,38 @@ use std::collections::BTreeMap;
 use super::{Engine, Modify, Result};
 
 #[derive(Debug)]
-pub struct BTreeEngine {
+pub struct EngineBtree {
     map: BTreeMap<Vec<u8>, Vec<u8>>,
 }
 
-impl BTreeEngine {
-    pub fn new() -> BTreeEngine {
-        info!("BTreeEngine: creating");
-        BTreeEngine { map: BTreeMap::new() }
+impl EngineBtree {
+    pub fn new() -> EngineBtree {
+        info!("EngineBtree: creating");
+        EngineBtree { map: BTreeMap::new() }
     }
 }
 
-impl Engine for BTreeEngine {
+impl Engine for EngineBtree {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        trace!("BTreeEngine: get {:?}", key);
+        trace!("EngineBtree: get {:?}", key);
         Ok(self.map.get(key).map(|v| v.clone()))
     }
 
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        trace!("BtreeEngine: seek {:?}", key);
+        trace!("EngineBtree: seek {:?}", key);
         // TODO (disksing)
-        panic!("BTreeEngine.seek not implemented.");
+        panic!("EngineBtree.seek not implemented.");
     }
 
     fn write(&mut self, batch: Vec<Modify>) -> Result<()> {
         for rev in batch {
             match rev {
                 Modify::Delete(k) => {
-                    trace!("BTreeEngine: delete {:?}", k);
+                    trace!("EngineBtree: delete {:?}", k);
                     self.map.remove(k);
                 }
                 Modify::Put((k, v)) => {
-                    trace!("BTreeEngine: put {:?},{:?}", k, v);
+                    trace!("EngineBtree: put {:?},{:?}", k, v);
                     self.map.insert(k.to_owned(), v.to_owned());
                 }
             }
