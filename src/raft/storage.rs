@@ -1,6 +1,6 @@
 
-#![feature(vec_push_all)]
-
+#![allow(dead_code)]
+#![allow(deprecated)]
 use protobuf;
 use raft::raftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
