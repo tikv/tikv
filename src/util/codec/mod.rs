@@ -1,6 +1,5 @@
 use std::{result, io, fmt};
 use std::error;
-use std::boxed::Box;
 use std::convert;
 
 use byteorder::{ByteOrder, BigEndian};
@@ -124,7 +123,7 @@ pub fn decode_msg_body<T: io::Read, M: protobuf::Message>(r: &mut T,
                                                           -> Result<()> {
     let mut payload = vec![0;payload_len];
 
-    let n = try!(r.read(&mut payload));
+    try!(r.read(&mut payload));
     try!(m.merge_from_bytes(&payload));
 
     Ok(())
@@ -141,7 +140,7 @@ pub fn decode_msg<T: io::Read, M: protobuf::Message>(r: &mut T, m: &mut M) -> Re
 
 #[cfg(test)]
 mod tests {
-    use bytes::{Buf, ByteBuf, MutByteBuf};
+    use bytes::ByteBuf;
 
     use super::*;
     use raft::raftpb::{Message, MessageType};
