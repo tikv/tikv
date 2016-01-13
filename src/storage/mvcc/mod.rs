@@ -1,7 +1,7 @@
 use std::{error, fmt, result};
 use storage::engine::{self, Engine, Modify};
 use self::meta::Meta;
-use self::codec::encode_key;
+use self::codec::{encode_key, decode_key};
 
 mod meta;
 mod codec;
@@ -54,6 +54,42 @@ pub fn delete(eng: &mut Engine, key: &[u8], version: u64) -> Result<()> {
         batch.push(Modify::Delete(&dkey));
     }
     eng.write(batch).map_err(|e| Error::from(e))
+}
+
+pub fn scan(eng: &Engine,
+            key: &[u8],
+            limit: usize,
+            version: u64)
+            -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    let mut pairs = vec![];
+    let mut seek_key = encode_key(key, 0u64);
+    loop {
+        if pairs.len() >= limit {
+            break;
+        }
+        let (mkey, mval) = match try!(eng.seek(&seek_key)) {
+            Some(x) => x,
+            None => break,
+        };
+        let (mut key, _) = try!(decode_key(&mkey));
+        let meta = try!(Meta::parse(&mval));
+        let ver = match meta.latest(version) {
+            Some(x) => x,
+            None => {
+                key.push(0);
+                seek_key = encode_key(&key, 0u64);
+                continue;
+            }
+        };
+        let dkey = encode_key(&key, ver);
+        match try!(eng.get(&dkey)) {
+            Some(x) => pairs.push((key.clone(), x)),
+            None => return MvccErrorKind::DataMissing.as_result(),
+        }
+        key.push(0);
+        seek_key = encode_key(&key, 0u64);
+    }
+    Ok(pairs)
 }
 
 #[derive(Debug)]
@@ -125,7 +161,8 @@ pub type Result<T> = result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use storage::engine::{self, Dsn};
-    use super::{get, put, delete};
+    use super::{get, put, delete, scan};
+
     #[test]
     fn test_mvcc() {
         let mut eng = engine::new_engine(Dsn::Memory).unwrap();
@@ -137,5 +174,20 @@ mod tests {
         assert_eq!(get(&*eng, b"x", 15).unwrap().unwrap(), b"x10");
         assert_eq!(get(&*eng, b"x", 20).unwrap(), None);
         assert_eq!(get(&*eng, b"x", 22).unwrap(), None);
+    }
+
+    #[test]
+    fn test_scan() {
+        let mut eng = engine::new_engine(Dsn::Memory).unwrap();
+        put(&mut *eng, b"aa", b"11", 10).unwrap();
+        put(&mut *eng, b"bb", b"22", 20).unwrap();
+        put(&mut *eng, b"cc", b"33", 15).unwrap();
+
+        let vec = scan(&*eng, b"a", 4, 19).unwrap();
+        assert_eq!(vec.len(), 2);
+        assert_eq!(vec[0].0, b"aa");
+        assert_eq!(vec[0].1, b"11");
+        assert_eq!(vec[1].0, b"cc");
+        assert_eq!(vec[1].1, b"33");
     }
 }

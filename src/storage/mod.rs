@@ -29,4 +29,9 @@ impl Storage {
         trace!("storage: delete {:?}@{}", key, version);
         mvcc::delete(&mut *self.engine, key, version)
     }
+
+    pub fn scan(&self, key: &[u8], limit: usize, version: u64) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        trace!("storage: scan {:?}({})@{}", key, limit, version);
+        mvcc::scan(&*self.engine, key, limit, version)
+    }
 }
