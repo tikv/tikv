@@ -147,6 +147,7 @@ impl Unstable {
 }
 
 
+#[cfg(test)]
 mod test {
     use raft::raftpb::{Entry, Snapshot};
     use raft::log_unstable::Unstable;
@@ -189,15 +190,14 @@ mod test {
 
 
     #[test]
-    #[cfg(test)]
     fn test_maybe_first_index() {
         let tests: Vec<Obj> = vec![  
             // no snapshot
             new_obj(new_entry(5,1), 5, None, false, 0),
-            new_obj( Entry::new(), 0, None, false, 0,),
+            new_obj(Entry::new(), 0, None, false, 0,),
             // has snapshot
-            new_obj( new_entry(5, 1), 5, Some(new_snapshot(4,1)), true, 5,),
-            new_obj( Entry::new(), 5, Some(new_snapshot(4,1)), true, 5,), 
+            new_obj(new_entry(5, 1), 5, Some(new_snapshot(4,1)), true, 5,),
+            new_obj(Entry::new(), 5, Some(new_snapshot(4,1)), true, 5,), 
         ];
 
         for tt in tests {
