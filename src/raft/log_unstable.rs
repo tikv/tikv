@@ -151,31 +151,13 @@ impl Unstable {
 mod test {
     use raft::raftpb::{Entry, Snapshot};
     use raft::log_unstable::Unstable;
-    pub struct Obj {
-        entry: Entry,
-        offset: u64,
-        snap: Option<Snapshot>,
+    use std::collections::VecDeque;
 
-        wok: bool,
-        windex: u64,
-    }
-
-
-    fn new_entry(index: u64, term: u64) -> Entry {
+    fn new_entry(index: u64, term: u64) -> Option<Entry> {
         let mut e = Entry::new();
         e.set_Term(term);
         e.set_Index(index);
-        e
-    }
-
-    fn new_obj(entry: Entry, offset: u64, snap: Option<Snapshot>, wok: bool, windex: u64) -> Obj {
-        Obj {
-            entry: entry,
-            offset: offset,
-            snap: snap,
-            wok: wok,
-            windex: windex,
-        }
+        Some(e)
     }
 
     fn new_snapshot(index: u64, term: u64) -> Snapshot {
@@ -188,29 +170,62 @@ mod test {
         snap
     }
 
-
     #[test]
     fn test_maybe_first_index() {
-        let tests: Vec<Obj> = vec![  
+        // entry, offset, snap, wok, windex,
+        let tests: Vec<(Option<Entry>, u64, Option<Snapshot>, bool, u64)> = vec![  
             // no snapshot
-            new_obj(new_entry(5,1), 5, None, false, 0),
-            new_obj(Entry::new(), 0, None, false, 0,),
+            (new_entry(5,1), 5, None, false, 0),
+            (None, 0, None, false, 0),
             // has snapshot
-            new_obj(new_entry(5, 1), 5, Some(new_snapshot(4,1)), true, 5,),
-            new_obj(Entry::new(), 5, Some(new_snapshot(4,1)), true, 5,), 
+            (new_entry(5, 1), 5, Some(new_snapshot(4,1)), true, 5),
+            (None, 5, Some(new_snapshot(4,1)), true, 5), 
         ];
 
-        for tt in tests {
+        for (entries, offset, snapshot, wok, windex) in tests {
             let u = Unstable {
-                entries: vec![tt.entry].into_iter().collect(),
-                offset: tt.offset,
-                snapshot: tt.snap.map_or(None, |snap| Some(Box::new(snap))),
+                entries: entries.map_or(VecDeque::new(), |entry| {
+                    vec![entry].into_iter().collect::<VecDeque<Entry>>()
+                }),
+                offset: offset,
+                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
             };
             let index = u.maybe_first_index();
             match index {
-                None => assert!(!tt.wok),
-                Some(index) => assert_eq!(index, tt.windex),
+                None => assert!(!wok),
+                Some(index) => assert_eq!(index, windex),
             }
         }
     }
+
+    // #[test]
+    fn test_maybe_last_index() {
+        // entry, offset, snap, wok, windex,
+        let tests: Vec<(Option<Entry>, u64, Option<Snapshot>, bool, u64)> = vec![  
+            (new_entry(5,1), 5, None, true, 5),
+            (new_entry(5,1), 5, Some(new_snapshot(4,1)), true, 5),
+            // last in snapshot
+            (None, 5, Some(new_snapshot(4,1)), true, 4),
+            // enpty unstable
+            (None, 0, None, false, 0),
+       ];
+
+        for (entries, offset, snapshot, wok, windex) in tests {
+            let u = Unstable {
+                entries: entries.map_or(VecDeque::new(), |entry| {
+                    vec![entry].into_iter().collect::<VecDeque<Entry>>()
+                }),
+                offset: offset,
+                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+            };
+            let index = u.maybe_last_index();
+            match index {
+                None => assert!(!wok),
+                Some(index) => assert_eq!(index, windex),
+            }
+        }
+    }
+
+
+    fn test_maybe_term() {}
 }
