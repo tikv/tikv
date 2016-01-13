@@ -189,6 +189,7 @@ mod test {
 
 
     #[test]
+    #[cfg(test)]
     fn test_maybe_first_index() {
         let tests: Vec<Obj> = vec![  
             // no snapshot
