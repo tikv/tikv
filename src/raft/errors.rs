@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::{result, io, fmt};
 use std::error;
 use std::boxed::Box;
