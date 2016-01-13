@@ -108,6 +108,7 @@ pub enum MvccErrorKind {
     MetaDataFlag,
     MetaDataVersion,
     KeyLength,
+    KeyPadding,
     KeyVersion,
     DataMissing,
 }
@@ -119,6 +120,7 @@ impl MvccErrorKind {
             MvccErrorKind::MetaDataFlag => "bad format meta data(flag)",
             MvccErrorKind::MetaDataVersion => "bad format meta data(version)",
             MvccErrorKind::KeyLength => "bad format key(length)",
+            MvccErrorKind::KeyPadding => "bad format key(padding)",
             MvccErrorKind::KeyVersion => "bad format key(version)",
             MvccErrorKind::DataMissing => "version data missing",
         }
