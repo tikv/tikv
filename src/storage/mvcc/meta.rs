@@ -1,5 +1,4 @@
 use std::cmp::{Ord, Ordering};
-use std::io::Cursor;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use super::{Result, MvccErrorKind};
 
@@ -21,7 +20,7 @@ impl MetaItem {
             Some(x) => x,
             None => return MvccErrorKind::MetaDataLength.as_result(),
         };
-        let ver = match Cursor::new(rest).read_u64::<BigEndian>() {
+        let ver = match rest.as_ref().read_u64::<BigEndian>() {
             Ok(x) => x,
             Err(..) => return MvccErrorKind::MetaDataVersion.as_result(),
         };

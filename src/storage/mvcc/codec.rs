@@ -1,4 +1,4 @@
-use std::io::{Cursor, Write};
+use std::io::Write;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use super::{Result, MvccErrorKind};
 
@@ -55,8 +55,7 @@ pub fn encode_key(key: &[u8], version: u64) -> Vec<u8> {
 #[allow(dead_code)]
 pub fn decode_key(data: &[u8]) -> Result<(Vec<u8>, u64)> {
     let (key, read_size) = try!(decode_bytes(data));
-    let mut rdr = Cursor::new(&data[read_size..]);
-    match rdr.read_u64::<BigEndian>() {
+    match data[read_size..].as_ref().read_u64::<BigEndian>() {
         Ok(ver) => Ok((key, ver)),
         Err(..) => MvccErrorKind::KeyVersion.as_result(),
     }
