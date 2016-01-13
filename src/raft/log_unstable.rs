@@ -207,10 +207,9 @@ mod test {
                 snapshot: tt.snap.map_or(None, |snap| Some(Box::new(snap))),
             };
             let index = u.maybe_first_index();
-            if index.is_none() {
-                assert!(!tt.wok);
-            } else {
-                assert_eq!(index.unwrap(), tt.windex);
+            match index {
+                None => assert!(!tt.wok),
+                Some(index) => assert_eq!(index, tt.windex),
             }
         }
     }
