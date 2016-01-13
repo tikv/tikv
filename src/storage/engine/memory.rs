@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::Bound::{Included, Unbounded};
 use super::{Engine, Modify, Result};
 
 #[derive(Debug)]
@@ -21,8 +22,8 @@ impl Engine for EngineBtree {
 
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         trace!("EngineBtree: seek {:?}", key);
-        // TODO (disksing)
-        panic!("EngineBtree.seek not implemented.");
+        let mut iter = self.map.range::<Vec<u8>, Vec<u8>>(Included(&key.to_owned()), Unbounded);
+        Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
     }
 
     fn write(&mut self, batch: Vec<Modify>) -> Result<()> {
