@@ -25,6 +25,7 @@ pub trait Storage {
 pub struct MemStorage {
     hard_state: HardState,
     snapshot: Snapshot,
+    // TODO: maybe vec_deque
     entries: Vec<Entry>,
 }
 
@@ -141,7 +142,7 @@ impl MemStorage {
 
         let offset = te[0].get_Index() - self.entries[0].get_Index();
         if self.entries.len() as u64 > offset {
-            let mut new_entries: Vec<Entry> = vec![Entry::new()];
+            let mut new_entries: Vec<Entry> = vec![];
             new_entries.push_all(&self.entries[..offset as usize]);
             new_entries.push_all(te);
             self.entries = new_entries;

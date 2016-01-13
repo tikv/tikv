@@ -2,6 +2,7 @@ use protobuf;
 use raft::raftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
 use std::collections::VecDeque;
+use std::collections::vec_deque::Drain;
 
 // unstable.entris[i] has raft log position i+unstable.offset.
 // Note that unstable.offset may be less than the highest log
@@ -84,6 +85,65 @@ impl unstable {
         }
         if idx == self.snapshot.as_ref().unwrap().get_metadata().get_index() {
             self.snapshot = None;
+        }
+    }
+
+    fn restore(&mut self, snap: Snapshot) {
+        self.offset = snap.get_metadata().get_index() + 1;
+        self.entries.clear();
+        self.snapshot = Some(Box::new(snap));
+    }
+
+    fn truncate_and_append(&mut self, ents: &[Entry]) {
+        let after = ents[0].get_Index() - 1;
+        if after == self.offset + self.entries.len() as u64 - 1 {
+            for e in ents {
+                self.entries.push_back(e.clone());
+            }
+        } else if after < self.offset {
+            // The log is being truncated to before our current offset
+            // portion, so set the offset and replace the entries
+            self.offset = after + 1;
+            self.entries.clear();
+
+            for e in ents {
+                self.entries.push_back(e.clone());
+            }
+        } else {
+            // truncate to after and copy to self.entries
+            // then append
+            let off = self.offset.clone();
+            let cut_ents = self.cut_slice(off, after + 1);
+            self.entries.clear();
+            for e in cut_ents {
+                self.entries.push_back(e);
+            }
+
+            for e in ents {
+                self.entries.push_back(e.clone());
+            }
+        }
+    }
+
+    fn cut_slice(&mut self, lo: u64, hi: u64) -> Vec<Entry> {
+        self.must_check_outofbounds(lo, hi);
+        let l = lo as usize;
+        let h = lo as usize;
+        let off = self.offset as usize;
+        return self.entries.drain(l - off..h - off).map(|e| e).collect();
+    }
+
+    fn must_check_outofbounds(&self, lo: u64, hi: u64) {
+        if lo > hi {
+            panic!("invalid unstable.slice {} > {}", lo, hi)
+        }
+        let upper = self.offset + self.entries.len() as u64;
+        if lo < self.offset || hi > upper {
+            panic!("unstable.slice[{}, {}] out of bound[{}, {}]",
+                   lo,
+                   hi,
+                   self.offset,
+                   upper)
         }
     }
 }
