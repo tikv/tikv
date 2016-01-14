@@ -52,7 +52,6 @@ pub fn encode_key(key: &[u8], version: u64) -> Vec<u8> {
     v
 }
 
-#[allow(dead_code)]
 pub fn decode_key(data: &[u8]) -> Result<(Vec<u8>, u64)> {
     let (key, read_size) = try!(decode_bytes(data));
     match data[read_size..].as_ref().read_u64::<BigEndian>() {
