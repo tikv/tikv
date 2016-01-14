@@ -357,7 +357,7 @@ mod test {
                 offset: offset,
                 snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
             };
-            u.truncate_and_append(to_append.as_slice());
+            u.truncate_and_append(&to_append);
             assert_eq!(u.offset, woffset);
             assert_eq!(u.entries, wentries.into_iter().collect::<VecDeque<Entry>>());
         }
