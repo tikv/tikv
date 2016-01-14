@@ -1,2 +1,2 @@
 pub mod raftpb;
-pub use self::raftpb::*;
+pub mod raft_serverpb;
