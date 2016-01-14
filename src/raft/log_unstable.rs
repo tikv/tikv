@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+
 use raft::raftpb::{Entry, Snapshot};
 use std::collections::VecDeque;
 
@@ -6,6 +7,7 @@ use std::collections::VecDeque;
 // Note that unstable.offset may be less than the highest log
 // position in storage; this means that the next write to storage
 // might need to truncate the log before persisting unstable.entries.
+#[derive(Debug, PartialEq)]
 pub struct Unstable {
     // the incoming unstable snapshot, if any.
     snapshot: Option<Box<Snapshot>>,
@@ -87,8 +89,8 @@ impl Unstable {
     }
 
     fn restore(&mut self, snap: Snapshot) {
-        self.offset = snap.get_metadata().get_index() + 1;
         self.entries.clear();
+        self.offset = snap.get_metadata().get_index() + 1;
         self.snapshot = Some(Box::new(snap));
     }
 
@@ -126,7 +128,7 @@ impl Unstable {
     fn cut_slice(&mut self, lo: u64, hi: u64) -> Vec<Entry> {
         self.must_check_outofbounds(lo, hi);
         let l = lo as usize;
-        let h = lo as usize;
+        let h = hi as usize;
         let off = self.offset as usize;
         return self.entries.drain(l - off..h - off).map(|e| e).collect();
     }
@@ -151,31 +153,13 @@ impl Unstable {
 mod test {
     use raft::raftpb::{Entry, Snapshot};
     use raft::log_unstable::Unstable;
-    pub struct Obj {
-        entry: Entry,
-        offset: u64,
-        snap: Option<Snapshot>,
-
-        wok: bool,
-        windex: u64,
-    }
-
+    use std::collections::VecDeque;
 
     fn new_entry(index: u64, term: u64) -> Entry {
         let mut e = Entry::new();
         e.set_Term(term);
         e.set_Index(index);
         e
-    }
-
-    fn new_obj(entry: Entry, offset: u64, snap: Option<Snapshot>, wok: bool, windex: u64) -> Obj {
-        Obj {
-            entry: entry,
-            offset: offset,
-            snap: snap,
-            wok: wok,
-            windex: windex,
-        }
     }
 
     fn new_snapshot(index: u64, term: u64) -> Snapshot {
@@ -188,29 +172,193 @@ mod test {
         snap
     }
 
-
     #[test]
     fn test_maybe_first_index() {
-        let tests: Vec<Obj> = vec![  
+        // entry, offset, snap, wok, windex,
+        let tests: Vec<(Option<Entry>, u64, Option<Snapshot>, bool, u64)> = vec![  
             // no snapshot
-            new_obj(new_entry(5,1), 5, None, false, 0),
-            new_obj(Entry::new(), 0, None, false, 0,),
+            (Some(new_entry(5,1)), 5, None, false, 0),
+            (None, 0, None, false, 0),
             // has snapshot
-            new_obj(new_entry(5, 1), 5, Some(new_snapshot(4,1)), true, 5,),
-            new_obj(Entry::new(), 5, Some(new_snapshot(4,1)), true, 5,), 
+            (Some(new_entry(5, 1)), 5, Some(new_snapshot(4,1)), true, 5),
+            (None, 5, Some(new_snapshot(4,1)), true, 5), 
         ];
 
-        for tt in tests {
+        for (entries, offset, snapshot, wok, windex) in tests {
             let u = Unstable {
-                entries: vec![tt.entry].into_iter().collect(),
-                offset: tt.offset,
-                snapshot: tt.snap.map_or(None, |snap| Some(Box::new(snap))),
+                entries: entries.map_or(VecDeque::new(), |entry| {
+                    vec![entry].into_iter().collect::<VecDeque<Entry>>()
+                }),
+                offset: offset,
+                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
             };
             let index = u.maybe_first_index();
             match index {
-                None => assert!(!tt.wok),
-                Some(index) => assert_eq!(index, tt.windex),
+                None => assert!(!wok),
+                Some(index) => assert_eq!(index, windex),
             }
+        }
+    }
+
+    #[test]
+    fn test_maybe_last_index() {
+        // entry, offset, snap, wok, windex,
+        let tests: Vec<(Option<Entry>, u64, Option<Snapshot>, bool, u64)> = vec![  
+            (Some(new_entry(5,1)), 5, None, true, 5),
+            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), true, 5),
+            // last in snapshot
+            (None, 5, Some(new_snapshot(4,1)), true, 4),
+            // empty unstable
+            (None, 0, None, false, 0),
+       ];
+
+        for (entries, offset, snapshot, wok, windex) in tests {
+            let u = Unstable {
+                entries: entries.map_or(VecDeque::new(), |entry| {
+                    vec![entry].into_iter().collect::<VecDeque<Entry>>()
+                }),
+                offset: offset,
+                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+            };
+            let index = u.maybe_last_index();
+            match index {
+                None => assert!(!wok),
+                Some(index) => assert_eq!(index, windex),
+            }
+        }
+    }
+
+    #[test]
+    fn test_maybe_term() {
+        // entry, offset, snap, index, wok, wterm
+        let tests: Vec<(Option<Entry>, u64, Option<Snapshot>, u64, bool, u64)> = vec![  
+            // term from entries
+            (Some(new_entry(5,1)), 5, None, 5, true, 1),
+            (Some(new_entry(5,1)), 5, None, 6, false, 0),
+            (Some(new_entry(5,1)), 5, None, 4, false, 0),
+            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 5, true, 1),
+            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 6, false, 0),
+            // term from snapshot
+            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 4, true, 1),
+            (None, 5, Some(new_snapshot(4,1)), 5, false, 0),
+            (None, 5, Some(new_snapshot(4,1)), 4, true, 1),
+            (None, 0, None, 5, false, 0),
+       ];
+
+        for (entries, offset, snapshot, index, wok, wterm) in tests {
+            let u = Unstable {
+                entries: entries.map_or(VecDeque::new(), |entry| {
+                    vec![entry].into_iter().collect::<VecDeque<Entry>>()
+                }),
+                offset: offset,
+                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+            };
+            let term = u.maybe_term(index);
+            match term {
+                None => assert!(!wok),
+                Some(term) => assert_eq!(term, wterm),
+            }
+        }
+    }
+
+
+    #[test]
+    fn test_restore() {
+        let mut u = Unstable {
+            entries: vec![new_entry(5, 1)].into_iter().collect::<VecDeque<Entry>>(),
+            offset: 5,
+            snapshot: Some(Box::new(new_snapshot(4, 1))),
+        };
+
+        let s = new_snapshot(6, 2);
+        u.restore(s.clone());
+
+        assert_eq!(u.offset, s.get_metadata().get_index() + 1);
+        assert_eq!(u.entries.len(), 0);
+        assert_eq!(*u.snapshot.unwrap(), s);
+    }
+
+    #[test]
+    fn test_stable_to() {
+        // entries, offset, snap, index, term, woffset, wlen
+        let tests: Vec<(Vec<Entry>, u64, Option<Snapshot>, u64, u64, u64, usize)> = vec![  
+            (vec![], 0, None, 5, 1, 0, 0),
+            // stable to the first entry
+            (vec![new_entry(5,1)], 5, None, 5, 1, 6, 0),
+            (vec![new_entry(5,1), new_entry(6, 0)], 5, None, 5, 1, 6, 1),
+            // stable to the first entry and term mismatch
+            (vec![new_entry(6,2)], 5, None, 6, 1, 5, 1),
+            // stable to old entry
+            (vec![new_entry(5,1)], 5, None, 4, 1, 5, 1),
+            (vec![new_entry(5,1)], 5, None, 4, 2, 5, 1),
+            // with snapshot
+            // stable to the first entry
+            (vec![new_entry(5,1)], 5, Some(new_snapshot(4,1)), 5, 1, 6, 0),
+            // stable to the first entry
+            (vec![new_entry(5,1), new_entry(6,1)], 5, Some(new_snapshot(4,1)), 5, 1, 6, 1),
+            // stable to the first entry and term mismatch
+            (vec![new_entry(6,2)], 5, Some(new_snapshot(5,1)), 6, 1, 5, 1),
+            // stable to snapshot 
+            (vec![new_entry(5,1)], 5, Some(new_snapshot(4,1)), 4, 1, 5, 1),
+            // stable to old entry
+            (vec![new_entry(5,2)], 5, Some(new_snapshot(4,2)), 4, 1, 5, 1),
+       ];
+
+        for (entries, offset, snapshot, index, term, woffset, wlen) in tests {
+            let mut u = Unstable {
+                entries: entries.into_iter().collect::<VecDeque<Entry>>(),
+                offset: offset,
+                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+            };
+            u.stable_to(index, term);
+            assert_eq!(u.offset, woffset);
+            assert_eq!(u.entries.len(), wlen);
+        }
+    }
+
+    #[test]
+    fn test_truncate_and_append() {
+        // entries, offset, snap, to_append, woffset, wentries
+        let tests: Vec<(Vec<Entry>,
+                        u64,
+                        Option<Snapshot>,
+                        Vec<Entry>,
+                        u64,
+                        Vec<Entry>)> = vec![
+            // replace to the end
+            (vec![new_entry(5, 1)], 5, None, 
+                vec![new_entry(6, 1), new_entry(7, 1)], 
+                    5, vec![new_entry(5,1), new_entry(6,1), new_entry(7,1)]),
+
+            // replace to unstable entries
+           (vec![new_entry(5, 1)], 5, None, 
+               vec![new_entry(5, 2), new_entry(6, 2)], 
+                   5, vec![new_entry(5, 2), new_entry(6, 2)]),
+
+            (vec![new_entry(5, 1)], 5, None, 
+                vec![new_entry(4, 2), new_entry(5, 2), new_entry(6, 2)], 
+                    4, vec![new_entry(4,2), new_entry(5, 2), new_entry(6, 2)]),
+
+            // truncate existing entries and append
+           (vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)], 5, None, 
+               vec![new_entry(6, 2)], 
+                   5, vec![new_entry(5, 1), new_entry(6, 2)]),
+
+            (vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)], 5, None, 
+                vec![new_entry(7, 2), new_entry(8, 2)], 
+                    5, vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 2), new_entry(8, 2)]),
+      ];
+
+
+        for (entries, offset, snapshot, to_append, woffset, wentries) in tests {
+            let mut u = Unstable {
+                entries: entries.into_iter().collect::<VecDeque<Entry>>(),
+                offset: offset,
+                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+            };
+            u.truncate_and_append(&to_append);
+            assert_eq!(u.offset, woffset);
+            assert_eq!(u.entries, wentries.into_iter().collect::<VecDeque<Entry>>());
         }
     }
 }
