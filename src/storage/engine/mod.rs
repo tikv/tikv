@@ -79,6 +79,7 @@ mod tests {
         let mut e = super::new_engine(Dsn::Memory).unwrap();
         get_put(&mut *e);
         batch(&mut *e);
+        seek(&mut *e);
     }
 
     #[test]
@@ -86,6 +87,7 @@ mod tests {
         let mut e = super::new_engine(Dsn::RocksDBPath("/tmp/rocks")).unwrap();
         get_put(&mut *e);
         batch(&mut *e);
+        seek(&mut *e);
     }
 
     fn assert_has(engine: &Engine, key: &[u8], value: &[u8]) {
@@ -94,6 +96,12 @@ mod tests {
 
     fn assert_none(engine: &Engine, key: &[u8]) {
         assert_eq!(engine.get(key).unwrap(), None);
+    }
+
+    fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
+        let (k, v) = engine.seek(key).unwrap().unwrap();
+        assert_eq!(k, pair.0);
+        assert_eq!(v, pair.1);
     }
 
     fn get_put(engine: &mut Engine) {
@@ -114,5 +122,17 @@ mod tests {
         engine.write(vec![Modify::Delete(b"x"), Modify::Delete(b"y")]).unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
+    }
+
+    fn seek(engine: &mut Engine) {
+        engine.put(b"x", b"1").unwrap();
+        assert_seek(engine, b"x", (b"x", b"1"));
+        assert_seek(engine, b"a", (b"x", b"1"));
+        engine.put(b"z", b"2").unwrap();
+        assert_seek(engine, b"y", (b"z", b"2"));
+        assert_seek(engine, b"x\x00", (b"z", b"2"));
+        assert_eq!(engine.seek(b"z\x00").unwrap(), None);
+        engine.delete(b"x").unwrap();
+        engine.delete(b"z").unwrap();
     }
 }
