@@ -1,0 +1,16 @@
+syntax = "proto2";
+package raft_serverpb;
+
+import "raftpb.proto";
+
+message RaftMessageRequest {
+ optional raftpb.Message message = 1;
+}
+
+message RaftMessageResponse {
+}
+
+// ConfChangeContext is encoded in the raftpb.ConfChange.Context field.
+message ConfChangeContext {
+  optional string command_id = 1;
+}

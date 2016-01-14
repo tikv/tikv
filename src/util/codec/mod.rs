@@ -143,7 +143,7 @@ mod tests {
     use bytes::ByteBuf;
 
     use super::*;
-    use raft::raftpb::{Message, MessageType};
+    use proto::raftpb::{Message, MessageType};
 
     #[test]
     fn test_codec() {

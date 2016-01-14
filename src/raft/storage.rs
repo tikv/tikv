@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 #![allow(deprecated)]
 use protobuf;
-use raft::raftpb::{HardState, ConfState, Entry, Snapshot};
+use proto::raftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
 
 
