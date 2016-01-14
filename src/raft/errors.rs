@@ -79,8 +79,8 @@ impl error::Error for Error {
     }
 }
 
-// Other can convert e to Error::Other.
-pub fn Other<E>(e: E) -> Error
+// other can convert e to Error::Other.
+pub fn other<E>(e: E) -> Error
     where E: Into<Box<error::Error + Send + Sync>>
 {
     Error::Other(e.into())
@@ -94,7 +94,7 @@ impl From<io::Error> for Error {
 
 impl From<ProtobufError> for Error {
     fn from(err: ProtobufError) -> Error {
-        Other(err)
+        other(err)
     }
 }
 
@@ -110,10 +110,10 @@ mod tests {
     #[test]
     fn test_error() {
         let e = ProtobufError::WireError("a error".to_string());
-        let err: Error = Other(e);
+        let err: Error = other(e);
         assert!(error::Error::cause(&err).is_none());
 
-        let err1 = Other("hello world");
+        let err1 = other("hello world");
         assert!(error::Error::cause(&err1).is_none());
     }
 }
