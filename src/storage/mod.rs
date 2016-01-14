@@ -1,10 +1,9 @@
-use std::error;
-use std::result;
-use std::fmt::{self, Display, Formatter};
 use self::engine::Engine;
 pub use self::engine::Dsn;
+use self::mvcc::Result;
 
 mod engine;
+mod mvcc;
 
 pub struct Storage {
     engine: Box<Engine>,
@@ -12,53 +11,22 @@ pub struct Storage {
 
 impl Storage {
     pub fn new(desc: Dsn) -> Result<Storage> {
-        engine::new_engine(desc).map(|e| Storage { engine: e }).map_err(|e| Error::from(e))
+        let eng = try!(engine::new_engine(desc));
+        Ok(Storage { engine: eng })
     }
 
     pub fn get(&self, key: &[u8], version: u64) -> Result<Option<Vec<u8>>> {
         trace!("storage: get {:?}@{}", key, version);
-        // TODO (disksing)
-        self.engine.get(key).map_err(|e| Error::from(e))
+        mvcc::get(&*self.engine, key, version)
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8], version: u64) -> Result<()> {
         trace!("storage: put {:?}@{}", key, version);
-        // TODO (disksing)
-        self.engine.put(key, value).map_err(|e| Error::from(e))
-    }
-}
-
-#[derive(Debug)]
-pub enum Error {
-    Engine(engine::Error),
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match *self {
-            Error::Engine(ref e) => Display::fmt(e, f),
-        }
-    }
-}
-
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            &Error::Engine(ref e) => e.description(),
-        }
+        mvcc::put(&mut *self.engine, key, value, version)
     }
 
-    fn cause(&self) -> Option<&error::Error> {
-        match self {
-            &Error::Engine(ref e) => Some(e),
-        }
+    pub fn delete(&mut self, key: &[u8], version: u64) -> Result<()> {
+        trace!("storage: delete {:?}@{}", key, version);
+        mvcc::delete(&mut *self.engine, key, version)
     }
 }
-
-impl From<engine::Error> for Error {
-    fn from(err: engine::Error) -> Error {
-        Error::Engine(err)
-    }
-}
-
-pub type Result<T> = result::Result<T, Error>;
