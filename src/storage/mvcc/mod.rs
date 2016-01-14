@@ -57,12 +57,12 @@ pub fn delete(eng: &mut Engine, key: &[u8], version: u64) -> Result<()> {
 }
 
 pub fn scan(eng: &Engine,
-            key: &[u8],
+            start_key: &[u8],
             limit: usize,
             version: u64)
             -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
     let mut pairs = vec![];
-    let mut seek_key = encode_key(key, 0u64);
+    let mut seek_key = encode_key(start_key, 0u64);
     loop {
         if pairs.len() >= limit {
             break;
