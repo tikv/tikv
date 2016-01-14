@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use raft::raftpb::{Entry, Snapshot};
+use proto::raftpb::{Entry, Snapshot};
 use std::collections::VecDeque;
 
 // unstable.entris[i] has raft log position i+unstable.offset.
@@ -151,7 +151,7 @@ impl Unstable {
 
 #[cfg(test)]
 mod test {
-    use raft::raftpb::{Entry, Snapshot};
+    use proto::raftpb::{Entry, Snapshot};
     use raft::log_unstable::Unstable;
     use std::collections::VecDeque;
 
@@ -163,7 +163,7 @@ mod test {
     }
 
     fn new_snapshot(index: u64, term: u64) -> Snapshot {
-        use raft::raftpb::{SnapshotMetadata, Snapshot};
+        use proto::raftpb::{SnapshotMetadata, Snapshot};
         let mut snap = Snapshot::new();
         let mut meta = SnapshotMetadata::new();
         meta.set_index(index);

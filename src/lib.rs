@@ -13,4 +13,5 @@ pub use storage::{Storage, Dsn};
 
 pub mod util;
 pub mod raft;
+pub mod proto;
 mod storage;
