@@ -1,13 +1,18 @@
 syntax = "proto2";
 package kvrpc;
 
-message FooRequest {
+enum MessageType {
+    Get = 1;
 }
-message FooResponse {
+message GetRequest {
 }
-message Message {
-    oneof body {
-        FooRequest fooReq = 1;
-        FooResponse fooResp = 2;
-    }
+message GetResponse {
+}
+message Request {
+    required MessageType type = 1;
+    optional GetRequest getReq = 2;
+}
+message Response {
+    required MessageType type = 1;
+    optional GetResponse getResp = 2;
 }
