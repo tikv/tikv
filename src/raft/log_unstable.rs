@@ -18,9 +18,16 @@ pub struct Unstable {
 
 
 impl Unstable {
+    pub fn new(offset: u64) -> Unstable {
+        Unstable {
+            offset: offset,
+            snapshot: None,
+            entries: VecDeque::new(),
+        }
+    }
     // maybe_first_index returns the last index if it has at least one
     // unstable entry or snapshot.
-    fn maybe_first_index(&self) -> Option<u64> {
+    pub fn maybe_first_index(&self) -> Option<u64> {
         self.snapshot
             .as_ref()
             .map_or(None, |snap| Some(snap.get_metadata().get_index() + 1))
@@ -28,7 +35,7 @@ impl Unstable {
 
     // maybe_last_index returns the last index if it has at least one
     // unstable entry or snapshot.
-    fn maybe_last_index(&self) -> Option<u64> {
+    pub fn maybe_last_index(&self) -> Option<u64> {
         match self.entries.len() {
             0 => {
                 self.snapshot
@@ -41,7 +48,7 @@ impl Unstable {
 
     // maybe_term returns the term of the entry at index idx, if there
     // is any.
-    fn maybe_term(&self, idx: u64) -> Option<u64> {
+    pub fn maybe_term(&self, idx: u64) -> Option<u64> {
         if idx < self.offset {
             if self.snapshot.is_none() {
                 return None;
@@ -64,7 +71,7 @@ impl Unstable {
         }
     }
 
-    fn stable_to(&mut self, idx: u64, term: u64) {
+    pub fn stable_to(&mut self, idx: u64, term: u64) {
         let t = self.maybe_term(idx);
         if t.is_none() {
             return;
@@ -79,7 +86,7 @@ impl Unstable {
         }
     }
 
-    fn stable_snap_to(&mut self, idx: u64) {
+    pub fn stable_snap_to(&mut self, idx: u64) {
         if self.snapshot.is_none() {
             return;
         }
@@ -88,13 +95,13 @@ impl Unstable {
         }
     }
 
-    fn restore(&mut self, snap: Snapshot) {
+    pub fn restore(&mut self, snap: Snapshot) {
         self.entries.clear();
         self.offset = snap.get_metadata().get_index() + 1;
         self.snapshot = Some(Box::new(snap));
     }
 
-    fn truncate_and_append(&mut self, ents: &[Entry]) {
+    pub fn truncate_and_append(&mut self, ents: &[Entry]) {
         let after = ents[0].get_Index() - 1;
         if after == self.offset + self.entries.len() as u64 - 1 {
             for e in ents {
@@ -125,7 +132,7 @@ impl Unstable {
         }
     }
 
-    fn cut_slice(&mut self, lo: u64, hi: u64) -> Vec<Entry> {
+    pub fn cut_slice(&mut self, lo: u64, hi: u64) -> Vec<Entry> {
         self.must_check_outofbounds(lo, hi);
         let l = lo as usize;
         let h = hi as usize;
@@ -133,7 +140,7 @@ impl Unstable {
         return self.entries.drain(l - off..h - off).map(|e| e).collect();
     }
 
-    fn must_check_outofbounds(&self, lo: u64, hi: u64) {
+    pub fn must_check_outofbounds(&self, lo: u64, hi: u64) {
         if lo > hi {
             panic!("invalid unstable.slice {} > {}", lo, hi)
         }
