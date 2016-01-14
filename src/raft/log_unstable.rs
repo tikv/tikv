@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(unused_features)]
 
 use raft::raftpb::{Entry, Snapshot};
 use std::collections::VecDeque;
@@ -128,7 +129,7 @@ impl Unstable {
     fn cut_slice(&mut self, lo: u64, hi: u64) -> Vec<Entry> {
         self.must_check_outofbounds(lo, hi);
         let l = lo as usize;
-        let h = lo as usize;
+        let h = hi as usize;
         let off = self.offset as usize;
         return self.entries.drain(l - off..h - off).map(|e| e).collect();
     }
@@ -280,7 +281,7 @@ mod test {
 
     #[test]
     fn test_stable_to() {
-        // entry, offset, snap, index, term, woffset, wlen
+        // entries, offset, snap, index, term, woffset, wlen
         let tests: Vec<(Vec<Entry>, u64, Option<Snapshot>, u64, u64, u64, usize)> = vec![  
             (vec![], 0, None, 5, 1, 0, 0),
             // stable to the first entry
@@ -313,6 +314,52 @@ mod test {
             u.stable_to(index, term);
             assert_eq!(u.offset, woffset);
             assert_eq!(u.entries.len(), wlen);
+        }
+    }
+
+    #[test]
+    fn test_truncate_and_append() {
+        // entries, offset, snap, to_append, woffset, wentries
+        let tests: Vec<(Vec<Entry>,
+                        u64,
+                        Option<Snapshot>,
+                        Vec<Entry>,
+                        u64,
+                        Vec<Entry>)> = vec![
+            // replace to the end
+            (vec![new_entry(5, 1)], 5, None, 
+                vec![new_entry(6, 1), new_entry(7, 1)], 
+                    5, vec![new_entry(5,1), new_entry(6,1), new_entry(7,1)]),
+
+            // replace to unstable entries
+           (vec![new_entry(5, 1)], 5, None, 
+               vec![new_entry(5, 2), new_entry(6, 2)], 
+                   5, vec![new_entry(5, 2), new_entry(6, 2)]),
+
+            (vec![new_entry(5, 1)], 5, None, 
+                vec![new_entry(4, 2), new_entry(5, 2), new_entry(6, 2)], 
+                    4, vec![new_entry(4,2), new_entry(5, 2), new_entry(6, 2)]),
+
+            // truncate existing entries and append
+           (vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)], 5, None, 
+               vec![new_entry(6, 2)], 
+                   5, vec![new_entry(5, 1), new_entry(6, 2)]),
+
+            (vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)], 5, None, 
+                vec![new_entry(7, 2), new_entry(8, 2)], 
+                    5, vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 2), new_entry(8, 2)]),
+      ];
+
+
+        for (entries, offset, snapshot, to_append, woffset, wentries) in tests {
+            let mut u = Unstable {
+                entries: entries.into_iter().collect::<VecDeque<Entry>>(),
+                offset: offset,
+                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+            };
+            u.truncate_and_append(to_append.as_slice());
+            assert_eq!(u.offset, woffset);
+            assert_eq!(u.entries, wentries.into_iter().collect::<VecDeque<Entry>>());
         }
     }
 }
