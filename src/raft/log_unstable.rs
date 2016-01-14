@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-#![allow(unused_features)]
 
 use raft::raftpb::{Entry, Snapshot};
 use std::collections::VecDeque;
