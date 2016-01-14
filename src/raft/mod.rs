@@ -1,4 +1,3 @@
-
 mod raft_log;
 pub mod raftpb;
 mod storage;
