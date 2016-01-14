@@ -166,14 +166,14 @@ mod tests {
     #[test]
     fn test_mvcc() {
         let mut eng = engine::new_engine(Dsn::Memory).unwrap();
-        assert_eq!(get(&*eng, b"x", 1).unwrap(), None);
+        assert_eq!(get(eng.as_ref(), b"x", 1).unwrap(), None);
         put(&mut *eng, b"x", b"x10", 10).unwrap();
-        assert_eq!(get(&*eng, b"x", 10).unwrap().unwrap(), b"x10");
-        assert_eq!(get(&*eng, b"x", 11).unwrap().unwrap(), b"x10");
+        assert_eq!(get(eng.as_ref(), b"x", 10).unwrap().unwrap(), b"x10");
+        assert_eq!(get(eng.as_ref(), b"x", 11).unwrap().unwrap(), b"x10");
         delete(&mut *eng, b"x", 20).unwrap();
-        assert_eq!(get(&*eng, b"x", 15).unwrap().unwrap(), b"x10");
-        assert_eq!(get(&*eng, b"x", 20).unwrap(), None);
-        assert_eq!(get(&*eng, b"x", 22).unwrap(), None);
+        assert_eq!(get(eng.as_ref(), b"x", 15).unwrap().unwrap(), b"x10");
+        assert_eq!(get(eng.as_ref(), b"x", 20).unwrap(), None);
+        assert_eq!(get(eng.as_ref(), b"x", 22).unwrap(), None);
     }
 
     #[test]
@@ -183,7 +183,7 @@ mod tests {
         put(&mut *eng, b"bb", b"22", 20).unwrap();
         put(&mut *eng, b"cc", b"33", 15).unwrap();
 
-        let vec = scan(&*eng, b"a", 4, 19).unwrap();
+        let vec = scan(eng.as_ref(), b"a", 4, 19).unwrap();
         assert_eq!(vec.len(), 2);
         assert_eq!(vec[0].0, b"aa");
         assert_eq!(vec[0].1, b"11");
