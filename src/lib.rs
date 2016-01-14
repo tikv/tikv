@@ -16,5 +16,6 @@ pub mod raft;
 pub mod proto;
 pub mod storage;
 pub mod kvserver;
+pub mod rpc;
 
 pub use storage::{Storage, Dsn};

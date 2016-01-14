@@ -1,0 +1,13 @@
+syntax = "proto2";
+package kvrpc;
+
+message FooRequest {
+}
+message FooResponse {
+}
+message Message {
+    oneof body {
+        FooRequest fooReq = 1;
+        FooResponse fooResp = 2;
+    }
+}

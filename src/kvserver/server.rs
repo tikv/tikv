@@ -9,15 +9,16 @@ use std::io::{Read, Write};
 use mio::{self, Token, EventLoop, EventSet, PollOpt, TryWrite, TryRead};
 use mio::tcp::{TcpListener, TcpStream};
 use protobuf;
+use protobuf::core::Message;
 use bytes::{MutBuf, ByteBuf, MutByteBuf};
 
-use raft::raftpb::Message;
-use util::codec::{self, encode_msg, decode_msg};
+use proto::kvrpc::Message as KVMessage;
+use util::codec::{self, encode_msg, decode_msg, MSG_HEADER_LEN};
 
 const SERVER_TOKEN: Token = Token(0);
 
 pub trait Dispatcher {
-    fn Dispatch<M: protobuf::Message>(&mut self, m: M) -> Result<M, Box<Error + Send + Sync>>;
+    fn Dispatch(&mut self, m: KVMessage) -> Result<KVMessage, Box<Error + Send + Sync>>;
 }
 
 struct Client<D: Dispatcher> {
@@ -34,7 +35,7 @@ impl<D: Dispatcher> Client<D> {
             sock: sock,
             interest: EventSet::readable(),
             d: d,
-            res: ByteBuf::mut_with_capacity(0),
+            res: ByteBuf::mut_with_capacity(1024),
         }
     }
 
@@ -46,11 +47,16 @@ impl<D: Dispatcher> Client<D> {
 
     fn read(&mut self) {
         // only test here
-        let mut m = Message::new();
+        let mut m = KVMessage::new();
         let msg_id = decode_msg(&mut self.sock, &mut m).unwrap();
 
         let res = self.d.borrow_mut().Dispatch(m).unwrap();
         self.res.clear();
+        let res_len: usize = MSG_HEADER_LEN + res.compute_size() as usize;
+        // Re-alloc self.res capacity
+        if self.res.capacity() < res_len {
+            self.res = ByteBuf::mut_with_capacity(res_len);
+        }
         encode_msg(&mut self.res, msg_id, &res).unwrap();
 
         self.interest.remove(EventSet::readable());
