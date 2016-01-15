@@ -166,34 +166,128 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use storage::engine::{self, Dsn};
+    use storage::engine::{self, Dsn, Engine};
+    use super::codec::encode_key;
     use super::MvccEngine;
 
     #[test]
-    fn test_mvcc() {
+    fn test_mvcc_get() {
         let mut eng = engine::new_engine(Dsn::Memory).unwrap();
-        assert_eq!(eng.mvcc_get(b"x", 1).unwrap(), None);
-        eng.mvcc_put(b"x", b"x10", 10).unwrap();
-        assert_eq!(eng.mvcc_get(b"x", 10).unwrap().unwrap(), b"x10");
-        assert_eq!(eng.mvcc_get(b"x", 11).unwrap().unwrap(), b"x10");
-        eng.mvcc_delete(b"x", 20).unwrap();
-        assert_eq!(eng.mvcc_get(b"x", 15).unwrap().unwrap(), b"x10");
-        assert_eq!(eng.mvcc_get(b"x", 20).unwrap(), None);
-        assert_eq!(eng.mvcc_get(b"x", 22).unwrap(), None);
+        // not exist
+        assert_eq!(eng.mvcc_get(b"x", 10).unwrap(), None);
+        // after put
+        eng.mvcc_put(b"x", b"x", 10).unwrap();
+        assert_eq!(eng.mvcc_get(b"x", 9).unwrap(), None);
+        assert_eq!(eng.mvcc_get(b"x", 10).unwrap().unwrap(), b"x");
+        assert_eq!(eng.mvcc_get(b"x", 11).unwrap().unwrap(), b"x");
+        // delete meta
+        eng.delete(&encode_key(b"x", 0u64)).unwrap();
+        assert_eq!(eng.mvcc_get(b"x", 10).unwrap(), None);
+        // data missing
+        eng.mvcc_put(b"y", b"y", 10).unwrap();
+        eng.delete(&encode_key(b"y", 10)).unwrap();
+        assert!(eng.mvcc_get(b"y", 10).is_err());
+    }
+
+    #[test]
+    fn test_mvcc_put_delete() {
+        let mut eng = engine::new_engine(Dsn::Memory).unwrap();
+        eng.mvcc_delete(b"x", 10).unwrap();
+        assert_eq!(eng.mvcc_get(b"x", 9).unwrap(), None);
+        assert_eq!(eng.mvcc_get(b"x", 10).unwrap(), None);
+        assert_eq!(eng.mvcc_get(b"x", 11).unwrap(), None);
+        eng.mvcc_put(b"x", b"x5", 5).unwrap();
+        assert_eq!(eng.mvcc_get(b"x", 9).unwrap().unwrap(), b"x5");
+        assert_eq!(eng.mvcc_get(b"x", 10).unwrap(), None);
+        assert_eq!(eng.mvcc_get(b"x", 11).unwrap(), None);
+        eng.mvcc_delete(b"x", 5).unwrap();
+        assert_eq!(eng.mvcc_get(b"x", 9).unwrap(), None);
     }
 
     #[test]
     fn test_scan() {
         let mut eng = engine::new_engine(Dsn::Memory).unwrap();
-        eng.mvcc_put(b"aa", b"11", 10).unwrap();
-        eng.mvcc_put(b"bb", b"22", 20).unwrap();
-        eng.mvcc_put(b"cc", b"33", 15).unwrap();
+        // ver1: A(1) - B(_) - C(1) - D(_) - E(1)
+        eng.mvcc_put(b"A", b"A1", 1).unwrap();
+        eng.mvcc_put(b"C", b"C1", 1).unwrap();
+        eng.mvcc_put(b"E", b"E1", 1).unwrap();
+        check_scan_ver1(eng.as_ref());
 
-        let vec = eng.mvcc_scan(b"a", 4, 19).unwrap();
-        assert_eq!(vec.len(), 2);
-        assert_eq!(vec[0].0, b"aa");
-        assert_eq!(vec[0].1, b"11");
-        assert_eq!(vec[1].0, b"cc");
-        assert_eq!(vec[1].1, b"33");
+        // ver2: A(1) - B(2) - C(1) - D(2) - E(1)
+        eng.mvcc_put(b"B", b"B2", 2).unwrap();
+        eng.mvcc_put(b"D", b"D2", 2).unwrap();
+        check_scan_ver1(eng.as_ref());
+        check_scan_ver2(eng.as_ref());
+
+        // ver3: A(_) - B(2) - C(1) - D(_) - E(1)
+        eng.mvcc_delete(b"A", 3).unwrap();
+        eng.mvcc_delete(b"D", 3).unwrap();
+        check_scan_ver1(eng.as_ref());
+        check_scan_ver2(eng.as_ref());
+        check_scan_ver3(eng.as_ref());
+
+        // ver4: A(_) - B(_) - C(4) - D(4) - E(1)
+        eng.mvcc_delete(b"B", 4).unwrap();
+        eng.mvcc_put(b"C", b"C4", 4).unwrap();
+        eng.mvcc_put(b"D", b"D4", 4).unwrap();
+        check_scan_ver1(eng.as_ref());
+        check_scan_ver2(eng.as_ref());
+        check_scan_ver3(eng.as_ref());
+        check_scan_ver4(eng.as_ref());
+    }
+
+    fn check_scan_ver1<T: Engine + ?Sized>(eng: &T) {
+        assert_scan_eq(eng.mvcc_scan(b"", 0, 1).unwrap(), vec![]);
+        assert_scan_eq(eng.mvcc_scan(b"", 1, 1).unwrap(), vec![(b"A", b"A1")]);
+        assert_scan_eq(eng.mvcc_scan(b"", 2, 1).unwrap(),
+                       vec![(b"A", b"A1"), (b"C", b"C1")]);
+        assert_scan_eq(eng.mvcc_scan(b"", 3, 1).unwrap(),
+                       vec![(b"A", b"A1"), (b"C", b"C1"), (b"E", b"E1")]);
+        assert_scan_eq(eng.mvcc_scan(b"", 4, 1).unwrap(),
+                       vec![(b"A", b"A1"), (b"C", b"C1"), (b"E", b"E1")]);
+
+        assert_scan_eq(eng.mvcc_scan(b"A", 3, 1).unwrap(),
+                       vec![(b"A", b"A1"), (b"C", b"C1"), (b"E", b"E1")]);
+        assert_scan_eq(eng.mvcc_scan(b"A\x00", 3, 1).unwrap(),
+                       vec![(b"C", b"C1"), (b"E", b"E1")]);
+
+        assert_scan_eq(eng.mvcc_scan(b"C", 4, 1).unwrap(),
+                       vec![(b"C", b"C1"), (b"E", b"E1")]);
+        assert_scan_eq(eng.mvcc_scan(b"F", 1, 1).unwrap(), vec![]);
+    }
+
+    fn check_scan_ver2<T: Engine + ?Sized>(eng: &T) {
+        assert_scan_eq(eng.mvcc_scan(b"", 5, 2).unwrap(),
+                       vec![(b"A", b"A1"),
+                            (b"B", b"B2"),
+                            (b"C", b"C1"),
+                            (b"D", b"D2"),
+                            (b"E", b"E1")]);
+        assert_scan_eq(eng.mvcc_scan(b"C", 5, 2).unwrap(),
+                       vec![(b"C", b"C1"), (b"D", b"D2"), (b"E", b"E1")]);
+        assert_scan_eq(eng.mvcc_scan(b"D\x00", 1, 2).unwrap(), vec![(b"E", b"E1")]);
+    }
+
+    fn check_scan_ver3<T: Engine + ?Sized>(eng: &T) {
+        assert_scan_eq(eng.mvcc_scan(b"", 5, 3).unwrap(),
+                       vec![(b"B", b"B2"), (b"C", b"C1"), (b"E", b"E1")]);
+        assert_scan_eq(eng.mvcc_scan(b"A", 1, 3).unwrap(), vec![(b"B", b"B2")]);
+        assert_scan_eq(eng.mvcc_scan(b"C\x00", 5, 3).unwrap(), vec![(b"E", b"E1")]);
+    }
+
+    fn check_scan_ver4<T: Engine + ?Sized>(eng: &T) {
+        assert_scan_eq(eng.mvcc_scan(b"", 5, 4).unwrap(),
+                       vec![(b"C", b"C4"), (b"D", b"D4"), (b"E", b"E1")]);
+        assert_scan_eq(eng.mvcc_scan(b"", 5, 20).unwrap(),
+                       vec![(b"C", b"C4"), (b"D", b"D4"), (b"E", b"E1")]);
+    }
+
+    fn assert_scan_eq(result: Vec<(Vec<u8>, Vec<u8>)>,
+                      expect: Vec<(&'static [u8], &'static [u8])>) {
+        assert_eq!(result.len(), expect.len());
+        for ((ref k1, ref v1), (ref k2, ref v2)) in result.into_iter().zip(expect.into_iter()) {
+            assert_eq!(k1, k2);
+            assert_eq!(v1, v2);
+        }
     }
 }
