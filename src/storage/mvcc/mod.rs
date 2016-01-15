@@ -290,4 +290,45 @@ mod tests {
             assert_eq!(v1, v2);
         }
     }
+
+    use test::Bencher;
+    use std::fs;
+    use std::sync::{Once, ONCE_INIT};
+    use rand::{self, thread_rng, Rng};
+
+    const NUM_OF_KEYS: usize = 100000;
+    const NUM_OF_VERSIONS: u64 = 10;
+    const VAL_LEN: usize = 10;
+    const SCAN_LEN: usize = 100;
+    const BENCH_DATA_PATH: &'static str = "/tmp/rocks-scan-bench-data";
+
+    #[bench]
+    #[ignore]
+    fn bench_scan(b: &mut Bencher) {
+        prepare();
+
+        let e = engine::new_engine(Dsn::RocksDBPath(BENCH_DATA_PATH)).unwrap();
+        b.iter(|| {
+            let key = format!("row_{}", rand::random::<usize>() % (NUM_OF_KEYS - SCAN_LEN));
+            e.mvcc_scan(key.as_bytes(), SCAN_LEN, 11).unwrap();
+        })
+    }
+
+    static PREPARE_ONCE: Once = ONCE_INIT;
+    fn prepare() {
+        PREPARE_ONCE.call_once(|| {
+            fs::remove_dir_all(BENCH_DATA_PATH).ok();
+            let mut e = engine::new_engine(Dsn::RocksDBPath(BENCH_DATA_PATH)).unwrap();
+
+            let mut val = [0u8; VAL_LEN];
+            for i in 0..NUM_OF_KEYS {
+                let key = format!("row_{}", i);
+                for j in 1..NUM_OF_VERSIONS + 1 {
+                    let ver = j * 5;
+                    thread_rng().fill_bytes(&mut val);
+                    e.mvcc_put(key.as_bytes(), &val, ver).unwrap();
+                }
+            }
+        })
+    }
 }

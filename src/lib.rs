@@ -9,6 +9,7 @@ extern crate test;
 extern crate protobuf;
 extern crate bytes;
 extern crate byteorder;
+extern crate rand;
 
 pub mod util;
 pub mod raft;
