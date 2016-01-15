@@ -12,8 +12,8 @@ pub struct Unstable {
     // the incoming unstable snapshot, if any.
     snapshot: Option<Box<Snapshot>>,
     // all entries that have not yet been written to storage.
-    entries: VecDeque<Entry>,
-    offset: u64,
+    pub entries: VecDeque<Entry>,
+    pub offset: u64,
 }
 
 
