@@ -6,7 +6,7 @@ use self::codec::{encode_key, decode_key};
 mod meta;
 mod codec;
 
-pub trait EngineExt : Engine {
+pub trait MvccEngine : Engine {
     fn mvcc_get(&self, key: &[u8], version: u64) -> Result<Option<Vec<u8>>> {
         let mkey = encode_key(key, 0u64);
         let mval = match try!(self.get(&mkey)) {
@@ -94,7 +94,7 @@ pub trait EngineExt : Engine {
     }
 }
 
-impl<T: Engine + ?Sized> EngineExt for T {}
+impl<T: Engine + ?Sized> MvccEngine for T {}
 
 #[derive(Debug)]
 pub enum Error {
@@ -165,7 +165,7 @@ pub type Result<T> = result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use storage::engine::{self, Dsn};
-    use super::EngineExt;
+    use super::MvccEngine;
 
     #[test]
     fn test_mvcc() {
