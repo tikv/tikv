@@ -143,11 +143,11 @@ impl MemStorage {
         let offset = te[0].get_Index() - self.entries[0].get_Index();
         if self.entries.len() as u64 > offset {
             let mut new_entries: Vec<Entry> = vec![];
-            new_entries.push_all(&self.entries[..offset as usize]);
-            new_entries.push_all(te);
+            new_entries.extend_from_slice(&self.entries[..offset as usize]);
+            new_entries.extend_from_slice(te);
             self.entries = new_entries;
         } else if self.entries.len() as u64 == offset {
-            self.entries.push_all(te);
+            self.entries.extend_from_slice(te);
         } else {
             panic!("missing log entry [last: {}, append at: {}]",
                    self.last_index().unwrap(),

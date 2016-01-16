@@ -2,10 +2,10 @@
 #![allow(dead_code)]
 use raft::storage::Storage;
 use raft::log_unstable::Unstable;
-use proto::raftpb::{Entry, Snapshot};
+use proto::raftpb::Entry;
 use raft::errors::{Result, Error, StorageError};
 use std::cmp;
-use std::collections::VecDeque;
+use protobuf;
 
 /// Raft log implementation
 pub struct RaftLog<T>
@@ -38,6 +38,26 @@ impl<T> ToString for RaftLog<T> where T: Storage
                 self.unstable.entries.len())
     }
 }
+
+
+fn limit_size(entries: &[Entry], max_size: u64) -> &[Entry] {
+    if entries.len() == 0 {
+        return entries;
+    }
+
+    let mut size = protobuf::Message::compute_size(&entries[0]) as u64;
+    let mut limit = 1usize;
+    while limit < entries.len() {
+        size += protobuf::Message::compute_size(&entries[limit]) as u64;
+        if size > max_size {
+            break;
+        }
+        limit += 1;
+    }
+
+    &entries[..limit]
+}
+
 
 impl<T> RaftLog<T> where T: Storage
 {
@@ -183,7 +203,7 @@ impl<T> RaftLog<T> where T: Storage
         self.last_index()
     }
 
-    fn unstable_entries(&self) -> Option<&VecDeque<Entry>> {
+    fn unstable_entries(&self) -> Option<&[Entry]> {
         if self.unstable.entries.len() == 0 {
             return None;
         }
@@ -193,11 +213,11 @@ impl<T> RaftLog<T> where T: Storage
     // next_entries returns all the available entries for execution.
     // If applied is smaller than the index of snapshot, it returns all committed
     // entries after the index of snapshot.
-    fn next_entries(&self) -> Option<&VecDeque<Entry>> {
-        let offset = cmp::max(self.applied + 1, self.first_index());
-        if self.committed + 1 > offset {
-            ents = self.slice(offset, self.committed + 1, u64::MAX);
-        }
+    fn next_entries(&self) -> Option<&[Entry]> {
+        // let offset = cmp::max(self.applied + 1, self.first_index());
+        //    if self.committed + 1 > offset {
+        //        ents = self.slice(offset, self.committed + 1, u64::MAX);
+        //    }
         unimplemented!();
     }
 
@@ -227,8 +247,46 @@ impl<T> RaftLog<T> where T: Storage
             return Err(err.unwrap());
         }
 
+
+        let mut ents: Vec<Entry> = vec![];
         if low == high {
-            return Ok(vec![]);
+            return Ok(ents);
         }
+
+        if low < self.unstable.offset {
+            let stored_entries = self.store
+                                     .entries(low, cmp::min(high, self.unstable.offset), max_size);
+            if stored_entries.is_err() {
+                let e = stored_entries.unwrap_err();
+                match e {
+                    Error::Store(StorageError::Compacted) => return Err(e),
+                    Error::Store(StorageError::Unavailable) => {
+                        panic!("entries[{}:{}] is unavailable from storage",
+                               low,
+                               cmp::min(high, self.unstable.offset))
+                    }
+                    _ => panic!(e),
+                }
+            }
+            let se = stored_entries.unwrap();
+            if (se.len() as u64) < cmp::min(high, self.unstable.offset) - low {
+                return Ok(ents);
+            }
+            ents = se.to_vec();
+        }
+
+        if high > self.unstable.offset {
+            let offset = self.unstable.offset.clone();
+            let unstable = self.unstable.slice(cmp::max(low, offset), high);
+            if ents.len() > 0 {
+                ents.extend_from_slice(&unstable);
+            } else {
+                ents = unstable;
+            }
+        }
+
+        let mut v = Vec::<Entry>::new();
+        v.extend_from_slice(limit_size(&ents, max_size));
+        Ok(v)
     }
 }
