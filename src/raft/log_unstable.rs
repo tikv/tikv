@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use proto::raftpb::{Entry, Snapshot};
-use std::collections::VecDeque;
 
 // unstable.entris[i] has raft log position i+unstable.offset.
 // Note that unstable.offset may be less than the highest log
@@ -12,7 +11,7 @@ pub struct Unstable {
     // the incoming unstable snapshot, if any.
     snapshot: Option<Box<Snapshot>>,
     // all entries that have not yet been written to storage.
-    pub entries: VecDeque<Entry>,
+    pub entries: Vec<Entry>,
     pub offset: u64,
 }
 
@@ -22,7 +21,7 @@ impl Unstable {
         Unstable {
             offset: offset,
             snapshot: None,
-            entries: VecDeque::new(),
+            entries: vec![],
         }
     }
     // maybe_first_index returns the last index if it has at least one
@@ -79,9 +78,9 @@ impl Unstable {
 
         if t.unwrap() == term && idx >= self.offset {
             let start = idx + 1 - self.offset;
-            for _ in 0..start {
-                self.entries.pop_front();
-            }
+            let left = &self.entries.clone()[start as usize..];
+            self.entries = vec![];
+            self.entries.extend_from_slice(left);
             self.offset = idx + 1;
         }
     }
@@ -104,35 +103,25 @@ impl Unstable {
     pub fn truncate_and_append(&mut self, ents: &[Entry]) {
         let after = ents[0].get_Index() - 1;
         if after == self.offset + self.entries.len() as u64 - 1 {
-            for e in ents {
-                self.entries.push_back(e.clone());
-            }
+            self.entries.extend_from_slice(ents);
         } else if after < self.offset {
             // The log is being truncated to before our current offset
             // portion, so set the offset and replace the entries
             self.offset = after + 1;
             self.entries.clear();
-
-            for e in ents {
-                self.entries.push_back(e.clone());
-            }
+            self.entries.extend_from_slice(ents);
         } else {
             // truncate to after and copy to self.entries
             // then append
             let off = self.offset.clone();
-            let cut_ents = self.cut_slice(off, after + 1);
-            self.entries.clear();
-            for e in cut_ents {
-                self.entries.push_back(e);
-            }
-
-            for e in ents {
-                self.entries.push_back(e.clone());
-            }
+            let cut_ents = &self.slice(off, after + 1);
+            self.entries = vec![];
+            self.entries.extend_from_slice(cut_ents);
+            self.entries.extend_from_slice(ents);
         }
     }
 
-    pub fn cut_slice(&mut self, lo: u64, hi: u64) -> Vec<Entry> {
+    pub fn slice(&mut self, lo: u64, hi: u64) -> Vec<Entry> {
         self.must_check_outofbounds(lo, hi);
         let l = lo as usize;
         let h = hi as usize;
@@ -160,7 +149,6 @@ impl Unstable {
 mod test {
     use proto::raftpb::{Entry, Snapshot};
     use raft::log_unstable::Unstable;
-    use std::collections::VecDeque;
 
     fn new_entry(index: u64, term: u64) -> Entry {
         let mut e = Entry::new();
@@ -193,9 +181,7 @@ mod test {
 
         for (entries, offset, snapshot, wok, windex) in tests {
             let u = Unstable {
-                entries: entries.map_or(VecDeque::new(), |entry| {
-                    vec![entry].into_iter().collect::<VecDeque<Entry>>()
-                }),
+                entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
                 snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
             };
@@ -221,9 +207,7 @@ mod test {
 
         for (entries, offset, snapshot, wok, windex) in tests {
             let u = Unstable {
-                entries: entries.map_or(VecDeque::new(), |entry| {
-                    vec![entry].into_iter().collect::<VecDeque<Entry>>()
-                }),
+                entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
                 snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
             };
@@ -254,9 +238,7 @@ mod test {
 
         for (entries, offset, snapshot, index, wok, wterm) in tests {
             let u = Unstable {
-                entries: entries.map_or(VecDeque::new(), |entry| {
-                    vec![entry].into_iter().collect::<VecDeque<Entry>>()
-                }),
+                entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
                 snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
             };
@@ -272,7 +254,7 @@ mod test {
     #[test]
     fn test_restore() {
         let mut u = Unstable {
-            entries: vec![new_entry(5, 1)].into_iter().collect::<VecDeque<Entry>>(),
+            entries: vec![new_entry(5, 1)],
             offset: 5,
             snapshot: Some(Box::new(new_snapshot(4, 1))),
         };
@@ -313,7 +295,7 @@ mod test {
 
         for (entries, offset, snapshot, index, term, woffset, wlen) in tests {
             let mut u = Unstable {
-                entries: entries.into_iter().collect::<VecDeque<Entry>>(),
+                entries: entries,
                 offset: offset,
                 snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
             };
@@ -359,13 +341,13 @@ mod test {
 
         for (entries, offset, snapshot, to_append, woffset, wentries) in tests {
             let mut u = Unstable {
-                entries: entries.into_iter().collect::<VecDeque<Entry>>(),
+                entries: entries,
                 offset: offset,
                 snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
             };
             u.truncate_and_append(&to_append);
             assert_eq!(u.offset, woffset);
-            assert_eq!(u.entries, wentries.into_iter().collect::<VecDeque<Entry>>());
+            assert_eq!(u.entries, wentries);
         }
     }
 }
