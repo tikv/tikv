@@ -9,7 +9,7 @@ run:
 	cargo run
 
 test:
-	cargo test -- --nocapture
+	RUST_BACKTRACE=1 cargo test -- --nocapture
 
 format:
 	rustfmt --write-mode overwrite src/lib.rs src/bin/*.rs
