@@ -2,10 +2,12 @@
 #![allow(dead_code)]
 use raft::storage::Storage;
 use raft::log_unstable::Unstable;
-use proto::raftpb::Entry;
+use proto::raftpb::{Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
-use std::cmp;
+use std::{cmp, u64};
 use protobuf;
+
+const NO_LIMIT: u64 = u64::MAX;
 
 /// Raft log implementation
 pub struct RaftLog<T>
@@ -72,6 +74,12 @@ impl<T> RaftLog<T> where T: Storage
             applied: first_index - 1,
             unstable: Unstable::new(last_index + 1),
         }
+    }
+
+    pub fn last_term(&self) -> u64 {
+        self.term(self.last_index())
+            .map_err(|e| panic!("unexpected error when getting the last term({})", e))
+            .unwrap()
     }
 
     pub fn term(&self, idx: u64) -> Result<u64> {
@@ -188,6 +196,28 @@ impl<T> RaftLog<T> where T: Storage
         }
     }
 
+    fn applied_to(&mut self, idx: u64) {
+        if idx == 0 {
+            return;
+        }
+        if self.committed < idx || idx < self.applied {
+            panic!("applied({}) is out of range [prev_applied({}), commited({})",
+                   idx,
+                   self.applied,
+                   self.committed)
+        }
+        self.applied = idx;
+    }
+
+    fn stable_to(&mut self, idx: u64, term: u64) {
+        self.unstable.stable_to(idx, term)
+    }
+
+    fn stable_snap_to(&mut self, idx: u64) {
+        self.unstable.stable_snap_to(idx)
+    }
+
+
     fn append(&mut self, ents: &[Entry]) -> u64 {
         if ents.len() == 0 {
             return self.last_index();
@@ -210,15 +240,61 @@ impl<T> RaftLog<T> where T: Storage
         Some(&self.unstable.entries)
     }
 
+    fn entries(&mut self, idx: u64, max_size: u64) -> Result<Vec<Entry>> {
+        let last = self.last_index();
+        if idx > last {
+            return Ok(Vec::<Entry>::new());
+        }
+        return self.slice(idx, last + 1, max_size);
+    }
+
+    fn all_entries(&mut self) -> Vec<Entry> {
+        let first_index = self.first_index();
+        let ents = self.entries(first_index, NO_LIMIT);
+        match ents {
+            Err(e) => {
+                // try again if there was a racing compaction
+                if e == Error::Store(StorageError::Compacted) {
+                    return self.all_entries();
+                }
+                panic!(e)
+            }
+            Ok(ents) => {
+                return ents;
+            }
+        }
+    }
+
+    fn is_upto_date(&self, last_index: u64, term: u64) -> bool {
+        term > self.last_term() || (term == self.last_term() && last_index >= self.last_index())
+    }
+
+
     // next_entries returns all the available entries for execution.
     // If applied is smaller than the index of snapshot, it returns all committed
     // entries after the index of snapshot.
-    fn next_entries(&self) -> Option<&[Entry]> {
-        // let offset = cmp::max(self.applied + 1, self.first_index());
-        //    if self.committed + 1 > offset {
-        //        ents = self.slice(offset, self.committed + 1, u64::MAX);
-        //    }
-        unimplemented!();
+    fn next_entries(&mut self) -> Option<Vec<Entry>> {
+        let offset = cmp::max(self.applied + 1, self.first_index());
+        let committed = self.committed;
+        if committed + 1 > offset {
+            match self.slice(offset, committed + 1, NO_LIMIT) {
+                Ok(vec) => return Some(vec),
+                Err(e) => panic!("{}", e),
+            }
+        }
+        None
+    }
+
+    fn has_next_entries(&self) -> bool {
+        let offset = cmp::max(self.applied + 1, self.first_index());
+        return self.committed + 1 > offset;
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        if self.unstable.snapshot.is_none() {
+            return self.store.snapshot().unwrap().clone();
+        }
+        self.unstable.get_snapshot()
     }
 
     fn must_check_outofbounds(&self, low: u64, high: u64) -> Option<Error> {
@@ -276,7 +352,7 @@ impl<T> RaftLog<T> where T: Storage
         }
 
         if high > self.unstable.offset {
-            let offset = self.unstable.offset.clone();
+            let offset = self.unstable.offset;
             let unstable = self.unstable.slice(cmp::max(low, offset), high);
             if ents.len() > 0 {
                 ents.extend_from_slice(&unstable);

@@ -9,7 +9,7 @@ use proto::raftpb::{Entry, Snapshot};
 #[derive(Debug, PartialEq)]
 pub struct Unstable {
     // the incoming unstable snapshot, if any.
-    snapshot: Option<Box<Snapshot>>,
+    pub snapshot: Option<Box<Snapshot>>,
     // all entries that have not yet been written to storage.
     pub entries: Vec<Entry>,
     pub offset: u64,
@@ -30,6 +30,10 @@ impl Unstable {
         self.snapshot
             .as_ref()
             .map_or(None, |snap| Some(snap.get_metadata().get_index() + 1))
+    }
+
+    pub fn get_snapshot(&self) -> Snapshot {
+        return *self.snapshot.as_ref().unwrap().clone();
     }
 
     // maybe_last_index returns the last index if it has at least one
