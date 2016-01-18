@@ -3,23 +3,22 @@
 
 use std::vec::Vec;
 
-use mio::{EventLoop, Token};
+use mio::Token;
 
-use raftserver::{Result, ConnData};
-use raftserver::server::Server;
+use raftserver::{Result, ConnData, Sender};
 
 pub trait ServerHandler :Sized {
     // Handle messages reading from connection with Token.
     // Return some messages for later writing to this connection.
     fn handle_read_data(&mut self,
-                        event_loop: &mut EventLoop<Server<Self>>,
+                        sender: &Sender,
                         token: Token,
                         msgs: Vec<ConnData>)
                         -> Result<(Vec<ConnData>)> {
         Ok((msgs))
     }
 
-    fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<Self>>) -> Result<()> {
+    fn handle_tick(&mut self, sender: &Sender) -> Result<()> {
         Ok(())
     }
 }

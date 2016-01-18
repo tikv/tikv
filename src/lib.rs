@@ -2,6 +2,7 @@
 #![feature(test)]
 #![feature(vec_push_all)]
 #![feature(btree_range, collections_bound)]
+#![feature(fnbox)]
 
 #[macro_use]
 extern crate log;
