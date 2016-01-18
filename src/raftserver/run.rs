@@ -127,7 +127,7 @@ mod tests {
     }
 
     impl ServerHandler for TickHandler {
-        fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<TickHandler>>) -> Result<()> {
+        fn handle_tick(&mut self, sender: &Sender) -> Result<()> {
             let mut v = self.n.lock().unwrap();
             v[0] += 1;
             Ok(())
@@ -151,5 +151,31 @@ mod tests {
 
         let n = n.lock().unwrap();
         assert!(n[0] > 1);
+    }
+
+    #[test]
+    fn test_timer() {
+        let addr = "127.0.0.1:0";
+        let mut r = Runner::start(addr).unwrap();
+
+        let sender = r.get_sender();
+        let n = Arc::new(Mutex::new(vec![1]));
+        let n1 = n.clone();
+        sender.timeout_ms(100, move || {
+                  let mut v = n1.lock().unwrap();
+                  v[0] = 0;
+              })
+              .unwrap();
+
+        thread::spawn(move || {
+            thread::sleep(Duration::new(1, 0));
+            sender.kill().unwrap();
+        });
+
+        let h = BaseHandler;
+        r.run(h).unwrap();
+
+        let n = n.lock().unwrap();
+        assert_eq!(n[0], 0);
     }
 }
