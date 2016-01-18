@@ -10,7 +10,7 @@ use std::ops::RangeTo;
 #[derive(Debug, PartialEq)]
 pub struct Unstable {
     // the incoming unstable snapshot, if any.
-    pub snapshot: Option<Box<Snapshot>>,
+    pub snapshot: Option<Snapshot>,
     // all entries that have not yet been written to storage.
     pub entries: Vec<Entry>,
     pub offset: u64,
@@ -34,7 +34,7 @@ impl Unstable {
     }
 
     pub fn get_snapshot(&self) -> Snapshot {
-        return *self.snapshot.as_ref().unwrap().clone();
+        return self.snapshot.as_ref().unwrap().clone();
     }
 
     // maybe_last_index returns the last index if it has at least one
@@ -100,7 +100,7 @@ impl Unstable {
     pub fn restore(&mut self, snap: Snapshot) {
         self.entries.clear();
         self.offset = snap.get_metadata().get_index() + 1;
-        self.snapshot = Some(Box::new(snap));
+        self.snapshot = Some(snap.clone());
     }
 
     pub fn truncate_and_append(&mut self, ents: &[Entry]) {
@@ -186,7 +186,7 @@ mod test {
             let u = Unstable {
                 entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+                snapshot: snapshot.map_or(None, |snap| Some(snap)),
             };
             let index = u.maybe_first_index();
             match index {
@@ -212,7 +212,7 @@ mod test {
             let u = Unstable {
                 entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+                snapshot: snapshot.map_or(None, |snap| Some(snap)),
             };
             let index = u.maybe_last_index();
             match index {
@@ -243,7 +243,7 @@ mod test {
             let u = Unstable {
                 entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+                snapshot: snapshot.map_or(None, |snap| Some(snap)),
             };
             let term = u.maybe_term(index);
             match term {
@@ -259,7 +259,7 @@ mod test {
         let mut u = Unstable {
             entries: vec![new_entry(5, 1)],
             offset: 5,
-            snapshot: Some(Box::new(new_snapshot(4, 1))),
+            snapshot: Some(new_snapshot(4, 1)),
         };
 
         let s = new_snapshot(6, 2);
@@ -267,7 +267,7 @@ mod test {
 
         assert_eq!(u.offset, s.get_metadata().get_index() + 1);
         assert_eq!(u.entries.len(), 0);
-        assert_eq!(*u.snapshot.unwrap(), s);
+        assert_eq!(u.snapshot.unwrap(), s);
     }
 
     #[test]
@@ -300,7 +300,7 @@ mod test {
             let mut u = Unstable {
                 entries: entries,
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+                snapshot: snapshot.map_or(None, |snap| Some(snap)),
             };
             u.stable_to(index, term);
             assert_eq!(u.offset, woffset);
@@ -346,7 +346,7 @@ mod test {
             let mut u = Unstable {
                 entries: entries,
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(Box::new(snap))),
+                snapshot: snapshot.map_or(None, |snap| Some(snap)),
             };
             u.truncate_and_append(&to_append);
             assert_eq!(u.offset, woffset);
