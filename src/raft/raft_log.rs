@@ -116,7 +116,7 @@ impl<T> RaftLog<T> where T: Storage
     // find_conflict finds the index of the conflict.
     // It returns the first pair of conflicting entries between the existing
     // entries and the given entries, if there are any.
-    // If there is no conflicting entries, and the existing entries contains
+    // If there is no conflicting entries, and the existing entries contain
     // all the given entries, zero will be returned.
     // If there is no conflicting entries, but the given entries contains new
     // entries, the index of the first new entry will be returned.
