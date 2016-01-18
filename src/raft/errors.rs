@@ -131,6 +131,7 @@ mod tests {
         assert!(error::Error::cause(&err1).is_none());
     }
 
+    #[test]
     fn test_equal() {
         assert_eq!(Error::NotFound, Error::NotFound);
         assert!(Error::NotFound != Error::Store(StorageError::Compacted));
