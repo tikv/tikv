@@ -174,17 +174,17 @@ mod tests {
     fn test_mvcc_get() {
         let mut eng = engine::new_engine(Dsn::Memory).unwrap();
         // not exist
-        assert_eq!(eng.mvcc_get(b"x", 10).unwrap(), None);
+        must_none(eng.as_ref(), b"x", 10);
         // after put
-        eng.mvcc_put(b"x", b"x", 10).unwrap();
-        assert_eq!(eng.mvcc_get(b"x", 9).unwrap(), None);
-        assert_eq!(eng.mvcc_get(b"x", 10).unwrap().unwrap(), b"x");
-        assert_eq!(eng.mvcc_get(b"x", 11).unwrap().unwrap(), b"x");
+        must_put(eng.as_mut(), b"x", b"x", 10);
+        must_none(eng.as_mut(), b"x", 9);
+        must_get(eng.as_ref(), b"x", 10, b"x");
+        must_get(eng.as_ref(), b"x", 11, b"x");
         // delete meta
         eng.delete(&encode_key(b"x", 0u64)).unwrap();
-        assert_eq!(eng.mvcc_get(b"x", 10).unwrap(), None);
+        must_none(eng.as_ref(), b"x", 10);
         // data missing
-        eng.mvcc_put(b"y", b"y", 10).unwrap();
+        must_put(eng.as_mut(), b"y", b"y", 10);
         eng.delete(&encode_key(b"y", 10)).unwrap();
         assert!(eng.mvcc_get(b"y", 10).is_err());
     }
@@ -192,16 +192,32 @@ mod tests {
     #[test]
     fn test_mvcc_put_delete() {
         let mut eng = engine::new_engine(Dsn::Memory).unwrap();
-        eng.mvcc_delete(b"x", 10).unwrap();
-        assert_eq!(eng.mvcc_get(b"x", 9).unwrap(), None);
-        assert_eq!(eng.mvcc_get(b"x", 10).unwrap(), None);
-        assert_eq!(eng.mvcc_get(b"x", 11).unwrap(), None);
-        eng.mvcc_put(b"x", b"x5", 5).unwrap();
-        assert_eq!(eng.mvcc_get(b"x", 9).unwrap().unwrap(), b"x5");
-        assert_eq!(eng.mvcc_get(b"x", 10).unwrap(), None);
-        assert_eq!(eng.mvcc_get(b"x", 11).unwrap(), None);
-        eng.mvcc_delete(b"x", 5).unwrap();
-        assert_eq!(eng.mvcc_get(b"x", 9).unwrap(), None);
+        must_delete(eng.as_mut(), b"x", 10);
+        must_none(eng.as_ref(), b"x", 9);
+        must_none(eng.as_ref(), b"x", 10);
+        must_none(eng.as_ref(), b"x", 11);
+        must_put(eng.as_mut(), b"x", b"x5", 5);
+        must_get(eng.as_ref(), b"x", 9, b"x5");
+        must_none(eng.as_ref(), b"x", 10);
+        must_none(eng.as_ref(), b"x", 11);
+        must_delete(eng.as_mut(), b"x", 5);
+        must_none(eng.as_ref(), b"x", 9);
+    }
+
+    fn must_get<T: Engine + ?Sized>(eng: &T, key: &[u8], version: u64, expect: &[u8]) {
+        assert_eq!(eng.mvcc_get(key, version).unwrap().unwrap(), expect);
+    }
+
+    fn must_none<T: Engine + ?Sized>(eng: &T, key: &[u8], version: u64) {
+        assert_eq!(eng.mvcc_get(key, version).unwrap(), None);
+    }
+
+    fn must_put<T: Engine + ?Sized>(eng: &mut T, key: &[u8], value: &[u8], version: u64) {
+        eng.mvcc_put(key, value, version).unwrap();
+    }
+
+    fn must_delete<T: Engine + ?Sized>(eng: &mut T, key: &[u8], version: u64) {
+        eng.mvcc_delete(key, version).unwrap();
     }
 
     #[test]
