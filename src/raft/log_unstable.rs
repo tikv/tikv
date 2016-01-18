@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use proto::raftpb::{Entry, Snapshot};
-use std::ops::RangeTo;
 
 // unstable.entris[i] has raft log position i+unstable.offset.
 // Note that unstable.offset may be less than the highest log
@@ -58,7 +57,7 @@ impl Unstable {
                 return None;
             }
 
-            let meta = self.snapshot.as_ref().unwrap().get_metadata().clone();
+            let meta = self.snapshot.as_ref().unwrap().get_metadata();
             if idx == meta.get_index() {
                 return Some(meta.get_term());
             }
@@ -83,7 +82,7 @@ impl Unstable {
 
         if t.unwrap() == term && idx >= self.offset {
             let start = idx + 1 - self.offset;
-            self.entries.drain(RangeTo { end: start as usize });
+            self.entries.drain(..start as usize);
             self.offset = idx + 1;
         }
     }
@@ -100,7 +99,7 @@ impl Unstable {
     pub fn restore(&mut self, snap: Snapshot) {
         self.entries.clear();
         self.offset = snap.get_metadata().get_index() + 1;
-        self.snapshot = Some(snap.clone());
+        self.snapshot = Some(snap);
     }
 
     pub fn truncate_and_append(&mut self, ents: &[Entry]) {
@@ -116,7 +115,7 @@ impl Unstable {
         } else {
             // truncate to after and copy to self.entries
             // then append
-            let off = self.offset.clone();
+            let off = self.offset;
             let cut_ents = &self.slice(off, after + 1);
             self.entries = vec![];
             self.entries.extend_from_slice(cut_ents);
