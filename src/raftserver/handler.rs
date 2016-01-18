@@ -17,4 +17,8 @@ pub trait ServerHandler :Sized {
                         -> Result<(Vec<ConnData>)> {
         Ok((msgs))
     }
+
+    fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<Self>>) -> Result<()> {
+        Ok(())
+    }
 }
