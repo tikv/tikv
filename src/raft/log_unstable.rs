@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use proto::raftpb::{Entry, Snapshot};
+use std::ops::RangeTo;
 
 // unstable.entris[i] has raft log position i+unstable.offset.
 // Note that unstable.offset may be less than the highest log
@@ -82,9 +83,7 @@ impl Unstable {
 
         if t.unwrap() == term && idx >= self.offset {
             let start = idx + 1 - self.offset;
-            let left = &self.entries.clone()[start as usize..];
-            self.entries = vec![];
-            self.entries.extend_from_slice(left);
+            self.entries.drain(RangeTo { end: start as usize });
             self.offset = idx + 1;
         }
     }
