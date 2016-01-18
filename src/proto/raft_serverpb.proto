@@ -3,14 +3,34 @@ package raft_serverpb;
 
 import "raftpb.proto";
 
-message RaftMessageRequest {
- optional raftpb.Message message = 1;
+enum MessageType {
+  MsgNone         = 0;
+  MsgCommand      = 1;
+  MsgCommandResp  = 2;
+  MsgRaft         = 3;
 }
 
-message RaftMessageResponse {
+message Message {
+  optional MessageType          type      = 1;  
+  optional RaftCommandRequest   cmd_req   = 2;
+  optional RaftCommandResponse  cmd_resp  = 3;
+  optional RaftMessage          raft      = 4;
+}
+
+
+message RaftMessage {
+ optional raftpb.Message message = 1;
 }
 
 // ConfChangeContext is encoded in the raftpb.ConfChange.Context field.
 message ConfChangeContext {
   optional string command_id = 1;
+}
+
+message RaftCommandRequest {
+  
+}
+
+message RaftCommandResponse {
+  
 }
