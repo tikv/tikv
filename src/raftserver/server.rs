@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;
 
-use raftserver::SERVER_TOKEN;
-use raftserver::{Msg, MsgType, Sender};
+use raftserver::{SERVER_TOKEN, TICK_TOKEN, FIRST_CUSTOM_TOKEN};
+use raftserver::{Msg, MsgType, Sender, Result};
 use raftserver::conn::Conn;
 use raftserver::handler::ServerHandler;
 
@@ -27,8 +27,12 @@ impl<T: ServerHandler> Server<T> {
             listener: l,
             sender: sender,
             conns: HashMap::new(),
-            token_counter: 1,
+            token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
         }
+    }
+
+    pub fn register_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) -> Result<()> {
+        Ok(())
     }
 
     fn handle_error(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
@@ -126,10 +130,14 @@ impl<T: ServerHandler> Server<T> {
             conn.register_writeable(event_loop);
         }
     }
+
+    fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
+        self.handler.handle_tick(event_loop).map_err(|e| warn!("handle tick err {:?}", e));
+    }
 }
 
 impl<T: ServerHandler> Handler for Server<T> {
-    type Timeout = ();
+    type Timeout = Msg;
     type Message = Msg;
 
     fn ready(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token, events: EventSet) {
@@ -151,6 +159,14 @@ impl<T: ServerHandler> Handler for Server<T> {
         match msg.msg_type {
             MsgType::Quit => event_loop.shutdown(),
             MsgType::WriteData => self.handle_writedata(event_loop, msg),
+            _ => panic!("unexpected msg"),
+        }
+    }
+
+    fn timeout(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
+        match msg.msg_type {
+            MsgType::Tick => self.handle_tick(event_loop),
+            MsgType::Timeout => {}
             _ => panic!("unexpected msg"),
         }
     }

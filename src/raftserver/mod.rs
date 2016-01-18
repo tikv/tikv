@@ -20,17 +20,31 @@ mod handler;
 pub type Result<T> = result::Result<T, Box<error::Error + Send + Sync>>;
 
 const SERVER_TOKEN: Token = Token(0);
+const TICK_TOKEN: Token = Token(1);
+const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 
+const DEFAULT_RAFT_INTERVAL_TICK_MS: usize = 100;
+
+#[derive(Clone, Debug)]
 pub struct Config {
     pub addr: String,
 }
 
 pub enum MsgType {
     None,
+    // Quit event loop.
     Quit,
+    // Read data from connection.
     ReadData,
+    // Write data to connection.
     WriteData,
+    // Close special connection.
     CloseConn,
+
+    // Tick is for base raft internal tick message.
+    Tick,
+    // Timeout is for custom timeout message.
+    Timeout,
 }
 
 pub struct ConnData {
