@@ -2,11 +2,12 @@
 #![allow(unused_must_use)]
 
 use std::collections::HashMap;
+use std::default::Default;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;
 
-use raftserver::{SERVER_TOKEN, TICK_TOKEN, FIRST_CUSTOM_TOKEN};
+use raftserver::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_RAFT_INTERVAL_TICK_MS};
 use raftserver::{Msg, MsgType, Sender, Result};
 use raftserver::conn::Conn;
 use raftserver::handler::ServerHandler;
@@ -32,6 +33,9 @@ impl<T: ServerHandler> Server<T> {
     }
 
     pub fn register_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) -> Result<()> {
+        let token = Msg { msg_type: MsgType::Tick, ..Default::default() };
+        // must ok, maybe check error later.
+        event_loop.timeout_ms(token, DEFAULT_RAFT_INTERVAL_TICK_MS);
         Ok(())
     }
 
@@ -132,7 +136,11 @@ impl<T: ServerHandler> Server<T> {
     }
 
     fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
-        self.handler.handle_tick(event_loop).map_err(|e| warn!("handle tick err {:?}", e));
+        self.handler
+            .handle_tick(event_loop)
+            .map_err(|e| warn!("handle tick err {:?}", e));
+
+        self.register_tick(event_loop);
     }
 }
 
