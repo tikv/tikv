@@ -185,7 +185,7 @@ mod test {
             let u = Unstable {
                 entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(snap)),
+                snapshot: snapshot,
             };
             let index = u.maybe_first_index();
             match index {
@@ -211,7 +211,7 @@ mod test {
             let u = Unstable {
                 entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(snap)),
+                snapshot: snapshot,
             };
             let index = u.maybe_last_index();
             match index {
@@ -242,7 +242,7 @@ mod test {
             let u = Unstable {
                 entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(snap)),
+                snapshot: snapshot,
             };
             let term = u.maybe_term(index);
             match term {
@@ -299,7 +299,7 @@ mod test {
             let mut u = Unstable {
                 entries: entries,
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(snap)),
+                snapshot: snapshot,
             };
             u.stable_to(index, term);
             assert_eq!(u.offset, woffset);
@@ -345,7 +345,7 @@ mod test {
             let mut u = Unstable {
                 entries: entries,
                 offset: offset,
-                snapshot: snapshot.map_or(None, |snap| Some(snap)),
+                snapshot: snapshot,
             };
             u.truncate_and_append(&to_append);
             assert_eq!(u.offset, woffset);
