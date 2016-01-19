@@ -147,7 +147,16 @@ mod tests {
     use super::{Meta, MetaItem};
 
     #[test]
-    fn test_meta_item() {
+    fn test_meta_item_new() {
+        assert!(MetaItem::new(b"").is_err());
+        MetaItem::new(b"v\x00\x00\x00\x00\x00\x00\x00\x00").unwrap();
+        MetaItem::new(b"d\x00\x00\x00\x00\x00\x00\x00\xff").unwrap();
+        assert!(MetaItem::new(b"x\x00\x00\x00\x00").is_err());
+        assert!(MetaItem::new(b"v\x00\x00\x00\x00\x00\x00\x00").is_err());
+    }
+
+    #[test]
+    fn test_meta_item_write() {
         let v100 = MetaItem::WithValue(100);
         let mut v100b: Vec<u8> = vec![];
         v100.write(&mut v100b);
@@ -164,21 +173,38 @@ mod tests {
     }
 
     #[test]
-    fn test_latest() {
+    fn test_meta() {
         let mut meta = Meta::new();
         assert_eq!(meta.latest(1), None);
+
         meta.add(10);
-        assert_eq!(meta.latest(1), None);
+        assert!(!meta.has_version(9));
+        assert!(meta.has_version(10));
+        assert!(!meta.has_version(11));
+        assert_eq!(meta.latest(9), None);
         assert_eq!(meta.latest(10), Some(10));
         assert_eq!(meta.latest(11), Some(10));
-        meta.delete(20);
-        assert_eq!(meta.latest(11), Some(10));
-        assert_eq!(meta.latest(20), None);
-        assert_eq!(meta.latest(21), None);
+
+        meta.delete(30);
+        assert!(meta.has_version(10));
+        assert!(meta.has_version(30));
+        assert_eq!(meta.latest(9), None);
+        assert_eq!(meta.latest(29), Some(10));
+        assert_eq!(meta.latest(30), None);
+        assert_eq!(meta.latest(31), None);
+
+        meta.add(20);
+        assert_eq!(meta.latest(9), None);
+        assert_eq!(meta.latest(19), Some(10));
+        assert_eq!(meta.latest(20), Some(20));
+        assert_eq!(meta.latest(21), Some(20));
+        assert_eq!(meta.latest(29), Some(20));
+        assert_eq!(meta.latest(30), None);
+        assert_eq!(meta.latest(31), None);
     }
 
     #[test]
-    fn test_parse() {
+    fn test_meta_parse() {
         let mut meta = Meta::new();
         meta.add(10);
         meta.delete(20);
