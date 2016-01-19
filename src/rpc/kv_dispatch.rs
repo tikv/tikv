@@ -12,7 +12,9 @@ impl KVDispatch {
         KVDispatch
     }
     pub fn handle_get(&mut self, msg: &Request) -> Result<Response, Box<Error + Send + Sync>> {
-        assert!(msg.has_getReq());
+        if !msg.has_getReq() {
+            return Err(From::from("request body is missing"));
+        }
         let get_req: &GetRequest = msg.get_getReq();
         let mut get_resp: GetResponse = GetResponse::new();
         // [TODO]: construct get response
@@ -22,7 +24,7 @@ impl KVDispatch {
     }
 }
 impl Dispatcher for KVDispatch {
-    fn Dispatch(&mut self, m: Request) -> Result<Response, Box<Error + Send + Sync>> {
+    fn dispatch(&mut self, m: Request) -> Result<Response, Box<Error + Send + Sync>> {
         match m.get_field_type() {
             MessageType::Get => {
                 match self.handle_get(&m) {
@@ -31,6 +33,5 @@ impl Dispatcher for KVDispatch {
                 }
             }
         }
-        Err(From::from("Message dismatch any type"))
     }
 }

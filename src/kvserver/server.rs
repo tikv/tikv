@@ -18,7 +18,7 @@ use util::codec::{self, encode_msg, decode_msg, MSG_HEADER_LEN};
 const SERVER_TOKEN: Token = Token(0);
 
 pub trait Dispatcher {
-    fn Dispatch(&mut self, m: Request) -> Result<Response, Box<Error + Send + Sync>>;
+    fn dispatch(&mut self, m: Request) -> Result<Response, Box<Error + Send + Sync>>;
 }
 
 struct Client<D: Dispatcher> {
@@ -40,7 +40,9 @@ impl<D: Dispatcher> Client<D> {
     }
 
     fn write(&mut self) {
-        self.sock.write(self.res.bytes()).unwrap();
+        if self.sock.write(self.res.bytes()).is_err() {
+            // [TODO]: add error log
+        }
         self.interest.remove(EventSet::writable());
         self.interest.insert(EventSet::readable());
     }
@@ -50,7 +52,7 @@ impl<D: Dispatcher> Client<D> {
         let mut m = Request::new();
         let msg_id = decode_msg(&mut self.sock, &mut m).unwrap();
 
-        let res: Response = self.d.borrow_mut().Dispatch(m).unwrap();
+        let res: Response = self.d.borrow_mut().dispatch(m).unwrap();
         self.res.clear();
         let res_len: usize = MSG_HEADER_LEN + res.compute_size() as usize;
         // Re-alloc self.res capacity
