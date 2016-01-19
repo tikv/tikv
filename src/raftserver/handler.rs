@@ -3,7 +3,7 @@
 
 use std::vec::Vec;
 
-use raftserver::{Result, ConnData, Sender};
+use raftserver::{Result, ConnData, Sender, TimerMsg};
 
 pub trait ServerHandler :Sized {
     // Handle messages reading from connection with Token.
@@ -16,6 +16,10 @@ pub trait ServerHandler :Sized {
     }
 
     fn handle_tick(&mut self, sender: &Sender) -> Result<()> {
+        Ok(())
+    }
+
+    fn handle_timer(&mut self, sender: &Sender, msg: TimerMsg) -> Result<()> {
         Ok(())
     }
 }

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::boxed::{Box, FnBox};
+use std::boxed::Box;
 use std::result;
 use std::error;
 
@@ -32,9 +32,14 @@ pub struct ConnData {
     data: ByteBuf,
 }
 
+pub enum TimerMsg {
+    // None is just for test, we will remove this later.
+    None,
+}
+
 pub struct TimerData {
     delay: u64,
-    cb: Box<FnBox() + Send + Sync + 'static>,
+    msg: TimerMsg,
 }
 
 impl ConnData {
@@ -88,12 +93,10 @@ impl Sender {
         Ok(())
     }
 
-    pub fn timeout_ms<F>(&self, delay: u64, f: F) -> Result<()>
-        where F: FnOnce() + Send + Sync + 'static
-    {
+    pub fn timeout_ms(&self, delay: u64, m: TimerMsg) -> Result<()> {
         try!(self.sender.send(Msg::Timer(TimerData {
             delay: delay,
-            cb: Box::new(f),
+            msg: m,
         })));
 
         Ok(())
