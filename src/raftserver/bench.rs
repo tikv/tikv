@@ -12,7 +12,7 @@ mod tests {
 
     impl Handler for MyHandler {
         type Timeout = ();
-         type Message = u32;
+        type Message = u32;
 
         fn notify(&mut self, event_loop: &mut EventLoop<MyHandler>, msg: u32) {
             if msg == 0 {
