@@ -2,13 +2,12 @@
 #![allow(unused_must_use)]
 
 use std::collections::HashMap;
-use std::default::Default;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;
 
 use raftserver::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_BASE_TICK_MS};
-use raftserver::{Msg, MsgType, Sender, Result};
+use raftserver::{Msg, Sender, Result, ConnData, TimerData};
 use raftserver::conn::Conn;
 use raftserver::handler::ServerHandler;
 
@@ -33,21 +32,16 @@ impl<T: ServerHandler> Server<T> {
     }
 
     pub fn register_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) -> Result<()> {
-        let token = Msg { msg_type: MsgType::Tick, ..Default::default() };
+        let token = Msg::Tick;
         // must ok, maybe check error later.
         event_loop.timeout_ms(token, DEFAULT_BASE_TICK_MS);
         Ok(())
     }
 
-    fn register_timer(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
+    fn register_timer(&mut self, event_loop: &mut EventLoop<Server<T>>, data: TimerData) {
         // we have already checked when sender.
-        let data = msg.timer_data.unwrap();
         let delay = data.delay;
-        let token = Msg {
-            msg_type: MsgType::Timer,
-            timer_data: Some(data),
-            ..Default::default()
-        };
+        let token = Msg::Timer(data);
         event_loop.timeout_ms(token, delay);
     }
 
@@ -111,10 +105,10 @@ impl<T: ServerHandler> Server<T> {
 
                 msgs.and_then(|msgs| {
                     self.handler
-                        .handle_read_data(&self.sender, token, msgs)
+                        .handle_read_data(&self.sender, msgs)
                         .and_then(|res| {
                             for data in res {
-                                try!(self.sender.write_data(token, data));
+                                try!(self.sender.write_data(data));
                             }
                             Ok(())
                         })
@@ -133,14 +127,8 @@ impl<T: ServerHandler> Server<T> {
         };
     }
 
-    fn handle_writedata(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
-        if msg.conn_data.is_none() {
-            error!("write msg data cannot be None");
-            return;
-        }
-
-        if let Some(conn) = self.conns.get_mut(&msg.token) {
-            let data = msg.conn_data.unwrap();
+    fn handle_writedata(&mut self, event_loop: &mut EventLoop<Server<T>>, data: ConnData) {
+        if let Some(conn) = self.conns.get_mut(&data.token) {
             conn.append_write_buf(data);
             conn.register_writeable(event_loop);
         }
@@ -154,10 +142,8 @@ impl<T: ServerHandler> Server<T> {
         self.register_tick(event_loop);
     }
 
-    fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, msg: Msg) {
-        let data = msg.timer_data.unwrap();
-        let cb = data.cb;
-        cb.call_box(());
+    fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, data: TimerData) {
+        data.cb.call_box(());
     }
 }
 
@@ -181,18 +167,18 @@ impl<T: ServerHandler> Handler for Server<T> {
     }
 
     fn notify(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
-        match msg.msg_type {
-            MsgType::Quit => event_loop.shutdown(),
-            MsgType::WriteData => self.handle_writedata(event_loop, msg),
-            MsgType::Timer => self.register_timer(event_loop, msg),
+        match msg {
+            Msg::Quit => event_loop.shutdown(),
+            Msg::WriteData(data) => self.handle_writedata(event_loop, data),
+            Msg::Timer(data) => self.register_timer(event_loop, data),
             _ => panic!("unexpected msg"),
         }
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
-        match msg.msg_type {
-            MsgType::Tick => self.handle_tick(event_loop),
-            MsgType::Timer => self.handle_timer(event_loop, msg),
+        match msg {
+            Msg::Tick => self.handle_tick(event_loop),
+            Msg::Timer(data) => self.handle_timer(event_loop, data),
             _ => panic!("unexpected msg"),
         }
     }
