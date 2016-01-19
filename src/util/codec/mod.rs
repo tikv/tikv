@@ -1,9 +1,10 @@
 // This package handles RPC message data encoding/decoding.
 // Every RPC message data contains two parts: header + payload.
 // Header is 16 bytes, format:
-//  | 0xdaf4 (2 bytes)| 0x01 (version 2 bytes)| msg_len (4 bytes) | msg_id (8 bytes)|, all use bigendian.
+//  | 0xdaf4 (2 bytes magic value) | 0x01 (version 2 bytes) | msg_len (4 bytes) | msg_id (8 bytes) |,
+// all use bigendian.
 // Now the version is always 1.
-// Payload can be any arbitrary data, but we use Protobuf in our problem default.
+// Payload can be any arbitrary data, but we use Protobuf in our program default.
 use std::{result, io, fmt};
 use std::error;
 use std::convert;
@@ -83,7 +84,7 @@ pub fn encode_msg<T: io::Write, M: protobuf::Message>(w: &mut T,
     Ok(())
 }
 
-// Decodes encode message, returns message ID.
+// Decodes encoded message, returns message ID.
 pub fn decode_msg<T: io::Read, M: protobuf::Message>(r: &mut T, m: &mut M) -> Result<u64> {
     let (message_id, payload) = try!(decode_data(r));
     try!(m.merge_from_bytes(&payload));
@@ -101,7 +102,7 @@ pub fn encode_data<T: io::Write>(w: &mut T, msg_id: u64, data: &[u8]) -> Result<
     Ok(())
 }
 
-// Decodes encoded data, returns message ID.
+// Decodes encoded data, returns message ID and body.
 pub fn decode_data<T: io::Read>(r: &mut T) -> Result<(u64, Vec<u8>)> {
     let mut header = vec![0;MSG_HEADER_LEN];
     try!(r.read_exact(&mut header));
@@ -113,7 +114,7 @@ pub fn decode_data<T: io::Read>(r: &mut T) -> Result<(u64, Vec<u8>)> {
     Ok((msg_id, payload))
 }
 
-// Encode msg header to a 16 bytes header buffer.
+// Encodes msg header to a 16 bytes header buffer.
 pub fn encode_msg_header(msg_id: u64, payload_len: usize) -> Vec<u8> {
     let mut buf = vec![0;MSG_HEADER_LEN];
 
@@ -125,7 +126,7 @@ pub fn encode_msg_header(msg_id: u64, payload_len: usize) -> Vec<u8> {
     return buf;
 }
 
-// Decode msg header in header buffer, the buffer length must be equal MSG_HEADER_LEN;
+// Decodes msg header in header buffer, the buffer length size must be equal MSG_HEADER_LEN;
 pub fn decode_msg_header(header: &[u8]) -> Result<(u64, usize)> {
     let magic = BigEndian::read_u16(&header[0..2]);
     if MSG_MAGIC != magic {
@@ -157,7 +158,7 @@ mod tests {
     use proto::raftpb::{Message, MessageType};
 
     #[test]
-    fn test_pbmsg_codec() {
+    fn test_msg_codec() {
         let mut m1 = Message::new();
         m1.set_field_type(MessageType::MsgBeat);
 

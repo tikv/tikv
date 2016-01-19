@@ -52,7 +52,9 @@ impl<T: ServerHandler> Server<T> {
                 // need deregister here?
                 event_loop.deregister(&conn.sock);
             }
-            None => {}
+            None => {
+                warn!("missing connection for token {}", token.as_usize());
+            }
         }
 
     }
@@ -81,6 +83,10 @@ impl<T: ServerHandler> Server<T> {
 
                 let new_token = Token(self.token_counter);
                 self.token_counter += 1;
+
+                sock.set_nodelay(true).map_err(|e| {
+                    error!("connection set no delay err {}", e);
+                });
 
                 let conn = Conn::new(sock, new_token);
 
