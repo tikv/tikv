@@ -3,8 +3,6 @@
 use std::boxed::{Box, FnBox};
 use std::result;
 use std::error;
-use std::default::Default;
-use std::option::Option;
 
 use bytes::{Buf, ByteBuf};
 use mio::{self, Token};
@@ -28,24 +26,8 @@ pub struct Config {
     pub addr: String,
 }
 
-pub enum MsgType {
-    None,
-    // Quit event loop.
-    Quit,
-    // Read data from connection.
-    ReadData,
-    // Write data to connection.
-    WriteData,
-    // Close special connection.
-    CloseConn,
-
-    // Tick is for base raft internal tick message.
-    Tick,
-    // Timer is for custom timeout message.
-    Timer,
-}
-
 pub struct ConnData {
+    token: Token,
     msg_id: u64,
     data: ByteBuf,
 }
@@ -66,22 +48,17 @@ impl ConnData {
     }
 }
 
-pub struct Msg {
-    pub msg_type: MsgType,
-    pub token: Token,
-    pub conn_data: Option<ConnData>,
-    pub timer_data: Option<TimerData>,
-}
-
-impl Default for Msg {
-    fn default() -> Msg {
-        Msg {
-            msg_type: MsgType::None,
-            token: Token(!0),
-            conn_data: None,
-            timer_data: None,
-        }
-    }
+pub enum Msg {
+    // Quit event loop.
+    Quit,
+    // Read data from connection.
+    ReadData(ConnData),
+    // Write data to connection.
+    WriteData(ConnData),
+    // Tick is for base internal tick message.
+    Tick,
+    // Timer is for custom timeout message.
+    Timer(TimerData),
 }
 
 #[derive(Debug)]
@@ -101,17 +78,12 @@ impl Sender {
     }
 
     pub fn kill(&self) -> Result<()> {
-        try!(self.sender.send(Msg { msg_type: MsgType::Quit, ..Default::default() }));
+        try!(self.sender.send(Msg::Quit));
         Ok(())
     }
 
-    pub fn write_data(&self, token: Token, data: ConnData) -> Result<()> {
-        try!(self.sender.send(Msg {
-            msg_type: MsgType::WriteData,
-            token: token,
-            conn_data: Some(data),
-            ..Default::default()
-        }));
+    pub fn write_data(&self, data: ConnData) -> Result<()> {
+        try!(self.sender.send(Msg::WriteData(data)));
 
         Ok(())
     }
@@ -119,14 +91,11 @@ impl Sender {
     pub fn timeout_ms<F>(&self, delay: u64, f: F) -> Result<()>
         where F: FnOnce() + Send + Sync + 'static
     {
-        try!(self.sender.send(Msg {
-            msg_type: MsgType::Timer,
-            timer_data: Some(TimerData {
-                delay: delay,
-                cb: Box::new(f),
-            }),
-            ..Default::default()
-        }));
+        try!(self.sender.send(Msg::Timer(TimerData {
+            delay: delay,
+            cb: Box::new(f),
+        })));
+
         Ok(())
     }
 }

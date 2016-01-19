@@ -3,8 +3,6 @@
 
 use std::vec::Vec;
 
-use mio::Token;
-
 use raftserver::{Result, ConnData, Sender};
 
 pub trait ServerHandler :Sized {
@@ -12,7 +10,6 @@ pub trait ServerHandler :Sized {
     // Return some messages for later writing to this connection.
     fn handle_read_data(&mut self,
                         sender: &Sender,
-                        token: Token,
                         msgs: Vec<ConnData>)
                         -> Result<(Vec<ConnData>)> {
         Ok((msgs))
