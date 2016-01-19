@@ -143,7 +143,9 @@ impl<T: ServerHandler> Server<T> {
     }
 
     fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, data: TimerData) {
-        data.cb.call_box(());
+        self.handler
+            .handle_timer(&self.sender, data.msg)
+            .map_err(|e| warn!("handle timer err {:?}", e));
     }
 }
 
