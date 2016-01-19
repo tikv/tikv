@@ -394,7 +394,7 @@ mod test {
         e
     }
 
-    fn diff(l_ents: &Vec<raftpb::Entry>, r_ents: &Vec<raftpb::Entry>) -> bool {
+    fn is_diff(l_ents: &Vec<raftpb::Entry>, r_ents: &Vec<raftpb::Entry>) -> bool {
         if l_ents.len() != r_ents.len() {
             return true;
         }
@@ -485,7 +485,7 @@ mod test {
             }
             match raft_log.entries(1, raft_log::NO_LIMIT) {
                 Err(e) => panic!("#{}: unexpected error {}", i, e),
-                Ok(ref g) if diff(g, wents) => {
+                Ok(ref g) if is_diff(g, wents) => {
                     panic!("#{}: logEnts = {:?}, want {:?}", i, &*g, &*wents)
                 }
                 _ => {
