@@ -10,9 +10,9 @@ message GetResponse {
 }
 message Request {
     required MessageType type = 1;
-    optional GetRequest getReq = 2;
+    optional GetRequest get_req = 2;
 }
 message Response {
     required MessageType type = 1;
-    optional GetResponse getResp = 2;
+    optional GetResponse get_resp = 2;
 }
