@@ -123,13 +123,13 @@ mod tests {
     }
 
     struct TickHandler {
-        n: Arc<Mutex<Vec<u8>>>,
+        n: Arc<Mutex<u64>>,
     }
 
     impl ServerHandler for TickHandler {
         fn handle_tick(&mut self, sender: &Sender) -> Result<()> {
             let mut v = self.n.lock().unwrap();
-            v[0] += 1;
+            *v += 1;
             Ok(())
         }
     }
@@ -145,12 +145,12 @@ mod tests {
             sender.kill().unwrap();
         });
 
-        let n = Arc::new(Mutex::new(vec![1]));
+        let n = Arc::new(Mutex::new(1));
         let h = TickHandler { n: n.clone() };
         r.run(h).unwrap();
 
         let n = n.lock().unwrap();
-        assert!(n[0] > 1);
+        assert!(*n > 1);
     }
 
     #[test]
@@ -159,11 +159,11 @@ mod tests {
         let mut r = Runner::start(addr).unwrap();
 
         let sender = r.get_sender();
-        let n = Arc::new(Mutex::new(vec![1]));
+        let n = Arc::new(Mutex::new(1));
         let n1 = n.clone();
         sender.timeout_ms(100, move || {
                   let mut v = n1.lock().unwrap();
-                  v[0] = 0;
+                  *v = 0;
               })
               .unwrap();
 
@@ -176,6 +176,6 @@ mod tests {
         r.run(h).unwrap();
 
         let n = n.lock().unwrap();
-        assert_eq!(n[0], 0);
+        assert_eq!(*n, 0);
     }
 }
