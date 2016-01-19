@@ -5,9 +5,9 @@ use std::vec::Vec;
 
 use raftserver::{Result, ConnData, Sender, TimerMsg};
 
-// ServerHandler is for logic, we must implement it for our raft server. 
+// ServerHandler is for server logic, we must implement it for our raft server. 
 // We use a event loop to handle all events, when an event is triggered, 
-// event loop will can its associated event handler, after we do something 
+// event loop will call its associated event handler, after we do something 
 // in this event handler, we can call server handler for outer logic use.
 // The event flow is event loop -> event handler (Server) -> server handler.
 // E.g, event loop finds a connection is ready to read, so it calls event handler 
