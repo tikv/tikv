@@ -6,15 +6,15 @@ mod tests {
 
     use mio::{EventLoop, Handler, Sender};
 
-    struct MyHandler {
+    struct CountHandler {
         n: usize,
     }
 
-    impl Handler for MyHandler {
+    impl Handler for CountHandler {
         type Timeout = ();
         type Message = u32;
 
-        fn notify(&mut self, event_loop: &mut EventLoop<MyHandler>, msg: u32) {
+        fn notify(&mut self, event_loop: &mut EventLoop<CountHandler>, msg: u32) {
             if msg == 0 {
                 event_loop.shutdown();
                 return;
@@ -39,7 +39,7 @@ mod tests {
         let sender = event_loop.channel();
 
         let t = thread::spawn(move || {
-            let mut h = MyHandler { n: 0 };
+            let mut h = CountHandler { n: 0 };
             event_loop.run(&mut h).unwrap();
             h.n
         });
