@@ -4,7 +4,7 @@ mod tests {
     use std::thread;
     use std::sync::mpsc::channel;
 
-    use mio::{EventLoop, Handler};
+    use mio::{EventLoop, Handler, Sender};
 
     struct MyHandler {
         n: usize,
@@ -24,52 +24,48 @@ mod tests {
         }
     }
 
+    fn mio_must_send(sender: &Sender<u32>, n: u32) {
+        loop {
+            // Send may return notify error, we must retry.
+            if let Ok(_) = sender.send(n) {
+                return;
+            }
+        }
+    }
+
     #[bench]
     fn bench_mio_channel(b: &mut Bencher) {
         let mut event_loop = EventLoop::new().unwrap();
         let sender = event_loop.channel();
 
-        let (exit_tx, exit_rx) = channel();
-
-        thread::spawn(move || {
+        let t = thread::spawn(move || {
             let mut h = MyHandler { n: 0 };
             event_loop.run(&mut h).unwrap();
-            exit_tx.send(h.n).unwrap();
+            h.n
         });
 
         let mut n1 = 0;
         b.iter(|| {
             n1 += 1;
-            loop {
-                // Send may return notify error, we must retry.
-                if let Ok(_) = sender.send(1) {
-                    return;
-                }
-            }
-
+            mio_must_send(&sender, 1);
         });
-        loop {
-            if let Ok(_) = sender.send(0) {
-                break;
-            }
-        }
 
-        let n2 = exit_rx.recv().unwrap();
+        mio_must_send(&sender, 0);
+
+        let n2 = t.join().unwrap();
         assert_eq!(n1, n2);
     }
 
     #[bench]
     fn bench_thread_channel(b: &mut Bencher) {
         let (tx, rx) = channel();
-        let (exit_tx, exit_rx) = channel();
 
-        thread::spawn(move || {
+        let t = thread::spawn(move || {
             let mut n2: usize = 0;
             loop {
                 let n = rx.recv().unwrap();
                 if n == 0 {
-                    exit_tx.send(n2).unwrap();
-                    return;
+                    return n2;
                 }
                 n2 += 1;
             }
@@ -82,7 +78,7 @@ mod tests {
         });
 
         tx.send(0).unwrap();
-        let n2 = exit_rx.recv().unwrap();
+        let n2 = t.join().unwrap();
         assert_eq!(n1, n2);
     }
 }
