@@ -2,12 +2,13 @@
 #![allow(unused_must_use)]
 
 use std::collections::HashMap;
+use std::default::Default;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;
 
-use raftserver::SERVER_TOKEN;
-use raftserver::{Msg, MsgType, Sender};
+use raftserver::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_BASE_TICK_MS};
+use raftserver::{Msg, MsgType, Sender, Result};
 use raftserver::conn::Conn;
 use raftserver::handler::ServerHandler;
 
@@ -27,8 +28,27 @@ impl<T: ServerHandler> Server<T> {
             listener: l,
             sender: sender,
             conns: HashMap::new(),
-            token_counter: 1,
+            token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
         }
+    }
+
+    pub fn register_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) -> Result<()> {
+        let token = Msg { msg_type: MsgType::Tick, ..Default::default() };
+        // must ok, maybe check error later.
+        event_loop.timeout_ms(token, DEFAULT_BASE_TICK_MS);
+        Ok(())
+    }
+
+    fn register_timer(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
+        // we have already checked when sender.
+        let data = msg.timer_data.unwrap();
+        let delay = data.delay;
+        let token = Msg {
+            msg_type: MsgType::Timer,
+            timer_data: Some(data),
+            ..Default::default()
+        };
+        event_loop.timeout_ms(token, delay);
     }
 
     fn handle_error(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
@@ -95,13 +115,12 @@ impl<T: ServerHandler> Server<T> {
                     Some(conn) => msgs = conn.read(event_loop),
                 }
 
-                let sender = self.sender.clone();
                 msgs.and_then(|msgs| {
                     self.handler
-                        .handle_read_data(event_loop, token, msgs)
+                        .handle_read_data(&self.sender, token, msgs)
                         .and_then(|res| {
                             for data in res {
-                                try!(sender.write_data(token, data));
+                                try!(self.sender.write_data(token, data));
                             }
                             Ok(())
                         })
@@ -132,10 +151,24 @@ impl<T: ServerHandler> Server<T> {
             conn.register_writeable(event_loop);
         }
     }
+
+    fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
+        self.handler
+            .handle_tick(&self.sender)
+            .map_err(|e| warn!("handle tick err {:?}", e));
+
+        self.register_tick(event_loop);
+    }
+
+    fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, msg: Msg) {
+        let data = msg.timer_data.unwrap();
+        let cb = data.cb;
+        cb.call_box(());
+    }
 }
 
 impl<T: ServerHandler> Handler for Server<T> {
-    type Timeout = ();
+    type Timeout = Msg;
     type Message = Msg;
 
     fn ready(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token, events: EventSet) {
@@ -157,6 +190,15 @@ impl<T: ServerHandler> Handler for Server<T> {
         match msg.msg_type {
             MsgType::Quit => event_loop.shutdown(),
             MsgType::WriteData => self.handle_writedata(event_loop, msg),
+            MsgType::Timer => self.register_timer(event_loop, msg),
+            _ => panic!("unexpected msg"),
+        }
+    }
+
+    fn timeout(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
+        match msg.msg_type {
+            MsgType::Tick => self.handle_tick(event_loop),
+            MsgType::Timer => self.handle_timer(event_loop, msg),
             _ => panic!("unexpected msg"),
         }
     }

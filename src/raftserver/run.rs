@@ -42,6 +42,7 @@ impl<T: ServerHandler> Runner<T> {
 
     fn run(&mut self, h: T) -> Result<()> {
         let mut server = Server::new(h, self.listener.take().unwrap(), self.sender.clone());
+        try!(server.register_tick(&mut self.event_loop));
         try!(self.event_loop.run(&mut server));
 
         Ok(())
@@ -51,13 +52,18 @@ impl<T: ServerHandler> Runner<T> {
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports)]
+    #![allow(unused_variables)]
+    #![allow(dead_code)]
 
     use std::default::Default;
     use std::thread;
-    use std::sync;
+    use std::sync::{self, Arc, Mutex};
     use std::time::Duration;
     use std::net::TcpStream;
     use std::io::prelude::*;
+    use std::vec::Vec;
+
+    use mio::EventLoop;
 
     use super::*;
     use raftserver::*;
@@ -114,5 +120,62 @@ mod tests {
         }
 
         sender.kill().unwrap();
+    }
+
+    struct TickHandler {
+        n: Arc<Mutex<u64>>,
+    }
+
+    impl ServerHandler for TickHandler {
+        fn handle_tick(&mut self, sender: &Sender) -> Result<()> {
+            let mut v = self.n.lock().unwrap();
+            *v += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_tick() {
+        let addr = "127.0.0.1:0";
+        let mut r = Runner::start(addr).unwrap();
+
+        let sender = r.get_sender();
+        thread::spawn(move || {
+            thread::sleep(Duration::new(1, 0));
+            sender.kill().unwrap();
+        });
+
+        let n = Arc::new(Mutex::new(1));
+        let h = TickHandler { n: n.clone() };
+        r.run(h).unwrap();
+
+        let n = n.lock().unwrap();
+        assert!(*n > 1);
+    }
+
+    #[test]
+    fn test_timer() {
+        let addr = "127.0.0.1:0";
+        let mut r = Runner::start(addr).unwrap();
+
+        let sender = r.get_sender();
+        let n = Arc::new(Mutex::new(1));
+        let n1 = n.clone();
+        sender.timeout_ms(100, move || {
+                  let mut v = n1.lock().unwrap();
+                  *v = 0;
+              })
+              .unwrap();
+
+        thread::spawn(move || {
+            thread::sleep(Duration::new(1, 0));
+            sender.kill().unwrap();
+        });
+
+        let h = BaseHandler;
+        r.run(h).unwrap();
+
+        let n = n.lock().unwrap();
+        assert_eq!(*n, 0);
     }
 }

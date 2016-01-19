@@ -1,6 +1,7 @@
 #![crate_type = "lib"]
 #![feature(test)]
 #![feature(btree_range, collections_bound)]
+#![feature(fnbox)]
 
 #[macro_use]
 extern crate log;
