@@ -37,7 +37,10 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
         // header is not full read, we will try read more.
         let n = try!(r.try_read(buf.mut_bytes()));
         match n {
-            None => {}//nothing to do here now, but should we return an error or panic?
+            None => {
+                // nothing to do here now, but should we return an error or panic?
+                error!("connection read None data");
+            }
             Some(n) => buf.advance(n),
         }
     }
@@ -52,7 +55,6 @@ fn try_write_data<T: TryWrite, B: Buf>(w: &mut T, buf: &mut B) -> Result<()> {
         None => {}
         Some(n) => buf.advance(n),
     }
-
 
     Ok(())
 }
