@@ -5,14 +5,14 @@ use std::vec::Vec;
 
 use raftserver::{Result, ConnData, Sender, TimerMsg};
 
-// ServerHandler is for server logic, we must implement it for our raft server. 
-// We use a event loop to handle all events, when an event is triggered, 
-// event loop will call its associated event handler, after we do something 
+// ServerHandler is for server logic, we must implement it for our raft server.
+// We use a event loop to handle all events, when an event is triggered,
+// event loop will call its associated event handler, after we do something
 // in this event handler, we can call server handler for outer logic use.
 // The event flow is event loop -> event handler (Server) -> server handler.
-// E.g, event loop finds a connection is ready to read, so it calls event handler 
+// E.g, event loop finds a connection is ready to read, so it calls event handler
 // to read data, after the event handler reads whole data, it calls server handler
-// for outer use. 
+// for outer use.
 pub trait ServerHandler :Sized {
     // Handles messages reading from connection with Token.
     // Returns some messages for later writing to this connection.
@@ -24,12 +24,12 @@ pub trait ServerHandler :Sized {
         Ok((msgs))
     }
 
-    // Handles tick. 
+    // Handles tick.
     fn handle_tick(&mut self, sender: &Sender) -> Result<()> {
         Ok(())
     }
 
-    // Handles customized timer. 
+    // Handles customized timer.
     fn handle_timer(&mut self, sender: &Sender, msg: TimerMsg) -> Result<()> {
         Ok(())
     }
