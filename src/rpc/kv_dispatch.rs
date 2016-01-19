@@ -12,14 +12,14 @@ impl KVDispatch {
         KVDispatch
     }
     pub fn handle_get(&mut self, msg: &Request) -> Result<Response, Box<Error + Send + Sync>> {
-        if !msg.has_getReq() {
+        if !msg.has_get_req() {
             return Err(From::from("request body is missing"));
         }
-        let get_req: &GetRequest = msg.get_getReq();
+        let get_req: &GetRequest = msg.get_get_req();
         let mut get_resp: GetResponse = GetResponse::new();
         // [TODO]: construct get response
         let mut resp: Response = Response::new();
-        resp.set_getResp(get_resp);
+        resp.set_get_resp(get_resp);
         Ok(resp)
     }
 }

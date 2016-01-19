@@ -97,6 +97,9 @@ impl<D: Dispatcher> mio::Handler for Server<D> {
 
                     let new_token = Token(self.token_counter);
                     let d = self.d.clone();
+                    if sock.set_nodelay(true).is_err() {
+                        error!("set nodeplay failed");
+                    }
                     self.clients.insert(new_token, Client::new(sock, d));
                     self.token_counter += 1;
 
