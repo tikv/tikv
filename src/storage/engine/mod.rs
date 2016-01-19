@@ -72,6 +72,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use super::{Dsn, Engine, Modify};
 
     #[test]
@@ -84,10 +85,13 @@ mod tests {
 
     #[test]
     fn rocksdb() {
-        let mut e = super::new_engine(Dsn::RocksDBPath("/tmp/rocks")).unwrap();
+        let dir = "/tmp/rocks-test";
+        fs::remove_dir_all(dir).ok();
+        let mut e = super::new_engine(Dsn::RocksDBPath(dir)).unwrap();
         get_put(e.as_mut());
         batch(e.as_mut());
         seek(e.as_mut());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     fn assert_has<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
@@ -100,8 +104,7 @@ mod tests {
 
     fn assert_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
         let (k, v) = engine.seek(key).unwrap().unwrap();
-        assert_eq!(k, pair.0);
-        assert_eq!(v, pair.1);
+        assert_eq!((&k as &[u8], &v as &[u8]), pair);
     }
 
     fn get_put<T: Engine + ?Sized>(engine: &mut T) {
@@ -110,8 +113,6 @@ mod tests {
         assert_has(engine, b"x", b"1");
         engine.put(b"x", b"2").unwrap();
         assert_has(engine, b"x", b"2");
-        engine.delete(b"x").unwrap();
-        assert_none(engine, b"x");
     }
 
     fn batch<T: Engine + ?Sized>(engine: &mut T) {
