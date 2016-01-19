@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::{result, io, fmt};
+use std::{cmp, result, io, fmt};
 use std::error;
 use std::boxed::Box;
 
@@ -14,7 +14,7 @@ pub enum Error {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum StorageError {
     Compacted,
     Unavailable,
@@ -26,7 +26,7 @@ impl StorageError {
         match self {
             &StorageError::Compacted => "log compacted",
             &StorageError::Unavailable => "log unavailable",
-            &StorageError::SnapshotOutOfDate => "log unavailable",
+            &StorageError::SnapshotOutOfDate => "snapshot out of date",
         }
     }
 }
@@ -48,6 +48,20 @@ impl fmt::Display for StorageError {
     }
 }
 
+impl cmp::PartialEq for Error {
+    fn eq(&self, other: &Error) -> bool {
+        match (self, other) {
+            (&Error::NotFound, &Error::NotFound) => true,
+            (&Error::Store(ref e1), &Error::Store(ref e2)) => e1 == e2,
+            (&Error::Io(ref e1), &Error::Io(ref e2)) => e1.kind() == e2.kind(),
+            // should not compare directly
+            (&Error::Other(ref e1), &Error::Other(ref e2)) => {
+                panic!("Shoud not compare boxed error directly {}， {}", e1, e2)
+            }
+            _ => false, 
+        }
+    }
+}
 
 impl error::Error for StorageError {
     fn description(&self) -> &str {
@@ -115,5 +129,13 @@ mod tests {
 
         let err1 = other("hello world");
         assert!(error::Error::cause(&err1).is_none());
+    }
+
+    #[test]
+    fn test_equal() {
+        assert_eq!(Error::NotFound, Error::NotFound);
+        assert!(Error::NotFound != Error::Store(StorageError::Compacted));
+        assert_eq!(Error::Store(StorageError::Compacted),
+                   Error::Store(StorageError::Compacted));
     }
 }
