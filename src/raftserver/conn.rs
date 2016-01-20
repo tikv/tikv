@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::vec::Vec;
 // use std::io::{Read, Write};
 use std::collections::VecDeque;
@@ -48,17 +50,6 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
     Ok(())
 }
 
-fn try_write_data<T: TryWrite, B: Buf>(w: &mut T, buf: &mut B) -> Result<()> {
-    // TODO: use try_write_buf directly if I can solve the compile problem.
-    let n = try!(w.try_write(buf.bytes()));
-    match n {
-        None => {}
-        Some(n) => buf.advance(n),
-    }
-
-    Ok(())
-}
-
 fn create_mem_buf(s: usize) -> MutByteBuf {
     unsafe {
         ByteBuf::from_mem_ref(alloc::heap(s.next_power_of_two()), s as u32, 0, s as u32).flip()
@@ -79,9 +70,9 @@ impl Conn {
         }
     }
 
-    pub fn register<T: ServerHandler>(&mut self,
-                                      event_loop: &mut EventLoop<Server<T>>)
-                                      -> Result<()> {
+    pub fn reregister<T: ServerHandler>(&mut self,
+                                        event_loop: &mut EventLoop<Server<T>>)
+                                        -> Result<()> {
         try!(event_loop.reregister(&self.sock,
                                    self.token,
                                    self.interest,
@@ -89,11 +80,11 @@ impl Conn {
         Ok(())
     }
 
-    pub fn register_writeable<T: ServerHandler>(&mut self,
-                                                event_loop: &mut EventLoop<Server<T>>)
-                                                -> Result<()> {
+    pub fn reregister_writeable<T: ServerHandler>(&mut self,
+                                                  event_loop: &mut EventLoop<Server<T>>)
+                                                  -> Result<()> {
         self.interest.insert(EventSet::writable());
-        return self.register(event_loop);
+        return self.reregister(event_loop);
     }
 
     pub fn read<T: ServerHandler>(&mut self,
@@ -127,6 +118,7 @@ impl Conn {
             }
 
             bufs.push(ConnData {
+                token: self.token,
                 msg_id: self.last_msg_id,
                 data: payload.flip(),
             });
@@ -134,22 +126,33 @@ impl Conn {
             self.header.clear();
         }
 
-        try!(self.register(event_loop));
+        try!(self.reregister(event_loop));
 
         Ok((bufs))
     }
 
+    fn write_buf(&mut self) -> Result<usize> {
+        // we check empty before.
+        let mut buf = self.res.front_mut().unwrap();
+
+        let n = try!(self.sock.try_write(buf.bytes()));
+        match n {
+            None => {}
+            Some(n) => buf.advance(n),
+        }
+
+        Ok(buf.remaining())
+    }
+
     pub fn write<T: ServerHandler>(&mut self, event_loop: &mut EventLoop<Server<T>>) -> Result<()> {
         while !self.res.is_empty() {
-            let mut buf = self.res.pop_front().unwrap();
+            let remaining = try!(self.write_buf());
 
-            try!(try_write_data(&mut self.sock, &mut buf));
-
-            if buf.remaining() > 0 {
+            if remaining > 0 {
                 // well, we don't write all, and need re-write later.
-                self.res.push_front(buf);
                 break;
             }
+            self.res.pop_front();
         }
 
         if self.res.is_empty() {
@@ -160,8 +163,9 @@ impl Conn {
             self.interest.insert(EventSet::writable());
         }
 
-        return self.register(event_loop);
+        return self.reregister(event_loop);
     }
+
 
     pub fn append_write_buf(&mut self, msg: ConnData) {
         self.res.push_back(msg.encode_to_buf());

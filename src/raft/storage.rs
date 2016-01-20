@@ -100,7 +100,7 @@ impl MemStorage {
         Ok(&self.snapshot)
     }
 
-    fn compact(&mut self, compact_index: u64) -> Result<()> {
+    pub fn compact(&mut self, compact_index: u64) -> Result<()> {
         let offset = self.entries[0].get_Index();
         if compact_index <= offset {
             return Err(Error::Store(StorageError::Compacted));
@@ -112,17 +112,12 @@ impl MemStorage {
         }
 
         let i = (compact_index - offset) as usize;
-        let mut old: Vec<Entry> = self.entries[i + 1..].to_vec();
-        self.entries = vec![Entry::new()];
-        let index = self.entries[i as usize].get_Index();
-        let term = self.entries[i as usize].get_Term();
-        self.entries[0].set_Index(index);
-        self.entries[0].set_Term(term);
-        self.entries.append(&mut old);
+        let entries = self.entries.drain(i..).collect();
+        self.entries = entries;
         Ok(())
     }
 
-    fn append(&mut self, ents: &[Entry]) -> Result<()> {
+    pub fn append(&mut self, ents: &[Entry]) -> Result<()> {
         if ents.len() == 0 {
             return Ok(());
         }
