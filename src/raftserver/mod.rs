@@ -33,16 +33,6 @@ pub struct ConnData {
     data: ByteBuf,
 }
 
-pub enum TimerMsg {
-    // None is just for test, we will remove this later.
-    None,
-}
-
-pub struct TimerData {
-    delay: u64,
-    msg: TimerMsg,
-}
-
 impl ConnData {
     pub fn encode_to_buf(&self) -> ByteBuf {
         let mut buf = ByteBuf::mut_with_capacity(codec::MSG_HEADER_LEN + self.data.bytes().len());
@@ -52,6 +42,16 @@ impl ConnData {
 
         buf.flip()
     }
+}
+
+pub enum TimerMsg {
+    // None is just for test, we will remove this later.
+    None,
+}
+
+pub struct TimerData {
+    delay: u64,
+    msg: TimerMsg,
 }
 
 pub enum Msg {
