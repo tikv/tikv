@@ -112,12 +112,7 @@ impl MemStorage {
         }
 
         let i = (compact_index - offset) as usize;
-        let new_length = self.entries.len() + 1 - i;
-        let mut entries: Vec<Entry> = Vec::with_capacity(new_length);
-        entries.push(Entry::new());
-        entries[0].set_Index(self.entries[i].get_Index());
-        entries[0].set_Term(self.entries[i].get_Term());
-        entries.append(&mut self.entries[i + 1..].to_vec());
+        let entries = self.entries.drain(i..).collect();
         self.entries = entries;
         Ok(())
     }
