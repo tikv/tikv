@@ -3,7 +3,7 @@
 use std::cmp;
 
 #[derive(Debug, PartialEq)]
-enum ProgressState {
+pub enum ProgressState {
     Probe,
     Replicate,
     Snapshot,
@@ -19,8 +19,8 @@ impl Default for ProgressState {
 
 #[derive(Debug, Default)]
 pub struct Progress {
-    matched: u64,
-    next_idx: u64,
+    pub matched: u64,
+    pub next_idx: u64,
     // When in ProgressStateProbe, leader sends at most one replication message
     // per heartbeat interval. It also probes actual progress of the follower.
     //
@@ -30,21 +30,21 @@ pub struct Progress {
     //
     // When in ProgressStateSnapshot, leader should have sent out snapshot
     // before and stops sending any replication message.
-    state: ProgressState,
+    pub state: ProgressState,
     // Paused is used in ProgressStateProbe.
     // When Paused is true, raft should pause sending replication message to this peer.
-    paused: bool,
+    pub paused: bool,
     // pending_snapshot is used in ProgressStateSnapshot.
     // If there is a pending snapshot, the pendingSnapshot will be set to the
     // index of the snapshot. If pendingSnapshot is set, the replication process of
     // this Progress will be paused. raft will not resend snapshot until the pending one
     // is reported to be failed.
-    pending_snapshot: u64,
+    pub pending_snapshot: u64,
 
     // recent_active is true if the progress is recently active. Receiving any messages
     // from the corresponding follower indicates the progress is active.
     // RecentActive can be reset to false after an election timeout.
-    recent_active: bool,
+    pub recent_active: bool,
 
     // Inflights is a sliding window for the inflight messages.
     // When inflights is full, no more message should be sent.
@@ -53,7 +53,7 @@ pub struct Progress {
     // into inflights in order.
     // When a leader receives a reply, the previous inflights should
     // be freed by calling inflights.freeTo.
-    ins: Inflights,
+    pub ins: Inflights,
 }
 
 
@@ -153,6 +153,7 @@ impl Progress {
             ProgressState::Probe => self.paused,
             ProgressState::Replicate => self.ins.full(),
             ProgressState::Snapshot => true,
+            ProgressState::Invalid => panic!("invalid ProgressState"),
         }
     }
 
@@ -167,7 +168,7 @@ impl Progress {
 
 
 #[derive(Debug, Default)]
-struct Inflights {
+pub struct Inflights {
     // the starting index in the buffer
     start: usize,
     // number of inflights in the buffer

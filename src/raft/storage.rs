@@ -7,8 +7,8 @@ use raft::errors::{Result, Error, StorageError};
 
 #[derive(Debug, Clone)]
 pub struct RaftState {
-    hard_state: HardState,
-    conf_state: ConfState,
+    pub hard_state: HardState,
+    pub conf_state: ConfState,
 }
 
 pub trait Storage {
