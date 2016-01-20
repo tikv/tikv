@@ -226,7 +226,7 @@ impl Inflights {
     }
 
     pub fn free_first_one(&mut self) {
-        let start = self.start;
+        let start = self.buffer[self.start];
         self.free_to(start);
     }
 
