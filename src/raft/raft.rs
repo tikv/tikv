@@ -107,7 +107,7 @@ impl<T> Config<T> where T: Storage
 
 
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Raft {
     hs: HardState,
 
@@ -143,26 +143,26 @@ struct Raft {
 
     heartbeat_timeout: usize,
     election_timeout: usize,
-    tick: Box<FnMut(&mut Raft)>,
-    step: Box<FnMut(&mut Raft, Message)>,
+    tick: Vec<Box<FnMut()>>,
+    step: Vec<Box<FnMut(&Message)>>,
 }
 
 impl Raft {
     fn newRaft<T>(c: &Config<T>) -> Raft
         where T: Storage
     {
-        c.validate().or_else(|e| panic!(e));
+        c.validate().map_err(|e| panic!(e));
         let mut raftlog = RaftLog::new(c.storage);
-        let state = c.storage.initial_state();
-        state.or_else(|e| panic!(e));
-        let hs = state.unwrap().hard_state;
-        let cs = state.unwrap().conf_state;
-        let mut peers = c.peers;
-        if cs.nodes.len() > 0 {
+        let state = &c.storage.initial_state();
+        state.map_err(|e| panic!(e));
+        let hs = &state.unwrap().hard_state;
+        let cs = &state.unwrap().conf_state;
+        let mut peers = c.peers.into_iter().collect::<Vec<u64>>();
+        if cs.get_nodes().len() > 0 {
             if peers.len() > 0 {
                 panic!("cannot specify both newRaft(peers) and conf_state.nodes")
             }
-            peers = cs.nodes;
+            peers = cs.get_nodes().into_iter().map(|&x| x).collect::<Vec<u64>>();
         }
 
         let mut tmp: HashMap<u64, Progress> = HashMap::new();
@@ -175,7 +175,7 @@ impl Raft {
                        });
         }
         // empty state
-        if hs == HardState::new() {
+        if hs == &HardState::new() {
 
         }
         Raft {
@@ -187,8 +187,11 @@ impl Raft {
             heartbeat_timeout: c.heartbeat_tick,
             check_quorum: c.check_quorum,
             prs: tmp,
-            tick: Default::default(),
+            tick: Vec::new(),
+            step: Vec::new(),
             ..Default::default()
         }
     }
+
+    pub fn do_nothing(&self) {}
 }
