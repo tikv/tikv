@@ -81,6 +81,16 @@ impl Progress {
         self.pending_snapshot = snapshot_idx;
     }
 
+    pub fn snapshot_failure(&self) -> bool {
+        self.pending_snapshot == 0
+    }
+
+    // maybeSnapshotAbort unsets pendingSnapshot if Match is equal or higher than
+    // the pendingSnapshot
+    pub fn maybe_snapshot_abort(&self) -> bool {
+        self.state == ProgressState::Snapshot && self.matched >= self.pending_snapshot
+    }
+
     // maybeUpdate returns false if the given n index comes from an outdated message.
     // Otherwise it updates the progress and returns true.
     pub fn maybe_update(&mut self, n: u64) -> bool {
@@ -162,6 +172,7 @@ impl Inflights {
         Inflights { buffer: Vec::with_capacity(cap), ..Default::default() }
     }
 
+    // full returns true if the inflights is full.
     pub fn full(&self) -> bool {
         self.count == self.cap()
     }
@@ -209,6 +220,7 @@ impl Inflights {
             i += 1;
         }
 
+        // free i inflights and set new start index
         self.count -= i;
         self.start = idx as u64;
     }
@@ -218,6 +230,8 @@ impl Inflights {
         self.free_to(start);
     }
 
+
+    // resets frees all inflights.
     pub fn reset(&mut self) {
         self.count = 0;
         self.start = 0;
