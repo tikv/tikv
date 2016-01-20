@@ -7,9 +7,18 @@ enum ProgressState {
     Probe,
     Replicate,
     Snapshot,
+    Invalid,
 }
 
-struct Progress {
+impl Default for ProgressState {
+    fn default() -> ProgressState {
+        ProgressState::Invalid
+    }
+}
+
+
+#[derive(Debug, Default)]
+pub struct Progress {
     matched: u64,
     next_idx: u64,
     // When in ProgressStateProbe, leader sends at most one replication message
@@ -46,6 +55,7 @@ struct Progress {
     // be freed by calling inflights.freeTo.
     ins: Inflights,
 }
+
 
 
 impl Progress {

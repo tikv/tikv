@@ -19,6 +19,7 @@ pub enum StorageError {
     Compacted,
     Unavailable,
     SnapshotOutOfDate,
+    SnapshotTemporarilyUnavailable,
 }
 
 impl StorageError {
@@ -26,6 +27,7 @@ impl StorageError {
         match self {
             &StorageError::Compacted => "log compacted",
             &StorageError::Unavailable => "log unavailable",
+            &StorageError::SnapshotTemporarilyUnavailable => "snapshot temporarily unavailable",
             &StorageError::SnapshotOutOfDate => "snapshot out of date",
         }
     }
