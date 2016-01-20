@@ -508,17 +508,11 @@ mod test {
         let offset = 500u64;
         raft_log.store.compact(offset).expect("compact failed");
 
-        if raft_log.last_index() != last_index {
-            panic!("last_index = {}, want {}",
-                   raft_log.last_index(),
-                   last_index);
-        }
+        assert_eq!(last_index, raft_log.last_index());
 
         let mut j = offset;
         while j <= raft_log.last_index() {
-            if raft_log.term(j).expect("") != j {
-                panic!("term({}) = {}, want {}", j, raft_log.term(j).expect(""), j);
-            }
+            assert_eq!(j, raft_log.term(j).expect(""));
             j = j + 1;
         }
 
@@ -530,32 +524,18 @@ mod test {
             j = j + 1;
         }
 
-        match raft_log.unstable_entries() {
-            None => panic!("should have content."),
-            Some(unstable_ents) => {
-                if unstable_ents.len() != 250 {
-                    panic!("unstable_ents.len() = {}, want = {}",
-                           unstable_ents.len(),
-                           250);
-                }
-                if unstable_ents[0].get_Index() != 751 {
-                    panic!("Index = {}, want = {}", unstable_ents[0].get_Index(), 751);
-                }
-            } 
+        {
+            let unstable_ents = raft_log.unstable_entries().expect("should have content.");
+            assert_eq!(250, unstable_ents.len());
+            assert_eq!(751, unstable_ents[0].get_Index());
         }
 
         let mut prev = raft_log.last_index();
         raft_log.append(&[new_entry(prev + 1, prev + 1)]);
-        if raft_log.last_index() != prev + 1 {
-            panic!("last_index = {}, want = {}",
-                   raft_log.last_index(),
-                   prev + 1);
-        }
+        assert_eq!(prev + 1, raft_log.last_index());
 
         prev = raft_log.last_index();
         let ents = raft_log.entries(prev, raft_log::NO_LIMIT).expect("unexpected error");
-        if ents.len() != 1 {
-            panic!("entries.len() = {}, want = {}", ents.len(), 1);
-        }
+        assert_eq!(1, ents.len());
     }
 }
