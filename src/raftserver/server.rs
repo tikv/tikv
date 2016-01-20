@@ -92,12 +92,14 @@ impl<T: ServerHandler> Server<T> {
 
                 self.conns.insert(new_token, conn);
 
-                // TODO: check error later.
                 event_loop.register(&self.conns[&new_token].sock,
                                     new_token,
                                     EventSet::readable(),
                                     PollOpt::edge() | PollOpt::oneshot())
-                          .unwrap()
+                          .map_err(|e| {
+                              error!("register conn err {:?}", e);
+                          });
+
             }
             token => {
                 let msgs;
@@ -136,7 +138,7 @@ impl<T: ServerHandler> Server<T> {
     fn handle_writedata(&mut self, event_loop: &mut EventLoop<Server<T>>, data: ConnData) {
         if let Some(conn) = self.conns.get_mut(&data.token) {
             conn.append_write_buf(data);
-            conn.register_writeable(event_loop);
+            conn.reregister_writeable(event_loop);
         }
     }
 
