@@ -85,13 +85,13 @@ impl Progress {
         self.pending_snapshot == 0
     }
 
-    // maybeSnapshotAbort unsets pendingSnapshot if Match is equal or higher than
+    // maybe_snapshot_abort unsets pendingSnapshot if Match is equal or higher than
     // the pendingSnapshot
     pub fn maybe_snapshot_abort(&self) -> bool {
         self.state == ProgressState::Snapshot && self.matched >= self.pending_snapshot
     }
 
-    // maybeUpdate returns false if the given n index comes from an outdated message.
+    // maybe_update returns false if the given n index comes from an outdated message.
     // Otherwise it updates the progress and returns true.
     pub fn maybe_update(&mut self, n: u64) -> bool {
         let mut updated = false;
@@ -112,9 +112,9 @@ impl Progress {
         self.next_idx = n + 1;
     }
 
-    // maybeDecrTo returns false if the given to index comes from an out of order message.
+    // maybe_decr_to returns false if the given to index comes from an out of order message.
     // Otherwise it decreases the progress next index to min(rejected, last) and returns true.
-    pub fn maybe_dec_to(&mut self, rejected: u64, last: u64) -> bool {
+    pub fn maybe_decr_to(&mut self, rejected: u64, last: u64) -> bool {
         if self.state == ProgressState::Replicate {
             // the rejection must be stale if the progress has matched and "rejected"
             // is smaller than "match".
