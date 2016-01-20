@@ -29,10 +29,8 @@ impl Default for StateRole {
 const INVALID_ID: u64 = 0;
 
 // Config contains the parameters to start a raft.
-#[derive(Debug, Default)]
-pub struct Config<T>
-    where T: Storage
-{
+#[derive( Default)]
+pub struct Config {
     // id is the identity of the local raft. ID cannot be 0.
     id: u64,
 
@@ -59,7 +57,7 @@ pub struct Config<T>
     // states to be stored in storage. raft reads the persisted entires
     // and states out of Storage when it needs. raft reads out the previous
     // state and configuration out of storage when restarting.
-    storage: T,
+    storage: Option<Box<Storage>>,
     // Applied is the last applied index. It should only be set when restarting
     // raft. raft will not return entries to the application smaller or equal to Applied.
     // If Applied is unset when restarting, raft might return previous applied entries.
@@ -82,8 +80,7 @@ pub struct Config<T>
     check_quorum: bool,
 }
 
-impl<T> Config<T> where T: Storage
-{
+impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.id == INVALID_ID {
             return Err(other("invalid node id"));
@@ -148,7 +145,7 @@ struct Raft {
 }
 
 impl Raft {
-    fn newRaft<T>(c: &Config<T>) -> Raft
+    fn newRaft<T>(c: &Config) -> Raft
         where T: Storage
     {
         c.validate().map_err(|e| panic!(e));
