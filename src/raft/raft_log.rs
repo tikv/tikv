@@ -92,11 +92,12 @@ impl<T> RaftLog<T> where T: Storage
         match self.unstable.maybe_term(idx) {
             Some(term) => Ok(term),
             _ => {
-                match self.store.term(idx) {
-                    a@Ok(_) => a,
-                    e@Err(Error::Store(StorageError::Compacted)) => e,
-                    Err(e) => panic!(e),
-                }
+                self.store.term(idx).map_err(|e| {
+                    if e != Error::Store(StorageError::Compacted) {
+                        panic!(e)
+                    }
+                    e
+                })
             }
         }
     }
