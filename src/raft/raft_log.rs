@@ -395,18 +395,6 @@ mod test {
         e
     }
 
-    fn is_diff(l_ents: &Vec<raftpb::Entry>, r_ents: &Vec<raftpb::Entry>) -> bool {
-        if l_ents.len() != r_ents.len() {
-            return true;
-        }
-        for (ref a, ref b) in l_ents.iter().zip(r_ents) {
-            if a != b {
-                return true;
-            }
-        }
-        false
-    }
-
     #[test]
     fn test_find_conflict() {
         let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
@@ -486,7 +474,7 @@ mod test {
             }
             match raft_log.entries(1, raft_log::NO_LIMIT) {
                 Err(e) => panic!("#{}: unexpected error {}", i, e),
-                Ok(ref g) if is_diff(g, wents) => {
+                Ok(ref g) if g != wents => {
                     panic!("#{}: logEnts = {:?}, want {:?}", i, &*g, &*wents)
                 }
                 _ => {
@@ -513,9 +501,8 @@ mod test {
             raft_log.append(&[new_entry(i as u64 + 1, i as u64 + 1)]);
         }
 
-        if !raft_log.maybe_commit(last_index, last_term) {
-            panic!("maybe_commit return false");
-        }
+        assert!(raft_log.maybe_commit(last_index, last_term),
+                "maybe_commit return false");
         let committed = raft_log.committed;
         raft_log.applied_to(committed);
         let offset = 500u64;
