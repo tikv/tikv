@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::vec::Vec;
 // use std::io::{Read, Write};
 use std::collections::VecDeque;
@@ -79,9 +81,9 @@ impl Conn {
         }
     }
 
-    pub fn register<T: ServerHandler>(&mut self,
-                                      event_loop: &mut EventLoop<Server<T>>)
-                                      -> Result<()> {
+    pub fn reregister<T: ServerHandler>(&mut self,
+                                        event_loop: &mut EventLoop<Server<T>>)
+                                        -> Result<()> {
         try!(event_loop.reregister(&self.sock,
                                    self.token,
                                    self.interest,
@@ -89,11 +91,11 @@ impl Conn {
         Ok(())
     }
 
-    pub fn register_writeable<T: ServerHandler>(&mut self,
-                                                event_loop: &mut EventLoop<Server<T>>)
-                                                -> Result<()> {
+    pub fn reregister_writeable<T: ServerHandler>(&mut self,
+                                                  event_loop: &mut EventLoop<Server<T>>)
+                                                  -> Result<()> {
         self.interest.insert(EventSet::writable());
-        return self.register(event_loop);
+        return self.reregister(event_loop);
     }
 
     pub fn read<T: ServerHandler>(&mut self,
@@ -127,6 +129,7 @@ impl Conn {
             }
 
             bufs.push(ConnData {
+                token: self.token,
                 msg_id: self.last_msg_id,
                 data: payload.flip(),
             });
@@ -134,7 +137,7 @@ impl Conn {
             self.header.clear();
         }
 
-        try!(self.register(event_loop));
+        try!(self.reregister(event_loop));
 
         Ok((bufs))
     }
@@ -160,7 +163,7 @@ impl Conn {
             self.interest.insert(EventSet::writable());
         }
 
-        return self.register(event_loop);
+        return self.reregister(event_loop);
     }
 
     pub fn append_write_buf(&mut self, msg: ConnData) {
