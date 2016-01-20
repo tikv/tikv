@@ -16,7 +16,7 @@ pub struct Runner<T: ServerHandler> {
 }
 
 impl<T: ServerHandler> Runner<T> {
-    // New a new runner with listening address.
+    // Create a runner with listening address.
     fn new(addr: &str) -> Result<(Runner<T>)> {
         let addr = try!(addr.parse());
         let listener = try!(TcpListener::bind(&addr));
