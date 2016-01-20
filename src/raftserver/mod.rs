@@ -99,7 +99,7 @@ impl Sender {
             match r.unwrap_err() {
                 NotifyError::Full(m) => {
                     warn!("notify queue is full, sleep and retry");
-                    thread::sleep(Duration::new(0, 100 * 1000000));
+                    thread::sleep(Duration::from_millis(100));
                     value = m;
                     continue;
                 }
