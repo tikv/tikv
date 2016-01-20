@@ -89,13 +89,17 @@ impl<T> RaftLog<T> where T: Storage
             return Ok(0u64);
         }
 
-        self.unstable.maybe_term(idx).map(|term| return Ok::<u64, Error>(term));
-        self.store.term(idx).map_err(|e| {
-            if e == Error::Store(StorageError::Compacted) {
-                return e;
+        match self.unstable.maybe_term(idx) {
+            Some(term) => Ok(term),
+            _ => {
+                self.store.term(idx).map_err(|e| {
+                    if e != Error::Store(StorageError::Compacted) {
+                        panic!(e)
+                    }
+                    e
+                })
             }
-            panic!(e)
-        })
+        }
     }
 
     pub fn first_index(&self) -> u64 {
@@ -265,7 +269,7 @@ impl<T> RaftLog<T> where T: Storage
         }
     }
 
-    fn is_upto_date(&self, last_index: u64, term: u64) -> bool {
+    fn is_up_to_date(&self, last_index: u64, term: u64) -> bool {
         term > self.last_term() || (term == self.last_term() && last_index >= self.last_index())
     }
 
@@ -317,6 +321,16 @@ impl<T> RaftLog<T> where T: Storage
         None
     }
 
+    fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool {
+        if max_index > self.committed &&
+           self.zero_term_on_err_compacted(self.term(max_index)) == term {
+            self.commit_to(max_index);
+            true
+        } else {
+            false
+        }
+    }
+
     fn slice(&mut self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
         let err = self.must_check_outofbounds(low, high);
         if err.is_some() {
@@ -364,5 +378,164 @@ impl<T> RaftLog<T> where T: Storage
         let mut v = Vec::<Entry>::new();
         v.extend_from_slice(limit_size(&ents, max_size));
         Ok(v)
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use raft::raft_log::{self, RaftLog};
+    use raft::storage;
+    use proto::raftpb;
+
+    fn new_entry(index: u64, term: u64) -> raftpb::Entry {
+        let mut e = raftpb::Entry::new();
+        e.set_Term(term);
+        e.set_Index(index);
+        e
+    }
+
+    #[test]
+    fn test_find_conflict() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
+        let tests = vec![
+            // no conflict, empty ent
+            (vec![], 0),
+            (vec![], 0),
+            // no conflict
+            (vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)], 0),
+            (vec![new_entry(2, 2), new_entry(3, 3)], 0),
+            (vec![new_entry(3, 3)], 0),
+            // no conflict, but has new entries
+            (vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
+            (vec![new_entry(2, 2), new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
+            (vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
+            (vec![new_entry(4, 4), new_entry(5, 4)], 4),
+            // conflicts with existing entries
+            (vec![new_entry(1, 4), new_entry(2, 4)], 1),
+            (vec![new_entry(2, 1), new_entry(3, 4), new_entry(4, 4)], 2),
+            (vec![new_entry(3, 1), new_entry(4, 2), new_entry(5, 4), new_entry(6, 4)], 3),
+        ];
+        for (i, &(ref ents, wconflict)) in tests.iter().enumerate() {
+            let mut raft_log = RaftLog::new(storage::MemStorage::new());
+            raft_log.append(&*previous_ents);
+            let gconflict = raft_log.find_conflict(&*ents);
+            if gconflict != wconflict {
+                panic!("#{}: conflict = {}, want {}", i, gconflict, wconflict)
+            }
+        }
+    }
+
+    #[test]
+    fn test_is_up_to_date() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
+        let mut raft_log = RaftLog::new(storage::MemStorage::new());
+        raft_log.append(&*previous_ents);
+        let tests = vec![
+            // greater term, ignore lastIndex
+            (raft_log.last_index() - 1, 4, true),
+            (raft_log.last_index(), 4, true),
+            (raft_log.last_index() + 1, 4, true),
+            // smaller term, ignore lastIndex
+            (raft_log.last_index() - 1, 2, false),
+            (raft_log.last_index(), 2, false),
+            (raft_log.last_index() + 1, 2, false),
+            // equal term, lager lastIndex wins
+            (raft_log.last_index() - 1, 3, false),
+            (raft_log.last_index(), 3, true),
+            (raft_log.last_index() + 1, 3, true),
+        ];
+        for (i, &(last_index, term, up_to_date)) in tests.iter().enumerate() {
+            let g_up_to_date = raft_log.is_up_to_date(last_index, term);
+            if g_up_to_date != up_to_date {
+                panic!("#{}: uptodate = {}, want {}", i, g_up_to_date, up_to_date);
+            }
+        }
+    }
+
+    #[test]
+    fn test_append() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2)];
+        let tests = vec![
+            (vec![], 2, vec![new_entry(1, 1), new_entry(2, 2)], 3),
+            (vec![new_entry(3, 2)], 3, vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 2)], 3),
+            // conflicts with index 1
+            (vec![new_entry(1, 2)], 1, vec![new_entry(1, 2)], 1),
+            // conflicts with index 2
+            (vec![new_entry(2, 3), new_entry(3, 3)], 3, vec![new_entry(1, 1), new_entry(2, 3), new_entry(3, 3)], 2),
+        ];
+        for (i, &(ref ents, windex, ref wents, wunstable)) in tests.iter().enumerate() {
+            let mut store = storage::MemStorage::new();
+            store.append(&previous_ents).expect("append failed");
+            let mut raft_log = RaftLog::new(store);
+            let index = raft_log.append(ents);
+            if index != windex {
+                panic!("#{}: last_index = {}, want {}", i, index, windex);
+            }
+            match raft_log.entries(1, raft_log::NO_LIMIT) {
+                Err(e) => panic!("#{}: unexpected error {}", i, e),
+                Ok(ref g) if g != wents => {
+                    panic!("#{}: logEnts = {:?}, want {:?}", i, &*g, &*wents)
+                }
+                _ => {
+                    let goff = raft_log.unstable.offset;
+                    if goff != wunstable {
+                        panic!("#{}: unstable = {}, want {}", i, goff, wunstable);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_compaction_side_effects() {
+        let last_index = 1000u64;
+        let unstable_index = 750u64;
+        let last_term = last_index;
+        let mut storage = storage::MemStorage::new();
+        for i in 1..(unstable_index + 1) {
+            storage.append(&[new_entry(i as u64, i as u64)]).expect("append failed");
+        }
+        let mut raft_log = RaftLog::new(storage);
+        for i in unstable_index..last_index {
+            raft_log.append(&[new_entry(i as u64 + 1, i as u64 + 1)]);
+        }
+
+        assert!(raft_log.maybe_commit(last_index, last_term),
+                "maybe_commit return false");
+        let committed = raft_log.committed;
+        raft_log.applied_to(committed);
+        let offset = 500u64;
+        raft_log.store.compact(offset).expect("compact failed");
+
+        assert_eq!(last_index, raft_log.last_index());
+
+        let mut j = offset;
+        while j <= raft_log.last_index() {
+            assert_eq!(j, raft_log.term(j).expect(""));
+            j = j + 1;
+        }
+
+        j = offset;
+        while j <= raft_log.last_index() {
+            if !raft_log.match_term(j, j) {
+                panic!("match_term({}) = false, want true", j);
+            }
+            j = j + 1;
+        }
+
+        {
+            let unstable_ents = raft_log.unstable_entries().expect("should have content.");
+            assert_eq!(250, unstable_ents.len());
+            assert_eq!(751, unstable_ents[0].get_Index());
+        }
+
+        let mut prev = raft_log.last_index();
+        raft_log.append(&[new_entry(prev + 1, prev + 1)]);
+        assert_eq!(prev + 1, raft_log.last_index());
+
+        prev = raft_log.last_index();
+        let ents = raft_log.entries(prev, raft_log::NO_LIMIT).expect("unexpected error");
+        assert_eq!(1, ents.len());
     }
 }
