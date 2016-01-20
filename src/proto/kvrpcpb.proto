@@ -1,5 +1,5 @@
 syntax = "proto2";
-package kvrpc;
+package kvrpcpb;
 
 enum MessageType {
     Get = 1;
