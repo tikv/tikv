@@ -1,2 +1,1 @@
-src/proto/raft_serverpb.rs binary
-src/proto/raftpb.rs binary
+src/proto/*pb.rs binary
