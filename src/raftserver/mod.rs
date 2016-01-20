@@ -3,9 +3,12 @@
 use std::boxed::Box;
 use std::result;
 use std::error;
+use std::thread;
+use std::convert;
+use std::time::Duration;
 
 use bytes::{Buf, ByteBuf};
-use mio::{self, Token};
+use mio::{self, Token, NotifyError};
 
 use util::codec;
 
@@ -78,28 +81,94 @@ impl Clone for Sender {
     }
 }
 
+const MAX_SEND_RETRY_CNT: i32 = 20;
+
 impl Sender {
     pub fn new(sender: mio::Sender<Msg>) -> Sender {
         Sender { sender: sender }
     }
 
+    fn send(&self, msg: Msg) -> Result<()> {
+        let mut value = msg;
+        for _ in 0..MAX_SEND_RETRY_CNT {
+            let r = self.sender.send(value);
+            if r.is_ok() {
+                return Ok(());
+            }
+
+            match r.unwrap_err() {
+                NotifyError::Full(m) => {
+                    warn!("notify queue is full, sleep and retry");
+                    thread::sleep(Duration::from_millis(100));
+                    value = m;
+                    continue;
+                }
+                e@_ => {
+                    return Err(convert::From::from(e));
+                }
+            }
+        }
+
+        Err(convert::From::from(NotifyError::Full(value)))
+    }
+
     pub fn kill(&self) -> Result<()> {
-        try!(self.sender.send(Msg::Quit));
+        try!(self.send(Msg::Quit));
         Ok(())
     }
 
     pub fn write_data(&self, data: ConnData) -> Result<()> {
-        try!(self.sender.send(Msg::WriteData(data)));
+        try!(self.send(Msg::WriteData(data)));
 
         Ok(())
     }
 
     pub fn timeout_ms(&self, delay: u64, m: TimerMsg) -> Result<()> {
-        try!(self.sender.send(Msg::Timer(TimerData {
+        try!(self.send(Msg::Timer(TimerData {
             delay: delay,
             msg: m,
         })));
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use mio::{EventLoop, Handler};
+
+    use super::*;
+
+    struct SenderHandler;
+
+    impl Handler for SenderHandler {
+        type Timeout = ();
+        type Message = Msg;
+
+        fn notify(&mut self, event_loop: &mut EventLoop<SenderHandler>, msg: Msg) {
+            match msg {
+                Msg::Quit => event_loop.shutdown(),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn test_sender() {
+        let mut event_loop = EventLoop::new().unwrap();
+        let sender = Sender::new(event_loop.channel());
+        let h = thread::spawn(move || {
+            event_loop.run(&mut SenderHandler).unwrap();
+        });
+
+        for _ in 1..10000 {
+            sender.timeout_ms(100, TimerMsg::None).unwrap();
+        }
+
+        sender.kill().unwrap();
+
+        h.join().unwrap();
     }
 }
