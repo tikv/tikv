@@ -118,7 +118,6 @@ impl Conn {
             }
 
             bufs.push(ConnData {
-                token: self.token,
                 msg_id: self.last_msg_id,
                 data: payload.flip(),
             });
