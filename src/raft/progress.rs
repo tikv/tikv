@@ -159,9 +159,9 @@ impl Progress {
 #[derive(Debug, Default)]
 struct Inflights {
     // the starting index in the buffer
-    start: u64,
+    start: usize,
     // number of inflights in the buffer
-    count: u64,
+    count: usize,
 
     // ring buffer
     buffer: Vec<u64>,
@@ -177,8 +177,8 @@ impl Inflights {
         self.count == self.cap()
     }
 
-    pub fn cap(&self) -> u64 {
-        self.buffer.capacity() as u64
+    pub fn cap(&self) -> usize {
+        self.buffer.capacity()
     }
 
     // add adds an inflight into inflights
@@ -191,19 +191,19 @@ impl Inflights {
         if next >= self.cap() {
             next -= self.cap();
         }
-        self.buffer[next as usize] = inflight;
+        self.buffer[next] = inflight;
         self.count += 1;
     }
 
     // free_to frees the inflights smaller or equal to the given `to` flight.
     pub fn free_to(&mut self, to: u64) {
-        if self.count == 0 || to < self.buffer[self.start as usize] {
+        if self.count == 0 || to < self.buffer[self.start] {
             // out of the left side of the window
             return;
         }
 
-        let mut i = 0u64;
-        let mut idx = self.start as usize;
+        let mut i = 0usize;
+        let mut idx = self.start;
         while i < self.count {
             if to < self.buffer[idx] {
                 // found the first large inflight
@@ -213,8 +213,8 @@ impl Inflights {
 
             // increase index and maybe rotate
             idx += 1;
-            if idx >= self.cap() as usize {
-                idx -= self.cap() as usize;
+            if idx >= self.cap() {
+                idx -= self.cap();
             }
 
             i += 1;
@@ -222,7 +222,7 @@ impl Inflights {
 
         // free i inflights and set new start index
         self.count -= i;
-        self.start = idx as u64;
+        self.start = idx;
     }
 
     pub fn free_first_one(&mut self) {
