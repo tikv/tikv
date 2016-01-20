@@ -16,8 +16,8 @@ pub struct Runner<T: ServerHandler> {
 }
 
 impl<T: ServerHandler> Runner<T> {
-    // Starts a new runner with listening address.
-    fn start(addr: &str) -> Result<(Runner<T>)> {
+    // New a new runner with listening address.
+    fn new(addr: &str) -> Result<(Runner<T>)> {
         let addr = try!(addr.parse());
         let listener = try!(TcpListener::bind(&addr));
 
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn test_base() {
         let addr = "127.0.0.1:0";
-        let mut r = Runner::start(addr).unwrap();
+        let mut r = Runner::new(addr).unwrap();
 
         let sender = r.get_sender();
         thread::spawn(move || {
@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn test_conn() {
         let addr = "127.0.0.1:12345";
-        let mut r = Runner::start(addr).unwrap();
+        let mut r = Runner::new(addr).unwrap();
 
         let sender = r.get_sender();
 
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn test_tick() {
         let addr = "127.0.0.1:0";
-        let mut r = Runner::start(addr).unwrap();
+        let mut r = Runner::new(addr).unwrap();
 
         let sender = r.get_sender();
         thread::spawn(move || {
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn test_timer() {
         let addr = "127.0.0.1:0";
-        let mut r = Runner::start(addr).unwrap();
+        let mut r = Runner::new(addr).unwrap();
 
         let sender = r.get_sender();
         let n = Arc::new(Mutex::new(1));
