@@ -60,10 +60,12 @@ mod tests {
     use std::sync::{self, Arc, Mutex};
     use std::time::Duration;
     use std::net::TcpStream;
-    use std::io::prelude::*;
+    use std::io::{Read, Write};
     use std::vec::Vec;
+    use std::string::String;
 
-    use mio::EventLoop;
+    use bytes::{Buf, ByteBuf};
+    use mio::{EventLoop, Token};
 
     use super::*;
     use raftserver::*;
@@ -185,5 +187,68 @@ mod tests {
 
         let n = n.lock().unwrap();
         assert_eq!(*n, 0);
+    }
+
+    struct PeerHandler;
+
+    fn new_conn_data(msg_id: u64, data: &str) -> ConnData {
+        ConnData {
+            msg_id: msg_id,
+            data: ByteBuf::from_slice(String::from(data).as_bytes()),
+        }
+    }
+
+    impl ServerHandler for PeerHandler {
+        fn handle_read_data(&mut self,
+                            sender: &Sender,
+                            token: Token,
+                            msgs: Vec<ConnData>)
+                            -> Result<(Vec<ConnData>)> {
+            let mut res = vec![];
+            for msg in msgs {
+                let buf = msg.as_bytes();
+                if buf == String::from("ping").as_bytes() {
+                    res.push(new_conn_data(msg.msg_id, "pong"));
+                }
+            }
+
+            Ok(res)
+        }
+    }
+
+    fn start_peer(addr: &str) -> (Sender, thread::JoinHandle<(())>) {
+        let mut r = Runner::new(addr).unwrap();
+        let s = r.get_sender();
+        let t = thread::spawn(move || {
+            let h = PeerHandler;
+
+            r.run(h).unwrap();
+
+            ()
+        });
+
+        (s, t)
+    }
+
+    #[test]
+    fn test_peer() {
+        let addr1 = "127.0.0.1:24680";
+        let addr2 = "127.0.0.1:24681";
+
+        let (s1, h1) = start_peer(addr1);
+        let (s2, h2) = start_peer(addr2);
+
+        s1.send_peer(addr2.to_string(), new_conn_data(1, "ping")).unwrap();
+        s2.send_peer(addr1.to_string(), new_conn_data(2, "ping")).unwrap();
+        s1.send_peer(addr1.to_string(), new_conn_data(3, "ping")).unwrap();
+        s2.send_peer(addr2.to_string(), new_conn_data(4, "ping")).unwrap();
+
+        thread::sleep(Duration::from_secs(1));
+
+        s1.kill().unwrap();
+        s2.kill().unwrap();
+
+        h1.join().unwrap();
+        h2.join().unwrap();
     }
 }
