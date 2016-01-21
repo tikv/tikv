@@ -189,7 +189,9 @@ mod tests {
         assert_eq!(*n, 0);
     }
 
-    struct PeerHandler;
+    struct PeerHandler {
+        cnt: Arc<Mutex<(u64, u64)>>,
+    }
 
     impl ServerHandler for PeerHandler {
         fn handle_read_data(&mut self,
@@ -199,9 +201,13 @@ mod tests {
                             -> Result<(Vec<ConnData>)> {
             let mut res = vec![];
             for msg in msgs {
+                let mut cnt = self.cnt.lock().unwrap();
                 let buf = Buf::bytes(&msg.data);
                 if buf == String::from("ping").as_bytes() {
+                    (*cnt).0 += 1;
                     res.push(ConnData::from_string(msg.msg_id, "pong"));
+                } else {
+                    (*cnt).1 += 1;
                 }
             }
 
@@ -209,11 +215,11 @@ mod tests {
         }
     }
 
-    fn start_peer(addr: &str) -> (Sender, thread::JoinHandle<(())>) {
+    fn start_peer(addr: &str, cnt: Arc<Mutex<(u64, u64)>>) -> (Sender, thread::JoinHandle<(())>) {
         let mut r = Runner::new(addr).unwrap();
         let s = r.get_sender();
         let t = thread::spawn(move || {
-            let h = PeerHandler;
+            let h = PeerHandler { cnt: cnt };
 
             r.run(h).unwrap();
 
@@ -228,8 +234,11 @@ mod tests {
         let addr1 = "127.0.0.1:24680";
         let addr2 = "127.0.0.1:24681";
 
-        let (s1, h1) = start_peer(addr1);
-        let (s2, h2) = start_peer(addr2);
+        let cnt1 = Arc::new(Mutex::new((0, 0)));
+        let cnt2 = Arc::new(Mutex::new((0, 0)));
+
+        let (s1, h1) = start_peer(addr1, cnt1.clone());
+        let (s2, h2) = start_peer(addr2, cnt2.clone());
 
         s1.send_peer(addr2.to_string(), ConnData::from_string(1, "ping")).unwrap();
         s2.send_peer(addr1.to_string(), ConnData::from_string(2, "ping")).unwrap();
@@ -243,5 +252,11 @@ mod tests {
 
         h1.join().unwrap();
         h2.join().unwrap();
+
+        let r1 = *(cnt1.lock().unwrap());
+        let r2 = *(cnt2.lock().unwrap());
+
+        assert_eq!(r1, r2);
+        assert_eq!(r1, (2, 2));
     }
 }
