@@ -202,7 +202,7 @@ mod tests {
                             -> Result<(Vec<ConnData>)> {
             let mut res = vec![];
             for msg in msgs {
-                let buf = msg.as_bytes();
+                let buf = Buf::bytes(&msg.data);
                 if buf == String::from("ping").as_bytes() {
                     self.ping += 1;
                     res.push(new_conn_data(msg.msg_id, "pong"));

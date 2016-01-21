@@ -17,7 +17,7 @@ pub struct Server<T: ServerHandler> {
     token_counter: usize,
     sender: Sender,
     peers: HashMap<String, Token>,
-    
+
     pub handler: T,
 }
 

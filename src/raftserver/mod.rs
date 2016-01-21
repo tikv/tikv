@@ -44,14 +44,6 @@ impl ConnData {
 
         buf.flip()
     }
-
-    // Notice: I meet a very strange problem in test, rust will
-    // convert conn_data.data.bytes() to io::Bytes traits, I don't
-    // know why so I supply this method instead temporally.
-    // I may use vector instead of ByteBuf later.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.data.bytes()
-    }
 }
 
 pub enum TimerMsg {
