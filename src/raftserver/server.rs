@@ -12,13 +12,13 @@ use raftserver::conn::Conn;
 use raftserver::handler::ServerHandler;
 
 pub struct Server<T: ServerHandler> {
-    pub listener: TcpListener,
-    pub conns: HashMap<Token, Conn>,
-    pub token_counter: usize,
-    pub sender: Sender,
-
+    listener: TcpListener,
+    conns: HashMap<Token, Conn>,
+    token_counter: usize,
+    sender: Sender,
     peers: HashMap<String, Token>,
-    handler: T,
+
+    pub handler: T,
 }
 
 impl<T: ServerHandler> Server<T> {
