@@ -116,9 +116,9 @@ impl Unstable {
             // truncate to after and copy to self.entries
             // then append
             let off = self.offset;
-            let mut entries = vec![];
             self.entries = {
                 let cut_ents = self.slice(off, after + 1);
+                let mut entries = Vec::with_capacity(cut_ents.len() + ents.len());
                 entries.extend_from_slice(cut_ents);
                 entries.extend_from_slice(ents);
                 entries
