@@ -19,6 +19,10 @@ pub struct Conn {
     pub token: Token,
     pub interest: EventSet,
 
+    // peer_addr is for remote peer address, we only set this
+    // when we connect to the remote peer.
+    pub peer_addr: Option<String>,
+
     // message header
     last_msg_id: u64,
     header: MutByteBuf,
@@ -58,7 +62,7 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 
 
 impl Conn {
-    pub fn new(sock: TcpStream, token: Token) -> Conn {
+    pub fn new(sock: TcpStream, token: Token, peer_addr: Option<String>) -> Conn {
         Conn {
             sock: sock,
             token: token,
@@ -67,6 +71,7 @@ impl Conn {
             payload: None,
             res: VecDeque::new(),
             last_msg_id: 0,
+            peer_addr: peer_addr,
         }
     }
 
