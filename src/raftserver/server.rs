@@ -91,10 +91,10 @@ impl<T: ServerHandler> Server<T> {
     }
 
     fn reregister_listener(&mut self, event_loop: &mut EventLoop<Server<T>>) {
-        event_loop.register(&self.listener,
-                            SERVER_TOKEN,
-                            EventSet::readable(),
-                            PollOpt::edge() | PollOpt::oneshot())
+        event_loop.reregister(&self.listener,
+                              SERVER_TOKEN,
+                              EventSet::readable(),
+                              PollOpt::edge() | PollOpt::oneshot())
                   .map_err(|e| {
                       error!("re-register listener err {}", e);
                   });
@@ -104,7 +104,7 @@ impl<T: ServerHandler> Server<T> {
     fn handle_readeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         match token {
             SERVER_TOKEN => {
-                // must reregister. 
+                // must reregister.
                 self.reregister_listener(event_loop);
 
                 let sock = match self.listener.accept() {
