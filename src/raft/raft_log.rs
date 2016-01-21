@@ -379,6 +379,15 @@ impl<T> RaftLog<T> where T: Storage
         v.extend_from_slice(limit_size(&ents, max_size));
         Ok(v)
     }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        info!("log [{}] starts to restore snapshot [index: {}, term: {}]",
+              self.to_string(),
+              snapshot.get_metadata().get_index(),
+              snapshot.get_metadata().get_term());
+        self.committed = snapshot.get_metadata().get_index();
+        self.unstable.restore(snapshot);
+    }
 }
 
 
@@ -393,6 +402,15 @@ mod test {
         e.set_Term(term);
         e.set_Index(index);
         e
+    }
+
+    fn new_snapshot(meta_index: u64, meta_term: u64) -> raftpb::Snapshot {
+        let mut meta = raftpb::SnapshotMetadata::new();
+        meta.set_index(meta_index);
+        meta.set_term(meta_term);
+        let mut snapshot = raftpb::Snapshot::new();
+        snapshot.set_metadata(meta);
+        snapshot
     }
 
     #[test]
@@ -537,5 +555,216 @@ mod test {
         prev = raft_log.last_index();
         let ents = raft_log.entries(prev, raft_log::NO_LIMIT).expect("unexpected error");
         assert_eq!(1, ents.len());
+    }
+
+    #[test]
+    fn test_term_with_unstable_snapshot() {
+        let storagesnapi = 10064;
+        let unstablesnapi = storagesnapi + 5;
+        let mut store = storage::MemStorage::new();
+        store.apply_snapshot(new_snapshot(storagesnapi, 1)).expect("apply failed.");
+        let mut raft_log = RaftLog::new(store);
+        raft_log.restore(new_snapshot(unstablesnapi, 1));
+
+        let tests = vec![
+            // cannot get term from storage
+            (storagesnapi, 0),
+            // cannot get term from the gap between storage ents and unstable snapshot
+            (storagesnapi + 1, 0),
+            (unstablesnapi - 1, 0),
+            // get term from unstable snapshot index
+            (unstablesnapi, 1),
+        ];
+
+        for (i, &(index, w)) in tests.iter().enumerate() {
+            let term = raft_log.term(index).expect("");
+            if term != w {
+                panic!("#{}: at = {}, want {}", i, term, w);
+            }
+        }
+    }
+
+    #[test]
+    fn test_term() {
+        let offset = 100u64;
+        let num = 100u64;
+
+        let mut store = storage::MemStorage::new();
+        store.apply_snapshot(new_snapshot(offset, 1)).expect("apply failed.");
+        let mut raft_log = RaftLog::new(store);
+        for i in 1..num {
+            raft_log.append(&[new_entry(offset + i, i)]);
+        }
+
+        let tests = vec![
+            (offset - 1, 0),
+            (offset, 1),
+            (offset + num / 2, num / 2),
+            (offset + num - 1, num - 1),
+            (offset + num, 0),
+        ];
+
+        for (i, &(index, w)) in tests.iter().enumerate() {
+            let term = raft_log.term(index).expect("");
+            if term != w {
+                panic!("#{}: at = {}, want {}", i, term, w);
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_restore() {
+        let (index, term) = (1000u64, 1000u64);
+        let mut store = storage::MemStorage::new();
+        store.apply_snapshot(new_snapshot(index, term)).expect("apply failed.");
+        let mut raft_log = RaftLog::new(store);
+
+        assert_eq!(0, raft_log.all_entries().len());
+        assert_eq!(index + 1, raft_log.first_index());
+        assert_eq!(index, raft_log.committed);
+        assert_eq!(index + 1, raft_log.unstable.offset);
+        let actual_term = raft_log.term(index).expect("");
+        assert_eq!(term, actual_term);
+    }
+
+    #[test]
+    fn test_stable_to_with_snap() {
+        let (snapi, snapt) = (5u64, 2u64);
+        let tests = vec![
+            (snapi + 1, snapt, vec![], snapi + 1),
+            (snapi, snapt, vec![], snapi + 1),
+            (snapi - 1, snapt, vec![], snapi + 1),
+            
+            (snapi + 1, snapt + 1, vec![], snapi + 1),
+            (snapi, snapt + 1, vec![], snapi + 1),
+            (snapi - 1, snapt + 1, vec![], snapi + 1),
+            
+            (snapi + 1, snapt, vec![new_entry(snapi + 1, snapt)], snapi + 2),
+            (snapi, snapt, vec![new_entry(snapi + 1, snapt)], snapi + 1),
+            (snapi - 1, snapt, vec![new_entry(snapi + 1, snapt)], snapi + 1),
+            
+            (snapi + 1, snapt + 1, vec![new_entry(snapi + 1, snapt)], snapi + 1),
+            (snapi, snapt + 1, vec![new_entry(snapi + 1, snapt)], snapi + 1),
+            (snapi - 1, snapt + 1, vec![new_entry(snapi + 1, snapt)], snapi + 1),
+        ];
+
+        for (i, &(stablei, stablet, ref new_ents, wunstable)) in tests.iter().enumerate() {
+            let mut store = storage::MemStorage::new();
+            store.apply_snapshot(new_snapshot(snapi, snapt)).expect("");
+            let mut raft_log = RaftLog::new(store);
+            raft_log.append(&*new_ents);
+            raft_log.stable_to(stablei, stablet);
+            if raft_log.unstable.offset != wunstable {
+                panic!("#{}: unstable = {}, want {}",
+                       i,
+                       raft_log.unstable.offset,
+                       wunstable);
+            }
+        }
+    }
+
+    #[test]
+    fn test_stable_to() {
+        let tests = vec![
+            (1, 1, 2),
+            (2, 2, 3),
+            (2, 1, 1),
+            (3, 1, 1),
+        ];
+        for (i, &(stablei, stablet, wunstable)) in tests.iter().enumerate() {
+            let mut raft_log = RaftLog::new(storage::MemStorage::new());
+            raft_log.append(&[new_entry(1, 1), new_entry(2, 2)]);
+            raft_log.stable_to(stablei, stablet);
+            if raft_log.unstable.offset != wunstable {
+                panic!("#{}: unstable = {}, want {}",
+                       i,
+                       raft_log.unstable.offset,
+                       wunstable);
+            }
+        }
+    }
+
+    // TestUnstableEnts ensures unstableEntries returns the unstable part of the
+    // entries correctly.
+    #[test]
+    fn test_unstable_ents() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2)];
+        let tests = vec![
+            (3, vec![]),
+            (1, previous_ents.clone()),
+        ];
+
+        for (i, &(unstable, ref wents)) in tests.iter().enumerate() {
+            // append stable entries to storage
+            let mut store = storage::MemStorage::new();
+            store.append(&previous_ents[..(unstable - 1)]).expect("");
+
+            // append unstable entries to raftlog
+            let mut raft_log = RaftLog::new(store);
+            raft_log.append(&previous_ents[(unstable - 1)..]);
+
+            let ents = raft_log.unstable_entries().unwrap_or(&[]).to_vec();
+            let l = ents.len();
+            if l > 0 {
+                raft_log.stable_to(ents[l - 1].get_Index(), ents[l - i].get_Term());
+            }
+            if &ents != wents {
+                panic!("#{}: unstableEnts = {:?}, want {:?}", i, ents, wents);
+            }
+            let w = previous_ents[previous_ents.len() - 1].get_Index() + 1;
+            let g = raft_log.unstable.offset;
+            if g != w {
+                panic!("#{}: unstable = {}, want {}", i, g, w);
+            }
+        }
+    }
+
+    #[test]
+    fn test_next_ents() {
+        let ents = [new_entry(4, 1), new_entry(5, 1), new_entry(6, 1)];
+        let tests = vec![
+            (0, Some(&ents[..2])),
+            (3, Some(&ents[..2])),
+            (4, Some(&ents[1..2])),
+            (5, None),
+        ];
+        for (i, &(applied, ref wents)) in tests.iter().enumerate() {
+            let mut store = storage::MemStorage::new();
+            store.apply_snapshot(new_snapshot(3, 1)).expect("");
+            let mut raft_log = RaftLog::new(store);
+            raft_log.append(&ents);
+            raft_log.maybe_commit(5, 1);
+            raft_log.applied_to(applied);
+
+            let nents = raft_log.next_entries();
+            if nents != wents.map(|n| n.to_vec()) {
+                panic!("#{}: nents = {:?}, want {:?}", i, nents, wents);
+            }
+        }
+    }
+
+    #[test]
+    fn test_has_next_ents() {
+        let ents = [new_entry(4, 1), new_entry(5, 1), new_entry(6, 1)];
+        let tests = vec![
+            (0, true),
+            (3, true),
+            (4, true),
+            (5, false),
+        ];
+
+        for (i, &(applied, has_next)) in tests.iter().enumerate() {
+            let mut store = storage::MemStorage::new();
+            store.apply_snapshot(new_snapshot(3, 1)).expect("");
+            let mut raft_log = RaftLog::new(store);
+            raft_log.append(&ents);
+            raft_log.maybe_commit(5, 1);
+            raft_log.applied_to(applied);
+
+            let actual_has_next = raft_log.has_next_entries();
+            if actual_has_next != has_next {
+                panic!("#{}: hasNext = {}, want {}", i, actual_has_next, has_next);
+            }
+        }
     }
 }
