@@ -116,19 +116,22 @@ impl Unstable {
             // truncate to after and copy to self.entries
             // then append
             let off = self.offset;
-            let cut_ents = &self.slice(off, after + 1);
-            self.entries = vec![];
-            self.entries.extend_from_slice(cut_ents);
-            self.entries.extend_from_slice(ents);
+            let mut entries = vec![];
+            self.entries = {
+                let cut_ents = self.slice(off, after + 1);
+                entries.extend_from_slice(cut_ents);
+                entries.extend_from_slice(ents);
+                entries
+            };
         }
     }
 
-    pub fn slice(&self, lo: u64, hi: u64) -> Vec<Entry> {
+    pub fn slice(&self, lo: u64, hi: u64) -> &[Entry] {
         self.must_check_outofbounds(lo, hi);
         let l = lo as usize;
         let h = hi as usize;
         let off = self.offset as usize;
-        self.entries[l - off..h - off].to_vec()
+        &self.entries[l - off..h - off]
     }
 
     pub fn must_check_outofbounds(&self, lo: u64, hi: u64) {
