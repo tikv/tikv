@@ -40,12 +40,12 @@ impl<T: ServerHandler> Runner<T> {
         self.sender.clone()
     }
 
-    fn run(&mut self, h: T) -> Result<()> {
+    fn run(&mut self, h: T) -> Result<T> {
         let mut server = Server::new(h, self.listener.take().unwrap(), self.sender.clone());
         try!(server.register_tick(&mut self.event_loop));
         try!(self.event_loop.run(&mut server));
 
-        Ok(())
+        Ok(server.handler)
     }
 }
 
@@ -106,7 +106,6 @@ mod tests {
 
         thread::sleep(Duration::new(0, 500 * 1000000));
         let mut conn = TcpStream::connect("127.0.0.1:12345").unwrap();
-
         for i in 1..10 {
             let mut data = vec![];
             codec::encode_data(&mut data, i as u64, "hello world".as_bytes()).unwrap();
@@ -125,13 +124,12 @@ mod tests {
     }
 
     struct TickHandler {
-        n: Arc<Mutex<u64>>,
+        n: u64,
     }
 
     impl ServerHandler for TickHandler {
         fn handle_tick(&mut self, sender: &Sender) -> Result<()> {
-            let mut v = self.n.lock().unwrap();
-            *v += 1;
+            self.n += 1;
             Ok(())
         }
     }
@@ -147,22 +145,19 @@ mod tests {
             sender.kill().unwrap();
         });
 
-        let n = Arc::new(Mutex::new(1));
-        let h = TickHandler { n: n.clone() };
-        r.run(h).unwrap();
+        let mut h = TickHandler { n: 1 };
+        h = r.run(h).unwrap();
 
-        let n = n.lock().unwrap();
-        assert!(*n > 1);
+        assert!(h.n > 1);
     }
 
     struct TimerHandler {
-        n: Arc<Mutex<u64>>,
+        n: u64,
     }
 
     impl ServerHandler for TimerHandler {
         fn handle_timer(&mut self, sender: &Sender, msg: TimerMsg) -> Result<()> {
-            let mut v = self.n.lock().unwrap();
-            *v = 0;
+            self.n = 0;
             Ok(())
         }
     }
@@ -173,8 +168,7 @@ mod tests {
         let mut r = Runner::new(addr).unwrap();
 
         let sender = r.get_sender();
-        let n = Arc::new(Mutex::new(1));
-        let h = TimerHandler { n: n.clone() };
+        let mut h = TimerHandler { n: 1 };
         sender.timeout_ms(100, TimerMsg::None)
               .unwrap();
 
@@ -183,13 +177,15 @@ mod tests {
             sender.kill().unwrap();
         });
 
-        r.run(h).unwrap();
+        h = r.run(h).unwrap();
 
-        let n = n.lock().unwrap();
-        assert_eq!(*n, 0);
+        assert_eq!(h.n, 0);
     }
 
-    struct PeerHandler;
+    struct PeerHandler {
+        ping: u32,
+        pong: u32,
+    }
 
     fn new_conn_data(msg_id: u64, data: &str) -> ConnData {
         ConnData {
@@ -208,7 +204,10 @@ mod tests {
             for msg in msgs {
                 let buf = msg.as_bytes();
                 if buf == String::from("ping").as_bytes() {
+                    self.ping += 1;
                     res.push(new_conn_data(msg.msg_id, "pong"));
+                } else {
+                    self.pong += 1;
                 }
             }
 
@@ -216,15 +215,15 @@ mod tests {
         }
     }
 
-    fn start_peer(addr: &str) -> (Sender, thread::JoinHandle<(())>) {
+    fn start_peer(addr: &str) -> (Sender, thread::JoinHandle<((u32, u32))>) {
         let mut r = Runner::new(addr).unwrap();
         let s = r.get_sender();
         let t = thread::spawn(move || {
-            let h = PeerHandler;
+            let mut h = PeerHandler { ping: 0, pong: 0 };
 
-            r.run(h).unwrap();
+            h = r.run(h).unwrap();
 
-            ()
+            (h.ping, h.pong)
         });
 
         (s, t)
@@ -248,7 +247,9 @@ mod tests {
         s1.kill().unwrap();
         s2.kill().unwrap();
 
-        h1.join().unwrap();
-        h2.join().unwrap();
+        let r1 = h1.join().unwrap();
+        let r2 = h2.join().unwrap();
+        assert_eq!(r1, r2);
+        assert_eq!(r1, (2, 2));
     }
 }

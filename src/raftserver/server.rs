@@ -18,7 +18,7 @@ pub struct Server<T: ServerHandler> {
     pub sender: Sender,
 
     peers: HashMap<String, Token>,
-    handler: T,
+    pub handler: T,
 }
 
 impl<T: ServerHandler> Server<T> {
@@ -104,7 +104,7 @@ impl<T: ServerHandler> Server<T> {
     fn handle_readeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         match token {
             SERVER_TOKEN => {
-                // must reregister. 
+                // must reregister.
                 self.reregister_listener(event_loop);
 
                 let sock = match self.listener.accept() {
