@@ -6,6 +6,7 @@ use std::error;
 use std::thread;
 use std::convert;
 use std::time::Duration;
+use std::string::String;
 
 use bytes::{Buf, ByteBuf};
 use mio::{self, Token, NotifyError};
@@ -36,6 +37,13 @@ pub struct ConnData {
 }
 
 impl ConnData {
+    pub fn from_string<S: Into<String>>(msg_id: u64, data: S) -> ConnData {
+        ConnData {
+            msg_id: msg_id,
+            data: ByteBuf::from_slice(data.into().as_bytes()),
+        }
+    }
+
     pub fn encode_to_buf(&self) -> ByteBuf {
         let mut buf = ByteBuf::mut_with_capacity(codec::MSG_HEADER_LEN + self.data.bytes().len());
 
@@ -43,14 +51,6 @@ impl ConnData {
         codec::encode_data(&mut buf, self.msg_id, self.data.bytes()).unwrap();
 
         buf.flip()
-    }
-
-    // Notice: I meet a very strange problem in test, rust will
-    // convert conn_data.data.bytes() to io::Bytes traits, I don't
-    // know why so I supply this method instead temporally.
-    // I may use vector instead of ByteBuf later.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.data.bytes()
     }
 }
 
