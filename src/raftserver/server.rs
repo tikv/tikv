@@ -7,7 +7,7 @@ use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;
 
 use raftserver::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_BASE_TICK_MS};
-use raftserver::{Msg, Sender, Result, ConnData, TimerData};
+use raftserver::{Msg, Sender, Result, ConnData, TimerMsg};
 use raftserver::conn::Conn;
 use raftserver::handler::ServerHandler;
 
@@ -38,10 +38,14 @@ impl<T: ServerHandler> Server<T> {
         Ok(())
     }
 
-    fn register_timer(&mut self, event_loop: &mut EventLoop<Server<T>>, data: TimerData) {
-        // we have already checked when sender.
-        let delay = data.delay;
-        let token = Msg::Timer(data);
+    fn register_timer(&mut self,
+                      event_loop: &mut EventLoop<Server<T>>,
+                      delay: u64,
+                      msg: TimerMsg) {
+        let token = Msg::Timer {
+            delay: delay,
+            msg: msg,
+        };
         event_loop.timeout_ms(token, delay);
     }
 
@@ -111,17 +115,24 @@ impl<T: ServerHandler> Server<T> {
                     Some(conn) => msgs = conn.read(event_loop),
                 }
 
-                msgs.and_then(|msgs| {
-                    self.handler
-                        .handle_read_data(&self.sender, msgs)
-                        .and_then(|res| {
+                msgs.and_then(|msgs| self.handler.handle_read_data(&self.sender, token, msgs))
+                    .and_then(|res| {
+                        if res.len() == 0 {
+                            return Ok(());
+                        }
+
+                        // append to write buffer here, no need using sender to notify.
+                        if let Some(conn) = self.conns.get_mut(&token) {
                             for data in res {
-                                try!(self.sender.write_data(data));
+                                conn.append_write_buf(data);
                             }
-                            Ok(())
-                        })
-                });
+                            try!(conn.reregister_writeable(event_loop));
+                        }
+                        Ok(())
+                    })
+                    .map_err(|e| warn!("handle read conn err {:?}", e));
             }
+
         }
     }
 
@@ -135,8 +146,11 @@ impl<T: ServerHandler> Server<T> {
         };
     }
 
-    fn handle_writedata(&mut self, event_loop: &mut EventLoop<Server<T>>, data: ConnData) {
-        if let Some(conn) = self.conns.get_mut(&data.token) {
+    fn handle_writedata(&mut self,
+                        event_loop: &mut EventLoop<Server<T>>,
+                        token: Token,
+                        data: ConnData) {
+        if let Some(conn) = self.conns.get_mut(&token) {
             conn.append_write_buf(data);
             conn.reregister_writeable(event_loop);
         }
@@ -150,9 +164,9 @@ impl<T: ServerHandler> Server<T> {
         self.register_tick(event_loop);
     }
 
-    fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, data: TimerData) {
+    fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, msg: TimerMsg) {
         self.handler
-            .handle_timer(&self.sender, data.msg)
+            .handle_timer(&self.sender, msg)
             .map_err(|e| warn!("handle timer err {:?}", e));
     }
 }
@@ -179,8 +193,8 @@ impl<T: ServerHandler> Handler for Server<T> {
     fn notify(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData(data) => self.handle_writedata(event_loop, data),
-            Msg::Timer(data) => self.register_timer(event_loop, data),
+            Msg::WriteData{token, data} => self.handle_writedata(event_loop, token, data),
+            Msg::Timer{delay, msg} => self.register_timer(event_loop, delay, msg),
             _ => panic!("unexpected msg"),
         }
     }
@@ -188,7 +202,7 @@ impl<T: ServerHandler> Handler for Server<T> {
     fn timeout(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
         match msg {
             Msg::Tick => self.handle_tick(event_loop),
-            Msg::Timer(data) => self.handle_timer(event_loop, data),
+            Msg::Timer{msg, ..} => self.handle_timer(event_loop, msg),
             _ => panic!("unexpected msg"),
         }
     }
