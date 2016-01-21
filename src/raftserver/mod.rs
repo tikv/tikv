@@ -6,6 +6,7 @@ use std::error;
 use std::thread;
 use std::convert;
 use std::time::Duration;
+use std::string::String;
 
 use bytes::{Buf, ByteBuf};
 use mio::{self, Token, NotifyError};
@@ -36,6 +37,13 @@ pub struct ConnData {
 }
 
 impl ConnData {
+    pub fn from_string<S: Into<String>>(msg_id: u64, data: S) -> ConnData {
+        ConnData {
+            msg_id: msg_id,
+            data: ByteBuf::from_slice(data.into().as_bytes()),
+        }
+    }
+
     pub fn encode_to_buf(&self) -> ByteBuf {
         let mut buf = ByteBuf::mut_with_capacity(codec::MSG_HEADER_LEN + self.data.bytes().len());
 

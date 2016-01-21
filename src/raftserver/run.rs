@@ -187,12 +187,6 @@ mod tests {
         pong: u32,
     }
 
-    fn new_conn_data(msg_id: u64, data: &str) -> ConnData {
-        ConnData {
-            msg_id: msg_id,
-            data: ByteBuf::from_slice(String::from(data).as_bytes()),
-        }
-    }
 
     impl ServerHandler for PeerHandler {
         fn handle_read_data(&mut self,
@@ -205,7 +199,7 @@ mod tests {
                 let buf = Buf::bytes(&msg.data);
                 if buf == String::from("ping").as_bytes() {
                     self.ping += 1;
-                    res.push(new_conn_data(msg.msg_id, "pong"));
+                    res.push(ConnData::from_string(msg.msg_id, "pong"));
                 } else {
                     self.pong += 1;
                 }
@@ -237,10 +231,10 @@ mod tests {
         let (s1, h1) = start_peer(addr1);
         let (s2, h2) = start_peer(addr2);
 
-        s1.send_peer(addr2.to_string(), new_conn_data(1, "ping")).unwrap();
-        s2.send_peer(addr1.to_string(), new_conn_data(2, "ping")).unwrap();
-        s1.send_peer(addr1.to_string(), new_conn_data(3, "ping")).unwrap();
-        s2.send_peer(addr2.to_string(), new_conn_data(4, "ping")).unwrap();
+        s1.send_peer(addr2.to_string(), ConnData::from_string(1, "ping")).unwrap();
+        s2.send_peer(addr1.to_string(), ConnData::from_string(2, "ping")).unwrap();
+        s1.send_peer(addr1.to_string(), ConnData::from_string(3, "ping")).unwrap();
+        s2.send_peer(addr2.to_string(), ConnData::from_string(4, "ping")).unwrap();
 
         thread::sleep(Duration::from_secs(1));
 
