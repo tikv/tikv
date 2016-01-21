@@ -368,9 +368,9 @@ impl<T> RaftLog<T> where T: Storage
             let offset = self.unstable.offset;
             let unstable = self.unstable.slice(cmp::max(low, offset), high);
             if ents.len() > 0 {
-                ents.extend_from_slice(&unstable);
+                ents.extend_from_slice(unstable);
             } else {
-                ents = unstable;
+                ents = unstable.to_vec();
             }
         }
 
