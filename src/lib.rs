@@ -1,6 +1,8 @@
 #![crate_type = "lib"]
+#![allow(unused_features)]
 #![feature(test)]
 #![feature(btree_range, collections_bound)]
+#![feature(std_panic, recover)]
 
 #[macro_use]
 extern crate log;
