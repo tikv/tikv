@@ -20,9 +20,9 @@ mod bench;
 
 pub type Result<T> = result::Result<T, Box<error::Error + Send + Sync>>;
 
-const SERVER_TOKEN: Token = Token(0);
+const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
-const INVALID_TOKEN: Token = Token(!0);
+const INVALID_TOKEN: Token = Token(0);
 const DEFAULT_BASE_TICK_MS: u64 = 100;
 
 #[derive(Clone, Debug)]
