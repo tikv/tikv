@@ -123,12 +123,12 @@ impl Unstable {
         }
     }
 
-    pub fn slice(&mut self, lo: u64, hi: u64) -> Vec<Entry> {
+    pub fn slice(&self, lo: u64, hi: u64) -> Vec<Entry> {
         self.must_check_outofbounds(lo, hi);
         let l = lo as usize;
         let h = hi as usize;
         let off = self.offset as usize;
-        return self.entries.drain(l - off..h - off).map(|e| e).collect();
+        self.entries[l - off..h - off].to_vec()
     }
 
     pub fn must_check_outofbounds(&self, lo: u64, hi: u64) {
