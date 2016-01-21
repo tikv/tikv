@@ -31,7 +31,6 @@ pub struct Config {
 }
 
 pub struct ConnData {
-    token: Token,
     msg_id: u64,
     data: ByteBuf,
 }
@@ -52,22 +51,26 @@ pub enum TimerMsg {
     None,
 }
 
-pub struct TimerData {
-    delay: u64,
-    msg: TimerMsg,
-}
-
 pub enum Msg {
     // Quit event loop.
     Quit,
     // Read data from connection.
-    ReadData(ConnData),
+    ReadData {
+        token: Token,
+        data: ConnData,
+    },
     // Write data to connection.
-    WriteData(ConnData),
+    WriteData {
+        token: Token,
+        data: ConnData,
+    },
     // Tick is for base internal tick message.
     Tick,
     // Timer is for custom timeout message.
-    Timer(TimerData),
+    Timer {
+        delay: u64,
+        msg: TimerMsg,
+    },
 }
 
 #[derive(Debug)]
@@ -117,17 +120,20 @@ impl Sender {
         Ok(())
     }
 
-    pub fn write_data(&self, data: ConnData) -> Result<()> {
-        try!(self.send(Msg::WriteData(data)));
+    pub fn write_data(&self, token: Token, data: ConnData) -> Result<()> {
+        try!(self.send(Msg::WriteData {
+            token: token,
+            data: data,
+        }));
 
         Ok(())
     }
 
     pub fn timeout_ms(&self, delay: u64, m: TimerMsg) -> Result<()> {
-        try!(self.send(Msg::Timer(TimerData {
+        try!(self.send(Msg::Timer {
             delay: delay,
             msg: m,
-        })));
+        }));
 
         Ok(())
     }
