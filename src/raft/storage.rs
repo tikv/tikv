@@ -66,7 +66,7 @@ impl MemStorage {
     }
 
 
-    fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
+    pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
         let mut e = Entry::new();
         e.set_Term(snapshot.get_metadata().get_term());
         e.set_Index(snapshot.get_metadata().get_index());

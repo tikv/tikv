@@ -91,10 +91,10 @@ impl<T: ServerHandler> Server<T> {
     }
 
     fn reregister_listener(&mut self, event_loop: &mut EventLoop<Server<T>>) {
-        event_loop.register(&self.listener,
-                            SERVER_TOKEN,
-                            EventSet::readable(),
-                            PollOpt::edge() | PollOpt::oneshot())
+        event_loop.reregister(&self.listener,
+                              SERVER_TOKEN,
+                              EventSet::readable(),
+                              PollOpt::edge() | PollOpt::oneshot())
                   .map_err(|e| {
                       error!("re-register listener err {}", e);
                   });

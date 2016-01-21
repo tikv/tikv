@@ -20,9 +20,9 @@ mod bench;
 
 pub type Result<T> = result::Result<T, Box<error::Error + Send + Sync>>;
 
-const SERVER_TOKEN: Token = Token(0);
+const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
-const INVALID_TOKEN: Token = Token(!0);
+const INVALID_TOKEN: Token = Token(0);
 const DEFAULT_BASE_TICK_MS: u64 = 100;
 
 #[derive(Clone, Debug)]
@@ -49,7 +49,7 @@ impl ConnData {
     // convert conn_data.data.bytes() to io::Bytes traits, I don't
     // know why so I supply this method instead temporally.
     // I may use vector instead of ByteBuf later.
-    pub fn as_bytes<'a>(&'a self) -> &'a [u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         self.data.bytes()
     }
 }
