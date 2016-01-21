@@ -1,4 +1,3 @@
-
 #![allow(dead_code)]
 use raft::storage::Storage;
 use raft::log_unstable::Unstable;
@@ -331,7 +330,7 @@ impl<T> RaftLog<T> where T: Storage
         }
     }
 
-    fn slice(&mut self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
+    fn slice(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
         let err = self.must_check_outofbounds(low, high);
         if err.is_some() {
             return Err(err.unwrap());
@@ -369,9 +368,9 @@ impl<T> RaftLog<T> where T: Storage
             let offset = self.unstable.offset;
             let unstable = self.unstable.slice(cmp::max(low, offset), high);
             if ents.len() > 0 {
-                ents.extend_from_slice(&unstable);
+                ents.extend_from_slice(unstable);
             } else {
-                ents = unstable;
+                ents = unstable.to_vec();
             }
         }
 
@@ -396,6 +395,9 @@ mod test {
     use raft::raft_log::{self, RaftLog};
     use raft::storage;
     use proto::raftpb;
+    use raft::errors::{Error, StorageError};
+    use protobuf;
+    use std::panic;
 
     fn new_entry(index: u64, term: u64) -> raftpb::Entry {
         let mut e = raftpb::Entry::new();
@@ -764,6 +766,283 @@ mod test {
             let actual_has_next = raft_log.has_next_entries();
             if actual_has_next != has_next {
                 panic!("#{}: hasNext = {}, want {}", i, actual_has_next, has_next);
+            }
+        }
+    }
+
+    #[test]
+    fn test_slice() {
+        let (offset, num) = (100u64, 100u64);
+        let (last, half) = (offset + num, offset + num / 2);
+        let halfe = new_entry(half, half);
+        let halfe_size = protobuf::Message::compute_size(&halfe) as u64;
+
+        let mut store = storage::MemStorage::new();
+        store.apply_snapshot(new_snapshot(offset, 0)).expect("");
+        for i in 1..(num / 2) {
+            store.append(&[new_entry(offset + i, offset + i)]).expect("");
+        }
+        let mut raft_log = RaftLog::new(store);
+        for i in (num / 2)..num {
+            raft_log.append(&[new_entry(offset + i, offset + i)]);
+        }
+
+        let tests = vec![
+            // test no limit
+            (offset - 1, offset + 1, raft_log::NO_LIMIT, vec![], false),
+            (offset, offset + 1, raft_log::NO_LIMIT, vec![], false),
+            (half - 1, half + 1, raft_log::NO_LIMIT, vec![new_entry(half - 1, half - 1), new_entry(half, half)], false),
+            (half, half + 1, raft_log::NO_LIMIT, vec![new_entry(half, half)], false),
+            (last - 1, last, raft_log::NO_LIMIT, vec![new_entry(last - 1, last - 1)], false),
+            (last, last + 1, raft_log::NO_LIMIT, vec![], true),
+
+            // test limit
+            (half - 1, half + 1, 0, vec![new_entry(half - 1, half - 1)], false),
+            (half - 1, half + 1, halfe_size + 1, vec![new_entry(half - 1, half - 1)], false),
+            (half - 1, half + 1, halfe_size * 2, vec![new_entry(half - 1, half - 1), new_entry(half, half)], false),
+            (half - 1, half + 2, halfe_size * 3, vec![new_entry(half - 1, half - 1), new_entry(half, half), new_entry(half + 1, half + 1)], false),
+            (half, half + 2, halfe_size, vec![new_entry(half, half)], false),
+            (half, half + 2, halfe_size * 2, vec![new_entry(half, half), new_entry(half + 1, half + 1)], false),
+        ];
+
+        for (i, &(from, to, limit, ref w, wpanic)) in tests.iter().enumerate() {
+            let raft_log_wrapper = panic::AssertRecoverSafe::new(&raft_log);
+            let res = panic::recover(move || (**raft_log_wrapper).slice(from, to, limit));
+            if res.is_err() ^ wpanic {
+                panic!("#{}: panic = {}, want {}: {:?}", i, true, false, res);
+            }
+            if res.is_err() {
+                continue;
+            }
+            let slice_res = res.unwrap();
+            if from <= offset && slice_res != Err(Error::Store(StorageError::Compacted)) {
+                let err = slice_res.err();
+                panic!("#{}: err = {:?}, want {}", i, err, StorageError::Compacted);
+            }
+            if from > offset && slice_res.is_err() {
+                panic!("#{}: unexpected error {}", i, slice_res.unwrap_err());
+            }
+            if let Ok(ref g) = slice_res {
+                if g != w {
+                    panic!("#{}: from {} to {} = {:?}, want {:?}", i, from, to, g, w);
+                }
+            }
+        }
+    }
+
+    /// TestLogMaybeAppend ensures:
+    /// If the given (index, term) matches with the existing log:
+    /// 	1. If an existing entry conflicts with a new one (same index
+    /// 	but different terms), delete the existing entry and all that
+    /// 	follow it
+    /// 	2.Append any new entries not already in the log
+    /// If the given (index, term) does not match with the existing log:
+    /// 	return false
+    #[test]
+    fn test_log_maybe_append() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
+        let (last_index, last_term, commit) = (3u64, 3u64, 1u64);
+
+        let tests = vec![
+            // not match: term is different
+            (last_term - 1, last_index, last_index, vec![new_entry(last_index + 1, 4)],
+             None, commit, false),
+            // not match: index out of bound
+            (last_term, last_index + 1, last_index, vec![new_entry(last_index + 2, 4)],
+             None, commit, false),
+            // match with the last existing entry
+            (last_term, last_index, last_index, vec![],
+             Some(last_index), last_index, false),
+            (last_term, last_index, last_index + 1, vec![],
+             Some(last_index), last_index, false), // do not increase commit higher than lastnewi
+            (last_term, last_index, last_index - 1, vec![],
+             Some(last_index), last_index - 1, false), // commit up to the commit in the message
+            (last_term, last_index, 0, vec![],
+             Some(last_index), commit, false), // commit do not decrease
+            (0, 0, last_index, vec![],
+             Some(0), commit, false), // commit do not decrease
+            (last_term, last_index, last_index, vec![new_entry(last_index + 1, 4)],
+             Some(last_index + 1), last_index, false),
+            (last_term, last_index, last_index + 1, vec![new_entry(last_index + 1, 4)],
+             Some(last_index + 1), last_index + 1, false),
+            (last_term, last_index, last_index + 2, vec![new_entry(last_index + 1, 4)],
+             Some(last_index + 1), last_index + 1, false), // do not increase commit higher than lastnewi
+            (last_term, last_index, last_index + 2, vec![new_entry(last_index + 1, 4), new_entry(last_index + 2, 4)],
+             Some(last_index + 2), last_index + 2, false),
+            // match with the the entry in the middle
+            (last_term - 1, last_index - 1, last_index, vec![new_entry(last_index, 4)],
+             Some(last_index), last_index, false),
+            (last_term - 2, last_index - 2, last_index, vec![new_entry(last_index - 1, 4)],
+             Some(last_index - 1), last_index - 1, false),
+            (last_term - 3, last_index - 3, last_index, vec![new_entry(last_index - 2, 4)],
+             Some(last_index - 2), last_index - 2, true), // conflict with existing committed entry
+            (last_term - 2, last_index - 2, last_index, vec![new_entry(last_index - 1, 4), new_entry(last_index, 4)],
+             Some(last_index), last_index, false),
+        ];
+
+        for (i,
+             &(log_term,
+               index,
+               committed,
+               ref ents,
+               wlasti,
+               wcommit,
+               wpanic)) in tests.iter().enumerate() {
+            let mut raft_log = RaftLog::new(storage::MemStorage::new());
+            raft_log.append(&*previous_ents);
+            raft_log.committed = commit;
+            let res = {
+                let mut raft_log_wrapper = panic::AssertRecoverSafe::new(&mut raft_log);
+                let ents_wrap = panic::AssertRecoverSafe::new(&ents);
+                panic::recover(move || {
+                    (**raft_log_wrapper).maybe_append(index, log_term, committed, &*(**ents_wrap))
+                })
+            };
+            if res.is_err() ^ wpanic {
+                panic!("#{}: panic = {}, want {}", i, res.is_err(), wpanic);
+            }
+            if res.is_err() {
+                continue;
+            }
+            let glasti = res.unwrap();
+            let gcommit = raft_log.committed;
+            if glasti != wlasti {
+                panic!("#{}: lastindex = {:?}, want {:?}", i, glasti, wlasti);
+            }
+            if gcommit != wcommit {
+                panic!("#{}: committed = {}, want {}", i, gcommit, wcommit);
+            }
+            let ents_len = ents.len() as u64;
+            if glasti.is_some() && ents_len != 0 {
+                let (from, to) = (raft_log.last_index() - ents_len + 1,
+                                  raft_log.last_index() + 1);
+                let gents = raft_log.slice(from, to, raft_log::NO_LIMIT)
+                                    .expect("");
+                if &gents != ents {
+                    panic!("#{}: appended entries = {:?}, want {:?}", i, gents, ents);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_commit_to() {
+        let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
+        let previous_commit = 2u64;
+        let tests = vec![
+            (3, 3, false),
+            (1, 2, false), // never decrease
+            (4, 0, true),  // commit out of range -> panic
+        ];
+        for (i, &(commit, wcommit, wpanic)) in tests.iter().enumerate() {
+            let mut raft_log = RaftLog::new(storage::MemStorage::new());
+            raft_log.append(&*previous_ents);
+            raft_log.committed = previous_commit;
+            let has_panic = {
+                let mut raft_log_wrap = panic::AssertRecoverSafe::new(&mut raft_log);
+                panic::recover(move || (**raft_log_wrap).commit_to(commit)).is_err()
+            };
+            if has_panic ^ wpanic {
+                panic!("#{}: panic = {}, want {}", i, has_panic, wpanic)
+            }
+            if !has_panic && raft_log.committed != wcommit {
+                let actual_committed = raft_log.committed;
+                panic!("#{}: committed = {}, want {}", i, actual_committed, wcommit);
+            }
+        }
+    }
+
+    // TestCompaction ensures that the number of log entries is correct after compactions.
+    #[test]
+    fn test_compaction() {
+        let tests = vec![
+            // out of upper bound
+            (1000, vec![1001u64], vec![0usize], false),
+            (1000, vec![300, 500, 800, 900], vec![700, 500, 200, 100], true),
+            // out of lower bound
+            (1000, vec![300, 299], vec![700, 0], false),
+        ];
+
+        for (i, &(last_index, ref compact, ref wleft, wallow)) in tests.iter().enumerate() {
+            let mut store = storage::MemStorage::new();
+            for i in 1u64..(last_index + 1) {
+                store.append(&[new_entry(i, 0)]).expect("");
+            }
+            let mut raft_log = RaftLog::new(store);
+            raft_log.maybe_commit(last_index, 0);
+            let committed = raft_log.committed;
+            raft_log.applied_to(committed);
+
+            for j in 0..compact.len() {
+                let res = {
+                    let mut raft_log_wrapper = panic::AssertRecoverSafe::new(&mut raft_log);
+                    let compact_to = compact[j];
+                    panic::recover(move || (**raft_log_wrapper).store.compact(compact_to))
+                };
+                if res.is_err() {
+                    if wallow {
+                        panic!("#{}: has_panic = true, want false: {:?}", i, res);
+                    }
+                    continue;
+                }
+                let compact_res = res.unwrap();
+                if let Err(e) = compact_res {
+                    if wallow {
+                        panic!("#{}.{} allow = false, want true, error: {}", i, j, e);
+                    }
+                    continue;
+                }
+                let l = raft_log.all_entries().len();
+                if l != wleft[j] {
+                    panic!("#{}.{} len = {}, want {}", i, j, l, wleft[j]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_is_outofbounds() {
+        let (offset, num) = (100u64, 100u64);
+        let mut store = storage::MemStorage::new();
+        store.apply_snapshot(new_snapshot(offset, 0)).expect("");
+        let mut raft_log = RaftLog::new(store);
+        for i in 1u64..(num + 1) {
+            raft_log.append(&[new_entry(i + offset, 0)]);
+        }
+        let first = offset + 1;
+        let tests = vec![
+            (first - 2, first + 1, false, true),
+            (first - 1, first + 1, false, true),
+            (first, first, false, false),
+            (first + num / 2, first + num / 2, false, false),
+            (first + num - 1, first + num - 1, false, false),
+            (first + num, first + num, false, false),
+            (first + num, first + num + 1, true, false),
+            (first + num + 1, first + num + 1, true, false),
+        ];
+
+        for (i, &(lo, hi, wpanic, w_err_compacted)) in tests.iter().enumerate() {
+            let raft_log_wrap = panic::AssertRecoverSafe::new(&raft_log);
+            let res = panic::recover(move || (**raft_log_wrap).must_check_outofbounds(lo, hi));
+            if res.is_err() ^ wpanic {
+                panic!("#{}: panic = {}, want {}: {:?}",
+                       i,
+                       res.is_err(),
+                       wpanic,
+                       res);
+            }
+            if res.is_err() {
+                continue;
+            }
+            let check_res = res.unwrap();
+            if w_err_compacted && check_res != Some(Error::Store(StorageError::Compacted)) {
+                panic!("#{}: err = {:?}, want {}",
+                       i,
+                       check_res,
+                       StorageError::Compacted);
+            }
+            if !w_err_compacted && check_res.is_some() {
+                panic!("#{}: unexpected err {:?}", i, check_res)
             }
         }
     }
