@@ -123,7 +123,7 @@ impl<T: ServerHandler> Server<T> {
                         warn!("missing conn for token {:?}", token);
                         return;
                     }
-                    Some(conn) => msgs = conn.read(event_loop),
+                    Some(conn) => msgs = conn.readable(event_loop),
                 }
 
                 msgs.and_then(|msgs| {
@@ -160,7 +160,7 @@ impl<T: ServerHandler> Server<T> {
                 warn!("missing conn for token {:?}", token);
                 return;
             }
-            Some(conn) => conn.write(event_loop),
+            Some(conn) => conn.writeable(event_loop),
         };
     }
 
