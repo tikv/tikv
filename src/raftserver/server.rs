@@ -51,7 +51,7 @@ impl<T: ServerHandler> Server<T> {
         event_loop.timeout_ms(token, delay);
     }
 
-    fn handle_error(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+    fn remove_conn(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         let conn = self.conns.remove(&token);
         match conn {
             Some(conn) => {
@@ -66,7 +66,6 @@ impl<T: ServerHandler> Server<T> {
                 warn!("missing connection for token {}", token.as_usize());
             }
         }
-
     }
 
     fn add_new_conn(&mut self,
@@ -86,7 +85,12 @@ impl<T: ServerHandler> Server<T> {
         try!(event_loop.register(&self.conns[&new_token].sock,
                                  new_token,
                                  EventSet::readable(),
-                                 PollOpt::edge()));
+                                 PollOpt::edge())
+                       .or_else(|e| {
+                           // register error, remove from conn map.
+                           self.conns.remove(&new_token);
+                           Err(e)
+                       }));
         Ok(new_token)
     }
 
@@ -117,14 +121,13 @@ impl<T: ServerHandler> Server<T> {
                 }
             }
             token => {
-                let msgs;
-                match self.conns.get_mut(&token) {
+                let msgs = match self.conns.get_mut(&token) {
                     None => {
                         warn!("missing conn for token {:?}", token);
                         return;
                     }
-                    Some(conn) => msgs = conn.readable(event_loop),
-                }
+                    Some(conn) => conn.readable(event_loop),
+                };
 
                 msgs.and_then(|msgs| {
                         if msgs.len() == 0 {
@@ -148,20 +151,28 @@ impl<T: ServerHandler> Server<T> {
                         }
                         Ok(())
                     })
-                    .map_err(|e| warn!("handle read conn err {:?}", e));
+                    .map_err(|e| {
+                        warn!("handle read conn err {:?}, remove", e);
+                        self.remove_conn(event_loop, token);
+                    });
             }
 
         }
     }
 
     fn handle_writeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
-        match self.conns.get_mut(&token) {
+        let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
             }
             Some(conn) => conn.writeable(event_loop),
         };
+
+        res.map_err(|e| {
+            warn!("handle write conn err {:?}, remove", e);
+            self.remove_conn(event_loop, token);
+        });
     }
 
     fn handle_writedata(&mut self,
@@ -223,8 +234,8 @@ impl<T: ServerHandler> Handler for Server<T> {
     type Message = Msg;
 
     fn ready(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token, events: EventSet) {
-        if events.is_hup() | events.is_error() {
-            self.handle_error(event_loop, token);
+        if events.is_hup() || events.is_error() {
+            self.remove_conn(event_loop, token);
             return;
         }
 
