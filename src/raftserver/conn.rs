@@ -149,20 +149,37 @@ impl Conn {
             self.res.pop_front();
         }
 
-        if self.res.is_empty() {
-            // no data for writing.
-            self.interest.remove(EventSet::writable());
-        } else {
-            // need to write next time.
-            self.interest.insert(EventSet::writable());
+        if !self.res.is_empty() {
+            // we don't write all data, so must try later.
+            // we have already registered writable, no need registering again.
+            return Ok(());
         }
 
+        // no data for writing, remove writable.
+        self.interest.remove(EventSet::writable());
         return self.reregister(event_loop);
     }
 
-
-    pub fn append_write_buf(&mut self, msg: ConnData) {
+    pub fn append_write_buf<T: ServerHandler>(&mut self,
+                                              event_loop: &mut EventLoop<Server<T>>,
+                                              msg: ConnData)
+                                              -> Result<()> {
+        // Now we just push data to a write buffer and register writable for later writing.
+        // Later we can write data directly, if meet WOUNDBLOCK error(don't write all data OK), 
+        // we can register writable at that time. 
+        // We must also check `socket is not connected` error too, when we connect to a remote
+        // peer, mio puts this socket in event loop immediately, but this socket may not be connected
+        // at that time, so we must register writable too for this case. 
         self.res.push_back(msg.encode_to_buf());
-        self.interest.insert(EventSet::writable());
+
+        if !self.interest.is_writable() {
+            // re-register writable if we have not,
+            // if registered, we can only remove this when
+            // writing all data in writable function.
+            self.interest.insert(EventSet::writable());
+            return self.reregister(event_loop);
+        }
+
+        Ok(())
     }
 }
