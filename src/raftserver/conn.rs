@@ -78,22 +78,12 @@ impl Conn {
     pub fn reregister<T: ServerHandler>(&mut self,
                                         event_loop: &mut EventLoop<Server<T>>)
                                         -> Result<()> {
-        try!(event_loop.reregister(&self.sock,
-                                   self.token,
-                                   self.interest,
-                                   PollOpt::edge() | PollOpt::oneshot()));
+        try!(event_loop.reregister(&self.sock, self.token, self.interest, PollOpt::edge()));
         Ok(())
     }
 
-    pub fn reregister_writeable<T: ServerHandler>(&mut self,
-                                                  event_loop: &mut EventLoop<Server<T>>)
-                                                  -> Result<()> {
-        self.interest.insert(EventSet::writable());
-        return self.reregister(event_loop);
-    }
-
     pub fn read<T: ServerHandler>(&mut self,
-                                  event_loop: &mut EventLoop<Server<T>>)
+                                  _: &mut EventLoop<Server<T>>)
                                   -> Result<(Vec<ConnData>)> {
         let mut bufs = vec![];
 
@@ -129,8 +119,6 @@ impl Conn {
 
             self.header.clear();
         }
-
-        try!(self.reregister(event_loop));
 
         Ok((bufs))
     }
@@ -173,5 +161,6 @@ impl Conn {
 
     pub fn append_write_buf(&mut self, msg: ConnData) {
         self.res.push_back(msg.encode_to_buf());
+        self.interest.insert(EventSet::writable());
     }
 }

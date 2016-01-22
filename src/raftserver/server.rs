@@ -86,48 +86,35 @@ impl<T: ServerHandler> Server<T> {
         try!(event_loop.register(&self.conns[&new_token].sock,
                                  new_token,
                                  EventSet::readable(),
-                                 PollOpt::edge() | PollOpt::oneshot()));
+                                 PollOpt::edge()));
         Ok(new_token)
     }
-
-    fn reregister_listener(&mut self, event_loop: &mut EventLoop<Server<T>>) {
-        event_loop.reregister(&self.listener,
-                              SERVER_TOKEN,
-                              EventSet::readable(),
-                              PollOpt::edge() | PollOpt::oneshot())
-                  .map_err(|e| {
-                      error!("re-register listener err {}", e);
-                  });
-    }
-
 
     fn handle_readeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         match token {
             SERVER_TOKEN => {
-                // must reregister.
-                self.reregister_listener(event_loop);
+                loop {
+                    // For edge trigger, we must accept all connections until None.
+                    let sock = match self.listener.accept() {
+                        Err(e) => {
+                            error!("accept error: {:?}", e);
+                            return;
+                        }
+                        Ok(None) => {
+                            debug!("no connection, accept later.");
+                            return;
+                        }
+                        Ok(Some((sock, addr))) => {
+                            debug!("accept conn {}", addr);
+                            sock
+                        }
+                    };
 
-                let sock = match self.listener.accept() {
-                    Err(e) => {
-                        error!("accept error: {:?}", e);
-                        return;
-                    }
-                    Ok(None) => {
-                        debug!("listener is not ready, try later");
-                        // TODO: check error later.
-                        return;
-                    }
-                    Ok(Some((sock, addr))) => {
-                        debug!("accept conn {}", addr);
-                        sock
-                    }
-                };
-
-                self.add_new_conn(event_loop, sock, None)
-                    .map_err(|e| {
-                        error!("register conn err {:?}", e);
-                    });
-
+                    self.add_new_conn(event_loop, sock, None)
+                        .map_err(|e| {
+                            error!("register conn err {:?}", e);
+                        });
+                }
             }
             token => {
                 let msgs;
@@ -156,7 +143,8 @@ impl<T: ServerHandler> Server<T> {
                             for data in res {
                                 conn.append_write_buf(data);
                             }
-                            try!(conn.reregister_writeable(event_loop));
+                            // write buffer here directly?
+                            try!(conn.reregister(event_loop));
                         }
                         Ok(())
                     })
@@ -182,7 +170,8 @@ impl<T: ServerHandler> Server<T> {
                         data: ConnData) {
         if let Some(conn) = self.conns.get_mut(&token) {
             conn.append_write_buf(data);
-            conn.reregister_writeable(event_loop);
+            // write buffer here directly?
+            conn.reregister(event_loop);
         }
     }
 
