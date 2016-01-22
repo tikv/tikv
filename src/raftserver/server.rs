@@ -144,10 +144,8 @@ impl<T: ServerHandler> Server<T> {
                         // append to write buffer here, no need using sender to notify.
                         if let Some(conn) = self.conns.get_mut(&token) {
                             for data in res {
-                                conn.append_write_buf(data);
+                                try!(conn.append_write_buf(event_loop, data));
                             }
-                            // write buffer here directly?
-                            try!(conn.reregister(event_loop));
                         }
                         Ok(())
                     })
@@ -179,11 +177,18 @@ impl<T: ServerHandler> Server<T> {
                         event_loop: &mut EventLoop<Server<T>>,
                         token: Token,
                         data: ConnData) {
-        if let Some(conn) = self.conns.get_mut(&token) {
-            conn.append_write_buf(data);
-            // write buffer here directly?
-            conn.reregister(event_loop);
-        }
+        let res = match self.conns.get_mut(&token) {
+            None => {
+                warn!("missing conn for token {:?}", token);
+                return;
+            }
+            Some(conn) => conn.append_write_buf(event_loop, data),
+        };
+
+        res.map_err(|e| {
+            warn!("handle write data err {:?}, remove", e);
+            self.remove_conn(event_loop, token);
+        });
     }
 
     fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
