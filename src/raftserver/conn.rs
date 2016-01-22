@@ -66,7 +66,7 @@ impl Conn {
         Conn {
             sock: sock,
             token: token,
-            interest: EventSet::readable(),
+            interest: EventSet::readable() | EventSet::hup(),
             header: create_mem_buf(codec::MSG_HEADER_LEN),
             payload: None,
             res: VecDeque::new(),
@@ -136,9 +136,9 @@ impl Conn {
         Ok(buf.remaining())
     }
 
-    pub fn writeable<T: ServerHandler>(&mut self,
-                                       event_loop: &mut EventLoop<Server<T>>)
-                                       -> Result<()> {
+    pub fn writable<T: ServerHandler>(&mut self,
+                                      event_loop: &mut EventLoop<Server<T>>)
+                                      -> Result<()> {
         while !self.res.is_empty() {
             let remaining = try!(self.write_buf());
 
