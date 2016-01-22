@@ -36,4 +36,8 @@ pub trait ServerHandler :Sized {
     fn handle_timer(&mut self, sender: &Sender, msg: TimerMsg) -> Result<()> {
         Ok(())
     }
+
+    // Handle quit, this will be called when we quit the server.
+    // We should do our cleanup in this function here.
+    fn handle_quit(&mut self) {}
 }
