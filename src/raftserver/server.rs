@@ -84,7 +84,7 @@ impl<T: ServerHandler> Server<T> {
 
         try!(event_loop.register(&self.conns[&new_token].sock,
                                  new_token,
-                                 EventSet::readable(),
+                                 EventSet::readable() | EventSet::hup(),
                                  PollOpt::edge())
                        .or_else(|e| {
                            // register error, remove from conn map.
@@ -160,13 +160,13 @@ impl<T: ServerHandler> Server<T> {
         }
     }
 
-    fn handle_writeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+    fn handle_writable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
             }
-            Some(conn) => conn.writeable(event_loop),
+            Some(conn) => conn.writable(event_loop),
         };
 
         res.map_err(|e| {
@@ -244,7 +244,7 @@ impl<T: ServerHandler> Handler for Server<T> {
         }
 
         if events.is_writable() {
-            self.handle_writeable(event_loop, token);
+            self.handle_writable(event_loop, token);
         }
     }
 
