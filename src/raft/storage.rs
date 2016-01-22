@@ -4,7 +4,8 @@
 use protobuf;
 use proto::raftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
-
+use std::cell::UnsafeCell;
+use std::ops::Deref;
 
 
 #[derive(Debug, Clone)]
@@ -202,3 +203,38 @@ impl Storage for MemStorage {
         Ok(&self.snapshot)
     }
 }
+
+/// TODO: make MemStorage become actually sync.
+/// Currently MemStore is only used for single-thread testing.
+unsafe impl Sync for MemStorage {}
+
+/// Because rocksdb has already been thread safe, so we don't need to wrap it
+/// into any sync guarantees.
+pub struct ThreadSafeStorage<T: Storage + Sync>(UnsafeCell<T>);
+
+impl<T: Storage + Sync> ThreadSafeStorage<T> {
+    pub fn new(t: T) -> ThreadSafeStorage<T> {
+        ThreadSafeStorage(UnsafeCell::new(t))
+    }
+
+    pub fn into_inner(self) -> T {
+        let ThreadSafeStorage(c) = self;
+        unsafe { c.into_inner() }
+    }
+
+    pub fn borrow_mut(&self) -> &mut T {
+        let &ThreadSafeStorage(ref c) = self;
+        unsafe { &mut *c.get() }
+    }
+}
+
+impl<T: Storage + Sync> Deref for ThreadSafeStorage<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        let &ThreadSafeStorage(ref c) = self;
+        unsafe { &*c.get() }
+    }
+}
+
+unsafe impl<T: Storage + Sync> Sync for ThreadSafeStorage<T> {}
