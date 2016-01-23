@@ -3,6 +3,7 @@
 #![feature(test)]
 #![feature(btree_range, collections_bound)]
 #![feature(std_panic, recover)]
+#![feature(fnbox)]
 
 #[macro_use]
 extern crate log;
