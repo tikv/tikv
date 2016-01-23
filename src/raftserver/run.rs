@@ -26,7 +26,7 @@ impl<T: ServerHandler> Runner<T> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
                                  EventSet::readable(),
-                                 PollOpt::edge() | PollOpt::oneshot()));
+                                 PollOpt::edge()));
 
         let sender = Sender::new(event_loop.channel());
         Ok(Runner {
