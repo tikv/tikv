@@ -82,9 +82,9 @@ impl Conn {
         Ok(())
     }
 
-    pub fn readable<T: ServerHandler>(&mut self,
-                                      _: &mut EventLoop<Server<T>>)
-                                      -> Result<(Vec<ConnData>)> {
+    pub fn read<T: ServerHandler>(&mut self,
+                                  _: &mut EventLoop<Server<T>>)
+                                  -> Result<(Vec<ConnData>)> {
         let mut bufs = vec![];
 
         loop {
@@ -136,9 +136,7 @@ impl Conn {
         Ok(buf.remaining())
     }
 
-    pub fn writable<T: ServerHandler>(&mut self,
-                                      event_loop: &mut EventLoop<Server<T>>)
-                                      -> Result<()> {
+    pub fn write<T: ServerHandler>(&mut self, event_loop: &mut EventLoop<Server<T>>) -> Result<()> {
         while !self.res.is_empty() {
             let remaining = try!(self.write_buf());
 
