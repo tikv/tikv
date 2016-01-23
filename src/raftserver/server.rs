@@ -51,7 +51,7 @@ impl<T: ServerHandler> Server<T> {
         event_loop.timeout_ms(token, delay);
     }
 
-    fn handle_error(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+    fn remove_conn(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         let conn = self.conns.remove(&token);
         match conn {
             Some(conn) => {
@@ -66,7 +66,6 @@ impl<T: ServerHandler> Server<T> {
                 warn!("missing connection for token {}", token.as_usize());
             }
         }
-
     }
 
     fn add_new_conn(&mut self,
@@ -79,65 +78,52 @@ impl<T: ServerHandler> Server<T> {
 
         try!(sock.set_nodelay(true));
 
+        try!(event_loop.register(&sock,
+                                 new_token,
+                                 EventSet::readable() | EventSet::hup(),
+                                 PollOpt::edge()));
+
         let conn = Conn::new(sock, new_token, peer_addr);
 
         self.conns.insert(new_token, conn);
 
-        try!(event_loop.register(&self.conns[&new_token].sock,
-                                 new_token,
-                                 EventSet::readable(),
-                                 PollOpt::edge() | PollOpt::oneshot()));
         Ok(new_token)
     }
-
-    fn reregister_listener(&mut self, event_loop: &mut EventLoop<Server<T>>) {
-        event_loop.reregister(&self.listener,
-                              SERVER_TOKEN,
-                              EventSet::readable(),
-                              PollOpt::edge() | PollOpt::oneshot())
-                  .map_err(|e| {
-                      error!("re-register listener err {}", e);
-                  });
-    }
-
 
     fn handle_readeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         match token {
             SERVER_TOKEN => {
-                // must reregister.
-                self.reregister_listener(event_loop);
+                loop {
+                    // For edge trigger, we must accept all connections until None.
+                    let sock = match self.listener.accept() {
+                        Err(e) => {
+                            error!("accept error: {:?}", e);
+                            return;
+                        }
+                        Ok(None) => {
+                            debug!("no connection, accept later.");
+                            return;
+                        }
+                        Ok(Some((sock, addr))) => {
+                            debug!("accept conn {}", addr);
+                            sock
+                        }
+                    };
 
-                let sock = match self.listener.accept() {
-                    Err(e) => {
-                        error!("accept error: {:?}", e);
-                        return;
-                    }
-                    Ok(None) => {
-                        debug!("listener is not ready, try later");
-                        // TODO: check error later.
-                        return;
-                    }
-                    Ok(Some((sock, addr))) => {
-                        debug!("accept conn {}", addr);
-                        sock
-                    }
-                };
-
-                self.add_new_conn(event_loop, sock, None)
-                    .map_err(|e| {
-                        error!("register conn err {:?}", e);
-                    });
-
+                    self.add_new_conn(event_loop, sock, None)
+                        .map_err(|e| {
+                            error!("register conn err {:?}", e);
+                        });
+                }
             }
             token => {
-                let msgs;
-                match self.conns.get_mut(&token) {
+                let msgs = match self.conns.get_mut(&token) {
                     None => {
                         warn!("missing conn for token {:?}", token);
                         return;
                     }
-                    Some(conn) => msgs = conn.read(event_loop),
-                }
+                    Some(conn) => conn.read(event_loop),
+                };
 
                 msgs.and_then(|msgs| {
                         if msgs.len() == 0 {
@@ -154,36 +140,51 @@ impl<T: ServerHandler> Server<T> {
                         // append to write buffer here, no need using sender to notify.
                         if let Some(conn) = self.conns.get_mut(&token) {
                             for data in res {
-                                conn.append_write_buf(data);
+                                try!(conn.append_write_buf(event_loop, data));
                             }
-                            try!(conn.reregister_writeable(event_loop));
                         }
                         Ok(())
                     })
-                    .map_err(|e| warn!("handle read conn err {:?}", e));
+                    .map_err(|e| {
+                        warn!("handle read conn err {:?}, remove", e);
+                        self.remove_conn(event_loop, token);
+                    });
             }
 
         }
     }
 
-    fn handle_writeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
-        match self.conns.get_mut(&token) {
+    fn handle_writable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+        let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
             }
             Some(conn) => conn.write(event_loop),
         };
+
+        res.map_err(|e| {
+            warn!("handle write conn err {:?}, remove", e);
+            self.remove_conn(event_loop, token);
+        });
     }
 
     fn handle_writedata(&mut self,
                         event_loop: &mut EventLoop<Server<T>>,
                         token: Token,
                         data: ConnData) {
-        if let Some(conn) = self.conns.get_mut(&token) {
-            conn.append_write_buf(data);
-            conn.reregister_writeable(event_loop);
-        }
+        let res = match self.conns.get_mut(&token) {
+            None => {
+                warn!("missing conn for token {:?}", token);
+                return;
+            }
+            Some(conn) => conn.append_write_buf(event_loop, data),
+        };
+
+        res.map_err(|e| {
+            warn!("handle write data err {:?}, remove", e);
+            self.remove_conn(event_loop, token);
+        });
     }
 
     fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
@@ -234,8 +235,8 @@ impl<T: ServerHandler> Handler for Server<T> {
     type Message = Msg;
 
     fn ready(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token, events: EventSet) {
-        if events.is_hup() | events.is_error() {
-            self.handle_error(event_loop, token);
+        if events.is_hup() || events.is_error() {
+            self.remove_conn(event_loop, token);
             return;
         }
 
@@ -244,7 +245,7 @@ impl<T: ServerHandler> Handler for Server<T> {
         }
 
         if events.is_writable() {
-            self.handle_writeable(event_loop, token);
+            self.handle_writable(event_loop, token);
         }
     }
 
