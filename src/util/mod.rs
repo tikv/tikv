@@ -30,31 +30,31 @@ impl Log for StdOutLogger {
 }
 
 /// A simple general wrapper for struct that is thread-safe for interior mutability already.
-pub struct ThreadSafeCell<T: Sync>(UnsafeCell<T>);
+pub struct SyncCell<T: Sync>(UnsafeCell<T>);
 
-impl<T: Sync> ThreadSafeCell<T> {
-    pub fn new(t: T) -> ThreadSafeCell<T> {
-        ThreadSafeCell(UnsafeCell::new(t))
+impl<T: Sync> SyncCell<T> {
+    pub fn new(t: T) -> SyncCell<T> {
+        SyncCell(UnsafeCell::new(t))
     }
 
     pub fn into_inner(self) -> T {
-        let ThreadSafeCell(c) = self;
+        let SyncCell(c) = self;
         unsafe { c.into_inner() }
     }
 
     pub fn borrow_mut(&self) -> &mut T {
-        let &ThreadSafeCell(ref c) = self;
+        let &SyncCell(ref c) = self;
         unsafe { &mut *c.get() }
     }
 }
 
-impl<T: Sync> Deref for ThreadSafeCell<T> {
+impl<T: Sync> Deref for SyncCell<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        let &ThreadSafeCell(ref c) = self;
+        let &SyncCell(ref c) = self;
         unsafe { &*c.get() }
     }
 }
 
-unsafe impl<T: Sync> Sync for ThreadSafeCell<T> {}
+unsafe impl<T: Sync> Sync for SyncCell<T> {}
