@@ -126,7 +126,7 @@ impl<T: ServerHandler> Server<T> {
                         warn!("missing conn for token {:?}", token);
                         return;
                     }
-                    Some(conn) => conn.readable(event_loop),
+                    Some(conn) => conn.read(event_loop),
                 };
 
                 msgs.and_then(|msgs| {
@@ -164,7 +164,7 @@ impl<T: ServerHandler> Server<T> {
                 warn!("missing conn for token {:?}", token);
                 return;
             }
-            Some(conn) => conn.writable(event_loop),
+            Some(conn) => conn.write(event_loop),
         };
 
         res.map_err(|e| {
