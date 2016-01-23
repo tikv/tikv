@@ -1,6 +1,5 @@
 use self::memory::EngineBtree;
 use std::{error, result};
-use std::fmt::{self, Display, Formatter};
 use self::rocksdb::EngineRocksdb;
 
 mod memory;
@@ -41,29 +40,13 @@ pub fn new_engine(desc: Dsn) -> Result<Box<Engine>> {
     }
 }
 
-#[derive(Debug)]
-pub enum Error {
-    Other(Box<error::Error + Send + Sync>),
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match *self {
-            Error::Other(ref error) => Display::fmt(error, f),
-        }
-    }
-}
-
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            &Error::Other(ref e) => e.description(),
-        }
-    }
-
-    fn cause(&self) -> Option<&error::Error> {
-        match self {
-            &Error::Other(ref e) => e.cause(),
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Other(err: Box<error::Error + Send + Sync>) {
+            from(err)
+            cause(err.as_ref())
+            description(err.description())
         }
     }
 }

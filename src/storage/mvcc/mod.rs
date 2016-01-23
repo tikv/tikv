@@ -1,4 +1,3 @@
-use std::{error, fmt, result};
 use storage::engine::{self, Engine, Modify};
 use self::meta::Meta;
 use self::codec::{encode_key, decode_key};
@@ -21,7 +20,7 @@ pub trait MvccEngine : Engine {
         let dkey = encode_key(key, ver);
         match try!(self.get(&dkey)) {
             Some(x) => Ok(Some(x)),
-            None => MvccErrorKind::DataMissing.as_result(),
+            None => Err(Error::DataMissing),
         }
     }
 
@@ -85,7 +84,7 @@ pub trait MvccEngine : Engine {
             let dkey = encode_key(&key, ver);
             match try!(self.get(&dkey)) {
                 Some(x) => pairs.push((key.clone(), x)),
-                None => return MvccErrorKind::DataMissing.as_result(),
+                None => return Err(Error::DataMissing),
             }
             key.push(0);
             seek_key = encode_key(&key, 0u64);
@@ -96,73 +95,25 @@ pub trait MvccEngine : Engine {
 
 impl<T: Engine + ?Sized> MvccEngine for T {}
 
-#[derive(Debug)]
-pub enum Error {
-    Engine(engine::Error),
-    Mvcc(MvccErrorKind),
-}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum MvccErrorKind {
-    MetaDataLength,
-    MetaDataFlag,
-    MetaDataVersion,
-    KeyLength,
-    KeyPadding,
-    KeyVersion,
-    DataMissing,
-}
-
-impl MvccErrorKind {
-    fn description(self) -> &'static str {
-        match self {
-            MvccErrorKind::MetaDataLength => "bad format meta data(length)",
-            MvccErrorKind::MetaDataFlag => "bad format meta data(flag)",
-            MvccErrorKind::MetaDataVersion => "bad format meta data(version)",
-            MvccErrorKind::KeyLength => "bad format key(length)",
-            MvccErrorKind::KeyPadding => "bad format key(padding)",
-            MvccErrorKind::KeyVersion => "bad format key(version)",
-            MvccErrorKind::DataMissing => "version data missing",
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Engine(err: engine::Error) {
+            from()
+            cause(err)
+            description(err.description())
         }
-    }
-
-    fn as_result<T>(self) -> Result<T> {
-        Err(Error::Mvcc(self))
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Error::Engine(ref err) => err.fmt(f),
-            Error::Mvcc(kind) => kind.description().fmt(f),
-        }
+        MetaDataLength {description("bad format meta data(length)")}
+        MetaDataFlag {description("bad format meta data(flag)")}
+        MetaDataVersion {description("bad format meta data(version)")}
+        KeyLength {description("bad format key(length)")}
+        KeyVersion {description("bad format key(version)")}
+        KeyPadding {description("bad format key(padding)")}
+        DataMissing {description("data missing")}
     }
 }
 
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        match *self {
-            Error::Engine(ref err) => err.description(),
-            Error::Mvcc(kind) => kind.description(),
-        }
-    }
-
-    fn cause(&self) -> Option<&error::Error> {
-        match *self {
-            Error::Engine(ref err) => Some(err),
-            Error::Mvcc(..) => None,
-        }
-    }
-}
-
-impl From<engine::Error> for Error {
-    fn from(err: engine::Error) -> Error {
-        Error::Engine(err)
-    }
-}
-
-pub type Result<T> = result::Result<T, Error>;
+pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
