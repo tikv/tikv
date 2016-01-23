@@ -403,7 +403,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
 #[cfg(test)]
 mod test {
     use raft::raft_log::{self, RaftLog};
-    use raft::storage::MemStorage;
+    use raft::storage::{MemStorage, Storage};
     use util::SyncCell;
     use std::sync::Arc;
     use proto::raftpb;
@@ -416,6 +416,10 @@ mod test {
         e.set_Term(term);
         e.set_Index(index);
         e
+    }
+
+    fn wrap_storage(store: MemStorage) -> Arc<SyncCell<MemStorage>> {
+        Arc::new(SyncCell::new(store))
     }
 
     fn new_snapshot(meta_index: u64, meta_term: u64) -> raftpb::Snapshot {
@@ -450,7 +454,7 @@ mod test {
         ];
         for (i, &(ref ents, wconflict)) in tests.iter().enumerate() {
             let store = MemStorage::new();
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             raft_log.append(&*previous_ents);
             let gconflict = raft_log.find_conflict(&*ents);
             if gconflict != wconflict {
@@ -463,7 +467,7 @@ mod test {
     fn test_is_up_to_date() {
         let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
         let store = MemStorage::new();
-        let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+        let mut raft_log = RaftLog::new(wrap_storage(store));
         raft_log.append(&*previous_ents);
         let tests = vec![
             // greater term, ignore lastIndex
@@ -501,7 +505,7 @@ mod test {
         for (i, &(ref ents, windex, ref wents, wunstable)) in tests.iter().enumerate() {
             let mut store = MemStorage::new();
             store.append(&previous_ents).expect("append failed");
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             let index = raft_log.append(ents);
             if index != windex {
                 panic!("#{}: last_index = {}, want {}", i, index, windex);
@@ -530,7 +534,7 @@ mod test {
         for i in 1..(unstable_index + 1) {
             storage.append(&[new_entry(i as u64, i as u64)]).expect("append failed");
         }
-        let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(storage)));
+        let mut raft_log = RaftLog::new(wrap_storage(storage));
         for i in unstable_index..last_index {
             raft_log.append(&[new_entry(i as u64 + 1, i as u64 + 1)]);
         }
@@ -579,7 +583,7 @@ mod test {
         let unstablesnapi = storagesnapi + 5;
         let mut store = MemStorage::new();
         store.apply_snapshot(new_snapshot(storagesnapi, 1)).expect("apply failed.");
-        let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+        let mut raft_log = RaftLog::new(wrap_storage(store));
         raft_log.restore(new_snapshot(unstablesnapi, 1));
 
         let tests = vec![
@@ -607,7 +611,7 @@ mod test {
 
         let mut store = MemStorage::new();
         store.apply_snapshot(new_snapshot(offset, 1)).expect("apply failed.");
-        let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+        let mut raft_log = RaftLog::new(wrap_storage(store));
         for i in 1..num {
             raft_log.append(&[new_entry(offset + i, i)]);
         }
@@ -633,7 +637,7 @@ mod test {
         let (index, term) = (1000u64, 1000u64);
         let mut store = MemStorage::new();
         store.apply_snapshot(new_snapshot(index, term)).expect("apply failed.");
-        let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+        let mut raft_log = RaftLog::new(wrap_storage(store));
 
         assert_eq!(0, raft_log.all_entries().len());
         assert_eq!(index + 1, raft_log.first_index());
@@ -667,7 +671,7 @@ mod test {
         for (i, &(stablei, stablet, ref new_ents, wunstable)) in tests.iter().enumerate() {
             let mut store = MemStorage::new();
             store.apply_snapshot(new_snapshot(snapi, snapt)).expect("");
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             raft_log.append(&*new_ents);
             raft_log.stable_to(stablei, stablet);
             if raft_log.unstable.offset != wunstable {
@@ -689,7 +693,7 @@ mod test {
         ];
         for (i, &(stablei, stablet, wunstable)) in tests.iter().enumerate() {
             let store = MemStorage::new();
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             raft_log.append(&[new_entry(1, 1), new_entry(2, 2)]);
             raft_log.stable_to(stablei, stablet);
             if raft_log.unstable.offset != wunstable {
@@ -717,7 +721,7 @@ mod test {
             store.append(&previous_ents[..(unstable - 1)]).expect("");
 
             // append unstable entries to raftlog
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             raft_log.append(&previous_ents[(unstable - 1)..]);
 
             let ents = raft_log.unstable_entries().unwrap_or(&[]).to_vec();
@@ -748,7 +752,7 @@ mod test {
         for (i, &(applied, ref wents)) in tests.iter().enumerate() {
             let mut store = MemStorage::new();
             store.apply_snapshot(new_snapshot(3, 1)).expect("");
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             raft_log.append(&ents);
             raft_log.maybe_commit(5, 1);
             raft_log.applied_to(applied);
@@ -773,7 +777,7 @@ mod test {
         for (i, &(applied, has_next)) in tests.iter().enumerate() {
             let mut store = MemStorage::new();
             store.apply_snapshot(new_snapshot(3, 1)).expect("");
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             raft_log.append(&ents);
             raft_log.maybe_commit(5, 1);
             raft_log.applied_to(applied);
@@ -797,7 +801,7 @@ mod test {
         for i in 1..(num / 2) {
             store.append(&[new_entry(offset + i, offset + i)]).expect("");
         }
-        let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+        let mut raft_log = RaftLog::new(wrap_storage(store));
         for i in (num / 2)..num {
             raft_log.append(&[new_entry(offset + i, offset + i)]);
         }
@@ -904,7 +908,7 @@ mod test {
                wcommit,
                wpanic)) in tests.iter().enumerate() {
             let store = MemStorage::new();
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             raft_log.append(&*previous_ents);
             raft_log.committed = commit;
             let res = {
@@ -952,7 +956,7 @@ mod test {
         ];
         for (i, &(commit, wcommit, wpanic)) in tests.iter().enumerate() {
             let store = MemStorage::new();
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             raft_log.append(&*previous_ents);
             raft_log.committed = previous_commit;
             let has_panic = {
@@ -985,7 +989,7 @@ mod test {
             for i in 1u64..(last_index + 1) {
                 store.append(&[new_entry(i, 0)]).expect("");
             }
-            let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+            let mut raft_log = RaftLog::new(wrap_storage(store));
             raft_log.maybe_commit(last_index, 0);
             let committed = raft_log.committed;
             raft_log.applied_to(committed);
@@ -1024,7 +1028,7 @@ mod test {
         let (offset, num) = (100u64, 100u64);
         let mut store = MemStorage::new();
         store.apply_snapshot(new_snapshot(offset, 0)).expect("");
-        let mut raft_log = RaftLog::new(Arc::new(SyncCell::new(store)));
+        let mut raft_log = RaftLog::new(wrap_storage(store));
         for i in 1u64..(num + 1) {
             raft_log.append(&[new_entry(i + offset, 0)]);
         }
