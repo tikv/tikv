@@ -84,7 +84,7 @@ mod tests {
 
         let sender = r.get_sender();
         thread::spawn(move || {
-            thread::sleep(Duration::new(1, 0));
+            thread::sleep(Duration::from_millis(500));
             sender.kill().unwrap();
         });
 
@@ -104,7 +104,7 @@ mod tests {
             r.run(h).unwrap();
         });
 
-        thread::sleep(Duration::new(0, 500 * 1000000));
+        thread::sleep(Duration::from_millis(500));
         let mut conn = TcpStream::connect("127.0.0.1:12345").unwrap();
 
         for i in 1..10 {
@@ -143,7 +143,7 @@ mod tests {
 
         let sender = r.get_sender();
         thread::spawn(move || {
-            thread::sleep(Duration::new(1, 0));
+            thread::sleep(Duration::from_millis(500));
             sender.kill().unwrap();
         });
 
@@ -179,7 +179,7 @@ mod tests {
               .unwrap();
 
         thread::spawn(move || {
-            thread::sleep(Duration::new(1, 0));
+            thread::sleep(Duration::from_millis(500));
             sender.kill().unwrap();
         });
 
@@ -258,5 +258,36 @@ mod tests {
 
         assert_eq!(r1, r2);
         assert_eq!(r1, (2, 2));
+    }
+
+    struct QuitHandler {
+        n: Arc<Mutex<u64>>,
+    }
+
+    impl ServerHandler for QuitHandler {
+        fn handle_quit(&mut self) {
+            let mut v = self.n.lock().unwrap();
+            *v = 0;
+        }
+    }
+
+    #[test]
+    fn test_quit() {
+        let addr = "127.0.0.1:0";
+        let mut r = Runner::new(addr).unwrap();
+
+        let sender = r.get_sender();
+        let n = Arc::new(Mutex::new(1));
+        let h = QuitHandler { n: n.clone() };
+
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(500));
+            sender.kill().unwrap();
+        });
+
+        r.run(h).unwrap();
+
+        let n = n.lock().unwrap();
+        assert_eq!(*n, 0);
     }
 }

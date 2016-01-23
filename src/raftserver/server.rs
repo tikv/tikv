@@ -266,4 +266,20 @@ impl<T: ServerHandler> Handler for Server<T> {
             _ => panic!("unexpected msg"),
         }
     }
+
+    fn interrupted(&mut self, event_loop: &mut EventLoop<Server<T>>) {
+        event_loop.shutdown();
+    }
+
+    fn tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
+        if event_loop.is_running() {
+            return;
+        }
+
+        // tick is called in the end of the loop, so if we notify to quit,
+        // we will quit the server here.
+        info!("begin to quit server......");
+        self.handler.handle_quit();
+        info!("quit server over");
+    }
 }
