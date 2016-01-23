@@ -78,19 +78,15 @@ impl<T: ServerHandler> Server<T> {
 
         try!(sock.set_nodelay(true));
 
+        try!(event_loop.register(&sock,
+                                 new_token,
+                                 EventSet::readable() | EventSet::hup(),
+                                 PollOpt::edge()));
+
         let conn = Conn::new(sock, new_token, peer_addr);
 
         self.conns.insert(new_token, conn);
 
-        try!(event_loop.register(&self.conns[&new_token].sock,
-                                 new_token,
-                                 EventSet::readable() | EventSet::hup(),
-                                 PollOpt::edge())
-                       .or_else(|e| {
-                           // register error, remove from conn map.
-                           self.conns.remove(&new_token);
-                           Err(e)
-                       }));
         Ok(new_token)
     }
 
