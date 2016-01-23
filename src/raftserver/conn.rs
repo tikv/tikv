@@ -143,16 +143,11 @@ impl Conn {
             let remaining = try!(self.write_buf());
 
             if remaining > 0 {
-                // well, we don't write all, and need re-write later.
-                break;
+                // we don't write all data, so must try later.
+                // we have already registered writable, no need registering again.
+                return Ok(());
             }
             self.res.pop_front();
-        }
-
-        if !self.res.is_empty() {
-            // we don't write all data, so must try later.
-            // we have already registered writable, no need registering again.
-            return Ok(());
         }
 
         // no data for writing, remove writable.
@@ -165,16 +160,16 @@ impl Conn {
                                               msg: ConnData)
                                               -> Result<()> {
         // Now we just push data to a write buffer and register writable for later writing.
-        // Later we can write data directly, if meet WOUNDBLOCK error(don't write all data OK), 
-        // we can register writable at that time. 
+        // Later we can write data directly, if meet WOUNDBLOCK error(don't write all data OK),
+        // we can register writable at that time.
         // We must also check `socket is not connected` error too, when we connect to a remote
         // peer, mio puts this socket in event loop immediately, but this socket may not be connected
-        // at that time, so we must register writable too for this case. 
+        // at that time, so we must register writable too for this case.
         self.res.push_back(msg.encode_to_buf());
 
         if !self.interest.is_writable() {
             // re-register writable if we have not,
-            // if registered, we can only remove this when
+            // if registered, we can only remove this flag when
             // writing all data in writable function.
             self.interest.insert(EventSet::writable());
             return self.reregister(event_loop);
