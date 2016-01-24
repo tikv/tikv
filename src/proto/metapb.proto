@@ -1,0 +1,29 @@
+syntax = "proto2";
+package metapb;
+
+message Node {
+  optional int64 node_id = 1;
+  optional string address = 2;
+  // more attributes......
+}
+
+
+message Store {
+  optional int64 store_id = 1;
+  optional Node node = 2;
+  // more attributes......
+}
+
+message Peer {
+  optional int64 peer_id = 1;
+  optional int64 node_id = 2;
+  optional int64 store_id = 3;
+}
+
+message Region {
+  optional int64 region_id = 1;
+  // Region key range [start_key, stop_key).
+  optional bytes start_key = 2;
+  optional bytes stop_key = 3;
+  repeated Peer peers = 4;
+}
