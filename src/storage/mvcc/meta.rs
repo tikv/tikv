@@ -116,7 +116,7 @@ impl Meta {
         let n = self.items.len();
         match n {
             0 => None,
-            _ => Some(self.items[n-1].version()),
+            _ => Some(self.items[n - 1].version()),
         }
     }
 
