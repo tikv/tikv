@@ -1,6 +1,6 @@
 use std::cmp::{Ord, Ordering};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use super::{Result, MvccErrorKind};
+use super::{Result, Error};
 
 #[derive(Debug, Copy, Clone)]
 enum MetaItem {
@@ -18,16 +18,16 @@ impl MetaItem {
     fn new(data: &[u8]) -> Result<MetaItem> {
         let (flag, rest) = match data.split_first() {
             Some(x) => x,
-            None => return MvccErrorKind::MetaDataLength.as_result(),
+            None => return Err(Error::MetaDataLength),
         };
         let ver = match rest.as_ref().read_u64::<BigEndian>() {
             Ok(x) => x,
-            Err(..) => return MvccErrorKind::MetaDataVersion.as_result(),
+            Err(_) => return Err(Error::MetaDataVersion),
         };
         match *flag {
             FLAG_WITH_VALUE => Ok(MetaItem::WithValue(ver)),
             FLAG_DELETED => Ok(MetaItem::Deleted(ver)),
-            _ => MvccErrorKind::MetaDataFlag.as_result(),
+            _ => Err(Error::MetaDataFlag),
         }
     }
 

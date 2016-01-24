@@ -7,6 +7,7 @@ dependencies = [
  "log 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.0.14 (git+https://github.com/stepancheg/rust-protobuf.git)",
+ "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -125,6 +126,11 @@ dependencies = [
 name = "protobuf"
 version = "1.0.14"
 source = "git+https://github.com/stepancheg/rust-protobuf.git#27493292cecdc0fa4523a6110f2724f442962199"
+
+[[package]]
+name = "quick-error"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "rand"
