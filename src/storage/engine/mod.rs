@@ -44,7 +44,7 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         Other(err: Box<error::Error + Send + Sync>) {
-            from(err)
+            from()
             cause(err.as_ref())
             description(err.description())
         }
