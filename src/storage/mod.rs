@@ -165,3 +165,32 @@ quick_error! {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::{Dsn, Storage, Result, Value, Callback};
+
+    fn expect_get_none() -> Callback<Option<Value>> {
+        Box::new(|x: Result<Option<Value>>| assert_eq!(x.unwrap(), None))
+    }
+
+    fn expect_commit_ok() -> Callback<()> {
+        Box::new(|x: Result<()>| assert!(x.is_ok()))
+    }
+
+    fn expect_commit_err() -> Callback<()> {
+        Box::new(|x: Result<()>| assert!(x.is_err()))
+    }
+
+    #[test]
+    fn test_callback() {
+        let storage = Storage::new(Dsn::Memory).unwrap();
+
+        storage.async_get(b"abc".to_vec(), 1u64, expect_get_none()).unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())], vec![], vec![], 100u64, expect_commit_ok()).unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())], vec![], vec![], 101u64, expect_commit_ok()).unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())], vec![], vec![], 99u64, expect_commit_err()).unwrap();
+
+        storage.stop().unwrap();
+    }
+}
