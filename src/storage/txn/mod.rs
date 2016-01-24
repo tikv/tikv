@@ -13,11 +13,11 @@ impl Scheduler {
     pub fn handle_cmd(&mut self, cmd: Command) {
         match cmd {
             Command::Get(((key, version), callback)) => {
-                let value = self.engine.as_ref().mvcc_get(&key, version);
+                let value = self.engine.mvcc_get(&key, version);
                 callback(value.map_err(|e| super::Error::from(e)));
             }
             Command::Scan(((start_key, limit, version), callback)) => {
-                let pairs = self.engine.as_ref().mvcc_scan(&start_key, limit, version);
+                let pairs = self.engine.mvcc_scan(&start_key, limit, version);
                 callback(pairs.map_err(|e| super::Error::from(e)));
             }
             Command::Commit(((puts, deletes, locks, version), callback)) => {
