@@ -1,15 +1,15 @@
 
 #![allow(dead_code)]
 use std::cmp;
-use raft::storage::{Storage, ThreadSafeStorage};
-use proto::raftpb::{HardState, ConfState, Entry, Snapshot, Message, MessageType};
+use raft::storage::Storage;
+use util::SyncCell;
+use proto::raftpb::{HardState, Entry, EntryType, Message, MessageType};
 use protobuf::repeated::RepeatedField;
 use raft::progress::{Progress, Inflights, ProgressState};
 use raft::errors::{Result, Error, other, StorageError};
 use std::collections::HashMap;
-use raft::raft_log::RaftLog;
+use raft::raft_log::{self, RaftLog};
 use std::sync::Arc;
-use std::fmt;
 
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -57,7 +57,7 @@ pub struct Config<T: Storage + Sync> {
     /// states to be stored in storage. raft reads the persisted entires
     /// and states out of Storage when it needs. raft reads out the previous
     /// state and configuration out of storage when restarting.
-    storage: Option<Arc<ThreadSafeStorage<T>>>,
+    storage: Option<Arc<SyncCell<T>>>,
     /// Applied is the last applied index. It should only be set when restarting
     /// raft. raft will not return entries to the application smaller or equal to Applied.
     /// If Applied is unset when restarting, raft might return previous applied entries.
@@ -152,15 +152,32 @@ struct Raft<T: Storage + Sync> {
 
     heartbeat_timeout: usize,
     election_timeout: usize,
+    tick_func: fn(&mut Raft<T>) -> (),
+    step_func: fn(&mut Raft<T>, Message) -> (),
+}
+
+fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
+    Progress {
+        next_idx: next_idx,
+        ins: Inflights::new(ins_size),
+        ..Default::default()
+    }
+}
+
+fn new_message(from: u64, field_type: MessageType) -> Message {
+    let mut m = Message::new();
+    m.set_from(from);
+    m.set_field_type(field_type);
+    m
 }
 
 impl<T: Storage + Sync> Raft<T> {
     fn new(c: &Config<T>) -> Raft<T> {
         c.validate().expect("configuration is invalid");
         let store = c.storage.as_ref().unwrap().clone();
-        let rs = (**store).initial_state().expect("");
-        let mut raft_log = RaftLog::new(store);
-        let mut peers = &*c.peers;
+        let rs = store.initial_state().expect("");
+        let raft_log = RaftLog::new(store);
+        let mut peers: &[u64] = &c.peers;
         if rs.conf_state.get_nodes().len() > 0 {
             if peers.len() > 0 {
                 // TODO(bdarnell): the peers argument is always nil except in
@@ -182,19 +199,16 @@ impl<T: Storage + Sync> Raft<T> {
             msgs: vec![],
             lead: INVALID_ID,
             pending_conf: false,
-            election_elapsed: 0,
-            heartbeat_elapsed: 0,
+            tick_func: Raft::tick_election,
+            step_func: Raft::step_follower,
             check_quorum: c.check_quorum,
+            heartbeat_elapsed: 0,
+            election_elapsed: 0,
             heartbeat_timeout: c.heartbeat_tick,
             election_timeout: c.election_tick,
         };
         for p in peers {
-            r.prs.insert(*p,
-                         Progress {
-                             next_idx: 1,
-                             ins: Inflights::new(r.max_inflight),
-                             ..Default::default()
-                         });
+            r.prs.insert(*p, new_progress(1, r.max_inflight));
         }
         if rs.hard_state != HardState::new() {
             r.load_state(rs.hard_state);
@@ -202,7 +216,8 @@ impl<T: Storage + Sync> Raft<T> {
         if c.applied > 0 {
             r.raft_log.applied_to(c.applied);
         }
-        r.become_follower(r.hs.get_term(), INVALID_ID);
+        let term = r.hs.get_term();
+        r.become_follower(term, INVALID_ID);
 
         let mut nodes_str = String::new();
         for n in r.nodes() {
@@ -375,7 +390,434 @@ impl<T: Storage + Sync> Raft<T> {
         }
     }
 
-    fn become_follower(&self, term: u64, lead: u64) {}
+    // bcastHeartbeat sends RPC, without entries to all the peers.
+    fn bcast_heartbeat(&mut self) {
+        let keys: Vec<u64> = self.prs.keys().map(|x| *x).collect();
+        for id in keys {
+            if id == self.id {
+                continue;
+            }
+            self.send_heartbeat(id);
+            self.prs.get_mut(&id).unwrap().resume()
+        }
+    }
+
+    fn maybe_commit(&mut self) -> bool {
+        // TODO: optimize
+        let mut mis = Vec::with_capacity(self.prs.len());
+        let keys: Vec<u64> = self.prs.keys().map(|x| *x).collect();
+        for id in keys {
+            mis.push(self.prs[&id].matched);
+        }
+        mis.sort_by(|a, b| b.cmp(a));
+        let mci = mis[self.quorum() - 1];
+        self.raft_log.maybe_commit(mci, self.hs.get_term())
+    }
+
+    fn reset(&mut self, term: u64) {
+        if self.hs.get_term() != term {
+            self.hs.set_term(term);
+            self.hs.set_vote(INVALID_ID);
+        }
+        self.lead = INVALID_ID;
+        self.election_elapsed = 0;
+        self.heartbeat_elapsed = 0;
+
+        self.votes = HashMap::new();
+        let keys: Vec<u64> = self.prs.keys().map(|x| *x).collect();
+        for id in keys {
+            *self.prs.get_mut(&id).unwrap() = new_progress(self.raft_log.last_index() + 1,
+                                                           self.max_inflight);
+            if id == self.id {
+                self.prs.get_mut(&id).unwrap().matched = self.raft_log.last_index();
+            }
+        }
+        self.pending_conf = false;
+    }
+
+    fn append_entry(&mut self, es: &mut [Entry]) {
+        let li = self.raft_log.last_index();
+        for i in 0..es.len() {
+            let e = es.get_mut(i).unwrap();
+            e.set_Term(self.hs.get_term());
+            e.set_Index(li + 1 + i as u64);
+        }
+        self.raft_log.append(es);
+        let id = self.id;
+        let last_index = self.raft_log.last_index();
+        self.prs.get_mut(&id).unwrap().maybe_update(last_index);
+        self.maybe_commit();
+    }
+
+    // tickElection is run by followers and candidates after self.election_timeout.
+    fn tick_election(&mut self) {
+        if !self.promotable() {
+            self.election_elapsed = 0;
+            return;
+        }
+        self.election_elapsed += 1;
+        if self.is_election_timeout() {
+            self.election_elapsed = 0;
+            let m = new_message(self.id, MessageType::MsgHup);
+            self.step(m);
+        }
+    }
+
+    // tickHeartbeat is run by leaders to send a MsgBeat after r.heartbeatTimeout.
+    fn tick_heartbeat(&mut self) {
+        self.heartbeat_elapsed += 1;
+        self.election_elapsed += 1;
+
+        if self.election_elapsed >= self.election_timeout {
+            self.election_elapsed = 0;
+            if self.check_quorum {
+                let m = new_message(self.id, MessageType::MsgCheckQuorum);
+                self.step(m);
+            }
+        }
+
+        if self.state != StateRole::Leader {
+            return;
+        }
+
+        if self.heartbeat_elapsed >= self.heartbeat_timeout {
+            self.heartbeat_elapsed = 0;
+            let m = new_message(self.id, MessageType::MsgBeat);
+            self.step(m);
+        }
+    }
+
+    fn become_follower(&mut self, term: u64, lead: u64) {
+        self.step_func = Raft::step_follower;
+        self.reset(term);
+        self.tick_func = Raft::tick_election;
+        self.lead = lead;
+        self.state = StateRole::Follower;
+        info!("{:x} became follower at term {}",
+              self.id,
+              self.hs.get_term());
+    }
+
+    fn become_candidate(&mut self) {
+        assert!(self.state != StateRole::Leader,
+                "invalid transition [leader -> candidate]");
+        self.step_func = Raft::step_candidate;
+        let term = self.hs.get_term() + 1;
+        self.reset(term);
+        self.tick_func = Raft::tick_election;
+        let id = self.id;
+        self.hs.set_vote(id);
+        self.state = StateRole::Candidate;
+        info!("{:x} became candidate at term {}",
+              self.id,
+              self.hs.get_term());
+    }
+
+    fn become_leader(&mut self) {
+        assert!(self.state != StateRole::Follower,
+                "invalid transition [follower -> leader]");
+        self.step_func = Raft::step_leader;
+        let term = self.hs.get_term();
+        self.reset(term);
+        self.tick_func = Raft::tick_heartbeat;
+        self.lead = self.id;
+        self.state = StateRole::Leader;
+        let begin = self.raft_log.get_committed() + 1;
+        let ents = self.raft_log
+                       .entries(begin, raft_log::NO_LIMIT)
+                       .expect("unexpected error getting uncommitted entries");
+        for e in ents {
+            if e.get_Type() != EntryType::EntryConfChange {
+                continue;
+            }
+            assert!(!self.pending_conf,
+                    "unexpected double uncommitted config entry");
+            self.pending_conf = true;
+        }
+        self.append_entry(&mut [Entry::new()]);
+        info!("{:x} became leader at term {}", self.id, self.hs.get_term());
+    }
+
+    fn compaign(&mut self) {
+        self.become_candidate();
+        let id = self.id;
+        let poll_res = self.poll(id, true);
+        if self.quorum() == poll_res {
+            self.become_leader();
+            return;
+        }
+        let keys: Vec<u64> = self.prs.keys().map(|x| *x).collect();
+        for id in keys {
+            if id == self.id {
+                continue;
+            }
+            info!("{:x} [logterm: {}, index: {}] sent vote request to {:x} at term {}",
+                  self.id,
+                  self.raft_log.last_term(),
+                  self.raft_log.last_index(),
+                  id,
+                  self.hs.get_term());
+            let mut m = Message::new();
+            m.set_to(id);
+            m.set_field_type(MessageType::MsgRequestVote);
+            m.set_index(self.raft_log.last_index());
+            m.set_logTerm(self.raft_log.last_term());
+            self.send(m);
+        }
+    }
+
+    fn get_term(&self) -> u64 {
+        self.hs.get_term()
+    }
+
+    fn poll(&mut self, id: u64, v: bool) -> usize {
+        if v {
+            info!("{:x} received vote from {:x} at term {}",
+                  self.id,
+                  id,
+                  self.get_term())
+        } else {
+            info!("{:x} received vote rejection from {:x} at term {}",
+                  self.id,
+                  id,
+                  self.get_term())
+        }
+        if !self.votes[&id] {
+            self.votes.insert(id, v);
+        }
+        self.votes.values().filter(|x| **x).count()
+    }
+
+    fn step(&mut self, m: Message) {
+        if m.get_field_type() == MessageType::MsgHup {
+            if self.state != StateRole::Leader {
+                info!("{:x} is starting a new election at term {}",
+                      self.id,
+                      self.get_term());
+                self.compaign();
+                let committed = self.raft_log.get_committed();
+                self.hs.set_commit(committed);
+            } else {
+                debug!("{:x} ignoring MsgHup because already leader", self.id);
+            }
+            return;
+        }
+
+        if m.get_term() == 0 {
+            // local message
+        } else if m.get_term() > self.get_term() {
+            let mut lead = m.get_from();
+            if m.get_field_type() == MessageType::MsgRequestVote {
+                lead = INVALID_ID;
+            }
+            info!("{:x} [term: {}] received a {:?} message with higher term from {:x} [term: {}]",
+                  self.id,
+                  self.get_term(),
+                  m.get_field_type(),
+                  m.get_from(),
+                  m.get_term());
+            self.become_follower(m.get_term(), lead);
+        } else {
+            // ignore
+            info!("{:x} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
+                  self.id,
+                  self.get_term(),
+                  m.get_field_type(),
+                  m.get_from(),
+                  m.get_term());
+            return;
+        }
+        (self.step_func)(self, m);
+        let committed = self.raft_log.get_committed();
+        self.hs.set_commit(committed);
+    }
+
+    fn step_leader(&mut self, m: Message) {
+        // These message types do not require any progress for m.From.
+        match m.get_field_type() {
+            MessageType::MsgBeat => {
+                self.bcast_heartbeat();
+                return;
+            }
+            MessageType::MsgCheckQuorum => {
+                if !self.check_quorum_active() {
+                    warn!("{:x} stepped down to follower since quorum is not active",
+                          self.id);
+                    let term = self.get_term();
+                    self.become_follower(term, INVALID_ID);
+                }
+                return;
+            }
+            MessageType::MsgPropose => {
+                if m.get_entries().len() == 0 {
+                    panic!("{:x} stepped empty MsgProp", self.id);
+                }
+                let id = self.id;
+                if self.prs.get(&id).is_none() {
+                    // If we are not currently a member of the range (i.e. this node
+                    // was removed from the configuration while serving as leader),
+                    // drop any new proposals.
+                    return;
+                }
+                let mut m = m;
+                if self.pending_conf {
+                    for e in m.mut_entries().iter_mut() {
+                        if e.get_Type() == EntryType::EntryConfChange {
+                            *e = Entry::new();
+                            e.set_Type(EntryType::EntryNormal);
+                        }
+                    }
+                }
+                self.append_entry(&mut m.mut_entries());
+                self.bcast_append();
+                return;
+            }
+            MessageType::MsgRequestVote => {
+                info!("{:x} [logterm: {}, index: {}, vote: {:x}] rejected vote from {:x} \
+                       [logterm: {}, index: {}] at term {}",
+                      self.id,
+                      self.raft_log.last_term(),
+                      self.raft_log.last_index(),
+                      self.hs.get_vote(),
+                      m.get_from(),
+                      m.get_logTerm(),
+                      m.get_index(),
+                      self.get_term());
+                let mut to_sent_m = Message::new();
+                to_sent_m.set_to(m.get_to());
+                to_sent_m.set_field_type(MessageType::MsgRequestVoteResponse);
+                to_sent_m.set_reject(true);
+                self.send(to_sent_m);
+            }
+            _ => {}
+        }
+
+        // All other message types require a progress for m.get_from (pr).
+        let mut send_append = false;
+        let mut maybe_commit = false;
+        let mut old_paused = false;
+        {
+            let pr = self.prs.get_mut(&m.get_from());
+            if pr.is_none() {
+                debug!("no progress available for {:x}", m.get_from());
+                return;
+            }
+            let pr = pr.unwrap();
+            match m.get_field_type() {
+                MessageType::MsgAppendResponse => {
+                    pr.recent_active = true;
+                    if m.get_reject() {
+                        debug!("{:x} received msgApp rejection(lastindex: {}) from {:x} for \
+                                index {}",
+                               self.id,
+                               m.get_rejectHint(),
+                               m.get_from(),
+                               m.get_index());
+                        if pr.maybe_decr_to(m.get_index(), m.get_rejectHint()) {
+                            debug!("{:x} decreased progress of {:x} to [{:?}]",
+                                   self.id,
+                                   m.get_from(),
+                                   pr);
+                            if pr.state == ProgressState::Replicate {
+                                pr.become_probe();
+                            }
+                            send_append = true;
+                        }
+                    } else {
+                        old_paused = pr.is_paused();
+                        if pr.maybe_update(m.get_index()) {
+                            match pr.state {
+                                ProgressState::Probe => pr.become_replicate(),
+                                ProgressState::Snapshot if pr.maybe_snapshot_abort() => {
+                                    debug!("{:x} snapshot aborted, resumed sending replication \
+                                            messages to {:x} [{:?}]",
+                                           self.id,
+                                           m.get_from(),
+                                           pr);
+                                    pr.become_probe();
+                                }
+                                ProgressState::Replicate => pr.ins.free_to(m.get_index()),
+                                _ => {}
+                            }
+                            maybe_commit = true;
+                        }
+                    }
+                }
+                MessageType::MsgHeartbeatResponse => {
+                    pr.recent_active = true;
+
+                    // free one slot for the full inflights window to allow progress.
+                    if pr.state == ProgressState::Replicate && pr.ins.full() {
+                        pr.ins.free_first_one();
+                    }
+                    if pr.matched < self.raft_log.last_index() {
+                        send_append = true;
+                    }
+                }
+                MessageType::MsgSnapStatus => {
+                    if pr.state != ProgressState::Snapshot {
+                        return;
+                    }
+                    if !m.get_reject() {
+                        pr.become_probe();
+                        debug!("{:x} snapshot succeeded, resumed sending replication messages to \
+                                {:x} [{:?}]",
+                               self.id,
+                               m.get_from(),
+                               pr);
+                    } else {
+                        pr.snapshot_failure();
+                        pr.become_probe();
+                        debug!("{:x} snapshot failed, resumed sending replication messages to \
+                                {:x} [{:?}]",
+                               self.id,
+                               m.get_from(),
+                               pr);
+                    }
+                    // If snapshot finish, wait for the msgAppResp from the remote node before sending
+                    // out the next msgApp.
+                    // If snapshot failure, wait for a heartbeat interval before next try
+                    pr.pause()
+                }
+                MessageType::MsgUnreachable => {
+                    // During optimistic replication, if the remote becomes unreachable,
+                    // there is huge probability that a MsgApp is lost.
+                    if pr.state == ProgressState::Replicate {
+                        pr.become_probe();
+                    }
+                    debug!("{:x} failed to send message to {:x} because it is unreachable [{:?}]",
+                           self.id,
+                           m.get_from(),
+                           pr);
+                }
+                _ => {}
+            }
+        }
+        if maybe_commit {
+            if self.maybe_commit() {
+                self.bcast_append();
+            } else if old_paused {
+                // update() reset the wait state on this node. If we had delayed sending
+                // an update before, send it now.
+                send_append = true;
+            }
+        }
+        if send_append {
+            self.send_append(m.get_from());
+        }
+    }
+
+    fn step_follower(&mut self, m: Message) {}
+    fn check_quorum_active(&self) -> bool {
+        true
+    }
+    fn step_candidate(&mut self, m: Message) {}
+    fn promotable(&self) -> bool {
+        true
+    }
+    fn is_election_timeout(&self) -> bool {
+        true
+    }
 
     fn load_state(&self, hs: HardState) {}
 }

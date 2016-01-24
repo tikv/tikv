@@ -8,7 +8,7 @@ use std::{cmp, u64};
 use std::sync::Arc;
 use protobuf;
 
-const NO_LIMIT: u64 = u64::MAX;
+pub const NO_LIMIT: u64 = u64::MAX;
 
 /// Raft log implementation
 pub struct RaftLog<T>
@@ -231,7 +231,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
     }
 
 
-    fn append(&mut self, ents: &[Entry]) -> u64 {
+    pub fn append(&mut self, ents: &[Entry]) -> u64 {
         if ents.len() == 0 {
             return self.last_index();
         }
@@ -330,7 +330,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         None
     }
 
-    fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool {
+    pub fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool {
         if max_index > self.committed &&
            self.zero_term_on_err_compacted(self.term(max_index)) == term {
             self.commit_to(max_index);
