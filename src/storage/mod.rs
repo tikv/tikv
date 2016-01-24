@@ -1,14 +1,54 @@
+use std::boxed::FnBox;
+use std::fmt;
 use std::thread::{self, JoinHandle};
 use mio::{EventLoop, Handler, Sender, NotifyError};
-use self::kv::Command;
 use self::txn::Scheduler;
 
-mod kv;
 mod engine;
 mod mvcc;
 mod txn;
 
-pub use self::kv::{Key, Value, KvPair, Version, Limit, Callback};
+pub type Key = Vec<u8>;
+pub type Value = Vec<u8>;
+pub type KvPair = (Key, Value);
+pub type Version = u64;
+pub type Limit = usize;
+pub type Puts = Vec<KvPair>;
+pub type Deletes = Vec<Key>;
+pub type Locks = Vec<Key>;
+pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
+
+pub enum Command {
+    Get(((Key, Version), Callback<Option<Value>>)),
+    Scan(((Key, Limit, Version), Callback<Vec<KvPair>>)),
+    Commit(((Puts, Deletes, Locks, Version), Callback<()>)),
+}
+
+impl fmt::Debug for Command {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Command::Get(((ref key, version), _)) => {
+                write!(f, "kv::command::get {:?} @ {}", key, version)
+            }
+            Command::Scan(((ref start_key, limit, version), _)) => {
+                write!(f,
+                       "kv::command::scan {:?}({}) @ {}",
+                       start_key,
+                       limit,
+                       version)
+            }
+            Command::Commit(((ref puts, ref deletes, ref locks, version), _)) => {
+                write!(f,
+                       "kv::command::commit puts({}), deletes({}), locks({}) @ {}",
+                       puts.len(),
+                       deletes.len(),
+                       locks.len(),
+                       version)
+            }
+        }
+    }
+}
+
 pub use self::engine::{Engine, Dsn};
 
 pub struct Storage {
@@ -33,7 +73,7 @@ impl Storage {
 
     pub fn stop(self) -> Result<()> {
         try!(self.sender.send(Message::Close));
-        self.thread.join().unwrap().unwrap(); // TODO(disksing): check error
+        try!(try!(self.thread.join()));
         Ok(())
     }
 
@@ -108,13 +148,19 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        Mvcc(err: mvcc::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         Txn(err: txn::Error) {
             from()
             cause(err)
             description(err.description())
         }
-
-        AlreadyStarted {description("already started")}
+        Other(err: Box<::std::any::Any + Send>) {
+            from()
+        }
     }
 }
 
