@@ -22,8 +22,8 @@ message Peer {
 
 message Region {
   optional int64 region_id = 1;
-  // Region key range [start_key, stop_key).
+  // Region key range [start_key, end_key).
   optional bytes start_key = 2;
-  optional bytes stop_key = 3;
+  optional bytes end_key = 3;
   repeated Peer peers = 4;
 }
