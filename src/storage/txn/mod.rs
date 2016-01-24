@@ -1,11 +1,16 @@
 use super::kv::Command;
 use super::mvcc;
+use super::Engine;
 
-pub struct Scheduler;
+pub struct Scheduler {
+    engine: Box<Engine>,
+}
 
 impl Scheduler {
-    pub fn new() -> Scheduler {
-        Scheduler
+    pub fn new(engine: Box<Engine>) -> Scheduler {
+        Scheduler {
+            engine: engine,
+        }
     }
 
     pub fn handle_cmd(&mut self, cmd: Command) {
@@ -16,6 +21,8 @@ impl Scheduler {
         }
     }
 }
+
+unsafe impl Send for Scheduler{}
 
 quick_error! {
     #[derive(Debug)]
