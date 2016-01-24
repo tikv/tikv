@@ -32,7 +32,7 @@ impl Scheduler {
         for key in puts.iter().map(|&(ref x, _)| x).chain(deletes.iter()).chain(locks.iter()) {
             let latest_modify = try!(self.engine.as_ref().mvcc_latest_modify(key));
             if let Some(x) = latest_modify {
-                if x < version {
+                if x >= version {
                     return Err(Error::ConditionNotMatch);
                 }
             }
