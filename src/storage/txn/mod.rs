@@ -7,9 +7,7 @@ pub struct Scheduler {
 
 impl Scheduler {
     pub fn new(engine: Box<Engine>) -> Scheduler {
-        Scheduler {
-            engine: engine,
-        }
+        Scheduler { engine: engine }
     }
 
     pub fn handle_cmd(&mut self, cmd: Command) {
@@ -23,12 +21,18 @@ impl Scheduler {
                 callback(pairs.map_err(|e| super::Error::from(e)));
             }
             Command::Commit(((puts, deletes, locks, version), callback)) => {
-                callback(self.commit(puts, deletes, locks, version).map_err(|e| super::Error::from(e)));
+                callback(self.commit(puts, deletes, locks, version)
+                             .map_err(|e| super::Error::from(e)));
             }
         }
     }
 
-    fn commit(&mut self, puts: Vec<KvPair>, deletes: Vec<Key>, locks: Vec<Key>, version: u64) -> Result<()> {
+    fn commit(&mut self,
+              puts: Vec<KvPair>,
+              deletes: Vec<Key>,
+              locks: Vec<Key>,
+              version: u64)
+              -> Result<()> {
         for key in puts.iter().map(|&(ref x, _)| x).chain(deletes.iter()).chain(locks.iter()) {
             let latest_modify = try!(self.engine.as_ref().mvcc_latest_modify(key));
             if let Some(x) = latest_modify {
@@ -48,7 +52,7 @@ impl Scheduler {
     }
 }
 
-unsafe impl Send for Scheduler{}
+unsafe impl Send for Scheduler {}
 
 quick_error! {
     #[derive(Debug)]

@@ -64,8 +64,10 @@ impl Storage {
         };
         let mut event_loop = try!(EventLoop::new());
         let sender = event_loop.channel();
-        let thread_handle = thread::spawn(move || event_loop.run(&mut scheduler).map_err(|e| Error::Io(e)));
-        Ok(Storage{
+        let thread_handle = thread::spawn(move || {
+            event_loop.run(&mut scheduler).map_err(|e| Error::Io(e))
+        });
+        Ok(Storage {
             sender: sender,
             thread: thread_handle,
         })
@@ -187,9 +189,24 @@ mod tests {
         let storage = Storage::new(Dsn::Memory).unwrap();
 
         storage.async_get(b"abc".to_vec(), 1u64, expect_get_none()).unwrap();
-        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())], vec![], vec![], 100u64, expect_commit_ok()).unwrap();
-        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())], vec![], vec![], 101u64, expect_commit_ok()).unwrap();
-        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())], vec![], vec![], 99u64, expect_commit_err()).unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
+                             vec![],
+                             vec![],
+                             100u64,
+                             expect_commit_ok())
+               .unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
+                             vec![],
+                             vec![],
+                             101u64,
+                             expect_commit_ok())
+               .unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
+                             vec![],
+                             vec![],
+                             99u64,
+                             expect_commit_err())
+               .unwrap();
 
         storage.stop().unwrap();
     }
