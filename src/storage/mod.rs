@@ -11,33 +11,44 @@ mod txn;
 pub type Key = Vec<u8>;
 pub type Value = Vec<u8>;
 pub type KvPair = (Key, Value);
-pub type Version = u64;
-pub type Limit = usize;
 pub type Puts = Vec<KvPair>;
-pub type Deletes = Vec<Key>;
-pub type Locks = Vec<Key>;
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub enum Command {
-    Get(((Key, Version), Callback<Option<Value>>)),
-    Scan(((Key, Limit, Version), Callback<Vec<KvPair>>)),
-    Commit(((Puts, Deletes, Locks, Version), Callback<()>)),
+    Get {
+        key: Key,
+        version: u64,
+        callback: Callback<Option<Value>>,
+    },
+    Scan {
+        start_key: Key,
+        limit: usize,
+        version: u64,
+        callback: Callback<Vec<KvPair>>,
+    },
+    Commit {
+        puts: Vec<KvPair>,
+        deletes: Vec<Key>,
+        locks: Vec<Key>,
+        version: u64,
+        callback: Callback<()>,
+    },
 }
 
 impl fmt::Debug for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Command::Get(((ref key, version), _)) => {
+            Command::Get{ref key, version, ..} => {
                 write!(f, "kv::command::get {:?} @ {}", key, version)
             }
-            Command::Scan(((ref start_key, limit, version), _)) => {
+            Command::Scan{ref start_key, limit, version, ..} => {
                 write!(f,
                        "kv::command::scan {:?}({}) @ {}",
                        start_key,
                        limit,
                        version)
             }
-            Command::Commit(((ref puts, ref deletes, ref locks, version), _)) => {
+            Command::Commit{ref puts, ref deletes, ref locks, version, ..} => {
                 write!(f,
                        "kv::command::commit puts({}), deletes({}), locks({}) @ {}",
                        puts.len(),
@@ -81,22 +92,31 @@ impl Storage {
 
     pub fn async_get(&self,
                      key: Key,
-                     version: Version,
+                     version: u64,
                      callback: Callback<Option<Value>>)
                      -> Result<()> {
-        let cmd = Command::Get(((key, version), callback));
-        try!(self.sender.send(Message::Command((cmd))));
+        let cmd = Command::Get {
+            key: key,
+            version: version,
+            callback: callback,
+        };
+        try!(self.sender.send(Message::Command(cmd)));
         Ok(())
     }
 
     pub fn async_scan(&self,
                       start_key: Key,
-                      limit: Limit,
-                      version: Version,
+                      limit: usize,
+                      version: u64,
                       callback: Callback<Vec<KvPair>>)
                       -> Result<()> {
-        let cmd = Command::Scan(((start_key, limit, version), callback));
-        try!(self.sender.send(Message::Command((cmd))));
+        let cmd = Command::Scan {
+            start_key: start_key,
+            limit: limit,
+            version: version,
+            callback: callback,
+        };
+        try!(self.sender.send(Message::Command(cmd)));
         Ok(())
     }
 
@@ -104,11 +124,17 @@ impl Storage {
                         puts: Vec<KvPair>,
                         deletes: Vec<Key>,
                         locks: Vec<Key>,
-                        version: Version,
+                        version: u64,
                         callback: Callback<()>)
                         -> Result<()> {
-        let cmd = Command::Commit(((puts, deletes, locks, version), callback));
-        try!(self.sender.send(Message::Command((cmd))));
+        let cmd = Command::Commit {
+            puts: puts,
+            deletes: deletes,
+            locks: locks,
+            version: version,
+            callback: callback,
+        };
+        try!(self.sender.send(Message::Command(cmd)));
         Ok(())
     }
 }
