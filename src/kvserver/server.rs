@@ -12,7 +12,7 @@ use protobuf;
 use protobuf::core::Message;
 use bytes::{MutBuf, ByteBuf, MutByteBuf};
 
-use proto::kvrpc::{Request, Response};
+use proto::kvrpcpb::{Request, Response};
 use util::codec::{self, encode_msg, decode_msg, MSG_HEADER_LEN};
 
 const SERVER_TOKEN: Token = Token(0);
