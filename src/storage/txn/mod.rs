@@ -52,8 +52,6 @@ impl Scheduler {
     }
 }
 
-unsafe impl Send for Scheduler {}
-
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
