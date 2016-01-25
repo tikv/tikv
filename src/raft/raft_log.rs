@@ -23,7 +23,7 @@ pub struct RaftLog<T>
 
     // committed is the highest log position that is known to be in
     // stable storage on a quorum of nodes.
-    committed: u64,
+    pub committed: u64,
 
     // applied is the highest log position that the application has
     // been instructed to apply to its state machine.
@@ -189,7 +189,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         None
     }
 
-    fn commit_to(&mut self, to_commit: u64) {
+    pub fn commit_to(&mut self, to_commit: u64) {
         // never decrease commit
         if self.committed < to_commit {
             if self.last_index() < to_commit {
@@ -216,10 +216,6 @@ impl<T> RaftLog<T> where T: Storage + Sync
 
     pub fn get_applied(&self) -> u64 {
         self.applied
-    }
-
-    pub fn get_committed(&self) -> u64 {
-        self.committed
     }
 
     fn stable_to(&mut self, idx: u64, term: u64) {
@@ -278,7 +274,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         }
     }
 
-    fn is_up_to_date(&self, last_index: u64, term: u64) -> bool {
+    pub fn is_up_to_date(&self, last_index: u64, term: u64) -> bool {
         term > self.last_term() || (term == self.last_term() && last_index >= self.last_index())
     }
 
@@ -389,7 +385,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         Ok(v)
     }
 
-    fn restore(&mut self, snapshot: Snapshot) {
+    pub fn restore(&mut self, snapshot: Snapshot) {
         info!("log [{}] starts to restore snapshot [index: {}, term: {}]",
               self.to_string(),
               snapshot.get_metadata().get_index(),
