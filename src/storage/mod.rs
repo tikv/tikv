@@ -11,7 +11,6 @@ mod txn;
 pub type Key = Vec<u8>;
 pub type Value = Vec<u8>;
 pub type KvPair = (Key, Value);
-pub type Puts = Vec<KvPair>;
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub enum Command {

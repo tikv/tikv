@@ -42,6 +42,7 @@ impl Scheduler {
             }
         }
 
+        // TODO(disksing): use batch
         for (ref k, ref v) in puts {
             try!(self.engine.mvcc_put(k, v, version));
         }
