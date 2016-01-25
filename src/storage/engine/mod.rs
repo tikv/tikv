@@ -11,7 +11,7 @@ pub enum Modify<'a> {
     Put((&'a [u8], &'a [u8])),
 }
 
-pub trait Engine {
+pub trait Engine : Send {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>>;
     fn write(&mut self, batch: Vec<Modify>) -> Result<()>;
