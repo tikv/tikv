@@ -55,8 +55,8 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use super::{Dsn, Engine, Modify};
+    use tempdir::TempDir;
 
     #[test]
     fn memory() {
@@ -68,13 +68,11 @@ mod tests {
 
     #[test]
     fn rocksdb() {
-        let dir = "/tmp/rocks-test";
-        fs::remove_dir_all(dir).ok();
-        let mut e = super::new_engine(Dsn::RocksDBPath(dir)).unwrap();
+        let dir = TempDir::new("rocksdb_test").unwrap();
+        let mut e = super::new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap())).unwrap();
         get_put(e.as_mut());
         batch(e.as_mut());
         seek(e.as_mut());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     fn assert_has<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {

@@ -15,6 +15,7 @@ extern crate bytes;
 extern crate byteorder;
 extern crate mio;
 extern crate rand;
+extern crate tempdir;
 
 pub mod util;
 pub mod raft;
