@@ -1,15 +1,47 @@
 #![allow(dead_code)]
-use raft::errors::{Result, Error, StorageError};
+use raft::errors::{Result, Error};
 use raft::Storage;
 use protobuf::{self, RepeatedField};
 use proto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType, ConfChange,
                     ConfChangeType, ConfState};
 use raft::raft::{Config, Raft, SoftState, INVALID_ID};
+use raft::status::Status;
 
 #[derive(Debug, Default)]
 struct Peer {
     id: u64,
     context: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+enum SnapshotStatus {
+    SnapshotFinish,
+    SnapshotFailure,
+}
+
+fn is_local_msg(m: &Message) -> bool {
+    match m.get_field_type() {
+        MessageType::MsgHup |
+        MessageType::MsgBeat |
+        MessageType::MsgUnreachable |
+        MessageType::MsgSnapStatus |
+        MessageType::MsgCheckQuorum => true,
+        _ => false,
+    }
+}
+
+fn is_response_msg(m: &Message) -> bool {
+    match m.get_field_type() {
+        MessageType::MsgAppendResponse |
+        MessageType::MsgRequestVoteResponse |
+        MessageType::MsgHeartbeatResponse |
+        MessageType::MsgUnreachable => true,
+        _ => false,
+    }
+}
+
+fn is_empty_snap(s: &Snapshot) -> bool {
+    s.get_metadata().get_index() == 0
 }
 
 // Ready encapsulates the entries and messages that are ready to read,
@@ -43,17 +75,18 @@ struct Ready {
     // committed to stable storage.
     // If it contains a MsgSnap message, the application MUST report back to raft
     // when the snapshot has been received or has failed by calling ReportSnapshot.
-    messages: Option<Vec<Message>>,
+    messages: Vec<Message>,
 }
 
 impl Ready {
-    fn new<T: Storage + Sync + Default>(raft: &Raft<T>,
+    fn new<T: Storage + Sync + Default>(raft: &mut Raft<T>,
                                         prev_ss: &SoftState,
                                         prev_hs: &HardState)
                                         -> Ready {
         let mut rd = Ready {
             entries: raft.raft_log.unstable_entries().unwrap_or(&vec![]).to_vec(),
             committed_entries: raft.raft_log.next_entries().unwrap_or(vec![]),
+            messages: raft.msgs.drain(..).collect(),
             ..Default::default()
         };
         let ss = raft.soft_state();
@@ -114,10 +147,6 @@ impl<T: Storage + Sync + Default> RawNode<T> {
         rn.prev_ss = rn.raft.soft_state();
         rn.prev_hs = rn.raft.hard_state();
         Ok(rn)
-    }
-
-    fn new_ready(&self) -> Ready {
-        Ready::new(&self.raft, &self.prev_ss, &self.prev_hs)
     }
 
     fn commit_ready(&mut self, rd: Ready) {
@@ -202,5 +231,73 @@ impl<T: Storage + Sync + Default> RawNode<T> {
         let mut cs = ConfState::new();
         cs.set_nodes(self.raft.nodes());
         cs
+    }
+
+    // Step advances the state machine using the given message.
+    fn step(&mut self, m: Message) -> Result<()> {
+        // ignore unexpected local messages receiving over network
+        if is_local_msg(&m) {
+            return Err(Error::StepLocalMsg);
+        }
+        if self.raft.prs.contains_key(&m.get_from()) || is_response_msg(&m) {
+            return self.raft.step(m);
+        }
+        Err(Error::StepPeerNotFound)
+    }
+
+    // Ready returns the current point-in-time state of this RawNode.
+    fn ready(&mut self) -> Ready {
+        Ready::new(&mut self.raft, &self.prev_ss, &self.prev_hs)
+    }
+
+    // HasReady called when RawNode user need to check if any Ready pending.
+    // Checking logic in this method should be consistent with Ready.containsUpdates().
+    fn has_ready(&self) -> bool {
+        let raft = &self.raft;
+        if raft.soft_state() != self.prev_ss {
+            return true;
+        }
+        if raft.hs != HardState::new() && raft.hs != self.prev_hs {
+            return true;
+        }
+        if Some(true) == raft.raft_log.get_unstable().snapshot.as_ref().map(|s| !is_empty_snap(s)) {
+            return true;
+        }
+        if raft.msgs.len() > 0 || raft.raft_log.unstable_entries().is_some() ||
+           raft.raft_log.has_next_entries() {
+            return true;
+        }
+        false
+    }
+
+    // Advance notifies the RawNode that the application has applied and saved progress in the
+    // last Ready results.
+    fn advance(&mut self, rd: Ready) {
+        self.commit_ready(rd);
+    }
+
+    // Status returns the current status of the given group.
+    fn status(&self) -> Status {
+        Status::new(&self.raft)
+    }
+
+    // ReportUnreachable reports the given node is not reachable for the last send.
+    fn report_unreachable(&mut self, id: u64) {
+        let mut m = Message::new();
+        m.set_field_type(MessageType::MsgUnreachable);
+        m.set_from(id);
+        // we don't care if it is ok actually
+        self.raft.step(m).is_ok();
+    }
+
+    // ReportSnapshot reports the status of the sent snapshot.
+    fn report_snapshot(&mut self, id: u64, status: SnapshotStatus) {
+        let rej = status == SnapshotStatus::SnapshotFailure;
+        let mut m = Message::new();
+        m.set_field_type(MessageType::MsgSnapStatus);
+        m.set_from(id);
+        m.set_reject(rej);
+        // we don't care if it is ok actually
+        self.raft.step(m).is_ok();
     }
 }
