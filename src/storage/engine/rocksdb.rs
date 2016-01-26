@@ -1,8 +1,8 @@
-extern crate rocksdb;
-
 use std::fmt::{self, Display, Formatter};
 use std::error::Error;
-use self::rocksdb::{DB, Writable, IteratorMode, Direction};
+
+use rocksdb::{DB, Writable, IteratorMode, Direction};
+
 use super::{Engine, Modify, Result};
 
 pub struct EngineRocksdb {

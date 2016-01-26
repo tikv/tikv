@@ -1,42 +1,238 @@
+use std::boxed::FnBox;
+use std::fmt;
+use std::thread::{self, JoinHandle};
+use mio::{EventLoop, Handler, Sender, NotifyError};
+use self::txn::Scheduler;
+
 mod engine;
 mod mvcc;
+mod txn;
 
-pub use self::engine::Dsn;
+pub type Key = Vec<u8>;
+pub type Value = Vec<u8>;
+pub type KvPair = (Key, Value);
+pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
-use self::engine::Engine;
-use self::mvcc::{MvccEngine, Result};
+pub enum Command {
+    Get {
+        key: Key,
+        version: u64,
+        callback: Callback<Option<Value>>,
+    },
+    Scan {
+        start_key: Key,
+        limit: usize,
+        version: u64,
+        callback: Callback<Vec<KvPair>>,
+    },
+    Commit {
+        puts: Vec<KvPair>,
+        deletes: Vec<Key>,
+        locks: Vec<Key>,
+        version: u64,
+        callback: Callback<()>,
+    },
+}
+
+impl fmt::Debug for Command {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Command::Get{ref key, version, ..} => {
+                write!(f, "kv::command::get {:?} @ {}", key, version)
+            }
+            Command::Scan{ref start_key, limit, version, ..} => {
+                write!(f,
+                       "kv::command::scan {:?}({}) @ {}",
+                       start_key,
+                       limit,
+                       version)
+            }
+            Command::Commit{ref puts, ref deletes, ref locks, version, ..} => {
+                write!(f,
+                       "kv::command::commit puts({}), deletes({}), locks({}) @ {}",
+                       puts.len(),
+                       deletes.len(),
+                       locks.len(),
+                       version)
+            }
+        }
+    }
+}
+
+pub use self::engine::{Engine, Dsn};
 
 pub struct Storage {
-    engine: Box<Engine>,
+    sender: Sender<Message>,
+    thread: JoinHandle<Result<()>>,
 }
 
 impl Storage {
-    pub fn new(desc: Dsn) -> Result<Storage> {
-        let eng = try!(engine::new_engine(desc));
-        Ok(Storage { engine: eng })
+    pub fn new(dsn: Dsn) -> Result<Storage> {
+        let mut scheduler = {
+            let engine = try!(engine::new_engine(dsn));
+            Scheduler::new(engine)
+        };
+        let mut event_loop = try!(EventLoop::new());
+        let sender = event_loop.channel();
+        let thread_handle = thread::spawn(move || {
+            event_loop.run(&mut scheduler).map_err(|e| Error::Io(e))
+        });
+        Ok(Storage {
+            sender: sender,
+            thread: thread_handle,
+        })
     }
 
-    pub fn get(&self, key: &[u8], version: u64) -> Result<Option<Vec<u8>>> {
-        trace!("storage: get {:?}@{}", key, version);
-        self.engine.as_ref().mvcc_get(key, version)
+    pub fn stop(self) -> Result<()> {
+        try!(self.sender.send(Message::Close));
+        try!(try!(self.thread.join()));
+        Ok(())
     }
 
-    pub fn put(&mut self, key: &[u8], value: &[u8], version: u64) -> Result<()> {
-        trace!("storage: put {:?}@{}", key, version);
-        self.engine.as_mut().mvcc_put(key, value, version)
+    pub fn async_get(&self,
+                     key: Key,
+                     version: u64,
+                     callback: Callback<Option<Value>>)
+                     -> Result<()> {
+        let cmd = Command::Get {
+            key: key,
+            version: version,
+            callback: callback,
+        };
+        try!(self.sender.send(Message::Command(cmd)));
+        Ok(())
     }
 
-    pub fn delete(&mut self, key: &[u8], version: u64) -> Result<()> {
-        trace!("storage: delete {:?}@{}", key, version);
-        self.engine.as_mut().mvcc_delete(key, version)
+    pub fn async_scan(&self,
+                      start_key: Key,
+                      limit: usize,
+                      version: u64,
+                      callback: Callback<Vec<KvPair>>)
+                      -> Result<()> {
+        let cmd = Command::Scan {
+            start_key: start_key,
+            limit: limit,
+            version: version,
+            callback: callback,
+        };
+        try!(self.sender.send(Message::Command(cmd)));
+        Ok(())
     }
 
-    pub fn scan(&self,
-                start_key: &[u8],
-                limit: usize,
-                version: u64)
-                -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        trace!("storage: scan {:?}({})@{}", start_key, limit, version);
-        self.engine.as_ref().mvcc_scan(start_key, limit, version)
+    pub fn async_commit(&self,
+                        puts: Vec<KvPair>,
+                        deletes: Vec<Key>,
+                        locks: Vec<Key>,
+                        version: u64,
+                        callback: Callback<()>)
+                        -> Result<()> {
+        let cmd = Command::Commit {
+            puts: puts,
+            deletes: deletes,
+            locks: locks,
+            version: version,
+            callback: callback,
+        };
+        try!(self.sender.send(Message::Command(cmd)));
+        Ok(())
+    }
+}
+
+impl Handler for Scheduler {
+    type Timeout = ();
+    type Message = Message;
+
+    fn notify(&mut self, event_loop: &mut EventLoop<Scheduler>, msg: Message) {
+        debug!("recv message: {:?}", msg);
+        match msg {
+            Message::Command(cmd) => self.handle_cmd(cmd),
+            Message::Close => event_loop.shutdown(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Message {
+    Command(Command),
+    Close,
+}
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Io(err: ::std::io::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Notify(err: NotifyError<Message>) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Engine(err: engine::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Mvcc(err: mvcc::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Txn(err: txn::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Other(err: Box<::std::any::Any + Send>) {
+            from()
+        }
+    }
+}
+
+pub type Result<T> = ::std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::{Dsn, Storage, Result, Value, Callback};
+
+    fn expect_get_none() -> Callback<Option<Value>> {
+        Box::new(|x: Result<Option<Value>>| assert_eq!(x.unwrap(), None))
+    }
+
+    fn expect_commit_ok() -> Callback<()> {
+        Box::new(|x: Result<()>| assert!(x.is_ok()))
+    }
+
+    fn expect_commit_err() -> Callback<()> {
+        Box::new(|x: Result<()>| assert!(x.is_err()))
+    }
+
+    #[test]
+    fn test_callback() {
+        let storage = Storage::new(Dsn::Memory).unwrap();
+
+        storage.async_get(b"abc".to_vec(), 1u64, expect_get_none()).unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
+                             vec![],
+                             vec![],
+                             100u64,
+                             expect_commit_ok())
+               .unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
+                             vec![],
+                             vec![],
+                             101u64,
+                             expect_commit_ok())
+               .unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
+                             vec![],
+                             vec![],
+                             99u64,
+                             expect_commit_err())
+               .unwrap();
+
+        storage.stop().unwrap();
     }
 }

@@ -1,6 +1,6 @@
 use std::cmp::{Ord, Ordering};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use super::{Result, MvccErrorKind};
+use super::{Result, Error};
 
 #[derive(Debug, Copy, Clone)]
 enum MetaItem {
@@ -18,16 +18,16 @@ impl MetaItem {
     fn new(data: &[u8]) -> Result<MetaItem> {
         let (flag, rest) = match data.split_first() {
             Some(x) => x,
-            None => return MvccErrorKind::MetaDataLength.as_result(),
+            None => return Err(Error::MetaDataLength),
         };
         let ver = match rest.as_ref().read_u64::<BigEndian>() {
             Ok(x) => x,
-            Err(..) => return MvccErrorKind::MetaDataVersion.as_result(),
+            Err(_) => return Err(Error::MetaDataVersion),
         };
         match *flag {
             FLAG_WITH_VALUE => Ok(MetaItem::WithValue(ver)),
             FLAG_DELETED => Ok(MetaItem::Deleted(ver)),
-            _ => MvccErrorKind::MetaDataFlag.as_result(),
+            _ => Err(Error::MetaDataFlag),
         }
     }
 
@@ -112,6 +112,14 @@ impl Meta {
         }
     }
 
+    pub fn latest_modify(&self) -> Option<u64> {
+        let n = self.items.len();
+        match n {
+            0 => None,
+            _ => Some(self.items[n - 1].version()),
+        }
+    }
+
     pub fn has_version(&self, ver: u64) -> bool {
         match self.items.binary_search(&MetaItem::WithValue(ver)) {
             Ok(..) => true,
@@ -176,6 +184,7 @@ mod tests {
     fn test_meta() {
         let mut meta = Meta::new();
         assert_eq!(meta.latest(1), None);
+        assert_eq!(meta.latest_modify(), None);
 
         meta.add(10);
         assert!(!meta.has_version(9));
@@ -184,6 +193,7 @@ mod tests {
         assert_eq!(meta.latest(9), None);
         assert_eq!(meta.latest(10), Some(10));
         assert_eq!(meta.latest(11), Some(10));
+        assert_eq!(meta.latest_modify(), Some(10));
 
         meta.delete(30);
         assert!(meta.has_version(10));
@@ -192,6 +202,7 @@ mod tests {
         assert_eq!(meta.latest(29), Some(10));
         assert_eq!(meta.latest(30), None);
         assert_eq!(meta.latest(31), None);
+        assert_eq!(meta.latest_modify(), Some(30));
 
         meta.add(20);
         assert_eq!(meta.latest(9), None);
@@ -201,6 +212,7 @@ mod tests {
         assert_eq!(meta.latest(29), Some(20));
         assert_eq!(meta.latest(30), None);
         assert_eq!(meta.latest(31), None);
+        assert_eq!(meta.latest_modify(), Some(30));
     }
 
     #[test]
