@@ -20,6 +20,9 @@ quick_error! {
         StepPeerNotFound {
             description("raft: cannot step as peer not found")
         }
+        ConfigInvalid(desc: String) {
+            description(desc)
+        }
     }
 }
 
@@ -35,6 +38,9 @@ quick_error! {
         SnapshotOutOfDate {
             description("snapshot out of date")
         }
+        SnapshotTemporarilyUnavailable {
+            description("snapshot is temporarily unavailable")
+        }
     }
 }
 
@@ -45,6 +51,7 @@ impl cmp::PartialEq for Error {
             (&Error::Store(ref e1), &Error::Store(ref e2)) => e1 == e2,
             (&Error::Io(ref e1), &Error::Io(ref e2)) => e1.kind() == e2.kind(),
             (&Error::StepLocalMsg, &Error::StepLocalMsg) => true,
+            (&Error::ConfigInvalid(ref e1), &Error::ConfigInvalid(ref e2)) => e1 == e2,
             _ => false, 
         }
     }

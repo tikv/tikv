@@ -11,6 +11,7 @@ use protobuf;
 pub const NO_LIMIT: u64 = u64::MAX;
 
 /// Raft log implementation
+#[derive(Default)]
 pub struct RaftLog<T>
     where T: Storage + Sync
 {

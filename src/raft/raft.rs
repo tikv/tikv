@@ -1,15 +1,15 @@
 #![allow(dead_code)]
 use std::cmp;
 use raft::storage::Storage;
-use util::SyncCell;
+use util::{SyncCell, DefaultRng};
+use rand::Rng;
 use proto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
 use protobuf::repeated::RepeatedField;
 use raft::progress::{Progress, Inflights, ProgressState};
-use raft::errors::{Result, Error, other, StorageError};
+use raft::errors::{Result, Error, StorageError};
 use std::collections::HashMap;
 use raft::raft_log::{self, RaftLog};
 use std::sync::Arc;
-use rand::{self, ThreadRng, Rng};
 
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -17,12 +17,11 @@ enum StateRole {
     Follower,
     Candidate,
     Leader,
-    Invalid,
 }
 
 impl Default for StateRole {
     fn default() -> StateRole {
-        StateRole::Invalid
+        StateRole::Follower
     }
 }
 
@@ -30,7 +29,7 @@ const INVALID_ID: u64 = 0;
 
 /// Config contains the parameters to start a raft.
 #[derive(Default)]
-pub struct Config<T: Storage + Sync> {
+pub struct Config<T: Storage + Sync + Default> {
     /// id is the identity of the local raft. ID cannot be 0.
     id: u64,
 
@@ -57,7 +56,7 @@ pub struct Config<T: Storage + Sync> {
     /// states to be stored in storage. raft reads the persisted entires
     /// and states out of Storage when it needs. raft reads out the previous
     /// state and configuration out of storage when restarting.
-    storage: Option<Arc<SyncCell<T>>>,
+    storage: Arc<SyncCell<T>>,
     /// Applied is the last applied index. It should only be set when restarting
     /// raft. raft will not return entries to the application smaller or equal to Applied.
     /// If Applied is unset when restarting, raft might return previous applied entries.
@@ -80,26 +79,24 @@ pub struct Config<T: Storage + Sync> {
     check_quorum: bool,
 }
 
-impl<T: Storage + Sync> Config<T> {
+impl<T: Storage + Sync + Default> Config<T> {
     pub fn validate(&self) -> Result<()> {
         if self.id == INVALID_ID {
-            return Err(other("invalid node id"));
+            return Err(Error::ConfigInvalid("invalid node id".to_string()));
         }
 
         if self.heartbeat_tick <= 0 {
-            return Err(other("heartbeat tick must greater than 0"));
+            return Err(Error::ConfigInvalid("heartbeat tick must greater than 0".to_string()));
         }
 
         if self.election_tick <= self.heartbeat_tick {
-            return Err(other("election tick must be greater than heartbeat tick"));
-        }
-
-        if self.storage.is_none() {
-            return Err(other("storage should be specified"));
+            return Err(Error::ConfigInvalid("election tick must be greater than heartbeat tick"
+                                                .to_string()));
         }
 
         if self.max_inflight_msgs <= 0 {
-            return Err(other("max inflight messages must be greater than 0"));
+            return Err(Error::ConfigInvalid("max inflight messages must be greater than 0"
+                                                .to_string()));
         }
 
         Ok(())
@@ -114,7 +111,8 @@ struct SoftState {
     raft_state: StateRole,
 }
 
-pub struct Raft<T: Storage + Sync> {
+#[derive(Default)]
+pub struct Raft<T: Default + Storage + Sync> {
     hs: HardState,
 
     id: u64,
@@ -155,7 +153,7 @@ pub struct Raft<T: Storage + Sync> {
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
     pre_step: Option<Box<FnMut() -> bool>>,
-    rng: ThreadRng,
+    rng: DefaultRng,
 }
 
 fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
@@ -174,10 +172,10 @@ fn new_message(from: u64, to: u64, field_type: MessageType) -> Message {
     m
 }
 
-impl<T: Storage + Sync + 'static> Raft<T> {
+impl<T: Storage + Sync + Default> Raft<T> {
     fn new(c: &Config<T>) -> Raft<T> {
         c.validate().expect("configuration is invalid");
-        let store = c.storage.as_ref().unwrap().clone();
+        let store = c.storage.clone();
         let rs = store.initial_state().expect("");
         let raft_log = RaftLog::new(store);
         let mut peers: &[u64] = &c.peers;
@@ -191,24 +189,16 @@ impl<T: Storage + Sync + 'static> Raft<T> {
             peers = rs.conf_state.get_nodes();
         }
         let mut r = Raft {
-            hs: HardState::new(),
             id: c.id,
             raft_log: raft_log,
             max_inflight: c.max_inflight_msgs,
             max_msg_size: c.max_size_per_msg,
             prs: HashMap::with_capacity(peers.len()),
-            state: StateRole::Invalid,
-            votes: HashMap::new(),
-            msgs: vec![],
-            lead: INVALID_ID,
-            pending_conf: false,
-            pre_step: None,
+            state: StateRole::Follower,
             check_quorum: c.check_quorum,
             heartbeat_timeout: c.heartbeat_tick,
             election_timeout: c.election_tick,
-            election_elapsed: 0,
-            heartbeat_elapsed: 0,
-            rng: rand::thread_rng(),
+            ..Default::default()
         };
         for p in peers {
             r.prs.insert(*p, new_progress(1, r.max_inflight));
@@ -221,7 +211,7 @@ impl<T: Storage + Sync + 'static> Raft<T> {
         }
         let term = r.get_term();
         r.become_follower(term, INVALID_ID);
-        let nodes_str = r.nodes().iter().fold(String::new(), |b, n| b + &format!("{:x}", n));
+        let nodes_str = r.nodes().iter().fold(String::new(), |b, n| b + &format!("{}", n));
         info!("newRaft {:x} [peers: [{}], term: {:?}, commit: {}, applied: {}, last_index: {}, \
                last_term: {}]",
               r.id,
@@ -450,7 +440,6 @@ impl<T: Storage + Sync + 'static> Raft<T> {
         match self.state {
             StateRole::Candidate | StateRole::Follower => self.tick_election(),
             StateRole::Leader => self.tick_heartbeat(),
-            _ => {}
         }
     }
 
@@ -625,7 +614,6 @@ impl<T: Storage + Sync + 'static> Raft<T> {
                 StateRole::Candidate => self.step_candidate(m),
                 StateRole::Follower => self.step_follower(m),
                 StateRole::Leader => self.step_leader(m),
-                _ => {}
             }
         }
         let committed = self.raft_log.committed;
@@ -815,19 +803,19 @@ impl<T: Storage + Sync + 'static> Raft<T> {
         self.prs.remove(&id);
     }
 
-    fn load_state(&mut self, state: HardState) {
-        if state.get_commit() < self.raft_log.committed ||
-           state.get_commit() > self.raft_log.last_index() {
-            panic!("{:x} state.commit {} is out of range [{}, {}]",
+    fn load_state(&mut self, hs: HardState) {
+        if hs.get_commit() < self.raft_log.committed ||
+           hs.get_commit() > self.raft_log.last_index() {
+            panic!("{:x} hs.commit {} is out of range [{}, {}]",
                    self.id,
-                   state.get_commit(),
+                   hs.get_commit(),
                    self.raft_log.committed,
                    self.raft_log.last_index())
         }
-        self.raft_log.committed = state.get_commit();
-        self.hs.set_term(state.get_term());
-        self.hs.set_vote(state.get_vote());
-        self.hs.set_commit(state.get_commit());
+        self.raft_log.committed = hs.get_commit();
+        self.hs.set_term(hs.get_term());
+        self.hs.set_vote(hs.get_vote());
+        self.hs.set_commit(hs.get_commit());
     }
 
     // isElectionTimeout returns true if r.elapsed is greater than the
