@@ -69,7 +69,7 @@ impl Unstable {
                 if idx > last {
                     return None;
                 }
-                Some(self.entries[(idx - self.offset) as usize].get_Term())
+                Some(self.entries[(idx - self.offset) as usize].get_term())
             }
         }
     }
@@ -103,7 +103,7 @@ impl Unstable {
     }
 
     pub fn truncate_and_append(&mut self, ents: &[Entry]) {
-        let after = ents[0].get_Index() - 1;
+        let after = ents[0].get_index() - 1;
         if after == self.offset + self.entries.len() as u64 - 1 {
             self.entries.extend_from_slice(ents);
         } else if after < self.offset {
@@ -157,8 +157,8 @@ mod test {
 
     fn new_entry(index: u64, term: u64) -> Entry {
         let mut e = Entry::new();
-        e.set_Term(term);
-        e.set_Index(index);
+        e.set_term(term);
+        e.set_index(index);
         e
     }
 
