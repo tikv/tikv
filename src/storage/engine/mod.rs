@@ -1,6 +1,5 @@
 use self::memory::EngineBtree;
 use std::{error, result};
-use std::fmt::{self, Display, Formatter};
 use self::rocksdb::EngineRocksdb;
 
 mod memory;
@@ -12,7 +11,7 @@ pub enum Modify<'a> {
     Put((&'a [u8], &'a [u8])),
 }
 
-pub trait Engine {
+pub trait Engine : Send {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>>;
     fn write(&mut self, batch: Vec<Modify>) -> Result<()>;
@@ -41,29 +40,13 @@ pub fn new_engine(desc: Dsn) -> Result<Box<Engine>> {
     }
 }
 
-#[derive(Debug)]
-pub enum Error {
-    Other(Box<error::Error + Send + Sync>),
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match *self {
-            Error::Other(ref error) => Display::fmt(error, f),
-        }
-    }
-}
-
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            &Error::Other(ref e) => e.description(),
-        }
-    }
-
-    fn cause(&self) -> Option<&error::Error> {
-        match self {
-            &Error::Other(ref e) => e.cause(),
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Other(err: Box<error::Error + Send + Sync>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
         }
     }
 }
@@ -72,8 +55,8 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use super::{Dsn, Engine, Modify};
+    use tempdir::TempDir;
 
     #[test]
     fn memory() {
@@ -85,13 +68,11 @@ mod tests {
 
     #[test]
     fn rocksdb() {
-        let dir = "/tmp/rocks-test";
-        fs::remove_dir_all(dir).ok();
-        let mut e = super::new_engine(Dsn::RocksDBPath(dir)).unwrap();
+        let dir = TempDir::new("rocksdb_test").unwrap();
+        let mut e = super::new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap())).unwrap();
         get_put(e.as_mut());
         batch(e.as_mut());
         seek(e.as_mut());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     fn assert_has<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {

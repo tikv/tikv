@@ -26,7 +26,7 @@ impl<T: ServerHandler> Runner<T> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
                                  EventSet::readable(),
-                                 PollOpt::edge() | PollOpt::oneshot()));
+                                 PollOpt::edge()));
 
         let sender = Sender::new(event_loop.channel());
         Ok(Runner {
@@ -60,10 +60,12 @@ mod tests {
     use std::sync::{self, Arc, Mutex};
     use std::time::Duration;
     use std::net::TcpStream;
-    use std::io::prelude::*;
+    use std::io::{Read, Write};
     use std::vec::Vec;
+    use std::string::String;
 
-    use mio::EventLoop;
+    use bytes::{Buf, ByteBuf};
+    use mio::{EventLoop, Token};
 
     use super::*;
     use raftserver::*;
@@ -82,7 +84,7 @@ mod tests {
 
         let sender = r.get_sender();
         thread::spawn(move || {
-            thread::sleep(Duration::new(1, 0));
+            thread::sleep(Duration::from_millis(500));
             sender.kill().unwrap();
         });
 
@@ -102,7 +104,7 @@ mod tests {
             r.run(h).unwrap();
         });
 
-        thread::sleep(Duration::new(0, 500 * 1000000));
+        thread::sleep(Duration::from_millis(500));
         let mut conn = TcpStream::connect("127.0.0.1:12345").unwrap();
 
         for i in 1..10 {
@@ -141,7 +143,7 @@ mod tests {
 
         let sender = r.get_sender();
         thread::spawn(move || {
-            thread::sleep(Duration::new(1, 0));
+            thread::sleep(Duration::from_millis(500));
             sender.kill().unwrap();
         });
 
@@ -177,7 +179,109 @@ mod tests {
               .unwrap();
 
         thread::spawn(move || {
-            thread::sleep(Duration::new(1, 0));
+            thread::sleep(Duration::from_millis(500));
+            sender.kill().unwrap();
+        });
+
+        r.run(h).unwrap();
+
+        let n = n.lock().unwrap();
+        assert_eq!(*n, 0);
+    }
+
+    struct PeerHandler {
+        cnt: Arc<Mutex<(u64, u64)>>,
+    }
+
+    impl ServerHandler for PeerHandler {
+        fn handle_read_data(&mut self,
+                            sender: &Sender,
+                            token: Token,
+                            msgs: Vec<ConnData>)
+                            -> Result<(Vec<ConnData>)> {
+            let mut res = vec![];
+            for msg in msgs {
+                let mut cnt = self.cnt.lock().unwrap();
+                let buf = Buf::bytes(&msg.data);
+                if buf == String::from("ping").as_bytes() {
+                    (*cnt).0 += 1;
+                    res.push(ConnData::from_string(msg.msg_id, "pong"));
+                } else {
+                    (*cnt).1 += 1;
+                }
+            }
+
+            Ok(res)
+        }
+    }
+
+    fn start_peer(addr: &str, cnt: Arc<Mutex<(u64, u64)>>) -> (Sender, thread::JoinHandle<(())>) {
+        let mut r = Runner::new(addr).unwrap();
+        let s = r.get_sender();
+        let t = thread::spawn(move || {
+            let h = PeerHandler { cnt: cnt };
+
+            r.run(h).unwrap();
+
+            ()
+        });
+
+        (s, t)
+    }
+
+    #[test]
+    fn test_peer() {
+        let addr1 = "127.0.0.1:24680";
+        let addr2 = "127.0.0.1:24681";
+
+        let cnt1 = Arc::new(Mutex::new((0, 0)));
+        let cnt2 = Arc::new(Mutex::new((0, 0)));
+
+        let (s1, h1) = start_peer(addr1, cnt1.clone());
+        let (s2, h2) = start_peer(addr2, cnt2.clone());
+
+        s1.send_peer(addr2.to_string(), ConnData::from_string(1, "ping")).unwrap();
+        s2.send_peer(addr1.to_string(), ConnData::from_string(2, "ping")).unwrap();
+        s1.send_peer(addr1.to_string(), ConnData::from_string(3, "ping")).unwrap();
+        s2.send_peer(addr2.to_string(), ConnData::from_string(4, "ping")).unwrap();
+
+        thread::sleep(Duration::from_secs(1));
+
+        s1.kill().unwrap();
+        s2.kill().unwrap();
+
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        let r1 = *(cnt1.lock().unwrap());
+        let r2 = *(cnt2.lock().unwrap());
+
+        assert_eq!(r1, r2);
+        assert_eq!(r1, (2, 2));
+    }
+
+    struct QuitHandler {
+        n: Arc<Mutex<u64>>,
+    }
+
+    impl ServerHandler for QuitHandler {
+        fn handle_quit(&mut self) {
+            let mut v = self.n.lock().unwrap();
+            *v = 0;
+        }
+    }
+
+    #[test]
+    fn test_quit() {
+        let addr = "127.0.0.1:0";
+        let mut r = Runner::new(addr).unwrap();
+
+        let sender = r.get_sender();
+        let n = Arc::new(Mutex::new(1));
+        let h = QuitHandler { n: n.clone() };
+
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(500));
             sender.kill().unwrap();
         });
 

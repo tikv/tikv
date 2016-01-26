@@ -3,6 +3,8 @@
 
 use std::vec::Vec;
 
+use mio::Token;
+
 use raftserver::{Result, ConnData, Sender, TimerMsg};
 
 // ServerHandler is for server logic, we must implement it for our raft server.
@@ -19,6 +21,7 @@ pub trait ServerHandler :Sized {
     // You can use sender to communicate with event loop.
     fn handle_read_data(&mut self,
                         sender: &Sender,
+                        token: Token,
                         msgs: Vec<ConnData>)
                         -> Result<(Vec<ConnData>)> {
         Ok((msgs))
@@ -33,4 +36,8 @@ pub trait ServerHandler :Sized {
     fn handle_timer(&mut self, sender: &Sender, msg: TimerMsg) -> Result<()> {
         Ok(())
     }
+
+    // Handle quit, this will be called when we quit the server.
+    // We should do our cleanup in this function here.
+    fn handle_quit(&mut self) {}
 }

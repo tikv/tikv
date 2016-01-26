@@ -19,6 +19,10 @@ pub struct Conn {
     pub token: Token,
     pub interest: EventSet,
 
+    // peer_addr is for remote peer address, we only set this
+    // when we connect to the remote peer.
+    pub peer_addr: Option<String>,
+
     // message header
     last_msg_id: u64,
     header: MutByteBuf,
@@ -58,37 +62,28 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 
 
 impl Conn {
-    pub fn new(sock: TcpStream, token: Token) -> Conn {
+    pub fn new(sock: TcpStream, token: Token, peer_addr: Option<String>) -> Conn {
         Conn {
             sock: sock,
             token: token,
-            interest: EventSet::readable(),
+            interest: EventSet::readable() | EventSet::hup(),
             header: create_mem_buf(codec::MSG_HEADER_LEN),
             payload: None,
             res: VecDeque::new(),
             last_msg_id: 0,
+            peer_addr: peer_addr,
         }
     }
 
     pub fn reregister<T: ServerHandler>(&mut self,
                                         event_loop: &mut EventLoop<Server<T>>)
                                         -> Result<()> {
-        try!(event_loop.reregister(&self.sock,
-                                   self.token,
-                                   self.interest,
-                                   PollOpt::edge() | PollOpt::oneshot()));
+        try!(event_loop.reregister(&self.sock, self.token, self.interest, PollOpt::edge()));
         Ok(())
     }
 
-    pub fn reregister_writeable<T: ServerHandler>(&mut self,
-                                                  event_loop: &mut EventLoop<Server<T>>)
-                                                  -> Result<()> {
-        self.interest.insert(EventSet::writable());
-        return self.reregister(event_loop);
-    }
-
     pub fn read<T: ServerHandler>(&mut self,
-                                  event_loop: &mut EventLoop<Server<T>>)
+                                  _: &mut EventLoop<Server<T>>)
                                   -> Result<(Vec<ConnData>)> {
         let mut bufs = vec![];
 
@@ -118,15 +113,12 @@ impl Conn {
             }
 
             bufs.push(ConnData {
-                token: self.token,
                 msg_id: self.last_msg_id,
                 data: payload.flip(),
             });
 
             self.header.clear();
         }
-
-        try!(self.reregister(event_loop));
 
         Ok((bufs))
     }
@@ -149,25 +141,38 @@ impl Conn {
             let remaining = try!(self.write_buf());
 
             if remaining > 0 {
-                // well, we don't write all, and need re-write later.
-                break;
+                // we don't write all data, so must try later.
+                // we have already registered writable, no need registering again.
+                return Ok(());
             }
             self.res.pop_front();
         }
 
-        if self.res.is_empty() {
-            // no data for writing.
-            self.interest.remove(EventSet::writable());
-        } else {
-            // need to write next time.
-            self.interest.insert(EventSet::writable());
-        }
-
+        // no data for writing, remove writable.
+        self.interest.remove(EventSet::writable());
         return self.reregister(event_loop);
     }
 
-
-    pub fn append_write_buf(&mut self, msg: ConnData) {
+    pub fn append_write_buf<T: ServerHandler>(&mut self,
+                                              event_loop: &mut EventLoop<Server<T>>,
+                                              msg: ConnData)
+                                              -> Result<()> {
+        // Now we just push data to a write buffer and register writable for later writing.
+        // Later we can write data directly, if meet WOUNDBLOCK error(don't write all data OK),
+        // we can register writable at that time.
+        // We must also check `socket is not connected` error too, when we connect to a remote
+        // peer, mio puts this socket in event loop immediately, but this socket may not be connected
+        // at that time, so we must register writable too for this case.
         self.res.push_back(msg.encode_to_buf());
+
+        if !self.interest.is_writable() {
+            // re-register writable if we have not,
+            // if registered, we can only remove this flag when
+            // writing all data in writable function.
+            self.interest.insert(EventSet::writable());
+            return self.reregister(event_loop);
+        }
+
+        Ok(())
     }
 }
