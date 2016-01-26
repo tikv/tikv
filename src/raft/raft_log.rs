@@ -84,6 +84,10 @@ impl<T> RaftLog<T> where T: Storage + Sync
             .unwrap()
     }
 
+    pub fn get_store(&self) -> Arc<SyncCell<T>> {
+        self.store.clone()
+    }
+
     pub fn term(&self, idx: u64) -> Result<u64> {
         // the valid term range is [index of dummy entry, last index]
         let dummy_idx = self.first_index() - 1;
@@ -219,14 +223,17 @@ impl<T> RaftLog<T> where T: Storage + Sync
         self.applied
     }
 
-    fn stable_to(&mut self, idx: u64, term: u64) {
+    pub fn stable_to(&mut self, idx: u64, term: u64) {
         self.unstable.stable_to(idx, term)
     }
 
-    fn stable_snap_to(&mut self, idx: u64) {
+    pub fn stable_snap_to(&mut self, idx: u64) {
         self.unstable.stable_snap_to(idx)
     }
 
+    pub fn get_unstable(&self) -> &Unstable {
+        &self.unstable
+    }
 
     pub fn append(&mut self, ents: &[Entry]) -> u64 {
         if ents.len() == 0 {
@@ -243,7 +250,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         self.last_index()
     }
 
-    fn unstable_entries(&self) -> Option<&[Entry]> {
+    pub fn unstable_entries(&self) -> Option<&[Entry]> {
         if self.unstable.entries.len() == 0 {
             return None;
         }
@@ -283,7 +290,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
     // next_entries returns all the available entries for execution.
     // If applied is smaller than the index of snapshot, it returns all committed
     // entries after the index of snapshot.
-    fn next_entries(&mut self) -> Option<Vec<Entry>> {
+    pub fn next_entries(&self) -> Option<Vec<Entry>> {
         let offset = cmp::max(self.applied + 1, self.first_index());
         let committed = self.committed;
         if committed + 1 > offset {
