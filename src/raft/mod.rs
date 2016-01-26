@@ -1,9 +1,8 @@
 mod raft_log;
+mod storage;
 mod progress;
+mod errors;
 mod log_unstable;
-
-pub mod storage;
-pub mod errors;
 
 pub use self::storage::{RaftState, Storage};
 
