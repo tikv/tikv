@@ -14,13 +14,13 @@ pub enum Modify<'a> {
 pub trait Engine : Send {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>>;
-    fn write(&mut self, batch: Vec<Modify>) -> Result<()>;
+    fn write(&self, batch: Vec<Modify>) -> Result<()>;
 
-    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.write(vec![Modify::Put((key, value))])
     }
 
-    fn delete(&mut self, key: &[u8]) -> Result<()> {
+    fn delete(&self, key: &[u8]) -> Result<()> {
         self.write(vec![Modify::Delete(key)])
     }
 }
