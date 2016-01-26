@@ -8,12 +8,13 @@ use protobuf::repeated::RepeatedField;
 use raft::progress::{Progress, Inflights, ProgressState};
 use raft::errors::{Result, Error, StorageError};
 use std::collections::HashMap;
+use std::collections::vec_deque::VecDeque;
 use raft::raft_log::{self, RaftLog};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum StateRole {
+pub enum StateRole {
     Follower,
     Candidate,
     Leader,
@@ -25,13 +26,13 @@ impl Default for StateRole {
     }
 }
 
-const INVALID_ID: u64 = 0;
+pub const INVALID_ID: u64 = 0;
 
 /// Config contains the parameters to start a raft.
 #[derive(Default)]
 pub struct Config<T: Storage + Sync + Default> {
     /// id is the identity of the local raft. ID cannot be 0.
-    id: u64,
+    pub id: u64,
 
     /// peers contains the IDs of all nodes (including self) in
     /// the raft cluster. It should only be set when starting a new
@@ -39,7 +40,7 @@ pub struct Config<T: Storage + Sync + Default> {
     /// Restarting raft from previous configuration will panic if
     /// peers is set.
     /// peer is private and only used for testing right now.
-    peers: Vec<u64>,
+    pub peers: Vec<u64>,
 
     /// ElectionTick is the election timeout. If a follower does not
     /// receive any message from the leader of current term during
@@ -47,36 +48,36 @@ pub struct Config<T: Storage + Sync + Default> {
     /// ElectionTick must be greater than HeartbeatTick. We suggest
     /// to use ElectionTick = 10 * HeartbeatTick to avoid unnecessary
     /// leader switching.
-    election_tick: usize,
+    pub election_tick: usize,
     /// HeartbeatTick is the heartbeat usizeerval. A leader sends heartbeat
     /// message to mausizeain the leadership every heartbeat usizeerval.
-    heartbeat_tick: usize,
+    pub heartbeat_tick: usize,
 
     /// Storage is the storage for raft. raft generates entires and
     /// states to be stored in storage. raft reads the persisted entires
     /// and states out of Storage when it needs. raft reads out the previous
     /// state and configuration out of storage when restarting.
-    storage: Arc<SyncCell<T>>,
+    pub storage: Arc<SyncCell<T>>,
     /// Applied is the last applied index. It should only be set when restarting
     /// raft. raft will not return entries to the application smaller or equal to Applied.
     /// If Applied is unset when restarting, raft might return previous applied entries.
     /// This is a very application dependent configuration.
-    applied: u64,
+    pub applied: u64,
 
     /// MaxSizePerMsg limits the max size of each append message. Smaller value lowers
     /// the raft recovery cost(initial probing and message lost during normal operation).
     /// On the other side, it might affect the throughput during normal replication.
     /// Note: math.MaxUusize64 for unlimited, 0 for at most one entry per message.
-    max_size_per_msg: u64,
+    pub max_size_per_msg: u64,
     /// max_inflight_msgs limits the max number of in-flight append messages during optimistic
     /// replication phase. The application transportation layer usually has its own sending
     /// buffer over TCP/UDP. Setting MaxInflightMsgs to avoid overflowing that sending buffer.
     /// TODO (xiangli): feedback to application to limit the proposal rate?
-    max_inflight_msgs: usize,
+    pub max_inflight_msgs: usize,
 
     /// check_quorum specifies if the leader should check quorum activity. Leader steps down when
     /// quorum is not active for an electionTimeout.
-    check_quorum: bool,
+    pub check_quorum: bool,
 }
 
 impl<T: Storage + Sync + Default> Config<T> {
@@ -106,32 +107,32 @@ impl<T: Storage + Sync + Default> Config<T> {
 // SoftState provides state that is useful for logging and debugging.
 // The state is volatile and does not need to be persisted to the WAL.
 #[derive(Default, PartialEq)]
-struct SoftState {
+pub struct SoftState {
     lead: u64,
     raft_state: StateRole,
 }
 
 #[derive(Default)]
 pub struct Raft<T: Default + Storage + Sync> {
-    hs: HardState,
+    pub hs: HardState,
 
-    id: u64,
+    pub id: u64,
 
     /// the log
-    raft_log: RaftLog<T>,
+    pub raft_log: RaftLog<T>,
 
-    max_inflight: usize,
-    max_msg_size: u64,
-    prs: HashMap<u64, Progress>,
+    pub max_inflight: usize,
+    pub max_msg_size: u64,
+    pub prs: HashMap<u64, Progress>,
 
-    state: StateRole,
+    pub state: StateRole,
 
-    votes: HashMap<u64, bool>,
+    pub votes: HashMap<u64, bool>,
 
-    msgs: Vec<Message>,
+    pub msgs: Vec<Message>,
 
     /// the leader id
-    lead: u64,
+    pub lead: u64,
 
     /// New configuration is ignored if there exists unapplied configuration.
     pending_conf: bool,
@@ -173,7 +174,7 @@ fn new_message(from: u64, to: u64, field_type: MessageType) -> Message {
 }
 
 impl<T: Storage + Sync + Default> Raft<T> {
-    fn new(c: &Config<T>) -> Raft<T> {
+    pub fn new(c: &Config<T>) -> Raft<T> {
         c.validate().expect("configuration is invalid");
         let store = c.storage.clone();
         let rs = store.initial_state().expect("");
@@ -224,22 +225,30 @@ impl<T: Storage + Sync + Default> Raft<T> {
         r
     }
 
+    pub fn get_store(&self) -> Arc<SyncCell<T>> {
+        self.raft_log.get_store()
+    }
+
     fn has_leader(&self) -> bool {
         self.lead != INVALID_ID
     }
 
-    fn soft_state(&self) -> SoftState {
+    pub fn soft_state(&self) -> SoftState {
         SoftState {
             lead: self.lead,
             raft_state: self.state,
         }
     }
 
+    pub fn hard_state(&self) -> HardState {
+        self.hs.clone()
+    }
+
     fn quorum(&self) -> usize {
         self.prs.len() / 2 + 1
     }
 
-    fn nodes(&self) -> Vec<u64> {
+    pub fn nodes(&self) -> Vec<u64> {
         let mut nodes = Vec::with_capacity(self.prs.len());
         nodes.extend(self.prs.keys());
         nodes.sort();
@@ -436,7 +445,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         self.maybe_commit();
     }
 
-    fn tick(&mut self) {
+    pub fn tick(&mut self) {
         match self.state {
             StateRole::Candidate | StateRole::Follower => self.tick_election(),
             StateRole::Leader => self.tick_heartbeat(),
@@ -481,14 +490,14 @@ impl<T: Storage + Sync + Default> Raft<T> {
         }
     }
 
-    fn become_follower(&mut self, term: u64, lead: u64) {
+    pub fn become_follower(&mut self, term: u64, lead: u64) {
         self.reset(term);
         self.lead = lead;
         self.state = StateRole::Follower;
         info!("{:x} became follower at term {}", self.id, self.get_term());
     }
 
-    fn become_candidate(&mut self) {
+    pub fn become_candidate(&mut self) {
         assert!(self.state != StateRole::Leader,
                 "invalid transition [leader -> candidate]");
         let term = self.get_term() + 1;
@@ -570,7 +579,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         self.votes.values().filter(|x| **x).count()
     }
 
-    fn step(&mut self, m: Message) {
+    pub fn step(&mut self, m: Message) -> Result<()> {
         if m.get_field_type() == MessageType::MsgHup {
             if self.state != StateRole::Leader {
                 info!("{:x} is starting a new election at term {}",
@@ -582,7 +591,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
             } else {
                 debug!("{:x} ignoring MsgHup because already leader", self.id);
             }
-            return;
+            return Ok(());
         }
 
         if m.get_term() == 0 {
@@ -607,7 +616,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
                   m.get_field_type(),
                   m.get_from(),
                   m.get_term());
-            return;
+            return Ok(());
         }
         if self.pre_step.is_none() || self.pre_step.as_mut().unwrap()() {
             match self.state {
@@ -618,6 +627,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         }
         let committed = self.raft_log.committed;
         self.hs.set_commit(committed);
+        Ok(())
     }
 
     fn step_leader(&mut self, m: Message) {
@@ -773,7 +783,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         self.prs.contains_key(&self.id)
     }
 
-    fn add_node(&mut self, id: u64) {
+    pub fn add_node(&mut self, id: u64) {
         if self.prs.contains_key(&id) {
             // Ignore any redundant addNode calls (which can happen because the
             // initial bootstrapping entries are applied twice).
@@ -784,12 +794,12 @@ impl<T: Storage + Sync + Default> Raft<T> {
         self.pending_conf = false;
     }
 
-    fn remove_node(&mut self, id: u64) {
+    pub fn remove_node(&mut self, id: u64) {
         self.del_progress(id);
         self.pending_conf = false;
     }
 
-    fn reset_pending_conf(&mut self) {
+    pub fn reset_pending_conf(&mut self) {
         self.pending_conf = false;
     }
 

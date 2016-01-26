@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 use std::{cmp, result, io};
+use std::error;
+use protobuf::error::ProtobufError;
 
 quick_error! {
     #[derive(Debug)]
@@ -22,6 +24,9 @@ quick_error! {
         }
         ConfigInvalid(desc: String) {
             description(desc)
+        }
+        Other(err: Box<error::Error + Sync + Send>) {
+            description(err.description())
         }
     }
 }
@@ -54,6 +59,12 @@ impl cmp::PartialEq for Error {
             (&Error::ConfigInvalid(ref e1), &Error::ConfigInvalid(ref e2)) => e1 == e2,
             _ => false, 
         }
+    }
+}
+
+impl From<ProtobufError> for Error {
+    fn from(e: ProtobufError) -> Error {
+        Error::Other(Box::new(e))
     }
 }
 
