@@ -16,6 +16,7 @@ extern crate byteorder;
 extern crate mio;
 extern crate rand;
 extern crate tempdir;
+extern crate rocksdb;
 
 pub mod util;
 pub mod raft;
