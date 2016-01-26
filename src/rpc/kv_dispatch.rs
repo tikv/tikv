@@ -36,18 +36,7 @@ impl KVDispatch {
     pub fn handle_scan(&mut self, msg: &Request) -> Result<Response, Box<Error + Send + Sync>> {
         unimplemented!();
     }
-    pub fn handle_put(&mut self, msg: &Request) -> Result<Response, Box<Error + Send + Sync>> {
-        unimplemented!();
-    }
-    pub fn handle_del(&mut self, msg: &Request) -> Result<Response, Box<Error + Send + Sync>> {
-        unimplemented!();
-    }
     pub fn handle_commit(&mut self, msg: &Request) -> Result<Response, Box<Error + Send + Sync>> {
-        unimplemented!();
-    }
-    pub fn handle_lock_keys(&mut self,
-                            msg: &Request)
-                            -> Result<Response, Box<Error + Send + Sync>> {
         unimplemented!();
     }
 }
@@ -66,26 +55,8 @@ impl Dispatcher for KVDispatch {
                     Ok(resp) => return Ok(resp),
                 }
             }
-            MessageType::CmdPut => {
-                match self.handle_put(&m) {
-                    Err(why) => return Err(From::from(why)),
-                    Ok(resp) => return Ok(resp),
-                }
-            }
-            MessageType::CmdDel => {
-                match self.handle_del(&m) {
-                    Err(why) => return Err(From::from(why)),
-                    Ok(resp) => return Ok(resp),
-                }
-            }
             MessageType::CmdCommit => {
                 match self.handle_commit(&m) {
-                    Err(why) => return Err(From::from(why)),
-                    Ok(resp) => return Ok(resp),
-                }
-            }
-            MessageType::CmdLockKeys => {
-                match self.handle_lock_keys(&m) {
                     Err(why) => return Err(From::from(why)),
                     Ok(resp) => return Ok(resp),
                 }

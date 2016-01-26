@@ -4,28 +4,48 @@ package kvrpcpb;
 enum MessageType {
     CmdGet = 1;
     CmdScan = 2;
-    CmdPut = 3;
-    CmdDel = 4;
-    CmdLockKeys = 5;
-    CmdCommit = 6;
+    CmdCommit = 3;
 }
+message KvPair {
+    required bytes key = 1;
+    required bytes value = 2;
+}
+
 message CmdGetRequest {
-    required uint64 version = 1;
-    required bytes key = 2;
+    required bytes key = 1;
+    required uint64 version = 2;
 }
 message CmdGetResponse {
     required bool ok = 1;
     required bytes value = 2;
 }
 message CmdScanRequest {
+    required bytes key = 1;
+    required uint32 limit = 2;
+    required uint64 version = 3;
 }
 message CmdScanResponse {
+    required bool ok = 1;
+    repeated KvPair results = 2;
+}
+message CmdCommitRequest {
+    repeated KvPair puts = 1;
+    repeated bytes dels = 2;
+    repeated bytes locks = 3;
+    required uint64 version = 4;
+}
+message CmdCommitResponse {
+    required bool ok = 1;
 }
 message Request {
     required MessageType type = 1;
     optional CmdGetRequest cmd_get_req = 2;
+    optional CmdScanRequest cmd_scan_req = 3;
+    optional CmdCommitRequest cmd_commit_req = 4;
 }
 message Response {
     required MessageType type = 1;
     optional CmdGetResponse cmd_get_resp = 2;
+    optional CmdScanResponse cmd_scan_resp = 3;
+    optional CmdCommitResponse cmd_commit_resp = 4;
 }
