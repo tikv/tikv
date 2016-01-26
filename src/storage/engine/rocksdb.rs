@@ -29,7 +29,7 @@ impl Engine for EngineRocksdb {
         Ok(pair)
     }
 
-    fn write(&mut self, batch: Vec<Modify>) -> Result<()> {
+    fn write(&self, batch: Vec<Modify>) -> Result<()> {
         for rev in batch {
             match rev {
                 Modify::Delete(k) => {
