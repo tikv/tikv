@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
-use mio::tcp::TcpListener;
+use mio::tcp::{TcpListener, TcpStream};
 
-use raftserver::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_BASE_TICK_MS};
-use raftserver::{Msg, Sender, Result, ConnData, TimerData};
+use raftserver::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_BASE_TICK_MS, INVALID_TOKEN};
+use raftserver::{Msg, Sender, Result, ConnData, TimerMsg};
 use raftserver::conn::Conn;
 use raftserver::handler::ServerHandler;
 
@@ -17,6 +17,7 @@ pub struct Server<T: ServerHandler> {
     pub token_counter: usize,
     pub sender: Sender,
 
+    peers: HashMap<String, Token>,
     handler: T,
 }
 
@@ -27,6 +28,7 @@ impl<T: ServerHandler> Server<T> {
             listener: l,
             sender: sender,
             conns: HashMap::new(),
+            peers: HashMap::new(),
             token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
         }
     }
@@ -38,108 +40,151 @@ impl<T: ServerHandler> Server<T> {
         Ok(())
     }
 
-    fn register_timer(&mut self, event_loop: &mut EventLoop<Server<T>>, data: TimerData) {
-        // we have already checked when sender.
-        let delay = data.delay;
-        let token = Msg::Timer(data);
+    fn register_timer(&mut self,
+                      event_loop: &mut EventLoop<Server<T>>,
+                      delay: u64,
+                      msg: TimerMsg) {
+        let token = Msg::Timer {
+            delay: delay,
+            msg: msg,
+        };
         event_loop.timeout_ms(token, delay);
     }
 
-    fn handle_error(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+    fn remove_conn(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         let conn = self.conns.remove(&token);
         match conn {
             Some(conn) => {
-                // need deregister here?
+                // if connected to remote peer, remove this too.
+                if let Some(addr) = conn.peer_addr {
+                    self.peers.remove(&addr);
+                }
+
                 event_loop.deregister(&conn.sock);
             }
             None => {
                 warn!("missing connection for token {}", token.as_usize());
             }
         }
+    }
 
+    fn add_new_conn(&mut self,
+                    event_loop: &mut EventLoop<Server<T>>,
+                    sock: TcpStream,
+                    peer_addr: Option<String>)
+                    -> Result<(Token)> {
+        let new_token = Token(self.token_counter);
+        self.token_counter += 1;
+
+        try!(sock.set_nodelay(true));
+
+        try!(event_loop.register(&sock,
+                                 new_token,
+                                 EventSet::readable() | EventSet::hup(),
+                                 PollOpt::edge()));
+
+        let conn = Conn::new(sock, new_token, peer_addr);
+
+        self.conns.insert(new_token, conn);
+
+        Ok(new_token)
     }
 
     fn handle_readeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         match token {
             SERVER_TOKEN => {
-                // let Server(ref mut server) = *self;
-                // Accept and drop the socket immediately, this will close
-                // the socket and notify the client of the EOF.
-                let sock = match self.listener.accept() {
-                    Err(e) => {
-                        error!("accept error: {:?}", e);
-                        return;
-                    }
-                    Ok(None) => {
-                        debug!("listener is not ready, try later");
-                        // TODO: check error later.
-                        return;
-                    }
-                    Ok(Some((sock, addr))) => {
-                        debug!("accept conn {}", addr);
-                        sock
-                    }
-                };
+                loop {
+                    // For edge trigger, we must accept all connections until None.
+                    let sock = match self.listener.accept() {
+                        Err(e) => {
+                            error!("accept error: {:?}", e);
+                            return;
+                        }
+                        Ok(None) => {
+                            debug!("no connection, accept later.");
+                            return;
+                        }
+                        Ok(Some((sock, addr))) => {
+                            debug!("accept conn {}", addr);
+                            sock
+                        }
+                    };
 
-                let new_token = Token(self.token_counter);
-                self.token_counter += 1;
-
-                sock.set_nodelay(true).map_err(|e| {
-                    error!("connection set no delay err {}", e);
-                });
-
-                let conn = Conn::new(sock, new_token);
-
-                self.conns.insert(new_token, conn);
-
-                event_loop.register(&self.conns[&new_token].sock,
-                                    new_token,
-                                    EventSet::readable(),
-                                    PollOpt::edge() | PollOpt::oneshot())
-                          .map_err(|e| {
-                              error!("register conn err {:?}", e);
-                          });
-
+                    self.add_new_conn(event_loop, sock, None)
+                        .map_err(|e| {
+                            error!("register conn err {:?}", e);
+                        });
+                }
             }
             token => {
-                let msgs;
-                match self.conns.get_mut(&token) {
+                let msgs = match self.conns.get_mut(&token) {
                     None => {
                         warn!("missing conn for token {:?}", token);
                         return;
                     }
-                    Some(conn) => msgs = conn.read(event_loop),
-                }
+                    Some(conn) => conn.read(event_loop),
+                };
 
                 msgs.and_then(|msgs| {
-                    self.handler
-                        .handle_read_data(&self.sender, msgs)
-                        .and_then(|res| {
+                        if msgs.len() == 0 {
+                            return Ok(msgs);
+                        }
+
+                        self.handler.handle_read_data(&self.sender, token, msgs)
+                    })
+                    .and_then(|res| {
+                        if res.len() == 0 {
+                            return Ok(());
+                        }
+
+                        // append to write buffer here, no need using sender to notify.
+                        if let Some(conn) = self.conns.get_mut(&token) {
                             for data in res {
-                                try!(self.sender.write_data(data));
+                                try!(conn.append_write_buf(event_loop, data));
                             }
-                            Ok(())
-                        })
-                });
+                        }
+                        Ok(())
+                    })
+                    .map_err(|e| {
+                        warn!("handle read conn err {:?}, remove", e);
+                        self.remove_conn(event_loop, token);
+                    });
             }
+
         }
     }
 
-    fn handle_writeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
-        match self.conns.get_mut(&token) {
+    fn handle_writable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+        let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
             }
             Some(conn) => conn.write(event_loop),
         };
+
+        res.map_err(|e| {
+            warn!("handle write conn err {:?}, remove", e);
+            self.remove_conn(event_loop, token);
+        });
     }
 
-    fn handle_writedata(&mut self, event_loop: &mut EventLoop<Server<T>>, data: ConnData) {
-        if let Some(conn) = self.conns.get_mut(&data.token) {
-            conn.append_write_buf(data);
-            conn.reregister_writeable(event_loop);
-        }
+    fn handle_writedata(&mut self,
+                        event_loop: &mut EventLoop<Server<T>>,
+                        token: Token,
+                        data: ConnData) {
+        let res = match self.conns.get_mut(&token) {
+            None => {
+                warn!("missing conn for token {:?}", token);
+                return;
+            }
+            Some(conn) => conn.append_write_buf(event_loop, data),
+        };
+
+        res.map_err(|e| {
+            warn!("handle write data err {:?}, remove", e);
+            self.remove_conn(event_loop, token);
+        });
     }
 
     fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
@@ -150,10 +195,38 @@ impl<T: ServerHandler> Server<T> {
         self.register_tick(event_loop);
     }
 
-    fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, data: TimerData) {
+    fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, msg: TimerMsg) {
         self.handler
-            .handle_timer(&self.sender, data.msg)
+            .handle_timer(&self.sender, msg)
             .map_err(|e| warn!("handle timer err {:?}", e));
+    }
+
+    fn connect_peer(&mut self, event_loop: &mut EventLoop<Server<T>>, addr: &str) -> Result<Token> {
+        let peer_addr = try!(addr.parse());
+        let sock = try!(TcpStream::connect(&peer_addr));
+        let token = try!(self.add_new_conn(event_loop, sock, Some(addr.to_string())));
+        self.peers.insert(addr.to_string(), token);
+        Ok(token)
+    }
+
+    fn handle_sendpeer(&mut self,
+                       event_loop: &mut EventLoop<Server<T>>,
+                       addr: String,
+                       data: ConnData) {
+        // check the corresponding token for peer address.
+        let mut token = self.peers.get(&addr).map_or(INVALID_TOKEN, |t| *t);
+
+        if token == INVALID_TOKEN {
+            match self.connect_peer(event_loop, &addr) {
+                Err(e) => {
+                    error!("connect {:?} err {:?}", addr, e);
+                    return;
+                }
+                Ok(new_token) => token = new_token,
+            }
+        }
+
+        self.handle_writedata(event_loop, token, data);
     }
 }
 
@@ -162,8 +235,8 @@ impl<T: ServerHandler> Handler for Server<T> {
     type Message = Msg;
 
     fn ready(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token, events: EventSet) {
-        if events.is_hup() | events.is_error() {
-            self.handle_error(event_loop, token);
+        if events.is_hup() || events.is_error() {
+            self.remove_conn(event_loop, token);
             return;
         }
 
@@ -172,15 +245,16 @@ impl<T: ServerHandler> Handler for Server<T> {
         }
 
         if events.is_writable() {
-            self.handle_writeable(event_loop, token);
+            self.handle_writable(event_loop, token);
         }
     }
 
     fn notify(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData(data) => self.handle_writedata(event_loop, data),
-            Msg::Timer(data) => self.register_timer(event_loop, data),
+            Msg::WriteData{token, data} => self.handle_writedata(event_loop, token, data),
+            Msg::Timer{delay, msg} => self.register_timer(event_loop, delay, msg),
+            Msg::SendPeer{addr, data} => self.handle_sendpeer(event_loop, addr, data),
             _ => panic!("unexpected msg"),
         }
     }
@@ -188,8 +262,24 @@ impl<T: ServerHandler> Handler for Server<T> {
     fn timeout(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
         match msg {
             Msg::Tick => self.handle_tick(event_loop),
-            Msg::Timer(data) => self.handle_timer(event_loop, data),
+            Msg::Timer{msg, ..} => self.handle_timer(event_loop, msg),
             _ => panic!("unexpected msg"),
         }
+    }
+
+    fn interrupted(&mut self, event_loop: &mut EventLoop<Server<T>>) {
+        event_loop.shutdown();
+    }
+
+    fn tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
+        if event_loop.is_running() {
+            return;
+        }
+
+        // tick is called in the end of the loop, so if we notify to quit,
+        // we will quit the server here.
+        info!("begin to quit server......");
+        self.handler.handle_quit();
+        info!("quit server over");
     }
 }

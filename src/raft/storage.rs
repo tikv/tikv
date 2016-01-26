@@ -5,8 +5,6 @@ use protobuf;
 use proto::raftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
 
-
-
 #[derive(Debug, Clone)]
 pub struct RaftState {
     hard_state: HardState,
@@ -66,7 +64,7 @@ impl MemStorage {
     }
 
 
-    fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
+    pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
         let mut e = Entry::new();
         e.set_Term(snapshot.get_metadata().get_term());
         e.set_Index(snapshot.get_metadata().get_index());
@@ -202,3 +200,7 @@ impl Storage for MemStorage {
         Ok(&self.snapshot)
     }
 }
+
+/// TODO: make MemStorage become actually sync.
+/// Currently MemStore is only used for single-thread testing.
+unsafe impl Sync for MemStorage {}

@@ -1,6 +1,6 @@
 use std::io::Write;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use super::{Result, MvccErrorKind};
+use super::{Result, Error};
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -33,7 +33,7 @@ fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
     let mut read: usize = 0;
     for chunk in data.chunks(ENC_GROUP_SIZE + 1) {
         if chunk.len() != ENC_GROUP_SIZE + 1 {
-            return MvccErrorKind::KeyLength.as_result();
+            return Err(Error::KeyLength);
         }
         read += ENC_GROUP_SIZE + 1;
 
@@ -44,16 +44,16 @@ fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
             continue;
         }
         if pad_size > ENC_GROUP_SIZE {
-            return MvccErrorKind::KeyPadding.as_result();
+            return Err(Error::KeyPadding);
         }
         let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
         key.write(bytes).unwrap();
         if padding.iter().any(|x| *x != 0) {
-            return MvccErrorKind::KeyPadding.as_result();
+            return Err(Error::KeyPadding);
         }
         return Ok((key, read));
     }
-    MvccErrorKind::KeyLength.as_result()
+    Err(Error::KeyLength)
 }
 
 pub fn encode_key(key: &[u8], version: u64) -> Vec<u8> {
@@ -66,7 +66,7 @@ pub fn decode_key(data: &[u8]) -> Result<(Vec<u8>, u64)> {
     let (key, read_size) = try!(decode_bytes(data));
     match data[read_size..].as_ref().read_u64::<BigEndian>() {
         Ok(ver) => Ok((key, ver)),
-        Err(..) => MvccErrorKind::KeyVersion.as_result(),
+        Err(_) => Err(Error::KeyVersion),
     }
 }
 

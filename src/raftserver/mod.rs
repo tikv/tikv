@@ -6,6 +6,7 @@ use std::error;
 use std::thread;
 use std::convert;
 use std::time::Duration;
+use std::string::String;
 
 use bytes::{Buf, ByteBuf};
 use mio::{self, Token, NotifyError};
@@ -20,9 +21,9 @@ mod bench;
 
 pub type Result<T> = result::Result<T, Box<error::Error + Send + Sync>>;
 
-const SERVER_TOKEN: Token = Token(0);
+const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
-
+const INVALID_TOKEN: Token = Token(0);
 const DEFAULT_BASE_TICK_MS: u64 = 100;
 
 #[derive(Clone, Debug)]
@@ -31,12 +32,18 @@ pub struct Config {
 }
 
 pub struct ConnData {
-    token: Token,
     msg_id: u64,
     data: ByteBuf,
 }
 
 impl ConnData {
+    pub fn from_string<S: Into<String>>(msg_id: u64, data: S) -> ConnData {
+        ConnData {
+            msg_id: msg_id,
+            data: ByteBuf::from_slice(data.into().as_bytes()),
+        }
+    }
+
     pub fn encode_to_buf(&self) -> ByteBuf {
         let mut buf = ByteBuf::mut_with_capacity(codec::MSG_HEADER_LEN + self.data.bytes().len());
 
@@ -52,22 +59,31 @@ pub enum TimerMsg {
     None,
 }
 
-pub struct TimerData {
-    delay: u64,
-    msg: TimerMsg,
-}
-
 pub enum Msg {
     // Quit event loop.
     Quit,
     // Read data from connection.
-    ReadData(ConnData),
+    ReadData {
+        token: Token,
+        data: ConnData,
+    },
     // Write data to connection.
-    WriteData(ConnData),
+    WriteData {
+        token: Token,
+        data: ConnData,
+    },
     // Tick is for base internal tick message.
     Tick,
     // Timer is for custom timeout message.
-    Timer(TimerData),
+    Timer {
+        delay: u64,
+        msg: TimerMsg,
+    },
+    // Send data to remote peer with address.
+    SendPeer {
+        addr: String,
+        data: ConnData,
+    },
 }
 
 #[derive(Debug)]
@@ -117,17 +133,29 @@ impl Sender {
         Ok(())
     }
 
-    pub fn write_data(&self, data: ConnData) -> Result<()> {
-        try!(self.send(Msg::WriteData(data)));
+    pub fn write_data(&self, token: Token, data: ConnData) -> Result<()> {
+        try!(self.send(Msg::WriteData {
+            token: token,
+            data: data,
+        }));
 
         Ok(())
     }
 
     pub fn timeout_ms(&self, delay: u64, m: TimerMsg) -> Result<()> {
-        try!(self.send(Msg::Timer(TimerData {
+        try!(self.send(Msg::Timer {
             delay: delay,
             msg: m,
-        })));
+        }));
+
+        Ok(())
+    }
+
+    pub fn send_peer(&self, addr: String, data: ConnData) -> Result<()> {
+        try!(self.send(Msg::SendPeer {
+            addr: addr,
+            data: data,
+        }));
 
         Ok(())
     }
