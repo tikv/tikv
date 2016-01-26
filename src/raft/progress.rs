@@ -2,7 +2,7 @@
 
 use std::cmp;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ProgressState {
     Probe,
     Replicate,
@@ -17,7 +17,7 @@ impl Default for ProgressState {
 }
 
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Progress {
     pub matched: u64,
     pub next_idx: u64,
@@ -167,7 +167,7 @@ impl Progress {
 }
 
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Inflights {
     // the starting index in the buffer
     start: usize,

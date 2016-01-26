@@ -302,7 +302,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         None
     }
 
-    fn has_next_entries(&self) -> bool {
+    pub fn has_next_entries(&self) -> bool {
         let offset = cmp::max(self.applied + 1, self.first_index());
         return self.committed + 1 > offset;
     }

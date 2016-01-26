@@ -8,9 +8,8 @@ use protobuf::repeated::RepeatedField;
 use raft::progress::{Progress, Inflights, ProgressState};
 use raft::errors::{Result, Error, StorageError};
 use std::collections::HashMap;
-use std::collections::vec_deque::VecDeque;
 use raft::raft_log::{self, RaftLog};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -108,8 +107,8 @@ impl<T: Storage + Sync + Default> Config<T> {
 // The state is volatile and does not need to be persisted to the WAL.
 #[derive(Default, PartialEq)]
 pub struct SoftState {
-    lead: u64,
-    raft_state: StateRole,
+    pub lead: u64,
+    pub raft_state: StateRole,
 }
 
 #[derive(Default)]
@@ -462,7 +461,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         if self.is_election_timeout() {
             self.election_elapsed = 0;
             let m = new_message(self.id, INVALID_ID, MessageType::MsgHup);
-            self.step(m);
+            self.step(m).is_ok();
         }
     }
 
@@ -475,7 +474,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
             self.election_elapsed = 0;
             if self.check_quorum {
                 let m = new_message(self.id, INVALID_ID, MessageType::MsgCheckQuorum);
-                self.step(m);
+                self.step(m).is_ok();
             }
         }
 
@@ -486,7 +485,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         if self.heartbeat_elapsed >= self.heartbeat_timeout {
             self.heartbeat_elapsed = 0;
             let m = new_message(self.id, INVALID_ID, MessageType::MsgBeat);
-            self.step(m);
+            self.step(m).is_ok();
         }
     }
 

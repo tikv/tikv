@@ -4,6 +4,7 @@ mod raft;
 mod progress;
 mod errors;
 mod log_unstable;
+mod status;
 
 pub use self::storage::{RaftState, Storage};
 
