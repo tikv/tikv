@@ -20,7 +20,7 @@ message Message {
 
 
 message RaftMessage {
-  optional int64 range_id           = 1;
+  optional uint64 range_id          = 1;
   optional metapb.Peer from_peer    = 2;
   optional metapb.Peer to_peer      = 3;
   optional uint64 msg_id            = 4;
@@ -39,4 +39,25 @@ message RaftCommandRequest {
 
 message RaftCommandResponse {
   
+}
+
+message RaftTruncatedState {
+    optional uint64 index    = 1;
+    optional uint64 term     = 2;
+}
+
+message KeyValue {
+    optional bytes key      = 1;
+    optional bytes value    = 2;
+}
+
+message RaftSnapshotData {
+    optional metapb.Region region   = 1;
+    repeated KeyValue data          = 2;
+}
+
+message StoreIdent {
+    optional uint64 cluster_id   = 1;
+    optional uint64 node_id      = 2;
+    optional uint64 store_id     = 3;
 }
