@@ -72,8 +72,8 @@ enum ConfChangeType {
 }
 
 message ConfChange {
-    optional uint64          id         = 1; 
-    optional ConfChangeType  type       = 2; 
-    optional uint64          node_id    = 3; 
-    optional bytes           context    = 4;
+    optional uint64          id             = 1; 
+    optional ConfChangeType  change_type    = 2; 
+    optional uint64          node_id        = 3; 
+    optional bytes           context        = 4;
 }
