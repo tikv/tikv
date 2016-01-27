@@ -1,83 +1,157 @@
 use std::collections::HashMap;
-use std::result::Result;
 use std::boxed::Box;
-use std::error::Error;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::io::{Read, Write};
+use std::thread;
 
-use mio::{self, Token, EventLoop, EventSet, PollOpt, TryWrite, TryRead};
+use mio::{self, Token, EventLoop, EventSet, PollOpt, TryWrite, TryRead, NotifyError};
 use mio::tcp::{TcpListener, TcpStream};
 use protobuf;
 use protobuf::core::Message;
 use bytes::{MutBuf, ByteBuf, MutByteBuf};
 
-use proto::kvrpcpb::{Request, Response};
+use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, Request, Response, MessageType};
 use util::codec::{self, encode_msg, decode_msg, MSG_HEADER_LEN};
+use storage;
+use storage::{Key, Storage, Value, KvPair, Callback};
 
 const SERVER_TOKEN: Token = Token(0);
 
-pub trait Dispatcher {
-    fn dispatch(&mut self, m: Request) -> Result<Response, Box<Error + Send + Sync>>;
+quick_error! {
+    #[derive(Debug)]
+    pub enum ServerError {
+        //Notify(err: NotifyError<Message>) {
+            //from()
+            //cause(err)
+            //description(err.description())
+        //}
+        Storage(err: storage::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+    }
 }
 
-struct Client<D: Dispatcher> {
+pub type Result<T> = ::std::result::Result<T, ServerError>;
+
+pub trait Dispatcher {
+    fn dispatch(&mut self, m: Request) -> Result<()>;
+}
+
+struct Client {
     sock: TcpStream,
     interest: EventSet,
-    d: Rc<RefCell<D>>,
 
-    res: MutByteBuf,
+    res: Vec<u8>,
 }
 
-impl<D: Dispatcher> Client<D> {
-    fn new(sock: TcpStream, d: Rc<RefCell<D>>) -> Client<D> {
+impl Client {
+    fn new(sock: TcpStream) -> Client {
         Client {
             sock: sock,
             interest: EventSet::readable(),
-            d: d,
-            res: ByteBuf::mut_with_capacity(1024),
+            res: Vec::with_capacity(1024),
         }
     }
 
     fn write(&mut self) {
-        if self.sock.write(self.res.bytes()).is_err() {
+        if self.sock.write(&self.res).is_err() {
             // [TODO]: add error log
         }
         self.interest.remove(EventSet::writable());
         self.interest.insert(EventSet::readable());
     }
 
-    fn read(&mut self) {
+    fn read(&mut self, token: Token, event_loop: &mut EventLoop<Server>) {
         // only test here
         let mut m = Request::new();
         let msg_id = decode_msg(&mut self.sock, &mut m).unwrap();
 
-        let res: Response = self.d.borrow_mut().dispatch(m).unwrap();
-        self.res.clear();
-        let res_len: usize = MSG_HEADER_LEN + res.compute_size() as usize;
-        // Re-alloc self.res capacity
-        if self.res.capacity() < res_len {
-            self.res = ByteBuf::mut_with_capacity(res_len);
-        }
-        encode_msg(&mut self.res, msg_id, &res).unwrap();
-
+        let sender = event_loop.channel();
+        let mut queueMsg: QueueMessage = QueueMessage::Request(token, msg_id, m);
+        thread::spawn(move || {
+            let _ = sender.send(queueMsg);
+        });
         self.interest.remove(EventSet::readable());
-        self.interest.insert(EventSet::writable());
     }
 }
 
-struct Server<D: Dispatcher> {
+struct Server {
     listener: TcpListener,
-    clients: HashMap<Token, Client<D>>,
+    clients: HashMap<Token, Client>,
     token_counter: usize,
-    d: Rc<RefCell<D>>,
+    store: Storage,
 }
 
-impl<D: Dispatcher> mio::Handler for Server<D> {
-    type Timeout = ();
-    type Message = ();
+impl Server {
+    pub fn handle_get(&mut self,
+                      msg: &Request,
+                      msg_id: u64,
+                      token: Token,
+                      event_loop: &mut EventLoop<Server>)
+                      -> Result<()> {
+        // if !msg.has_cmd_get_req() {
+        // }
+        let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
+        let key = cmd_get_req.get_key().iter().cloned().collect();
+        let sender = event_loop.channel();
+        match self.store.async_get(key,
+                                   cmd_get_req.get_version(),
+                                   Box::new(move |v: ::std::result::Result<Option<Value>,
+                                                                             storage::Error>| {
+                                       let resp: Response = Server::cmd_get_done(v);
+                                       let mut queueMsg: QueueMessage =
+                                           QueueMessage::Response(token, msg_id, resp);
+                                       thread::spawn(move || {
+                                           let _ = sender.send(queueMsg);
+                                       });
+                                   })) {
+            Ok(()) => {}
+            Err(why) => return Err(ServerError::Storage(why)),
+        }
+        Ok(())
+    }
+    pub fn handle_scan(&mut self, msg: &Request) -> Result<Response> {
+        unimplemented!();
+    }
+    pub fn handle_commit(&mut self, msg: &Request) -> Result<Response> {
+        unimplemented!();
+    }
+    fn cmd_get_done(r: ::std::result::Result<Option<Value>, storage::Error>) -> Response {
+        let mut resp: Response = Response::new();
+        let mut cmd_get_resp: CmdGetResponse = CmdGetResponse::new();
+        match r {
+            Ok(v) => {
+                match v {
+                    Some(val) => cmd_get_resp.set_value(val),
+                    None => cmd_get_resp.set_value(Vec::new()),
+                }
+                cmd_get_resp.set_ok(true);
+            }
+            Err(e) => {
+                cmd_get_resp.set_ok(false);
+            }
+        }
+        resp.set_field_type(MessageType::CmdGet);
+        resp.set_cmd_get_resp(cmd_get_resp);
+        resp
+    }
+}
 
-    fn ready(&mut self, event_loop: &mut EventLoop<Server<D>>, token: Token, events: EventSet) {
+enum QueueMessage {
+    // Request(token, msg_id, kvrpc_request)
+    Request(Token, u64, Request),
+    // Request(token, msg_id, kvrpc_response)
+    Response(Token, u64, Response),
+}
+
+impl mio::Handler for Server {
+    type Timeout = ();
+    type Message = QueueMessage;
+
+    fn ready(&mut self, event_loop: &mut EventLoop<Server>, token: Token, events: EventSet) {
         if events.is_hup() || events.is_error() {
             self.clients.remove(&token);
             return;
@@ -96,11 +170,10 @@ impl<D: Dispatcher> mio::Handler for Server<D> {
                     };
 
                     let new_token = Token(self.token_counter);
-                    let d = self.d.clone();
                     if sock.set_nodelay(true).is_err() {
                         error!("set nodeplay failed");
                     }
-                    self.clients.insert(new_token, Client::new(sock, d));
+                    self.clients.insert(new_token, Client::new(sock));
                     self.token_counter += 1;
 
                     event_loop.register(&self.clients[&new_token].sock,
@@ -112,7 +185,7 @@ impl<D: Dispatcher> mio::Handler for Server<D> {
                 }
                 token => {
                     let mut client = self.clients.get_mut(&token).unwrap();
-                    client.read();
+                    client.read(token, event_loop);
                     event_loop.reregister(&client.sock,
                                           token,
                                           client.interest,
@@ -132,9 +205,48 @@ impl<D: Dispatcher> mio::Handler for Server<D> {
                       .unwrap();
         }
     }
+
+    fn notify(&mut self, event_loop: &mut EventLoop<Server>, msg: QueueMessage) {
+        match msg {
+            QueueMessage::Request(token, msg_id, m) => {
+                match m.get_field_type() {
+                    MessageType::CmdGet => {
+                        if self.handle_get(&m, msg_id, token, event_loop).is_err() {
+                            // [TODO]: error log
+                        }
+                    }
+                    MessageType::CmdScan => {
+                        if self.handle_scan(&m).is_err() {
+                            // [TODO]: error log
+                        }
+                    }
+                    MessageType::CmdCommit => {
+                        if self.handle_commit(&m).is_err() {
+                            // [TODO]: error log
+                        }
+                    }
+                }
+            }
+            QueueMessage::Response(token, msg_id, resp) => {
+                let mut client: &mut Client = self.clients.get_mut(&token).unwrap();
+                client.res.clear();
+                let resp_len: usize = MSG_HEADER_LEN + resp.compute_size() as usize;
+                if client.res.capacity() < resp_len {
+                    client.res = Vec::with_capacity(resp_len);
+                }
+                encode_msg(&mut client.res, msg_id, &resp).unwrap();
+                client.interest.insert(EventSet::writable());
+                event_loop.reregister(&client.sock,
+                                      token,
+                                      client.interest,
+                                      PollOpt::edge() | PollOpt::oneshot())
+                          .unwrap();
+            }
+        }
+    }
 }
 
-fn run<D: Dispatcher>(addr: &str, d: D) {
+pub fn run(addr: &str, store: Storage) {
     let laddr = addr.parse().unwrap();
     let listener = TcpListener::bind(&laddr).unwrap();
 
@@ -150,8 +262,19 @@ fn run<D: Dispatcher>(addr: &str, d: D) {
         listener: listener,
         token_counter: 1,
         clients: HashMap::new(),
-        d: Rc::new(RefCell::new(d)),
+        store: store,
     };
-
     event_loop.run(&mut server).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use storage::{Storage, Dsn};
+
+    #[test]
+    fn test_recv() {
+        let store: Storage = Storage::new(Dsn::Memory).unwrap();
+        run("127.0.0.1:61234", store);
+    }
 }
