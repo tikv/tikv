@@ -168,7 +168,7 @@ fn new_message(from: u64, to: u64, field_type: MessageType) -> Message {
     let mut m = Message::new();
     m.set_to(to);
     m.set_from(from);
-    m.set_field_type(field_type);
+    m.set_msg_type(field_type);
     m
 }
 
@@ -261,7 +261,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         // do not attach term to MsgPropose
         // proposals are a way to forward to the leader and
         // should be treated as local message.
-        if m.get_field_type() != MessageType::MsgPropose {
+        if m.get_msg_type() != MessageType::MsgPropose {
             m.set_term(self.get_term());
         }
         self.msgs.push(m);
@@ -275,7 +275,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
             return;
         }
 
-        m.set_field_type(MessageType::MsgSnapshot);
+        m.set_msg_type(MessageType::MsgSnapshot);
         let snapshot_r = self.raft_log.snapshot();
         if let Err(e) = snapshot_r {
             if e == Error::Store(StorageError::SnapshotTemporarilyUnavailable) {
@@ -312,15 +312,15 @@ impl<T: Storage + Sync + Default> Raft<T> {
 
     fn prepare_send_entries(&mut self, m: &mut Message, to: u64, term: u64, ents: Vec<Entry>) {
         let pr = self.prs.get_mut(&to).unwrap();
-        m.set_field_type(MessageType::MsgAppend);
+        m.set_msg_type(MessageType::MsgAppend);
         m.set_index(pr.next_idx - 1);
-        m.set_logTerm(term);
+        m.set_log_term(term);
         m.set_entries(RepeatedField::from_vec(ents));
         m.set_commit(self.raft_log.committed);
         if m.get_entries().len() != 0 {
             match pr.state {
                 ProgressState::Replicate => {
-                    let last = m.get_entries().last().unwrap().get_Index();
+                    let last = m.get_entries().last().unwrap().get_index();
                     pr.optimistic_update(last);
                     pr.ins.add(last);
                 }
@@ -366,7 +366,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         let commit = cmp::min(self.prs.get(&to).unwrap().matched, self.raft_log.committed);
         let mut m = Message::new();
         m.set_to(to);
-        m.set_field_type(MessageType::MsgHeartbeat);
+        m.set_msg_type(MessageType::MsgHeartbeat);
         m.set_commit(commit);
         self.send(m);
     }
@@ -434,8 +434,8 @@ impl<T: Storage + Sync + Default> Raft<T> {
         let li = self.raft_log.last_index();
         for i in 0..es.len() {
             let e = es.get_mut(i).unwrap();
-            e.set_Term(self.get_term());
-            e.set_Index(li + 1 + i as u64);
+            e.set_term(self.get_term());
+            e.set_index(li + 1 + i as u64);
         }
         self.raft_log.append(es);
         let id = self.id;
@@ -519,7 +519,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
                        .entries(begin, raft_log::NO_LIMIT)
                        .expect("unexpected error getting uncommitted entries");
         for e in ents {
-            if e.get_Type() != EntryType::EntryConfChange {
+            if e.get_entry_type() != EntryType::EntryConfChange {
                 continue;
             }
             assert!(!self.pending_conf,
@@ -551,7 +551,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
                   self.get_term());
             let mut m = new_message(INVALID_ID, id, MessageType::MsgRequestVote);
             m.set_index(self.raft_log.last_index());
-            m.set_logTerm(self.raft_log.last_term());
+            m.set_log_term(self.raft_log.last_term());
             self.send(m);
         }
     }
@@ -579,7 +579,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
     }
 
     pub fn step(&mut self, m: Message) -> Result<()> {
-        if m.get_field_type() == MessageType::MsgHup {
+        if m.get_msg_type() == MessageType::MsgHup {
             if self.state != StateRole::Leader {
                 info!("{:x} is starting a new election at term {}",
                       self.id,
@@ -597,13 +597,13 @@ impl<T: Storage + Sync + Default> Raft<T> {
             // local message
         } else if m.get_term() > self.get_term() {
             let mut lead = m.get_from();
-            if m.get_field_type() == MessageType::MsgRequestVote {
+            if m.get_msg_type() == MessageType::MsgRequestVote {
                 lead = INVALID_ID;
             }
             info!("{:x} [term: {}] received a {:?} message with higher term from {:x} [term: {}]",
                   self.id,
                   self.get_term(),
-                  m.get_field_type(),
+                  m.get_msg_type(),
                   m.get_from(),
                   m.get_term());
             self.become_follower(m.get_term(), lead);
@@ -612,7 +612,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
             info!("{:x} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
                   self.id,
                   self.get_term(),
-                  m.get_field_type(),
+                  m.get_msg_type(),
                   m.get_from(),
                   m.get_term());
             return Ok(());
@@ -648,16 +648,16 @@ impl<T: Storage + Sync + Default> Raft<T> {
         if m.get_index() < self.hs.get_commit() {
             let mut to_send = Message::new();
             to_send.set_to(m.get_from());
-            to_send.set_field_type(MessageType::MsgAppendResponse);
+            to_send.set_msg_type(MessageType::MsgAppendResponse);
             to_send.set_index(self.hs.get_commit());
             self.send(to_send);
             return;
         }
         let mut to_send = Message::new();
         to_send.set_to(m.get_from());
-        to_send.set_field_type(MessageType::MsgAppendResponse);
+        to_send.set_msg_type(MessageType::MsgAppendResponse);
         match self.raft_log.maybe_append(m.get_index(),
-                                         m.get_logTerm(),
+                                         m.get_log_term(),
                                          m.get_commit(),
                                          m.get_entries()) {
             Some(mlast_index) => {
@@ -670,12 +670,12 @@ impl<T: Storage + Sync + Default> Raft<T> {
                        self.id,
                        self.raft_log.zero_term_on_err_compacted(self.raft_log.term(m.get_index())),
                        m.get_index(),
-                       m.get_logTerm(),
+                       m.get_log_term(),
                        m.get_index(),
                        m.get_from());
                 to_send.set_index(m.get_index());
                 to_send.set_reject(true);
-                to_send.set_rejectHint(self.raft_log.last_index());
+                to_send.set_reject_hint(self.raft_log.last_index());
                 self.send(to_send);
             }
         }
@@ -685,7 +685,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         self.raft_log.commit_to(m.get_commit());
         let mut to_send = Message::new();
         to_send.set_to(m.get_from());
-        to_send.set_field_type(MessageType::MsgHeartbeatResponse);
+        to_send.set_msg_type(MessageType::MsgHeartbeatResponse);
         self.send(to_send);
     }
 
@@ -701,7 +701,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
                   sterm);
             let mut to_send = Message::new();
             to_send.set_to(m.get_from());
-            to_send.set_field_type(MessageType::MsgAppendResponse);
+            to_send.set_msg_type(MessageType::MsgAppendResponse);
             to_send.set_index(self.raft_log.last_index());
             self.send(to_send);
         } else {
@@ -712,7 +712,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
                   sterm);
             let mut to_send = Message::new();
             to_send.set_to(m.get_from());
-            to_send.set_field_type(MessageType::MsgAppendResponse);
+            to_send.set_msg_type(MessageType::MsgAppendResponse);
             to_send.set_index(self.raft_log.committed);
             self.send(to_send);
         }
