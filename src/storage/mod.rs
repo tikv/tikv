@@ -1,7 +1,7 @@
 use std::boxed::FnBox;
 use std::fmt;
 use std::thread::{self, JoinHandle};
-use mio::{EventLoop, Handler, Sender, NotifyError};
+use std::sync::mpsc::{self, Sender};
 use self::txn::Scheduler;
 
 mod engine;
@@ -62,7 +62,7 @@ impl fmt::Debug for Command {
 pub use self::engine::{Engine, Dsn};
 
 pub struct Storage {
-    sender: Sender<Message>,
+    tx: Sender<Message>,
     thread: JoinHandle<Result<()>>,
 }
 
@@ -72,19 +72,29 @@ impl Storage {
             let engine = try!(engine::new_engine(dsn));
             Scheduler::new(engine)
         };
-        let mut event_loop = try!(EventLoop::new());
-        let sender = event_loop.channel();
-        let thread_handle = thread::spawn(move || {
-            event_loop.run(&mut scheduler).map_err(|e| Error::Io(e))
+        let (tx, rx) = mpsc::channel::<Message>();
+        let desc = format!("{:?}", dsn);
+        let handle = thread::spawn(move || {
+            info!("storage: [{}] started.", desc);
+            loop {
+                let msg = try!(rx.recv());
+                debug!("recv message: {:?}", msg);
+                match msg {
+                    Message::Command(cmd) => scheduler.handle_cmd(cmd),
+                    Message::Close => break,
+                }
+            }
+            info!("storage: [{}] closing.", desc);
+            Ok(())
         });
         Ok(Storage {
-            sender: sender,
-            thread: thread_handle,
+            tx: tx,
+            thread: handle,
         })
     }
 
     pub fn stop(self) -> Result<()> {
-        try!(self.sender.send(Message::Close));
+        try!(self.tx.send(Message::Close));
         try!(try!(self.thread.join()));
         Ok(())
     }
@@ -99,7 +109,7 @@ impl Storage {
             version: version,
             callback: callback,
         };
-        try!(self.sender.send(Message::Command(cmd)));
+        try!(self.tx.send(Message::Command(cmd)));
         Ok(())
     }
 
@@ -115,7 +125,7 @@ impl Storage {
             version: version,
             callback: callback,
         };
-        try!(self.sender.send(Message::Command(cmd)));
+        try!(self.tx.send(Message::Command(cmd)));
         Ok(())
     }
 
@@ -133,21 +143,8 @@ impl Storage {
             version: version,
             callback: callback,
         };
-        try!(self.sender.send(Message::Command(cmd)));
+        try!(self.tx.send(Message::Command(cmd)));
         Ok(())
-    }
-}
-
-impl Handler for Scheduler {
-    type Timeout = ();
-    type Message = Message;
-
-    fn notify(&mut self, event_loop: &mut EventLoop<Scheduler>, msg: Message) {
-        debug!("recv message: {:?}", msg);
-        match msg {
-            Message::Command(cmd) => self.handle_cmd(cmd),
-            Message::Close => event_loop.shutdown(),
-        }
     }
 }
 
@@ -160,12 +157,12 @@ pub enum Message {
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Io(err: ::std::io::Error) {
+        Recv(err: mpsc::RecvError) {
             from()
             cause(err)
             description(err.description())
         }
-        Notify(err: NotifyError<Message>) {
+        Send(err: mpsc::SendError<Message>) {
             from()
             cause(err)
             description(err.description())
