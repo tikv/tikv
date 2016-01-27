@@ -6,7 +6,7 @@ use proto::raftpb::{Entry, Snapshot};
 // Note that unstable.offset may be less than the highest log
 // position in storage; this means that the next write to storage
 // might need to truncate the log before persisting unstable.entries.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub struct Unstable {
     // the incoming unstable snapshot, if any.
     pub snapshot: Option<Snapshot>,

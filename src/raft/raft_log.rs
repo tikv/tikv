@@ -8,9 +8,10 @@ use std::{cmp, u64};
 use std::sync::Arc;
 use protobuf;
 
-const NO_LIMIT: u64 = u64::MAX;
+pub const NO_LIMIT: u64 = u64::MAX;
 
 /// Raft log implementation
+#[derive(Default)]
 pub struct RaftLog<T>
     where T: Storage + Sync
 {
@@ -23,7 +24,7 @@ pub struct RaftLog<T>
 
     // committed is the highest log position that is known to be in
     // stable storage on a quorum of nodes.
-    committed: u64,
+    pub committed: u64,
 
     // applied is the highest log position that the application has
     // been instructed to apply to its state machine.
@@ -81,6 +82,10 @@ impl<T> RaftLog<T> where T: Storage + Sync
         self.term(self.last_index())
             .map_err(|e| panic!("unexpected error when getting the last term({})", e))
             .unwrap()
+    }
+
+    pub fn get_store(&self) -> Arc<SyncCell<T>> {
+        self.store.clone()
     }
 
     pub fn term(&self, idx: u64) -> Result<u64> {
@@ -189,7 +194,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         None
     }
 
-    fn commit_to(&mut self, to_commit: u64) {
+    pub fn commit_to(&mut self, to_commit: u64) {
         // never decrease commit
         if self.committed < to_commit {
             if self.last_index() < to_commit {
@@ -218,20 +223,19 @@ impl<T> RaftLog<T> where T: Storage + Sync
         self.applied
     }
 
-    pub fn get_committed(&self) -> u64 {
-        self.committed
-    }
-
-    fn stable_to(&mut self, idx: u64, term: u64) {
+    pub fn stable_to(&mut self, idx: u64, term: u64) {
         self.unstable.stable_to(idx, term)
     }
 
-    fn stable_snap_to(&mut self, idx: u64) {
+    pub fn stable_snap_to(&mut self, idx: u64) {
         self.unstable.stable_snap_to(idx)
     }
 
+    pub fn get_unstable(&self) -> &Unstable {
+        &self.unstable
+    }
 
-    fn append(&mut self, ents: &[Entry]) -> u64 {
+    pub fn append(&mut self, ents: &[Entry]) -> u64 {
         if ents.len() == 0 {
             return self.last_index();
         }
@@ -246,7 +250,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         self.last_index()
     }
 
-    fn unstable_entries(&self) -> Option<&[Entry]> {
+    pub fn unstable_entries(&self) -> Option<&[Entry]> {
         if self.unstable.entries.len() == 0 {
             return None;
         }
@@ -278,7 +282,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         }
     }
 
-    fn is_up_to_date(&self, last_index: u64, term: u64) -> bool {
+    pub fn is_up_to_date(&self, last_index: u64, term: u64) -> bool {
         term > self.last_term() || (term == self.last_term() && last_index >= self.last_index())
     }
 
@@ -286,7 +290,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
     // next_entries returns all the available entries for execution.
     // If applied is smaller than the index of snapshot, it returns all committed
     // entries after the index of snapshot.
-    fn next_entries(&mut self) -> Option<Vec<Entry>> {
+    pub fn next_entries(&self) -> Option<Vec<Entry>> {
         let offset = cmp::max(self.applied + 1, self.first_index());
         let committed = self.committed;
         if committed + 1 > offset {
@@ -298,7 +302,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         None
     }
 
-    fn has_next_entries(&self) -> bool {
+    pub fn has_next_entries(&self) -> bool {
         let offset = cmp::max(self.applied + 1, self.first_index());
         return self.committed + 1 > offset;
     }
@@ -330,7 +334,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         None
     }
 
-    fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool {
+    pub fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool {
         if max_index > self.committed &&
            self.zero_term_on_err_compacted(self.term(max_index)) == term {
             self.commit_to(max_index);
@@ -389,7 +393,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         Ok(v)
     }
 
-    fn restore(&mut self, snapshot: Snapshot) {
+    pub fn restore(&mut self, snapshot: Snapshot) {
         info!("log [{}] starts to restore snapshot [index: {}, term: {}]",
               self.to_string(),
               snapshot.get_metadata().get_index(),

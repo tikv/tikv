@@ -1,5 +1,7 @@
 use std::cell::UnsafeCell;
 use std::ops::Deref;
+use std::ops::DerefMut;
+use rand::{self, ThreadRng};
 
 pub use log::LogLevelFilter;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
@@ -48,6 +50,12 @@ impl<T: Sync> SyncCell<T> {
     }
 }
 
+impl<T: Sync + Default> Default for SyncCell<T> {
+    fn default() -> SyncCell<T> {
+        SyncCell::new(Default::default())
+    }
+}
+
 impl<T: Sync> Deref for SyncCell<T> {
     type Target = T;
 
@@ -58,3 +66,33 @@ impl<T: Sync> Deref for SyncCell<T> {
 }
 
 unsafe impl<T: Sync> Sync for SyncCell<T> {}
+
+pub struct DefaultRng {
+    rng: ThreadRng,
+}
+
+impl DefaultRng {
+    fn new() -> DefaultRng {
+        DefaultRng { rng: rand::thread_rng() }
+    }
+}
+
+impl Default for DefaultRng {
+    fn default() -> DefaultRng {
+        DefaultRng::new()
+    }
+}
+
+impl Deref for DefaultRng {
+    type Target = ThreadRng;
+
+    fn deref(&self) -> &ThreadRng {
+        &self.rng
+    }
+}
+
+impl DerefMut for DefaultRng {
+    fn deref_mut(&mut self) -> &mut ThreadRng {
+        &mut self.rng
+    }
+}
