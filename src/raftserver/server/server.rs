@@ -8,8 +8,8 @@ use mio::tcp::{TcpListener, TcpStream};
 
 use raftserver::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_BASE_TICK_MS, INVALID_TOKEN};
 use raftserver::{Msg, Sender, Result, ConnData, TimerMsg};
-use raftserver::conn::Conn;
-use raftserver::handler::ServerHandler;
+use super::conn::Conn;
+use super::handler::ServerHandler;
 
 pub struct Server<T: ServerHandler> {
     pub listener: TcpListener,

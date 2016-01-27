@@ -11,7 +11,7 @@ pub enum Modify<'a> {
     Put((&'a [u8], &'a [u8])),
 }
 
-pub trait Engine : Send {
+pub trait Engine : Send + Sync {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>>;
     fn write(&self, batch: Vec<Modify>) -> Result<()>;
@@ -25,7 +25,7 @@ pub trait Engine : Send {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Dsn<'a> {
     Memory,
     RocksDBPath(&'a str),
