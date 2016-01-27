@@ -144,11 +144,11 @@ impl MemStorage {
         MemStorage { ..Default::default() }
     }
 
-    pub fn read(&self) -> RwLockReadGuard<MemStorageCore> { 
+    pub fn rl(&self) -> RwLockReadGuard<MemStorageCore> {
         self.core.read().unwrap()
     }
 
-    pub fn write(&self) -> RwLockWriteGuard<MemStorageCore> {
+    pub fn wl(&self) -> RwLockWriteGuard<MemStorageCore> {
         self.core.write().unwrap()
     }
 }
@@ -161,7 +161,7 @@ impl Default for MemStorage {
 
 impl Storage for MemStorage {
     fn initial_state(&self) -> Result<RaftState> {
-        let core = self.core.read().unwrap();
+        let core = self.rl();
         Ok(RaftState {
             hard_state: core.hard_state.clone(),
             conf_state: core.snapshot.get_metadata().get_conf_state().clone(),
@@ -169,7 +169,7 @@ impl Storage for MemStorage {
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
-        let core = self.core.read().unwrap();
+        let core = self.rl();
         let offset = core.entries[0].get_index();
         if low <= offset {
             return Err(Error::Store(StorageError::Compacted));
@@ -190,7 +190,7 @@ impl Storage for MemStorage {
     }
 
     fn term(&self, idx: u64) -> Result<u64> {
-        let core = self.core.read().unwrap();
+        let core = self.rl();
         let offset = core.entries[0].get_index();
         if idx < offset {
             return Err(Error::Store(StorageError::Compacted));
@@ -199,17 +199,17 @@ impl Storage for MemStorage {
     }
 
     fn first_index(&self) -> Result<u64> {
-        let core = self.core.read().unwrap();
+        let core = self.rl();
         Ok(core.entries[0].get_index() + 1)
     }
 
     fn last_index(&self) -> Result<u64> {
-        let core = self.core.read().unwrap();
+        let core = self.rl();
         Ok(core.inner_last_index())
     }
 
     fn snapshot(&self) -> Result<Snapshot> {
-        let core = self.core.read().unwrap();
+        let core = self.rl();
         Ok(core.snapshot.clone())
     }
 }

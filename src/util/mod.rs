@@ -46,7 +46,7 @@ pub fn limit_size<T: Message + Clone>(entries: &[T], max: u64) -> Vec<T> {
         }
         limit += 1;
     }
-    entries[..limit as usize].to_vec()
+    entries[..limit].to_vec()
 }
 
 /// A simple general wrapper for struct that is thread-safe for interior mutability already.
