@@ -33,8 +33,10 @@ quick_error! {
 }
 
 impl Error {
-    pub fn other<T: error::Error + Sync + Send + 'static>(err: T) -> Error {
-        Error::Other(Box::new(err))
+    pub fn other<T>(err: T) -> Error
+        where T: Into<Box<error::Error + Sync + Send + 'static>>
+    {
+        Error::Other(err.into())
     }
 }
 
@@ -80,8 +82,10 @@ quick_error! {
 }
 
 impl StorageError {
-    pub fn other<T: error::Error + Sync + Send + 'static>(err: T) -> StorageError {
-        StorageError::Other(Box::new(err))
+    pub fn other<T>(err: T) -> StorageError
+        where T: Into<Box<error::Error + Sync + Send + 'static>>
+    {
+        StorageError::Other(err.into())
     }
 }
 
@@ -127,5 +131,14 @@ mod tests {
         assert_eq!(StorageError::SnapshotTemporarilyUnavailable,
                    StorageError::SnapshotTemporarilyUnavailable);
         assert!(StorageError::other(Error::StepLocalMsg) != StorageError::Unavailable);
+    }
+
+    #[test]
+    fn test_other() {
+        // just for check compile.
+        Error::other("a simple string error");
+        StorageError::other("a simple string error");
+        Error::other(io::Error::new(io::ErrorKind::Other, "hello io"));
+        StorageError::other(io::Error::new(io::ErrorKind::Other, "hello io"));
     }
 }
