@@ -9,9 +9,12 @@ use mio::{self, Token, EventLoop, EventSet, PollOpt, TryWrite, TryRead, NotifyEr
 use mio::tcp::{TcpListener, TcpStream};
 use protobuf;
 use protobuf::core::Message;
+use protobuf::RepeatedField;
 use bytes::{MutBuf, ByteBuf, MutByteBuf};
 
-use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, Request, Response, MessageType};
+use proto::kvrpcpb;
+use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
+                     CmdCommitRequest, CmdCommitResponse, Request, Response, MessageType};
 use util::codec::{self, encode_msg, decode_msg, MSG_HEADER_LEN};
 use storage;
 use storage::{Key, Storage, Value, KvPair, Callback};
@@ -93,6 +96,7 @@ impl Server {
                       event_loop: &mut EventLoop<Server>)
                       -> Result<()> {
         // if !msg.has_cmd_get_req() {
+        // // [TODO]: return error
         // }
         let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
         let key = cmd_get_req.get_key().iter().cloned().collect();
@@ -113,8 +117,36 @@ impl Server {
         }
         Ok(())
     }
-    pub fn handle_scan(&mut self, msg: &Request) -> Result<Response> {
-        unimplemented!();
+    pub fn handle_scan(&mut self,
+                       msg: &Request,
+                       msg_id: u64,
+                       token: Token,
+                       event_loop: &mut EventLoop<Server>)
+                       -> Result<()> {
+        // if !msg.has_cmd_scan_req() {
+        // / [TODO]: return error
+        // }
+        let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
+        let start_key = cmd_scan_req.get_key().iter().cloned().collect();
+        let sender = event_loop.channel();
+        match self.store
+                  .async_scan(start_key,
+                              cmd_scan_req.get_limit() as usize,
+                              cmd_scan_req.get_version(),
+                              Box::new(move |kvs: ::std::result::Result<Vec<KvPair>,
+                                                                          storage::Error>| {
+                                  let resp: Response = Server::cmd_scan_done(kvs);
+                                  let mut queueMsg: QueueMessage = QueueMessage::Response(token,
+                                                                                          msg_id,
+                                                                                          resp);
+                                  thread::spawn(move || {
+                                      let _ = sender.send(queueMsg);
+                                  });
+                              })) {
+            Ok(()) => {}
+            Err(why) => return Err(ServerError::Storage(why)),
+        }
+        Ok(())
     }
     pub fn handle_commit(&mut self, msg: &Request) -> Result<Response> {
         unimplemented!();
@@ -136,6 +168,30 @@ impl Server {
         }
         resp.set_field_type(MessageType::CmdGet);
         resp.set_cmd_get_resp(cmd_get_resp);
+        resp
+    }
+    fn cmd_scan_done(kvs: ::std::result::Result<Vec<KvPair>, storage::Error>) -> Response {
+        let mut resp: Response = Response::new();
+        let mut cmd_scan_resp: CmdScanResponse = CmdScanResponse::new();
+        match kvs {
+            Ok(v) => {
+                // convert storage::KvPair to kvrpcpb::KvPair
+                let mut new_kvs: Vec<kvrpcpb::KvPair> = Vec::new();
+                for x in &v {
+                    let mut new_kv: kvrpcpb::KvPair = kvrpcpb::KvPair::new();
+                    new_kv.set_key(x.0.clone());
+                    new_kv.set_value(x.1.clone());
+                    new_kvs.push(new_kv);
+                }
+                cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
+                cmd_scan_resp.set_ok(true);
+            }
+            Err(e) => {
+                cmd_scan_resp.set_ok(false);
+            }
+        }
+        resp.set_field_type(MessageType::CmdScan);
+        resp.set_cmd_scan_resp(cmd_scan_resp);
         resp
     }
 }
@@ -216,7 +272,7 @@ impl mio::Handler for Server {
                         }
                     }
                     MessageType::CmdScan => {
-                        if self.handle_scan(&m).is_err() {
+                        if self.handle_scan(&m, msg_id, token, event_loop).is_err() {
                             // [TODO]: error log
                         }
                     }

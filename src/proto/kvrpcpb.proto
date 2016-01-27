@@ -17,7 +17,7 @@ message CmdGetRequest {
 }
 message CmdGetResponse {
     required bool ok = 1;
-    required bytes value = 2;
+    optional bytes value = 2;
 }
 message CmdScanRequest {
     required bytes key = 1;
