@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn test_msg_codec() {
         let mut m1 = Message::new();
-        m1.set_field_type(MessageType::MsgBeat);
+        m1.set_msg_type(MessageType::MsgBeat);
 
         let mut w = ByteBuf::mut_with_capacity(64);
         assert_eq!(encode_msg(&mut w, 1, &m1).is_ok(), true);

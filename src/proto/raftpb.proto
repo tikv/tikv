@@ -8,7 +8,7 @@ enum EntryType {
 }
 
 message Entry {
-    optional EntryType  type        = 1; 
+    optional EntryType  entry_type  = 1; 
     optional uint64     term        = 2; 
     optional uint64     index       = 3; 
     optional bytes      data        = 4;
@@ -42,7 +42,7 @@ enum MessageType {
 }
 
 message Message {
-    optional MessageType type           = 1;  
+    optional MessageType msg_type       = 1;  
     optional uint64      to             = 2;  
     optional uint64      from           = 3;  
     optional uint64      term           = 4;  
