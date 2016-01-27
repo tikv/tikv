@@ -829,7 +829,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         self.hs.set_commit(hs.get_commit());
     }
 
-    // is_election_timeout returns true if self.elapsed is greater than the
+    // is_election_timeout returns true if self.election_elapsed is greater than the
     // randomized election timeout in (electiontimeout, 2 * electiontimeout - 1).
     // Otherwise, it returns false.
     fn is_election_timeout(&mut self) -> bool {
@@ -843,7 +843,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
     // check_quorum_active returns true if the quorum is active from
     // the view of the local raft state machine. Otherwise, it returns
     // false.
-    // checkQuorumActive also resets all recent_active to false.
+    // check_quorum_active also resets all recent_active to false.
     fn check_quorum_active(&mut self) -> bool {
         let mut act = 0;
         let self_id = self.id;
