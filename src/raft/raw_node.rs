@@ -20,7 +20,7 @@ enum SnapshotStatus {
 }
 
 fn is_local_msg(m: &Message) -> bool {
-    match m.get_field_type() {
+    match m.get_msg_type() {
         MessageType::MsgHup |
         MessageType::MsgBeat |
         MessageType::MsgUnreachable |
@@ -31,7 +31,7 @@ fn is_local_msg(m: &Message) -> bool {
 }
 
 fn is_response_msg(m: &Message) -> bool {
-    match m.get_field_type() {
+    match m.get_msg_type() {
         MessageType::MsgAppendResponse |
         MessageType::MsgRequestVoteResponse |
         MessageType::MsgHeartbeatResponse |
@@ -126,16 +126,16 @@ impl<T: Storage + Sync + Default> RawNode<T> {
             let mut ents = Vec::with_capacity(peers.len());
             for (i, peer) in peers.iter().enumerate() {
                 let mut cc = ConfChange::new();
-                cc.set_Type(ConfChangeType::ConfChangeAddNode);
-                cc.set_NodeID(peer.id);
-                cc.set_Context(peer.context.clone());
+                cc.set_change_type(ConfChangeType::ConfChangeAddNode);
+                cc.set_node_id(peer.id);
+                cc.set_context(peer.context.clone());
                 let data = protobuf::Message::write_to_bytes(&cc)
                                .expect("unexpected marshal error");
                 let mut e = Entry::new();
-                e.set_Type(EntryType::EntryConfChange);
-                e.set_Term(1);
-                e.set_Index(i as u64 + 1);
-                e.set_Data(data);
+                e.set_entry_type(EntryType::EntryConfChange);
+                e.set_term(1);
+                e.set_index(i as u64 + 1);
+                e.set_data(data);
                 ents.push(e);
             }
             rn.raft.raft_log.append(&ents);
@@ -172,7 +172,7 @@ impl<T: Storage + Sync + Default> RawNode<T> {
         }
         if rd.entries.len() > 0 {
             let e = rd.entries.last().unwrap();
-            self.raft.raft_log.stable_to(e.get_Index(), e.get_Term());
+            self.raft.raft_log.stable_to(e.get_index(), e.get_term());
         }
         if rd.snapshot != Snapshot::new() {
             self.raft.raft_log.stable_snap_to(rd.snapshot.get_metadata().get_index());
@@ -187,17 +187,17 @@ impl<T: Storage + Sync + Default> RawNode<T> {
     // Campaign causes this RawNode to transition to candidate state.
     fn campaign(&mut self) -> Result<()> {
         let mut m = Message::new();
-        m.set_field_type(MessageType::MsgHup);
+        m.set_msg_type(MessageType::MsgHup);
         self.raft.step(m)
     }
 
     // Propose proposes data be appended to the raft log.
     fn propose(&mut self, data: Vec<u8>) -> Result<()> {
         let mut m = Message::new();
-        m.set_field_type(MessageType::MsgPropose);
+        m.set_msg_type(MessageType::MsgPropose);
         m.set_from(self.raft.id);
         let mut e = Entry::new();
-        e.set_Data(data);
+        e.set_data(data);
         m.set_entries(RepeatedField::from_vec(vec![e]));
         self.raft.step(m)
     }
@@ -206,24 +206,24 @@ impl<T: Storage + Sync + Default> RawNode<T> {
     fn propose_conf_change(&mut self, cc: ConfChange) -> Result<()> {
         let data = try!(protobuf::Message::write_to_bytes(&cc));
         let mut m = Message::new();
-        m.set_field_type(MessageType::MsgPropose);
+        m.set_msg_type(MessageType::MsgPropose);
         let mut e = Entry::new();
-        e.set_Type(EntryType::EntryConfChange);
-        e.set_Data(data);
+        e.set_entry_type(EntryType::EntryConfChange);
+        e.set_data(data);
         m.set_entries(RepeatedField::from_vec(vec![e]));
         self.raft.step(m)
     }
 
     fn apply_conf_change(&mut self, cc: ConfChange) -> ConfState {
-        if cc.get_NodeID() == INVALID_ID {
+        if cc.get_node_id() == INVALID_ID {
             self.raft.reset_pending_conf();
             let mut cs = ConfState::new();
             cs.set_nodes(self.raft.nodes());
             return cs;
         }
-        let nid = cc.get_NodeID();
-        assert!(cc.has_Type(), "unexpected conf type");
-        match cc.get_Type() {
+        let nid = cc.get_node_id();
+        assert!(cc.has_change_type(), "unexpected conf type");
+        match cc.get_change_type() {
             ConfChangeType::ConfChangeAddNode => self.raft.add_node(nid),
             ConfChangeType::ConfChangeRemoveNode => self.raft.remove_node(nid),
             ConfChangeType::ConfChangeUpdateNode => self.raft.reset_pending_conf(),
@@ -284,7 +284,7 @@ impl<T: Storage + Sync + Default> RawNode<T> {
     // ReportUnreachable reports the given node is not reachable for the last send.
     fn report_unreachable(&mut self, id: u64) {
         let mut m = Message::new();
-        m.set_field_type(MessageType::MsgUnreachable);
+        m.set_msg_type(MessageType::MsgUnreachable);
         m.set_from(id);
         // we don't care if it is ok actually
         self.raft.step(m).is_ok();
@@ -294,7 +294,7 @@ impl<T: Storage + Sync + Default> RawNode<T> {
     fn report_snapshot(&mut self, id: u64, status: SnapshotStatus) {
         let rej = status == SnapshotStatus::SnapshotFailure;
         let mut m = Message::new();
-        m.set_field_type(MessageType::MsgSnapStatus);
+        m.set_msg_type(MessageType::MsgSnapStatus);
         m.set_from(id);
         m.set_reject(rej);
         // we don't care if it is ok actually
