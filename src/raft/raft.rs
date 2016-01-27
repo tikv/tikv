@@ -152,7 +152,7 @@ pub struct Raft<T: Default + Storage + Sync> {
     election_timeout: usize,
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
-    pre_step: Option<Box<FnMut() -> bool>>,
+    skip_step: Option<Box<FnMut() -> bool>>,
     rng: DefaultRng,
 }
 
@@ -293,6 +293,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         }
         let (sindex, sterm) = (snapshot.get_metadata().get_index(),
                                snapshot.get_metadata().get_term());
+        // TODO get rid of clone
         m.set_snapshot(snapshot.clone());
         debug!("{:x} [firstindex: {}, commit: {}] sent snapshot[index: {}, term: {}] to {:x} \
                 [{:?}]",
@@ -355,18 +356,18 @@ impl<T: Storage + Sync + Default> Raft<T> {
         self.send(m);
     }
 
-    // sendHeartbeat sends an empty MsgApp
+    // send_heartbeat sends an empty MsgAppend
     fn send_heartbeat(&mut self, to: u64) {
-        // Attach the commit as min(to.matched, r.committed).
+        // Attach the commit as min(to.matched, self.raft_log.committed).
         // When the leader sends out heartbeat message,
         // the receiver(follower) might not be matched with the leader
         // or it might not have all the committed entries.
         // The leader MUST NOT forward the follower's commit to
         // an unmatched index.
-        let commit = cmp::min(self.prs.get(&to).unwrap().matched, self.raft_log.committed);
         let mut m = Message::new();
         m.set_to(to);
         m.set_msg_type(MessageType::MsgHeartbeat);
+        let commit = cmp::min(self.prs.get(&to).unwrap().matched, self.raft_log.committed);
         m.set_commit(commit);
         self.send(m);
     }
@@ -403,6 +404,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         for p in self.prs.values() {
             mis.push(p.matched);
         }
+        // reverse sort
         mis.sort_by(|a, b| b.cmp(a));
         let mci = mis[self.quorum() - 1];
         let term = self.get_term();
@@ -451,7 +453,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         }
     }
 
-    // tickElection is run by followers and candidates after self.election_timeout.
+    // tick_election is run by followers and candidates after self.election_timeout.
     fn tick_election(&mut self) {
         if !self.promotable() {
             self.election_elapsed = 0;
@@ -465,7 +467,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         }
     }
 
-    // tickHeartbeat is run by leaders to send a MsgBeat after r.heartbeatTimeout.
+    // tick_heartbeat is run by leaders to send a MsgBeat after self.heartbeat_timeout.
     fn tick_heartbeat(&mut self) {
         self.heartbeat_elapsed += 1;
         self.election_elapsed += 1;
@@ -530,7 +532,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         info!("{:x} became leader at term {}", self.id, self.get_term());
     }
 
-    fn compaign(&mut self) {
+    fn campaign(&mut self) {
         self.become_candidate();
         let id = self.id;
         let poll_res = self.poll(id, true);
@@ -584,7 +586,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
                 info!("{:x} is starting a new election at term {}",
                       self.id,
                       self.get_term());
-                self.compaign();
+                self.campaign();
                 let committed = self.raft_log.committed;
                 self.hs.set_commit(committed);
             } else {
@@ -617,7 +619,8 @@ impl<T: Storage + Sync + Default> Raft<T> {
                   m.get_term());
             return Ok(());
         }
-        if self.pre_step.is_none() || self.pre_step.as_mut().unwrap()() {
+
+        if self.skip_step.is_none() || self.skip_step.as_mut().unwrap()() {
             match self.state {
                 StateRole::Candidate => self.step_candidate(m),
                 StateRole::Follower => self.step_follower(m),
@@ -681,7 +684,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         }
     }
 
-    fn handle_hearbeat(&mut self, m: Message) {
+    fn handle_heartbeat(&mut self, m: Message) {
         self.raft_log.commit_to(m.get_commit());
         let mut to_send = Message::new();
         to_send.set_to(m.get_from());
@@ -827,7 +830,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         self.hs.set_commit(hs.get_commit());
     }
 
-    // isElectionTimeout returns true if r.elapsed is greater than the
+    // is_election_timeout returns true if self.election_elapsed is greater than the
     // randomized election timeout in (electiontimeout, 2 * electiontimeout - 1).
     // Otherwise, it returns false.
     fn is_election_timeout(&mut self) -> bool {
@@ -838,10 +841,10 @@ impl<T: Storage + Sync + Default> Raft<T> {
         d > self.rng.gen_range(0, self.election_timeout)
     }
 
-    // checkQuorumActive returns true if the quorum is active from
+    // check_quorum_active returns true if the quorum is active from
     // the view of the local raft state machine. Otherwise, it returns
     // false.
-    // checkQuorumActive also resets all RecentActive to false.
+    // check_quorum_active also resets all recent_active to false.
     fn check_quorum_active(&mut self) -> bool {
         let mut act = 0;
         let self_id = self.id;
