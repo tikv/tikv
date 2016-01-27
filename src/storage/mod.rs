@@ -29,7 +29,8 @@ pub enum Command {
         puts: Vec<KvPair>,
         deletes: Vec<Key>,
         locks: Vec<Key>,
-        version: u64,
+        start_version: u64,
+        commit_version: u64,
         callback: Callback<()>,
     },
 }
@@ -47,13 +48,14 @@ impl fmt::Debug for Command {
                        limit,
                        version)
             }
-            Command::Commit{ref puts, ref deletes, ref locks, version, ..} => {
+            Command::Commit{ref puts, ref deletes, ref locks, start_version, commit_version, ..} => {
                 write!(f,
-                       "kv::command::commit puts({}), deletes({}), locks({}) @ {}",
+                       "kv::command::commit puts({}), deletes({}), locks({}) @ {},{}",
                        puts.len(),
                        deletes.len(),
                        locks.len(),
-                       version)
+                       start_version,
+                       commit_version)
             }
         }
     }
@@ -133,14 +135,16 @@ impl Storage {
                         puts: Vec<KvPair>,
                         deletes: Vec<Key>,
                         locks: Vec<Key>,
-                        version: u64,
+                        start_version: u64,
+                        commit_version: u64,
                         callback: Callback<()>)
                         -> Result<()> {
         let cmd = Command::Commit {
             puts: puts,
             deletes: deletes,
             locks: locks,
-            version: version,
+            start_version: start_version,
+            commit_version: commit_version,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -215,18 +219,21 @@ mod tests {
                              vec![],
                              vec![],
                              100u64,
-                             expect_commit_ok())
-               .unwrap();
-        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
-                             vec![],
-                             vec![],
                              101u64,
                              expect_commit_ok())
                .unwrap();
         storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
                              vec![],
                              vec![],
-                             99u64,
+                             102u64,
+                             104u64,
+                             expect_commit_ok())
+               .unwrap();
+        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
+                             vec![],
+                             vec![],
+                             103u64,
+                             105u64,
                              expect_commit_err())
                .unwrap();
 

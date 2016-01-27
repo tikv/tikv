@@ -20,8 +20,8 @@ impl Scheduler {
                 let pairs = self.engine.mvcc_scan(&start_key, limit, version);
                 callback(pairs.map_err(|e| super::Error::from(e)));
             }
-            Command::Commit{puts, deletes, locks, version, callback} => {
-                callback(self.commit(puts, deletes, locks, version)
+            Command::Commit{puts, deletes, locks, start_version, commit_version, callback} => {
+                callback(self.commit(puts, deletes, locks, start_version, commit_version)
                              .map_err(|e| super::Error::from(e)));
             }
         }
@@ -31,12 +31,13 @@ impl Scheduler {
               puts: Vec<KvPair>,
               deletes: Vec<Key>,
               locks: Vec<Key>,
-              version: u64)
+              start_version: u64,
+              commit_version: u64)
               -> Result<()> {
         for key in puts.iter().map(|&(ref x, _)| x).chain(deletes.iter()).chain(locks.iter()) {
             let latest_modify = try!(self.engine.as_ref().mvcc_latest_modify(key));
             if let Some(x) = latest_modify {
-                if x >= version {
+                if x >= start_version {
                     return Err(Error::ConditionNotMatch);
                 }
             }
@@ -44,10 +45,10 @@ impl Scheduler {
 
         // TODO(disksing): use batch
         for (ref k, ref v) in puts {
-            try!(self.engine.mvcc_put(k, v, version));
+            try!(self.engine.mvcc_put(k, v, commit_version));
         }
         for ref k in deletes {
-            try!(self.engine.mvcc_delete(k, version));
+            try!(self.engine.mvcc_delete(k, commit_version));
         }
         Ok(())
     }
