@@ -13,11 +13,7 @@ use mio::{self, Token, NotifyError};
 
 use util::codec;
 
-mod conn;
-mod server;
-mod run;
-mod handler;
-mod bench;
+pub mod server;
 
 pub type Result<T> = result::Result<T, Box<error::Error + Send + Sync>>;
 

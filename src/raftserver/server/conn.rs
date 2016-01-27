@@ -10,8 +10,8 @@ use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 
 use raftserver::{Result, ConnData};
-use raftserver::server::Server;
-use raftserver::handler::ServerHandler;
+use super::server::Server;
+use super::handler::ServerHandler;
 use util::codec;
 
 pub struct Conn {
