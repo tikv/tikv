@@ -134,26 +134,26 @@ pub struct Raft<T: Default + Storage + Sync> {
     pub lead: u64,
 
     /// New configuration is ignored if there exists unapplied configuration.
-    pub pending_conf: bool,
+    pending_conf: bool,
 
     /// number of ticks since it reached last electionTimeout when it is leader
     /// or candidate.
     /// number of ticks since it reached last electionTimeout or received a
     /// valid message from current leader when it is a follower.
-    pub election_elapsed: usize,
+    election_elapsed: usize,
 
     /// number of ticks since it reached last heartbeatTimeout.
     /// only leader keeps heartbeatElapsed.
-    pub heartbeat_elapsed: usize,
+    heartbeat_elapsed: usize,
 
-    pub check_quorum: bool,
+    check_quorum: bool,
 
-    pub heartbeat_timeout: usize,
-    pub election_timeout: usize,
+    heartbeat_timeout: usize,
+    election_timeout: usize,
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
-    pub skip_step: Option<Box<FnMut() -> bool>>,
-    pub rng: DefaultRng,
+    skip_step: Option<Box<FnMut() -> bool>>,
+    rng: DefaultRng,
 }
 
 fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
@@ -293,6 +293,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         }
         let (sindex, sterm) = (snapshot.get_metadata().get_index(),
                                snapshot.get_metadata().get_term());
+        // TODO get rid of clone
         m.set_snapshot(snapshot.clone());
         debug!("{:x} [firstindex: {}, commit: {}] sent snapshot[index: {}, term: {}] to {:x} \
                 [{:?}]",
