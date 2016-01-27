@@ -12,7 +12,7 @@ enum MessageType {
 }
 
 message Message {
-  optional MessageType          type      = 1;  
+  optional MessageType          msg_type  = 1;  
   optional RaftCommandRequest   cmd_req   = 2;
   optional RaftCommandResponse  cmd_resp  = 3;
   optional RaftMessage          raft      = 4;
