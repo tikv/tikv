@@ -2,6 +2,7 @@ use std::cell::UnsafeCell;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use rand::{self, ThreadRng};
+use protobuf::Message;
 
 pub use log::LogLevelFilter;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
@@ -29,6 +30,23 @@ impl Log for StdOutLogger {
             println!("[{}] {}", record.level(), record.args());
         }
     }
+}
+
+pub fn limit_size<T: Message + Clone>(entries: &[T], max: u64) -> Vec<T> {
+    if entries.len() == 0 {
+        return entries.to_vec();
+    }
+
+    let mut size = Message::compute_size(&entries[0]) as u64;
+    let mut limit = 1usize;
+    while limit < entries.len() {
+        size += Message::compute_size(&entries[limit]) as u64;
+        if size > max {
+            break;
+        }
+        limit += 1;
+    }
+    entries[..limit as usize].to_vec()
 }
 
 /// A simple general wrapper for struct that is thread-safe for interior mutability already.
