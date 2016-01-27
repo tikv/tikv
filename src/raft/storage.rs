@@ -42,7 +42,7 @@ impl MemStorage {
     }
 
     fn inner_last_index(&self) -> u64 {
-        return self.entries[0].get_Index() + self.entries.len() as u64 - 1;
+        return self.entries[0].get_index() + self.entries.len() as u64 - 1;
     }
 
     fn limit_size(entries: &[Entry], max: u64) -> Result<&[Entry]> {
@@ -66,8 +66,8 @@ impl MemStorage {
 
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
         let mut e = Entry::new();
-        e.set_Term(snapshot.get_metadata().get_term());
-        e.set_Index(snapshot.get_metadata().get_index());
+        e.set_term(snapshot.get_metadata().get_term());
+        e.set_index(snapshot.get_metadata().get_index());
         self.entries = vec![e];
         self.snapshot = snapshot;
         Ok(())
@@ -82,14 +82,14 @@ impl MemStorage {
             return Err(Error::Store(StorageError::SnapshotOutOfDate));
         }
 
-        let offset = self.entries[0].get_Index();
+        let offset = self.entries[0].get_index();
         if idx > self.last_index().unwrap() {
             panic!("snapshot {} is out of bound lastindex({})",
                    idx,
                    self.last_index().unwrap())
         }
         self.snapshot.mut_metadata().set_index(idx);
-        self.snapshot.mut_metadata().set_term(self.entries[(idx - offset) as usize].get_Term());
+        self.snapshot.mut_metadata().set_term(self.entries[(idx - offset) as usize].get_term());
         match cs {
             Some(cs) => self.snapshot.mut_metadata().set_conf_state(cs),
             None => {}
@@ -99,7 +99,7 @@ impl MemStorage {
     }
 
     pub fn compact(&mut self, compact_index: u64) -> Result<()> {
-        let offset = self.entries[0].get_Index();
+        let offset = self.entries[0].get_index();
         if compact_index <= offset {
             return Err(Error::Store(StorageError::Compacted));
         }
@@ -119,21 +119,21 @@ impl MemStorage {
         if ents.len() == 0 {
             return Ok(());
         }
-        let first: u64 = self.entries[0].get_Index() + 1;
-        let last: u64 = ents[0].get_Index() + ents.len() as u64 - 1;
+        let first: u64 = self.entries[0].get_index() + 1;
+        let last: u64 = ents[0].get_index() + ents.len() as u64 - 1;
 
         if last < first {
             return Ok(());
         }
         // truncate compacted entries
         let mut te: &[Entry] = ents;
-        if first > ents[0].get_Index() {
-            let start = (first - ents[0].get_Index()) as usize;
+        if first > ents[0].get_index() {
+            let start = (first - ents[0].get_index()) as usize;
             te = &ents[start..ents.len()];
         }
 
 
-        let offset = te[0].get_Index() - self.entries[0].get_Index();
+        let offset = te[0].get_index() - self.entries[0].get_index();
         if self.entries.len() as u64 > offset {
             let mut new_entries: Vec<Entry> = vec![];
             new_entries.extend_from_slice(&self.entries[..offset as usize]);
@@ -144,7 +144,7 @@ impl MemStorage {
         } else {
             panic!("missing log entry [last: {}, append at: {}]",
                    self.last_index().unwrap(),
-                   te[0].get_Index())
+                   te[0].get_index())
         }
 
         Ok(())
@@ -161,7 +161,7 @@ impl Storage for MemStorage {
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<&[Entry]> {
-        let offset = self.entries[0].get_Index();
+        let offset = self.entries[0].get_index();
         if low <= offset {
             return Err(Error::Store(StorageError::Compacted));
         }
@@ -181,15 +181,15 @@ impl Storage for MemStorage {
     }
 
     fn term(&self, idx: u64) -> Result<u64> {
-        let offset = self.entries[0].get_Index();
+        let offset = self.entries[0].get_index();
         if idx < offset {
             return Err(Error::Store(StorageError::Compacted));
         }
-        Ok(self.entries[(idx - offset) as usize].get_Term())
+        Ok(self.entries[(idx - offset) as usize].get_term())
     }
 
     fn first_index(&self) -> Result<u64> {
-        Ok(self.entries[0].get_Index() + 1)
+        Ok(self.entries[0].get_index() + 1)
     }
 
     fn last_index(&self) -> Result<u64> {
