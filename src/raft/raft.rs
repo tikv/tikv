@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use std::cmp;
 use raft::storage::Storage;
-use util::{SyncCell, DefaultRng};
+use util::DefaultRng;
 use rand::Rng;
 use proto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
 use protobuf::repeated::RepeatedField;
@@ -29,7 +29,7 @@ pub const INVALID_ID: u64 = 0;
 
 /// Config contains the parameters to start a raft.
 #[derive(Default)]
-pub struct Config<T: Storage + Sync + Default> {
+pub struct Config<T: Storage + Default> {
     /// id is the identity of the local raft. ID cannot be 0.
     pub id: u64,
 
@@ -56,7 +56,7 @@ pub struct Config<T: Storage + Sync + Default> {
     /// states to be stored in storage. raft reads the persisted entires
     /// and states out of Storage when it needs. raft reads out the previous
     /// state and configuration out of storage when restarting.
-    pub storage: Arc<SyncCell<T>>,
+    pub storage: Arc<T>,
     /// Applied is the last applied index. It should only be set when restarting
     /// raft. raft will not return entries to the application smaller or equal to Applied.
     /// If Applied is unset when restarting, raft might return previous applied entries.
@@ -79,7 +79,7 @@ pub struct Config<T: Storage + Sync + Default> {
     pub check_quorum: bool,
 }
 
-impl<T: Storage + Sync + Default> Config<T> {
+impl<T: Storage + Default> Config<T> {
     pub fn validate(&self) -> Result<()> {
         if self.id == INVALID_ID {
             return Err(Error::ConfigInvalid("invalid node id".to_string()));
@@ -112,7 +112,7 @@ pub struct SoftState {
 }
 
 #[derive(Default)]
-pub struct Raft<T: Default + Storage + Sync> {
+pub struct Raft<T: Default + Storage> {
     pub hs: HardState,
 
     pub id: u64,
@@ -172,7 +172,7 @@ fn new_message(from: u64, to: u64, field_type: MessageType) -> Message {
     m
 }
 
-impl<T: Storage + Sync + Default> Raft<T> {
+impl<T: Storage + Default> Raft<T> {
     pub fn new(c: &Config<T>) -> Raft<T> {
         c.validate().expect("configuration is invalid");
         let store = c.storage.clone();
@@ -224,7 +224,7 @@ impl<T: Storage + Sync + Default> Raft<T> {
         r
     }
 
-    pub fn get_store(&self) -> Arc<SyncCell<T>> {
+    pub fn get_store(&self) -> Arc<T> {
         self.raft_log.get_store()
     }
 

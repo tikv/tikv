@@ -1,9 +1,10 @@
 
 #![allow(dead_code)]
 #![allow(deprecated)]
-use protobuf;
 use proto::raftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use util;
 
 #[derive(Debug, Clone)]
 pub struct RaftState {
@@ -13,23 +14,23 @@ pub struct RaftState {
 
 pub trait Storage {
     fn initial_state(&self) -> Result<RaftState>;
-    fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<&[Entry]>;
+    fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>>;
     fn term(&self, idx: u64) -> Result<u64>;
     fn first_index(&self) -> Result<u64>;
     fn last_index(&self) -> Result<u64>;
-    fn snapshot(&self) -> Result<&Snapshot>;
+    fn snapshot(&self) -> Result<Snapshot>;
 }
 
-pub struct MemStorage {
+pub struct MemStorageCore {
     hard_state: HardState,
     snapshot: Snapshot,
     // TODO: maybe vec_deque
     entries: Vec<Entry>,
 }
 
-impl MemStorage {
-    pub fn new() -> MemStorage {
-        MemStorage {
+impl MemStorageCore {
+    pub fn new() -> MemStorageCore {
+        MemStorageCore {
             // When starting from scratch populate the list with a dummy entry at term zero.
             entries: vec![Entry::new()],
             hard_state: HardState::new(),
@@ -44,25 +45,6 @@ impl MemStorage {
     fn inner_last_index(&self) -> u64 {
         return self.entries[0].get_index() + self.entries.len() as u64 - 1;
     }
-
-    fn limit_size(entries: &[Entry], max: u64) -> Result<&[Entry]> {
-        if entries.len() == 0 {
-            return Ok(entries);
-        }
-
-        let mut size = protobuf::Message::compute_size(&entries[0]) as u64;
-        let mut limit = 1u64;
-        while limit < entries.len() as u64 {
-            size += protobuf::Message::compute_size(&entries[limit as usize]) as u64;
-            if size > max {
-                break;
-            }
-            limit += 1;
-        }
-        let ents = &entries[..limit as usize];
-        Ok(ents)
-    }
-
 
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
         let mut e = Entry::new();
@@ -83,10 +65,10 @@ impl MemStorage {
         }
 
         let offset = self.entries[0].get_index();
-        if idx > self.last_index().unwrap() {
+        if idx > self.inner_last_index() {
             panic!("snapshot {} is out of bound lastindex({})",
                    idx,
-                   self.last_index().unwrap())
+                   self.inner_last_index())
         }
         self.snapshot.mut_metadata().set_index(idx);
         self.snapshot.mut_metadata().set_term(self.entries[(idx - offset) as usize].get_term());
@@ -103,10 +85,10 @@ impl MemStorage {
         if compact_index <= offset {
             return Err(Error::Store(StorageError::Compacted));
         }
-        if compact_index > self.last_index().unwrap() {
+        if compact_index > self.inner_last_index() {
             panic!("compact {} is out of bound lastindex({})",
                    compact_index,
-                   self.last_index().unwrap())
+                   self.inner_last_index())
         }
 
         let i = (compact_index - offset) as usize;
@@ -143,7 +125,7 @@ impl MemStorage {
             self.entries.extend_from_slice(te);
         } else {
             panic!("missing log entry [last: {}, append at: {}]",
-                   self.last_index().unwrap(),
+                   self.inner_last_index(),
                    te[0].get_index())
         }
 
@@ -151,56 +133,83 @@ impl MemStorage {
     }
 }
 
+pub struct MemStorage {
+    core: RwLock<MemStorageCore>,
+}
+
+/// A thread-safe in-memory storage implementation.
+/// Mainly for tests purpose.
+impl MemStorage {
+    pub fn new() -> MemStorage {
+        MemStorage { ..Default::default() }
+    }
+
+    pub fn rl(&self) -> RwLockReadGuard<MemStorageCore> {
+        self.core.read().unwrap()
+    }
+
+    pub fn wl(&self) -> RwLockWriteGuard<MemStorageCore> {
+        self.core.write().unwrap()
+    }
+}
+
+impl Default for MemStorage {
+    fn default() -> MemStorage {
+        MemStorage { core: RwLock::new(MemStorageCore::new()) }
+    }
+}
 
 impl Storage for MemStorage {
     fn initial_state(&self) -> Result<RaftState> {
+        let core = self.rl();
         Ok(RaftState {
-            hard_state: self.hard_state.clone(),
-            conf_state: self.snapshot.get_metadata().get_conf_state().clone(),
+            hard_state: core.hard_state.clone(),
+            conf_state: core.snapshot.get_metadata().get_conf_state().clone(),
         })
     }
 
-    fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<&[Entry]> {
-        let offset = self.entries[0].get_index();
+    fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
+        let core = self.rl();
+        let offset = core.entries[0].get_index();
         if low <= offset {
             return Err(Error::Store(StorageError::Compacted));
         }
 
-        if high > self.inner_last_index() + 1 {
+        if high > core.inner_last_index() + 1 {
             panic!("index out of bound")
         }
         // only contains dummy entries.
-        if self.entries.len() == 1 {
+        if core.entries.len() == 1 {
             return Err(Error::Store(StorageError::Unavailable));
         }
 
         let lo = (low - offset) as usize;
         let hi = (high - offset) as usize;
-        let ents: &[Entry] = &self.entries[lo..hi];
-        return MemStorage::limit_size(ents, max_size);
+        let ents: &[Entry] = &core.entries[lo..hi];
+        Ok(util::limit_size(ents, max_size))
     }
 
     fn term(&self, idx: u64) -> Result<u64> {
-        let offset = self.entries[0].get_index();
+        let core = self.rl();
+        let offset = core.entries[0].get_index();
         if idx < offset {
             return Err(Error::Store(StorageError::Compacted));
         }
-        Ok(self.entries[(idx - offset) as usize].get_term())
+        Ok(core.entries[(idx - offset) as usize].get_term())
     }
 
     fn first_index(&self) -> Result<u64> {
-        Ok(self.entries[0].get_index() + 1)
+        let core = self.rl();
+        Ok(core.entries[0].get_index() + 1)
     }
 
     fn last_index(&self) -> Result<u64> {
-        Ok(self.inner_last_index())
+        let core = self.rl();
+        Ok(core.inner_last_index())
     }
 
-    fn snapshot(&self) -> Result<&Snapshot> {
-        Ok(&self.snapshot)
+    fn snapshot(&self) -> Result<Snapshot> {
+        let core = self.rl();
+        Ok(core.snapshot.clone())
     }
 }
-
-/// TODO: make MemStorage become actually sync.
-/// Currently MemStore is only used for single-thread testing.
-unsafe impl Sync for MemStorage {}
