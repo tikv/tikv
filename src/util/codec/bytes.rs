@@ -1,5 +1,6 @@
+use std::vec::Vec;
 use std::io::Write;
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+
 use super::{Result, Error};
 
 const ENC_GROUP_SIZE: usize = 8;
@@ -7,7 +8,7 @@ const ENC_MARKER: u8 = b'\xff';
 const ENC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
 
 // Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
-fn encode_bytes(key: &[u8]) -> Vec<u8> {
+pub fn encode_bytes(key: &[u8]) -> Vec<u8> {
     let cap = key.len() / (ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1);
     let mut encoded = Vec::<u8>::with_capacity(cap);
     let len = key.len();
@@ -28,7 +29,7 @@ fn encode_bytes(key: &[u8]) -> Vec<u8> {
     encoded
 }
 
-fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
+pub fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
     let mut key = Vec::<u8>::with_capacity(data.len());
     let mut read: usize = 0;
     for chunk in data.chunks(ENC_GROUP_SIZE + 1) {
@@ -56,23 +57,9 @@ fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
     Err(Error::KeyLength)
 }
 
-pub fn encode_key(key: &[u8], version: u64) -> Vec<u8> {
-    let mut v = encode_bytes(key);
-    v.write_u64::<BigEndian>(version).unwrap();
-    v
-}
-
-pub fn decode_key(data: &[u8]) -> Result<(Vec<u8>, u64)> {
-    let (key, read_size) = try!(decode_bytes(data));
-    match data[read_size..].as_ref().read_u64::<BigEndian>() {
-        Ok(ver) => Ok((key, ver)),
-        Err(_) => Err(Error::KeyVersion),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{encode_key, encode_bytes, decode_key, decode_bytes};
+    use super::{encode_bytes, decode_bytes};
     use std::cmp::Ordering;
 
     #[test]
@@ -157,29 +144,6 @@ mod tests {
         for (x, y, ord) in pairs {
             assert_eq!(encode_bytes(x).cmp(&encode_bytes(y)), ord);
         }
-    }
-
-    #[test]
-    fn test_encode_key() {
-        let pairs: Vec<(&[u8], u64)> = vec![
-          (b"abc", 0),
-          (b"\x00\x00", 100),
-        ];
-
-        for (x, y) in pairs {
-            let data = encode_key(x, y);
-            let (k, ver) = decode_key(&data).unwrap();
-            assert_eq!((x, y), (&k as &[u8], ver));
-        }
-    }
-
-    #[test]
-    fn test_key_compare() {
-        let a1 = encode_key(b"A", 1);
-        let a2 = encode_key(b"A", 2);
-        let b1 = encode_key(b"B", 1);
-        assert!(a2 > a1);
-        assert!(a2 < b1);
     }
 
     use test::Bencher;
