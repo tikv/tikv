@@ -1,48 +1,130 @@
+use std::collections::VecDeque;
 use super::mvcc::{self, MvccEngine};
-use super::{Engine, Command, Key, KvPair};
+use super::{Engine, Command, Key, Value, KvPair, Callback};
+
+#[derive(Debug)]
+#[allow(dead_code)]
+enum Pending {
+    Command(Command),
+    WaitCommit {
+        puts: Vec<KvPair>,
+        deletes: Vec<Key>,
+        start_version: u64,
+    },
+}
 
 pub struct Scheduler {
     engine: Box<Engine>,
+    pendings: VecDeque<Pending>,
 }
 
 impl Scheduler {
     pub fn new(engine: Box<Engine>) -> Scheduler {
-        Scheduler { engine: engine }
+        Scheduler {
+            engine: engine,
+            pendings: VecDeque::new(),
+        }
     }
 
     pub fn handle_cmd(&mut self, cmd: Command) {
         match cmd {
-            Command::Get{key, version, callback} => {
-                let value = self.engine.mvcc_get(&key, version);
-                callback(value.map_err(|e| super::Error::from(e)));
+            Command::Commit{commit_version, callback, ..} => {
+                match self.pendings.pop_front() {
+                    // TODO(disksing): check start_version
+                    Some(Pending::WaitCommit{puts, deletes, ..}) => {
+                        self.exec_commit(puts, deletes, commit_version, callback)
+                    }
+                    _ => unreachable!(), // TODO(disksing): return specific errors
+                }
             }
-            Command::Scan{start_key, limit, version, callback} => {
-                let pairs = self.engine.mvcc_scan(&start_key, limit, version);
-                callback(pairs.map_err(|e| super::Error::from(e)));
+            _ => self.pendings.push_back(Pending::Command(cmd)),
+        }
+
+        loop {
+            match self.pendings.front() {
+                Some(&Pending::WaitCommit{..}) | None => return,
+                _ => {}
             }
-            Command::Commit{puts, deletes, locks, start_version, commit_version, callback} => {
-                callback(self.commit(puts, deletes, locks, start_version, commit_version)
-                             .map_err(|e| super::Error::from(e)));
+
+            let front = self.pendings.pop_front().unwrap();
+            match front {
+                Pending::Command(Command::Get{key, version, callback}) => {
+                    self.exec_get(key, version, callback)
+                }
+                Pending::Command(Command::Scan{start_key, limit, version, callback}) => {
+                    self.exec_scan(start_key, limit, version, callback)
+                }
+                Pending::Command(Command::Prewrite{puts, deletes, locks, start_version, callback}) => {
+                    self.exec_prewrite(puts, deletes, locks, start_version, callback)
+                }
+                _ => unreachable!(),
             }
         }
     }
 
-    fn commit(&mut self,
-              puts: Vec<KvPair>,
-              deletes: Vec<Key>,
-              locks: Vec<Key>,
-              start_version: u64,
-              commit_version: u64)
-              -> Result<()> {
+    fn exec_get(&self, key: Key, version: u64, callback: Callback<Option<Value>>) {
+        let value = self.engine.mvcc_get(&key, version);
+        callback(value.map_err(|e| super::Error::from(e)));
+    }
+
+    fn exec_scan(&self,
+                 start_key: Key,
+                 limit: usize,
+                 version: u64,
+                 callback: Callback<Vec<KvPair>>) {
+        let pairs = self.engine.mvcc_scan(&start_key, limit, version);
+        callback(pairs.map_err(|e| super::Error::from(e)));
+    }
+
+    fn exec_prewrite(&mut self,
+                     puts: Vec<KvPair>,
+                     deletes: Vec<Key>,
+                     locks: Vec<Key>,
+                     start_version: u64,
+                     callback: Callback<()>) {
+        match self.check_prewrite(&puts, &deletes, &locks, start_version) {
+            Ok(_) => {
+                self.pendings.push_front(Pending::WaitCommit {
+                    puts: puts,
+                    deletes: deletes,
+                    start_version: start_version,
+                });
+                callback(Ok(()));
+            }
+            Err(e) => callback(Err(super::Error::from(e))),
+        }
+    }
+
+    fn check_prewrite(&self,
+                      puts: &Vec<KvPair>,
+                      deletes: &Vec<Key>,
+                      locks: &Vec<Key>,
+                      start_version: u64)
+                      -> Result<()> {
         for key in puts.iter().map(|&(ref x, _)| x).chain(deletes.iter()).chain(locks.iter()) {
-            let latest_modify = try!(self.engine.as_ref().mvcc_latest_modify(key));
+            let latest_modify = try!(self.engine.mvcc_latest_modify(key));
             if let Some(x) = latest_modify {
                 if x >= start_version {
                     return Err(Error::ConditionNotMatch);
                 }
             }
         }
+        Ok(())
+    }
 
+    fn exec_commit(&mut self,
+                   puts: Vec<KvPair>,
+                   deletes: Vec<Key>,
+                   commit_version: u64,
+                   callback: Callback<()>) {
+        callback(self.try_commit(puts, deletes, commit_version).map_err(|e| super::Error::from(e)));
+    }
+
+    fn try_commit(&mut self,
+                  puts: Vec<KvPair>,
+                  deletes: Vec<Key>,
+                  commit_version: u64)
+                  -> Result<()> {
         // TODO(disksing): use batch
         for (ref k, ref v) in puts {
             try!(self.engine.mvcc_put(k, v, commit_version));
