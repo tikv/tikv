@@ -575,7 +575,7 @@ impl<T: Storage + Default> Raft<T> {
                   id,
                   self.get_term())
         }
-        if !self.votes[&id] {
+        if !self.votes.contains_key(&id) {
             self.votes.insert(id, v);
         }
         self.votes.values().filter(|x| **x).count()
@@ -610,7 +610,7 @@ impl<T: Storage + Default> Raft<T> {
                   m.get_from(),
                   m.get_term());
             self.become_follower(m.get_term(), lead);
-        } else {
+        } else if m.get_term() < self.get_term() {
             // ignore
             info!("{:x} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
                   self.id,
@@ -1139,5 +1139,534 @@ impl<T: Storage + Default> Raft<T> {
             p.recent_active = false;
         }
         act >= self.quorum()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use raft::Storage;
+    use std::sync::Arc;
+    use std::collections::HashMap;
+    use raft::errors::*;
+    use rand;
+    use raft::raft_log;
+    use protobuf::RepeatedField;
+    use std::ops::Deref;
+    use std::ops::DerefMut;
+    use raft::storage::MemStorage;
+    use proto::raftpb::{Entry, Message, MessageType};
+    use raft::progress::{Progress, Inflights, ProgressState};
+
+    fn new_progress(state: ProgressState,
+                    matched: u64,
+                    next_idx: u64,
+                    pending_snapshot: u64,
+                    ins_size: usize)
+                    -> Progress {
+        Progress {
+            state: state,
+            matched: matched,
+            next_idx: next_idx,
+            pending_snapshot: pending_snapshot,
+            ins: Inflights::new(ins_size),
+            ..Default::default()
+        }
+    }
+
+    fn new_test_raft<T: Storage + Default>(id: u64,
+                                           peers: Vec<u64>,
+                                           election: usize,
+                                           heartbeat: usize,
+                                           storage: Arc<T>)
+                                           -> Raft<T> {
+        Raft::new(&Config {
+            id: id,
+            peers: peers,
+            election_tick: election,
+            heartbeat_tick: heartbeat,
+            storage: storage,
+            max_size_per_msg: raft_log::NO_LIMIT,
+            max_inflight_msgs: 256,
+            ..Default::default()
+        })
+    }
+
+    fn read_messages<T: Storage + Default>(raft: &mut Raft<T>) -> Vec<Message> {
+        raft.msgs.drain(..).collect()
+    }
+
+    fn ents(terms: Vec<u64>) -> Interface {
+        let store = MemStorage::new();
+        for (i, term) in terms.iter().enumerate() {
+            let mut e = Entry::new();
+            e.set_index(i as u64 + 1);
+            e.set_term(*term);
+            store.wl().append(&[e]).expect("");
+        }
+        let mut raft = new_test_raft(1, vec![], 5, 1, Arc::new(store));
+        raft.reset(0);
+        Interface::new(raft)
+    }
+
+    fn next_ents(r: &mut Raft<MemStorage>, s: &MemStorage) -> Vec<Entry> {
+        s.wl().append(&r.raft_log.unstable_entries().unwrap()).expect("");
+        let (last_idx, last_term) = (r.raft_log.last_index(), r.raft_log.last_term());
+        r.raft_log.stable_to(last_idx, last_term);
+        let ents = r.raft_log.next_entries();
+        let committed = r.raft_log.committed;
+        r.raft_log.applied_to(committed);
+        ents.unwrap()
+    }
+
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
+    struct Connem {
+        from: u64,
+        to: u64,
+    }
+
+    /// Compare to upstream, we use struct instead of trait here.
+    /// Because to be able to cast Interface later, we have to make
+    /// Raft derive Any, which will require a lot of dependencies to derive Any.
+    /// That's not worthy for just testing purpose.
+    struct Interface {
+        raft: Option<Raft<MemStorage>>,
+    }
+
+    impl Interface {
+        fn new(r: Raft<MemStorage>) -> Interface {
+            Interface { raft: Some(r) }
+        }
+
+        fn step(&mut self, m: Message) -> Result<()> {
+            match self.raft {
+                Some(_) => Raft::step(self, m),
+                None => Ok(()),
+            }
+        }
+
+        fn read_messages(&mut self) -> Vec<Message> {
+            match self.raft {
+                Some(_) => self.msgs.drain(..).collect(),
+                None => vec![],
+            }
+        }
+
+        fn initial(&mut self, id: u64, ids: &Vec<u64>) {
+            if self.raft.is_some() {
+                self.id = id;
+                self.prs = HashMap::with_capacity(ids.len());
+                for id in ids {
+                    self.prs.insert(*id, Progress { ..Default::default() });
+                }
+                self.reset(0);
+            }
+        }
+    }
+
+    impl Deref for Interface {
+        type Target = Raft<MemStorage>;
+        fn deref(&self) -> &Raft<MemStorage> {
+            self.raft.as_ref().unwrap()
+        }
+    }
+
+    impl DerefMut for Interface {
+        fn deref_mut(&mut self) -> &mut Raft<MemStorage> {
+            self.raft.as_mut().unwrap()
+        }
+    }
+
+    fn nop_stepper() -> Interface {
+        Interface { raft: None }
+    }
+
+    #[derive(Default)]
+    struct Network {
+        peers: HashMap<u64, Interface>,
+        storage: HashMap<u64, Arc<MemStorage>>,
+        dropm: HashMap<Connem, f64>,
+        ignorem: HashMap<MessageType, bool>,
+    }
+
+    impl Network {
+        // newNetwork initializes a network from peers.
+        // A nil node will be replaced with a new *stateMachine.
+        // A *stateMachine will get its k, id.
+        // When using stateMachine, the address list is always [1, n].
+        fn new(peers: Vec<Option<Interface>>) -> Network {
+            let size = peers.len();
+            let peer_addrs: Vec<u64> = (1..size as u64 + 1).collect();
+            let mut nstorage: HashMap<u64, Arc<MemStorage>> = HashMap::new();
+            let mut npeers: HashMap<u64, Interface> = HashMap::new();
+            let mut peers = peers;
+            for (p, id) in peers.drain(..).zip(peer_addrs.clone()) {
+                match p {
+                    None => {
+                        nstorage.insert(id, Arc::new(MemStorage::new()));
+                        let raft = new_test_raft(id,
+                                                 peer_addrs.clone(),
+                                                 10,
+                                                 1,
+                                                 nstorage[&id].clone());
+                        npeers.insert(id, Interface::new(raft));
+                    }
+                    Some(p) => {
+                        let mut p = p;
+                        p.initial(id, &peer_addrs);
+                        npeers.insert(id, p);
+                    }
+                }
+            }
+            Network {
+                peers: npeers,
+                storage: nstorage,
+                ..Default::default()
+            }
+        }
+
+        fn ignore(&mut self, t: MessageType) {
+            self.ignorem.insert(t, true);
+        }
+
+        fn filter(&self, msgs: Vec<Message>) -> Vec<Message> {
+            let mut msgs = msgs;
+            let msgs: Vec<Message> =
+                msgs.drain(..)
+                    .filter(|m| {
+                        if self.ignorem.get(&m.get_msg_type()).map(|x| *x).unwrap_or(false) {
+                            return false;
+                        }
+                        // hups never go over the network, so don't drop them but panic
+                        assert!(m.get_msg_type() != MessageType::MsgHup, "unexpected msgHup");
+                        let perc = self.dropm
+                                       .get(&Connem {
+                                           from: m.get_from(),
+                                           to: m.get_to(),
+                                       })
+                                       .map(|x| *x)
+                                       .unwrap_or(0f64);
+                        rand::random::<f64>() >= perc
+                    })
+                    .collect();
+            msgs
+        }
+
+        fn send(&mut self, msgs: Vec<Message>) {
+            let mut msgs = msgs;
+            while msgs.len() > 0 {
+                let mut new_msgs = vec![];
+                for m in msgs.drain(..) {
+                    let resp = {
+                        let p = self.peers.get_mut(&m.get_to()).unwrap();
+                        p.step(m).expect("");
+                        p.read_messages()
+                    };
+                    new_msgs.append(&mut self.filter(resp));
+                }
+                msgs.append(&mut new_msgs);
+            }
+        }
+
+        fn drop(&mut self, from: u64, to: u64, perc: f64) {
+            self.dropm.insert(Connem {
+                                  from: from,
+                                  to: to,
+                              },
+                              perc);
+        }
+
+        fn cut(&mut self, one: u64, other: u64) {
+            self.drop(one, other, 1f64);
+            self.drop(other, one, 1f64);
+        }
+
+        fn isolate(&mut self, id: u64) {
+            for i in 0..self.peers.len() as u64 {
+                let nid = i + 1;
+                if nid != id {
+                    self.drop(id, nid, 1.0);
+                    self.drop(nid, id, 1.0);
+                }
+            }
+        }
+
+        fn recover(&mut self) {
+            self.dropm = HashMap::new();
+            self.ignorem = HashMap::new();
+        }
+    }
+
+    #[test]
+    fn test_progress_become_probe() {
+        let matched = 1u64;
+        let mut tests = vec![(new_progress(ProgressState::Replicate, matched, 5, 0, 256),
+                              2),
+                             // snapshot finish
+                             (new_progress(ProgressState::Snapshot, matched, 5, 10, 256),
+                              11),
+                             // snapshot failure
+                             (new_progress(ProgressState::Snapshot, matched, 5, 0, 256), 2)];
+        for (i, &mut (ref mut p, wnext)) in tests.iter_mut().enumerate() {
+            p.become_probe();
+            if p.state != ProgressState::Probe {
+                panic!("#{}: state = {:?}, want {:?}",
+                       i,
+                       p.state,
+                       ProgressState::Probe);
+            }
+            if p.matched != matched {
+                panic!("#{}: match = {:?}, want {:?}", i, p.matched, matched);
+            }
+            if p.next_idx != wnext {
+                panic!("#{}: next = {}, want {}", i, p.next_idx, wnext);
+            }
+        }
+    }
+
+    #[test]
+    fn test_progress_become_replicate() {
+        let mut p = new_progress(ProgressState::Probe, 1, 5, 0, 256);
+        p.become_replicate();
+
+        assert_eq!(p.state, ProgressState::Replicate);
+        assert_eq!(p.matched, 1);
+        assert_eq!(p.matched + 1, p.next_idx);
+    }
+
+    #[test]
+    fn test_progress_become_snapshot() {
+        let mut p = new_progress(ProgressState::Probe, 1, 5, 0, 256);
+        p.become_snapshot(10);
+        assert_eq!(p.state, ProgressState::Snapshot);
+        assert_eq!(p.matched, 1);
+        assert_eq!(p.pending_snapshot, 10);
+    }
+
+    #[test]
+    fn test_progress_update() {
+        let (prev_m, prev_n) = (3u64, 5u64);
+        let tests = vec![
+            (prev_m - 1, prev_m, prev_n, false),
+            (prev_m, prev_m, prev_n, false),
+            (prev_m + 1, prev_m + 1, prev_n, true),
+            (prev_m + 2, prev_m + 2, prev_n + 1, true),
+        ];
+        for (i, &(update, wm, wn, wok)) in tests.iter().enumerate() {
+            let mut p = Progress {
+                matched: prev_m,
+                next_idx: prev_n,
+                ..Default::default()
+            };
+            let ok = p.maybe_update(update);
+            if ok != wok {
+                panic!("#{}: ok= {}, want {}", i, ok, wok);
+            }
+            if p.matched != wm {
+                panic!("#{}: match= {}, want {}", i, p.matched, wm);
+            }
+            if p.next_idx != wn {
+                panic!("#{}: next= {}, want {}", i, p.next_idx, wn);
+            }
+        }
+    }
+
+    #[test]
+    fn test_progress_maybe_decr() {
+        let tests = vec![
+            // state replicate and rejected is not greater than match
+            (ProgressState::Replicate, 5, 10, 5, 5, false, 10),
+            // state replicate and rejected is not greater than match
+            (ProgressState::Replicate, 5, 10, 4, 4, false, 10),
+            // state replicate and rejected is greater than match
+			// directly decrease to match+1
+            (ProgressState::Replicate, 5, 10, 9, 9, true, 6),
+            // next-1 != rejected is always false
+            (ProgressState::Probe, 0, 0, 0, 0, false, 0),
+            // next-1 != rejected is always false
+            (ProgressState::Probe, 0, 10, 5, 5, false, 10),
+            // next>1 = decremented by 1
+            (ProgressState::Probe, 0, 10, 9, 9, true, 9),
+            // next>1 = decremented by 1
+            (ProgressState::Probe, 0, 2, 1, 1, true, 1),
+            // next<=1 = reset to 1
+            (ProgressState::Probe, 0, 1, 0, 0, true, 1),
+            // decrease to min(rejected, last+1)
+            (ProgressState::Probe, 0, 10, 9, 2, true, 3),
+            // rejected < 1, reset to 1
+            (ProgressState::Probe, 0, 10, 9, 0, true, 1),
+        ];
+        for (i, &(state, m, n, rejected, last, w, wn)) in tests.iter().enumerate() {
+            let mut p = new_progress(state, m, n, 0, 0);
+            if p.maybe_decr_to(rejected, last) != w {
+                panic!("#{}: maybeDecrTo= {}, want {}", i, !w, w);
+            }
+            if p.matched != m {
+                panic!("#{}: match= {}, want {}", i, p.matched, m);
+            }
+            if p.next_idx != wn {
+                panic!("#{}: next= {}, want {}", i, p.next_idx, wn);
+            }
+        }
+    }
+
+    #[test]
+    fn test_progress_is_paused() {
+        let tests = vec![
+            (ProgressState::Probe, false, false),
+            (ProgressState::Probe, true, true),
+            (ProgressState::Replicate, false, false),
+            (ProgressState::Replicate, true, false),
+            (ProgressState::Snapshot, false, true),
+            (ProgressState::Snapshot, true, true),
+        ];
+        for (i, &(state, paused, w)) in tests.iter().enumerate() {
+            let p = Progress {
+                state: state,
+                paused: paused,
+                ins: Inflights::new(256),
+                ..Default::default()
+            };
+            if p.is_paused() != w {
+                panic!("#{}: shouldwait = {}, want {}", i, p.is_paused(), w)
+            }
+        }
+    }
+
+    // TestProgressResume ensures that progress.maybeUpdate and progress.maybeDecrTo
+    // will reset progress.paused.
+    #[test]
+    fn test_progress_resume() {
+        let mut p = Progress {
+            next_idx: 2,
+            paused: true,
+            ..Default::default()
+        };
+        p.maybe_decr_to(1, 1);
+        assert!(!p.paused, "paused= true, want false");
+        p.paused = true;
+        p.maybe_update(2);
+        assert!(!p.paused, "paused= true, want false");
+    }
+
+    // TestProgressResumeByHeartbeat ensures raft.heartbeat reset progress.paused by heartbeat.
+    #[test]
+    fn test_progress_resume_by_heartbeat() {
+        let mut raft = new_test_raft(1, vec![1, 2], 5, 1, Arc::new(MemStorage::new()));
+        raft.become_candidate();
+        raft.become_leader();
+        raft.prs.get_mut(&2).unwrap().paused = true;
+        let mut m = Message::new();
+        m.set_from(1);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgBeat);
+        raft.step(m).expect("");
+        assert!(!raft.prs[&2].paused, "paused = true, want false");
+    }
+
+    #[test]
+    fn test_progress_paused() {
+        let mut raft = new_test_raft(1, vec![1, 2], 5, 1, Arc::new(MemStorage::new()));
+        raft.become_candidate();
+        raft.become_leader();
+        let mut m = Message::new();
+        m.set_from(1);
+        m.set_to(1);
+        m.set_msg_type(MessageType::MsgPropose);
+        let mut e = Entry::new();
+        e.set_data("some_data".as_bytes().to_vec());
+        m.set_entries(RepeatedField::from_vec(vec![e]));
+        raft.step(m.clone()).expect("");
+        raft.step(m.clone()).expect("");
+        raft.step(m.clone()).expect("");
+        let ms = read_messages(&mut raft);
+        assert_eq!(ms.len(), 1);
+    }
+
+    #[test]
+    fn test_leader_election() {
+        let mut tests = vec![
+            (Network::new(vec![None, None, None]), StateRole::Leader),
+            (Network::new(vec![None, None, Some(nop_stepper())]), StateRole::Leader),
+            (Network::new(vec![None, Some(nop_stepper()), Some(nop_stepper())]), StateRole::Candidate),
+            (Network::new(vec![None, Some(nop_stepper()), Some(nop_stepper()), None]), StateRole::Candidate),
+            (Network::new(vec![None, Some(nop_stepper()), Some(nop_stepper()), None, None]), StateRole::Leader),
+            
+            // three logs further along than 0
+            (Network::new(vec![None, Some(ents(vec![1])), Some(ents(vec![2])), Some(ents(vec![1, 3])), None]), StateRole::Follower),
+            
+            // logs converge
+            (Network::new(vec![Some(ents(vec![1])), None, Some(ents(vec![2])), Some(ents(vec![1])), None]), StateRole::Leader),
+        ];
+
+        for (i, &mut (ref mut network, state)) in tests.iter_mut().enumerate() {
+            let mut m = Message::new();
+            m.set_from(1);
+            m.set_to(1);
+            m.set_msg_type(MessageType::MsgHup);
+            network.send(vec![m]);
+            let raft = network.peers.get(&1).unwrap();
+            if raft.state != state {
+                panic!("#{}: state = {:?}, want {:?}", i, raft.state, state);
+            }
+            if raft.hs.get_term() != 1 {
+                panic!("#{}: term = {}, want {}", i, raft.hs.get_term(), 1)
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_replicatioin() {
+        let new_message = |from, to, t, n| {
+            let mut m = Message::new();
+            m.set_from(from);
+            m.set_to(to);
+            m.set_msg_type(t);
+            if n > 0 {
+                let mut ents = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let mut e = Entry::new();
+                    e.set_data("somedata".as_bytes().to_vec());
+                    ents.push(e);
+                }
+                m.set_entries(RepeatedField::from_vec(ents));
+            }
+            m
+        };
+        let mut tests = vec![
+            (Network::new(vec![None, None, None]), vec![new_message(1, 1, MessageType::MsgPropose, 1)], 2),
+            (Network::new(vec![None, None, None]), vec![new_message(1, 1, MessageType::MsgPropose, 1), new_message(1, 2, MessageType::MsgHup, 0), new_message(1, 2, MessageType::MsgPropose, 1)], 4),
+        ];
+
+        for (i, &mut (ref mut network, ref msgs, wcommitted)) in tests.iter_mut().enumerate() {
+            network.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+            for m in msgs {
+                network.send(vec![m.clone()]);
+            }
+
+            for (j, x) in network.peers.iter_mut() {
+                if x.raft_log.committed != wcommitted {
+                    panic!("#{}.{}: committed = {}, want {}",
+                           i,
+                           j,
+                           x.raft_log.committed,
+                           wcommitted);
+                }
+
+                let mut ents = next_ents(x, &network.storage[j]);
+                let ents: Vec<Entry> = ents.drain(..).filter(|e| e.has_data()).collect();
+                for (k, m) in msgs.iter()
+                                  .filter(|m| m.get_msg_type() == MessageType::MsgPropose)
+                                  .enumerate() {
+                    if ents[k].get_data() != m.get_entries()[0].get_data() {
+                        panic!("#{}.{}: data = {:?}, want {:?}",
+                               i,
+                               j,
+                               ents[k].get_data(),
+                               m.get_entries()[0].get_data());
+                    }
+                }
+            }
+        }
     }
 }
