@@ -5,71 +5,23 @@
 // all use bigendian.
 // Now the version is always 1.
 // Payload can be any arbitrary data, but we use Protobuf in our program default.
-use std::{result, io, fmt};
-use std::error;
-use std::convert;
+use std::io;
 use std::vec::Vec;
-use std::io::Write;
 
 use byteorder::{ByteOrder, BigEndian};
 use protobuf;
+
+use super::{Result, Error};
 
 pub const MSG_HEADER_LEN: usize = 16;
 pub const MSG_MAGIC: u16 = 0xdaf4;
 pub const MSG_VERSION_V1: u16 = 1;
 
-#[derive(Debug)]
-pub enum Error {
-    Io(io::Error),
-    Protobuf(protobuf::ProtobufError),
-}
-
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &Error::Io(ref e) => fmt::Debug::fmt(e, f),
-            &Error::Protobuf(ref e) => fmt::Debug::fmt(e, f),
-        }
-    }
-}
-
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            // not sure that cause should be included in message
-            &Error::Io(ref e) => e.description(),
-            &Error::Protobuf(ref e) => e.description(),
-        }
-    }
-
-    fn cause(&self) -> Option<&error::Error> {
-        match self {
-            &Error::Io(ref e) => Some(e),
-            &Error::Protobuf(ref e) => Some(e),
-        }
-    }
-}
-
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error {
-        Error::Io(err)
-    }
-}
-
-impl From<protobuf::ProtobufError> for Error {
-    fn from(err: protobuf::ProtobufError) -> Error {
-        Error::Protobuf(err)
-    }
-}
 
 fn other_err(msg: String) -> Error {
-    let err = io::Error::new(io::ErrorKind::Other, msg);
-    convert::From::from(err)
+    Error::Io(io::Error::new(io::ErrorKind::Other, msg))
 }
 
-pub type Result<T> = result::Result<T, Error>;
 
 // Encodes message with message ID and protobuf body.
 pub fn encode_msg<T: io::Write, M: protobuf::Message>(w: &mut T,

@@ -69,7 +69,7 @@ mod tests {
 
     use super::*;
     use raftserver::*;
-    use util::codec;
+    use util::codec::rpc;
     use super::super::ServerHandler;
 
     struct BaseHandler;
@@ -108,7 +108,7 @@ mod tests {
 
         for i in 1..10 {
             let mut data = vec![];
-            codec::encode_data(&mut data, i as u64, "hello world".as_bytes()).unwrap();
+            rpc::encode_data(&mut data, i as u64, "hello world".as_bytes()).unwrap();
             for i in data.clone() {
                 conn.write(&[i; 1]).unwrap();
                 conn.flush().unwrap();
