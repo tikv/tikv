@@ -50,13 +50,17 @@ impl<T> From<sync::PoisonError<T>> for raft::Error {
 
 impl Storage for RegionStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
-        let mut hard_state = HardState::new();
         let mut meta = try!(self.meta.write());
-        let found = try!(engine::get_msg(&self.engine,
-                                         &keys::raft_hard_state_key(meta.region_id),
-                                         &mut hard_state));
         let initialized = meta.is_initialized();
-        // We should know why cockroachdb does this initialization later.
+        let res = try!(engine::get_msg::<HardState>(&self.engine,
+                                                    &keys::raft_hard_state_key(meta.region_id)));
+
+        let found = res.is_some();
+        let mut hard_state = match res {
+            Some(state) => state,
+            None => HardState::new(), 
+        };
+
         if !found {
             if initialized {
                 hard_state.set_term(RAFT_INIT_LOG_TERM);
@@ -196,14 +200,13 @@ impl Storage for RegionStorage {
         let meta = try!(self.meta.read());
         let applied_index = try!(meta.snap_load_applied_index(&snap));
 
-        let mut region = metapb::Region::new();
-        let found = try!(engine::snap_get_msg(&snap,
-                                              &keys::region_info_key(meta.region.get_start_key()),
-                                              &mut region));
-        if !found {
-            return Err(storage_error(format!("could not find region info")));
-        }
+        let res = try!(engine::snap_get_msg::<metapb::Region>(&snap,
+                                            &keys::region_info_key(meta.region.get_start_key())));
 
+        let region = match res {
+            None => return Err(storage_error(format!("could not find region info"))),
+            Some(region) => region,
+        };
 
         let term = try!(self.term(applied_index));
 
