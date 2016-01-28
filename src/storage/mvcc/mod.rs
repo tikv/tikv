@@ -93,14 +93,14 @@ pub trait MvccEngine : Engine {
         Ok(pairs)
     }
 
-    fn mvcc_latest_modify(&self, key: &[u8]) -> Result<Option<u64>> {
+    fn mvcc_latest_modified(&self, key: &[u8]) -> Result<Option<u64>> {
         let mkey = encode_key(key, 0u64);
         let mval = match try!(self.get(&mkey)) {
             Some(x) => x,
             None => return Ok(None),
         };
         let meta = try!(Meta::parse(&mval));
-        Ok(meta.latest_modify())
+        Ok(meta.latest_modified())
     }
 }
 
