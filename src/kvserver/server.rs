@@ -19,6 +19,8 @@ use util::codec::{self, encode_msg, decode_msg, MSG_HEADER_LEN};
 use storage;
 use storage::{Key, Storage, Value, KvPair, Callback};
 
+use util;
+
 const SERVER_TOKEN: Token = Token(0);
 
 quick_error! {
@@ -127,8 +129,9 @@ impl Server {
         // / [TODO]: return error
         // }
         let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
-        let start_key = cmd_scan_req.get_key().iter().cloned().collect();
         let sender = event_loop.channel();
+        // convert [u8] to Vec[u8]
+        let start_key: Key = cmd_scan_req.get_key().iter().cloned().collect();
         match self.store
                   .async_scan(start_key,
                               cmd_scan_req.get_limit() as usize,
@@ -148,8 +151,43 @@ impl Server {
         }
         Ok(())
     }
-    pub fn handle_commit(&mut self, msg: &Request) -> Result<Response> {
-        unimplemented!();
+    pub fn handle_commit(&mut self,
+                         msg: &Request,
+                         msg_id: u64,
+                         token: Token,
+                         event_loop: &mut EventLoop<Server>)
+                         -> Result<()> {
+        let cmd_commit_req: &CmdCommitRequest = msg.get_cmd_commit_req();
+        let sender = event_loop.channel();
+        for kv in cmd_commit_req.get_puts() {
+        }
+        let puts: Vec<_> = cmd_commit_req.get_puts()
+                                         .iter()
+                                         .map(|kv| {
+                                             (util::array_to_vec(kv.get_key()),
+                                              util::array_to_vec(kv.get_value()))
+                                         })
+                                         .collect();
+        let deletes: Vec<_> = cmd_commit_req.get_dels().iter().cloned().collect();
+        let locks: Vec<_> = cmd_commit_req.get_locks().iter().cloned().collect();
+        match self.store
+                  .async_commit(puts,
+                                deletes,
+                                locks,
+                                cmd_commit_req.get_version(),
+                                Box::new(move |v: ::std::result::Result<(), storage::Error>| {
+                                    let resp: Response = Server::cmd_commit_done();
+                                    let mut queueMsg: QueueMessage = QueueMessage::Response(token,
+                                                                                            msg_id,
+                                                                                            resp);
+                                    thread::spawn(move || {
+                                        let _ = sender.send(queueMsg);
+                                    });
+                                })) {
+            Ok(()) => {}
+            Err(why) => return Err(ServerError::Storage(why)),
+        }
+        Ok(())
     }
     fn cmd_get_done(r: ::std::result::Result<Option<Value>, storage::Error>) -> Response {
         let mut resp: Response = Response::new();
@@ -192,6 +230,10 @@ impl Server {
         }
         resp.set_field_type(MessageType::CmdScan);
         resp.set_cmd_scan_resp(cmd_scan_resp);
+        resp
+    }
+    fn cmd_commit_done() -> Response {
+        let mut resp: Response = Response::new();
         resp
     }
 }
@@ -277,7 +319,7 @@ impl mio::Handler for Server {
                         }
                     }
                     MessageType::CmdCommit => {
-                        if self.handle_commit(&m).is_err() {
+                        if self.handle_commit(&m, msg_id, token, event_loop).is_err() {
                             // [TODO]: error log
                         }
                     }
