@@ -48,7 +48,7 @@ impl<T> From<sync::PoisonError<T>> for raft::Error {
     }
 }
 
-impl RegionStorage {
+impl Storage for RegionStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
         let mut hard_state = HardState::new();
         let mut meta = try!(self.meta.write());
@@ -168,11 +168,11 @@ impl RegionStorage {
                     _ => return Err(e),
                 }
             }
-            Ok(entries) => {
-                if entries.len() == 0 {
+            Ok(ents) => {
+                if ents.len() == 0 {
                     return Ok(0);
                 } else {
-                    return Ok(entries[0].get_term());
+                    return Ok(ents[0].get_term());
                 }
             }
         }
@@ -220,7 +220,7 @@ impl RegionStorage {
 
         snapshot.mut_metadata().set_conf_state(conf_state);
 
-        // Set snapshot data. 
+        // Set snapshot data.
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region);
 
