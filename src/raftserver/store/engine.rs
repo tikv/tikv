@@ -13,15 +13,18 @@ pub fn new_engine(path: &str) -> Result<DB> {
     Ok(db)
 }
 
-pub fn get_msg<M: protobuf::Message>(db: &DB, key: &[u8], m: &mut M) -> Result<bool> {
+pub fn get_msg<M>(db: &DB, key: &[u8]) -> Result<Option<M>>
+    where M: protobuf::Message + protobuf::MessageStatic
+{
     let value = try!(db.get(key));
 
     if value.is_none() {
-        return Ok(false);
+        return Ok(None);
     }
 
+    let mut m = M::new();
     try!(m.merge_from_bytes(&value.unwrap()));
-    Ok(true)
+    Ok(Some(m))
 }
 
 pub fn put_msg<T: Writable, M: protobuf::Message>(w: &T, key: &[u8], m: &M) -> Result<()> {
@@ -80,15 +83,18 @@ fn snap_get(snap: &Snapshot, key: &[u8]) -> Result<Option<Box<[u8]>>> {
 
 // Now snapshot doesn't support get function, so it is not easy to combine DB and Snapshot operations.
 // If origin rust rocksdb supports snapshot get, we will discard these functions.
-pub fn snap_get_msg<M: protobuf::Message>(snap: &Snapshot, key: &[u8], m: &mut M) -> Result<bool> {
+pub fn snap_get_msg<M>(snap: &Snapshot, key: &[u8]) -> Result<Option<M>>
+    where M: protobuf::Message + protobuf::MessageStatic
+{
     let value = try!(snap_get(snap, key));
 
     if value.is_none() {
-        return Ok(false);
+        return Ok(None);
     }
 
+    let mut m = M::new();
     try!(m.merge_from_bytes(&value.unwrap()));
-    Ok(true)
+    Ok(Some(m))
 }
 
 pub fn snap_get_u64(snap: &Snapshot, key: &[u8]) -> Result<Option<u64>> {
@@ -171,25 +177,22 @@ mod tests {
         let key = b"key";
         put_msg(&engine, key, &r).unwrap();
 
-        let mut r1 = Region::new();
-        let b = get_msg(&engine, key, &mut r1).unwrap();
-        assert_eq!(r, r1);
-        assert!(b);
-
-        let mut r2 = Region::new();
         let snap = engine.snapshot();
-        let b = snap_get_msg(&snap, key, &mut r2).unwrap();
+
+        let mut r1 = get_msg::<Region>(&engine, key).unwrap().unwrap();
+        assert_eq!(r, r1);
+
+        let mut r2 = snap_get_msg::<Region>(&snap, key).unwrap().unwrap();
         assert_eq!(r, r2);
-        assert!(b);
 
         r.set_region_id(11);
         put_msg(&engine, key, &r).unwrap();
-        get_msg(&engine, key, &mut r1).unwrap();
-        snap_get_msg(&snap, key, &mut r2).unwrap();
+        r1 = get_msg::<Region>(&engine, key).unwrap().unwrap();
+        r2 = snap_get_msg::<Region>(&snap, key).unwrap().unwrap();
         assert!(r1 != r2);
 
-        let b = get_msg(&engine, b"missing_key", &mut r1).unwrap();
-        assert!(!b);
+        let b = get_msg::<Region>(&engine, b"missing_key").unwrap();
+        assert!(b.is_none());
 
         put_i64(&engine, key, -1).unwrap();
         assert_eq!(get_i64(&engine, key).unwrap(), Some(-1));

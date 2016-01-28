@@ -35,9 +35,7 @@ const RAFT_TRUNCATED_STATE_SUFFIX: u8 = 0x05;
 const REGION_INFO_SUFFIX: u8 = 0x01;
 
 pub fn store_ident_key() -> Vec<u8> {
-    let mut key = Vec::with_capacity(STORE_IDENT_KEY.len());
-    key.extend_from_slice(STORE_IDENT_KEY);
-    key
+    STORE_IDENT_KEY.to_vec()
 }
 
 fn make_region_id_key(region_id: u64, suffix: u8, extra_cap: usize) -> Vec<u8> {
