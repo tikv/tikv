@@ -11,21 +11,21 @@ pub enum Modify<'a> {
     Put((&'a [u8], &'a [u8])),
 }
 
-pub trait Engine : Send {
+pub trait Engine : Send + Sync {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>>;
-    fn write(&mut self, batch: Vec<Modify>) -> Result<()>;
+    fn write(&self, batch: Vec<Modify>) -> Result<()>;
 
-    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.write(vec![Modify::Put((key, value))])
     }
 
-    fn delete(&mut self, key: &[u8]) -> Result<()> {
+    fn delete(&self, key: &[u8]) -> Result<()> {
         self.write(vec![Modify::Delete(key)])
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Dsn<'a> {
     Memory,
     RocksDBPath(&'a str),

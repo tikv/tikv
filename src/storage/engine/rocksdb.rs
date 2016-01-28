@@ -1,8 +1,8 @@
-extern crate rocksdb;
-
 use std::fmt::{self, Display, Formatter};
 use std::error::Error;
-use self::rocksdb::{DB, Writable, IteratorMode, Direction};
+
+use rocksdb::{DB, Writable, IteratorMode, Direction};
+
 use super::{Engine, Modify, Result};
 
 pub struct EngineRocksdb {
@@ -29,7 +29,7 @@ impl Engine for EngineRocksdb {
         Ok(pair)
     }
 
-    fn write(&mut self, batch: Vec<Modify>) -> Result<()> {
+    fn write(&self, batch: Vec<Modify>) -> Result<()> {
         for rev in batch {
             match rev {
                 Modify::Delete(k) => {

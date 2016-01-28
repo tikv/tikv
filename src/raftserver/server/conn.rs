@@ -10,9 +10,9 @@ use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 
 use raftserver::{Result, ConnData};
-use raftserver::server::Server;
-use raftserver::handler::ServerHandler;
-use util::codec;
+use super::server::Server;
+use super::handler::ServerHandler;
+use util::codec::rpc;
 
 pub struct Conn {
     pub sock: TcpStream,
@@ -67,7 +67,7 @@ impl Conn {
             sock: sock,
             token: token,
             interest: EventSet::readable() | EventSet::hup(),
-            header: create_mem_buf(codec::MSG_HEADER_LEN),
+            header: create_mem_buf(rpc::MSG_HEADER_LEN),
             payload: None,
             res: VecDeque::new(),
             last_msg_id: 0,
@@ -97,8 +97,8 @@ impl Conn {
                 }
 
                 // we have already read whole header, parse it and begin to read payload.
-                let (msg_id, payload_len) = try!(codec::decode_msg_header(self.header
-                                                                              .bytes()));
+                let (msg_id, payload_len) = try!(rpc::decode_msg_header(self.header
+                                                                            .bytes()));
                 self.last_msg_id = msg_id;
                 self.payload = Some(create_mem_buf(payload_len));
             }

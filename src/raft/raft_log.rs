@@ -1,21 +1,21 @@
 #![allow(dead_code)]
 use raft::storage::Storage;
-use util::SyncCell;
 use raft::log_unstable::Unstable;
 use proto::raftpb::{Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
 use std::{cmp, u64};
 use std::sync::Arc;
-use protobuf;
+use util;
 
-const NO_LIMIT: u64 = u64::MAX;
+pub const NO_LIMIT: u64 = u64::MAX;
 
 /// Raft log implementation
+#[derive(Default)]
 pub struct RaftLog<T>
-    where T: Storage + Sync
+    where T: Storage
 {
     // storage contains all stable entries since the last snapshot.
-    store: Arc<SyncCell<T>>,
+    store: Arc<T>,
 
     // unstable contains all unstable entries and snapshot.
     // they will be saved into storage.
@@ -23,7 +23,7 @@ pub struct RaftLog<T>
 
     // committed is the highest log position that is known to be in
     // stable storage on a quorum of nodes.
-    committed: u64,
+    pub committed: u64,
 
     // applied is the highest log position that the application has
     // been instructed to apply to its state machine.
@@ -31,7 +31,7 @@ pub struct RaftLog<T>
     applied: u64,
 }
 
-impl<T> ToString for RaftLog<T> where T: Storage + Sync
+impl<T> ToString for RaftLog<T> where T: Storage
 {
     fn to_string(&self) -> String {
         format!("committed={}, applied={}, unstable.offset={}, unstable.entries.len()={}",
@@ -42,29 +42,9 @@ impl<T> ToString for RaftLog<T> where T: Storage + Sync
     }
 }
 
-
-fn limit_size(entries: &[Entry], max_size: u64) -> &[Entry] {
-    if entries.len() == 0 {
-        return entries;
-    }
-
-    let mut size = protobuf::Message::compute_size(&entries[0]) as u64;
-    let mut limit = 1usize;
-    while limit < entries.len() {
-        size += protobuf::Message::compute_size(&entries[limit]) as u64;
-        if size > max_size {
-            break;
-        }
-        limit += 1;
-    }
-
-    &entries[..limit]
-}
-
-
-impl<T> RaftLog<T> where T: Storage + Sync
+impl<T> RaftLog<T> where T: Storage
 {
-    pub fn new(storage: Arc<SyncCell<T>>) -> RaftLog<T> {
+    pub fn new(storage: Arc<T>) -> RaftLog<T> {
         let first_index = storage.first_index().unwrap_or_else(|e| panic!(e));
         let last_index = storage.last_index().unwrap_or_else(|e| panic!(e));
 
@@ -81,6 +61,10 @@ impl<T> RaftLog<T> where T: Storage + Sync
         self.term(self.last_index())
             .map_err(|e| panic!("unexpected error when getting the last term({})", e))
             .unwrap()
+    }
+
+    pub fn get_store(&self) -> Arc<T> {
+        self.store.clone()
     }
 
     pub fn term(&self, idx: u64) -> Result<u64> {
@@ -131,14 +115,14 @@ impl<T> RaftLog<T> where T: Storage + Sync
     // The index of the given entries MUST be continuously increasing.
     pub fn find_conflict(&self, ents: &[Entry]) -> u64 {
         for e in ents {
-            if !self.match_term(e.get_Index(), e.get_Term()) {
-                if e.get_Index() <= self.last_index() {
+            if !self.match_term(e.get_index(), e.get_term()) {
+                if e.get_index() <= self.last_index() {
                     info!("found conflict at index {}, [existing term:{}, conflicting term:{}]",
-                          e.get_Index(),
-                          self.zero_term_on_err_compacted(self.term(e.get_Index())),
-                          e.get_Term());
+                          e.get_index(),
+                          self.zero_term_on_err_compacted(self.term(e.get_index())),
+                          e.get_term());
                 }
-                return e.get_Index();
+                return e.get_index();
             }
         }
         0
@@ -189,7 +173,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         None
     }
 
-    fn commit_to(&mut self, to_commit: u64) {
+    pub fn commit_to(&mut self, to_commit: u64) {
         // never decrease commit
         if self.committed < to_commit {
             if self.last_index() < to_commit {
@@ -218,25 +202,24 @@ impl<T> RaftLog<T> where T: Storage + Sync
         self.applied
     }
 
-    pub fn get_committed(&self) -> u64 {
-        self.committed
-    }
-
-    fn stable_to(&mut self, idx: u64, term: u64) {
+    pub fn stable_to(&mut self, idx: u64, term: u64) {
         self.unstable.stable_to(idx, term)
     }
 
-    fn stable_snap_to(&mut self, idx: u64) {
+    pub fn stable_snap_to(&mut self, idx: u64) {
         self.unstable.stable_snap_to(idx)
     }
 
+    pub fn get_unstable(&self) -> &Unstable {
+        &self.unstable
+    }
 
-    fn append(&mut self, ents: &[Entry]) -> u64 {
+    pub fn append(&mut self, ents: &[Entry]) -> u64 {
         if ents.len() == 0 {
             return self.last_index();
         }
 
-        let after = ents[0].get_Index() - 1;
+        let after = ents[0].get_index() - 1;
         if after < self.committed {
             panic!("after {} is out of range [committed {}]",
                    after,
@@ -246,7 +229,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         self.last_index()
     }
 
-    fn unstable_entries(&self) -> Option<&[Entry]> {
+    pub fn unstable_entries(&self) -> Option<&[Entry]> {
         if self.unstable.entries.len() == 0 {
             return None;
         }
@@ -261,7 +244,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         return self.slice(idx, last + 1, max_size);
     }
 
-    fn all_entries(&mut self) -> Vec<Entry> {
+    fn all_entries(&self) -> Vec<Entry> {
         let first_index = self.first_index();
         let ents = self.entries(first_index, NO_LIMIT);
         match ents {
@@ -278,7 +261,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         }
     }
 
-    fn is_up_to_date(&self, last_index: u64, term: u64) -> bool {
+    pub fn is_up_to_date(&self, last_index: u64, term: u64) -> bool {
         term > self.last_term() || (term == self.last_term() && last_index >= self.last_index())
     }
 
@@ -286,7 +269,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
     // next_entries returns all the available entries for execution.
     // If applied is smaller than the index of snapshot, it returns all committed
     // entries after the index of snapshot.
-    fn next_entries(&mut self) -> Option<Vec<Entry>> {
+    pub fn next_entries(&self) -> Option<Vec<Entry>> {
         let offset = cmp::max(self.applied + 1, self.first_index());
         let committed = self.committed;
         if committed + 1 > offset {
@@ -298,15 +281,16 @@ impl<T> RaftLog<T> where T: Storage + Sync
         None
     }
 
-    fn has_next_entries(&self) -> bool {
+    pub fn has_next_entries(&self) -> bool {
         let offset = cmp::max(self.applied + 1, self.first_index());
         return self.committed + 1 > offset;
     }
 
-    pub fn snapshot(&self) -> Result<&Snapshot> {
-        match self.unstable.snapshot {
-            Some(ref snp) => Ok(snp),
-            None => self.store.snapshot(),
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        if self.unstable.snapshot.is_some() {
+            Ok(self.unstable.get_snapshot())
+        } else {
+            self.store.snapshot()
         }
     }
 
@@ -330,7 +314,7 @@ impl<T> RaftLog<T> where T: Storage + Sync
         None
     }
 
-    fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool {
+    pub fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool {
         if max_index > self.committed &&
            self.zero_term_on_err_compacted(self.term(max_index)) == term {
             self.commit_to(max_index);
@@ -384,12 +368,10 @@ impl<T> RaftLog<T> where T: Storage + Sync
             }
         }
 
-        let mut v = Vec::<Entry>::new();
-        v.extend_from_slice(limit_size(&ents, max_size));
-        Ok(v)
+        Ok(util::limit_size(&ents, max_size))
     }
 
-    fn restore(&mut self, snapshot: Snapshot) {
+    pub fn restore(&mut self, snapshot: Snapshot) {
         info!("log [{}] starts to restore snapshot [index: {}, term: {}]",
               self.to_string(),
               snapshot.get_metadata().get_index(),
@@ -404,7 +386,6 @@ impl<T> RaftLog<T> where T: Storage + Sync
 mod test {
     use raft::raft_log::{self, RaftLog};
     use raft::storage::{MemStorage, Storage};
-    use util::SyncCell;
     use std::sync::Arc;
     use proto::raftpb;
     use raft::errors::{Error, StorageError};
@@ -413,13 +394,9 @@ mod test {
 
     fn new_entry(index: u64, term: u64) -> raftpb::Entry {
         let mut e = raftpb::Entry::new();
-        e.set_Term(term);
-        e.set_Index(index);
+        e.set_term(term);
+        e.set_index(index);
         e
-    }
-
-    fn wrap_storage(store: MemStorage) -> Arc<SyncCell<MemStorage>> {
-        Arc::new(SyncCell::new(store))
     }
 
     fn new_snapshot(meta_index: u64, meta_term: u64) -> raftpb::Snapshot {
@@ -454,7 +431,7 @@ mod test {
         ];
         for (i, &(ref ents, wconflict)) in tests.iter().enumerate() {
             let store = MemStorage::new();
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&previous_ents);
             let gconflict = raft_log.find_conflict(&ents);
             if gconflict != wconflict {
@@ -467,7 +444,7 @@ mod test {
     fn test_is_up_to_date() {
         let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
         let store = MemStorage::new();
-        let mut raft_log = RaftLog::new(wrap_storage(store));
+        let mut raft_log = RaftLog::new(Arc::new(store));
         raft_log.append(&previous_ents);
         let tests = vec![
             // greater term, ignore lastIndex
@@ -503,9 +480,9 @@ mod test {
             (vec![new_entry(2, 3), new_entry(3, 3)], 3, vec![new_entry(1, 1), new_entry(2, 3), new_entry(3, 3)], 2),
         ];
         for (i, &(ref ents, windex, ref wents, wunstable)) in tests.iter().enumerate() {
-            let mut store = MemStorage::new();
-            store.append(&previous_ents).expect("append failed");
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let store = MemStorage::new();
+            store.wl().append(&previous_ents).expect("append failed");
+            let mut raft_log = RaftLog::new(Arc::new(store));
             let index = raft_log.append(ents);
             if index != windex {
                 panic!("#{}: last_index = {}, want {}", i, index, windex);
@@ -528,11 +505,11 @@ mod test {
         let last_index = 1000u64;
         let unstable_index = 750u64;
         let last_term = last_index;
-        let mut storage = MemStorage::new();
+        let storage = MemStorage::new();
         for i in 1..(unstable_index + 1) {
-            storage.append(&[new_entry(i as u64, i as u64)]).expect("append failed");
+            storage.wl().append(&[new_entry(i as u64, i as u64)]).expect("append failed");
         }
-        let mut raft_log = RaftLog::new(wrap_storage(storage));
+        let mut raft_log = RaftLog::new(Arc::new(storage));
         for i in unstable_index..last_index {
             raft_log.append(&[new_entry(i as u64 + 1, i as u64 + 1)]);
         }
@@ -542,7 +519,7 @@ mod test {
         let committed = raft_log.committed;
         raft_log.applied_to(committed);
         let offset = 500u64;
-        raft_log.store.borrow_mut().compact(offset).expect("compact failed");
+        raft_log.store.wl().compact(offset).expect("compact failed");
 
         assert_eq!(last_index, raft_log.last_index());
 
@@ -563,7 +540,7 @@ mod test {
         {
             let unstable_ents = raft_log.unstable_entries().expect("should have content.");
             assert_eq!(250, unstable_ents.len());
-            assert_eq!(751, unstable_ents[0].get_Index());
+            assert_eq!(751, unstable_ents[0].get_index());
         }
 
         let mut prev = raft_log.last_index();
@@ -579,9 +556,9 @@ mod test {
     fn test_term_with_unstable_snapshot() {
         let storagesnapi = 10064;
         let unstablesnapi = storagesnapi + 5;
-        let mut store = MemStorage::new();
-        store.apply_snapshot(new_snapshot(storagesnapi, 1)).expect("apply failed.");
-        let mut raft_log = RaftLog::new(wrap_storage(store));
+        let store = MemStorage::new();
+        store.wl().apply_snapshot(new_snapshot(storagesnapi, 1)).expect("apply failed.");
+        let mut raft_log = RaftLog::new(Arc::new(store));
         raft_log.restore(new_snapshot(unstablesnapi, 1));
 
         let tests = vec![
@@ -607,9 +584,9 @@ mod test {
         let offset = 100u64;
         let num = 100u64;
 
-        let mut store = MemStorage::new();
-        store.apply_snapshot(new_snapshot(offset, 1)).expect("apply failed.");
-        let mut raft_log = RaftLog::new(wrap_storage(store));
+        let store = MemStorage::new();
+        store.wl().apply_snapshot(new_snapshot(offset, 1)).expect("apply failed.");
+        let mut raft_log = RaftLog::new(Arc::new(store));
         for i in 1..num {
             raft_log.append(&[new_entry(offset + i, i)]);
         }
@@ -633,9 +610,9 @@ mod test {
     #[test]
     fn test_log_restore() {
         let (index, term) = (1000u64, 1000u64);
-        let mut store = MemStorage::new();
-        store.apply_snapshot(new_snapshot(index, term)).expect("apply failed.");
-        let mut raft_log = RaftLog::new(wrap_storage(store));
+        let store = MemStorage::new();
+        store.wl().apply_snapshot(new_snapshot(index, term)).expect("apply failed.");
+        let raft_log = RaftLog::new(Arc::new(store));
 
         assert_eq!(0, raft_log.all_entries().len());
         assert_eq!(index + 1, raft_log.first_index());
@@ -667,9 +644,9 @@ mod test {
         ];
 
         for (i, &(stablei, stablet, ref new_ents, wunstable)) in tests.iter().enumerate() {
-            let mut store = MemStorage::new();
-            store.apply_snapshot(new_snapshot(snapi, snapt)).expect("");
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let store = MemStorage::new();
+            store.wl().apply_snapshot(new_snapshot(snapi, snapt)).expect("");
+            let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&new_ents);
             raft_log.stable_to(stablei, stablet);
             if raft_log.unstable.offset != wunstable {
@@ -691,7 +668,7 @@ mod test {
         ];
         for (i, &(stablei, stablet, wunstable)) in tests.iter().enumerate() {
             let store = MemStorage::new();
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&[new_entry(1, 1), new_entry(2, 2)]);
             raft_log.stable_to(stablei, stablet);
             if raft_log.unstable.offset != wunstable {
@@ -715,22 +692,22 @@ mod test {
 
         for (i, &(unstable, ref wents)) in tests.iter().enumerate() {
             // append stable entries to storage
-            let mut store = MemStorage::new();
-            store.append(&previous_ents[..(unstable - 1)]).expect("");
+            let store = MemStorage::new();
+            store.wl().append(&previous_ents[..(unstable - 1)]).expect("");
 
             // append unstable entries to raftlog
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&previous_ents[(unstable - 1)..]);
 
             let ents = raft_log.unstable_entries().unwrap_or(&[]).to_vec();
             let l = ents.len();
             if l > 0 {
-                raft_log.stable_to(ents[l - 1].get_Index(), ents[l - i].get_Term());
+                raft_log.stable_to(ents[l - 1].get_index(), ents[l - i].get_term());
             }
             if &ents != wents {
                 panic!("#{}: unstableEnts = {:?}, want {:?}", i, ents, wents);
             }
-            let w = previous_ents[previous_ents.len() - 1].get_Index() + 1;
+            let w = previous_ents[previous_ents.len() - 1].get_index() + 1;
             let g = raft_log.unstable.offset;
             if g != w {
                 panic!("#{}: unstable = {}, want {}", i, g, w);
@@ -748,9 +725,9 @@ mod test {
             (5, None),
         ];
         for (i, &(applied, ref wents)) in tests.iter().enumerate() {
-            let mut store = MemStorage::new();
-            store.apply_snapshot(new_snapshot(3, 1)).expect("");
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let store = MemStorage::new();
+            store.wl().apply_snapshot(new_snapshot(3, 1)).expect("");
+            let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&ents);
             raft_log.maybe_commit(5, 1);
             raft_log.applied_to(applied);
@@ -773,9 +750,9 @@ mod test {
         ];
 
         for (i, &(applied, has_next)) in tests.iter().enumerate() {
-            let mut store = MemStorage::new();
-            store.apply_snapshot(new_snapshot(3, 1)).expect("");
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let store = MemStorage::new();
+            store.wl().apply_snapshot(new_snapshot(3, 1)).expect("");
+            let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&ents);
             raft_log.maybe_commit(5, 1);
             raft_log.applied_to(applied);
@@ -794,12 +771,12 @@ mod test {
         let halfe = new_entry(half, half);
         let halfe_size = protobuf::Message::compute_size(&halfe) as u64;
 
-        let mut store = MemStorage::new();
-        store.apply_snapshot(new_snapshot(offset, 0)).expect("");
+        let store = MemStorage::new();
+        store.wl().apply_snapshot(new_snapshot(offset, 0)).expect("");
         for i in 1..(num / 2) {
-            store.append(&[new_entry(offset + i, offset + i)]).expect("");
+            store.wl().append(&[new_entry(offset + i, offset + i)]).expect("");
         }
-        let mut raft_log = RaftLog::new(wrap_storage(store));
+        let mut raft_log = RaftLog::new(Arc::new(store));
         for i in (num / 2)..num {
             raft_log.append(&[new_entry(offset + i, offset + i)]);
         }
@@ -906,7 +883,7 @@ mod test {
                wcommit,
                wpanic)) in tests.iter().enumerate() {
             let store = MemStorage::new();
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&previous_ents);
             raft_log.committed = commit;
             let res = {
@@ -954,7 +931,7 @@ mod test {
         ];
         for (i, &(commit, wcommit, wpanic)) in tests.iter().enumerate() {
             let store = MemStorage::new();
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&previous_ents);
             raft_log.committed = previous_commit;
             let has_panic = {
@@ -983,22 +960,20 @@ mod test {
         ];
 
         for (i, &(last_index, ref compact, ref wleft, wallow)) in tests.iter().enumerate() {
-            let mut store = MemStorage::new();
+            let store = MemStorage::new();
             for i in 1u64..(last_index + 1) {
-                store.append(&[new_entry(i, 0)]).expect("");
+                store.wl().append(&[new_entry(i, 0)]).expect("");
             }
-            let mut raft_log = RaftLog::new(wrap_storage(store));
+            let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.maybe_commit(last_index, 0);
             let committed = raft_log.committed;
             raft_log.applied_to(committed);
 
             for j in 0..compact.len() {
+                let raft_log_wrapper = panic::AssertRecoverSafe::new(&raft_log);
                 let res = {
-                    let raft_log_wrapper = panic::AssertRecoverSafe::new(&mut raft_log);
                     let compact_to = compact[j];
-                    panic::recover(move || {
-                        raft_log_wrapper.store.borrow_mut().compact(compact_to)
-                    })
+                    panic::recover(move || raft_log_wrapper.store.wl().compact(compact_to))
                 };
                 if res.is_err() {
                     if wallow {
@@ -1024,9 +999,9 @@ mod test {
     #[test]
     fn test_is_outofbounds() {
         let (offset, num) = (100u64, 100u64);
-        let mut store = MemStorage::new();
-        store.apply_snapshot(new_snapshot(offset, 0)).expect("");
-        let mut raft_log = RaftLog::new(wrap_storage(store));
+        let store = MemStorage::new();
+        store.wl().apply_snapshot(new_snapshot(offset, 0)).expect("");
+        let mut raft_log = RaftLog::new(Arc::new(store));
         for i in 1u64..(num + 1) {
             raft_log.append(&[new_entry(i + offset, 0)]);
         }

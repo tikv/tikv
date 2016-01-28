@@ -1,5 +1,8 @@
 use std::cell::UnsafeCell;
 use std::ops::Deref;
+use std::ops::DerefMut;
+use rand::{self, ThreadRng};
+use protobuf::Message;
 
 pub use log::LogLevelFilter;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
@@ -29,6 +32,23 @@ impl Log for StdOutLogger {
     }
 }
 
+pub fn limit_size<T: Message + Clone>(entries: &[T], max: u64) -> Vec<T> {
+    if entries.len() == 0 {
+        return entries.to_vec();
+    }
+
+    let mut size = Message::compute_size(&entries[0]) as u64;
+    let mut limit = 1usize;
+    while limit < entries.len() {
+        size += Message::compute_size(&entries[limit]) as u64;
+        if size > max {
+            break;
+        }
+        limit += 1;
+    }
+    entries[..limit].to_vec()
+}
+
 /// A simple general wrapper for struct that is thread-safe for interior mutability already.
 pub struct SyncCell<T: Sync>(UnsafeCell<T>);
 
@@ -48,6 +68,12 @@ impl<T: Sync> SyncCell<T> {
     }
 }
 
+impl<T: Sync + Default> Default for SyncCell<T> {
+    fn default() -> SyncCell<T> {
+        SyncCell::new(Default::default())
+    }
+}
+
 impl<T: Sync> Deref for SyncCell<T> {
     type Target = T;
 
@@ -61,4 +87,33 @@ unsafe impl<T: Sync> Sync for SyncCell<T> {}
 
 pub fn array_to_vec(arr: &[u8]) -> Vec<u8> {
     arr.iter().cloned().collect()
+}
+pub struct DefaultRng {
+    rng: ThreadRng,
+}
+
+impl DefaultRng {
+    fn new() -> DefaultRng {
+        DefaultRng { rng: rand::thread_rng() }
+    }
+}
+
+impl Default for DefaultRng {
+    fn default() -> DefaultRng {
+        DefaultRng::new()
+    }
+}
+
+impl Deref for DefaultRng {
+    type Target = ThreadRng;
+
+    fn deref(&self) -> &ThreadRng {
+        &self.rng
+    }
+}
+
+impl DerefMut for DefaultRng {
+    fn deref_mut(&mut self) -> &mut ThreadRng {
+        &mut self.rng
+    }
 }
