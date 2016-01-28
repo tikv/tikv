@@ -102,9 +102,9 @@ impl Scheduler {
                       start_version: u64)
                       -> Result<()> {
         for key in puts.iter().map(|&(ref x, _)| x).chain(deletes.iter()).chain(locks.iter()) {
-            let latest_modify = try!(self.engine.mvcc_latest_modify(key));
-            if let Some(x) = latest_modify {
-                if x >= start_version {
+            let latest_version = try!(self.engine.mvcc_latest_modified(key));
+            if let Some(ver) = latest_version {
+                if ver >= start_version {
                     return Err(Error::ConditionNotMatch);
                 }
             }
