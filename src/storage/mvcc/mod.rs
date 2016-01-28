@@ -1,6 +1,7 @@
 use storage::engine::{self, Engine, Modify};
 use self::meta::Meta;
 use self::codec::{encode_key, decode_key};
+use util::codec::Error as CodecError;
 
 mod meta;
 mod codec;
@@ -113,12 +114,15 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        Codec(err: CodecError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         MetaDataLength {description("bad format meta data(length)")}
         MetaDataFlag {description("bad format meta data(flag)")}
         MetaDataVersion {description("bad format meta data(version)")}
-        KeyLength {description("bad format key(length)")}
         KeyVersion {description("bad format key(version)")}
-        KeyPadding {description("bad format key(padding)")}
         DataMissing {description("data missing")}
     }
 }
