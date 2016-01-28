@@ -6,8 +6,8 @@ use mio::{EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;
 
 use raftserver::{Result, Sender, SERVER_TOKEN};
-use raftserver::server::Server;
-use raftserver::handler::ServerHandler;
+use super::server::Server;
+use super::handler::ServerHandler;
 
 pub struct Runner<T: ServerHandler> {
     sender: Sender,
@@ -17,7 +17,7 @@ pub struct Runner<T: ServerHandler> {
 
 impl<T: ServerHandler> Runner<T> {
     // Create a runner with listening address.
-    fn new(addr: &str) -> Result<(Runner<T>)> {
+    pub fn new(addr: &str) -> Result<(Runner<T>)> {
         let addr = try!(addr.parse());
         let listener = try!(TcpListener::bind(&addr));
 
@@ -36,11 +36,11 @@ impl<T: ServerHandler> Runner<T> {
         })
     }
 
-    fn get_sender(&self) -> Sender {
+    pub fn get_sender(&self) -> Sender {
         self.sender.clone()
     }
 
-    fn run(&mut self, h: T) -> Result<()> {
+    pub fn run(&mut self, h: T) -> Result<()> {
         let mut server = Server::new(h, self.listener.take().unwrap(), self.sender.clone());
         try!(server.register_tick(&mut self.event_loop));
         try!(self.event_loop.run(&mut server));
@@ -69,9 +69,8 @@ mod tests {
 
     use super::*;
     use raftserver::*;
-    use util::codec;
-    use raftserver::handler::ServerHandler;
-    use raftserver::server::Server;
+    use util::codec::rpc;
+    use super::super::ServerHandler;
 
     struct BaseHandler;
 
@@ -109,7 +108,7 @@ mod tests {
 
         for i in 1..10 {
             let mut data = vec![];
-            codec::encode_data(&mut data, i as u64, "hello world".as_bytes()).unwrap();
+            rpc::encode_data(&mut data, i as u64, "hello world".as_bytes()).unwrap();
             for i in data.clone() {
                 conn.write(&[i; 1]).unwrap();
                 conn.flush().unwrap();

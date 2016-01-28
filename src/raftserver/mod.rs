@@ -11,13 +11,9 @@ use std::string::String;
 use bytes::{Buf, ByteBuf};
 use mio::{self, Token, NotifyError};
 
-use util::codec;
+use util::codec::rpc;
 
-mod conn;
-mod server;
-mod run;
-mod handler;
-mod bench;
+pub mod server;
 
 pub type Result<T> = result::Result<T, Box<error::Error + Send + Sync>>;
 
@@ -45,10 +41,10 @@ impl ConnData {
     }
 
     pub fn encode_to_buf(&self) -> ByteBuf {
-        let mut buf = ByteBuf::mut_with_capacity(codec::MSG_HEADER_LEN + self.data.bytes().len());
+        let mut buf = ByteBuf::mut_with_capacity(rpc::MSG_HEADER_LEN + self.data.bytes().len());
 
         // Must ok here
-        codec::encode_data(&mut buf, self.msg_id, self.data.bytes()).unwrap();
+        rpc::encode_data(&mut buf, self.msg_id, self.data.bytes()).unwrap();
 
         buf.flip()
     }

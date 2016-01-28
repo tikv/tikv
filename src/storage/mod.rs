@@ -1,7 +1,7 @@
 use std::boxed::FnBox;
 use std::fmt;
 use std::thread::{self, JoinHandle};
-use mio::{EventLoop, Handler, Sender, NotifyError};
+use std::sync::mpsc::{self, Sender};
 use self::txn::Scheduler;
 
 mod engine;
@@ -25,11 +25,16 @@ pub enum Command {
         version: u64,
         callback: Callback<Vec<KvPair>>,
     },
-    Commit {
+    Prewrite {
         puts: Vec<KvPair>,
         deletes: Vec<Key>,
         locks: Vec<Key>,
-        version: u64,
+        start_version: u64,
+        callback: Callback<()>,
+    },
+    Commit {
+        start_version: u64,
+        commit_version: u64,
         callback: Callback<()>,
     },
 }
@@ -47,13 +52,19 @@ impl fmt::Debug for Command {
                        limit,
                        version)
             }
-            Command::Commit{ref puts, ref deletes, ref locks, version, ..} => {
+            Command::Prewrite {ref puts, ref deletes, ref locks, start_version, ..} => {
                 write!(f,
-                       "kv::command::commit puts({}), deletes({}), locks({}) @ {}",
+                       "kv::command::prewrite puts({}), deletes({}), locks({}) @ {}",
                        puts.len(),
                        deletes.len(),
                        locks.len(),
-                       version)
+                       start_version)
+            }
+            Command::Commit{start_version, commit_version, ..} => {
+                write!(f,
+                       "kv::command::commit {} -> {}",
+                       start_version,
+                       commit_version)
             }
         }
     }
@@ -62,7 +73,7 @@ impl fmt::Debug for Command {
 pub use self::engine::{Engine, Dsn};
 
 pub struct Storage {
-    sender: Sender<Message>,
+    tx: Sender<Message>,
     thread: JoinHandle<Result<()>>,
 }
 
@@ -72,19 +83,29 @@ impl Storage {
             let engine = try!(engine::new_engine(dsn));
             Scheduler::new(engine)
         };
-        let mut event_loop = try!(EventLoop::new());
-        let sender = event_loop.channel();
-        let thread_handle = thread::spawn(move || {
-            event_loop.run(&mut scheduler).map_err(|e| Error::Io(e))
+        let (tx, rx) = mpsc::channel::<Message>();
+        let desc = format!("{:?}", dsn);
+        let handle = thread::spawn(move || {
+            info!("storage: [{}] started.", desc);
+            loop {
+                let msg = try!(rx.recv());
+                debug!("recv message: {:?}", msg);
+                match msg {
+                    Message::Command(cmd) => scheduler.handle_cmd(cmd),
+                    Message::Close => break,
+                }
+            }
+            info!("storage: [{}] closing.", desc);
+            Ok(())
         });
         Ok(Storage {
-            sender: sender,
-            thread: thread_handle,
+            tx: tx,
+            thread: handle,
         })
     }
 
     pub fn stop(self) -> Result<()> {
-        try!(self.sender.send(Message::Close));
+        try!(self.tx.send(Message::Close));
         try!(try!(self.thread.join()));
         Ok(())
     }
@@ -99,7 +120,7 @@ impl Storage {
             version: version,
             callback: callback,
         };
-        try!(self.sender.send(Message::Command(cmd)));
+        try!(self.tx.send(Message::Command(cmd)));
         Ok(())
     }
 
@@ -115,39 +136,40 @@ impl Storage {
             version: version,
             callback: callback,
         };
-        try!(self.sender.send(Message::Command(cmd)));
+        try!(self.tx.send(Message::Command(cmd)));
+        Ok(())
+    }
+
+    pub fn async_prewrite(&self,
+                          puts: Vec<KvPair>,
+                          deletes: Vec<Key>,
+                          locks: Vec<Key>,
+                          start_version: u64,
+                          callback: Callback<()>)
+                          -> Result<()> {
+        let cmd = Command::Prewrite {
+            puts: puts,
+            deletes: deletes,
+            locks: locks,
+            start_version: start_version,
+            callback: callback,
+        };
+        try!(self.tx.send(Message::Command(cmd)));
         Ok(())
     }
 
     pub fn async_commit(&self,
-                        puts: Vec<KvPair>,
-                        deletes: Vec<Key>,
-                        locks: Vec<Key>,
-                        version: u64,
+                        start_version: u64,
+                        commit_version: u64,
                         callback: Callback<()>)
                         -> Result<()> {
         let cmd = Command::Commit {
-            puts: puts,
-            deletes: deletes,
-            locks: locks,
-            version: version,
+            start_version: start_version,
+            commit_version: commit_version,
             callback: callback,
         };
-        try!(self.sender.send(Message::Command(cmd)));
+        try!(self.tx.send(Message::Command(cmd)));
         Ok(())
-    }
-}
-
-impl Handler for Scheduler {
-    type Timeout = ();
-    type Message = Message;
-
-    fn notify(&mut self, event_loop: &mut EventLoop<Scheduler>, msg: Message) {
-        debug!("recv message: {:?}", msg);
-        match msg {
-            Message::Command(cmd) => self.handle_cmd(cmd),
-            Message::Close => event_loop.shutdown(),
-        }
     }
 }
 
@@ -160,12 +182,12 @@ pub enum Message {
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Io(err: ::std::io::Error) {
+        Recv(err: mpsc::RecvError) {
             from()
             cause(err)
             description(err.description())
         }
-        Notify(err: NotifyError<Message>) {
+        Send(err: mpsc::SendError<Message>) {
             from()
             cause(err)
             description(err.description())
@@ -201,38 +223,59 @@ mod tests {
         Box::new(|x: Result<Option<Value>>| assert_eq!(x.unwrap(), None))
     }
 
-    fn expect_commit_ok() -> Callback<()> {
+    fn expect_get_val(v: Vec<u8>) -> Callback<Option<Value>> {
+        Box::new(move |x: Result<Option<Value>>| assert_eq!(x.unwrap().unwrap(), v))
+    }
+
+    fn expect_ok() -> Callback<()> {
         Box::new(|x: Result<()>| assert!(x.is_ok()))
     }
 
-    fn expect_commit_err() -> Callback<()> {
+    fn expect_fail() -> Callback<()> {
         Box::new(|x: Result<()>| assert!(x.is_err()))
     }
 
     #[test]
-    fn test_callback() {
+    fn test_get_put() {
         let storage = Storage::new(Dsn::Memory).unwrap();
+        storage.async_get(vec![b'x'], 100u64, expect_get_none()).unwrap();
+        storage.async_prewrite(vec![(vec![b'x'], b"100".to_vec())],
+                               vec![],
+                               vec![],
+                               100u64,
+                               expect_ok())
+               .unwrap();
+        storage.async_commit(100u64, 101u64, expect_ok()).unwrap();
+        storage.async_get(vec![b'x'], 100u64, expect_get_none()).unwrap();
+        storage.async_get(vec![b'x'], 101u64, expect_get_val(b"100".to_vec())).unwrap();
+        storage.stop().unwrap();
+    }
 
-        storage.async_get(b"abc".to_vec(), 1u64, expect_get_none()).unwrap();
-        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
-                             vec![],
-                             vec![],
-                             100u64,
-                             expect_commit_ok())
+    #[test]
+    fn test_txn() {
+        let storage = Storage::new(Dsn::Memory).unwrap();
+        storage.async_prewrite(vec![(vec![b'x'], b"100".to_vec())],
+                               vec![],
+                               vec![],
+                               100u64,
+                               expect_ok())
                .unwrap();
-        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
-                             vec![],
-                             vec![],
-                             101u64,
-                             expect_commit_ok())
+        storage.async_prewrite(vec![(vec![b'y'], b"101".to_vec())],
+                               vec![],
+                               vec![],
+                               101u64,
+                               expect_ok())
                .unwrap();
-        storage.async_commit(vec![(b"abc".to_vec(), b"123".to_vec())],
-                             vec![],
-                             vec![],
-                             99u64,
-                             expect_commit_err())
+        storage.async_commit(100u64, 110u64, expect_ok()).unwrap();
+        storage.async_commit(101u64, 111u64, expect_ok()).unwrap();
+        storage.async_get(vec![b'x'], 120u64, expect_get_val(b"100".to_vec())).unwrap();
+        storage.async_get(vec![b'y'], 120u64, expect_get_val(b"101".to_vec())).unwrap();
+        storage.async_prewrite(vec![(vec![b'x'], b"105".to_vec())],
+                               vec![],
+                               vec![],
+                               105u64,
+                               expect_fail())
                .unwrap();
-
         storage.stop().unwrap();
     }
 }
