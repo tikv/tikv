@@ -164,10 +164,12 @@ fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
     }
 }
 
-fn new_message(from: u64, to: u64, field_type: MessageType) -> Message {
+fn new_message(to: u64, field_type: MessageType, from: Option<u64>) -> Message {
     let mut m = Message::new();
     m.set_to(to);
-    m.set_from(from);
+    if let Some(id) = from {
+        m.set_from(id);
+    }
     m.set_msg_type(field_type);
     m
 }
@@ -293,8 +295,7 @@ impl<T: Storage + Default> Raft<T> {
         }
         let (sindex, sterm) = (snapshot.get_metadata().get_index(),
                                snapshot.get_metadata().get_term());
-        // TODO get rid of clone
-        m.set_snapshot(snapshot.clone());
+        m.set_snapshot(snapshot);
         debug!("{:x} [firstindex: {}, commit: {}] sent snapshot[index: {}, term: {}] to {:x} \
                 [{:?}]",
                self.id,
@@ -462,7 +463,7 @@ impl<T: Storage + Default> Raft<T> {
         self.election_elapsed += 1;
         if self.is_election_timeout() {
             self.election_elapsed = 0;
-            let m = new_message(self.id, INVALID_ID, MessageType::MsgHup);
+            let m = new_message(INVALID_ID, MessageType::MsgHup, Some(self.id));
             self.step(m).is_ok();
         }
     }
@@ -475,7 +476,7 @@ impl<T: Storage + Default> Raft<T> {
         if self.election_elapsed >= self.election_timeout {
             self.election_elapsed = 0;
             if self.check_quorum {
-                let m = new_message(self.id, INVALID_ID, MessageType::MsgCheckQuorum);
+                let m = new_message(INVALID_ID, MessageType::MsgCheckQuorum, Some(self.id));
                 self.step(m).is_ok();
             }
         }
@@ -486,7 +487,7 @@ impl<T: Storage + Default> Raft<T> {
 
         if self.heartbeat_elapsed >= self.heartbeat_timeout {
             self.heartbeat_elapsed = 0;
-            let m = new_message(self.id, INVALID_ID, MessageType::MsgBeat);
+            let m = new_message(INVALID_ID, MessageType::MsgBeat, Some(self.id));
             self.step(m).is_ok();
         }
     }
@@ -551,7 +552,7 @@ impl<T: Storage + Default> Raft<T> {
                   self.raft_log.last_index(),
                   id,
                   self.get_term());
-            let mut m = new_message(INVALID_ID, id, MessageType::MsgRequestVote);
+            let mut m = new_message(id, MessageType::MsgRequestVote, None);
             m.set_index(self.raft_log.last_index());
             m.set_log_term(self.raft_log.last_term());
             self.send(m);
@@ -632,19 +633,312 @@ impl<T: Storage + Default> Raft<T> {
         Ok(())
     }
 
+    fn handle_append_response(&mut self,
+                              m: &Message,
+                              old_paused: &mut bool,
+                              send_append: &mut bool,
+                              maybe_commit: &mut bool) {
+        let pr = self.prs.get_mut(&m.get_from()).unwrap();
+        pr.recent_active = true;
+        if m.get_reject() {
+            debug!("{:x} received msgAppend rejection(lastindex: {}) from {:x} for index {}",
+                   self.id,
+                   m.get_reject_hint(),
+                   m.get_from(),
+                   m.get_index());
+            if pr.maybe_decr_to(m.get_index(), m.get_reject_hint()) {
+                debug!("{:x} decreased progress of {:x} to [{:?}]",
+                       self.id,
+                       m.get_from(),
+                       pr);
+                if pr.state == ProgressState::Replicate {
+                    pr.become_probe();
+                }
+                *send_append = true;
+            }
+            return;
+        }
+        
+        *old_paused = pr.is_paused();
+        if !pr.maybe_update(m.get_index()) {
+            return;
+        }
+        
+        match pr.state {
+            ProgressState::Probe => pr.become_replicate(),
+            ProgressState::Snapshot if pr.maybe_snapshot_abort() => {
+                debug!("{:x} snapshot aborted, resumed sending replication messages to {:x} \
+                        [{:?}]",
+                       self.id,
+                       m.get_from(),
+                       pr);
+                pr.become_probe();
+            }
+            ProgressState::Replicate => pr.ins.free_to(m.get_index()),
+            // TODO: remove this later.
+            _ => {}
+        }
+        *maybe_commit = true;
+    }
+
+    fn handle_snapshot_status(&mut self, m: &Message) {
+        let pr = self.prs.get_mut(&m.get_from()).unwrap();
+        if !m.get_reject() {
+            pr.become_probe();
+            debug!("{:x} snapshot succeeded, resumed sending replication messages to {:x} [{:?}]",
+                   self.id,
+                   m.get_from(),
+                   pr);
+        } else {
+            pr.snapshot_failure();
+            pr.become_probe();
+            debug!("{:x} snapshot failed, resumed sending replication messages to {:x} [{:?}]",
+                   self.id,
+                   m.get_from(),
+                   pr);
+        }
+        // If snapshot finish, wait for the msgAppResp from the remote node before sending
+        // out the next msgAppend.
+        // If snapshot failure, wait for a heartbeat interval before next try
+        pr.pause();
+    }
+
+    /// check message's progress to decide which action should be taken.
+    fn check_message_with_progress(&mut self,
+                                   m: &Message,
+                                   send_append: &mut bool,
+                                   old_paused: &mut bool,
+                                   maybe_commit: &mut bool) {
+        if !self.prs.contains_key(&m.get_from()) {
+            debug!("no progress available for {:x}", m.get_from());
+            return;
+        }
+        match m.get_msg_type() {
+            MessageType::MsgAppendResponse => {
+                self.handle_append_response(m, old_paused, send_append, maybe_commit)
+            }
+            MessageType::MsgHeartbeatResponse => {
+                let pr = self.prs.get_mut(&m.get_from()).unwrap();
+                pr.recent_active = true;
+
+                // free one slot for the full inflights window to allow progress.
+                if pr.state == ProgressState::Replicate && pr.ins.full() {
+                    pr.ins.free_first_one();
+                }
+                if pr.matched < self.raft_log.last_index() {
+                    *send_append = true;
+                }
+            }
+            MessageType::MsgSnapStatus => {
+                if self.prs[&m.get_from()].state != ProgressState::Snapshot {
+                    return;
+                }
+                self.handle_snapshot_status(&m);
+            }
+            MessageType::MsgUnreachable => {
+                let pr = self.prs.get_mut(&m.get_from()).unwrap();
+                // During optimistic replication, if the remote becomes unreachable,
+                // there is huge probability that a MsgAppend is lost.
+                if pr.state == ProgressState::Replicate {
+                    pr.become_probe();
+                }
+                debug!("{:x} failed to send message to {:x} because it is unreachable [{:?}]",
+                       self.id,
+                       m.get_from(),
+                       pr);
+            }
+            _ => {}
+        }
+    }
+
+    fn log_vote_reject(&self, m: &Message) {
+        info!("{:x} [logterm: {}, index: {}, vote: {:x}] rejected vote from {:x} [logterm: {}, \
+               index: {}] at term {}",
+              self.id,
+              self.raft_log.last_term(),
+              self.raft_log.last_index(),
+              self.hs.get_vote(),
+              m.get_from(),
+              m.get_log_term(),
+              m.get_index(),
+              self.get_term());
+    }
+
+    fn log_vote_approve(&self, m: &Message) {
+        info!("{:x} [logterm: {}, index: {}, vote: {:x}] voted for {:x} [logterm: {}, index: {}] \
+               at term {}",
+              self.id,
+              self.raft_log.last_term(),
+              self.raft_log.last_index(),
+              self.hs.get_vote(),
+              m.get_from(),
+              m.get_log_term(),
+              m.get_index(),
+              self.get_term());
+    }
+
     fn step_leader(&mut self, m: Message) {
-        // TODO: implement
-        assert!(m.get_term() == 0)
+        // These message types do not require any progress for m.From.
+        match m.get_msg_type() {
+            MessageType::MsgBeat => {
+                self.bcast_heartbeat();
+                return;
+            }
+            MessageType::MsgCheckQuorum => {
+                if !self.check_quorum_active() {
+                    warn!("{:x} stepped down to follower since quorum is not active",
+                          self.id);
+                    let term = self.get_term();
+                    self.become_follower(term, INVALID_ID);
+                }
+                return;
+            }
+            MessageType::MsgPropose => {
+                if m.get_entries().len() == 0 {
+                    panic!("{:x} stepped empty MsgProp", self.id);
+                }
+                if !self.prs.contains_key(&self.id) {
+                    // If we are not currently a member of the range (i.e. this node
+                    // was removed from the configuration while serving as leader),
+                    // drop any new proposals.
+                    return;
+                }
+                let mut m = m;
+                for e in m.mut_entries().iter_mut() {
+                    if e.get_entry_type() == EntryType::EntryConfChange {
+                        if self.pending_conf {
+                            *e = Entry::new();
+                            e.set_entry_type(EntryType::EntryNormal);
+                        }
+                        self.pending_conf = true;
+                    }
+                }
+                self.append_entry(&mut m.mut_entries());
+                self.bcast_append();
+                return;
+            }
+            MessageType::MsgRequestVote => {
+                self.log_vote_reject(&m);
+                let mut to_sent = Message::new();
+                to_sent.set_to(m.get_to());
+                to_sent.set_msg_type(MessageType::MsgRequestVoteResponse);
+                to_sent.set_reject(true);
+                self.send(to_sent);
+                return;
+            }
+            _ => {}
+        }
+
+        let mut send_append = false;
+        let mut maybe_commit = false;
+        let mut old_paused = false;
+        self.check_message_with_progress(&m, &mut send_append, &mut old_paused, &mut maybe_commit);
+        if maybe_commit {
+            if self.maybe_commit() {
+                self.bcast_append();
+            } else if old_paused {
+                // update() reset the wait state on this node. If we had delayed sending
+                // an update before, send it now.
+                send_append = true;
+            }
+        }
+        if send_append {
+            self.send_append(m.get_from());
+        }
     }
 
     fn step_candidate(&mut self, m: Message) {
-        // TODO: implement
-        assert!(m.get_term() == 0)
+        let term = self.get_term();
+        match m.get_msg_type() {
+            MessageType::MsgPropose => {
+                info!("{:x} no leader at term {}; dropping proposal",
+                      self.id,
+                      term);
+                return;
+            }
+            MessageType::MsgAppend => {
+                self.become_follower(term, m.get_from());
+                self.handle_append_entries(m);
+            }
+            MessageType::MsgHeartbeat => {
+                self.become_follower(term, m.get_from());
+                self.handle_heartbeat(m);
+            }
+            MessageType::MsgSnapshot => {
+                self.become_follower(term, m.get_from());
+                self.handle_snapshot(m);
+            }
+            MessageType::MsgRequestVote => {
+                self.log_vote_reject(&m);
+                let t = MessageType::MsgRequestVoteResponse;
+                let mut to_send = new_message(m.get_from(), t, None);
+                to_send.set_reject(true);
+                self.send(to_send);
+            }
+            MessageType::MsgRequestVoteResponse => {
+                let gr = self.poll(m.get_from(), !m.get_reject());
+                let quorum = self.quorum();
+                info!("{:x} [quorum:{}] has received {} votes and {} vote rejections",
+                      self.id,
+                      quorum,
+                      gr,
+                      self.votes.len() - gr);
+                if quorum == gr {
+                    self.become_leader();
+                    self.bcast_append();
+                } else if quorum == self.votes.len() - gr {
+                    self.become_follower(term, INVALID_ID);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn step_follower(&mut self, m: Message) {
-        // TODO: implement
-        assert!(m.get_term() == 0)
+        let term = self.get_term();
+        match m.get_msg_type() {
+            MessageType::MsgPropose => {
+                if self.lead == INVALID_ID {
+                    info!("{:x} no leader at term {}; dropping proposal",
+                          self.id,
+                          term);
+                    return;
+                }
+                let mut m = m;
+                m.set_to(self.lead);
+                self.send(m);
+            }
+            MessageType::MsgAppend => {
+                self.election_elapsed = 0;
+                self.lead = m.get_from();
+                self.handle_append_entries(m);
+            }
+            MessageType::MsgHeartbeat => {
+                self.election_elapsed = 0;
+                self.lead = m.get_from();
+                self.handle_heartbeat(m);
+            }
+            MessageType::MsgSnapshot => {
+                self.election_elapsed = 0;
+                self.handle_snapshot(m);
+            }
+            MessageType::MsgRequestVote => {
+                let t = MessageType::MsgRequestVoteResponse;
+                if (self.hs.get_vote() == INVALID_ID || self.hs.get_vote() == m.get_from()) &&
+                   self.raft_log.is_up_to_date(m.get_index(), m.get_log_term()) {
+                    self.log_vote_approve(&m);
+                    self.election_elapsed = 0;
+                    self.hs.set_vote(m.get_from());
+                    self.send(new_message(m.get_from(), t, None));
+                } else {
+                    self.log_vote_reject(&m);
+                    let mut to_send = new_message(m.get_from(), t, None);
+                    to_send.set_reject(true);
+                    self.send(to_send);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn handle_append_entries(&mut self, m: Message) {
