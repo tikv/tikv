@@ -52,7 +52,7 @@ impl Storage for RegionStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
         let mut meta = try!(self.meta.write());
         let initialized = meta.is_initialized();
-        let res = try!(engine::get_msg::<HardState>(&self.engine,
+        let res: Option<HardState> = try!(engine::get_msg(self.engine.as_ref(),
                                                     &keys::raft_hard_state_key(meta.region_id)));
 
         let found = res.is_some();
@@ -102,7 +102,7 @@ impl Storage for RegionStorage {
         let end_key = keys::raft_log_key(meta.region_id, high);
 
 
-        try!(engine::scan(&self.engine,
+        try!(engine::scan(self.engine.as_ref(),
                           &start_key,
                           &end_key,
                           &mut |_, value| -> Result<bool> {
@@ -196,9 +196,9 @@ impl Storage for RegionStorage {
 
         // TODO: get applied_index and region info from snapshot.
         let meta = try!(self.meta.read());
-        let applied_index = try!(meta.snap_load_applied_index(&snap));
+        let applied_index = try!(meta.load_applied_index(&snap));
 
-        let res = try!(engine::snap_get_msg::<metapb::Region>(&snap,
+        let res: Option<metapb::Region> = try!(engine::get_msg(&snap,
                                             &keys::region_info_key(meta.region.get_start_key())));
 
         let region = match res {
