@@ -12,17 +12,17 @@ use raft::{self, Storage, RaftState, StorageError};
 use raftserver::{Result, Error};
 use super::keys;
 use super::engine::Retriever;
-use super::region_meta::{RegionMeta, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use super::peer_meta::{PeerMeta, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
 
-pub struct RegionStorage {
+pub struct PeerStorage {
     engine: Arc<DB>,
 
-    meta: Arc<RwLock<RegionMeta>>,
+    meta: Arc<RwLock<PeerMeta>>,
 }
 
-impl RegionStorage {
-    pub fn new(engine: Arc<DB>, meta: Arc<RwLock<RegionMeta>>) -> RegionStorage {
-        RegionStorage {
+impl PeerStorage {
+    pub fn new(engine: Arc<DB>, meta: Arc<RwLock<PeerMeta>>) -> PeerStorage {
+        PeerStorage {
             engine: engine,
             meta: meta,
         }
@@ -48,7 +48,7 @@ impl<T> From<sync::PoisonError<T>> for raft::Error {
     }
 }
 
-impl Storage for RegionStorage {
+impl Storage for PeerStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
         let mut meta = try!(self.meta.write());
         let initialized = meta.is_initialized();
