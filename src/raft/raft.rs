@@ -435,15 +435,12 @@ impl<T: Storage + Default> Raft<T> {
 
     fn append_entry(&mut self, es: &mut [Entry]) {
         let li = self.raft_log.last_index();
-        for i in 0..es.len() {
-            let e = es.get_mut(i).unwrap();
+        for (i, e) in es.iter_mut().enumerate() {
             e.set_term(self.get_term());
             e.set_index(li + 1 + i as u64);
         }
         self.raft_log.append(es);
-        let id = self.id;
-        let last_index = self.raft_log.last_index();
-        self.prs.get_mut(&id).unwrap().maybe_update(last_index);
+        self.prs.get_mut(&self.id).unwrap().maybe_update(self.raft_log.last_index());
         self.maybe_commit();
     }
 
@@ -1150,13 +1147,23 @@ mod test {
     use std::collections::HashMap;
     use raft::errors::*;
     use rand;
-    use raft::raft_log;
+    use raft::raft_log::{self, RaftLog};
     use protobuf::RepeatedField;
     use std::ops::Deref;
     use std::ops::DerefMut;
     use raft::storage::MemStorage;
     use proto::raftpb::{Entry, Message, MessageType};
     use raft::progress::{Progress, Inflights, ProgressState};
+    use raft::log_unstable::Unstable;
+
+    fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
+        let mut s = format!("committed: {}\n", raft_log.committed);
+        s = s + &format!("applied: {}\n", raft_log.applied);
+        for (i, e) in raft_log.all_entries().iter().enumerate() {
+            s = s + &format!("#{}: {:?}\n", i, e);
+        }
+        s
+    }
 
     fn new_progress(state: ProgressState,
                     matched: u64,
@@ -1279,6 +1286,31 @@ mod test {
 
     fn nop_stepper() -> Interface {
         Interface { raft: None }
+    }
+
+    fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
+        let mut m = Message::new();
+        m.set_from(from);
+        m.set_to(to);
+        m.set_msg_type(t);
+        if n > 0 {
+            let mut ents = Vec::with_capacity(n);
+            for _ in 0..n {
+                ents.push(new_entry(0, 0, Some("somedata")));
+            }
+            m.set_entries(RepeatedField::from_vec(ents));
+        }
+        m
+    }
+
+    fn new_entry(term: u64, index: u64, data: Option<&str>) -> Entry {
+        let mut e = Entry::new();
+        e.set_index(index);
+        e.set_term(term);
+        if let Some(d) = data {
+            e.set_data(d.as_bytes().to_vec());
+        }
+        e
     }
 
     #[derive(Default)]
@@ -1617,22 +1649,6 @@ mod test {
 
     #[test]
     fn test_log_replicatioin() {
-        let new_message = |from, to, t, n| {
-            let mut m = Message::new();
-            m.set_from(from);
-            m.set_to(to);
-            m.set_msg_type(t);
-            if n > 0 {
-                let mut ents = Vec::with_capacity(n);
-                for _ in 0..n {
-                    let mut e = Entry::new();
-                    e.set_data("somedata".as_bytes().to_vec());
-                    ents.push(e);
-                }
-                m.set_entries(RepeatedField::from_vec(ents));
-            }
-            m
-        };
         let mut tests = vec![
             (Network::new(vec![None, None, None]), vec![new_message(1, 1, MessageType::MsgPropose, 1)], 2),
             (Network::new(vec![None, None, None]), vec![new_message(1, 1, MessageType::MsgPropose, 1), new_message(1, 2, MessageType::MsgHup, 0), new_message(1, 2, MessageType::MsgPropose, 1)], 4),
@@ -1668,5 +1684,183 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_single_node_commit() {
+        let mut tt = Network::new(vec![None]);
+        tt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+        tt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+        tt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+
+        assert_eq!(tt.peers[&1].raft_log.committed, 3);
+    }
+
+    // TestCannotCommitWithoutNewTermEntry tests the entries cannot be committed
+    // when leader changes, no new proposal comes in and ChangeTerm proposal is
+    // filtered.
+    #[test]
+    fn test_cannot_commit_without_new_term_entry() {
+        let mut tt = Network::new(vec![None, None, None, None, None]);
+        tt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+        // 0 cannot reach 2, 3, 4
+        tt.cut(1, 3);
+        tt.cut(1, 4);
+        tt.cut(1, 5);
+
+        tt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+        tt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+
+        assert_eq!(tt.peers[&1].raft_log.committed, 1);
+
+        // network recovery
+        tt.recover();
+        // avoid committing ChangeTerm proposal
+        tt.ignore(MessageType::MsgAppend);
+
+        // elect 2 as the new leader with term 2
+        tt.send(vec![new_message(2, 2, MessageType::MsgHup, 0)]);
+
+        // no log entries from previous term should be committed
+        assert_eq!(tt.peers[&2].raft_log.committed, 1);
+
+        tt.recover();
+        // send heartbeat; reset wait
+        tt.send(vec![new_message(2, 2, MessageType::MsgBeat, 0)]);
+        // append an entry at current term
+        tt.send(vec![new_message(2, 2, MessageType::MsgPropose, 1)]);
+        // expect the committed to be advanced
+        assert_eq!(tt.peers[&2].raft_log.committed, 5);
+    }
+
+    // TestCommitWithoutNewTermEntry tests the entries could be committed
+    // when leader changes, no new proposal comes in.
+    #[test]
+    fn test_commit_without_new_term_entry() {
+        let mut tt = Network::new(vec![None, None, None, None, None]);
+        tt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+        // 0 cannot reach 2, 3, 4
+        tt.cut(1, 3);
+        tt.cut(1, 4);
+        tt.cut(1, 5);
+
+        tt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+        tt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+
+        assert_eq!(tt.peers[&1].raft_log.committed, 1);
+
+        // network recovery
+        tt.recover();
+
+        // elect 1 as the new leader with term 2
+        // after append a ChangeTerm entry from the current term, all entries
+        // should be committed
+        tt.send(vec![new_message(2, 2, MessageType::MsgHup, 0)]);
+
+        assert_eq!(tt.peers[&1].raft_log.committed, 4);
+    }
+
+    #[test]
+    fn test_dueling_candidates() {
+        let a = new_test_raft(1, vec![1, 2, 3], 10, 1, Arc::new(MemStorage::new()));
+        let b = new_test_raft(2, vec![1, 2, 3], 10, 1, Arc::new(MemStorage::new()));
+        let c = new_test_raft(3, vec![1, 2, 3], 10, 1, Arc::new(MemStorage::new()));
+
+        let mut nt = Network::new(vec![Some(Interface::new(a)),
+                                       Some(Interface::new(b)),
+                                       Some(Interface::new(c))]);
+        nt.cut(1, 3);
+
+        nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+        nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+        nt.recover();
+        nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+        let store = MemStorage::new();
+        let mut e = Entry::new();
+        e.set_term(1);
+        e.set_index(1);
+        store.wl().append(&[new_entry(1, 1, None)]).expect("");
+        let wlog = RaftLog {
+            store: Arc::new(store),
+            committed: 1,
+            unstable: Unstable { offset: 2, ..Default::default() },
+            ..Default::default()
+        };
+        let wlog2 = RaftLog::new(Arc::new(MemStorage::new()));
+        let tests = vec![
+            (StateRole::Follower, 2, &wlog),
+            (StateRole::Follower, 2, &wlog),
+            (StateRole::Follower, 2, &wlog2),
+        ];
+
+        for (i, &(state, term, raft_log)) in tests.iter().enumerate() {
+            let id = i as u64 + 1;
+            if nt.peers[&id].state != state {
+                panic!("#{}: state = {:?}, want {:?}",
+                       i,
+                       nt.peers[&id].state,
+                       state);
+            }
+            if nt.peers[&id].get_term() != term {
+                panic!("#{}: term = {}, want {}", i, nt.peers[&id].get_term(), term);
+            }
+            let base = ltoa(raft_log);
+            let l = ltoa(&nt.peers[&(1 + i as u64)].raft_log);
+            if base != l {
+                panic!("#{}: raft_log:\n {}, want:\n {}", i, l, base);
+            }
+        }
+    }
+
+    #[test]
+    fn test_candidate_concede() {
+        let mut tt = Network::new(vec![None, None, None]);
+        tt.isolate(1);
+
+        tt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+        tt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+        // heal the partition
+        tt.recover();
+        // send heartbeat; reset wait
+        tt.send(vec![new_message(3, 3, MessageType::MsgBeat, 0)]);
+
+        // send a proposal to 3 to flush out a MsgAppend to 1
+        let data = "force follower";
+        let mut m = new_message(3, 3, MessageType::MsgPropose, 0);
+        m.set_entries(RepeatedField::from_vec(vec![new_entry(0, 0, Some(data))]));
+        tt.send(vec![m]);
+        // send heartbeat; flush out commit
+        tt.send(vec![new_message(3, 3, MessageType::MsgBeat, 0)]);
+
+        assert_eq!(tt.peers[&1].state, StateRole::Follower);
+        assert_eq!(tt.peers[&1].get_term(), 1);
+
+        let store = MemStorage::new();
+        store.wl().append(&[new_entry(1, 1, None), new_entry(1, 2, Some(data))]).expect("");
+        let want_log = ltoa(&RaftLog {
+            store: Arc::new(store),
+            unstable: Unstable { offset: 3, ..Default::default() },
+            committed: 2,
+            ..Default::default()
+        });
+        for (id, p) in tt.peers.iter() {
+            let l = ltoa(&p.raft_log);
+            if l != want_log {
+                panic!("#{}: raft_log: {}, want: {}", id, l, want_log);
+            }
+        }
+    }
+
+    #[test]
+    fn test_single_node_candidate() {
+        let mut tt = Network::new(vec![None]);
+        tt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+        assert_eq!(tt.peers[&1].state, StateRole::Leader);
     }
 }
