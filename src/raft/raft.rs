@@ -658,12 +658,12 @@ impl<T: Storage + Default> Raft<T> {
             }
             return;
         }
-        
+
         *old_paused = pr.is_paused();
         if !pr.maybe_update(m.get_index()) {
             return;
         }
-        
+
         match pr.state {
             ProgressState::Probe => pr.become_replicate(),
             ProgressState::Snapshot if pr.maybe_snapshot_abort() => {
