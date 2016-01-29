@@ -13,7 +13,7 @@ use super::engine::Retriever;
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 10;
 
-pub struct RegionMeta {
+pub struct PeerMeta {
     engine: Arc<DB>,
 
     pub region_id: u64,
@@ -23,7 +23,7 @@ pub struct RegionMeta {
     pub truncated_state: Option<RaftTruncatedState>,
 }
 
-impl RegionMeta {
+impl PeerMeta {
     pub fn is_initialized(&self) -> bool {
         self.region.get_end_key().len() > 0
     }
