@@ -115,13 +115,14 @@ impl Storage for RegionStorage {
                               }
 
                               next_index += 1;
-                              total_size += entry.compute_size() as u64;
-                              ents.push(entry);
 
                               // We only check if max_size > 0.
                               if max_size > 0 {
+                                  total_size += entry.compute_size() as u64;
                                   exceeded_max_size = total_size > max_size;
                               }
+
+                              ents.push(entry);
 
                               Ok(!exceeded_max_size)
                           }));
@@ -159,19 +160,16 @@ impl Storage for RegionStorage {
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
         match self.entries(idx, idx + 1, 0) {
-            Err(e) => {
-                match e {
-                    raft::Error::Store(StorageError::Compacted) => {
-                        let meta = try!(self.meta.read());
-                        let state = try!(meta.get_truncated_state());
-                        if state.get_index() == idx {
-                            return Ok(state.get_term());
-                        }
-                        return Err(e);
-                    }
-                    _ => return Err(e),
+            Err(e@raft::Error::Store(StorageError::Compacted)) => {
+                let meta = try!(self.meta.read());
+                let state = try!(meta.get_truncated_state());
+                if state.get_index() == idx {
+                    return Ok(state.get_term());
                 }
+                return Err(e);
+
             }
+            Err(e) => return Err(e),
             Ok(ents) => {
                 if ents.len() == 0 {
                     return Ok(0);

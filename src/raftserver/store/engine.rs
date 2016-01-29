@@ -28,8 +28,7 @@ pub fn get_msg<M>(db: &DB, key: &[u8]) -> Result<Option<M>>
 }
 
 pub fn put_msg<T: Writable, M: protobuf::Message>(w: &T, key: &[u8], m: &M) -> Result<()> {
-    let mut value = vec![];
-    try!(m.write_to_vec(&mut value));
+    let value = try!(m.write_to_bytes());
     try!(w.put(key, &value));
     Ok(())
 }

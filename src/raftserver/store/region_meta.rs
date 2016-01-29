@@ -36,18 +36,17 @@ impl RegionMeta {
     }
 
     pub fn get_first_index(&self) -> Result<u64> {
-        let state = try!(self.get_truncated_state());
-        Ok(state.get_index() + 1)
+        self.get_truncated_state().map(|state| state.get_index() + 1)
     }
 
 
     pub fn load_truncated_state(&self) -> Result<RaftTruncatedState> {
         let res = try!(engine::get_msg::<RaftTruncatedState>(&self.engine,
                                          &keys::raft_truncated_state_key(self.region_id)));
-        let found = res.is_some();
-        let mut state = match res {
-            Some(state) => state,
-            None => RaftTruncatedState::new(),
+
+        let (mut state, found) = match res {
+            Some(state) => (state, true),
+            None => (RaftTruncatedState::new(), false),
         };
 
         if !found {
@@ -82,10 +81,7 @@ impl RegionMeta {
         }
 
         let n = try!(engine::get_u64(&self.engine, &keys::raft_applied_index_key(self.region_id)));
-        match n {
-            Some(index) => return Ok(index),
-            None => Ok(applied_index),
-        }
+        Ok(n.unwrap_or(applied_index))
     }
 
     pub fn snap_load_applied_index(&self, snap: &Snapshot) -> Result<u64> {
@@ -95,17 +91,14 @@ impl RegionMeta {
         }
 
         let n = try!(engine::snap_get_u64(snap, &keys::raft_applied_index_key(self.region_id)));
-        match n {
-            Some(index) => return Ok(index),
-            None => Ok(applied_index),
-        }
+        Ok(n.unwrap_or(applied_index))
     }
 
     // For region snapshot, we care 3 range in database for this region.
     // [region id, region id + 1) -> saving raft entries, applied index, etc.
     // [region meta start, region meta end) -> saving region information.
     // [region data start, region data end) -> saving region data.
-    pub fn region_key_ranges(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+    fn region_key_ranges(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
         // The first range starts at MIN_KEY, but it contains unnecessary local data.
         // So we should skip this.
         let mut data_start_key = self.region.get_start_key();
