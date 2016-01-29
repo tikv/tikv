@@ -5,7 +5,7 @@ use protobuf::{self, RepeatedField};
 use proto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType, ConfChange,
                     ConfChangeType, ConfState};
 use raft::raft::{Config, Raft, SoftState, INVALID_ID};
-use raft::status::Status;
+use raft::Status;
 
 #[derive(Debug, Default)]
 struct Peer {
@@ -48,7 +48,7 @@ fn is_empty_snap(s: &Snapshot) -> bool {
 // be saved to stable storage, committed or sent to other peers.
 // All fields in Ready are read-only.
 #[derive(Default)]
-struct Ready {
+pub struct Ready {
     // The current volatile state of a Node.
     // SoftState will be nil if there is no update.
     // It is not required to consume or store SoftState.
@@ -79,10 +79,10 @@ struct Ready {
 }
 
 impl Ready {
-    fn new<T: Storage + Sync + Default>(raft: &mut Raft<T>,
-                                        prev_ss: &SoftState,
-                                        prev_hs: &HardState)
-                                        -> Ready {
+    fn new<T: Storage + Default>(raft: &mut Raft<T>,
+                                 prev_ss: &SoftState,
+                                 prev_hs: &HardState)
+                                 -> Ready {
         let mut rd = Ready {
             entries: raft.raft_log.unstable_entries().unwrap_or(&vec![]).to_vec(),
             committed_entries: raft.raft_log.next_entries().unwrap_or(vec![]),
@@ -108,13 +108,13 @@ impl Ready {
 // The methods of this struct correspond to the methods of Node and are described
 // more fully there.
 #[derive(Default)]
-struct RawNode<T: Storage + Sync + Default> {
+pub struct RawNode<T: Storage + Default> {
     raft: Raft<T>,
     prev_ss: SoftState,
     prev_hs: HardState,
 }
 
-impl<T: Storage + Sync + Default> RawNode<T> {
+impl<T: Storage + Default> RawNode<T> {
     // NewRawNode returns a new RawNode given configuration and a list of raft peers.
     fn new(config: &Config<T>, peers: &[Peer]) -> Result<RawNode<T>> {
         assert!(config.id != 0, "config.id must not be zero");
