@@ -55,11 +55,7 @@ impl Storage for RegionStorage {
         let res: Option<HardState> = try!(engine::get_msg(self.engine.as_ref(),
                                                     &keys::raft_hard_state_key(meta.region_id)));
 
-        let found = res.is_some();
-        let mut hard_state = match res {
-            Some(state) => state,
-            None => HardState::new(), 
-        };
+        let (mut hard_state, found) = res.map_or((HardState::new(), false), |e| (e, true));
 
         if !found {
             if initialized {
@@ -79,7 +75,6 @@ impl Storage for RegionStorage {
                 conf_state.mut_nodes().push(p.get_peer_id());
             }
         }
-
 
         Ok(RaftState {
             hard_state: hard_state,
