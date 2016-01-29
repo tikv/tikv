@@ -184,8 +184,13 @@ mod tests {
         assert_eq!(engine.get_i64(key).unwrap(), Some(-1));
         assert!(engine.get_i64(b"missing_key").unwrap().is_none());
 
+        let snap = engine.snapshot();
+        assert_eq!(snap.get_i64(key).unwrap(), Some(-1));
+        assert!(snap.get_i64(b"missing_key").unwrap().is_none());
+
         engine.put_u64(key, 1).unwrap();
         assert_eq!(engine.get_u64(key).unwrap(), Some(1));
+        assert_eq!(snap.get_i64(key).unwrap(), Some(-1));
     }
 
     #[test]
