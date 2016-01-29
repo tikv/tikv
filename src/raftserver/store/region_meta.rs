@@ -8,7 +8,7 @@ use proto::metapb;
 use proto::raft_serverpb::RaftTruncatedState;
 use raftserver::{Result, other};
 use super::keys;
-use super::engine::{self, Readable};
+use super::engine::Retriever;
 
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 10;
@@ -41,7 +41,7 @@ impl RegionMeta {
 
 
     pub fn load_truncated_state(&self) -> Result<RaftTruncatedState> {
-        let res: Option<RaftTruncatedState> = try!(engine::get_msg(self.engine.as_ref(),
+        let res: Option<RaftTruncatedState> = try!(self.engine.get_msg(
                                          &keys::raft_truncated_state_key(self.region_id)));
 
         if let Some(state) = res {
@@ -62,8 +62,7 @@ impl RegionMeta {
     }
 
     pub fn load_last_index(&self) -> Result<u64> {
-        let n = try!(engine::get_u64(self.engine.as_ref(),
-                                     &keys::raft_last_index_key(self.region_id)));
+        let n = try!(self.engine.get_u64(&keys::raft_last_index_key(self.region_id)));
         match n {
             Some(last_index) => return Ok(last_index),
             None => {
@@ -74,13 +73,13 @@ impl RegionMeta {
         }
     }
 
-    pub fn load_applied_index<T: Readable>(&self, db: &T) -> Result<u64> {
+    pub fn load_applied_index<T: Retriever>(&self, db: &T) -> Result<u64> {
         let mut applied_index: u64 = 0;
         if self.is_initialized() {
             applied_index = RAFT_INIT_LOG_INDEX;
         }
 
-        let n = try!(engine::get_u64(db, &keys::raft_applied_index_key(self.region_id)));
+        let n = try!(db.get_u64(&keys::raft_applied_index_key(self.region_id)));
         Ok(n.unwrap_or(applied_index))
     }
 
@@ -109,7 +108,7 @@ impl RegionMeta {
     {
         let ranges = self.region_key_ranges();
         for r in ranges {
-            try!(engine::scan(snap, &r.0, &r.1, f));
+            try!(snap.scan(&r.0, &r.1, f));
         }
 
         Ok(())
