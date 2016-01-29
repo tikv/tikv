@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::thread;
 
 use mio::{self, Token, EventLoop, EventSet, PollOpt};
-use mio::tcp::{TcpListener, TcpStream};
+use mio::tcp::TcpListener;
 use protobuf::core::Message;
 use protobuf::RepeatedField;
 
@@ -12,22 +12,20 @@ use proto::kvrpcpb;
 use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
                      CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
                      Request, Response, MessageType};
-use util::codec::rpc::{encode_msg, decode_msg, MSG_HEADER_LEN};
+use util;
+use util::codec::rpc::{encode_msg, MSG_HEADER_LEN};
 use storage;
 use storage::{Key, Storage, Value, KvPair};
 
-use util;
+use super::conn::Conn;
 
-const SERVER_TOKEN: Token = Token(0);
+pub type Result<T> = ::std::result::Result<T, ServerError>;
+
+pub const SERVER_TOKEN: Token = Token(0);
 
 quick_error! {
     #[derive(Debug)]
     pub enum ServerError {
-        //Notify(err: NotifyError<Message>) {
-            //from()
-            //cause(err)
-            //description(err.description())
-        //}
         Storage(err: storage::Error) {
             from()
             cause(err)
@@ -36,58 +34,26 @@ quick_error! {
     }
 }
 
-pub type Result<T> = ::std::result::Result<T, ServerError>;
-
-pub trait Dispatcher {
-    fn dispatch(&mut self, m: Request) -> Result<()>;
-}
-
-struct Client {
-    sock: TcpStream,
-    interest: EventSet,
-
-    res: Vec<u8>,
-}
-
-impl Client {
-    fn new(sock: TcpStream) -> Client {
-        Client {
-            sock: sock,
-            interest: EventSet::readable(),
-            res: Vec::with_capacity(1024),
-        }
-    }
-
-    fn write(&mut self) {
-        if self.sock.write(&self.res).is_err() {
-            // [TODO]: add error log
-        }
-        self.interest.remove(EventSet::writable());
-        self.interest.insert(EventSet::readable());
-    }
-
-    fn read(&mut self, token: Token, event_loop: &mut EventLoop<Server>) {
-        // only test here
-        let mut m = Request::new();
-        let msg_id = decode_msg(&mut self.sock, &mut m).unwrap();
-
-        let sender = event_loop.channel();
-        let queue_msg: QueueMessage = QueueMessage::Request(token, msg_id, m);
-        thread::spawn(move || {
-            let _ = sender.send(queue_msg);
-        });
-        self.interest.remove(EventSet::readable());
-    }
-}
-
-struct Server {
-    listener: TcpListener,
-    clients: HashMap<Token, Client>,
-    token_counter: usize,
+pub struct Server {
+    pub listener: TcpListener,
+    pub conns: HashMap<Token, Conn>,
+    pub token_counter: usize,
     store: Storage,
 }
 
 impl Server {
+    pub fn new(listener: TcpListener,
+               conns: HashMap<Token, Conn>,
+               tc: usize,
+               store: Storage)
+               -> Server {
+        return Server {
+            listener: listener,
+            conns: conns,
+            token_counter: tc,
+            store: store,
+        };
+    }
     pub fn handle_get(&mut self,
                       msg: &Request,
                       msg_id: u64,
@@ -269,7 +235,7 @@ impl Server {
     }
 }
 
-enum QueueMessage {
+pub enum QueueMessage {
     // Request(token, msg_id, kvrpc_request)
     Request(Token, u64, Request),
     // Request(token, msg_id, kvrpc_response)
@@ -282,7 +248,7 @@ impl mio::Handler for Server {
 
     fn ready(&mut self, event_loop: &mut EventLoop<Server>, token: Token, events: EventSet) {
         if events.is_hup() || events.is_error() {
-            self.clients.remove(&token);
+            self.conns.remove(&token);
             return;
         }
 
@@ -300,13 +266,14 @@ impl mio::Handler for Server {
                     };
 
                     let new_token = Token(self.token_counter);
-                    if sock.set_nodelay(true).is_err() {
-                        error!("set nodeplay failed");
+                    match sock.set_nodelay(true) {
+                        Ok(_) => {}
+                        Err(e) => error!("set nodeplay failed {:?}", e),
                     }
-                    self.clients.insert(new_token, Client::new(sock));
+                    self.conns.insert(new_token, Conn::new(sock));
                     self.token_counter += 1;
 
-                    event_loop.register(&self.clients[&new_token].sock,
+                    event_loop.register(&self.conns[&new_token].sock,
                                         new_token,
                                         EventSet::readable(),
                                         PollOpt::edge() | PollOpt::oneshot())
@@ -314,11 +281,11 @@ impl mio::Handler for Server {
 
                 }
                 token => {
-                    let mut client = self.clients.get_mut(&token).unwrap();
-                    client.read(token, event_loop);
-                    event_loop.reregister(&client.sock,
+                    let mut conn = self.conns.get_mut(&token).unwrap();
+                    conn.read(token, event_loop);
+                    event_loop.reregister(&conn.sock,
                                           token,
-                                          client.interest,
+                                          conn.interest,
                                           PollOpt::edge() | PollOpt::oneshot())
                               .unwrap();
                 }
@@ -326,11 +293,11 @@ impl mio::Handler for Server {
         }
 
         if events.is_writable() {
-            let mut client = self.clients.get_mut(&token).unwrap();
-            client.write();
-            event_loop.reregister(&client.sock,
+            let mut conn = self.conns.get_mut(&token).unwrap();
+            conn.write();
+            event_loop.reregister(&conn.sock,
                                   token,
-                                  client.interest,
+                                  conn.interest,
                                   PollOpt::edge() | PollOpt::oneshot())
                       .unwrap();
         }
@@ -363,53 +330,20 @@ impl mio::Handler for Server {
                 }
             }
             QueueMessage::Response(token, msg_id, resp) => {
-                let mut client: &mut Client = self.clients.get_mut(&token).unwrap();
-                client.res.clear();
+                let mut conn: &mut Conn = self.conns.get_mut(&token).unwrap();
+                conn.res.clear();
                 let resp_len: usize = MSG_HEADER_LEN + resp.compute_size() as usize;
-                if client.res.capacity() < resp_len {
-                    client.res = Vec::with_capacity(resp_len);
+                if conn.res.capacity() < resp_len {
+                    conn.res = Vec::with_capacity(resp_len);
                 }
-                encode_msg(&mut client.res, msg_id, &resp).unwrap();
-                client.interest.insert(EventSet::writable());
-                event_loop.reregister(&client.sock,
+                encode_msg(&mut conn.res, msg_id, &resp).unwrap();
+                conn.interest.insert(EventSet::writable());
+                event_loop.reregister(&conn.sock,
                                       token,
-                                      client.interest,
+                                      conn.interest,
                                       PollOpt::edge() | PollOpt::oneshot())
                           .unwrap();
             }
         }
-    }
-}
-
-pub fn run(addr: &str, store: Storage) {
-    let laddr = addr.parse().unwrap();
-    let listener = TcpListener::bind(&laddr).unwrap();
-
-    let mut event_loop = EventLoop::new().unwrap();
-
-    event_loop.register(&listener,
-                        SERVER_TOKEN,
-                        EventSet::readable(),
-                        PollOpt::edge())
-              .unwrap();
-
-    let mut server = Server {
-        listener: listener,
-        token_counter: 1,
-        clients: HashMap::new(),
-        store: store,
-    };
-    event_loop.run(&mut server).unwrap();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use storage::{Storage, Dsn};
-
-    #[test]
-    fn test_recv() {
-        let store: Storage = Storage::new(Dsn::Memory).unwrap();
-        run("127.0.0.1:61234", store);
     }
 }
