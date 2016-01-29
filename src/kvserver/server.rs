@@ -1,23 +1,20 @@
 use std::collections::HashMap;
 use std::boxed::Box;
-use std::rc::Rc;
-use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::thread;
 
-use mio::{self, Token, EventLoop, EventSet, PollOpt, TryWrite, TryRead, NotifyError};
+use mio::{self, Token, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
-use protobuf;
 use protobuf::core::Message;
 use protobuf::RepeatedField;
-use bytes::{MutBuf, ByteBuf, MutByteBuf};
 
 use proto::kvrpcpb;
 use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
-                     CmdCommitRequest, CmdCommitResponse, Request, Response, MessageType};
-use util::codec::{self, encode_msg, decode_msg, MSG_HEADER_LEN};
+                     CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
+                     Request, Response, MessageType};
+use util::codec::rpc::{encode_msg, decode_msg, MSG_HEADER_LEN};
 use storage;
-use storage::{Key, Storage, Value, KvPair, Callback};
+use storage::{Key, Storage, Value, KvPair};
 
 use util;
 
@@ -75,9 +72,9 @@ impl Client {
         let msg_id = decode_msg(&mut self.sock, &mut m).unwrap();
 
         let sender = event_loop.channel();
-        let mut queueMsg: QueueMessage = QueueMessage::Request(token, msg_id, m);
+        let queue_msg: QueueMessage = QueueMessage::Request(token, msg_id, m);
         thread::spawn(move || {
-            let _ = sender.send(queueMsg);
+            let _ = sender.send(queue_msg);
         });
         self.interest.remove(EventSet::readable());
     }
@@ -108,10 +105,11 @@ impl Server {
                                    Box::new(move |v: ::std::result::Result<Option<Value>,
                                                                              storage::Error>| {
                                        let resp: Response = Server::cmd_get_done(v);
-                                       let mut queueMsg: QueueMessage =
-                                           QueueMessage::Response(token, msg_id, resp);
+                                       let queue_msg: QueueMessage = QueueMessage::Response(token,
+                                                                                            msg_id,
+                                                                                            resp);
                                        thread::spawn(move || {
-                                           let _ = sender.send(queueMsg);
+                                           let _ = sender.send(queue_msg);
                                        });
                                    })) {
             Ok(()) => {}
@@ -139,13 +137,50 @@ impl Server {
                               Box::new(move |kvs: ::std::result::Result<Vec<KvPair>,
                                                                           storage::Error>| {
                                   let resp: Response = Server::cmd_scan_done(kvs);
-                                  let mut queueMsg: QueueMessage = QueueMessage::Response(token,
-                                                                                          msg_id,
-                                                                                          resp);
+                                  let queue_msg: QueueMessage = QueueMessage::Response(token,
+                                                                                       msg_id,
+                                                                                       resp);
                                   thread::spawn(move || {
-                                      let _ = sender.send(queueMsg);
+                                      let _ = sender.send(queue_msg);
                                   });
                               })) {
+            Ok(()) => {}
+            Err(why) => return Err(ServerError::Storage(why)),
+        }
+        Ok(())
+    }
+    pub fn handle_prewrite(&mut self,
+                           msg: &Request,
+                           msg_id: u64,
+                           token: Token,
+                           event_loop: &mut EventLoop<Server>)
+                           -> Result<()> {
+        let cmd_prewrite_req: &CmdPrewriteRequest = msg.get_cmd_prewrite_req();
+        let sender = event_loop.channel();
+        let puts: Vec<_> = cmd_prewrite_req.get_puts()
+                                           .iter()
+                                           .map(|kv| {
+                                               (util::array_to_vec(kv.get_key()),
+                                                util::array_to_vec(kv.get_value()))
+                                           })
+                                           .collect();
+        let deletes: Vec<_> = cmd_prewrite_req.get_dels().iter().cloned().collect();
+        let locks: Vec<_> = cmd_prewrite_req.get_locks().iter().cloned().collect();
+        match self.store
+                  .async_prewrite(puts,
+                                  deletes,
+                                  locks,
+                                  cmd_prewrite_req.get_start_version(),
+                                  Box::new(move |r: ::std::result::Result<(),
+                                                                            storage::Error>| {
+                                      let resp: Response = Server::cmd_prewrite_done(r);
+                                      let queue_msg: QueueMessage = QueueMessage::Response(token,
+                                                                                           msg_id,
+                                                                                           resp);
+                                      thread::spawn(move || {
+                                          let _ = sender.send(queue_msg);
+                                      });
+                                  })) {
             Ok(()) => {}
             Err(why) => return Err(ServerError::Storage(why)),
         }
@@ -159,29 +194,16 @@ impl Server {
                          -> Result<()> {
         let cmd_commit_req: &CmdCommitRequest = msg.get_cmd_commit_req();
         let sender = event_loop.channel();
-        for kv in cmd_commit_req.get_puts() {
-        }
-        let puts: Vec<_> = cmd_commit_req.get_puts()
-                                         .iter()
-                                         .map(|kv| {
-                                             (util::array_to_vec(kv.get_key()),
-                                              util::array_to_vec(kv.get_value()))
-                                         })
-                                         .collect();
-        let deletes: Vec<_> = cmd_commit_req.get_dels().iter().cloned().collect();
-        let locks: Vec<_> = cmd_commit_req.get_locks().iter().cloned().collect();
         match self.store
-                  .async_commit(puts,
-                                deletes,
-                                locks,
-                                cmd_commit_req.get_version(),
-                                Box::new(move |v: ::std::result::Result<(), storage::Error>| {
-                                    let resp: Response = Server::cmd_commit_done();
-                                    let mut queueMsg: QueueMessage = QueueMessage::Response(token,
-                                                                                            msg_id,
-                                                                                            resp);
+                  .async_commit(cmd_commit_req.get_start_version(),
+                                cmd_commit_req.get_commit_version(),
+                                Box::new(move |r: ::std::result::Result<(), storage::Error>| {
+                                    let resp: Response = Server::cmd_commit_done(r);
+                                    let queue_msg: QueueMessage = QueueMessage::Response(token,
+                                                                                         msg_id,
+                                                                                         resp);
                                     thread::spawn(move || {
-                                        let _ = sender.send(queueMsg);
+                                        let _ = sender.send(queue_msg);
                                     });
                                 })) {
             Ok(()) => {}
@@ -192,6 +214,7 @@ impl Server {
     fn cmd_get_done(r: ::std::result::Result<Option<Value>, storage::Error>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_get_resp: CmdGetResponse = CmdGetResponse::new();
+        cmd_get_resp.set_ok(r.is_ok());
         match r {
             Ok(v) => {
                 match v {
@@ -200,9 +223,7 @@ impl Server {
                 }
                 cmd_get_resp.set_ok(true);
             }
-            Err(e) => {
-                cmd_get_resp.set_ok(false);
-            }
+            Err(_) => {}
         }
         resp.set_field_type(MessageType::CmdGet);
         resp.set_cmd_get_resp(cmd_get_resp);
@@ -211,6 +232,7 @@ impl Server {
     fn cmd_scan_done(kvs: ::std::result::Result<Vec<KvPair>, storage::Error>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_scan_resp: CmdScanResponse = CmdScanResponse::new();
+        cmd_scan_resp.set_ok(kvs.is_ok());
         match kvs {
             Ok(v) => {
                 // convert storage::KvPair to kvrpcpb::KvPair
@@ -222,18 +244,27 @@ impl Server {
                     new_kvs.push(new_kv);
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
-                cmd_scan_resp.set_ok(true);
             }
-            Err(e) => {
-                cmd_scan_resp.set_ok(false);
-            }
+            Err(_) => {}
         }
         resp.set_field_type(MessageType::CmdScan);
         resp.set_cmd_scan_resp(cmd_scan_resp);
         resp
     }
-    fn cmd_commit_done() -> Response {
+    fn cmd_prewrite_done(r: ::std::result::Result<(), storage::Error>) -> Response {
         let mut resp: Response = Response::new();
+        let mut cmd_prewrite_resp: CmdPrewriteResponse = CmdPrewriteResponse::new();
+        cmd_prewrite_resp.set_ok(r.is_ok());
+        resp.set_field_type(MessageType::CmdPrewrite);
+        resp.set_cmd_prewrite_resp(cmd_prewrite_resp);
+        resp
+    }
+    fn cmd_commit_done(r: ::std::result::Result<(), storage::Error>) -> Response {
+        let mut resp: Response = Response::new();
+        let mut cmd_commit_resp: CmdCommitResponse = CmdCommitResponse::new();
+        cmd_commit_resp.set_ok(r.is_ok());
+        resp.set_field_type(MessageType::CmdCommit);
+        resp.set_cmd_commit_resp(cmd_commit_resp);
         resp
     }
 }
@@ -259,7 +290,8 @@ impl mio::Handler for Server {
             match token {
                 SERVER_TOKEN => {
                     let sock = match self.listener.accept() {
-                        Ok(Some((sock, addr))) => sock,
+                        // Some(sock, addr)
+                        Ok(Some((sock, _))) => sock,
                         Ok(None) => unreachable!(),
                         Err(e) => {
                             error!("accept error: {}", e);
@@ -315,6 +347,11 @@ impl mio::Handler for Server {
                     }
                     MessageType::CmdScan => {
                         if self.handle_scan(&m, msg_id, token, event_loop).is_err() {
+                            // [TODO]: error log
+                        }
+                    }
+                    MessageType::CmdPrewrite => {
+                        if self.handle_prewrite(&m, msg_id, token, event_loop).is_err() {
                             // [TODO]: error log
                         }
                     }
