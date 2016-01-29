@@ -11,7 +11,7 @@ use proto::raft_serverpb::{RaftSnapshotData, KeyValue};
 use raft::{self, Storage, RaftState, StorageError};
 use raftserver::{Result, Error};
 use super::keys;
-use super::engine;
+use super::engine::Retriever;
 use super::region_meta::{RegionMeta, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
 
 pub struct RegionStorage {
@@ -52,14 +52,10 @@ impl Storage for RegionStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
         let mut meta = try!(self.meta.write());
         let initialized = meta.is_initialized();
-        let res = try!(engine::get_msg::<HardState>(&self.engine,
-                                                    &keys::raft_hard_state_key(meta.region_id)));
+        let res: Option<HardState> = try!(self.engine
+                                              .get_msg(&keys::raft_hard_state_key(meta.region_id)));
 
-        let found = res.is_some();
-        let mut hard_state = match res {
-            Some(state) => state,
-            None => HardState::new(), 
-        };
+        let (mut hard_state, found) = res.map_or((HardState::new(), false), |e| (e, true));
 
         if !found {
             if initialized {
@@ -79,7 +75,6 @@ impl Storage for RegionStorage {
                 conf_state.mut_nodes().push(p.get_peer_id());
             }
         }
-
 
         Ok(RaftState {
             hard_state: hard_state,
@@ -102,30 +97,29 @@ impl Storage for RegionStorage {
         let end_key = keys::raft_log_key(meta.region_id, high);
 
 
-        try!(engine::scan(&self.engine,
-                          &start_key,
-                          &end_key,
-                          &mut |_, value| -> Result<bool> {
-                              let mut entry = Entry::new();
-                              try!(entry.merge_from_bytes(value));
+        try!(self.engine.scan(&start_key,
+                              &end_key,
+                              &mut |_, value| -> Result<bool> {
+                                  let mut entry = Entry::new();
+                                  try!(entry.merge_from_bytes(value));
 
-                              // May meet gap or has been compacted.
-                              if entry.get_index() != next_index {
-                                  return Ok(true);
-                              }
+                                  // May meet gap or has been compacted.
+                                  if entry.get_index() != next_index {
+                                      return Ok(true);
+                                  }
 
-                              next_index += 1;
+                                  next_index += 1;
 
-                              // We only check if max_size > 0.
-                              if max_size > 0 {
-                                  total_size += entry.compute_size() as u64;
-                                  exceeded_max_size = total_size > max_size;
-                              }
+                                  // We only check if max_size > 0.
+                                  if max_size > 0 {
+                                      total_size += entry.compute_size() as u64;
+                                      exceeded_max_size = total_size > max_size;
+                                  }
 
-                              ents.push(entry);
+                                  ents.push(entry);
 
-                              Ok(!exceeded_max_size)
-                          }));
+                                  Ok(!exceeded_max_size)
+                              }));
 
         // If we get the correct number of entries the total size exceeds max_size, returns.
         if ents.len() == (high - low) as usize || exceeded_max_size {
@@ -196,9 +190,9 @@ impl Storage for RegionStorage {
 
         // TODO: get applied_index and region info from snapshot.
         let meta = try!(self.meta.read());
-        let applied_index = try!(meta.snap_load_applied_index(&snap));
+        let applied_index = try!(meta.load_applied_index(&snap));
 
-        let res = try!(engine::snap_get_msg::<metapb::Region>(&snap,
+        let res: Option<metapb::Region> = try!(snap.get_msg(
                                             &keys::region_info_key(meta.region.get_start_key())));
 
         let region = match res {
