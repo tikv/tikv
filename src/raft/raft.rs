@@ -658,10 +658,12 @@ impl<T: Storage + Default> Raft<T> {
             }
             return;
         }
+        
         *old_paused = pr.is_paused();
         if !pr.maybe_update(m.get_index()) {
             return;
         }
+        
         match pr.state {
             ProgressState::Probe => pr.become_replicate(),
             ProgressState::Snapshot if pr.maybe_snapshot_abort() => {
@@ -802,12 +804,13 @@ impl<T: Storage + Default> Raft<T> {
                     return;
                 }
                 let mut m = m;
-                if self.pending_conf {
-                    for e in m.mut_entries().iter_mut() {
-                        if e.get_entry_type() == EntryType::EntryConfChange {
+                for e in m.mut_entries().iter_mut() {
+                    if e.get_entry_type() == EntryType::EntryConfChange {
+                        if self.pending_conf {
                             *e = Entry::new();
                             e.set_entry_type(EntryType::EntryNormal);
                         }
+                        self.pending_conf = true;
                     }
                 }
                 self.append_entry(&mut m.mut_entries());
