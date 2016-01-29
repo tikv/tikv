@@ -1,8 +1,5 @@
 #![allow(dead_code)]
 
-use std::boxed::Box;
-use std::result;
-use std::error;
 use std::thread;
 use std::convert;
 use std::time::Duration;
@@ -13,9 +10,9 @@ use mio::{self, Token, NotifyError};
 
 use util::codec::rpc;
 
-pub mod server;
-
-pub type Result<T> = result::Result<T, Box<error::Error + Send + Sync>>;
+pub mod store;
+pub mod errors;
+pub use self::errors::{Result, Error, other};
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
