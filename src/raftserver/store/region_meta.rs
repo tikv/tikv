@@ -44,19 +44,18 @@ impl RegionMeta {
         let res = try!(engine::get_msg::<RaftTruncatedState>(&self.engine,
                                          &keys::raft_truncated_state_key(self.region_id)));
 
-        let (mut state, found) = match res {
-            Some(state) => (state, true),
-            None => (RaftTruncatedState::new(), false),
-        };
+        if let Some(state) = res {
+            return Ok(state);
+        }
 
-        if !found {
-            if self.is_initialized() {
-                state.set_index(RAFT_INIT_LOG_INDEX);
-                state.set_term(RAFT_INIT_LOG_TERM);
-            } else {
-                state.set_index(0);
-                state.set_term(0);
-            }
+        let mut state = RaftTruncatedState::new();
+
+        if self.is_initialized() {
+            state.set_index(RAFT_INIT_LOG_INDEX);
+            state.set_term(RAFT_INIT_LOG_TERM);
+        } else {
+            state.set_index(0);
+            state.set_term(0);
         }
 
         Ok(state)
