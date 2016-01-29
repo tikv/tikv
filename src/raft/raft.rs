@@ -633,58 +633,90 @@ impl<T: Storage + Default> Raft<T> {
         Ok(())
     }
 
+    fn handle_append_response(&mut self,
+                              m: &Message,
+                              old_paused: &mut bool,
+                              send_append: &mut bool,
+                              maybe_commit: &mut bool) {
+        let pr = self.prs.get_mut(&m.get_from()).unwrap();
+        pr.recent_active = true;
+        if m.get_reject() {
+            debug!("{:x} received msgAppend rejection(lastindex: {}) from {:x} for index {}",
+                   self.id,
+                   m.get_reject_hint(),
+                   m.get_from(),
+                   m.get_index());
+            if pr.maybe_decr_to(m.get_index(), m.get_reject_hint()) {
+                debug!("{:x} decreased progress of {:x} to [{:?}]",
+                       self.id,
+                       m.get_from(),
+                       pr);
+                if pr.state == ProgressState::Replicate {
+                    pr.become_probe();
+                }
+                *send_append = true;
+            }
+            return;
+        }
+        *old_paused = pr.is_paused();
+        if !pr.maybe_update(m.get_index()) {
+            return;
+        }
+        match pr.state {
+            ProgressState::Probe => pr.become_replicate(),
+            ProgressState::Snapshot if pr.maybe_snapshot_abort() => {
+                debug!("{:x} snapshot aborted, resumed sending replication messages to {:x} \
+                        [{:?}]",
+                       self.id,
+                       m.get_from(),
+                       pr);
+                pr.become_probe();
+            }
+            ProgressState::Replicate => pr.ins.free_to(m.get_index()),
+            // TODO: remove this later.
+            _ => {}
+        }
+        *maybe_commit = true;
+    }
+
+    fn handle_snapshot_status(&mut self, m: &Message) {
+        let pr = self.prs.get_mut(&m.get_from()).unwrap();
+        if !m.get_reject() {
+            pr.become_probe();
+            debug!("{:x} snapshot succeeded, resumed sending replication messages to {:x} [{:?}]",
+                   self.id,
+                   m.get_from(),
+                   pr);
+        } else {
+            pr.snapshot_failure();
+            pr.become_probe();
+            debug!("{:x} snapshot failed, resumed sending replication messages to {:x} [{:?}]",
+                   self.id,
+                   m.get_from(),
+                   pr);
+        }
+        // If snapshot finish, wait for the msgAppResp from the remote node before sending
+        // out the next msgAppend.
+        // If snapshot failure, wait for a heartbeat interval before next try
+        pr.pause();
+    }
+
     /// check message's progress to decide which action should be taken.
     fn check_message_with_progress(&mut self,
                                    m: &Message,
                                    send_append: &mut bool,
                                    old_paused: &mut bool,
                                    maybe_commit: &mut bool) {
-        let pr = self.prs.get_mut(&m.get_from());
-        if pr.is_none() {
+        if !self.prs.contains_key(&m.get_from()) {
             debug!("no progress available for {:x}", m.get_from());
             return;
         }
-        let pr = pr.unwrap();
         match m.get_msg_type() {
             MessageType::MsgAppendResponse => {
-                pr.recent_active = true;
-                if m.get_reject() {
-                    debug!("{:x} received msgApp rejection(lastindex: {}) from {:x} for index {}",
-                           self.id,
-                           m.get_reject_hint(),
-                           m.get_from(),
-                           m.get_index());
-                    if pr.maybe_decr_to(m.get_index(), m.get_reject_hint()) {
-                        debug!("{:x} decreased progress of {:x} to [{:?}]",
-                               self.id,
-                               m.get_from(),
-                               pr);
-                        if pr.state == ProgressState::Replicate {
-                            pr.become_probe();
-                        }
-                        *send_append = true;
-                    }
-                } else {
-                    *old_paused = pr.is_paused();
-                    if pr.maybe_update(m.get_index()) {
-                        match pr.state {
-                            ProgressState::Probe => pr.become_replicate(),
-                            ProgressState::Snapshot if pr.maybe_snapshot_abort() => {
-                                debug!("{:x} snapshot aborted, resumed sending replication \
-                                        messages to {:x} [{:?}]",
-                                       self.id,
-                                       m.get_from(),
-                                       pr);
-                                pr.become_probe();
-                            }
-                            ProgressState::Replicate => pr.ins.free_to(m.get_index()),
-                            _ => {}
-                        }
-                        *maybe_commit = true;
-                    }
-                }
+                self.handle_append_response(m, old_paused, send_append, maybe_commit)
             }
             MessageType::MsgHeartbeatResponse => {
+                let pr = self.prs.get_mut(&m.get_from()).unwrap();
                 pr.recent_active = true;
 
                 // free one slot for the full inflights window to allow progress.
@@ -696,33 +728,15 @@ impl<T: Storage + Default> Raft<T> {
                 }
             }
             MessageType::MsgSnapStatus => {
-                if pr.state != ProgressState::Snapshot {
+                if self.prs[&m.get_from()].state != ProgressState::Snapshot {
                     return;
                 }
-                if !m.get_reject() {
-                    pr.become_probe();
-                    debug!("{:x} snapshot succeeded, resumed sending replication messages to \
-                            {:x} [{:?}]",
-                           self.id,
-                           m.get_from(),
-                           pr);
-                } else {
-                    pr.snapshot_failure();
-                    pr.become_probe();
-                    debug!("{:x} snapshot failed, resumed sending replication messages to {:x} \
-                            [{:?}]",
-                           self.id,
-                           m.get_from(),
-                           pr);
-                }
-                // If snapshot finish, wait for the msgAppResp from the remote node before sending
-                // out the next msgApp.
-                // If snapshot failure, wait for a heartbeat interval before next try
-                pr.pause()
+                self.handle_snapshot_status(&m);
             }
             MessageType::MsgUnreachable => {
+                let pr = self.prs.get_mut(&m.get_from()).unwrap();
                 // During optimistic replication, if the remote becomes unreachable,
-                // there is huge probability that a MsgApp is lost.
+                // there is huge probability that a MsgAppend is lost.
                 if pr.state == ProgressState::Replicate {
                     pr.become_probe();
                 }
