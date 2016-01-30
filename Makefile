@@ -9,7 +9,7 @@ run:
 	cargo run
 
 test:
-	RUST_BACKTRACE=1 cargo test -- --nocapture
+	RUST_LOG=tikv=DEBUG RUST_BACKTRACE=1 cargo test -- --nocapture
 
 bench:
 	RUST_BACKTRACE=1 cargo bench -- --nocapture

@@ -23,3 +23,6 @@ git = "https://github.com/stepancheg/rust-protobuf.git"
 
 [dependencies.bytes]
 git = "https://github.com/carllerche/bytes"
+
+[dev-dependencies]
+env_logger = "0.3"
