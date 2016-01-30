@@ -113,7 +113,8 @@ pub struct SoftState {
 
 #[derive(Default)]
 pub struct Raft<T: Default + Storage> {
-    pub hs: HardState,
+    pub term: u64,
+    pub vote: u64,
 
     pub id: u64,
 
@@ -242,7 +243,11 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     pub fn hard_state(&self) -> HardState {
-        self.hs.clone()
+        let mut hs = HardState::new();
+        hs.set_term(self.term);
+        hs.set_vote(self.vote);
+        hs.set_commit(self.raft_log.committed);
+        hs
     }
 
     fn quorum(&self) -> usize {
@@ -300,7 +305,7 @@ impl<T: Storage + Default> Raft<T> {
                 [{:?}]",
                self.id,
                self.raft_log.first_index(),
-               self.hs.get_commit(),
+               self.raft_log.committed,
                sindex,
                sterm,
                to,
@@ -414,8 +419,8 @@ impl<T: Storage + Default> Raft<T> {
 
     fn reset(&mut self, term: u64) {
         if self.get_term() != term {
-            self.hs.set_term(term);
-            self.hs.set_vote(INVALID_ID);
+            self.term = term;
+            self.vote = INVALID_ID;
         }
         self.lead = INVALID_ID;
         self.election_elapsed = 0;
@@ -502,7 +507,7 @@ impl<T: Storage + Default> Raft<T> {
         let term = self.get_term() + 1;
         self.reset(term);
         let id = self.id;
-        self.hs.set_vote(id);
+        self.vote = id;
         self.state = StateRole::Candidate;
         info!("{:x} became candidate at term {}", self.id, self.get_term());
     }
@@ -557,7 +562,7 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     fn get_term(&self) -> u64 {
-        self.hs.get_term()
+        self.term
     }
 
     fn poll(&mut self, id: u64, v: bool) -> usize {
@@ -585,8 +590,6 @@ impl<T: Storage + Default> Raft<T> {
                       self.id,
                       self.get_term());
                 self.campaign();
-                let committed = self.raft_log.committed;
-                self.hs.set_commit(committed);
             } else {
                 debug!("{:x} ignoring MsgHup because already leader", self.id);
             }
@@ -625,8 +628,6 @@ impl<T: Storage + Default> Raft<T> {
                 StateRole::Leader => self.step_leader(m),
             }
         }
-        let committed = self.raft_log.committed;
-        self.hs.set_commit(committed);
         Ok(())
     }
 
@@ -738,7 +739,7 @@ impl<T: Storage + Default> Raft<T> {
               self.id,
               self.raft_log.last_term(),
               self.raft_log.last_index(),
-              self.hs.get_vote(),
+              self.vote,
               m.get_from(),
               m.get_log_term(),
               m.get_index(),
@@ -751,7 +752,7 @@ impl<T: Storage + Default> Raft<T> {
               self.id,
               self.raft_log.last_term(),
               self.raft_log.last_index(),
-              self.hs.get_vote(),
+              self.vote,
               m.get_from(),
               m.get_log_term(),
               m.get_index(),
@@ -904,11 +905,11 @@ impl<T: Storage + Default> Raft<T> {
             }
             MessageType::MsgRequestVote => {
                 let t = MessageType::MsgRequestVoteResponse;
-                if (self.hs.get_vote() == INVALID_ID || self.hs.get_vote() == m.get_from()) &&
+                if (self.vote == INVALID_ID || self.vote == m.get_from()) &&
                    self.raft_log.is_up_to_date(m.get_index(), m.get_log_term()) {
                     self.log_vote_approve(&m);
                     self.election_elapsed = 0;
-                    self.hs.set_vote(m.get_from());
+                    self.vote = m.get_from();
                     self.send(new_message(m.get_from(), t, None));
                 } else {
                     self.log_vote_reject(&m);
@@ -922,11 +923,11 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     fn handle_append_entries(&mut self, m: Message) {
-        if m.get_index() < self.hs.get_commit() {
+        if m.get_index() < self.raft_log.committed {
             let mut to_send = Message::new();
             to_send.set_to(m.get_from());
             to_send.set_msg_type(MessageType::MsgAppendResponse);
-            to_send.set_index(self.hs.get_commit());
+            to_send.set_index(self.raft_log.committed);
             self.send(to_send);
             return;
         }
@@ -973,7 +974,7 @@ impl<T: Storage + Default> Raft<T> {
         if self.restore(m.take_snapshot()) {
             info!("{:x} [commit: {}] restored snapshot [index: {}, term: {}]",
                   self.id,
-                  self.hs.get_commit(),
+                  self.raft_log.committed,
                   sindex,
                   sterm);
             let mut to_send = Message::new();
@@ -984,7 +985,7 @@ impl<T: Storage + Default> Raft<T> {
         } else {
             info!("{:x} [commit: {}] ignored snapshot [index: {}, term: {}]",
                   self.id,
-                  self.hs.get_commit(),
+                  self.raft_log.committed,
                   sindex,
                   sterm);
             let mut to_send = Message::new();
@@ -995,17 +996,13 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
-    fn get_commit(&self) -> u64 {
-        self.hs.get_commit()
-    }
-
     fn restore_raft(&mut self, snap: &Snapshot) -> Option<bool> {
         let meta = snap.get_metadata();
         if self.raft_log.match_term(meta.get_index(), meta.get_term()) {
             info!("{:x} [commit: {}, lastindex: {}, lastterm: {}] fast-forwarded commit to \
                    snapshot [index: {}, term: {}]",
                   self.id,
-                  self.get_commit(),
+                  self.raft_log.committed,
                   self.raft_log.last_index(),
                   self.raft_log.last_term(),
                   meta.get_index(),
@@ -1017,7 +1014,7 @@ impl<T: Storage + Default> Raft<T> {
         info!("{:x} [commit: {}, lastindex: {}, lastterm: {}] starts to restore snapshot [index: \
                {}, term: {}]",
               self.id,
-              self.get_commit(),
+              self.raft_log.committed,
               self.raft_log.last_index(),
               self.raft_log.last_term(),
               meta.get_index(),
@@ -1099,9 +1096,8 @@ impl<T: Storage + Default> Raft<T> {
                    self.raft_log.last_index())
         }
         self.raft_log.committed = hs.get_commit();
-        self.hs.set_term(hs.get_term());
-        self.hs.set_vote(hs.get_vote());
-        self.hs.set_commit(hs.get_commit());
+        self.term = hs.get_term();
+        self.vote = hs.get_vote();
     }
 
     // is_election_timeout returns true if self.election_elapsed is greater than the
@@ -1641,8 +1637,8 @@ mod test {
             if raft.state != state {
                 panic!("#{}: state = {:?}, want {:?}", i, raft.state, state);
             }
-            if raft.hs.get_term() != 1 {
-                panic!("#{}: term = {}, want {}", i, raft.hs.get_term(), 1)
+            if raft.term != 1 {
+                panic!("#{}: term = {}, want {}", i, raft.term, 1)
             }
         }
     }
