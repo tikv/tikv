@@ -212,14 +212,14 @@ impl<T: Storage + Default> Raft<T> {
         if c.applied > 0 {
             r.raft_log.applied_to(c.applied);
         }
-        let term = r.get_term();
+        let term = r.term;
         r.become_follower(term, INVALID_ID);
         let nodes_str = r.nodes().iter().fold(String::new(), |b, n| b + &format!("{}", n));
         info!("newRaft {:x} [peers: [{}], term: {:?}, commit: {}, applied: {}, last_index: {}, \
                last_term: {}]",
               r.id,
               nodes_str,
-              r.get_term(),
+              r.term,
               r.raft_log.committed,
               r.raft_log.get_applied(),
               r.raft_log.last_index(),
@@ -269,7 +269,7 @@ impl<T: Storage + Default> Raft<T> {
         // proposals are a way to forward to the leader and
         // should be treated as local message.
         if m.get_msg_type() != MessageType::MsgPropose {
-            m.set_term(self.get_term());
+            m.set_term(self.term);
         }
         self.msgs.push(m);
     }
@@ -413,12 +413,12 @@ impl<T: Storage + Default> Raft<T> {
         // reverse sort
         mis.sort_by(|a, b| b.cmp(a));
         let mci = mis[self.quorum() - 1];
-        let term = self.get_term();
+        let term = self.term;
         self.raft_log.maybe_commit(mci, term)
     }
 
     fn reset(&mut self, term: u64) {
-        if self.get_term() != term {
+        if self.term != term {
             self.term = term;
             self.vote = INVALID_ID;
         }
@@ -441,7 +441,7 @@ impl<T: Storage + Default> Raft<T> {
     fn append_entry(&mut self, es: &mut [Entry]) {
         let li = self.raft_log.last_index();
         for (i, e) in es.iter_mut().enumerate() {
-            e.set_term(self.get_term());
+            e.set_term(self.term);
             e.set_index(li + 1 + i as u64);
         }
         self.raft_log.append(es);
@@ -498,24 +498,24 @@ impl<T: Storage + Default> Raft<T> {
         self.reset(term);
         self.lead = lead;
         self.state = StateRole::Follower;
-        info!("{:x} became follower at term {}", self.id, self.get_term());
+        info!("{:x} became follower at term {}", self.id, self.term);
     }
 
     pub fn become_candidate(&mut self) {
         assert!(self.state != StateRole::Leader,
                 "invalid transition [leader -> candidate]");
-        let term = self.get_term() + 1;
+        let term = self.term + 1;
         self.reset(term);
         let id = self.id;
         self.vote = id;
         self.state = StateRole::Candidate;
-        info!("{:x} became candidate at term {}", self.id, self.get_term());
+        info!("{:x} became candidate at term {}", self.id, self.term);
     }
 
     fn become_leader(&mut self) {
         assert!(self.state != StateRole::Follower,
                 "invalid transition [follower -> leader]");
-        let term = self.get_term();
+        let term = self.term;
         self.reset(term);
         self.lead = self.id;
         self.state = StateRole::Leader;
@@ -532,7 +532,7 @@ impl<T: Storage + Default> Raft<T> {
             self.pending_conf = true;
         }
         self.append_entry(&mut [Entry::new()]);
-        info!("{:x} became leader at term {}", self.id, self.get_term());
+        info!("{:x} became leader at term {}", self.id, self.term);
     }
 
     fn campaign(&mut self) {
@@ -553,7 +553,7 @@ impl<T: Storage + Default> Raft<T> {
                   self.raft_log.last_term(),
                   self.raft_log.last_index(),
                   id,
-                  self.get_term());
+                  self.term);
             let mut m = new_message(id, MessageType::MsgRequestVote, None);
             m.set_index(self.raft_log.last_index());
             m.set_log_term(self.raft_log.last_term());
@@ -561,21 +561,17 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
-    fn get_term(&self) -> u64 {
-        self.term
-    }
-
     fn poll(&mut self, id: u64, v: bool) -> usize {
         if v {
             info!("{:x} received vote from {:x} at term {}",
                   self.id,
                   id,
-                  self.get_term())
+                  self.term)
         } else {
             info!("{:x} received vote rejection from {:x} at term {}",
                   self.id,
                   id,
-                  self.get_term())
+                  self.term)
         }
         if !self.votes.contains_key(&id) {
             self.votes.insert(id, v);
@@ -588,7 +584,7 @@ impl<T: Storage + Default> Raft<T> {
             if self.state != StateRole::Leader {
                 info!("{:x} is starting a new election at term {}",
                       self.id,
-                      self.get_term());
+                      self.term);
                 self.campaign();
             } else {
                 debug!("{:x} ignoring MsgHup because already leader", self.id);
@@ -598,23 +594,23 @@ impl<T: Storage + Default> Raft<T> {
 
         if m.get_term() == 0 {
             // local message
-        } else if m.get_term() > self.get_term() {
+        } else if m.get_term() > self.term {
             let mut lead = m.get_from();
             if m.get_msg_type() == MessageType::MsgRequestVote {
                 lead = INVALID_ID;
             }
             info!("{:x} [term: {}] received a {:?} message with higher term from {:x} [term: {}]",
                   self.id,
-                  self.get_term(),
+                  self.term,
                   m.get_msg_type(),
                   m.get_from(),
                   m.get_term());
             self.become_follower(m.get_term(), lead);
-        } else if m.get_term() < self.get_term() {
+        } else if m.get_term() < self.term {
             // ignore
             info!("{:x} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
                   self.id,
-                  self.get_term(),
+                  self.term,
                   m.get_msg_type(),
                   m.get_from(),
                   m.get_term());
@@ -743,7 +739,7 @@ impl<T: Storage + Default> Raft<T> {
               m.get_from(),
               m.get_log_term(),
               m.get_index(),
-              self.get_term());
+              self.term);
     }
 
     fn log_vote_approve(&self, m: &Message) {
@@ -756,7 +752,7 @@ impl<T: Storage + Default> Raft<T> {
               m.get_from(),
               m.get_log_term(),
               m.get_index(),
-              self.get_term());
+              self.term);
     }
 
     fn step_leader(&mut self, m: Message) {
@@ -770,7 +766,7 @@ impl<T: Storage + Default> Raft<T> {
                 if !self.check_quorum_active() {
                     warn!("{:x} stepped down to follower since quorum is not active",
                           self.id);
-                    let term = self.get_term();
+                    let term = self.term;
                     self.become_follower(term, INVALID_ID);
                 }
                 return;
@@ -829,7 +825,7 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     fn step_candidate(&mut self, m: Message) {
-        let term = self.get_term();
+        let term = self.term;
         match m.get_msg_type() {
             MessageType::MsgPropose => {
                 info!("{:x} no leader at term {}; dropping proposal",
@@ -876,7 +872,7 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     fn step_follower(&mut self, m: Message) {
-        let term = self.get_term();
+        let term = self.term;
         match m.get_msg_type() {
             MessageType::MsgPropose => {
                 if self.lead == INVALID_ID {
@@ -1801,8 +1797,8 @@ mod test {
                        nt.peers[&id].state,
                        state);
             }
-            if nt.peers[&id].get_term() != term {
-                panic!("#{}: term = {}, want {}", i, nt.peers[&id].get_term(), term);
+            if nt.peers[&id].term != term {
+                panic!("#{}: term = {}, want {}", i, nt.peers[&id].term, term);
             }
             let base = ltoa(raft_log);
             let l = ltoa(&nt.peers[&(1 + i as u64)].raft_log);
@@ -1834,7 +1830,7 @@ mod test {
         tt.send(vec![new_message(3, 3, MessageType::MsgBeat, 0)]);
 
         assert_eq!(tt.peers[&1].state, StateRole::Follower);
-        assert_eq!(tt.peers[&1].get_term(), 1);
+        assert_eq!(tt.peers[&1].term, 1);
 
         let store = MemStorage::new();
         store.wl().append(&[new_entry(1, 1, None), new_entry(1, 2, Some(data))]).expect("");
