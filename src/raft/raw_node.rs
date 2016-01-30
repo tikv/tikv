@@ -257,7 +257,8 @@ impl<T: Storage + Default> RawNode<T> {
         if raft.soft_state() != self.prev_ss {
             return true;
         }
-        if raft.hs != HardState::new() && raft.hs != self.prev_hs {
+        let hs = raft.hard_state();
+        if hs != HardState::new() && hs != self.prev_hs {
             return true;
         }
         if Some(true) == raft.raft_log.get_unstable().snapshot.as_ref().map(|s| !is_empty_snap(s)) {
