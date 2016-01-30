@@ -112,7 +112,7 @@ impl Meta {
         }
     }
 
-    pub fn latest_modify(&self) -> Option<u64> {
+    pub fn latest_modified(&self) -> Option<u64> {
         let n = self.items.len();
         match n {
             0 => None,
@@ -184,7 +184,7 @@ mod tests {
     fn test_meta() {
         let mut meta = Meta::new();
         assert_eq!(meta.latest(1), None);
-        assert_eq!(meta.latest_modify(), None);
+        assert_eq!(meta.latest_modified(), None);
 
         meta.add(10);
         assert!(!meta.has_version(9));
@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(meta.latest(9), None);
         assert_eq!(meta.latest(10), Some(10));
         assert_eq!(meta.latest(11), Some(10));
-        assert_eq!(meta.latest_modify(), Some(10));
+        assert_eq!(meta.latest_modified(), Some(10));
 
         meta.delete(30);
         assert!(meta.has_version(10));
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(meta.latest(29), Some(10));
         assert_eq!(meta.latest(30), None);
         assert_eq!(meta.latest(31), None);
-        assert_eq!(meta.latest_modify(), Some(30));
+        assert_eq!(meta.latest_modified(), Some(30));
 
         meta.add(20);
         assert_eq!(meta.latest(9), None);
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(meta.latest(29), Some(20));
         assert_eq!(meta.latest(30), None);
         assert_eq!(meta.latest(31), None);
-        assert_eq!(meta.latest_modify(), Some(30));
+        assert_eq!(meta.latest_modified(), Some(30));
     }
 
     #[test]

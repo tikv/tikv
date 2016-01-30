@@ -1,8 +1,5 @@
 #![allow(dead_code)]
 
-use std::boxed::Box;
-use std::result;
-use std::error;
 use std::thread;
 use std::convert;
 use std::time::Duration;
@@ -11,11 +8,11 @@ use std::string::String;
 use bytes::{Buf, ByteBuf};
 use mio::{self, Token, NotifyError};
 
-use util::codec;
+use util::codec::rpc;
 
-pub mod server;
-
-pub type Result<T> = result::Result<T, Box<error::Error + Send + Sync>>;
+pub mod store;
+pub mod errors;
+pub use self::errors::{Result, Error, other};
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
@@ -41,10 +38,10 @@ impl ConnData {
     }
 
     pub fn encode_to_buf(&self) -> ByteBuf {
-        let mut buf = ByteBuf::mut_with_capacity(codec::MSG_HEADER_LEN + self.data.bytes().len());
+        let mut buf = ByteBuf::mut_with_capacity(rpc::MSG_HEADER_LEN + self.data.bytes().len());
 
         // Must ok here
-        codec::encode_data(&mut buf, self.msg_id, self.data.bytes()).unwrap();
+        rpc::encode_data(&mut buf, self.msg_id, self.data.bytes()).unwrap();
 
         buf.flip()
     }
