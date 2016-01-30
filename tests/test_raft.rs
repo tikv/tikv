@@ -17,6 +17,10 @@ fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
     s
 }
 
+fn new_storage() -> Arc<MemStorage> {
+    Arc::new(MemStorage::new())
+}
+
 fn new_progress(state: ProgressState,
                 matched: u64,
                 next_idx: u64,
@@ -187,7 +191,7 @@ impl Network {
         for (p, id) in peers.drain(..).zip(peer_addrs.clone()) {
             match p {
                 None => {
-                    nstorage.insert(id, Arc::new(MemStorage::new()));
+                    nstorage.insert(id, new_storage());
                     let r = new_test_raft(id, peer_addrs.clone(), 10, 1, nstorage[&id].clone());
                     npeers.insert(id, Interface::new(r));
                 }
@@ -425,7 +429,7 @@ fn test_progress_resume() {
 // TestProgressResumeByHeartbeat ensures raft.heartbeat reset progress.paused by heartbeat.
 #[test]
 fn test_progress_resume_by_heartbeat() {
-    let mut raft = new_test_raft(1, vec![1, 2], 5, 1, Arc::new(MemStorage::new()));
+    let mut raft = new_test_raft(1, vec![1, 2], 5, 1, new_storage());
     raft.become_candidate();
     raft.become_leader();
     raft.prs.get_mut(&2).unwrap().paused = true;
@@ -439,7 +443,7 @@ fn test_progress_resume_by_heartbeat() {
 
 #[test]
 fn test_progress_paused() {
-    let mut raft = new_test_raft(1, vec![1, 2], 5, 1, Arc::new(MemStorage::new()));
+    let mut raft = new_test_raft(1, vec![1, 2], 5, 1, new_storage());
     raft.become_candidate();
     raft.become_leader();
     let mut m = Message::new();
@@ -601,9 +605,9 @@ fn test_commit_without_new_term_entry() {
 
 #[test]
 fn test_dueling_candidates() {
-    let a = new_test_raft(1, vec![1, 2, 3], 10, 1, Arc::new(MemStorage::new()));
-    let b = new_test_raft(2, vec![1, 2, 3], 10, 1, Arc::new(MemStorage::new()));
-    let c = new_test_raft(3, vec![1, 2, 3], 10, 1, Arc::new(MemStorage::new()));
+    let a = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let b = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let c = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
 
     let mut nt = Network::new(vec![Some(Interface::new(a)),
                                     Some(Interface::new(b)),
@@ -627,7 +631,7 @@ fn test_dueling_candidates() {
         unstable: Unstable { offset: 2, ..Default::default() },
         ..Default::default()
     };
-    let wlog2 = RaftLog::new(Arc::new(MemStorage::new()));
+    let wlog2 = RaftLog::new(new_storage());
     let tests = vec![
         (StateRole::Follower, 2, &wlog),
         (StateRole::Follower, 2, &wlog),
