@@ -1,3 +1,4 @@
+#![allow(unused_must_use)]
 use std::collections::HashMap;
 use std::boxed::Box;
 use std::io::{Read, Write};
@@ -31,6 +32,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        FormatError(desc: String) {
+            description(desc)
+        }
     }
 }
 
@@ -60,9 +64,11 @@ impl Server {
                       token: Token,
                       event_loop: &mut EventLoop<Server>)
                       -> Result<()> {
-        // if !msg.has_cmd_get_req() {
-        // // [TODO]: return error
-        // }
+        if !msg.has_cmd_get_req() {
+            error!("Msg doesn't containe a CmdGetRequest");
+            return Err(ServerError::FormatError("Msg doesn't containe a CmdGetRequest"
+                                                    .to_string()));
+        }
         let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
         let key = cmd_get_req.get_key().iter().cloned().collect();
         let sender = event_loop.channel();
@@ -89,9 +95,11 @@ impl Server {
                        token: Token,
                        event_loop: &mut EventLoop<Server>)
                        -> Result<()> {
-        // if !msg.has_cmd_scan_req() {
-        // / [TODO]: return error
-        // }
+        if !msg.has_cmd_scan_req() {
+            error!("Msg doesn't containe a CmdScanRequest");
+            return Err(ServerError::FormatError("Msg doesn't containe a CmdScanRequest"
+                                                    .to_string()));
+        }
         let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
         let sender = event_loop.channel();
         // convert [u8] to Vec[u8]
@@ -121,6 +129,11 @@ impl Server {
                            token: Token,
                            event_loop: &mut EventLoop<Server>)
                            -> Result<()> {
+        if !msg.has_cmd_prewrite_req() {
+            error!("Msg doesn't containe a CmdPrewriteRequest");
+            return Err(ServerError::FormatError("Msg doesn't containe a CmdPrewriteRequest"
+                                                    .to_string()));
+        }
         let cmd_prewrite_req: &CmdPrewriteRequest = msg.get_cmd_prewrite_req();
         let sender = event_loop.channel();
         let puts: Vec<_> = cmd_prewrite_req.get_puts()
@@ -158,6 +171,11 @@ impl Server {
                          token: Token,
                          event_loop: &mut EventLoop<Server>)
                          -> Result<()> {
+        if !msg.has_cmd_commit_req() {
+            error!("Msg doesn't containe a CmdCommitRequest");
+            return Err(ServerError::FormatError("Msg doesn't containe a CmdCommitRequest"
+                                                    .to_string()));
+        }
         let cmd_commit_req: &CmdCommitRequest = msg.get_cmd_commit_req();
         let sender = event_loop.channel();
         match self.store
@@ -281,7 +299,13 @@ impl mio::Handler for Server {
 
                 }
                 token => {
-                    let mut conn = self.conns.get_mut(&token).unwrap();
+                    let mut conn: &mut Conn = match self.conns.get_mut(&token) {
+                        Some(c) => c,
+                        None => {
+                            error!("Get connection failed token[{}]", token.0);
+                            return;
+                        }
+                    };
                     conn.read(token, event_loop);
                     event_loop.reregister(&conn.sock,
                                           token,
@@ -293,7 +317,13 @@ impl mio::Handler for Server {
         }
 
         if events.is_writable() {
-            let mut conn = self.conns.get_mut(&token).unwrap();
+            let mut conn: &mut Conn = match self.conns.get_mut(&token) {
+                Some(c) => c,
+                None => {
+                    error!("Get connection failed token[{}]", token.0);
+                    return;
+                }
+            };
             conn.write();
             event_loop.reregister(&conn.sock,
                                   token,
@@ -308,29 +338,35 @@ impl mio::Handler for Server {
             QueueMessage::Request(token, msg_id, m) => {
                 match m.get_field_type() {
                     MessageType::CmdGet => {
-                        if self.handle_get(&m, msg_id, token, event_loop).is_err() {
-                            // [TODO]: error log
-                        }
+                        if let Err(e) = self.handle_get(&m, msg_id, token, event_loop) {
+                            error!("Some error occur err[{:?}]", e);
+                        };
                     }
                     MessageType::CmdScan => {
-                        if self.handle_scan(&m, msg_id, token, event_loop).is_err() {
-                            // [TODO]: error log
+                        if let Err(e) = self.handle_scan(&m, msg_id, token, event_loop) {
+                            error!("Some error occur err[{:?}]", e);
                         }
                     }
                     MessageType::CmdPrewrite => {
-                        if self.handle_prewrite(&m, msg_id, token, event_loop).is_err() {
-                            // [TODO]: error log
+                        if let Err(e) = self.handle_prewrite(&m, msg_id, token, event_loop) {
+                            error!("Some error occur err[{:?}]", e);
                         }
                     }
                     MessageType::CmdCommit => {
-                        if self.handle_commit(&m, msg_id, token, event_loop).is_err() {
-                            // [TODO]: error log
+                        if let Err(e) = self.handle_commit(&m, msg_id, token, event_loop) {
+                            error!("Some error occur err[{:?}]", e);
                         }
                     }
                 }
             }
             QueueMessage::Response(token, msg_id, resp) => {
-                let mut conn: &mut Conn = self.conns.get_mut(&token).unwrap();
+                let mut conn: &mut Conn = match self.conns.get_mut(&token) {
+                    Some(c) => c,
+                    None => {
+                        error!("Get connection failed token[{}]", token.0);
+                        return;
+                    }
+                };
                 conn.res.clear();
                 let resp_len: usize = MSG_HEADER_LEN + resp.compute_size() as usize;
                 if conn.res.capacity() < resp_len {
