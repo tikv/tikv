@@ -135,7 +135,7 @@ pub struct Raft<T: Default + Storage> {
     pub lead: u64,
 
     /// New configuration is ignored if there exists unapplied configuration.
-    pending_conf: bool,
+    pub pending_conf: bool,
 
     /// number of ticks since it reached last electionTimeout when it is leader
     /// or candidate.
@@ -415,6 +415,9 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
+    // maybeCommit attempts to advance the commit index. Returns true if
+    // the commit index changed (in which case the caller should call
+    // r.bcast_append).
     pub fn maybe_commit(&mut self) -> bool {
         // TODO: optimize
         let mut mis = Vec::with_capacity(self.prs.len());
@@ -457,6 +460,7 @@ impl<T: Storage + Default> Raft<T> {
         }
         self.raft_log.append(es);
         self.prs.get_mut(&self.id).unwrap().maybe_update(self.raft_log.last_index());
+        // Regardless of maybeCommit's return, our caller will call bcastAppend.
         self.maybe_commit();
     }
 
@@ -1076,7 +1080,7 @@ impl<T: Storage + Default> Raft<T> {
 
     // promotable indicates whether state machine can be promoted to leader,
     // which is true when its own id is in progress list.
-    fn promotable(&self) -> bool {
+    pub fn promotable(&self) -> bool {
         self.prs.contains_key(&self.id)
     }
 
@@ -1094,6 +1098,11 @@ impl<T: Storage + Default> Raft<T> {
     pub fn remove_node(&mut self, id: u64) {
         self.del_progress(id);
         self.pending_conf = false;
+        // The quorum size is now smaller, so see if any pending entries can
+        // be committed.
+        if self.maybe_commit() {
+            self.bcast_append();
+        }
     }
 
     pub fn reset_pending_conf(&mut self) {
