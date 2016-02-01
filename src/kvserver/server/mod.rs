@@ -1,5 +1,5 @@
 mod conn;
 mod server;
-mod run;
 
+pub mod run;
 pub use self::run::run;
