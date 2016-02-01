@@ -389,7 +389,7 @@ impl<T: Storage + Default> Raft<T> {
         self.send(m);
     }
 
-    // bcastAppend sends RPC, with entries to all peers that are not up-to-date
+    // bcast_append sends RPC, with entries to all peers that are not up-to-date
     // according to the progress recorded in r.prs.
     pub fn bcast_append(&mut self) {
         // TODO: avoid copy

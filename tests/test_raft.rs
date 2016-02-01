@@ -7,8 +7,6 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::panic;
 use std::cmp;
-use std::rc::Rc;
-use std::cell::RefCell;
 use tikv::proto::raftpb::{Entry, Message, MessageType, HardState, Snapshot};
 use rand;
 
@@ -907,18 +905,14 @@ fn test_is_election_timeout() {
 // actual stepX function.
 #[test]
 fn test_step_ignore_old_term_msg() {
-    let called = Rc::new(RefCell::new(false));
-    let called_copy = called.clone();
     let mut sm = new_test_raft(1, vec![1], 10, 1, new_storage());
     sm.skip_step = Some(Box::new(move || {
-        *called_copy.borrow_mut() = true;
-        true
+        panic!("step function should not be called.");
     }));
     sm.term = 2;
     let mut m = new_message(0, 0, MessageType::MsgAppend, 0);
     m.set_term(1);
     sm.step(m).expect("");
-    assert!(!*called.borrow(), "step function should not be called.");
 }
 
 // TestHandleMsgApp ensures:
