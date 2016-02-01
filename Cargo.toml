@@ -8,6 +8,8 @@ name = "tikv"
 
 [[bin]]
 name = "server"
+[[bin]]
+name = "kvserver"
 
 [dependencies]
 log = "0.3"

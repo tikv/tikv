@@ -23,15 +23,3 @@ pub fn run(addr: &str, store: Storage) {
     let mut server = Server::new(listener, conns, 1, store);
     event_loop.run(&mut server).unwrap();
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use storage::{Storage, Dsn};
-
-    #[test]
-    fn test_recv() {
-        let store: Storage = Storage::new(Dsn::Memory).unwrap();
-        run("127.0.0.1:61234", store);
-    }
-}
