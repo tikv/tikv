@@ -178,7 +178,7 @@ struct Network {
 }
 
 impl Network {
-    // newNetwork initializes a network from peers.
+    // initializes a network from peers.
     // A nil node will be replaced with a new *stateMachine.
     // A *stateMachine will get its k, id.
     // When using stateMachine, the address list is always [1, n].
@@ -410,7 +410,7 @@ fn test_progress_is_paused() {
     }
 }
 
-// TestProgressResume ensures that progress.maybeUpdate and progress.maybeDecrTo
+// test_progress_resume ensures that progress.maybeUpdate and progress.maybeDecrTo
 // will reset progress.paused.
 #[test]
 fn test_progress_resume() {
@@ -426,7 +426,7 @@ fn test_progress_resume() {
     assert!(!p.paused, "paused= true, want false");
 }
 
-// TestProgressResumeByHeartbeat ensures raft.heartbeat reset progress.paused by heartbeat.
+// test_progress_resume_by_heartbeat ensures raft.heartbeat reset progress.paused by heartbeat.
 #[test]
 fn test_progress_resume_by_heartbeat() {
     let mut raft = new_test_raft(1, vec![1, 2], 5, 1, new_storage());
@@ -537,7 +537,7 @@ fn test_single_node_commit() {
     assert_eq!(tt.peers[&1].raft_log.committed, 3);
 }
 
-// TestCannotCommitWithoutNewTermEntry tests the entries cannot be committed
+// test_cannot_commit_without_new_term_entry tests the entries cannot be committed
 // when leader changes, no new proposal comes in and ChangeTerm proposal is
 // filtered.
 #[test]
@@ -575,7 +575,7 @@ fn test_cannot_commit_without_new_term_entry() {
     assert_eq!(tt.peers[&2].raft_log.committed, 5);
 }
 
-// TestCommitWithoutNewTermEntry tests the entries could be committed
+// test_commit_without_new_term_entry tests the entries could be committed
 // when leader changes, no new proposal comes in.
 #[test]
 fn test_commit_without_new_term_entry() {
