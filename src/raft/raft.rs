@@ -141,19 +141,19 @@ pub struct Raft<T: Default + Storage> {
     /// or candidate.
     /// number of ticks since it reached last electionTimeout or received a
     /// valid message from current leader when it is a follower.
-    election_elapsed: usize,
+    pub election_elapsed: usize,
 
     /// number of ticks since it reached last heartbeatTimeout.
     /// only leader keeps heartbeatElapsed.
     heartbeat_elapsed: usize,
 
-    check_quorum: bool,
+    pub check_quorum: bool,
 
     heartbeat_timeout: usize,
     election_timeout: usize,
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
-    skip_step: Option<Box<FnMut() -> bool>>,
+    pub skip_step: Option<Box<FnMut() -> bool>>,
     rng: DefaultRng,
 }
 
@@ -254,6 +254,14 @@ impl<T: Storage + Default> Raft<T> {
         self.prs.len() / 2 + 1
     }
 
+    pub fn get_election_timeout(&self) -> usize {
+        self.election_timeout
+    }
+
+    pub fn get_heartbeat_timeout(&self) -> usize {
+        self.heartbeat_timeout
+    }
+
     pub fn nodes(&self) -> Vec<u64> {
         let mut nodes = Vec::with_capacity(self.prs.len());
         nodes.extend(self.prs.keys());
@@ -274,12 +282,12 @@ impl<T: Storage + Default> Raft<T> {
         self.msgs.push(m);
     }
 
-    fn prepare_send_snapshot(&mut self, m: &mut Message, to: u64) {
+    fn prepare_send_snapshot(&mut self, m: &mut Message, to: u64) -> bool {
         let pr = self.prs.get_mut(&to).unwrap();
         if !pr.recent_active {
             debug!("ignore sending snapshot to {:x} since it is not recently active",
                    to);
-            return;
+            return false;
         }
 
         m.set_msg_type(MessageType::MsgSnapshot);
@@ -290,7 +298,7 @@ impl<T: Storage + Default> Raft<T> {
                         unavailable",
                        self.id,
                        to);
-                return;
+                return false;
             }
             panic!(e);
         }
@@ -315,6 +323,7 @@ impl<T: Storage + Default> Raft<T> {
                self.id,
                to,
                pr);
+        true
     }
 
     fn prepare_send_entries(&mut self, m: &mut Message, to: u64, term: u64, ents: Vec<Entry>) {
@@ -342,7 +351,7 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     // send_append sends RPC, with entries to the given peer.
-    fn send_append(&mut self, to: u64) {
+    pub fn send_append(&mut self, to: u64) {
         let (term, ents) = {
             let pr = self.prs.get(&to).unwrap();
             if pr.is_paused() {
@@ -355,7 +364,9 @@ impl<T: Storage + Default> Raft<T> {
         m.set_to(to);
         if term.is_err() || ents.is_err() {
             // send snapshot if we failed to get term or entries
-            self.prepare_send_snapshot(&mut m, to);
+            if !self.prepare_send_snapshot(&mut m, to) {
+                return;
+            }
         } else {
             self.prepare_send_entries(&mut m, to, term.unwrap(), ents.unwrap());
         }
@@ -378,9 +389,9 @@ impl<T: Storage + Default> Raft<T> {
         self.send(m);
     }
 
-    // bcastAppend sends RPC, with entries to all peers that are not up-to-date
+    // bcast_append sends RPC, with entries to all peers that are not up-to-date
     // according to the progress recorded in r.prs.
-    fn bcast_append(&mut self) {
+    pub fn bcast_append(&mut self) {
         // TODO: avoid copy
         let keys: Vec<u64> = self.prs.keys().map(|x| *x).collect();
         for id in keys {
@@ -392,7 +403,7 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     // bcastHeartbeat sends RPC, without entries to all the peers.
-    fn bcast_heartbeat(&mut self) {
+    pub fn bcast_heartbeat(&mut self) {
         // TODO: avoid copy
         let keys: Vec<u64> = self.prs.keys().map(|x| *x).collect();
         for id in keys {
@@ -404,7 +415,7 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
-    fn maybe_commit(&mut self) -> bool {
+    pub fn maybe_commit(&mut self) -> bool {
         // TODO: optimize
         let mut mis = Vec::with_capacity(self.prs.len());
         for p in self.prs.values() {
@@ -438,7 +449,7 @@ impl<T: Storage + Default> Raft<T> {
         self.pending_conf = false;
     }
 
-    fn append_entry(&mut self, es: &mut [Entry]) {
+    pub fn append_entry(&mut self, es: &mut [Entry]) {
         let li = self.raft_log.last_index();
         for (i, e) in es.iter_mut().enumerate() {
             e.set_term(self.term);
@@ -617,7 +628,7 @@ impl<T: Storage + Default> Raft<T> {
             return Ok(());
         }
 
-        if self.skip_step.is_none() || self.skip_step.as_mut().unwrap()() {
+        if self.skip_step.is_none() || !self.skip_step.as_mut().unwrap()() {
             match self.state {
                 StateRole::Candidate => self.step_candidate(m),
                 StateRole::Follower => self.step_follower(m),
@@ -936,7 +947,7 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
-    fn handle_append_entries(&mut self, m: Message) {
+    pub fn handle_append_entries(&mut self, m: Message) {
         if m.get_index() < self.raft_log.committed {
             let mut to_send = Message::new();
             to_send.set_to(m.get_from());
@@ -973,7 +984,7 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
-    fn handle_heartbeat(&mut self, m: Message) {
+    pub fn handle_heartbeat(&mut self, m: Message) {
         self.raft_log.commit_to(m.get_commit());
         let mut to_send = Message::new();
         to_send.set_to(m.get_from());
@@ -1034,8 +1045,7 @@ impl<T: Storage + Default> Raft<T> {
               meta.get_index(),
               meta.get_term());
         self.prs = HashMap::with_capacity(meta.get_conf_state().get_nodes().len());
-        for n in meta.get_conf_state().get_nodes() {
-            let n = *n;
+        for &n in meta.get_conf_state().get_nodes() {
             let next_idx = self.raft_log.last_index() + 1;
             let matched = if n == self.id {
                 next_idx - 1
@@ -1053,7 +1063,7 @@ impl<T: Storage + Default> Raft<T> {
 
     // restore recovers the state machine from a snapshot. It restores the log and the
     // configuration of state machine.
-    fn restore(&mut self, snap: Snapshot) -> bool {
+    pub fn restore(&mut self, snap: Snapshot) -> bool {
         if snap.get_metadata().get_index() < self.raft_log.committed {
             return false;
         }
@@ -1090,7 +1100,7 @@ impl<T: Storage + Default> Raft<T> {
         self.pending_conf = false;
     }
 
-    fn set_progress(&mut self, id: u64, matched: u64, next_idx: u64) {
+    pub fn set_progress(&mut self, id: u64, matched: u64, next_idx: u64) {
         let mut p = new_progress(next_idx, self.max_inflight);
         p.matched = matched;
         self.prs.insert(id, p);
@@ -1117,7 +1127,7 @@ impl<T: Storage + Default> Raft<T> {
     // is_election_timeout returns true if self.election_elapsed is greater than the
     // randomized election timeout in (electiontimeout, 2 * electiontimeout - 1).
     // Otherwise, it returns false.
-    fn is_election_timeout(&mut self) -> bool {
+    pub fn is_election_timeout(&mut self) -> bool {
         if self.election_elapsed < self.election_timeout {
             return false;
         }

@@ -1,3 +1,5 @@
+#![feature(std_panic, recover)]
+
 #[macro_use]
 extern crate log;
 extern crate protobuf;
