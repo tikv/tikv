@@ -55,11 +55,11 @@ impl MemStorageCore {
         Ok(())
     }
 
-    fn create_snapshot(&mut self,
-                       idx: u64,
-                       cs: Option<ConfState>,
-                       data: Vec<u8>)
-                       -> Result<&Snapshot> {
+    pub fn create_snapshot(&mut self,
+                           idx: u64,
+                           cs: Option<ConfState>,
+                           data: Vec<u8>)
+                           -> Result<&Snapshot> {
         if idx <= self.snapshot.get_metadata().get_index() {
             return Err(Error::Store(StorageError::SnapshotOutOfDate));
         }
