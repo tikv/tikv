@@ -5,7 +5,7 @@ mod progress;
 mod errors;
 mod log_unstable;
 mod status;
-mod raw_node;
+pub mod raw_node;
 
 pub use self::storage::{RaftState, Storage};
 pub use self::errors::{Result, Error, StorageError};
