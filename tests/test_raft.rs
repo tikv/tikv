@@ -2,12 +2,13 @@ use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
 use std::sync::Arc;
 use std::collections::HashMap;
-use protobuf::RepeatedField;
+use protobuf::{self, RepeatedField};
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::panic;
 use std::cmp;
-use tikv::proto::raftpb::{Entry, Message, MessageType, HardState, Snapshot};
+use tikv::proto::raftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
+                          ConfChange, ConfChangeType};
 use rand;
 
 fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
@@ -75,13 +76,13 @@ fn ents(terms: Vec<u64>) -> Interface {
 }
 
 fn next_ents(r: &mut Raft<MemStorage>, s: &MemStorage) -> Vec<Entry> {
-    s.wl().append(&r.raft_log.unstable_entries().unwrap()).expect("");
+    s.wl().append(&r.raft_log.unstable_entries().unwrap_or(&vec![])).expect("");
     let (last_idx, last_term) = (r.raft_log.last_index(), r.raft_log.last_term());
     r.raft_log.stable_to(last_idx, last_term);
     let ents = r.raft_log.next_entries();
     let committed = r.raft_log.committed;
     r.raft_log.applied_to(committed);
-    ents.unwrap()
+    ents.unwrap_or(vec![])
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Hash)]
@@ -752,7 +753,7 @@ fn test_old_messages() {
     }
 }
 
-// TestOldMessagesReply - optimization - reply with new term.
+// test_old_messages_reply - optimization - reply with new term.
 
 #[test]
 fn test_proposal() {
@@ -915,7 +916,7 @@ fn test_step_ignore_old_term_msg() {
     sm.step(m).expect("");
 }
 
-// TestHandleMsgApp ensures:
+// test_handle_msg_append ensures:
 // 1. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm.
 // 2. If an existing entry conflicts with a new one (same index but different terms),
 //    delete the existing entry and all that follow it; append any new entries not already in the log.
@@ -984,7 +985,7 @@ fn test_handle_msg_append() {
     }
 }
 
-// TestHandleHeartbeat ensures that the follower commits to the commit in the message.
+// test_handle_heartbeat ensures that the follower commits to the commit in the message.
 #[test]
 fn test_handle_heartbeat() {
     let commit = 2u64;
@@ -1071,7 +1072,7 @@ fn test_handle_heartbeat_resp() {
     assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
 }
 
-// TestMsgAppRespWaitReset verifies the waitReset behavior of a leader
+// test_msg_append_response_wait_reset verifies the waitReset behavior of a leader
 // MsgAppResp.
 #[test]
 fn test_msg_append_response_wait_reset() {
@@ -1655,4 +1656,238 @@ fn test_restore_from_snap_msg() {
     sm.step(m).expect("");
 
     // TODO: port the remaining if upstream completed this test.
+}
+
+#[test]
+fn test_slow_node_restore() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    nt.isolate(3);
+    for _ in 0..100 {
+        nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+    }
+    next_ents(&mut nt.peers.get_mut(&1).unwrap(), &nt.storage[&1]);
+    let mut cs = ConfState::new();
+    cs.set_nodes(nt.peers[&1].nodes());
+    nt.storage[&1]
+        .wl()
+        .create_snapshot(nt.peers[&1].raft_log.applied, Some(cs), vec![])
+        .expect("");
+    nt.storage[&1].wl().compact(nt.peers[&1].raft_log.applied).expect("");
+
+    nt.recover();
+    // send heartbeats so that the leader can learn everyone is active.
+    // node 3 will only be considered as active when node 1 receives a reply from it.
+    loop {
+        nt.send(vec![new_message(1, 1, MessageType::MsgBeat, 0)]);
+        if nt.peers[&1].prs[&3].recent_active {
+            break;
+        }
+    }
+
+    // trigger a snapshot
+    nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+
+    // trigger a commit
+    nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+    assert_eq!(nt.peers[&3].raft_log.committed,
+               nt.peers[&1].raft_log.committed);
+}
+
+// test_step_config tests that when raft step msgProp in EntryConfChange type,
+// it appends the entry to log and sets pendingConf to be true.
+#[test]
+fn test_step_config() {
+    // a raft that cannot make progress
+    let mut r = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
+    r.become_candidate();
+    r.become_leader();
+    let index = r.raft_log.last_index();
+    let mut m = new_message(1, 1, MessageType::MsgPropose, 0);
+    let mut e = Entry::new();
+    e.set_entry_type(EntryType::EntryConfChange);
+    m.mut_entries().push(e);
+    r.step(m).expect("");
+    assert_eq!(r.raft_log.last_index(), index + 1);
+    assert!(r.pending_conf);
+}
+
+// test_step_ignore_config tests that if raft step the second msgProp in
+// EntryConfChange type when the first one is uncommitted, the node will set
+// the proposal to noop and keep its original state.
+#[test]
+fn test_step_ignore_config() {
+    // a raft that cannot make progress
+    let mut r = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
+    r.become_candidate();
+    r.become_leader();
+    let mut m = new_message(1, 1, MessageType::MsgPropose, 0);
+    let mut e = Entry::new();
+    e.set_entry_type(EntryType::EntryConfChange);
+    m.mut_entries().push(e);
+    r.step(m.clone()).expect("");
+    let index = r.raft_log.last_index();
+    let pending_conf = r.pending_conf;
+    r.step(m.clone()).expect("");
+    let mut we = new_entry(1, 3, None);
+    we.set_entry_type(EntryType::EntryNormal);
+    let wents = vec![we];
+    let ents = r.raft_log.entries(index + 1, NO_LIMIT).expect("");
+    assert_eq!(ents, wents);
+    assert_eq!(r.pending_conf, pending_conf);
+}
+
+// test_recover_pending_config tests that new leader recovers its pendingConf flag
+// based on uncommitted entries.
+#[test]
+fn test_recover_pending_config() {
+    let mut tests = vec![
+        (EntryType::EntryNormal, false),
+        (EntryType::EntryConfChange, true),
+    ];
+    for (i, (ent_type, wpending)) in tests.drain(..).enumerate() {
+        let mut r = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
+        let mut e = Entry::new();
+        e.set_entry_type(ent_type);
+        r.append_entry(&mut vec![e]);
+        r.become_candidate();
+        r.become_leader();
+        if r.pending_conf != wpending {
+            panic!("#{}: pending_conf = {}, want {}",
+                   i,
+                   r.pending_conf,
+                   wpending);
+        }
+    }
+}
+
+// test_recover_double_pending_config tests that new leader will panic if
+// there exist two uncommitted config entries.
+#[test]
+#[should_panic]
+fn test_recover_double_pending_config() {
+    let mut r = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
+    let mut e = Entry::new();
+    e.set_entry_type(EntryType::EntryConfChange);
+    r.append_entry(&mut vec![e.clone()]);
+    r.append_entry(&mut vec![e]);
+    r.become_candidate();
+    r.become_leader();
+}
+
+// test_add_node tests that addNode could update pendingConf and nodes correctly.
+#[test]
+fn test_add_node() {
+    let mut r = new_test_raft(1, vec![1], 10, 1, new_storage());
+    r.pending_conf = true;
+    r.add_node(2);
+    assert!(!r.pending_conf);
+    assert_eq!(r.nodes(), vec![1, 2]);
+}
+
+// test_remove_node tests that removeNode could update pendingConf, nodes and
+// and removed list correctly.
+#[test]
+fn test_remove_node() {
+    let mut r = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
+    r.pending_conf = true;
+    r.remove_node(2);
+    assert!(!r.pending_conf);
+    assert_eq!(r.nodes(), vec![1]);
+}
+
+#[test]
+fn test_promotable() {
+    let id = 1u64;
+    let mut tests = vec![
+        (vec![1], true),
+        (vec![1, 2, 3], true),
+        (vec![], false),
+        (vec![2, 3], false),
+    ];
+    for (i, (peers, wp)) in tests.drain(..).enumerate() {
+        let r = new_test_raft(id, peers, 5, 1, new_storage());
+        if r.promotable() != wp {
+            panic!("#{}: promotable = {}, want {}", i, r.promotable(), wp);
+        }
+    }
+}
+
+#[test]
+fn test_raft_nodes() {
+    let mut tests = vec![
+        (vec![1, 2, 3], vec![1, 2, 3]),
+        (vec![3, 2, 1], vec![1, 2, 3]),
+    ];
+    for (i, (ids, wids)) in tests.drain(..).enumerate() {
+        let r = new_test_raft(1, ids, 10, 1, new_storage());
+        if r.nodes() != wids {
+            panic!("#{}: nodes = {:?}, want {:?}", i, r.nodes(), wids);
+        }
+    }
+}
+
+#[test]
+fn test_compaign_while_leader() {
+    let mut r = new_test_raft(1, vec![1], 5, 1, new_storage());
+    assert_eq!(r.state, StateRole::Follower);
+    // We don't call campaign() directly because it comes after the check
+    // for our current state.
+    r.step(new_message(1, 1, MessageType::MsgHup, 0)).expect("");
+    assert_eq!(r.state, StateRole::Leader);
+    let term = r.term;
+    r.step(new_message(1, 1, MessageType::MsgHup, 0)).expect("");
+    assert_eq!(r.state, StateRole::Leader);
+    assert_eq!(r.term, term);
+}
+
+// test_commit_after_remove_node verifies that pending commands can become
+// committed when a config change reduces the quorum requirements.
+#[test]
+fn test_commit_after_remove_node() {
+    // Create a cluster with two nodes.
+    let s = new_storage();
+    let mut r = new_test_raft(1, vec![1, 2], 5, 1, s.clone());
+    r.become_candidate();
+    r.become_leader();
+
+    // Begin to remove the second node.
+    let mut m = new_message(0, 0, MessageType::MsgPropose, 0);
+    let mut e = Entry::new();
+    e.set_entry_type(EntryType::EntryConfChange);
+    let mut cc = ConfChange::new();
+    cc.set_change_type(ConfChangeType::ConfChangeRemoveNode);
+    cc.set_node_id(2);
+    e.set_data(protobuf::Message::write_to_bytes(&cc).unwrap());
+    m.mut_entries().push(e);
+    r.step(m).expect("");
+    // Stabilize the log and make sure nothing is committed yet.
+    assert_eq!(next_ents(&mut r, &s).len(), 0);
+    let cc_index = r.raft_log.last_index();
+
+    // While the config change is pending, make another proposal.
+    let mut m = new_message(0, 0, MessageType::MsgPropose, 0);
+    let mut e = new_entry(0, 0, Some("hello"));
+    e.set_entry_type(EntryType::EntryNormal);
+    m.mut_entries().push(e);
+    r.step(m).expect("");
+
+    // Node 2 acknowledges the config change, committing it.
+    let mut m = new_message(2, 0, MessageType::MsgAppendResponse, 0);
+    m.set_index(cc_index);
+    r.step(m).expect("");
+    let ents = next_ents(&mut r, &s);
+    assert_eq!(ents.len(), 2);
+    assert_eq!(ents[0].get_entry_type(), EntryType::EntryNormal);
+    assert!(!ents[0].has_data());
+    assert_eq!(ents[1].get_entry_type(), EntryType::EntryConfChange);
+
+    // Apply the config change. This reduces quorum requirements so the
+    // pending command can now commit.
+    r.remove_node(2);
+    let ents = next_ents(&mut r, &s);
+    assert_eq!(ents.len(), 1);
+    assert_eq!(ents[0].get_entry_type(), EntryType::EntryNormal);
+    assert_eq!(ents[0].get_data(), "hello".as_bytes());
 }
