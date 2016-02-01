@@ -84,10 +84,9 @@ impl Server {
                                            let _ = sender.send(queue_msg);
                                        });
                                    })) {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(why) => return Err(ServerError::Storage(why)),
         }
-        Ok(())
     }
     pub fn handle_scan(&mut self,
                        msg: &Request,
@@ -104,6 +103,7 @@ impl Server {
         let sender = event_loop.channel();
         // convert [u8] to Vec[u8]
         let start_key: Key = cmd_scan_req.get_key().iter().cloned().collect();
+        debug!("start_key [{:?}]", start_key);
         match self.store
                   .async_scan(start_key,
                               cmd_scan_req.get_limit() as usize,
@@ -118,10 +118,9 @@ impl Server {
                                       let _ = sender.send(queue_msg);
                                   });
                               })) {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(why) => return Err(ServerError::Storage(why)),
         }
-        Ok(())
     }
     pub fn handle_prewrite(&mut self,
                            msg: &Request,
@@ -160,10 +159,9 @@ impl Server {
                                           let _ = sender.send(queue_msg);
                                       });
                                   })) {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(why) => return Err(ServerError::Storage(why)),
         }
-        Ok(())
     }
     pub fn handle_commit(&mut self,
                          msg: &Request,
@@ -190,10 +188,9 @@ impl Server {
                                         let _ = sender.send(queue_msg);
                                     });
                                 })) {
-            Ok(()) => {}
-            Err(why) => return Err(ServerError::Storage(why)),
+            Ok(()) => Ok(()),
+            Err(why) => Err(ServerError::Storage(why)),
         }
-        Ok(())
     }
     fn cmd_get_done(r: ::std::result::Result<Option<Value>, storage::Error>) -> Response {
         let mut resp: Response = Response::new();
@@ -335,31 +332,39 @@ impl mio::Handler for Server {
 
     fn notify(&mut self, event_loop: &mut EventLoop<Server>, msg: QueueMessage) {
         match msg {
-            QueueMessage::Request(token, msg_id, m) => {
-                match m.get_field_type() {
+            QueueMessage::Request(token, msg_id, req) => {
+                debug!("notify Request token[{}] msg_id[{}] type[{:?}]",
+                       token.0,
+                       msg_id,
+                       req.get_field_type());
+                match req.get_field_type() {
                     MessageType::CmdGet => {
-                        if let Err(e) = self.handle_get(&m, msg_id, token, event_loop) {
+                        if let Err(e) = self.handle_get(&req, msg_id, token, event_loop) {
                             error!("Some error occur err[{:?}]", e);
                         };
                     }
                     MessageType::CmdScan => {
-                        if let Err(e) = self.handle_scan(&m, msg_id, token, event_loop) {
+                        if let Err(e) = self.handle_scan(&req, msg_id, token, event_loop) {
                             error!("Some error occur err[{:?}]", e);
                         }
                     }
                     MessageType::CmdPrewrite => {
-                        if let Err(e) = self.handle_prewrite(&m, msg_id, token, event_loop) {
+                        if let Err(e) = self.handle_prewrite(&req, msg_id, token, event_loop) {
                             error!("Some error occur err[{:?}]", e);
                         }
                     }
                     MessageType::CmdCommit => {
-                        if let Err(e) = self.handle_commit(&m, msg_id, token, event_loop) {
+                        if let Err(e) = self.handle_commit(&req, msg_id, token, event_loop) {
                             error!("Some error occur err[{:?}]", e);
                         }
                     }
                 }
             }
             QueueMessage::Response(token, msg_id, resp) => {
+                debug!("notify Response token[{}] msg_id[{}] type[{:?}]",
+                       token.0,
+                       msg_id,
+                       resp.get_field_type());
                 let mut conn: &mut Conn = match self.conns.get_mut(&token) {
                     Some(c) => c,
                     None => {
