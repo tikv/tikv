@@ -9,6 +9,9 @@ name = "tikv"
 [[bin]]
 name = "server"
 
+[[test]]
+name = "tests"
+
 [dependencies]
 log = "0.3"
 rocksdb = "0.3"

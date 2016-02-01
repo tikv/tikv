@@ -2,17 +2,16 @@
 
 use std::cmp;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ProgressState {
     Probe,
     Replicate,
     Snapshot,
-    Invalid,
 }
 
 impl Default for ProgressState {
     fn default() -> ProgressState {
-        ProgressState::Invalid
+        ProgressState::Probe
     }
 }
 
@@ -136,7 +135,7 @@ impl Progress {
         }
 
         // the rejection must be stale if "rejected" does not match next - 1
-        if self.next_idx - 1 != rejected {
+        if self.next_idx == 0 || self.next_idx - 1 != rejected {
             return false;
         }
 
@@ -153,7 +152,6 @@ impl Progress {
             ProgressState::Probe => self.paused,
             ProgressState::Replicate => self.ins.full(),
             ProgressState::Snapshot => true,
-            ProgressState::Invalid => panic!("invalid ProgressState"),
         }
     }
 
@@ -202,7 +200,12 @@ impl Inflights {
         if next >= self.cap() {
             next -= self.cap();
         }
-        self.buffer[next] = inflight;
+        assert!(next <= self.buffer.len());
+        if next == self.buffer.len() {
+            self.buffer.push(inflight);
+        } else {
+            self.buffer[next] = inflight;
+        }
         self.count += 1;
     }
 

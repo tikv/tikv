@@ -15,11 +15,11 @@ pub struct RaftLog<T>
     where T: Storage
 {
     // storage contains all stable entries since the last snapshot.
-    store: Arc<T>,
+    pub store: Arc<T>,
 
     // unstable contains all unstable entries and snapshot.
     // they will be saved into storage.
-    unstable: Unstable,
+    pub unstable: Unstable,
 
     // committed is the highest log position that is known to be in
     // stable storage on a quorum of nodes.
@@ -28,7 +28,7 @@ pub struct RaftLog<T>
     // applied is the highest log position that the application has
     // been instructed to apply to its state machine.
     // Invariant: applied <= committed
-    applied: u64,
+    pub applied: u64,
 }
 
 impl<T> ToString for RaftLog<T> where T: Storage
@@ -244,7 +244,7 @@ impl<T> RaftLog<T> where T: Storage
         return self.slice(idx, last + 1, max_size);
     }
 
-    fn all_entries(&self) -> Vec<Entry> {
+    pub fn all_entries(&self) -> Vec<Entry> {
         let first_index = self.first_index();
         let ents = self.entries(first_index, NO_LIMIT);
         match ents {
