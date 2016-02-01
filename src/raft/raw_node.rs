@@ -8,13 +8,13 @@ use raft::raft::{Config, Raft, SoftState, INVALID_ID};
 use raft::Status;
 
 #[derive(Debug, Default)]
-struct Peer {
-    id: u64,
-    context: Vec<u8>,
+pub struct Peer {
+    pub id: u64,
+    pub context: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
-enum SnapshotStatus {
+pub enum SnapshotStatus {
     SnapshotFinish,
     SnapshotFailure,
 }
@@ -52,30 +52,30 @@ pub struct Ready {
     // The current volatile state of a Node.
     // SoftState will be nil if there is no update.
     // It is not required to consume or store SoftState.
-    ss: Option<SoftState>,
+    pub ss: Option<SoftState>,
 
     // The current state of a Node to be saved to stable storage BEFORE
     // Messages are sent.
     // HardState will be equal to empty state if there is no update.
-    hs: Option<HardState>,
+    pub hs: Option<HardState>,
 
     // Entries specifies entries to be saved to stable storage BEFORE
     // Messages are sent.
-    entries: Vec<Entry>,
+    pub entries: Vec<Entry>,
 
     // Snapshot specifies the snapshot to be saved to stable storage.
-    snapshot: Snapshot,
+    pub snapshot: Snapshot,
 
     // CommittedEntries specifies entries to be committed to a
     // store/state-machine. These have previously been committed to stable
     // store.
-    committed_entries: Vec<Entry>,
+    pub committed_entries: Vec<Entry>,
 
     // Messages specifies outbound messages to be sent AFTER Entries are
     // committed to stable storage.
     // If it contains a MsgSnap message, the application MUST report back to raft
     // when the snapshot has been received or has failed by calling ReportSnapshot.
-    messages: Vec<Message>,
+    pub messages: Vec<Message>,
 }
 
 impl Ready {
@@ -116,7 +116,7 @@ pub struct RawNode<T: Storage + Default> {
 
 impl<T: Storage + Default> RawNode<T> {
     // NewRawNode returns a new RawNode given configuration and a list of raft peers.
-    fn new(config: &Config<T>, peers: &[Peer]) -> Result<RawNode<T>> {
+    pub fn new(config: &Config<T>, peers: &[Peer]) -> Result<RawNode<T>> {
         assert!(config.id != 0, "config.id must not be zero");
         let r = Raft::new(config);
         let mut rn = RawNode { raft: r, ..Default::default() };
@@ -180,19 +180,19 @@ impl<T: Storage + Default> RawNode<T> {
     }
 
     // Tick advances the internal logical clock by a single tick.
-    fn tick(&mut self) {
+    pub fn tick(&mut self) {
         self.raft.tick();
     }
 
     // Campaign causes this RawNode to transition to candidate state.
-    fn campaign(&mut self) -> Result<()> {
+    pub fn campaign(&mut self) -> Result<()> {
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgHup);
         self.raft.step(m)
     }
 
     // Propose proposes data be appended to the raft log.
-    fn propose(&mut self, data: Vec<u8>) -> Result<()> {
+    pub fn propose(&mut self, data: Vec<u8>) -> Result<()> {
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgPropose);
         m.set_from(self.raft.id);
@@ -203,7 +203,7 @@ impl<T: Storage + Default> RawNode<T> {
     }
 
     // ProposeConfChange proposes a config change.
-    fn propose_conf_change(&mut self, cc: ConfChange) -> Result<()> {
+    pub fn propose_conf_change(&mut self, cc: ConfChange) -> Result<()> {
         let data = try!(protobuf::Message::write_to_bytes(&cc));
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgPropose);
@@ -214,7 +214,7 @@ impl<T: Storage + Default> RawNode<T> {
         self.raft.step(m)
     }
 
-    fn apply_conf_change(&mut self, cc: ConfChange) -> ConfState {
+    pub fn apply_conf_change(&mut self, cc: ConfChange) -> ConfState {
         if cc.get_node_id() == INVALID_ID {
             self.raft.reset_pending_conf();
             let mut cs = ConfState::new();
@@ -234,7 +234,7 @@ impl<T: Storage + Default> RawNode<T> {
     }
 
     // Step advances the state machine using the given message.
-    fn step(&mut self, m: Message) -> Result<()> {
+    pub fn step(&mut self, m: Message) -> Result<()> {
         // ignore unexpected local messages receiving over network
         if is_local_msg(&m) {
             return Err(Error::StepLocalMsg);
@@ -246,13 +246,13 @@ impl<T: Storage + Default> RawNode<T> {
     }
 
     // Ready returns the current point-in-time state of this RawNode.
-    fn ready(&mut self) -> Ready {
+    pub fn ready(&mut self) -> Ready {
         Ready::new(&mut self.raft, &self.prev_ss, &self.prev_hs)
     }
 
     // HasReady called when RawNode user need to check if any Ready pending.
     // Checking logic in this method should be consistent with Ready.containsUpdates().
-    fn has_ready(&self) -> bool {
+    pub fn has_ready(&self) -> bool {
         let raft = &self.raft;
         if raft.soft_state() != self.prev_ss {
             return true;
@@ -272,17 +272,17 @@ impl<T: Storage + Default> RawNode<T> {
 
     // Advance notifies the RawNode that the application has applied and saved progress in the
     // last Ready results.
-    fn advance(&mut self, rd: Ready) {
+    pub fn advance(&mut self, rd: Ready) {
         self.commit_ready(rd);
     }
 
     // Status returns the current status of the given group.
-    fn status(&self) -> Status {
+    pub fn status(&self) -> Status {
         Status::new(&self.raft)
     }
 
     // ReportUnreachable reports the given node is not reachable for the last send.
-    fn report_unreachable(&mut self, id: u64) {
+    pub fn report_unreachable(&mut self, id: u64) {
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgUnreachable);
         m.set_from(id);
@@ -291,7 +291,7 @@ impl<T: Storage + Default> RawNode<T> {
     }
 
     // ReportSnapshot reports the status of the sent snapshot.
-    fn report_snapshot(&mut self, id: u64, status: SnapshotStatus) {
+    pub fn report_snapshot(&mut self, id: u64, status: SnapshotStatus) {
         let rej = status == SnapshotStatus::SnapshotFailure;
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgSnapStatus);
