@@ -753,7 +753,7 @@ fn test_old_messages() {
     }
 }
 
-// TestOldMessagesReply - optimization - reply with new term.
+// test_old_messages_reply - optimization - reply with new term.
 
 #[test]
 fn test_proposal() {
@@ -916,7 +916,7 @@ fn test_step_ignore_old_term_msg() {
     sm.step(m).expect("");
 }
 
-// TestHandleMsgApp ensures:
+// test_handle_msg_append ensures:
 // 1. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm.
 // 2. If an existing entry conflicts with a new one (same index but different terms),
 //    delete the existing entry and all that follow it; append any new entries not already in the log.
@@ -985,7 +985,7 @@ fn test_handle_msg_append() {
     }
 }
 
-// TestHandleHeartbeat ensures that the follower commits to the commit in the message.
+// test_handle_heartbeat ensures that the follower commits to the commit in the message.
 #[test]
 fn test_handle_heartbeat() {
     let commit = 2u64;
@@ -1072,7 +1072,7 @@ fn test_handle_heartbeat_resp() {
     assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
 }
 
-// TestMsgAppRespWaitReset verifies the waitReset behavior of a leader
+// test_msg_append_response_wait_reset verifies the waitReset behavior of a leader
 // MsgAppResp.
 #[test]
 fn test_msg_append_response_wait_reset() {
@@ -1695,7 +1695,7 @@ fn test_slow_node_restore() {
                nt.peers[&1].raft_log.committed);
 }
 
-// TestStepConfig tests that when raft step msgProp in EntryConfChange type,
+// test_step_config tests that when raft step msgProp in EntryConfChange type,
 // it appends the entry to log and sets pendingConf to be true.
 #[test]
 fn test_step_config() {
@@ -1713,7 +1713,7 @@ fn test_step_config() {
     assert!(r.pending_conf);
 }
 
-// TestStepIgnoreConfig tests that if raft step the second msgProp in
+// test_step_ignore_config tests that if raft step the second msgProp in
 // EntryConfChange type when the first one is uncommitted, the node will set
 // the proposal to noop and keep its original state.
 #[test]
@@ -1738,7 +1738,7 @@ fn test_step_ignore_config() {
     assert_eq!(r.pending_conf, pending_conf);
 }
 
-// TestRecoverPendingConfig tests that new leader recovers its pendingConf flag
+// test_recover_pending_config tests that new leader recovers its pendingConf flag
 // based on uncommitted entries.
 #[test]
 fn test_recover_pending_config() {
@@ -1762,7 +1762,7 @@ fn test_recover_pending_config() {
     }
 }
 
-// TestRecoverDoublePendingConfig tests that new leader will panic if
+// test_recover_double_pending_config tests that new leader will panic if
 // there exist two uncommitted config entries.
 #[test]
 #[should_panic]
@@ -1775,7 +1775,8 @@ fn test_recover_double_pending_config() {
     r.become_candidate();
     r.become_leader();
 }
-// TestAddNode tests that addNode could update pendingConf and nodes correctly.
+
+// test_add_node tests that addNode could update pendingConf and nodes correctly.
 #[test]
 fn test_add_node() {
     let mut r = new_test_raft(1, vec![1], 10, 1, new_storage());
@@ -1785,7 +1786,7 @@ fn test_add_node() {
     assert_eq!(r.nodes(), vec![1, 2]);
 }
 
-// TestRemoveNode tests that removeNode could update pendingConf, nodes and
+// test_remove_node tests that removeNode could update pendingConf, nodes and
 // and removed list correctly.
 #[test]
 fn test_remove_node() {
@@ -1841,7 +1842,7 @@ fn test_compaign_while_leader() {
     assert_eq!(r.term, term);
 }
 
-// TestCommitAfterRemoveNode verifies that pending commands can become
+// test_commit_after_remove_node verifies that pending commands can become
 // committed when a config change reduces the quorum requirements.
 #[test]
 fn test_commit_after_remove_node() {

@@ -415,7 +415,7 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
-    // maybeCommit attempts to advance the commit index. Returns true if
+    // maybe_commit attempts to advance the commit index. Returns true if
     // the commit index changed (in which case the caller should call
     // r.bcast_append).
     pub fn maybe_commit(&mut self) -> bool {
@@ -460,7 +460,7 @@ impl<T: Storage + Default> Raft<T> {
         }
         self.raft_log.append(es);
         self.prs.get_mut(&self.id).unwrap().maybe_update(self.raft_log.last_index());
-        // Regardless of maybeCommit's return, our caller will call bcastAppend.
+        // Regardless of maybe_commit's return, our caller will call bcastAppend.
         self.maybe_commit();
     }
 
