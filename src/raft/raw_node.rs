@@ -10,7 +10,7 @@ use raft::Status;
 #[derive(Debug, Default)]
 pub struct Peer {
     pub id: u64,
-    pub context: Vec<u8>,
+    pub context: Option<Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -47,7 +47,7 @@ fn is_empty_snap(s: &Snapshot) -> bool {
 // Ready encapsulates the entries and messages that are ready to read,
 // be saved to stable storage, committed or sent to other peers.
 // All fields in Ready are read-only.
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq)]
 pub struct Ready {
     // The current volatile state of a Node.
     // SoftState will be nil if there is no update.
@@ -109,7 +109,7 @@ impl Ready {
 // more fully there.
 #[derive(Default)]
 pub struct RawNode<T: Storage + Default> {
-    raft: Raft<T>,
+    pub raft: Raft<T>,
     prev_ss: SoftState,
     prev_hs: HardState,
 }
@@ -128,7 +128,9 @@ impl<T: Storage + Default> RawNode<T> {
                 let mut cc = ConfChange::new();
                 cc.set_change_type(ConfChangeType::ConfChangeAddNode);
                 cc.set_node_id(peer.id);
-                cc.set_context(peer.context.clone());
+                if peer.context.is_some() {
+                    cc.set_context(peer.context.as_ref().unwrap().clone());
+                }
                 let data = protobuf::Message::write_to_bytes(&cc)
                                .expect("unexpected marshal error");
                 let mut e = Entry::new();
