@@ -90,8 +90,8 @@ impl Progress {
         self.pending_snapshot = snapshot_idx;
     }
 
-    pub fn snapshot_failure(&self) -> bool {
-        self.pending_snapshot == 0
+    pub fn snapshot_failure(&mut self) {
+        self.pending_snapshot = 0;
     }
 
     // maybe_snapshot_abort unsets pendingSnapshot if Match is equal or higher than
