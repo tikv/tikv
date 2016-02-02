@@ -132,7 +132,7 @@ fn test_raw_node_propose_and_conf_change() {
 fn test_raw_node_start() {
     let cc = conf_change(ConfChangeType::ConfChangeAddNode, 1);
     let ccdata = protobuf::Message::write_to_bytes(&cc).unwrap();
-    let wents = vec![new_ready(Some(soft_state(1, StateRole::Leader)),
+    let wants = vec![new_ready(Some(soft_state(1, StateRole::Leader)),
                                Some(hard_state(2, 2, 1)),
                                vec![
                 entry(EntryType::EntryConfChange, 1, 1, Some(ccdata.clone())),
@@ -152,13 +152,13 @@ fn test_raw_node_start() {
     raw_node.campaign().expect("");
     let rd = raw_node.ready();
     info!("rd {:?}", &rd);
-    assert_eq!(rd, wents[0]);
+    assert_eq!(rd, wants[0]);
     store.wl().append(&rd.entries).expect("");
     raw_node.advance(rd);
 
     raw_node.propose("foo".as_bytes().to_vec()).expect("");
     let rd = raw_node.ready();
-    assert_eq!(rd, wents[1]);
+    assert_eq!(rd, wants[1]);
     store.wl().append(&rd.entries).expect("");
     raw_node.advance(rd);
     assert!(!raw_node.has_ready());
