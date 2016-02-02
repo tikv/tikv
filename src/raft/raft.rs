@@ -82,21 +82,21 @@ pub struct Config<T: Storage + Default> {
 impl<T: Storage + Default> Config<T> {
     pub fn validate(&self) -> Result<()> {
         if self.id == INVALID_ID {
-            return Err(Error::ConfigInvalid("invalid node id".to_string()));
+            return Err(Error::ConfigInvalid("invalid node id".to_owned()));
         }
 
         if self.heartbeat_tick <= 0 {
-            return Err(Error::ConfigInvalid("heartbeat tick must greater than 0".to_string()));
+            return Err(Error::ConfigInvalid("heartbeat tick must greater than 0".to_owned()));
         }
 
         if self.election_tick <= self.heartbeat_tick {
             return Err(Error::ConfigInvalid("election tick must be greater than heartbeat tick"
-                                                .to_string()));
+                                                .to_owned()));
         }
 
         if self.max_inflight_msgs <= 0 {
             return Err(Error::ConfigInvalid("max inflight messages must be greater than 0"
-                                                .to_string()));
+                                                .to_owned()));
         }
 
         Ok(())
@@ -393,7 +393,7 @@ impl<T: Storage + Default> Raft<T> {
     // according to the progress recorded in r.prs.
     pub fn bcast_append(&mut self) {
         // TODO: avoid copy
-        let keys: Vec<u64> = self.prs.keys().map(|x| *x).collect();
+        let keys: Vec<u64> = self.prs.keys().cloned().collect();
         for id in keys {
             if id == self.id {
                 continue;
@@ -405,7 +405,7 @@ impl<T: Storage + Default> Raft<T> {
     // bcastHeartbeat sends RPC, without entries to all the peers.
     pub fn bcast_heartbeat(&mut self) {
         // TODO: avoid copy
-        let keys: Vec<u64> = self.prs.keys().map(|x| *x).collect();
+        let keys: Vec<u64> = self.prs.keys().cloned().collect();
         for id in keys {
             if id == self.id {
                 continue;
@@ -443,7 +443,7 @@ impl<T: Storage + Default> Raft<T> {
         self.votes = HashMap::new();
         let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
         let self_id = self.id;
-        for (id, p) in self.prs.iter_mut() {
+        for (id, p) in &mut self.prs {
             *p = new_progress(last_index + 1, max_inflight);
             if id == &self_id {
                 p.matched = last_index;
@@ -558,7 +558,7 @@ impl<T: Storage + Default> Raft<T> {
             self.become_leader();
             return;
         }
-        let keys: Vec<u64> = self.prs.keys().map(|x| *x).collect();
+        let keys: Vec<u64> = self.prs.keys().cloned().collect();
         for id in keys {
             if id == self.id {
                 continue;

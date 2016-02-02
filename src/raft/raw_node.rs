@@ -172,7 +172,7 @@ impl<T: Storage + Default> RawNode<T> {
             // whether they were included in rd.HardState or not.
             self.raft.raft_log.applied_to(self.prev_hs.get_commit());
         }
-        if rd.entries.len() > 0 {
+        if !rd.entries.is_empty() {
             let e = rd.entries.last().unwrap();
             self.raft.raft_log.stable_to(e.get_index(), e.get_term());
         }
@@ -266,7 +266,7 @@ impl<T: Storage + Default> RawNode<T> {
         if Some(true) == raft.raft_log.get_unstable().snapshot.as_ref().map(|s| !is_empty_snap(s)) {
             return true;
         }
-        if raft.msgs.len() > 0 || raft.raft_log.unstable_entries().is_some() ||
+        if !raft.msgs.is_empty() || raft.raft_log.unstable_entries().is_some() ||
            raft.raft_log.has_next_entries() {
             return true;
         }
