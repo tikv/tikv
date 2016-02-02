@@ -58,12 +58,12 @@ pub fn new_test_config(id: u64,
     }
 }
 
-fn new_test_raft(id: u64,
-                 peers: Vec<u64>,
-                 election: usize,
-                 heartbeat: usize,
-                 storage: Arc<MemStorage>)
-                 -> Interface {
+pub fn new_test_raft(id: u64,
+                     peers: Vec<u64>,
+                     election: usize,
+                     heartbeat: usize,
+                     storage: Arc<MemStorage>)
+                     -> Interface {
     Interface::new(Raft::new(&new_test_config(id, peers, election, heartbeat, storage)))
 }
 
@@ -104,7 +104,7 @@ struct Connem {
 /// Because to be able to cast Interface later, we have to make
 /// Raft derive Any, which will require a lot of dependencies to derive Any.
 /// That's not worthy for just testing purpose.
-struct Interface {
+pub struct Interface {
     raft: Option<Raft<MemStorage>>,
 }
 
@@ -113,14 +113,14 @@ impl Interface {
         Interface { raft: Some(r) }
     }
 
-    fn step(&mut self, m: Message) -> Result<()> {
+    pub fn step(&mut self, m: Message) -> Result<()> {
         match self.raft {
             Some(_) => Raft::step(self, m),
             None => Ok(()),
         }
     }
 
-    fn read_messages(&mut self) -> Vec<Message> {
+    pub fn read_messages(&mut self) -> Vec<Message> {
         match self.raft {
             Some(_) => self.msgs.drain(..).collect(),
             None => vec![],

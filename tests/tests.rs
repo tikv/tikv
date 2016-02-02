@@ -9,3 +9,4 @@ extern crate rand;
 
 mod test_raft;
 mod test_raw_node;
+mod test_raft_snap;
