@@ -20,7 +20,7 @@ fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
     s
 }
 
-fn new_storage() -> Arc<MemStorage> {
+pub fn new_storage() -> Arc<MemStorage> {
     Arc::new(MemStorage::new())
 }
 
@@ -40,13 +40,13 @@ fn new_progress(state: ProgressState,
     }
 }
 
-fn new_test_raft(id: u64,
-                 peers: Vec<u64>,
-                 election: usize,
-                 heartbeat: usize,
-                 storage: Arc<MemStorage>)
-                 -> Interface {
-    Interface::new(Raft::new(&Config {
+pub fn new_test_config(id: u64,
+                       peers: Vec<u64>,
+                       election: usize,
+                       heartbeat: usize,
+                       storage: Arc<MemStorage>)
+                       -> Config<MemStorage> {
+    Config {
         id: id,
         peers: peers,
         election_tick: election,
@@ -55,7 +55,16 @@ fn new_test_raft(id: u64,
         max_size_per_msg: NO_LIMIT,
         max_inflight_msgs: 256,
         ..Default::default()
-    }))
+    }
+}
+
+fn new_test_raft(id: u64,
+                 peers: Vec<u64>,
+                 election: usize,
+                 heartbeat: usize,
+                 storage: Arc<MemStorage>)
+                 -> Interface {
+    Interface::new(Raft::new(&new_test_config(id, peers, election, heartbeat, storage)))
 }
 
 fn read_messages<T: Storage + Default>(raft: &mut Raft<T>) -> Vec<Message> {
@@ -147,7 +156,7 @@ const NOP_STEPPER: Option<Interface> = Some(Interface { raft: None });
 
 const SOME_DATA: Option<&'static str> = Some("somedata");
 
-fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
+pub fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
     let mut m = Message::new();
     m.set_from(from);
     m.set_to(to);
@@ -162,11 +171,11 @@ fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
     m
 }
 
-fn empty_entry(term: u64, index: u64) -> Entry {
+pub fn empty_entry(term: u64, index: u64) -> Entry {
     new_entry(term, index, None)
 }
 
-fn new_entry(term: u64, index: u64, data: Option<&str>) -> Entry {
+pub fn new_entry(term: u64, index: u64, data: Option<&str>) -> Entry {
     let mut e = Entry::new();
     e.set_index(index);
     e.set_term(term);
@@ -187,7 +196,7 @@ fn new_raft_log(ents: Vec<Entry>, offset: u64, committed: u64) -> RaftLog<MemSto
     }
 }
 
-fn new_snapshot(index: u64, term: u64, nodes: Vec<u64>) -> Snapshot {
+pub fn new_snapshot(index: u64, term: u64, nodes: Vec<u64>) -> Snapshot {
     let mut s = Snapshot::new();
     s.mut_metadata().set_index(index);
     s.mut_metadata().set_term(term);
@@ -655,7 +664,7 @@ fn test_dueling_candidates() {
     nt.recover();
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
-    let wlog = new_raft_log(vec![new_entry(1, 1, None)], 2, 1);
+    let wlog = new_raft_log(vec![empty_entry(1, 1)], 2, 1);
     let wlog2 = RaftLog::new(new_storage());
     let tests = vec![
         (StateRole::Follower, 2, &wlog),
@@ -706,7 +715,7 @@ fn test_candidate_concede() {
     assert_eq!(tt.peers[&1].state, StateRole::Follower);
     assert_eq!(tt.peers[&1].term, 1);
 
-    let ents = vec![new_entry(1, 1, None), new_entry(1, 2, Some(data))];
+    let ents = vec![empty_entry(1, 1), new_entry(1, 2, Some(data))];
     let want_log = ltoa(&new_raft_log(ents, 3, 2));
     for (id, p) in tt.peers.iter() {
         let l = ltoa(&p.raft_log);
@@ -734,14 +743,14 @@ fn test_old_messages() {
     // pretend we're an old leader trying to make progress; this entry is expected to be ignored.
     let mut m = new_message(2, 1, MessageType::MsgAppend, 0);
     m.set_term(2);
-    m.set_entries(RepeatedField::from_vec(vec![new_entry(2, 3, None)]));
+    m.set_entries(RepeatedField::from_vec(vec![empty_entry(2, 3)]));
     tt.send(vec![m]);
     // commit a new entry
     tt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
 
-    let ents = vec![new_entry(1, 1, None),
-                    new_entry(2, 2, None),
-                    new_entry(3, 3, None),
+    let ents = vec![empty_entry(1, 1),
+                    empty_entry(2, 2),
+                    empty_entry(3, 3),
                     new_entry(3, 4, SOME_DATA)];
     let ilog = new_raft_log(ents, 5, 4);
     let base = ltoa(&ilog);
@@ -778,9 +787,7 @@ fn test_proposal() {
         send(&mut nw, new_message(1, 1, MessageType::MsgPropose, 1));
 
         let want_log = if success {
-            new_raft_log(vec![new_entry(1, 1, None), new_entry(1, 2, SOME_DATA)],
-                         3,
-                         2)
+            new_raft_log(vec![empty_entry(1, 1), new_entry(1, 2, SOME_DATA)], 3, 2)
         } else {
             RaftLog::new(new_storage())
         };
@@ -812,9 +819,7 @@ fn test_proposal_by_proxy() {
         // propose via follower
         tt.send(vec![new_message(2, 2, MessageType::MsgPropose, 1)]);
 
-        let want_log = new_raft_log(vec![new_entry(1, 1, None), new_entry(1, 2, SOME_DATA)],
-                                    3,
-                                    2);
+        let want_log = new_raft_log(vec![empty_entry(1, 1), new_entry(1, 2, SOME_DATA)], 3, 2);
         let base = ltoa(&want_log);
         for (id, p) in tt.peers.iter() {
             if p.raft.is_none() {
@@ -932,7 +937,7 @@ fn test_handle_msg_append() {
         m.set_commit(commit);
         if let Some(ets) = ents {
             m.set_entries(RepeatedField::from_vec(ets.iter()
-                                                     .map(|&(i, t)| new_entry(t, i, None))
+                                                     .map(|&(i, t)| empty_entry(t, i))
                                                      .collect()));
         }
         m
@@ -958,7 +963,7 @@ fn test_handle_msg_append() {
 
     for (j, (m, w_index, w_commit, w_reject)) in tests.drain(..).enumerate() {
         let store = new_storage();
-        store.wl().append(&[new_entry(1, 1, None), new_entry(2, 2, None)]).expect("");
+        store.wl().append(&[empty_entry(1, 1), empty_entry(2, 2)]).expect("");
         let mut sm = new_test_raft(1, vec![1], 10, 1, store);
         sm.become_follower(2, INVALID_ID);
 
@@ -1002,7 +1007,7 @@ fn test_handle_heartbeat() {
     for (i, (m, w_commit)) in tests.drain(..).enumerate() {
         let store = new_storage();
         store.wl()
-             .append(&[new_entry(1, 1, None), new_entry(2, 2, None), new_entry(3, 3, None)])
+             .append(&[empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)])
              .expect("");
         let mut sm = new_test_raft(1, vec![1, 2], 5, 1, store);
         sm.become_follower(2, 2);
@@ -1031,7 +1036,7 @@ fn test_handle_heartbeat() {
 fn test_handle_heartbeat_resp() {
     let store = new_storage();
     store.wl()
-         .append(&[new_entry(1, 1, None), new_entry(2, 2, None), new_entry(3, 3, None)])
+         .append(&[empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)])
          .expect("");
     let mut sm = new_test_raft(1, vec![1, 2], 5, 1, store);
     sm.become_candidate();
@@ -1095,7 +1100,7 @@ fn test_msg_append_response_wait_reset() {
 
     // A new command is now proposed on node 1.
     m = new_message(1, 0, MessageType::MsgPropose, 0);
-    m.set_entries(RepeatedField::from_vec(vec![new_entry(0, 0, None)]));
+    m.set_entries(RepeatedField::from_vec(vec![empty_entry(0, 0)]));
     sm.step(m).expect("");
 
     // The command is broadcast to all nodes not in the wait state.
@@ -1150,7 +1155,7 @@ fn test_recv_msg_request_vote() {
     ];
 
     for (j, (state, i, term, vote_for, w_reject)) in tests.drain(..).enumerate() {
-        let raft_log = new_raft_log(vec![new_entry(2, 1, None), new_entry(2, 2, None)], 3, 0);
+        let raft_log = new_raft_log(vec![empty_entry(2, 1), empty_entry(2, 2)], 3, 0);
         let mut sm = new_test_raft(1, vec![1], 10, 1, new_storage());
         sm.state = state;
         sm.vote = vote_for;
@@ -1324,7 +1329,7 @@ fn test_leader_append_response() {
         // sm term is 1 after it becomes the leader.
         // thus the last log term must be 1 to be committed.
         let mut sm = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
-        sm.raft_log = new_raft_log(vec![new_entry(0, 1, None), new_entry(1, 2, None)], 3, 0);
+        sm.raft_log = new_raft_log(vec![empty_entry(0, 1), empty_entry(1, 2)], 3, 0);
         sm.become_candidate();
         sm.become_leader();
         sm.read_messages();
@@ -1376,7 +1381,7 @@ fn test_bcast_beat() {
     sm.become_candidate();
     sm.become_leader();
     for i in 0..10 {
-        sm.append_entry(&mut vec![new_entry(0, i as u64 + 1, None)]);
+        sm.append_entry(&mut vec![empty_entry(0, i as u64 + 1)]);
     }
     // slow follower
     let mut_pr = |sm: &mut Interface, n, matched, next_idx| {
@@ -1438,7 +1443,7 @@ fn test_recv_msg_beat() {
 
     for (i, (state, w_msg)) in tests.drain(..).enumerate() {
         let mut sm = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
-        sm.raft_log = new_raft_log(vec![new_entry(0, 1, None), new_entry(1, 2, None)], 0, 0);
+        sm.raft_log = new_raft_log(vec![empty_entry(0, 1), empty_entry(1, 2)], 0, 0);
         sm.term = 1;
         sm.state = state;
         sm.step(new_message(1, 1, MessageType::MsgBeat, 0)).expect("");
@@ -1460,7 +1465,7 @@ fn test_recv_msg_beat() {
 
 #[test]
 fn test_leader_increase_next() {
-    let previous_ents = vec![new_entry(1, 1, None), new_entry(1, 2, None), new_entry(1, 3, None)];
+    let previous_ents = vec![empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3)];
     let mut tests = vec![
         // state replicate; optimistically increase next
         // previous entries + noop entry + propose + 1
@@ -1550,7 +1555,7 @@ fn test_send_append_for_progress_snapshot() {
 
 #[test]
 fn test_recv_msg_unreachable() {
-    let previous_ents = vec![new_entry(1, 1, None), new_entry(1, 2, None), new_entry(1, 3, None)];
+    let previous_ents = vec![empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3)];
     let s = new_storage();
     s.wl().append(&previous_ents).expect("");
     let mut r = new_test_raft(1, vec![1, 2], 10, 1, s);
@@ -1584,7 +1589,7 @@ fn test_restore() {
 
 #[test]
 fn test_restore_ignore_snapshot() {
-    let previous_ents = vec![new_entry(1, 1, None), new_entry(1, 2, None), new_entry(1, 3, None)];
+    let previous_ents = vec![empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3)];
     let commit = 1u64;
     let mut sm = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
     sm.raft_log.append(&previous_ents);
@@ -1730,7 +1735,7 @@ fn test_step_ignore_config() {
     let index = r.raft_log.last_index();
     let pending_conf = r.pending_conf;
     r.step(m.clone()).expect("");
-    let mut we = new_entry(1, 3, None);
+    let mut we = empty_entry(1, 3);
     we.set_entry_type(EntryType::EntryNormal);
     let wents = vec![we];
     let ents = r.raft_log.entries(index + 1, NO_LIMIT).expect("");

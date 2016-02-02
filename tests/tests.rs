@@ -8,3 +8,4 @@ extern crate tikv;
 extern crate rand;
 
 mod test_raft;
+mod test_raw_node;
