@@ -15,11 +15,11 @@ pub struct RaftLog<T>
     where T: Storage
 {
     // storage contains all stable entries since the last snapshot.
-    store: Arc<T>,
+    pub store: Arc<T>,
 
     // unstable contains all unstable entries and snapshot.
     // they will be saved into storage.
-    unstable: Unstable,
+    pub unstable: Unstable,
 
     // committed is the highest log position that is known to be in
     // stable storage on a quorum of nodes.
@@ -28,7 +28,7 @@ pub struct RaftLog<T>
     // applied is the highest log position that the application has
     // been instructed to apply to its state machine.
     // Invariant: applied <= committed
-    applied: u64,
+    pub applied: u64,
 }
 
 impl<T> ToString for RaftLog<T> where T: Storage
@@ -230,7 +230,7 @@ impl<T> RaftLog<T> where T: Storage
     }
 
     pub fn unstable_entries(&self) -> Option<&[Entry]> {
-        if self.unstable.entries.len() == 0 {
+        if self.unstable.entries.is_empty() {
             return None;
         }
         Some(&self.unstable.entries)
@@ -241,10 +241,10 @@ impl<T> RaftLog<T> where T: Storage
         if idx > last {
             return Ok(Vec::<Entry>::new());
         }
-        return self.slice(idx, last + 1, max_size);
+        self.slice(idx, last + 1, max_size)
     }
 
-    fn all_entries(&self) -> Vec<Entry> {
+    pub fn all_entries(&self) -> Vec<Entry> {
         let first_index = self.first_index();
         let ents = self.entries(first_index, NO_LIMIT);
         match ents {
@@ -255,9 +255,7 @@ impl<T> RaftLog<T> where T: Storage
                 }
                 panic!(e)
             }
-            Ok(ents) => {
-                return ents;
-            }
+            Ok(ents) => ents,
         }
     }
 
@@ -283,7 +281,7 @@ impl<T> RaftLog<T> where T: Storage
 
     pub fn has_next_entries(&self) -> bool {
         let offset = cmp::max(self.applied + 1, self.first_index());
-        return self.committed + 1 > offset;
+        self.committed + 1 > offset
     }
 
     pub fn snapshot(&self) -> Result<Snapshot> {
@@ -361,7 +359,7 @@ impl<T> RaftLog<T> where T: Storage
         if high > self.unstable.offset {
             let offset = self.unstable.offset;
             let unstable = self.unstable.slice(cmp::max(low, offset), high);
-            if ents.len() > 0 {
+            if !ents.is_empty() {
                 ents.extend_from_slice(unstable);
             } else {
                 ents = unstable.to_vec();

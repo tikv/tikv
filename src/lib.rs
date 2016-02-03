@@ -18,6 +18,9 @@ extern crate mio;
 extern crate tempdir;
 extern crate rocksdb;
 
+#[cfg(test)]
+extern crate env_logger;
+
 pub mod util;
 pub mod raft;
 pub mod proto;

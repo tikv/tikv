@@ -8,6 +8,7 @@ pub use log::LogLevelFilter;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 pub mod codec;
+pub mod macros;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {

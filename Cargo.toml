@@ -11,6 +11,9 @@ name = "server"
 [[bin]]
 name = "kvserver"
 
+[[test]]
+name = "tests"
+
 [dependencies]
 log = "0.3"
 rocksdb = "0.3"
@@ -25,3 +28,6 @@ git = "https://github.com/stepancheg/rust-protobuf.git"
 
 [dependencies.bytes]
 git = "https://github.com/carllerche/bytes"
+
+[dev-dependencies]
+env_logger = "0.3"
