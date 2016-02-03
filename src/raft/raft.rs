@@ -472,7 +472,7 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     // tick_election is run by followers and candidates after self.election_timeout.
-    fn tick_election(&mut self) {
+    pub fn tick_election(&mut self) {
         if !self.promotable() {
             self.election_elapsed = 0;
             return;
@@ -939,7 +939,9 @@ impl<T: Storage + Default> Raft<T> {
                     self.log_vote_approve(&m);
                     self.election_elapsed = 0;
                     self.vote = m.get_from();
-                    self.send(new_message(m.get_from(), t, None));
+                    let mut to_send = new_message(m.get_from(), t, None);
+                    to_send.set_reject(false);
+                    self.send(to_send);
                 } else {
                     self.log_vote_reject(&m);
                     let mut to_send = new_message(m.get_from(), t, None);
@@ -1119,7 +1121,7 @@ impl<T: Storage + Default> Raft<T> {
         self.prs.remove(&id);
     }
 
-    fn load_state(&mut self, hs: HardState) {
+    pub fn load_state(&mut self, hs: HardState) {
         if hs.get_commit() < self.raft_log.committed ||
            hs.get_commit() > self.raft_log.last_index() {
             panic!("{:x} hs.commit {} is out of range [{}, {}]",
