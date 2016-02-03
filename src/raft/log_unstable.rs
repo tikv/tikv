@@ -33,7 +33,7 @@ impl Unstable {
     }
 
     pub fn get_snapshot(&self) -> Snapshot {
-        return self.snapshot.as_ref().unwrap().clone();
+        self.snapshot.as_ref().unwrap().clone()
     }
 
     // maybe_last_index returns the last index if it has at least one

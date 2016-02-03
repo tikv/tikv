@@ -9,10 +9,10 @@ run:
 	cargo run
 
 test:
-	RUST_BACKTRACE=1 cargo test -- --nocapture
+	RUST_LOG=tikv=DEBUG RUST_BACKTRACE=1 cargo test -- --nocapture
 
 bench:
 	RUST_BACKTRACE=1 cargo bench -- --nocapture
 
 format:
-	rustfmt --write-mode overwrite src/lib.rs src/bin/*.rs
+	rustfmt --write-mode overwrite src/lib.rs src/bin/*.rs tests/tests.rs

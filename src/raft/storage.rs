@@ -43,7 +43,7 @@ impl MemStorageCore {
     }
 
     fn inner_last_index(&self) -> u64 {
-        return self.entries[0].get_index() + self.entries.len() as u64 - 1;
+        self.entries[0].get_index() + self.entries.len() as u64 - 1
     }
 
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
@@ -55,11 +55,11 @@ impl MemStorageCore {
         Ok(())
     }
 
-    fn create_snapshot(&mut self,
-                       idx: u64,
-                       cs: Option<ConfState>,
-                       data: Vec<u8>)
-                       -> Result<&Snapshot> {
+    pub fn create_snapshot(&mut self,
+                           idx: u64,
+                           cs: Option<ConfState>,
+                           data: Vec<u8>)
+                           -> Result<&Snapshot> {
         if idx <= self.snapshot.get_metadata().get_index() {
             return Err(Error::Store(StorageError::SnapshotOutOfDate));
         }
@@ -72,9 +72,8 @@ impl MemStorageCore {
         }
         self.snapshot.mut_metadata().set_index(idx);
         self.snapshot.mut_metadata().set_term(self.entries[(idx - offset) as usize].get_term());
-        match cs {
-            Some(cs) => self.snapshot.mut_metadata().set_conf_state(cs),
-            None => {}
+        if let Some(cs) = cs {
+            self.snapshot.mut_metadata().set_conf_state(cs)
         }
         self.snapshot.set_data(data);
         Ok(&self.snapshot)
