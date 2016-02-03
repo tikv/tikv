@@ -11,7 +11,7 @@ use tikv::proto::raftpb::{Entry, Message, MessageType, HardState, Snapshot, Conf
                           ConfChange, ConfChangeType};
 use rand;
 
-fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
+pub fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
     let mut s = format!("committed: {}\n", raft_log.committed);
     s = s + &format!("applied: {}\n", raft_log.applied);
     for (i, e) in raft_log.all_entries().iter().enumerate() {
@@ -152,9 +152,9 @@ impl DerefMut for Interface {
     }
 }
 
-const NOP_STEPPER: Option<Interface> = Some(Interface { raft: None });
+pub const NOP_STEPPER: Option<Interface> = Some(Interface { raft: None });
 
-const SOME_DATA: Option<&'static str> = Some("somedata");
+pub const SOME_DATA: Option<&'static str> = Some("somedata");
 
 pub fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
     let mut m = Message::new();
@@ -205,8 +205,8 @@ pub fn new_snapshot(index: u64, term: u64, nodes: Vec<u64>) -> Snapshot {
 }
 
 #[derive(Default)]
-struct Network {
-    peers: HashMap<u64, Interface>,
+pub struct Network {
+    pub peers: HashMap<u64, Interface>,
     storage: HashMap<u64, Arc<MemStorage>>,
     dropm: HashMap<Connem, f64>,
     ignorem: HashMap<MessageType, bool>,
@@ -217,7 +217,7 @@ impl Network {
     // A nil node will be replaced with a new *stateMachine.
     // A *stateMachine will get its k, id.
     // When using stateMachine, the address list is always [1, n].
-    fn new(peers: Vec<Option<Interface>>) -> Network {
+    pub fn new(peers: Vec<Option<Interface>>) -> Network {
         let size = peers.len();
         let peer_addrs: Vec<u64> = (1..size as u64 + 1).collect();
         let mut nstorage: HashMap<u64, Arc<MemStorage>> = HashMap::new();
@@ -271,7 +271,7 @@ impl Network {
         msgs
     }
 
-    fn send(&mut self, msgs: Vec<Message>) {
+    pub fn send(&mut self, msgs: Vec<Message>) {
         let mut msgs = msgs;
         while msgs.len() > 0 {
             let mut new_msgs = vec![];
