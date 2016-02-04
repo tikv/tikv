@@ -2,7 +2,6 @@
 use std::collections::HashMap;
 use std::boxed::Box;
 use std::io::{Read, Write};
-use std::thread;
 
 use mio::{self, Token, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;
@@ -80,9 +79,7 @@ impl Server {
                                        let queue_msg: QueueMessage = QueueMessage::Response(token,
                                                                                             msg_id,
                                                                                             resp);
-                                       thread::spawn(move || {
-                                           let _ = sender.send(queue_msg);
-                                       });
+                                       sender.send(queue_msg).map_err(|e| error!("{:?}", e));
                                    })) {
             Ok(()) => Ok(()),
             Err(why) => return Err(ServerError::Storage(why)),
@@ -114,9 +111,7 @@ impl Server {
                                   let queue_msg: QueueMessage = QueueMessage::Response(token,
                                                                                        msg_id,
                                                                                        resp);
-                                  thread::spawn(move || {
-                                      let _ = sender.send(queue_msg);
-                                  });
+                                  sender.send(queue_msg).map_err(|e| error!("{:?}", e));
                               })) {
             Ok(()) => Ok(()),
             Err(why) => return Err(ServerError::Storage(why)),
@@ -155,9 +150,7 @@ impl Server {
                                       let queue_msg: QueueMessage = QueueMessage::Response(token,
                                                                                            msg_id,
                                                                                            resp);
-                                      thread::spawn(move || {
-                                          let _ = sender.send(queue_msg);
-                                      });
+                                      sender.send(queue_msg).map_err(|e| error!("{:?}", e));
                                   })) {
             Ok(()) => Ok(()),
             Err(why) => return Err(ServerError::Storage(why)),
@@ -184,9 +177,8 @@ impl Server {
                                     let queue_msg: QueueMessage = QueueMessage::Response(token,
                                                                                          msg_id,
                                                                                          resp);
-                                    thread::spawn(move || {
-                                        let _ = sender.send(queue_msg);
-                                    });
+                                    // [TODO]: retry
+                                    sender.send(queue_msg).map_err(|e| error!("{:?}", e));
                                 })) {
             Ok(()) => Ok(()),
             Err(why) => Err(ServerError::Storage(why)),
@@ -291,7 +283,7 @@ impl mio::Handler for Server {
                     event_loop.register(&self.conns[&new_token].sock,
                                         new_token,
                                         EventSet::readable(),
-                                        PollOpt::edge() | PollOpt::oneshot())
+                                        PollOpt::level() | PollOpt::oneshot())
                               .unwrap();
 
                 }
@@ -307,7 +299,7 @@ impl mio::Handler for Server {
                     event_loop.reregister(&conn.sock,
                                           token,
                                           conn.interest,
-                                          PollOpt::edge() | PollOpt::oneshot())
+                                          PollOpt::level() | PollOpt::oneshot())
                               .unwrap();
                 }
             }
@@ -325,7 +317,7 @@ impl mio::Handler for Server {
             event_loop.reregister(&conn.sock,
                                   token,
                                   conn.interest,
-                                  PollOpt::edge() | PollOpt::oneshot())
+                                  PollOpt::level() | PollOpt::oneshot())
                       .unwrap();
         }
     }
@@ -382,7 +374,7 @@ impl mio::Handler for Server {
                 event_loop.reregister(&conn.sock,
                                       token,
                                       conn.interest,
-                                      PollOpt::edge() | PollOpt::oneshot())
+                                      PollOpt::level() | PollOpt::oneshot())
                           .unwrap();
             }
         }
