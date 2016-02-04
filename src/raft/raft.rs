@@ -517,6 +517,7 @@ impl<T: Storage + Default> Raft<T> {
         info!("{:x} became follower at term {}", self.id, self.term);
     }
 
+    // TODO: revoke pub when there is a better way to test.
     pub fn become_candidate(&mut self) {
         assert!(self.state != StateRole::Leader,
                 "invalid transition [leader -> candidate]");
@@ -528,6 +529,7 @@ impl<T: Storage + Default> Raft<T> {
         info!("{:x} became candidate at term {}", self.id, self.term);
     }
 
+    // TODO: revoke pub when there is a better way to test.
     pub fn become_leader(&mut self) {
         assert!(self.state != StateRole::Follower,
                 "invalid transition [follower -> leader]");
@@ -954,6 +956,7 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
+    // TODO: revoke pub when there is a better way to test.
     pub fn handle_append_entries(&mut self, m: Message) {
         if m.get_index() < self.raft_log.committed {
             let mut to_send = Message::new();
@@ -991,6 +994,7 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
+    // TODO: revoke pub when there is a better way to test.
     pub fn handle_heartbeat(&mut self, m: Message) {
         self.raft_log.commit_to(m.get_commit());
         let mut to_send = Message::new();
@@ -1122,6 +1126,7 @@ impl<T: Storage + Default> Raft<T> {
         self.prs.remove(&id);
     }
 
+    // TODO: revoke pub when there is a better way to test.
     pub fn load_state(&mut self, hs: HardState) {
         if hs.get_commit() < self.raft_log.committed ||
            hs.get_commit() > self.raft_log.last_index() {
