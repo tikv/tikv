@@ -1,5 +1,5 @@
+#![allow(unused_must_use)]
 use std::io::Write;
-use std::thread;
 
 use mio::{Token, EventLoop, EventSet};
 use mio::tcp::TcpStream;
@@ -40,9 +40,7 @@ impl Conn {
 
         let sender = event_loop.channel();
         let queue_msg: QueueMessage = QueueMessage::Request(token, msg_id, m);
-        thread::spawn(move || {
-            let _ = sender.send(queue_msg);
-        });
+        sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         self.interest.remove(EventSet::readable());
     }
 }

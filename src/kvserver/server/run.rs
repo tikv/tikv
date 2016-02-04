@@ -16,7 +16,7 @@ pub fn run(addr: &str, store: Storage) {
     event_loop.register(&listener,
                         SERVER_TOKEN,
                         EventSet::readable(),
-                        PollOpt::edge())
+                        PollOpt::level())
               .unwrap();
 
     let conns: HashMap<Token, Conn> = HashMap::new();
