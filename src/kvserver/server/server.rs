@@ -247,6 +247,7 @@ pub enum QueueMessage {
     Request(Token, u64, Request),
     // Request(token, msg_id, kvrpc_response)
     Response(Token, u64, Response),
+    Quit,
 }
 
 impl mio::Handler for Server {
@@ -377,6 +378,7 @@ impl mio::Handler for Server {
                                       PollOpt::level() | PollOpt::oneshot())
                           .unwrap();
             }
+            QueueMessage::Quit => event_loop.shutdown(),
         }
     }
 }
