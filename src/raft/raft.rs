@@ -472,6 +472,7 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     // tick_election is run by followers and candidates after self.election_timeout.
+    // TODO: revoke pub when there is a better way to test.
     pub fn tick_election(&mut self) {
         if !self.promotable() {
             self.election_elapsed = 0;
