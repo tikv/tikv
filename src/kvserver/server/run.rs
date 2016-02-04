@@ -10,13 +10,11 @@ use super::conn::Conn;
 pub fn run(addr: &str, store: Storage) {
     let laddr = addr.parse().unwrap();
     let listener = TcpListener::bind(&laddr).unwrap();
-
     let mut event_loop = EventLoop::new().unwrap();
-
     event_loop.register(&listener,
                         SERVER_TOKEN,
-                        EventSet::readable(),
-                        PollOpt::level())
+                        EventSet::readable() | EventSet::hup(),
+                        PollOpt::edge())
               .unwrap();
 
     let conns: HashMap<Token, Conn> = HashMap::new();

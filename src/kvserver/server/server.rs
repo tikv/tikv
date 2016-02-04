@@ -4,7 +4,7 @@ use std::boxed::Box;
 use std::io::{Read, Write};
 
 use mio::{self, Token, EventLoop, EventSet, PollOpt};
-use mio::tcp::TcpListener;
+use mio::tcp::{TcpListener, TcpStream};
 use protobuf::core::Message;
 use protobuf::RepeatedField;
 
@@ -57,6 +57,7 @@ impl Server {
             store: store,
         };
     }
+
     pub fn handle_get(&mut self,
                       msg: &Request,
                       msg_id: u64,
@@ -85,6 +86,7 @@ impl Server {
             Err(why) => return Err(ServerError::Storage(why)),
         }
     }
+
     pub fn handle_scan(&mut self,
                        msg: &Request,
                        msg_id: u64,
@@ -117,6 +119,7 @@ impl Server {
             Err(why) => return Err(ServerError::Storage(why)),
         }
     }
+
     pub fn handle_prewrite(&mut self,
                            msg: &Request,
                            msg_id: u64,
@@ -156,6 +159,7 @@ impl Server {
             Err(why) => return Err(ServerError::Storage(why)),
         }
     }
+
     pub fn handle_commit(&mut self,
                          msg: &Request,
                          msg_id: u64,
@@ -184,6 +188,7 @@ impl Server {
             Err(why) => Err(ServerError::Storage(why)),
         }
     }
+
     fn cmd_get_done(r: ::std::result::Result<Option<Value>, storage::Error>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_get_resp: CmdGetResponse = CmdGetResponse::new();
@@ -202,6 +207,7 @@ impl Server {
         resp.set_cmd_get_resp(cmd_get_resp);
         resp
     }
+
     fn cmd_scan_done(kvs: ::std::result::Result<Vec<KvPair>, storage::Error>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_scan_resp: CmdScanResponse = CmdScanResponse::new();
@@ -224,6 +230,7 @@ impl Server {
         resp.set_cmd_scan_resp(cmd_scan_resp);
         resp
     }
+
     fn cmd_prewrite_done(r: ::std::result::Result<(), storage::Error>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_prewrite_resp: CmdPrewriteResponse = CmdPrewriteResponse::new();
@@ -232,6 +239,7 @@ impl Server {
         resp.set_cmd_prewrite_resp(cmd_prewrite_resp);
         resp
     }
+
     fn cmd_commit_done(r: ::std::result::Result<(), storage::Error>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_commit_resp: CmdCommitResponse = CmdCommitResponse::new();
@@ -239,6 +247,143 @@ impl Server {
         resp.set_field_type(MessageType::CmdCommit);
         resp.set_cmd_commit_resp(cmd_commit_resp);
         resp
+    }
+
+    fn add_new_conn(&mut self,
+                    event_loop: &mut EventLoop<Server>,
+                    sock: TcpStream)
+                    -> Result<(Token)> {
+        let new_token = Token(self.token_counter);
+        match sock.set_nodelay(true) {
+            Ok(_) => {}
+            Err(e) => error!("set nodeplay failed {:?}", e),
+        }
+        self.conns.insert(new_token, Conn::new(sock));
+        self.token_counter += 1;
+
+        event_loop.register(&self.conns[&new_token].sock,
+                            new_token,
+                            EventSet::readable() | EventSet::hup(),
+                            PollOpt::edge())
+                  .unwrap();
+        Ok(new_token)
+    }
+
+    fn remove_conn(&mut self, event_loop: &mut EventLoop<Server>, token: Token) {
+        let conn = self.conns.remove(&token);
+        match conn {
+            Some(conn) => {
+                event_loop.deregister(&conn.sock);
+            }
+            None => {
+                warn!("missing connection for token {}", token.as_usize());
+            }
+        }
+    }
+
+    fn handle_server_readable(&mut self, event_loop: &mut EventLoop<Server>) {
+        loop {
+            let sock = match self.listener.accept() {
+                // Some(sock, addr)
+                Ok(Some((sock, _))) => sock,
+                Ok(None) => {
+                    debug!("no connection, accept later.");
+                    return;
+                }
+                Err(e) => {
+                    error!("accept error: {}", e);
+                    return;
+                }
+            };
+            self.add_new_conn(event_loop, sock);
+        }
+    }
+
+    fn handle_conn_readable(&mut self, event_loop: &mut EventLoop<Server>, token: Token) {
+        let mut conn: &mut Conn = match self.conns.get_mut(&token) {
+            Some(c) => c,
+            None => {
+                error!("Get connection failed token[{}]", token.0);
+                return;
+            }
+        };
+        conn.read(token, event_loop);
+        event_loop.reregister(&conn.sock, token, conn.interest, PollOpt::edge())
+                  .unwrap();
+    }
+
+    fn handle_writable(&mut self, event_loop: &mut EventLoop<Server>, token: Token) {
+        let mut conn: &mut Conn = match self.conns.get_mut(&token) {
+            Some(c) => c,
+            None => {
+                error!("Get connection failed token[{}]", token.0);
+                return;
+            }
+        };
+        conn.write();
+        event_loop.reregister(&conn.sock, token, conn.interest, PollOpt::edge())
+                  .unwrap();
+    }
+
+    fn handle_request(&mut self,
+                      event_loop: &mut EventLoop<Server>,
+                      token: Token,
+                      msg_id: u64,
+                      req: Request) {
+        debug!("notify Request token[{}] msg_id[{}] type[{:?}]",
+               token.0,
+               msg_id,
+               req.get_field_type());
+        match req.get_field_type() {
+            MessageType::CmdGet => {
+                if let Err(e) = self.handle_get(&req, msg_id, token, event_loop) {
+                    error!("Some error occur err[{:?}]", e);
+                };
+            }
+            MessageType::CmdScan => {
+                if let Err(e) = self.handle_scan(&req, msg_id, token, event_loop) {
+                    error!("Some error occur err[{:?}]", e);
+                }
+            }
+            MessageType::CmdPrewrite => {
+                if let Err(e) = self.handle_prewrite(&req, msg_id, token, event_loop) {
+                    error!("Some error occur err[{:?}]", e);
+                }
+            }
+            MessageType::CmdCommit => {
+                if let Err(e) = self.handle_commit(&req, msg_id, token, event_loop) {
+                    error!("Some error occur err[{:?}]", e);
+                }
+            }
+        }
+    }
+
+    fn handle_response(&mut self,
+                       event_loop: &mut EventLoop<Server>,
+                       token: Token,
+                       msg_id: u64,
+                       resp: Response) {
+
+        debug!("notify Response token[{}] msg_id[{}] type[{:?}]",
+               token.0,
+               msg_id,
+               resp.get_field_type());
+        let mut conn: &mut Conn = match self.conns.get_mut(&token) {
+            Some(c) => c,
+            None => {
+                error!("Get connection failed token[{}]", token.0);
+                return;
+            }
+        };
+        conn.res.clear();
+        let resp_len: usize = MSG_HEADER_LEN + resp.compute_size() as usize;
+        if conn.res.capacity() < resp_len {
+            conn.res = Vec::with_capacity(resp_len);
+        }
+        encode_msg(&mut conn.res, msg_id, &resp).unwrap();
+        conn.interest.insert(EventSet::writable());
+        event_loop.reregister(&conn.sock, token, conn.interest, PollOpt::edge())
+                  .unwrap();
     }
 }
 
@@ -256,127 +401,33 @@ impl mio::Handler for Server {
 
     fn ready(&mut self, event_loop: &mut EventLoop<Server>, token: Token, events: EventSet) {
         if events.is_hup() || events.is_error() {
-            self.conns.remove(&token);
+            self.remove_conn(event_loop, token);
             return;
         }
 
         if events.is_readable() {
             match token {
                 SERVER_TOKEN => {
-                    let sock = match self.listener.accept() {
-                        // Some(sock, addr)
-                        Ok(Some((sock, _))) => sock,
-                        Ok(None) => unreachable!(),
-                        Err(e) => {
-                            error!("accept error: {}", e);
-                            return;
-                        }
-                    };
-
-                    let new_token = Token(self.token_counter);
-                    match sock.set_nodelay(true) {
-                        Ok(_) => {}
-                        Err(e) => error!("set nodeplay failed {:?}", e),
-                    }
-                    self.conns.insert(new_token, Conn::new(sock));
-                    self.token_counter += 1;
-
-                    event_loop.register(&self.conns[&new_token].sock,
-                                        new_token,
-                                        EventSet::readable(),
-                                        PollOpt::level() | PollOpt::oneshot())
-                              .unwrap();
-
+                    self.handle_server_readable(event_loop);
                 }
                 token => {
-                    let mut conn: &mut Conn = match self.conns.get_mut(&token) {
-                        Some(c) => c,
-                        None => {
-                            error!("Get connection failed token[{}]", token.0);
-                            return;
-                        }
-                    };
-                    conn.read(token, event_loop);
-                    event_loop.reregister(&conn.sock,
-                                          token,
-                                          conn.interest,
-                                          PollOpt::level() | PollOpt::oneshot())
-                              .unwrap();
+                    self.handle_conn_readable(event_loop, token);
                 }
             }
         }
 
         if events.is_writable() {
-            let mut conn: &mut Conn = match self.conns.get_mut(&token) {
-                Some(c) => c,
-                None => {
-                    error!("Get connection failed token[{}]", token.0);
-                    return;
-                }
-            };
-            conn.write();
-            event_loop.reregister(&conn.sock,
-                                  token,
-                                  conn.interest,
-                                  PollOpt::level() | PollOpt::oneshot())
-                      .unwrap();
+            self.handle_writable(event_loop, token);
         }
     }
 
     fn notify(&mut self, event_loop: &mut EventLoop<Server>, msg: QueueMessage) {
         match msg {
             QueueMessage::Request(token, msg_id, req) => {
-                debug!("notify Request token[{}] msg_id[{}] type[{:?}]",
-                       token.0,
-                       msg_id,
-                       req.get_field_type());
-                match req.get_field_type() {
-                    MessageType::CmdGet => {
-                        if let Err(e) = self.handle_get(&req, msg_id, token, event_loop) {
-                            error!("Some error occur err[{:?}]", e);
-                        };
-                    }
-                    MessageType::CmdScan => {
-                        if let Err(e) = self.handle_scan(&req, msg_id, token, event_loop) {
-                            error!("Some error occur err[{:?}]", e);
-                        }
-                    }
-                    MessageType::CmdPrewrite => {
-                        if let Err(e) = self.handle_prewrite(&req, msg_id, token, event_loop) {
-                            error!("Some error occur err[{:?}]", e);
-                        }
-                    }
-                    MessageType::CmdCommit => {
-                        if let Err(e) = self.handle_commit(&req, msg_id, token, event_loop) {
-                            error!("Some error occur err[{:?}]", e);
-                        }
-                    }
-                }
+                self.handle_request(event_loop, token, msg_id, req);
             }
             QueueMessage::Response(token, msg_id, resp) => {
-                debug!("notify Response token[{}] msg_id[{}] type[{:?}]",
-                       token.0,
-                       msg_id,
-                       resp.get_field_type());
-                let mut conn: &mut Conn = match self.conns.get_mut(&token) {
-                    Some(c) => c,
-                    None => {
-                        error!("Get connection failed token[{}]", token.0);
-                        return;
-                    }
-                };
-                conn.res.clear();
-                let resp_len: usize = MSG_HEADER_LEN + resp.compute_size() as usize;
-                if conn.res.capacity() < resp_len {
-                    conn.res = Vec::with_capacity(resp_len);
-                }
-                encode_msg(&mut conn.res, msg_id, &resp).unwrap();
-                conn.interest.insert(EventSet::writable());
-                event_loop.reregister(&conn.sock,
-                                      token,
-                                      conn.interest,
-                                      PollOpt::level() | PollOpt::oneshot())
-                          .unwrap();
+                self.handle_response(event_loop, token, msg_id, resp);
             }
             QueueMessage::Quit => event_loop.shutdown(),
         }
