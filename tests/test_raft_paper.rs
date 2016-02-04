@@ -39,38 +39,6 @@ fn accept_and_reply(m: Message) -> Message {
     reply.set_index(m.get_index() + m.get_entries().len() as u64);
     reply
 }
-// func commitNoopEntry(r *raft, s *MemoryStorage) {
-// if r.state != StateLeader {
-// panic("it should only be used when it is the leader")
-// }
-// r.bcastAppend()
-// simulate the response of MsgApp
-// msgs := r.readMessages()
-// for _, m := range msgs {
-// if m.Type != pb.MsgApp || len(m.Entries) != 1 || m.Entries[0].Data != nil {
-// panic("not a message to append noop entry")
-// }
-// r.Step(acceptAndReply(m))
-// }
-// ignore further messages to refresh followers' commit index
-// r.readMessages()
-// s.Append(r.raftLog.unstableEntries())
-// r.raftLog.appliedTo(r.raftLog.committed)
-// r.raftLog.stableTo(r.raftLog.lastIndex(), r.raftLog.lastTerm())
-// }
-// func acceptAndReply(m pb.Message) pb.Message {
-// if m.Type != pb.MsgApp {
-// panic("type should be MsgApp")
-// }
-// return pb.Message{
-// From:  m.To,
-// To:    m.From,
-// Term:  m.Term,
-// Type:  pb.MsgAppResp,
-// Index: m.Index + uint64(len(m.Entries)),
-// }
-// }
-//
 
 #[test]
 fn test_follower_update_term_from_message() {
