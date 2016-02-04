@@ -472,7 +472,8 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     // tick_election is run by followers and candidates after self.election_timeout.
-    fn tick_election(&mut self) {
+    // TODO: revoke pub when there is a better way to test.
+    pub fn tick_election(&mut self) {
         if !self.promotable() {
             self.election_elapsed = 0;
             return;
@@ -516,6 +517,7 @@ impl<T: Storage + Default> Raft<T> {
         info!("{:x} became follower at term {}", self.id, self.term);
     }
 
+    // TODO: revoke pub when there is a better way to test.
     pub fn become_candidate(&mut self) {
         assert!(self.state != StateRole::Leader,
                 "invalid transition [leader -> candidate]");
@@ -527,6 +529,7 @@ impl<T: Storage + Default> Raft<T> {
         info!("{:x} became candidate at term {}", self.id, self.term);
     }
 
+    // TODO: revoke pub when there is a better way to test.
     pub fn become_leader(&mut self) {
         assert!(self.state != StateRole::Follower,
                 "invalid transition [follower -> leader]");
@@ -939,7 +942,9 @@ impl<T: Storage + Default> Raft<T> {
                     self.log_vote_approve(&m);
                     self.election_elapsed = 0;
                     self.vote = m.get_from();
-                    self.send(new_message(m.get_from(), t, None));
+                    let mut to_send = new_message(m.get_from(), t, None);
+                    to_send.set_reject(false);
+                    self.send(to_send);
                 } else {
                     self.log_vote_reject(&m);
                     let mut to_send = new_message(m.get_from(), t, None);
@@ -951,6 +956,7 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
+    // TODO: revoke pub when there is a better way to test.
     pub fn handle_append_entries(&mut self, m: Message) {
         if m.get_index() < self.raft_log.committed {
             let mut to_send = Message::new();
@@ -988,6 +994,7 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
+    // TODO: revoke pub when there is a better way to test.
     pub fn handle_heartbeat(&mut self, m: Message) {
         self.raft_log.commit_to(m.get_commit());
         let mut to_send = Message::new();
@@ -1119,7 +1126,8 @@ impl<T: Storage + Default> Raft<T> {
         self.prs.remove(&id);
     }
 
-    fn load_state(&mut self, hs: HardState) {
+    // TODO: revoke pub when there is a better way to test.
+    pub fn load_state(&mut self, hs: HardState) {
         if hs.get_commit() < self.raft_log.committed ||
            hs.get_commit() > self.raft_log.last_index() {
             panic!("{:x} hs.commit {} is out of range [{}, {}]",

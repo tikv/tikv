@@ -3,7 +3,8 @@ use protobuf::{self, ProtobufEnum};
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
 use std::sync::Arc;
-use test_raft::{new_storage, new_test_config, new_message, new_entry, empty_entry, new_snapshot};
+use test_raft::*;
+use test_raft_paper::*;
 
 fn new_peer(id: u64) -> Peer {
     Peer { id: id, ..Default::default() }
@@ -32,14 +33,6 @@ fn soft_state(lead: u64, state: StateRole) -> SoftState {
         lead: lead,
         raft_state: state,
     }
-}
-
-fn hard_state(t: u64, c: u64, v: u64) -> HardState {
-    let mut hs = HardState::new();
-    hs.set_term(t);
-    hs.set_commit(c);
-    hs.set_vote(v);
-    hs
 }
 
 fn new_ready(ss: Option<SoftState>,
