@@ -420,7 +420,7 @@ impl PeerStorage {
         Ok(n.unwrap_or(applied_index))
     }
 
-    // For region snapshot, we concern three key ranges in database for this region.
+    // For region snapshot, we return three key ranges in database for this region.
     // [region id, region id + 1) -> saving raft entries, applied index, etc.
     // [region meta start, region meta end) -> saving region information.
     // [region data start, region data end) -> saving region data.
