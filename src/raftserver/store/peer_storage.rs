@@ -78,7 +78,7 @@ impl PeerStorage {
                 self.last_index = 0;
             }
         } else if initialized && hard_state.get_commit() == 0 {
-            // How can we enter this condidation? Log first and try to find later.
+            // How can we enter this condition? Log first and try to find later.
             warn!("peer initialized but hard state commit is 0");
             hard_state.set_commit(RAFT_INIT_LOG_INDEX);
         }
@@ -181,6 +181,9 @@ impl PeerStorage {
     }
 
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
+        debug!("begin to generate a snapshot for region {}",
+               self.get_region_id());
+
         let snap = self.engine.snapshot();
 
         let applied_index = try!(self.load_applied_index(&snap));
@@ -231,6 +234,8 @@ impl PeerStorage {
 
         snapshot.set_data(v);
 
+        debug!("generate snapshot ok for region {}", self.get_region_id());
+
         Ok(snapshot)
     }
 
@@ -242,6 +247,9 @@ impl PeerStorage {
                               prev_last_index: u64,
                               entries: &[Entry])
                               -> Result<u64> {
+        debug!("append {} entries for region {}",
+               entries.len(),
+               self.get_region_id());
         if entries.len() == 0 {
             return Ok(prev_last_index);
         }
@@ -265,6 +273,9 @@ impl PeerStorage {
 
     // Apply the peer with given snapshot.
     pub fn apply_snapshot<T: Mutator>(&mut self, w: &T, snap: Snapshot) -> Result<ApplySnapResult> {
+        debug!("begin to apply snapshot for region {}",
+               self.get_region_id());
+
         let mut snap_data = RaftSnapshotData::new();
         try!(snap_data.merge_from_bytes(snap.get_data()));
 
@@ -304,6 +315,8 @@ impl PeerStorage {
         let last_index = snap.get_metadata().get_index();
         try!(set_last_index(w, region_id, last_index));
 
+        debug!("apply snapshot ok for region {}", self.get_region_id());
+
         Ok(ApplySnapResult {
             last_index: last_index,
             applied_index: last_index,
@@ -314,6 +327,10 @@ impl PeerStorage {
     // Discard all log entries prior to compact_index. We must guarantee
     // that the compact_index is not greater than applied index.
     pub fn compact<T: Mutator>(&self, w: &T, compact_index: u64) -> Result<()> {
+        debug!("compact log entries to prior to {} for region {}",
+               compact_index,
+               self.get_region_id());
+
         if compact_index <= self.first_index() {
             return Err(other("try to truncate compacted entries"));
         } else if compact_index > self.applied_index {
@@ -403,7 +420,7 @@ impl PeerStorage {
         Ok(n.unwrap_or(applied_index))
     }
 
-    // For region snapshot, we care 3 range in database for this region.
+    // For region snapshot, we care three key ranges in database for this region.
     // [region id, region id + 1) -> saving raft entries, applied index, etc.
     // [region meta start, region meta end) -> saving region information.
     // [region data start, region data end) -> saving region data.
