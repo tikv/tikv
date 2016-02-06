@@ -55,6 +55,22 @@ pub struct ApplySnapResult {
 }
 
 impl PeerStorage {
+    pub fn new(engine: Arc<DB>, region: &metapb::Region) -> Result<PeerStorage> {
+        let mut store = PeerStorage {
+            engine: engine,
+            region: region.clone(),
+            last_index: 0,
+            applied_index: 0,
+            truncated_state: RaftTruncatedState::new(),
+        };
+
+        store.last_index = try!(store.load_last_index());
+        store.applied_index = try!(store.load_applied_index(store.engine.as_ref()));
+        store.truncated_state = try!(store.load_truncated_state());
+
+        Ok(store)
+    }
+
     pub fn is_initialized(&self) -> bool {
         self.region.get_end_key().len() > 0
     }
@@ -180,6 +196,14 @@ impl PeerStorage {
         self.last_index
     }
 
+    pub fn applied_index(&self) -> u64 {
+        self.applied_index
+    }
+
+    pub fn get_region(&self) -> &metapb::Region {
+        &self.region
+    }
+
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
         debug!("begin to generate a snapshot for region {}",
                self.get_region_id());
@@ -266,13 +290,16 @@ impl PeerStorage {
             try!(w.delete(&keys::raft_log_key(self.get_region_id(), i)));
         }
 
-        try!(set_last_index(w, self.get_region_id(), last_index));
+        try!(save_last_index(w, self.get_region_id(), last_index));
 
         Ok(last_index)
     }
 
     // Apply the peer with given snapshot.
-    pub fn apply_snapshot<T: Mutator>(&mut self, w: &T, snap: Snapshot) -> Result<ApplySnapResult> {
+    pub fn apply_snapshot<T: Mutator>(&mut self,
+                                      w: &T,
+                                      snap: &Snapshot)
+                                      -> Result<ApplySnapResult> {
         debug!("begin to apply snapshot for region {}",
                self.get_region_id());
 
@@ -313,7 +340,7 @@ impl PeerStorage {
         }
 
         let last_index = snap.get_metadata().get_index();
-        try!(set_last_index(w, region_id, last_index));
+        try!(save_last_index(w, region_id, last_index));
 
         debug!("apply snapshot ok for region {}", self.get_region_id());
 
@@ -440,7 +467,7 @@ impl PeerStorage {
 
     }
 
-    fn scan_region<T, F>(&self, db: &T, f: &mut F) -> Result<()>
+    pub fn scan_region<T, F>(&self, db: &T, f: &mut F) -> Result<()>
         where T: Retriever,
               F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
@@ -452,69 +479,74 @@ impl PeerStorage {
         Ok(())
     }
 
-    fn get_region_id(&self) -> u64 {
+    pub fn get_region_id(&self) -> u64 {
         self.region.get_region_id()
     }
 }
 
-pub fn set_hard_state<T: Mutator>(w: &T, region_id: u64, state: &HardState) -> Result<()> {
+pub fn save_hard_state<T: Mutator>(w: &T, region_id: u64, state: &HardState) -> Result<()> {
     w.put_msg(&keys::raft_hard_state_key(region_id), state)
 }
 
-pub fn set_truncated_state<T: Mutator>(w: &T,
-                                       region_id: u64,
-                                       state: &RaftTruncatedState)
-                                       -> Result<()> {
+pub fn save_truncated_state<T: Mutator>(w: &T,
+                                        region_id: u64,
+                                        state: &RaftTruncatedState)
+                                        -> Result<()> {
     w.put_msg(&keys::raft_truncated_state_key(region_id), state)
 }
 
-pub fn set_applied_index<T: Mutator>(w: &T, region_id: u64, applied_index: u64) -> Result<()> {
+pub fn save_applied_index<T: Mutator>(w: &T, region_id: u64, applied_index: u64) -> Result<()> {
     w.put_u64(&keys::raft_applied_index_key(region_id), applied_index)
 }
 
-pub fn set_last_index<T: Mutator>(w: &T, region_id: u64, last_index: u64) -> Result<()> {
+pub fn save_last_index<T: Mutator>(w: &T, region_id: u64, last_index: u64) -> Result<()> {
     w.put_u64(&keys::raft_last_index_key(region_id), last_index)
 }
-
 
 pub struct RaftStorage {
     store: Arc<RwLock<PeerStorage>>,
 }
 
 impl RaftStorage {
-    fn new(store: Arc<RwLock<PeerStorage>>) -> RaftStorage {
+    pub fn new(store: Arc<RwLock<PeerStorage>>) -> RaftStorage {
         RaftStorage { store: store }
     }
 }
 
 impl Storage for RaftStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
-        let mut store = try!(self.store.write());
+        let mut store = self.store.write().unwrap();
         store.initial_state()
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
-        let store = try!(self.store.read());
+        let store = self.store.read().unwrap();
         store.entries(low, high, max_size)
     }
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
-        let store = try!(self.store.read());
+        let store = self.store.read().unwrap();
         store.term(idx)
     }
 
     fn first_index(&self) -> raft::Result<u64> {
-        let store = try!(self.store.read());
+        let store = self.store.read().unwrap();
         Ok(store.first_index())
     }
 
     fn last_index(&self) -> raft::Result<u64> {
-        let store = try!(self.store.read());
+        let store = self.store.read().unwrap();
         Ok(store.last_index())
     }
 
     fn snapshot(&self) -> raft::Result<Snapshot> {
-        let store = try!(self.store.read());
+        let store = self.store.read().unwrap();
         store.snapshot()
+    }
+}
+
+impl Default for RaftStorage {
+    fn default() -> RaftStorage {
+        unreachable!();
     }
 }
