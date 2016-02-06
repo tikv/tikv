@@ -40,8 +40,12 @@ fn is_response_msg(m: &Message) -> bool {
     }
 }
 
-fn is_empty_snap(s: &Snapshot) -> bool {
+pub fn is_empty_snap(s: &Snapshot) -> bool {
     s.get_metadata().get_index() == 0
+}
+
+pub fn is_empty_hard_state(state: &HardState) -> bool {
+    (state.get_term() == 0) && (state.get_vote() == 0) && (state.get_commit() == 0)
 }
 
 // Ready encapsulates the entries and messages that are ready to read,
