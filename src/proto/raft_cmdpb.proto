@@ -1,0 +1,14 @@
+syntax = "proto2";
+package raft_cmdpb;
+
+import "metapb.proto";
+import "errorpb.proto";
+
+message RaftCommandRequest {
+  optional uint64 region_id     = 1;
+  optional metapb.Peer peer     = 2;
+}
+
+message RaftCommandResponse {
+  optional errorpb.Error error  = 1;
+}
