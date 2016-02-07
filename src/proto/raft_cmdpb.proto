@@ -3,12 +3,126 @@ package raft_cmdpb;
 
 import "metapb.proto";
 import "errorpb.proto";
+import "raftpb.proto";
+
+message GetRequest {
+    optional bytes key = 1;
+}
+
+message GetResponse {
+    optional bytes value = 1;
+}
+
+message SeekRequest {
+    optional bytes key = 1;
+}
+
+message SeekResponse {
+    optional bytes key   = 1;
+    optional bytes value = 2;
+}
+
+message PutRequest {
+    optional bytes key   = 1;
+    optional bytes value = 2;
+}
+
+message PutResponse {
+    
+}
+
+message DeleteRequest {
+    optional bytes key = 1;
+}
+
+message DeleteResponse {
+    
+}
+
+message WriteBatch {
+    // If value is None, the operation is delete,
+    // else is put.
+    optional bytes key   = 1;
+    optional bytes value = 2;    
+}
+
+message WriteRequest {
+    repeated WriteBatch batch = 1;
+}
+
+message WriteResponse {
+    
+}
+
+message RequestUnion {
+    optional GetRequest get            = 1;
+    optional SeekRequest seek          = 2;
+    optional PutRequest put            = 3;
+    optional DeleteRequest delete      = 4;
+    optional WriteRequest write        = 5;
+}
+
+message ResponseUnion {
+    optional GetResponse get           = 1;
+    optional SeekResponse seek         = 2;
+    optional PutResponse put           = 3;
+    optional DeleteResponse delete     = 4;
+    optional WriteResponse write       = 5;
+}
+
+message ChangePeerRequest {
+    optional raftpb.ConfChangeType change_type = 1;
+    optional metapb.Peer peer                  = 2;
+    repeated metapb.Peer update_peers          = 3;    
+}
+
+message ChangePeerResponse {
+
+}
+
+message SplitRequest {
+    // The split_key must be in the been splitting region. 
+    // If the split_key is none, we will choose a proper key
+    // to split the region in half.
+    optional bytes split_key = 1;
+}
+
+message SplitResponse {
+    optional metapb.Region first  = 1;
+    optional metapb.Region second = 2;
+}
+
+message AdminRequestUnion {
+    optional ChangePeerRequest change_peer  = 1;
+    optional SplitRequest split             = 2;
+}
+
+message AdminResponseUnion {
+    optional ChangePeerResponse change_peer = 1;
+    optional SplitResponse split            = 2;  
+}
+
+message RaftRequestHeader {
+  optional uint64 region_id          = 1;
+  optional metapb.Peer peer          = 2;
+  // true for read linearization
+  optional bool read_quorum          = 3;  
+}
+
+message RaftResponseHeader {
+  optional errorpb.Error error  = 1;
+}
 
 message RaftCommandRequest {
-  optional uint64 region_id     = 1;
-  optional metapb.Peer peer     = 2;
+  optional RaftRequestHeader header          = 1;
+  // We can't enclose normal requests and administrator request
+  // at same time. 
+  repeated RequestUnion requests             = 2; 
+  optional AdminRequestUnion admin_request   = 3; 
 }
 
 message RaftCommandResponse {
-  optional errorpb.Error error  = 1;
+  optional RaftResponseHeader header         = 1;
+  repeated ResponseUnion responses           = 2;
+  optional AdminResponseUnion admin_response = 3;
 }
