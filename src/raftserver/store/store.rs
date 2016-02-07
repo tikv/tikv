@@ -112,9 +112,7 @@ impl Store {
     fn handle_raft_message(&mut self, msg_data: ByteBuf) -> Result<()> {
         let msg: RaftMessage = try!(protobuf::parse_from_bytes(msg_data.bytes()));
 
-        // TODO: change to get_region_id after another PR merged.
-        let region_id = msg.get_range_id();
-
+        let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
         debug!("handle raft message for region {}, from {} to {}",
