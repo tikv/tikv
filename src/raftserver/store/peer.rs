@@ -160,10 +160,12 @@ impl Peer {
     }
 
     fn send_raft_message(&mut self, msg: &raftpb::Message) -> Result<()> {
+        // TODO: implement it later.
         Ok(())
     }
 
     fn handle_raft_commit_entries(&mut self, committed_entries: &[raftpb::Entry]) -> Result<()> {
+        // TODO: implement it later.
         Ok(())
     }
 }
