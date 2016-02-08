@@ -2,6 +2,7 @@ pub mod engine;
 pub mod keys;
 pub mod msg;
 pub mod config;
+pub mod bootstrap;
 
 mod store;
 mod peer;
