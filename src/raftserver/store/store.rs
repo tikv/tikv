@@ -8,12 +8,11 @@ use std::collections::{HashMap, HashSet};
 use rocksdb::DB;
 use mio::{self, EventLoop};
 
-use proto::metapb;
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
 use raftserver::{Result, other};
 use super::{Sender, Msg};
 use super::keys;
-use super::engine::{Retriever, Mutator};
+use super::engine::Retriever;
 use super::config::Config;
 use super::peer::Peer;
 
@@ -49,15 +48,6 @@ impl Store {
             peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
         })
-    }
-
-    pub fn bootstrap(engine: Arc<DB>, cluster_id: u64, meta: metapb::Store) -> Result<()> {
-        let mut ident = StoreIdent::new();
-        ident.set_cluster_id(cluster_id);
-        ident.set_node_id(meta.get_node().get_node_id());
-        ident.set_store_id(meta.get_store_id());
-
-        save_store_ident(engine.as_ref(), &ident)
     }
 
     pub fn run(&mut self) -> Result<()> {
@@ -150,10 +140,6 @@ fn load_store_ident<T: Retriever>(r: &T) -> Result<Option<StoreIdent>> {
     let ident = try!(r.get_msg::<StoreIdent>(&keys::store_ident_key()));
 
     Ok(ident)
-}
-
-fn save_store_ident<T: Mutator>(w: &T, ident: &StoreIdent) -> Result<()> {
-    w.put_msg(&keys::store_ident_key(), ident)
 }
 
 fn register_timer(event_loop: &mut EventLoop<Store>, msg: Msg, delay: u64) -> Result<mio::Timeout> {
