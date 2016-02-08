@@ -1,14 +1,12 @@
 #![allow(unused_variables)]
 #![allow(unused_must_use)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::option::Option;
 use std::collections::{HashMap, HashSet};
 
 use rocksdb::DB;
 use mio::{self, EventLoop};
-use bytes::{Buf, ByteBuf};
-use protobuf;
 
 use proto::metapb;
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
@@ -109,8 +107,8 @@ impl Store {
         self.register_raft_base_tick(event_loop);
     }
 
-    fn handle_raft_message(&mut self, msg_data: ByteBuf) -> Result<()> {
-        let msg: RaftMessage = try!(protobuf::parse_from_bytes(msg_data.bytes()));
+    fn handle_raft_message(&mut self, msg: Mutex<RaftMessage>) -> Result<()> {
+        let msg = msg.lock().unwrap();
 
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
