@@ -20,7 +20,7 @@ pub struct Peer {
 }
 
 impl Peer {
-    // If we create the peer actively, like bootstrapp/split/merge region, we should
+    // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
     pub fn create(store: &mut Store, region: metapb::Region) -> Result<Peer> {
