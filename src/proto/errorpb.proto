@@ -1,0 +1,19 @@
+syntax = "proto2";
+package errorpb;
+
+import "metapb.proto";
+
+message NotLeaderError {
+    optional metapb.Peer peer   = 1;
+    optional metapb.Peer leader = 2;
+    optional uint64 region_id   = 3;
+}
+
+message ErrorDetail {
+    optional NotLeaderError not_leader = 1;
+}
+
+message Error {
+    optional string message            = 1;
+    optional ErrorDetail detail        = 2;
+}
