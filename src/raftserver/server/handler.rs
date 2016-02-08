@@ -5,7 +5,8 @@ use std::vec::Vec;
 
 use mio::Token;
 
-use raftserver::{Result, ConnData, Sender, TimerMsg};
+use raftserver::Result;
+use super::{ConnData, Sender, TimerMsg};
 
 // ServerHandler is for server logic, we must implement it for our raft server.
 // We use a event loop to handle all events, when an event is triggered,
