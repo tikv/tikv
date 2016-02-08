@@ -4,6 +4,7 @@ pub mod msg;
 pub mod config;
 pub mod bootstrap;
 
+mod cmd_resp;
 mod store;
 mod peer;
 mod peer_storage;

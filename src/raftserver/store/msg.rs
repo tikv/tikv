@@ -46,4 +46,15 @@ impl Sender {
         try!(send_msg(&self.sender, msg));
         Ok(())
     }
+
+    pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
+        self.send(Msg::RaftMessage(Mutex::new(msg)))
+    }
+
+    pub fn send_command(&self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
+        self.send(Msg::RaftCommand {
+            request: Mutex::new(msg),
+            callback: cb,
+        })
+    }
 }

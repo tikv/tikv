@@ -9,12 +9,15 @@ use rocksdb::DB;
 use mio::{self, EventLoop};
 
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
+use proto::raft_cmdpb::RaftCommandRequest;
 use raftserver::{Result, other};
 use super::{Sender, Msg};
 use super::keys;
 use super::engine::Retriever;
 use super::config::Config;
 use super::peer::Peer;
+use super::msg::Callback;
+use super::cmd_resp;
 
 pub struct Store {
     cfg: Config,
@@ -134,6 +137,21 @@ impl Store {
 
         Ok(())
     }
+
+    fn handle_raft_command(&mut self, msg: Mutex<RaftCommandRequest>, cb: Callback) -> Result<()> {
+        let msg = msg.lock().unwrap();
+
+        let region_id = msg.get_header().get_region_id();
+        let mut peer = match self.peers.get_mut(&region_id) {
+            None => return cb.call_box((cmd_resp::region_not_found_error(region_id),)),
+            Some(peer) => peer,
+        };
+
+        let resp = peer.handle_raft_command(&msg)
+                       .unwrap_or_else(|e| cmd_resp::message_error(format!("{:?}", e)));
+
+        cb.call_box((resp,))
+    }
 }
 
 fn load_store_ident<T: Retriever>(r: &T) -> Result<Option<StoreIdent>> {
@@ -157,6 +175,11 @@ impl mio::Handler for Store {
             Msg::RaftMessage(data) => {
                 self.handle_raft_message(data).map_err(|e| {
                     error!("handle raft message err: {:?}", e);
+                });
+            }
+            Msg::RaftCommand{request, callback} => {
+                self.handle_raft_command(request, callback).map_err(|e| {
+                    error!("handle raft command err: {:?}", e);
                 });
             }
             _ => panic!("invalid notify msg type"),

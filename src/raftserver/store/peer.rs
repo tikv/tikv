@@ -4,6 +4,7 @@ use rocksdb::{DB, WriteBatch};
 
 use proto::metapb;
 use proto::raftpb;
+use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 use raft::{self, Ready, RawNode};
 use raftserver::{Result, other};
 use super::store::Store;
@@ -125,6 +126,11 @@ impl Peer {
 
         self.raft_group.advance(ready);
         Ok(())
+    }
+
+    pub fn handle_raft_command(&mut self, msg: &RaftCommandRequest) -> Result<RaftCommandResponse> {
+        // TODO: finish all commands here.
+        Err(other("not implemented now"))
     }
 
     fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<()> {
