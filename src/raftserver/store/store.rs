@@ -1,7 +1,7 @@
 #![allow(unused_variables)]
 #![allow(unused_must_use)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::option::Option;
 use std::collections::{HashMap, HashSet};
 
@@ -16,20 +16,23 @@ use super::keys;
 use super::engine::{Retriever, Mutator};
 use super::config::Config;
 use super::peer::Peer;
+use super::transport::Transport;
 
-pub struct Store {
+pub struct Store<T: Transport> {
     cfg: Config,
     ident: StoreIdent,
     engine: Arc<DB>,
     sender: Sender,
-    event_loop: Option<EventLoop<Store>>,
+    event_loop: Option<EventLoop<Store<T>>>,
 
     peers: HashMap<u64, Peer>,
     pending_raft_groups: HashSet<u64>,
+
+    trans: Arc<RwLock<T>>,
 }
 
-impl Store {
-    pub fn new(engine: Arc<DB>, cfg: Config) -> Result<Store> {
+impl<T: Transport> Store<T> {
+    pub fn new(cfg: Config, engine: Arc<DB>, trans: Arc<RwLock<T>>) -> Result<Store<T>> {
         let ident: StoreIdent = try!(load_store_ident(engine.as_ref()).and_then(|res| {
             match res {
                 None => Err(other("store must be bootstrapped first")),
@@ -48,6 +51,7 @@ impl Store {
             event_loop: Some(event_loop),
             peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
+            trans: trans,
         })
     }
 
@@ -87,7 +91,7 @@ impl Store {
         &self.cfg
     }
 
-    fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Store>) {
+    fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shudown the store?
         let _ = register_timer(event_loop,
@@ -98,7 +102,7 @@ impl Store {
                     });
     }
 
-    fn handle_raft_base_tick(&mut self, event_loop: &mut EventLoop<Store>) {
+    fn handle_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (region_id, peer) in self.peers.iter_mut() {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(*region_id);
@@ -117,6 +121,12 @@ impl Store {
                region_id,
                from_peer.get_peer_id(),
                to_peer.get_peer_id());
+
+        {
+            let mut trans = self.trans.write().unwrap();
+            trans.cache_peer(from_peer.get_peer_id(), from_peer.clone());
+            trans.cache_peer(to_peer.get_peer_id(), to_peer.clone());
+        }
 
         if !self.peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self, region_id, to_peer.get_peer_id()));
@@ -138,7 +148,7 @@ impl Store {
 
         for region_id in ids {
             if let Some(peer) = self.peers.get_mut(&region_id) {
-                try!(peer.handle_raft_ready().map_err(|e| {
+                try!(peer.handle_raft_ready(&self.trans).map_err(|e| {
                     // TODO: should we panic here or shutdown the store?
                     error!("handle raft ready err: {:?}", e);
                     e
@@ -160,17 +170,20 @@ fn save_store_ident<T: Mutator>(w: &T, ident: &StoreIdent) -> Result<()> {
     w.put_msg(&keys::store_ident_key(), ident)
 }
 
-fn register_timer(event_loop: &mut EventLoop<Store>, msg: Msg, delay: u64) -> Result<mio::Timeout> {
+fn register_timer<T: Transport>(event_loop: &mut EventLoop<Store<T>>,
+                                msg: Msg,
+                                delay: u64)
+                                -> Result<mio::Timeout> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
     event_loop.timeout_ms(msg, delay).map_err(|e| other(format!("register timer err: {:?}", e)))
 }
 
-impl mio::Handler for Store {
+impl<T: Transport> mio::Handler for Store<T> {
     type Timeout = Msg;
     type Message = Msg;
 
-    fn notify(&mut self, event_loop: &mut EventLoop<Store>, msg: Msg) {
+    fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::RaftMessage(data) => {
                 self.handle_raft_message(data).unwrap_or_else(|e| {
@@ -181,14 +194,14 @@ impl mio::Handler for Store {
         }
     }
 
-    fn timeout(&mut self, event_loop: &mut EventLoop<Store>, timeout: Msg) {
+    fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Msg) {
         match timeout {
             Msg::RaftBaseTick => self.handle_raft_base_tick(event_loop),
             _ => panic!("invalid timeout msg type"),
         }
     }
 
-    fn tick(&mut self, event_loop: &mut EventLoop<Store>) {
+    fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         // We handle raft ready in event loop.
         self.handle_raft_ready();
     }
