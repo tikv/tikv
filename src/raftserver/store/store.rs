@@ -138,11 +138,7 @@ impl Store {
 
         for region_id in ids {
             if let Some(peer) = self.peers.get_mut(&region_id) {
-                try!(peer.handle_raft_ready().map_err(|e| {
-                    // TODO: should we panic here or shutdown the store?
-                    error!("handle raft ready err: {:?}", e);
-                    e
-                }));
+                try!(peer.handle_raft_ready());
             }
         }
 
@@ -173,9 +169,9 @@ impl mio::Handler for Store {
     fn notify(&mut self, event_loop: &mut EventLoop<Store>, msg: Msg) {
         match msg {
             Msg::RaftMessage(data) => {
-                self.handle_raft_message(data).unwrap_or_else(|e| {
+                self.handle_raft_message(data).map_err(|e| {
                     error!("handle raft message err: {:?}", e);
-                })
+                });
             }
             _ => panic!("invalid notify msg type"),
         }
@@ -190,6 +186,9 @@ impl mio::Handler for Store {
 
     fn tick(&mut self, event_loop: &mut EventLoop<Store>) {
         // We handle raft ready in event loop.
-        self.handle_raft_ready();
+        self.handle_raft_ready().map_err(|e| {
+            // TODO: should we panic here or shutdown the store?
+            error!("handle raft ready err: {:?}", e);
+        });
     }
 }
