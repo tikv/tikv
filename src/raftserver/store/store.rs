@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use rocksdb::DB;
 use mio::{self, EventLoop};
+use uuid::Uuid;
 
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
 use proto::raft_cmdpb::RaftCommandRequest;
@@ -15,7 +16,7 @@ use super::{Sender, Msg};
 use super::keys;
 use super::engine::Retriever;
 use super::config::Config;
-use super::peer::Peer;
+use super::peer::{Peer, PendingCmd};
 use super::msg::Callback;
 use super::cmd_resp;
 
@@ -138,8 +139,8 @@ impl Store {
         Ok(())
     }
 
-    fn handle_raft_command(&mut self, msg: Mutex<RaftCommandRequest>, cb: Callback) -> Result<()> {
-        let msg = msg.lock().unwrap();
+    fn propose_raft_command(&mut self, msg: Mutex<RaftCommandRequest>, cb: Callback) -> Result<()> {
+        let msg = msg.into_inner().unwrap();
 
         let region_id = msg.get_header().get_region_id();
         let mut peer = match self.peers.get_mut(&region_id) {
@@ -147,10 +148,37 @@ impl Store {
             Some(peer) => peer,
         };
 
-        let resp = peer.handle_raft_command(&msg)
-                       .unwrap_or_else(|e| cmd_resp::message_error(format!("{:?}", e)));
+        // TODO: check leader first.
 
-        cb.call_box((resp,))
+        // TODO: support handing read-only commands later.
+        // for read-only, if we don't care stale read, we can
+        // execute these commands immediately in leader.
+
+        let mut pending_cmd = PendingCmd {
+            uuid: Uuid::new_v4(),
+            cb: None,
+            cmd: Some(msg),
+        };
+
+        match peer.propose_pending_cmd(&mut pending_cmd) {
+            Err(e) => {
+                let resp = cmd_resp::message_error(format!("{:?}", e));
+                return cb.call_box((resp,));
+            }
+            Ok(()) => (), // nothing to do.
+        };
+
+        // Keep the callback in pending_cmd so that we can call it later
+        // after command applied.
+        pending_cmd.cb = Some(cb);
+        peer.pending_cmds.insert(pending_cmd.uuid, pending_cmd);
+
+        self.pending_raft_groups.insert(region_id);
+
+        // TODO: add timeout, if the command is not applied after timeout,
+        // we will call the callback with timeout error.
+
+        Ok(())
     }
 }
 
@@ -178,8 +206,8 @@ impl mio::Handler for Store {
                 });
             }
             Msg::RaftCommand{request, callback} => {
-                self.handle_raft_command(request, callback).map_err(|e| {
-                    error!("handle raft command err: {:?}", e);
+                self.propose_raft_command(request, callback).map_err(|e| {
+                    error!("propose raft command err: {:?}", e);
                 });
             }
             _ => panic!("invalid notify msg type"),

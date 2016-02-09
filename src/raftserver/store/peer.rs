@@ -1,15 +1,27 @@
 use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::vec::Vec;
 
 use rocksdb::{DB, WriteBatch};
+use protobuf::{self, Message};
+use uuid::Uuid;
 
 use proto::metapb;
 use proto::raftpb;
-use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse, ChangePeerRequest};
 use raft::{self, Ready, RawNode};
 use raftserver::{Result, other};
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
+use super::msg::Callback;
+
+pub struct PendingCmd {
+    pub uuid: Uuid,
+    pub cb: Option<Callback>,
+    // Sometimes we should re-propose pending command (only ConfChnage).
+    pub cmd: Option<RaftCommandRequest>,
+}
 
 pub struct Peer {
     engine: Arc<DB>,
@@ -18,6 +30,7 @@ pub struct Peer {
     region_id: u64,
     pub raft_group: RawNode<RaftStorage>,
     pub storage: Arc<RwLock<PeerStorage>>,
+    pub pending_cmds: HashMap<Uuid, PendingCmd>,
 }
 
 impl Peer {
@@ -73,6 +86,7 @@ impl Peer {
             region_id: region.get_region_id(),
             storage: storage,
             raft_group: raft_group,
+            pending_cmds: HashMap::new(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -128,9 +142,37 @@ impl Peer {
         Ok(())
     }
 
-    pub fn handle_raft_command(&mut self, msg: &RaftCommandRequest) -> Result<RaftCommandResponse> {
-        // TODO: finish all commands here.
-        Err(other("not implemented now"))
+    pub fn propose_pending_cmd(&mut self, pending_cmd: &mut PendingCmd) -> Result<()> {
+        if pending_cmd.cmd.is_none() {
+            // This may only occur in re-propose.
+            debug!("pending command msg is none for region {} in peer {}",
+                   self.region_id,
+                   self.peer_id);
+            return Ok(());
+        }
+
+        let cmd = pending_cmd.cmd.take().unwrap();
+        let data = try!(encode_raft_command(&pending_cmd.uuid, &cmd));
+
+        let mut reproposable = false;
+        // We handle change_peer command as ConfChange entry, and others as normal entry.
+        if let Some(change_peer) = get_change_peer_command(&cmd) {
+            let mut cc = raftpb::ConfChange::new();
+            cc.set_change_type(change_peer.get_change_type());
+            cc.set_node_id(change_peer.get_peer().get_peer_id());
+            cc.set_context(data);
+
+            try!(self.raft_group.propose_conf_change(cc));
+            reproposable = true;
+        } else {
+            try!(self.raft_group.propose(data));
+        }
+
+        if reproposable {
+            pending_cmd.cmd = Some(cmd);
+        }
+
+        Ok(())
     }
 
     fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<()> {
@@ -171,7 +213,89 @@ impl Peer {
     }
 
     fn handle_raft_commit_entries(&mut self, committed_entries: &[raftpb::Entry]) -> Result<()> {
-        // TODO: implement it later.
+        // If we send multi ConfChange commands, only first one will be proposed correctly,
+        // others will be saved as a normal entry with no data, so we must re-propose these
+        // commands again.
+        let mut need_repropose = false;
+        for entry in committed_entries {
+            let index = entry.get_index();
+            match entry.get_entry_type() {
+                raftpb::EntryType::EntryNormal => {
+                    let data = entry.get_data();
+                    if data.len() == 0 {
+                        need_repropose = true;
+                        continue;
+                    }
+
+                    let (uuid, cmd) = try!(decode_raft_command(data));
+                    // no need to return error here.
+                    let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
+                        error!("process raft command at index {} err: {:?}", index, e);
+                    });
+                }
+                raftpb::EntryType::EntryConfChange => {
+                    let mut conf_change =
+                        try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
+                    let (uuid, cmd) = try!(decode_raft_command(conf_change.get_context()));
+                    let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
+                        error!("process raft command at index {} err: {:?}", index, e);
+                        // If failed, tell raft that the config change was aborted.
+                        conf_change = raftpb::ConfChange::new();
+                    });
+
+                    self.raft_group.apply_conf_change(conf_change);
+                }
+            }
+        }
+
+        if need_repropose {
+            if self.pending_cmds.len() > 0 {
+                info!("re-propose {} pending commands after empty entry",
+                      self.pending_cmds.len());
+                // TODO: handle re-propose later.
+            }
+        }
+
         Ok(())
     }
+
+    fn process_raft_command(&mut self,
+                            index: u64,
+                            uuid: Uuid,
+                            cmd: RaftCommandRequest)
+                            -> Result<()> {
+        Ok(())
+    }
+}
+
+fn encode_raft_command(uuid: &Uuid, cmd: &RaftCommandRequest) -> Result<Vec<u8>> {
+    let mut data = Vec::with_capacity(16 + cmd.compute_size() as usize);
+    data.extend_from_slice(uuid.as_bytes());
+    try!(cmd.write_to_vec(&mut data));
+
+    Ok(data)
+}
+
+fn decode_raft_command(data: &[u8]) -> Result<(Uuid, RaftCommandRequest)> {
+    if data.len() < 16 {
+        return Err(other(format!("invalid encoded raft data len {}", data.len())));
+    }
+
+    let uuid = Uuid::from_bytes(&data[0..16]).unwrap();
+
+    let msg = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(&data[16..]));
+
+    Ok((uuid, msg))
+}
+
+fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_change_peer() {
+        return None;
+    }
+
+    Some(req.get_change_peer())
 }
