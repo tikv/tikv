@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::vec::Vec;
+use std::default::Default;
 
 use rocksdb::{DB, WriteBatch};
 use protobuf::{self, Message};
@@ -15,7 +16,9 @@ use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
 use super::msg::Callback;
+use super::cmd_resp;
 
+#[derive(Default)]
 pub struct PendingCmd {
     pub uuid: Uuid,
     pub cb: Option<Callback>,
@@ -252,7 +255,18 @@ impl Peer {
             if self.pending_cmds.len() > 0 {
                 info!("re-propose {} pending commands after empty entry",
                       self.pending_cmds.len());
-                // TODO: handle re-propose later.
+                let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
+                for (_, cmd) in self.pending_cmds.iter() {
+                    cmds.push(PendingCmd {
+                        uuid: cmd.uuid.clone(),
+                        cmd: cmd.cmd.clone(),
+                        ..Default::default()
+                    });
+                }
+
+                for mut cmd in cmds.iter_mut() {
+                    try!(self.propose_pending_cmd(&mut cmd));
+                }
             }
         }
 
@@ -264,7 +278,87 @@ impl Peer {
                             uuid: Uuid,
                             cmd: RaftCommandRequest)
                             -> Result<()> {
+        if index == 0 {
+            return Err(other("processing raft command needs a none zero index"));
+        }
+
+        let pending_cmd = self.pending_cmds.remove(&uuid);
+
+        let resp = match self.apply_raft_command(index, cmd) {
+            Err(e) => {
+                error!("apply raft command err {:?}", e);
+                cmd_resp::message_error(e)
+            }
+            Ok(resp) => resp,
+        };
+
+        if let Some(mut pending_cmd) = pending_cmd {
+            if pending_cmd.cb.is_none() {
+                warn!("pending command callback for entry {} is None", index);
+            } else {
+                let cb = pending_cmd.cb.take().unwrap();
+                let _ = cb.call_box((resp,)).map_err(|e| {
+                    error!("callback err {:?}", e);
+                });
+            }
+        }
+
         Ok(())
+    }
+
+    fn apply_raft_command(&mut self,
+                          index: u64,
+                          cmd: RaftCommandRequest)
+                          -> Result<RaftCommandResponse> {
+        let last_applied_index;
+        {
+            let storage = self.storage.read().unwrap();
+            last_applied_index = storage.applied_index();
+        }
+
+        if last_applied_index >= index {
+            return Err(other(format!("applied index moved backwards, {} >= {}",
+                                     last_applied_index,
+                                     index)));
+        }
+
+        let wb = WriteBatch::new();
+
+        let mut resp = match self.execute_raft_command(&wb, index, cmd) {
+            Err(e) => {
+                error!("execute raft command err: {:?}", e);
+                cmd_resp::message_error(e)
+            }
+            Ok(resp) => resp,
+        };
+
+        let _ = peer_storage::save_applied_index(&wb, self.region_id, index)
+                    .expect("save applied index must not fail");
+
+        let _ = self.engine
+                    .write(wb)
+                    .map(|()| {
+                        let mut storage = self.storage.write().unwrap();
+                        storage.set_applied_index(index);
+
+                        // TODO: handle truncate log command and set truncate log state
+                        ()
+                    })
+                    .map_err(|e| {
+                        error!("commit batch failed err {:?}", e);
+                        resp = cmd_resp::message_error(e);
+                    });
+
+        Ok(resp)
+    }
+
+    fn execute_raft_command(&mut self,
+                            wb: &WriteBatch,
+                            index: u64,
+                            cmd: RaftCommandRequest)
+                            -> Result<RaftCommandResponse> {
+        // implement later.
+        unreachable!();
     }
 }
 
