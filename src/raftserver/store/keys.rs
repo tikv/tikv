@@ -18,6 +18,8 @@ pub const META1_PREFIX_KEY: &'static [u8] = &[META1_PREFIX];
 pub const META2_PREFIX_KEY: &'static [u8] = &[META2_PREFIX];
 pub const META_MIN_KEY: &'static [u8] = &[META1_PREFIX];
 pub const META_MAX_KEY: &'static [u8] = &[META2_PREFIX + 1];
+pub const META1_MAX_KEY: &'static [u8] = &[META1_PREFIX, MAX_KEY[0]];
+pub const META2_MAX_KEY: &'static [u8] = &[META2_PREFIX, MAX_KEY[0]];
 
 pub const DATA_PREFIX: u8 = b'z';
 pub const DATA_PREFIX_KEY: &'static [u8] = &[DATA_PREFIX];
