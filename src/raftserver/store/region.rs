@@ -20,6 +20,16 @@ use raftserver::{Result, other};
 //  \x00\x03"222" -> region 3
 // If we want to find key "123", using seek we may get `\x00\x03"222"`, but not `\x00\x03"111"`,
 // (Rocksdb seeks the key >= given key), so we must move back to get the correct region.
+//
+// So for a key like "123", the route flow is:
+//  1, find meta2 region using key \x00\0x02"123" in meta1.
+//  2, find data region using key \x00\x03"123" in meta2.
+//  3, find data using key "123".
+// 
+// Client should cache all region route meta so that it can send the commands to the relevant region
+// directly and correctly. If the request key is not in the region, clients should re-flesh the cache 
+// from placement driver first then re-send again.
+
 
 trait RouteMetaAction <T: Mutator>{
     fn handle(&self, w: &T, key: &[u8], region: &metapb::Region) -> Result<()>;
