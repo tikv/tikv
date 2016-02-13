@@ -25,20 +25,24 @@ pub const DATA_PREFIX: u8 = b'z';
 pub const DATA_PREFIX_KEY: &'static [u8] = &[DATA_PREFIX];
 
 // Following keys are all local keys, so the first byte must be 0x01.
-const STORE_IDENT_KEY: &'static [u8] = &[0x01, 0x01];
-const REGION_ID_PREFIX_KEY: &'static [u8] = &[0x01, 0x02];
-const REGION_META_PREFIX_KEY: &'static [u8] = &[0x01, 0x03];
+pub const STORE_IDENT_KEY: &'static [u8] = &[LOCAL_PREFIX, 0x01];
+pub const REGION_ID_PREFIX: u8 = 0x02;
+pub const REGION_ID_PREFIX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_ID_PREFIX];
+pub const REGION_META_PREFIX: u8 = 0x03;
+pub const REGION_META_PREFIX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
+pub const REGION_META_MIN_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
+pub const REGION_META_MAX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX + 1];
 
 // Following are the suffix after the local prefix.
 // For region id
-const RAFT_LOG_SUFFIX: u8 = 0x01;
-const RAFT_HARD_STATE_SUFFIX: u8 = 0x02;
-const RAFT_APPLIED_INDEX_SUFFIX: u8 = 0x03;
-const RAFT_LAST_INDEX_SUFFIX: u8 = 0x04;
-const RAFT_TRUNCATED_STATE_SUFFIX: u8 = 0x05;
+pub const RAFT_LOG_SUFFIX: u8 = 0x01;
+pub const RAFT_HARD_STATE_SUFFIX: u8 = 0x02;
+pub const RAFT_APPLIED_INDEX_SUFFIX: u8 = 0x03;
+pub const RAFT_LAST_INDEX_SUFFIX: u8 = 0x04;
+pub const RAFT_TRUNCATED_STATE_SUFFIX: u8 = 0x05;
 
 // For region meta
-const REGION_INFO_SUFFIX: u8 = 0x01;
+pub const REGION_INFO_SUFFIX: u8 = 0x01;
 
 pub fn store_ident_key() -> Vec<u8> {
     STORE_IDENT_KEY.to_vec()
@@ -94,6 +98,21 @@ fn make_region_meta_key(region_key: &[u8], suffix: u8) -> Vec<u8> {
     key.extend(bytes::encode_bytes(region_key));
     key.push(suffix);
     key
+}
+
+// Decode encoded region meta key, return the region key and meta suffix type.
+pub fn decode_region_meta_key(key: &[u8]) -> Result<(Vec<u8>, u8)> {
+    if !key.starts_with(REGION_META_PREFIX_KEY) {
+        return Err(other(format!("invalid region meta prefix for key {:?}", key)));
+    }
+
+    let (region_key, cnt) = try!(bytes::decode_bytes(&key[REGION_META_PREFIX_KEY.len()..]));
+    // The last character must be the suffix type, 1 byte.
+    if REGION_META_PREFIX_KEY.len() + cnt + 1 != key.len() {
+        return Err(other(format!("invalid region meta suffix for key {:?}", key)));
+    }
+
+    Ok((region_key, key[key.len() - 1]))
 }
 
 pub fn region_meta_prefix(region_key: &[u8]) -> Vec<u8> {

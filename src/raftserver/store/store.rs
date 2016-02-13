@@ -7,9 +7,11 @@ use std::collections::{HashMap, HashSet};
 
 use rocksdb::DB;
 use mio::{self, EventLoop};
+use protobuf;
 
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
 use raftserver::{Result, other};
+use proto::metapb;
 use super::{Sender, Msg};
 use super::keys;
 use super::engine::Retriever;
@@ -50,7 +52,33 @@ impl Store {
         })
     }
 
+    // Do something before store runs.
+    fn prepare(&mut self) -> Result<()> {
+        // Scan region meta to get saved regions.
+        let start_key = keys::REGION_META_MIN_KEY;
+        let end_key = keys::REGION_META_MAX_KEY;
+        let engine = self.engine.clone();
+        try!(engine.scan(start_key,
+                         end_key,
+                         &mut |key, value| -> Result<bool> {
+                             let (_, suffix) = try!(keys::decode_region_meta_key(key));
+                             if suffix != keys::REGION_INFO_SUFFIX {
+                                 return Ok(true);
+                             }
+
+                             let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
+                             let peer = try!(Peer::create(self, region));
+                             // TODO: check duplicated peer id later?
+                             self.peers.insert(peer.get_peer_id(), peer);
+                             Ok(true)
+                         }));
+
+        Ok(())
+    }
+
     pub fn run(&mut self) -> Result<()> {
+        try!(self.prepare());
+
         let mut event_loop = self.event_loop.take().unwrap();
         self.register_raft_base_tick(&mut event_loop);
         try!(event_loop.run(self));
