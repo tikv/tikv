@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use rocksdb::{DB, WriteBatch};
+use rocksdb::{DB, WriteBatch, Writable};
 
 use proto::metapb;
 use proto::raftpb;
@@ -80,6 +80,22 @@ impl Peer {
         }
 
         Ok(peer)
+    }
+
+
+    pub fn destroy(&mut self) -> Result<()> {
+        // Delete all data in this peer.
+        let mut store = self.storage.write().unwrap();
+        let batch = WriteBatch::new();
+        try!(store.scan_region(self.engine.as_ref(),
+                               &mut |key, _| -> Result<bool> {
+                                   try!(batch.delete(key));
+                                   Ok(true)
+                               }));
+
+        try!(self.engine.write(batch));
+
+        Ok(())
     }
 
     pub fn update_region(&mut self, region: &metapb::Region) -> Result<()> {
