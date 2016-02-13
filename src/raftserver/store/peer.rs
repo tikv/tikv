@@ -99,6 +99,10 @@ impl Peer {
         store.get_region().clone()
     }
 
+    pub fn get_peer_id(&self) -> u64 {
+        self.peer_id
+    }
+
     pub fn get_raft_status(&self) -> raft::Status {
         self.raft_group.status()
     }
