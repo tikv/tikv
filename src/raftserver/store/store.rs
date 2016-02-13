@@ -79,7 +79,7 @@ impl Store {
 
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Store>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
-        // TODO: shudown the store?
+        // TODO: shutdown the store?
         let _ = register_timer(event_loop,
                                Msg::RaftBaseTick,
                                self.cfg.raft_base_tick_interval)
@@ -159,14 +159,14 @@ impl mio::Handler for Store {
                     error!("handle raft message err: {:?}", e);
                 });
             }
-            _ => panic!("invalid notify msg type"),
+            _ => panic!("invalid notify msg type {:?}", msg),
         }
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Store>, timeout: Msg) {
         match timeout {
             Msg::RaftBaseTick => self.handle_raft_base_tick(event_loop),
-            _ => panic!("invalid timeout msg type"),
+            _ => panic!("invalid timeout msg type {:?}", timeout),
         }
     }
 
