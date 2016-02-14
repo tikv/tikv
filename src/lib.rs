@@ -17,6 +17,7 @@ extern crate mio;
 extern crate rand;
 extern crate tempdir;
 extern crate rocksdb;
+extern crate uuid;
 
 #[cfg(test)]
 extern crate env_logger;
