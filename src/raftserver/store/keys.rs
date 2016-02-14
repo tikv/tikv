@@ -109,9 +109,9 @@ pub fn region_info_key(region_key: &[u8]) -> Vec<u8> {
 
 // Returns a region route meta (meta1, meta2) indexing key for the
 // given key.
-// For data key, it returns a meta2 key, e.g, \x02\"zabc" -> ""
+// For data key, it returns a meta2 key, e.g, "zabc" -> \0x03"zabc"
 // For meta2 key, it returns a meta1 key, e.g, \0x03\"zabc" -> \0x02"zabc"
-// For meta1 key, it returns a MIN_KEY, e.g, "zabc" -> \0x03"zabc"
+// For meta1 key, it returns a MIN_KEY, e.g, \x02\"zabc" -> ""
 pub fn region_route_meta_key(key: &[u8]) -> Vec<u8> {
     if key.len() == 0 {
         return MIN_KEY.to_vec();
