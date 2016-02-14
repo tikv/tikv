@@ -109,9 +109,9 @@ pub fn region_info_key(region_key: &[u8]) -> Vec<u8> {
 
 // Returns a region route meta (meta1, meta2) indexing key for the
 // given key.
-// For data key, it returns a meta2 key.
-// For meta2 key, it returns a meta1 key.
-// For meta1 key, it returns a MIN_KEY.
+// For data key, it returns a meta2 key, e.g, \x02\"zabc" -> ""
+// For meta2 key, it returns a meta1 key, e.g, \0x03\"zabc" -> \0x02"zabc"
+// For meta1 key, it returns a MIN_KEY, e.g, "zabc" -> \0x03"zabc"
 pub fn region_route_meta_key(key: &[u8]) -> Vec<u8> {
     if key.len() == 0 {
         return MIN_KEY.to_vec();
@@ -120,7 +120,7 @@ pub fn region_route_meta_key(key: &[u8]) -> Vec<u8> {
     match key[0] {
         META1_PREFIX => MIN_KEY.to_vec(),
         META2_PREFIX => vec![META1_PREFIX_KEY, &key[1..]].concat(),
-        _ => vec![META2_PREFIX_KEY, &key[1..]].concat(),
+        _ => vec![META2_PREFIX_KEY, key].concat(),
     }
 }
 
@@ -138,6 +138,7 @@ pub fn validate_region_route_meta_key(key: &[u8]) -> Result<()> {
         return Err(other(format!("{:?} is not a meta key", key)));
     }
 
+    // TODO: check data prefix later?
     if MAX_KEY < &key[META1_PREFIX_KEY.len()..] {
         return Err(other(format!("{:?} is > {:?}", key, MAX_KEY)));
     }
