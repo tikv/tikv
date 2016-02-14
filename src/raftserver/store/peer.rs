@@ -69,6 +69,10 @@ impl Peer {
                          region: metapb::Region,
                          peer_id: u64)
                          -> Result<Peer> {
+        if peer_id == raft::INVALID_ID {
+            return Err(other("invalid peer id"));
+        }
+
         let store_id = store.get_store_id();
 
         let s = try!(PeerStorage::new(store.get_engine(), &region));
