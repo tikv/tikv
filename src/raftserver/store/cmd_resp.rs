@@ -6,10 +6,7 @@ use proto::errorpb::ErrorDetail;
 
 pub fn region_not_found_error(region_id: u64) -> RaftCommandResponse {
     let mut detail = ErrorDetail::new();
-    {
-        let mut msg = detail.mut_region_not_found();
-        msg.set_region_id(region_id);
-    }
+    detail.mut_region_not_found().set_region_id(region_id);
     detail_error("region is not found", detail)
 }
 
