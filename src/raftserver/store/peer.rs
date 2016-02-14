@@ -299,55 +299,77 @@ impl Peer {
         // commands again.
         let mut need_repropose = false;
         for entry in committed_entries {
-            let index = entry.get_index();
             match entry.get_entry_type() {
                 raftpb::EntryType::EntryNormal => {
-                    let data = entry.get_data();
-                    if data.len() == 0 {
-                        need_repropose = true;
-                        continue;
-                    }
-
-                    let (uuid, cmd) = try!(decode_raft_command(data));
-                    // no need to return error here.
-                    let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
-                        error!("process raft command at index {} err: {:?}", index, e);
-                    });
+                    try!(self.handle_raft_entry_normal(entry, &mut need_repropose));
                 }
                 raftpb::EntryType::EntryConfChange => {
-                    let mut conf_change =
-                        try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
-                    let (uuid, cmd) = try!(decode_raft_command(conf_change.get_context()));
-                    let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
-                        error!("process raft command at index {} err: {:?}", index, e);
-                        // If failed, tell raft that the config change was aborted.
-                        conf_change = raftpb::ConfChange::new();
-                    });
-
-                    self.raft_group.apply_conf_change(conf_change);
+                    try!(self.handle_raft_entry_conf_change(entry));
                 }
             }
         }
 
         if need_repropose {
-            if self.pending_cmds.len() > 0 {
-                info!("re-propose {} pending commands after empty entry",
-                      self.pending_cmds.len());
-                let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
-                for (_, cmd) in self.pending_cmds.iter() {
-                    cmds.push(PendingCmd {
-                        uuid: cmd.uuid.clone(),
-                        cmd: cmd.cmd.clone(),
-                        ..Default::default()
-                    });
-                }
-
-                for mut cmd in cmds.iter_mut() {
-                    try!(self.propose_pending_cmd(&mut cmd));
-                }
-            }
+            try!(self.repropose_pending_cmds());
         }
 
+        Ok(())
+    }
+
+    fn handle_raft_entry_normal(&mut self,
+                                entry: &raftpb::Entry,
+                                repropose: &mut bool)
+                                -> Result<()> {
+        let index = entry.get_index();
+        let data = entry.get_data();
+        if data.len() == 0 {
+            *repropose = true;
+            return Ok(());
+        }
+
+        let (uuid, cmd) = try!(decode_raft_command(data));
+        // no need to return error here.
+        if let Err(e) = self.process_raft_command(index, uuid, cmd) {
+            error!("process raft command at index {} err: {:?}", index, e);
+        }
+
+        Ok(())
+    }
+
+    fn handle_raft_entry_conf_change(&mut self, entry: &raftpb::Entry) -> Result<()> {
+        let index = entry.get_index();
+        let mut conf_change =
+            try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
+
+        let (uuid, cmd) = try!(decode_raft_command(conf_change.get_context()));
+        if let Err(e) = self.process_raft_command(index, uuid, cmd) {
+            error!("process raft command at index {} err: {:?}", index, e);
+            // If failed, tell raft that the config change was aborted.
+            conf_change = raftpb::ConfChange::new();
+        }
+
+        self.raft_group.apply_conf_change(conf_change);
+        Ok(())
+    }
+
+    fn repropose_pending_cmds(&mut self) -> Result<()> {
+        if self.pending_cmds.len() > 0 {
+            info!("re-propose {} pending commands after empty entry",
+                  self.pending_cmds.len());
+            let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
+            for (_, cmd) in self.pending_cmds.iter() {
+                // We only need uuid and cmd for later re-propose.
+                cmds.push(PendingCmd {
+                    uuid: cmd.uuid.clone(),
+                    cmd: cmd.cmd.clone(),
+                    ..Default::default()
+                });
+            }
+
+            for mut cmd in cmds.iter_mut() {
+                try!(self.propose_pending_cmd(&mut cmd));
+            }
+        }
         Ok(())
     }
 
@@ -375,9 +397,9 @@ impl Peer {
                 warn!("pending command callback for entry {} is None", index);
             } else {
                 let cb = pending_cmd.cb.take().unwrap();
-                let _ = cb.call_box((resp,)).map_err(|e| {
+                if let Err(e) = cb.call_box((resp,)) {
                     error!("callback err {:?}", e);
-                });
+                }
             }
         }
 
@@ -388,11 +410,7 @@ impl Peer {
                           index: u64,
                           cmd: RaftCommandRequest)
                           -> Result<RaftCommandResponse> {
-        let last_applied_index;
-        {
-            let storage = self.storage.read().unwrap();
-            last_applied_index = storage.applied_index();
-        }
+        let last_applied_index = self.storage.read().unwrap().applied_index();
 
         if last_applied_index >= index {
             return Err(other(format!("applied index moved backwards, {} >= {}",
@@ -402,30 +420,28 @@ impl Peer {
 
         let wb = WriteBatch::new();
 
-        let mut resp = match self.execute_raft_command(&wb, index, cmd) {
-            Err(e) => {
-                error!("execute raft command err: {:?}", e);
-                cmd_resp::message_error(e)
+        let mut resp = self.execute_raft_command(&wb, index, cmd).unwrap_or_else(|e| {
+            error!("execute raft command err: {:?}", e);
+            cmd_resp::message_error(e)
+        });
+
+        peer_storage::save_applied_index(&wb, self.region_id, index)
+            .expect("save applied index must not fail");
+
+        match self.engine
+                  .write(wb) {
+            Ok(()) => {
+                let mut storage = self.storage.write().unwrap();
+                storage.set_applied_index(index);
+
+                // TODO: handle truncate log command and set truncate log state
+                ()
             }
-            Ok(resp) => resp,
+            Err(e) => {
+                error!("commit batch failed err {:?}", e);
+                resp = cmd_resp::message_error(e);
+            }
         };
-
-        let _ = peer_storage::save_applied_index(&wb, self.region_id, index)
-                    .expect("save applied index must not fail");
-
-        let _ = self.engine
-                    .write(wb)
-                    .map(|()| {
-                        let mut storage = self.storage.write().unwrap();
-                        storage.set_applied_index(index);
-
-                        // TODO: handle truncate log command and set truncate log state
-                        ()
-                    })
-                    .map_err(|e| {
-                        error!("commit batch failed err {:?}", e);
-                        resp = cmd_resp::message_error(e);
-                    });
 
         Ok(resp)
     }
