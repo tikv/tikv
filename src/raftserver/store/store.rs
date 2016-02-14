@@ -8,12 +8,11 @@ use std::collections::{HashMap, HashSet};
 use rocksdb::DB;
 use mio::{self, EventLoop};
 
-use proto::metapb;
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
 use raftserver::{Result, other};
 use super::{Sender, Msg};
 use super::keys;
-use super::engine::{Retriever, Mutator};
+use super::engine::Retriever;
 use super::config::Config;
 use super::peer::Peer;
 use super::transport::Transport;
@@ -55,15 +54,6 @@ impl<T: Transport> Store<T> {
         })
     }
 
-    pub fn bootstrap(engine: Arc<DB>, cluster_id: u64, meta: metapb::Store) -> Result<()> {
-        let mut ident = StoreIdent::new();
-        ident.set_cluster_id(cluster_id);
-        ident.set_node_id(meta.get_node().get_node_id());
-        ident.set_store_id(meta.get_store_id());
-
-        save_store_ident(engine.as_ref(), &ident)
-    }
-
     pub fn run(&mut self) -> Result<()> {
         let mut event_loop = self.event_loop.take().unwrap();
         self.register_raft_base_tick(&mut event_loop);
@@ -93,7 +83,7 @@ impl<T: Transport> Store<T> {
 
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
-        // TODO: shudown the store?
+        // TODO: shutdown the store?
         let _ = register_timer(event_loop,
                                Msg::RaftBaseTick,
                                self.cfg.raft_base_tick_interval)
@@ -166,10 +156,6 @@ fn load_store_ident<T: Retriever>(r: &T) -> Result<Option<StoreIdent>> {
     Ok(ident)
 }
 
-fn save_store_ident<T: Mutator>(w: &T, ident: &StoreIdent) -> Result<()> {
-    w.put_msg(&keys::store_ident_key(), ident)
-}
-
 fn register_timer<T: Transport>(event_loop: &mut EventLoop<Store<T>>,
                                 msg: Msg,
                                 delay: u64)
@@ -186,23 +172,26 @@ impl<T: Transport> mio::Handler for Store<T> {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::RaftMessage(data) => {
-                self.handle_raft_message(data).unwrap_or_else(|e| {
+                self.handle_raft_message(data).map_err(|e| {
                     error!("handle raft message err: {:?}", e);
-                })
+                });
             }
-            _ => panic!("invalid notify msg type"),
+            _ => panic!("invalid notify msg type {:?}", msg),
         }
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Msg) {
         match timeout {
             Msg::RaftBaseTick => self.handle_raft_base_tick(event_loop),
-            _ => panic!("invalid timeout msg type"),
+            _ => panic!("invalid timeout msg type {:?}", timeout),
         }
     }
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         // We handle raft ready in event loop.
-        self.handle_raft_ready();
+        self.handle_raft_ready().map_err(|e| {
+            // TODO: should we panic here or shutdown the store?
+            error!("handle raft ready err: {:?}", e);
+        });
     }
 }
