@@ -58,27 +58,21 @@ enum CommandType {
     InvalidCmd  = 0;
     Get         = 1;
     Seek        = 2;
-    Put         = 3;
-    Delete      = 4;
-    Write       = 5;
+    Write       = 3;
 }
 
 message RequestUnion {
     optional CommandType cmd_type      = 1;
     optional GetRequest get            = 2;
     optional SeekRequest seek          = 3;
-    optional PutRequest put            = 4;
-    optional DeleteRequest delete      = 5;
-    optional WriteRequest write        = 6;
+    optional WriteRequest write        = 4;
 }
 
 message ResponseUnion {
     optional CommandType cmd_type      = 1;
     optional GetResponse get           = 2;
     optional SeekResponse seek         = 3;
-    optional PutResponse put           = 4;
-    optional DeleteResponse delete     = 5;
-    optional WriteResponse write       = 6;
+    optional WriteResponse write       = 4;
 }
 
 message ChangePeerRequest {
