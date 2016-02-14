@@ -456,7 +456,7 @@ impl PeerStorage {
         // So we should skip this.
         let mut data_start_key = self.region.get_start_key();
         if data_start_key == keys::MIN_KEY {
-            data_start_key = keys::LOCAL_MAX;
+            data_start_key = keys::LOCAL_MAX_KEY;
         }
 
         vec![(keys::region_id_prefix(self.get_region_id()),
