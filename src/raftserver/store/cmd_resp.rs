@@ -2,7 +2,7 @@ use std::boxed::Box;
 use std::error;
 
 use proto::raft_cmdpb::RaftCommandResponse;
-use proto::errorpb::ErrorDetail;
+use proto::errorpb::{self, ErrorDetail};
 
 pub fn region_not_found_error(region_id: u64) -> RaftCommandResponse {
     let mut detail = ErrorDetail::new();
@@ -26,13 +26,12 @@ fn new_error(err: Box<error::Error + Send + Sync>,
              detail: Option<ErrorDetail>)
              -> RaftCommandResponse {
     let mut msg = RaftCommandResponse::new();
-    {
-        let mut error_header = msg.mut_header().mut_error();
-        error_header.set_message(format!("{:?}", err));
-        if let Some(detail) = detail {
-            error_header.set_detail(detail)
-        }
+    let mut error_header = errorpb::Error::new();
+    error_header.set_message(format!("{:?}", err));
+    if let Some(detail) = detail {
+        error_header.set_detail(detail)
     }
+    msg.mut_header().set_error(error_header);
 
     msg
 }
