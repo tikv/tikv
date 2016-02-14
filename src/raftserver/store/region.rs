@@ -25,9 +25,9 @@ use raftserver::{Result, other};
 //  1, find meta2 region using key \x00\0x02"123" in meta1.
 //  2, find data region using key \x00\x03"123" in meta2.
 //  3, find data using key "123".
-// 
+//
 // Client should cache all region route meta so that it can send the commands to the relevant region
-// directly and correctly. If the request key is not in the region, clients should re-flesh the cache 
+// directly and correctly. If the request key is not in the region, clients should re-flesh the cache
 // from placement driver first then re-send again.
 
 
@@ -63,12 +63,24 @@ fn del_route_meta<T: Mutator>(w: &T, key: &[u8], _: &metapb::Region) -> Result<(
     Ok(())
 }
 
+// We will split a region into two parts, left + right.
 pub fn split_region_route<T: Mutator>(w: &T,
                                       left: &metapb::Region,
                                       right: &metapb::Region)
                                       -> Result<()> {
     try!(handle_region_route(w, left, PutRouteMetaAction));
     try!(handle_region_route(w, right, PutRouteMetaAction));
+    Ok(())
+}
+
+// We merge two regions into one region, left + right -> merged,
+// we will handle right region outer.
+pub fn merge_region_route<T: Mutator>(w: &T,
+                                      left: &metapb::Region,
+                                      merged: &metapb::Region)
+                                      -> Result<()> {
+    try!(handle_region_route(w, left, DeleteRouteMetaAction));
+    try!(handle_region_route(w, merged, PutRouteMetaAction));
     Ok(())
 }
 
@@ -84,6 +96,10 @@ fn handle_region_route<T: Mutator, F: RouteMetaAction<T>>(w: &T,
     let start_key = region.get_start_key();
     let end_key = region.get_end_key();
 
+    if end_key == keys::MIN_KEY {
+        return Err(other("invalid end key"));
+    }
+
     // We can't split meta1.
     if end_key.starts_with(keys::META1_PREFIX_KEY) ||
        start_key.starts_with(keys::META1_PREFIX_KEY) {
@@ -95,7 +111,8 @@ fn handle_region_route<T: Mutator, F: RouteMetaAction<T>>(w: &T,
         try!(action.handle(w, &keys::region_route_meta_key(end_key), region));
     } else {
         // The regions ends with a normal data key, updates relevant meta2.
-        try!(action.handle(w, &vec![keys::META2_PREFIX_KEY, end_key].concat(), region));
+        // TODO: check data prefix later?
+        try!(action.handle(w, &keys::region_route_meta_key(end_key), region));
 
         // The regions start_key starts with MIN_KEY or meta2 prefix, updates meta1 KEY_MAX.
         if start_key == keys::MIN_KEY || start_key.starts_with(keys::META2_PREFIX_KEY) {

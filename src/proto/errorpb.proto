@@ -9,8 +9,13 @@ message NotLeaderError {
     optional uint64 region_id   = 3;
 }
 
+message RegionNotFoundError {
+    optional uint64 region_id = 1;
+}
+
 message ErrorDetail {
-    optional NotLeaderError not_leader = 1;
+    optional NotLeaderError not_leader              = 1;
+    optional RegionNotFoundError region_not_found   = 2;
 }
 
 message Error {
