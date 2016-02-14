@@ -315,9 +315,9 @@ impl Peer {
 
         let (uuid, cmd) = try!(decode_raft_command(data));
         // no need to return error here.
-        let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
+        if let Err(e) = self.process_raft_command(index, uuid, cmd) {
             error!("process raft command at index {} err: {:?}", index, e);
-        });
+        }
 
         Ok(())
     }
@@ -326,13 +326,13 @@ impl Peer {
         let index = entry.get_index();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
-            
+
         let (uuid, cmd) = try!(decode_raft_command(conf_change.get_context()));
-        let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
+        if let Err(e) = self.process_raft_command(index, uuid, cmd) {
             error!("process raft command at index {} err: {:?}", index, e);
             // If failed, tell raft that the config change was aborted.
             conf_change = raftpb::ConfChange::new();
-        });
+        }
 
         self.raft_group.apply_conf_change(conf_change);
         Ok(())
@@ -383,9 +383,9 @@ impl Peer {
                 warn!("pending command callback for entry {} is None", index);
             } else {
                 let cb = pending_cmd.cb.take().unwrap();
-                let _ = cb.call_box((resp,)).map_err(|e| {
+                if let Err(e) = cb.call_box((resp,)) {
                     error!("callback err {:?}", e);
-                });
+                }
             }
         }
 
@@ -396,11 +396,7 @@ impl Peer {
                           index: u64,
                           cmd: RaftCommandRequest)
                           -> Result<RaftCommandResponse> {
-        let last_applied_index;
-        {
-            let storage = self.storage.read().unwrap();
-            last_applied_index = storage.applied_index();
-        }
+        let last_applied_index = self.storage.read().unwrap().applied_index();
 
         if last_applied_index >= index {
             return Err(other(format!("applied index moved backwards, {} >= {}",
@@ -410,30 +406,28 @@ impl Peer {
 
         let wb = WriteBatch::new();
 
-        let mut resp = match self.execute_raft_command(&wb, index, cmd) {
-            Err(e) => {
-                error!("execute raft command err: {:?}", e);
-                cmd_resp::message_error(e)
+        let mut resp = self.execute_raft_command(&wb, index, cmd).unwrap_or_else(|e| {
+            error!("execute raft command err: {:?}", e);
+            cmd_resp::message_error(e)
+        });
+
+        peer_storage::save_applied_index(&wb, self.region_id, index)
+            .expect("save applied index must not fail");
+
+        match self.engine
+                  .write(wb) {
+            Ok(()) => {
+                let mut storage = self.storage.write().unwrap();
+                storage.set_applied_index(index);
+
+                // TODO: handle truncate log command and set truncate log state
+                ()
             }
-            Ok(resp) => resp,
+            Err(e) => {
+                error!("commit batch failed err {:?}", e);
+                resp = cmd_resp::message_error(e);
+            }
         };
-
-        let _ = peer_storage::save_applied_index(&wb, self.region_id, index)
-                    .expect("save applied index must not fail");
-
-        let _ = self.engine
-                    .write(wb)
-                    .map(|()| {
-                        let mut storage = self.storage.write().unwrap();
-                        storage.set_applied_index(index);
-
-                        // TODO: handle truncate log command and set truncate log state
-                        ()
-                    })
-                    .map_err(|e| {
-                        error!("commit batch failed err {:?}", e);
-                        resp = cmd_resp::message_error(e);
-                    });
 
         Ok(resp)
     }
