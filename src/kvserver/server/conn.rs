@@ -1,3 +1,4 @@
+use std::io;
 use std::io::Write;
 
 use mio::{Token, EventLoop, EventSet};
@@ -39,7 +40,11 @@ impl Conn {
             let msg_id = match decode_msg(&mut self.sock, &mut m) {
                 Err(e) => {
                     match e {
-                        Error::Io(_) => {
+                        Error::Io(io_err) => {
+                            match io_err.kind() {
+                                io::ErrorKind::UnexpectedEof => {}
+                                _ => error!("other io error {:?}", io_err),
+                            }
                             // Read to eof, just break
                         }
                         _ => error!("read error {:?}", e),
