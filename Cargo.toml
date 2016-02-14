@@ -22,6 +22,7 @@ rand = "0.3"
 mio = "0.5"
 quick-error = "0.2"
 tempdir = "0.3"
+getopts = "0.2"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"

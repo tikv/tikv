@@ -86,9 +86,6 @@ impl<T: Sync> Deref for SyncCell<T> {
 
 unsafe impl<T: Sync> Sync for SyncCell<T> {}
 
-pub fn array_to_vec(arr: &[u8]) -> Vec<u8> {
-    arr.iter().cloned().collect()
-}
 pub struct DefaultRng {
     rng: ThreadRng,
 }

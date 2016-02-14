@@ -1,4 +1,3 @@
-#![allow(unused_must_use)]
 use std::io::Write;
 
 use mio::{Token, EventLoop, EventSet};
@@ -40,7 +39,7 @@ impl Conn {
 
         let sender = event_loop.channel();
         let queue_msg: QueueMessage = QueueMessage::Request(token, msg_id, m);
-        sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+        let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         self.interest.remove(EventSet::readable());
     }
 }
