@@ -316,24 +316,30 @@ impl Peer {
         }
 
         if need_repropose {
-            if self.pending_cmds.len() > 0 {
-                info!("re-propose {} pending commands after empty entry",
-                      self.pending_cmds.len());
-                let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
-                for (_, cmd) in self.pending_cmds.iter() {
-                    cmds.push(PendingCmd {
-                        uuid: cmd.uuid.clone(),
-                        cmd: cmd.cmd.clone(),
-                        ..Default::default()
-                    });
-                }
-
-                for mut cmd in cmds.iter_mut() {
-                    try!(self.propose_pending_cmd(&mut cmd));
-                }
-            }
+            try!(self.repropose_pending_cmds());
         }
 
+        Ok(())
+    }
+
+    fn repropose_pending_cmds(&mut self) -> Result<()> {
+        if self.pending_cmds.len() > 0 {
+            info!("re-propose {} pending commands after empty entry",
+                  self.pending_cmds.len());
+            let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
+            for (_, cmd) in self.pending_cmds.iter() {
+                // We only need uuid and cmd for later re-propose. 
+                cmds.push(PendingCmd {
+                    uuid: cmd.uuid.clone(),
+                    cmd: cmd.cmd.clone(),
+                    ..Default::default()
+                });
+            }
+
+            for mut cmd in cmds.iter_mut() {
+                try!(self.propose_pending_cmd(&mut cmd));
+            }
+        }
         Ok(())
     }
 
