@@ -89,7 +89,8 @@ pub fn raft_truncated_state_key(region_id: u64) -> Vec<u8> {
 }
 
 fn make_region_meta_key(region_key: &[u8], suffix: u8) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_META_PREFIX_KEY.len() + 1 + (region_key.len() / 8) * 9);
+    let mut key = Vec::with_capacity(REGION_META_PREFIX_KEY.len() + 1 +
+                                     bytes::max_encoded_bytes_size(region_key.len()));
     key.extend_from_slice(REGION_META_PREFIX_KEY);
     key.extend(bytes::encode_bytes(region_key));
     key.push(suffix);
@@ -97,7 +98,8 @@ fn make_region_meta_key(region_key: &[u8], suffix: u8) -> Vec<u8> {
 }
 
 pub fn region_meta_prefix(region_key: &[u8]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_META_PREFIX_KEY.len() + (region_key.len() / 8) * 9);
+    let mut key = Vec::with_capacity(REGION_META_PREFIX_KEY.len() +
+                                     bytes::max_encoded_bytes_size(region_key.len()));
     key.extend_from_slice(REGION_META_PREFIX_KEY);
     key.extend(bytes::encode_bytes(region_key));
     key
