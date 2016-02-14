@@ -88,8 +88,8 @@ message SplitRequest {
 }
 
 message SplitResponse {
-    optional metapb.Region first  = 1;
-    optional metapb.Region second = 2;
+    optional metapb.Region left  = 1;
+    optional metapb.Region right = 2;
 }
 
 message AdminRequestUnion {
