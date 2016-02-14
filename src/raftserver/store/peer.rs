@@ -285,32 +285,12 @@ impl Peer {
         // commands again.
         let mut need_repropose = false;
         for entry in committed_entries {
-            let index = entry.get_index();
             match entry.get_entry_type() {
                 raftpb::EntryType::EntryNormal => {
-                    let data = entry.get_data();
-                    if data.len() == 0 {
-                        need_repropose = true;
-                        continue;
-                    }
-
-                    let (uuid, cmd) = try!(decode_raft_command(data));
-                    // no need to return error here.
-                    let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
-                        error!("process raft command at index {} err: {:?}", index, e);
-                    });
+                    try!(self.handle_raft_entry_normal(entry, &mut need_repropose));
                 }
                 raftpb::EntryType::EntryConfChange => {
-                    let mut conf_change =
-                        try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
-                    let (uuid, cmd) = try!(decode_raft_command(conf_change.get_context()));
-                    let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
-                        error!("process raft command at index {} err: {:?}", index, e);
-                        // If failed, tell raft that the config change was aborted.
-                        conf_change = raftpb::ConfChange::new();
-                    });
-
-                    self.raft_group.apply_conf_change(conf_change);
+                    try!(self.handle_raft_entry_conf_change(entry));
                 }
             }
         }
@@ -319,6 +299,42 @@ impl Peer {
             try!(self.repropose_pending_cmds());
         }
 
+        Ok(())
+    }
+
+    fn handle_raft_entry_normal(&mut self,
+                                entry: &raftpb::Entry,
+                                repropose: &mut bool)
+                                -> Result<()> {
+        let index = entry.get_index();
+        let data = entry.get_data();
+        if data.len() == 0 {
+            *repropose = true;
+            return Ok(());
+        }
+
+        let (uuid, cmd) = try!(decode_raft_command(data));
+        // no need to return error here.
+        let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
+            error!("process raft command at index {} err: {:?}", index, e);
+        });
+
+        Ok(())
+    }
+
+    fn handle_raft_entry_conf_change(&mut self, entry: &raftpb::Entry) -> Result<()> {
+        let index = entry.get_index();
+        let mut conf_change =
+            try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
+            
+        let (uuid, cmd) = try!(decode_raft_command(conf_change.get_context()));
+        let _ = self.process_raft_command(index, uuid, cmd).map_err(|e| {
+            error!("process raft command at index {} err: {:?}", index, e);
+            // If failed, tell raft that the config change was aborted.
+            conf_change = raftpb::ConfChange::new();
+        });
+
+        self.raft_group.apply_conf_change(conf_change);
         Ok(())
     }
 
