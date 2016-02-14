@@ -10,13 +10,15 @@ use uuid::Uuid;
 use proto::metapb;
 use proto::raftpb;
 use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse, ChangePeerRequest};
-use raft::{self, Ready, RawNode};
+use proto::raft_serverpb::RaftMessage;
+use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other};
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
+use super::transport::Transport;
 
 #[derive(Default)]
 pub struct PendingCmd {
@@ -40,7 +42,7 @@ impl Peer {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
-    pub fn create(store: &mut Store, region: metapb::Region) -> Result<Peer> {
+    pub fn create<T: Transport>(store: &mut Store<T>, region: metapb::Region) -> Result<Peer> {
         let store_id = store.get_store_id();
         let peer_id = match util::find_peer(&region, store_id) {
             None => return Err(other(format!("find no peer for store {}", store_id))),
@@ -53,13 +55,19 @@ impl Peer {
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after appling snapshot.
-    pub fn replicate(store: &mut Store, region_id: u64, peer_id: u64) -> Result<Peer> {
+    pub fn replicate<T: Transport>(store: &mut Store<T>,
+                                   region_id: u64,
+                                   peer_id: u64)
+                                   -> Result<Peer> {
         let mut region = metapb::Region::new();
         region.set_region_id(region_id);
         Peer::new(store, region, peer_id)
     }
 
-    fn new(store: &mut Store, region: metapb::Region, peer_id: u64) -> Result<Peer> {
+    fn new<T: Transport>(store: &mut Store<T>,
+                         region: metapb::Region,
+                         peer_id: u64)
+                         -> Result<Peer> {
         let store_id = store.get_store_id();
 
         let s = try!(PeerStorage::new(store.get_engine(), &region));
@@ -121,7 +129,7 @@ impl Peer {
         self.raft_group.status()
     }
 
-    pub fn handle_raft_ready(&mut self) -> Result<()> {
+    pub fn handle_raft_ready<T: Transport>(&mut self, trans: &Arc<RwLock<T>>) -> Result<()> {
         if !self.raft_group.has_ready() {
             debug!("raft group is not ready for {}", self.peer_id);
             return Ok(());
@@ -136,7 +144,7 @@ impl Peer {
         try!(self.handle_raft_ready_in_storage(&ready));
 
         for msg in &ready.messages {
-            try!(self.send_raft_message(&msg));
+            try!(self.send_raft_message(&msg, trans));
         }
 
         try!(self.handle_raft_commit_entries(&ready.committed_entries));
@@ -210,8 +218,64 @@ impl Peer {
         Ok(())
     }
 
-    fn send_raft_message(&mut self, msg: &raftpb::Message) -> Result<()> {
-        // TODO: implement it later.
+    fn send_raft_message<T: Transport>(&mut self,
+                                       msg: &raftpb::Message,
+                                       trans: &Arc<RwLock<T>>)
+                                       -> Result<()> {
+        let msg_type = msg.get_msg_type();
+
+        let mut send_msg = RaftMessage::new();
+        send_msg.set_region_id(self.region_id);
+        send_msg.set_message(msg.clone());
+
+        let mut snap_status = SnapshotStatus::SnapshotFinish;
+        let mut unreachable = false;
+
+        let to_peer_id;
+        let to_store_id;
+
+        {
+            let trans = trans.read().unwrap();
+            let from_peer = try!(trans.get_peer(msg.get_from()).ok_or_else(|| {
+                other(format!("failed to lookup sender peer {} in region {}",
+                              msg.get_from(),
+                              self.region_id))
+            }));
+
+            let to_peer = try!(trans.get_peer(msg.get_to()).ok_or_else(|| {
+                other(format!("failed to look up recipient peer {} in region {}",
+                              msg.get_to(),
+                              self.region_id))
+            }));
+
+            to_peer_id = to_peer.get_peer_id();
+            to_store_id = to_peer.get_store_id();
+
+            send_msg.set_from_peer(from_peer);
+            send_msg.set_to_peer(to_peer);
+
+            let _ = trans.send(send_msg).map_err(|e| {
+                warn!("region {} on store {} failed to send msg to {} in store {}, err: {:?}",
+                      self.region_id,
+                      self.store_id,
+                      to_peer_id,
+                      to_store_id,
+                      e);
+
+                unreachable = true;
+                snap_status = SnapshotStatus::SnapshotFailure;
+            });
+        }
+
+        if unreachable {
+            self.raft_group.report_unreachable(to_peer_id);
+        }
+
+        if msg_type == raftpb::MessageType::MsgSnapshot {
+            // TODO: report status until receiving ack, error or timeout.
+            self.raft_group.report_snapshot(to_peer_id, snap_status);
+        }
+
         Ok(())
     }
 
