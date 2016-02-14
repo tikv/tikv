@@ -11,7 +11,7 @@ pub use self::storage::{RaftState, Storage};
 pub use self::errors::{Result, Error, StorageError};
 pub use self::raft::{Raft, StateRole, Config, INVALID_ID, SoftState};
 pub use self::raft_log::{RaftLog, NO_LIMIT};
-pub use self::raw_node::{Ready, RawNode, Peer};
+pub use self::raw_node::{Ready, RawNode, Peer, is_empty_snap, SnapshotStatus};
 pub use self::status::Status;
 pub use self::log_unstable::Unstable;
 pub use self::progress::{Inflights, Progress, ProgressState};

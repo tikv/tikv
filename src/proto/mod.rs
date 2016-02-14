@@ -6,3 +6,7 @@ pub mod raft_serverpb;
 pub mod kvrpcpb;
 #[cfg_attr(rustfmt, rustfmt_skip)]
 pub mod metapb;
+#[cfg_attr(rustfmt, rustfmt_skip)]
+pub mod errorpb;
+#[cfg_attr(rustfmt, rustfmt_skip)]
+pub mod raft_cmdpb;
