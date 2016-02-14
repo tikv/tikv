@@ -5,6 +5,7 @@ use mio::tcp::TcpStream;
 
 use proto::kvrpcpb::Request;
 use util::codec::rpc::decode_msg;
+use util::codec::Error;
 use super::server::{Server, QueueMessage};
 
 // Conn is a abstraction of remote client
@@ -33,13 +34,25 @@ impl Conn {
     }
 
     pub fn read(&mut self, token: Token, event_loop: &mut EventLoop<Server>) {
-        // only test here
-        let mut m = Request::new();
-        let msg_id = decode_msg(&mut self.sock, &mut m).unwrap();
+        loop {
+            let mut m = Request::new();
+            let msg_id = match decode_msg(&mut self.sock, &mut m) {
+                Err(e) => {
+                    match e {
+                        Error::Io(_) => {
+                            // Read to eof, just break
+                        }
+                        _ => error!("read error {:?}", e),
+                    }
+                    break;
+                }
+                Ok(id) => id,
+            };
 
-        let sender = event_loop.channel();
-        let queue_msg: QueueMessage = QueueMessage::Request(token, msg_id, m);
-        let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+            let sender = event_loop.channel();
+            let queue_msg: QueueMessage = QueueMessage::Request(token, msg_id, m);
+            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+        }
         self.interest.remove(EventSet::readable());
     }
 }
