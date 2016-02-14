@@ -40,7 +40,7 @@ fn is_response_msg(m: &Message) -> bool {
     }
 }
 
-fn is_empty_snap(s: &Snapshot) -> bool {
+pub fn is_empty_snap(s: &Snapshot) -> bool {
     s.get_metadata().get_index() == 0
 }
 
