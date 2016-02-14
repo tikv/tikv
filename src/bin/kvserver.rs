@@ -5,9 +5,10 @@ extern crate log;
 
 use tikv::storage::{Storage, Dsn};
 use tikv::kvserver::server::run::run;
-use tikv::util::{self, LogLevelFilter};
+use tikv::util::{self, logger};
 use getopts::Options;
 use std::env;
+use log::LogLevelFilter;
 
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -30,7 +31,7 @@ fn main() {
         return;
     }
     let log_filter = match matches.opt_str("L") {
-        Some(level) => get_level_by_string(&level),
+        Some(level) => logger::get_level_by_string(&level),
         None => LogLevelFilter::Info,
     };
     util::init_log(log_filter).unwrap();
@@ -39,16 +40,4 @@ fn main() {
     let store: Storage = Storage::new(Dsn::Memory).unwrap();
     info!("Start listenning on {}...", host);
     run(&host, store);
-}
-
-fn get_level_by_string(lv: &str) -> LogLevelFilter {
-    match lv {
-        "trace" | "TRACE" => LogLevelFilter::Trace,
-        "debug" | "DEBUG" => LogLevelFilter::Debug,
-        "info" | "INFO" => LogLevelFilter::Info,
-        "warn" | "WARN" => LogLevelFilter::Warn,
-        "error" | "ERROR" => LogLevelFilter::Error,
-        "off" | "OFF" => LogLevelFilter::Off,
-        _ => LogLevelFilter::Info,
-    }
 }

@@ -39,10 +39,7 @@ pub fn encode_msg<T: io::Write, M: protobuf::Message>(w: &mut T,
 // Decodes encoded message, returns message ID.
 pub fn decode_msg<T: io::Read, M: protobuf::Message>(r: &mut T, m: &mut M) -> Result<u64> {
     // Try read, if read UnexpectedEof, then stop
-    let (message_id, payload) = match decode_data(r) {
-        Err(e) => return Err(Error::from(e)),
-        Ok((msg_id, pl)) => (msg_id, pl),
-    };
+    let (message_id, payload) = try!(decode_data(r));
     try!(m.merge_from_bytes(&payload));
 
     Ok(message_id)
@@ -73,13 +70,7 @@ pub fn encode_msg_header(msg_id: u64, payload_len: usize) -> Vec<u8> {
 // Decodes encoded data, returns message ID and body.
 pub fn decode_data<T: io::Read>(r: &mut T) -> Result<(u64, Vec<u8>)> {
     let mut header = vec![0;MSG_HEADER_LEN];
-    let _ = r.read_exact(&mut header).map_err(|e| {
-        match e.kind() {
-            io::ErrorKind::UnexpectedEof => return Error::Io(e),
-            _ => Error::from(e),
-        }
-    });
-
+    try!(r.read_exact(&mut header));
     let (msg_id, payload_len) = try!(decode_msg_header(&mut header));
     let mut payload = vec![0;payload_len];
     try!(r.read_exact(&mut payload));

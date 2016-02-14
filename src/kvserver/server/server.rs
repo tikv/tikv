@@ -63,9 +63,8 @@ impl Server {
                       event_loop: &mut EventLoop<Server>)
                       -> Result<()> {
         if !msg.has_cmd_get_req() {
-            error!("Msg doesn't containe a CmdGetRequest");
-            return Err(ServerError::FormatError("Msg doesn't containe a CmdGetRequest"
-                                                    .to_string()));
+            error!("Msg doesn't contain a CmdGetRequest");
+            return Err(ServerError::FormatError("Msg doesn't contain a CmdGetRequest".to_string()));
         }
         let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
         let key = cmd_get_req.get_key().to_vec();
@@ -76,10 +75,9 @@ impl Server {
             let _ = sender.send(queue_msg)
                           .map_err(|e| error!("{:?}", e));
         });
-        match self.store.async_get(key, cmd_get_req.get_version(), received_cb) {
-            Ok(()) => Ok(()),
-            Err(why) => return Err(ServerError::Storage(why)),
-        }
+        self.store
+            .async_get(key, cmd_get_req.get_version(), received_cb)
+            .map_err(|e| ServerError::Storage(e))
     }
 
     pub fn handle_scan(&mut self,
@@ -103,13 +101,12 @@ impl Server {
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         });
-        match self.store.async_scan(start_key,
-                                    cmd_scan_req.get_limit() as usize,
-                                    cmd_scan_req.get_version(),
-                                    received_cb) {
-            Ok(()) => Ok(()),
-            Err(why) => return Err(ServerError::Storage(why)),
-        }
+        self.store
+            .async_scan(start_key,
+                        cmd_scan_req.get_limit() as usize,
+                        cmd_scan_req.get_version(),
+                        received_cb)
+            .map_err(|e| ServerError::Storage(e))
     }
 
     pub fn handle_prewrite(&mut self,
@@ -138,14 +135,13 @@ impl Server {
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         });
-        match self.store.async_prewrite(puts,
-                                        deletes,
-                                        locks,
-                                        cmd_prewrite_req.get_start_version(),
-                                        received_cb) {
-            Ok(()) => Ok(()),
-            Err(why) => return Err(ServerError::Storage(why)),
-        }
+        self.store
+            .async_prewrite(puts,
+                            deletes,
+                            locks,
+                            cmd_prewrite_req.get_start_version(),
+                            received_cb)
+            .map_err(|e| ServerError::Storage(e))
     }
 
     pub fn handle_commit(&mut self,
@@ -155,8 +151,8 @@ impl Server {
                          event_loop: &mut EventLoop<Server>)
                          -> Result<()> {
         if !msg.has_cmd_commit_req() {
-            error!("Msg doesn't containe a CmdCommitRequest");
-            return Err(ServerError::FormatError("Msg doesn't containe a CmdCommitRequest"
+            error!("Msg doesn't contain a CmdCommitRequest");
+            return Err(ServerError::FormatError("Msg doesn't contain a CmdCommitRequest"
                                                     .to_string()));
         }
         let cmd_commit_req: &CmdCommitRequest = msg.get_cmd_commit_req();
@@ -167,12 +163,11 @@ impl Server {
             // [TODO]: retry
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         });
-        match self.store.async_commit(cmd_commit_req.get_start_version(),
-                                      cmd_commit_req.get_commit_version(),
-                                      received_cb) {
-            Ok(()) => Ok(()),
-            Err(why) => Err(ServerError::Storage(why)),
-        }
+        self.store
+            .async_commit(cmd_commit_req.get_start_version(),
+                          cmd_commit_req.get_commit_version(),
+                          received_cb)
+            .map_err(|e| ServerError::Storage(e))
     }
 
     fn cmd_get_done(r: ResultStorage<Option<Value>>) -> Response {
@@ -180,15 +175,9 @@ impl Server {
         let mut cmd_get_resp: CmdGetResponse = CmdGetResponse::new();
         cmd_get_resp.set_ok(r.is_ok());
         match r {
-            Ok(v) => {
-                match v {
-                    Some(val) => cmd_get_resp.set_value(val),
-                    None => cmd_get_resp.set_value(Vec::new()),
-                }
-            }
-            Err(e) => {
-                error!("storage error: {:?}", e);
-            }
+            Ok(Some(val)) => cmd_get_resp.set_value(val),
+            Ok(None) => cmd_get_resp.set_value(Vec::new()),
+            Err(e) => error!("storage error: {:?}", e),
         }
         resp.set_field_type(MessageType::CmdGet);
         resp.set_cmd_get_resp(cmd_get_resp);
