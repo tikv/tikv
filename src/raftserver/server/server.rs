@@ -6,8 +6,9 @@ use std::collections::HashMap;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
-use raftserver::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_BASE_TICK_MS, INVALID_TOKEN};
-use raftserver::{Msg, Sender, Result, ConnData, TimerMsg};
+use raftserver::Result;
+use super::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_BASE_TICK_MS, INVALID_TOKEN};
+use super::{Msg, Sender, ConnData, TimerMsg};
 use super::conn::Conn;
 use super::handler::ServerHandler;
 

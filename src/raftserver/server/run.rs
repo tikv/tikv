@@ -5,7 +5,8 @@ use std::option::Option;
 use mio::{EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;
 
-use raftserver::{Result, Sender, SERVER_TOKEN};
+use raftserver::Result;
+use super::{Sender, SERVER_TOKEN};
 use super::server::Server;
 use super::handler::ServerHandler;
 
@@ -67,10 +68,9 @@ mod tests {
     use bytes::{Buf, ByteBuf};
     use mio::{EventLoop, Token};
 
-    use super::*;
+    use super::super::*;
     use raftserver::*;
     use util::codec::rpc;
-    use super::super::ServerHandler;
 
     struct BaseHandler;
 

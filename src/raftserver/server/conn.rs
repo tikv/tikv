@@ -9,7 +9,8 @@ use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 
-use raftserver::{Result, ConnData};
+use raftserver::Result;
+use super::ConnData;
 use super::server::Server;
 use super::handler::ServerHandler;
 use util::codec::rpc;
