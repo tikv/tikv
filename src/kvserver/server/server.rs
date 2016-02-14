@@ -1,4 +1,3 @@
-#![allow(unused_must_use)]
 use std::collections::HashMap;
 use std::boxed::Box;
 use std::io::{Read, Write};
@@ -12,7 +11,6 @@ use proto::kvrpcpb;
 use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
                      CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
                      Request, Response, MessageType};
-use util;
 use util::codec::rpc::{encode_msg, MSG_HEADER_LEN};
 use storage;
 use storage::{Key, Storage, Value, KvPair};
@@ -20,8 +18,12 @@ use storage::{Key, Storage, Value, KvPair};
 use super::conn::Conn;
 
 pub type Result<T> = ::std::result::Result<T, ServerError>;
+pub type ResultStorage<T> = ::std::result::Result<T, storage::Error>;
 
-pub const SERVER_TOKEN: Token = Token(0);
+// Token(1) instead of Token(0)
+// See here: https://github.com/hjr3/mob/blob/multi-echo-blog-post/src/main.rs#L115
+pub const SERVER_TOKEN: Token = Token(1);
+const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 
 quick_error! {
     #[derive(Debug)]
@@ -45,15 +47,11 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(listener: TcpListener,
-               conns: HashMap<Token, Conn>,
-               tc: usize,
-               store: Storage)
-               -> Server {
+    pub fn new(listener: TcpListener, conns: HashMap<Token, Conn>, store: Storage) -> Server {
         return Server {
             listener: listener,
             conns: conns,
-            token_counter: tc,
+            token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             store: store,
         };
     }
@@ -70,18 +68,15 @@ impl Server {
                                                     .to_string()));
         }
         let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
-        let key = cmd_get_req.get_key().iter().cloned().collect();
+        let key = cmd_get_req.get_key().to_vec();
         let sender = event_loop.channel();
-        match self.store.async_get(key,
-                                   cmd_get_req.get_version(),
-                                   Box::new(move |v: ::std::result::Result<Option<Value>,
-                                                                             storage::Error>| {
-                                       let resp: Response = Server::cmd_get_done(v);
-                                       let queue_msg: QueueMessage = QueueMessage::Response(token,
-                                                                                            msg_id,
-                                                                                            resp);
-                                       sender.send(queue_msg).map_err(|e| error!("{:?}", e));
-                                   })) {
+        let received_cb = Box::new(move |v: ResultStorage<Option<Value>>| {
+            let resp: Response = Server::cmd_get_done(v);
+            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
+            let _ = sender.send(queue_msg)
+                          .map_err(|e| error!("{:?}", e));
+        });
+        match self.store.async_get(key, cmd_get_req.get_version(), received_cb) {
             Ok(()) => Ok(()),
             Err(why) => return Err(ServerError::Storage(why)),
         }
@@ -101,20 +96,17 @@ impl Server {
         let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
         let sender = event_loop.channel();
         // convert [u8] to Vec[u8]
-        let start_key: Key = cmd_scan_req.get_key().iter().cloned().collect();
+        let start_key: Key = cmd_scan_req.get_key().to_vec();
         debug!("start_key [{:?}]", start_key);
-        match self.store
-                  .async_scan(start_key,
-                              cmd_scan_req.get_limit() as usize,
-                              cmd_scan_req.get_version(),
-                              Box::new(move |kvs: ::std::result::Result<Vec<KvPair>,
-                                                                          storage::Error>| {
-                                  let resp: Response = Server::cmd_scan_done(kvs);
-                                  let queue_msg: QueueMessage = QueueMessage::Response(token,
-                                                                                       msg_id,
-                                                                                       resp);
-                                  sender.send(queue_msg).map_err(|e| error!("{:?}", e));
-                              })) {
+        let received_cb = Box::new(move |kvs: ResultStorage<Vec<KvPair>>| {
+            let resp: Response = Server::cmd_scan_done(kvs);
+            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
+            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+        });
+        match self.store.async_scan(start_key,
+                                    cmd_scan_req.get_limit() as usize,
+                                    cmd_scan_req.get_version(),
+                                    received_cb) {
             Ok(()) => Ok(()),
             Err(why) => return Err(ServerError::Storage(why)),
         }
@@ -136,25 +128,21 @@ impl Server {
         let puts: Vec<_> = cmd_prewrite_req.get_puts()
                                            .iter()
                                            .map(|kv| {
-                                               (util::array_to_vec(kv.get_key()),
-                                                util::array_to_vec(kv.get_value()))
+                                               (kv.get_key().to_vec(), kv.get_value().to_vec())
                                            })
                                            .collect();
-        let deletes: Vec<_> = cmd_prewrite_req.get_dels().iter().cloned().collect();
-        let locks: Vec<_> = cmd_prewrite_req.get_locks().iter().cloned().collect();
-        match self.store
-                  .async_prewrite(puts,
-                                  deletes,
-                                  locks,
-                                  cmd_prewrite_req.get_start_version(),
-                                  Box::new(move |r: ::std::result::Result<(),
-                                                                            storage::Error>| {
-                                      let resp: Response = Server::cmd_prewrite_done(r);
-                                      let queue_msg: QueueMessage = QueueMessage::Response(token,
-                                                                                           msg_id,
-                                                                                           resp);
-                                      sender.send(queue_msg).map_err(|e| error!("{:?}", e));
-                                  })) {
+        let deletes: Vec<_> = cmd_prewrite_req.get_dels().to_vec();
+        let locks: Vec<_> = cmd_prewrite_req.get_locks().to_vec();
+        let received_cb = Box::new(move |r: ResultStorage<()>| {
+            let resp: Response = Server::cmd_prewrite_done(r);
+            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
+            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+        });
+        match self.store.async_prewrite(puts,
+                                        deletes,
+                                        locks,
+                                        cmd_prewrite_req.get_start_version(),
+                                        received_cb) {
             Ok(()) => Ok(()),
             Err(why) => return Err(ServerError::Storage(why)),
         }
@@ -173,23 +161,21 @@ impl Server {
         }
         let cmd_commit_req: &CmdCommitRequest = msg.get_cmd_commit_req();
         let sender = event_loop.channel();
-        match self.store
-                  .async_commit(cmd_commit_req.get_start_version(),
-                                cmd_commit_req.get_commit_version(),
-                                Box::new(move |r: ::std::result::Result<(), storage::Error>| {
-                                    let resp: Response = Server::cmd_commit_done(r);
-                                    let queue_msg: QueueMessage = QueueMessage::Response(token,
-                                                                                         msg_id,
-                                                                                         resp);
-                                    // [TODO]: retry
-                                    sender.send(queue_msg).map_err(|e| error!("{:?}", e));
-                                })) {
+        let received_cb = Box::new(move |r: ResultStorage<()>| {
+            let resp: Response = Server::cmd_commit_done(r);
+            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
+            // [TODO]: retry
+            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+        });
+        match self.store.async_commit(cmd_commit_req.get_start_version(),
+                                      cmd_commit_req.get_commit_version(),
+                                      received_cb) {
             Ok(()) => Ok(()),
             Err(why) => Err(ServerError::Storage(why)),
         }
     }
 
-    fn cmd_get_done(r: ::std::result::Result<Option<Value>, storage::Error>) -> Response {
+    fn cmd_get_done(r: ResultStorage<Option<Value>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_get_resp: CmdGetResponse = CmdGetResponse::new();
         cmd_get_resp.set_ok(r.is_ok());
@@ -199,16 +185,17 @@ impl Server {
                     Some(val) => cmd_get_resp.set_value(val),
                     None => cmd_get_resp.set_value(Vec::new()),
                 }
-                cmd_get_resp.set_ok(true);
             }
-            Err(_) => {}
+            Err(e) => {
+                error!("storage error: {:?}", e);
+            }
         }
         resp.set_field_type(MessageType::CmdGet);
         resp.set_cmd_get_resp(cmd_get_resp);
         resp
     }
 
-    fn cmd_scan_done(kvs: ::std::result::Result<Vec<KvPair>, storage::Error>) -> Response {
+    fn cmd_scan_done(kvs: ResultStorage<Vec<KvPair>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_scan_resp: CmdScanResponse = CmdScanResponse::new();
         cmd_scan_resp.set_ok(kvs.is_ok());
@@ -224,14 +211,16 @@ impl Server {
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
             }
-            Err(_) => {}
+            Err(e) => {
+                error!("storage error: {:?}", e);
+            }
         }
         resp.set_field_type(MessageType::CmdScan);
         resp.set_cmd_scan_resp(cmd_scan_resp);
         resp
     }
 
-    fn cmd_prewrite_done(r: ::std::result::Result<(), storage::Error>) -> Response {
+    fn cmd_prewrite_done(r: ResultStorage<()>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_prewrite_resp: CmdPrewriteResponse = CmdPrewriteResponse::new();
         cmd_prewrite_resp.set_ok(r.is_ok());
@@ -240,7 +229,7 @@ impl Server {
         resp
     }
 
-    fn cmd_commit_done(r: ::std::result::Result<(), storage::Error>) -> Response {
+    fn cmd_commit_done(r: ResultStorage<()>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_commit_resp: CmdCommitResponse = CmdCommitResponse::new();
         cmd_commit_resp.set_ok(r.is_ok());
@@ -254,10 +243,7 @@ impl Server {
                     sock: TcpStream)
                     -> Result<(Token)> {
         let new_token = Token(self.token_counter);
-        match sock.set_nodelay(true) {
-            Ok(_) => {}
-            Err(e) => error!("set nodeplay failed {:?}", e),
-        }
+        let _ = sock.set_nodelay(true).map_err(|e| error!("set nodelay failed {:?}", e));
         self.conns.insert(new_token, Conn::new(sock));
         self.token_counter += 1;
 
@@ -273,7 +259,7 @@ impl Server {
         let conn = self.conns.remove(&token);
         match conn {
             Some(conn) => {
-                event_loop.deregister(&conn.sock);
+                let _ = event_loop.deregister(&conn.sock);
             }
             None => {
                 warn!("missing connection for token {}", token.as_usize());
@@ -295,7 +281,7 @@ impl Server {
                     return;
                 }
             };
-            self.add_new_conn(event_loop, sock);
+            let _ = self.add_new_conn(event_loop, sock);
         }
     }
 

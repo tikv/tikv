@@ -18,6 +18,6 @@ pub fn run(addr: &str, store: Storage) {
               .unwrap();
 
     let conns: HashMap<Token, Conn> = HashMap::new();
-    let mut server = Server::new(listener, conns, 1, store);
+    let mut server = Server::new(listener, conns, store);
     event_loop.run(&mut server).unwrap();
 }
