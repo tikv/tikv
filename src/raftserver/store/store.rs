@@ -162,7 +162,17 @@ impl<T: Transport> Store<T> {
             Some(peer) => peer,
         };
 
-        // TODO: check leader first.
+        if !peer.is_leader() {
+            let trans = self.trans.read().unwrap();
+            return cb.call_box((cmd_resp::not_leader_error(region_id,
+                                                           trans.get_peer(peer.get_leader())),));
+        }
+
+        // Notice:
+        // Here means the peer is leader, it can still step down to follower later,
+        // but it doesn't matter, if the peer is not leader, the proposing command
+        // log entry can't be committed.
+
 
         // TODO: support handing read-only commands later.
         // for read-only, if we don't care stale read, we can
