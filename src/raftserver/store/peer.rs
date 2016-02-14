@@ -328,7 +328,7 @@ impl Peer {
                   self.pending_cmds.len());
             let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
             for (_, cmd) in self.pending_cmds.iter() {
-                // We only need uuid and cmd for later re-propose. 
+                // We only need uuid and cmd for later re-propose.
                 cmds.push(PendingCmd {
                     uuid: cmd.uuid.clone(),
                     cmd: cmd.cmd.clone(),
