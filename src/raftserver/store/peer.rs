@@ -33,6 +33,7 @@ pub struct Peer {
     store_id: u64,
     peer_id: u64,
     region_id: u64,
+    leader_id: u64,
     pub raft_group: RawNode<RaftStorage>,
     pub storage: Arc<RwLock<PeerStorage>>,
     pub pending_cmds: HashMap<Uuid, PendingCmd>,
@@ -95,6 +96,7 @@ impl Peer {
             store_id: store_id,
             peer_id: peer_id,
             region_id: region.get_region_id(),
+            leader_id: raft::INVALID_ID,
             storage: storage,
             raft_group: raft_group,
             pending_cmds: HashMap::new(),
@@ -129,6 +131,14 @@ impl Peer {
         self.raft_group.status()
     }
 
+    pub fn get_leader(&self) -> u64 {
+        self.leader_id
+    }
+
+    pub fn is_leader(&self) -> bool {
+        self.leader_id == self.peer_id
+    }
+
     pub fn handle_raft_ready<T: Transport>(&mut self, trans: &Arc<RwLock<T>>) -> Result<()> {
         if !self.raft_group.has_ready() {
             debug!("raft group is not ready for {}", self.peer_id);
@@ -140,6 +150,10 @@ impl Peer {
                self.region_id);
 
         let ready = self.raft_group.ready();
+
+        if let Some(ref ss) = ready.ss {
+            self.leader_id = ss.lead;
+        }
 
         try!(self.handle_raft_ready_in_storage(&ready));
 
