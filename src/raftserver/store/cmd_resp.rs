@@ -3,27 +3,21 @@ use std::error;
 use std::option::Option;
 
 use proto::raft_cmdpb::RaftCommandResponse;
-use proto::errorpb::ErrorDetail;
 use proto::metapb;
+use proto::errorpb::{self, ErrorDetail};
 
 pub fn region_not_found_error(region_id: u64) -> RaftCommandResponse {
     let mut detail = ErrorDetail::new();
-    {
-        let mut msg = detail.mut_region_not_found();
-        msg.set_region_id(region_id);
-    }
+    detail.mut_region_not_found().set_region_id(region_id);
     detail_error("region is not found", detail)
 }
 
 pub fn not_leader_error(region_id: u64, leader: Option<metapb::Peer>) -> RaftCommandResponse {
     let mut detail = ErrorDetail::new();
-    {
-        let mut msg = detail.mut_not_leader();
-        if let Some(leader) = leader {
-            msg.set_leader(leader);
-        }
-        msg.set_region_id(region_id);
+    if let Some(leader) = leader {
+        detail.mut_not_leader().set_leader(leader);
     }
+    detail.mut_not_leader().set_region_id(region_id);
     detail_error("peer is not leader", detail)
 }
 
@@ -43,13 +37,12 @@ fn new_error(err: Box<error::Error + Send + Sync>,
              detail: Option<ErrorDetail>)
              -> RaftCommandResponse {
     let mut msg = RaftCommandResponse::new();
-    {
-        let mut error_header = msg.mut_header().mut_error();
-        error_header.set_message(format!("{:?}", err));
-        if let Some(detail) = detail {
-            error_header.set_detail(detail)
-        }
+    let mut error_header = errorpb::Error::new();
+    error_header.set_message(format!("{:?}", err));
+    if let Some(detail) = detail {
+        error_header.set_detail(detail)
     }
+    msg.mut_header().set_error(error_header);
 
     msg
 }

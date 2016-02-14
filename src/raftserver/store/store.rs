@@ -88,12 +88,11 @@ impl<T: Transport> Store<T> {
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        let _ = register_timer(event_loop,
-                               Msg::RaftBaseTick,
-                               self.cfg.raft_base_tick_interval)
-                    .map_err(|e| {
-                        error!("register raft base tick err: {:?}", e);
-                    });
+        if let Err(e) = register_timer(event_loop,
+                                       Msg::RaftBaseTick,
+                                       self.cfg.raft_base_tick_interval) {
+            error!("register raft base tick err: {:?}", e);
+        };
     }
 
     fn handle_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -142,11 +141,11 @@ impl<T: Transport> Store<T> {
 
         for region_id in ids {
             if let Some(peer) = self.peers.get_mut(&region_id) {
-                try!(peer.handle_raft_ready(&self.trans).map_err(|e| {
+                if let Err(e) = peer.handle_raft_ready(&self.trans) {
                     // TODO: should we panic here or shutdown the store?
                     error!("handle raft ready err: {:?}", e);
-                    e
-                }));
+                    return Err(e);
+                }
             }
         }
 
@@ -228,14 +227,14 @@ impl<T: Transport> mio::Handler for Store<T> {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::RaftMessage(data) => {
-                self.handle_raft_message(data).map_err(|e| {
+                if let Err(e) = self.handle_raft_message(data) {
                     error!("handle raft message err: {:?}", e);
-                });
+                }
             }
             Msg::RaftCommand{request, callback} => {
-                self.propose_raft_command(request, callback).map_err(|e| {
+                if let Err(e) = self.propose_raft_command(request, callback) {
                     error!("propose raft command err: {:?}", e);
-                });
+                }
             }
             _ => panic!("invalid notify msg type {:?}", msg),
         }
@@ -250,9 +249,9 @@ impl<T: Transport> mio::Handler for Store<T> {
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         // We handle raft ready in event loop.
-        self.handle_raft_ready().map_err(|e| {
+        if let Err(e) = self.handle_raft_ready() {
             // TODO: should we panic here or shutdown the store?
             error!("handle raft ready err: {:?}", e);
-        });
+        }
     }
 }
