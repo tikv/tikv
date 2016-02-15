@@ -144,9 +144,8 @@ mod tests {
         type Message = Msg;
 
         fn notify(&mut self, event_loop: &mut EventLoop<SenderHandler>, msg: Msg) {
-            match msg {
-                Msg::Quit => event_loop.shutdown(),
-                _ => {}
+            if let Msg::Quit = msg {
+                event_loop.shutdown()
             }
         }
     }
