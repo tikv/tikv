@@ -181,7 +181,7 @@ impl Peer {
         }
 
         let cmd = pending_cmd.cmd.take().unwrap();
-        let data = try!(encode_raft_command(&pending_cmd.uuid, &cmd));
+        let data = try!(cmd.write_to_bytes());
 
         let mut reproposable = false;
         // We handle change_peer command as ConfChange entry, and others as normal entry.
@@ -331,9 +331,9 @@ impl Peer {
             return Ok(());
         }
 
-        let (uuid, cmd) = try!(decode_raft_command(data));
+        let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(data));
         // no need to return error here.
-        if let Err(e) = self.process_raft_command(index, uuid, cmd) {
+        if let Err(e) = self.process_raft_command(index, cmd) {
             error!("process raft command at index {} err: {:?}", index, e);
         }
 
@@ -345,8 +345,8 @@ impl Peer {
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
 
-        let (uuid, cmd) = try!(decode_raft_command(conf_change.get_context()));
-        if let Err(e) = self.process_raft_command(index, uuid, cmd) {
+        let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(conf_change.get_context()));
+        if let Err(e) = self.process_raft_command(index, cmd) {
             error!("process raft command at index {} err: {:?}", index, e);
             // If failed, tell raft that the config change was aborted.
             conf_change = raftpb::ConfChange::new();
@@ -363,11 +363,7 @@ impl Peer {
             let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
             for (_, cmd) in self.pending_cmds.iter() {
                 // We only need uuid and cmd for later re-propose.
-                cmds.push(PendingCmd {
-                    uuid: cmd.uuid.clone(),
-                    cmd: cmd.cmd.clone(),
-                    ..Default::default()
-                });
+                cmds.push(PendingCmd { cmd: cmd.cmd.clone(), ..Default::default() });
             }
 
             for mut cmd in cmds.iter_mut() {
@@ -377,18 +373,19 @@ impl Peer {
         Ok(())
     }
 
-    fn process_raft_command(&mut self,
-                            index: u64,
-                            uuid: Uuid,
-                            cmd: RaftCommandRequest)
-                            -> Result<()> {
+    fn process_raft_command(&mut self, index: u64, cmd: RaftCommandRequest) -> Result<()> {
         if index == 0 {
             return Err(other("processing raft command needs a none zero index"));
         }
 
+        let uuid = Uuid::from_bytes(cmd.get_header().get_uuid()).unwrap_or_else(|| {
+            error!("missing request uuid, but we still try to apply this command");
+            Uuid::new_v4()
+        });
+
         let pending_cmd = self.pending_cmds.remove(&uuid);
 
-        let resp = match self.apply_raft_command(index, cmd) {
+        let mut resp = match self.apply_raft_command(index, cmd) {
             Err(e) => {
                 error!("apply raft command err {:?}", e);
                 cmd_resp::message_error(e)
@@ -401,6 +398,8 @@ impl Peer {
                 warn!("pending command callback for entry {} is None", index);
             } else {
                 let cb = pending_cmd.cb.take().unwrap();
+                // Bind uuid here.
+                cmd_resp::bind_uuid(&mut resp, uuid);
                 if let Err(e) = cb.call_box((resp,)) {
                     error!("callback err {:?}", e);
                 }
@@ -458,26 +457,6 @@ impl Peer {
         // implement later.
         unreachable!();
     }
-}
-
-fn encode_raft_command(uuid: &Uuid, cmd: &RaftCommandRequest) -> Result<Vec<u8>> {
-    let mut data = Vec::with_capacity(16 + cmd.compute_size() as usize);
-    data.extend_from_slice(uuid.as_bytes());
-    try!(cmd.write_to_vec(&mut data));
-
-    Ok(data)
-}
-
-fn decode_raft_command(data: &[u8]) -> Result<(Uuid, RaftCommandRequest)> {
-    if data.len() < 16 {
-        return Err(other(format!("invalid encoded raft data len {}", data.len())));
-    }
-
-    let uuid = Uuid::from_bytes(&data[0..16]).unwrap();
-
-    let msg = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(&data[16..]));
-
-    Ok((uuid, msg))
 }
 
 fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerRequest> {

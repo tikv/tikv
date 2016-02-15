@@ -10,7 +10,7 @@ use mio::{self, EventLoop};
 use uuid::Uuid;
 
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
-use proto::raft_cmdpb::RaftCommandRequest;
+use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 use raftserver::{Result, other};
 use super::{Sender, Msg};
 use super::keys;
@@ -18,7 +18,7 @@ use super::engine::Retriever;
 use super::config::Config;
 use super::peer::{Peer, PendingCmd};
 use super::msg::Callback;
-use super::cmd_resp;
+use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
 
 pub struct Store<T: Transport> {
@@ -151,16 +151,36 @@ impl<T: Transport> Store<T> {
     }
 
     fn propose_raft_command(&mut self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
+        let mut resp: RaftCommandResponse;
+        let uuid: Uuid = match Uuid::from_bytes(msg.get_header().get_uuid()) {
+            None => {
+                resp = cmd_resp::message_error("missing request uuid");
+                return cb.call_box((resp,));
+            }
+            Some(uuid) => uuid,
+        };
+
         let region_id = msg.get_header().get_region_id();
         let mut peer = match self.peers.get_mut(&region_id) {
-            None => return cb.call_box((cmd_resp::region_not_found_error(region_id),)),
+            None => {
+                resp = cmd_resp::region_not_found_error(region_id);
+                bind_uuid(&mut resp, uuid);
+                return cb.call_box((resp,));
+            }
             Some(peer) => peer,
         };
 
         if !peer.is_leader() {
             let trans = self.trans.read().unwrap();
-            return cb.call_box((cmd_resp::not_leader_error(region_id,
-                                                           trans.get_peer(peer.get_leader())),));
+            resp = cmd_resp::not_leader_error(region_id, trans.get_peer(peer.get_leader()));
+            bind_uuid(&mut resp, uuid);
+            return cb.call_box((resp,));
+        }
+
+        if peer.pending_cmds.contains_key(&uuid) {
+            resp = cmd_resp::message_error(format!("duplicated uuid {:?}", uuid));
+            bind_uuid(&mut resp, uuid);
+            return cb.call_box((resp,));
         }
 
         // Notice:
@@ -174,14 +194,15 @@ impl<T: Transport> Store<T> {
         // execute these commands immediately in leader.
 
         let mut pending_cmd = PendingCmd {
-            uuid: Uuid::new_v4(),
+            uuid: uuid,
             cb: None,
             cmd: Some(msg),
         };
 
         match peer.propose_pending_cmd(&mut pending_cmd) {
             Err(e) => {
-                let resp = cmd_resp::message_error(format!("{:?}", e));
+                resp = cmd_resp::message_error(format!("{:?}", e));
+                bind_uuid(&mut resp, uuid);
                 return cb.call_box((resp,));
             }
             Ok(()) => (), // nothing to do.
@@ -190,7 +211,7 @@ impl<T: Transport> Store<T> {
         // Keep the callback in pending_cmd so that we can call it later
         // after command applied.
         pending_cmd.cb = Some(cb);
-        peer.pending_cmds.insert(pending_cmd.uuid, pending_cmd);
+        peer.pending_cmds.insert(uuid, pending_cmd);
 
         self.pending_raft_groups.insert(region_id);
 
