@@ -175,7 +175,7 @@ mod test {
     #[test]
     fn test_maybe_first_index() {
         // entry, offset, snap, wok, windex,
-        let tests: Vec<(Option<Entry>, u64, Option<Snapshot>, bool, u64)> = vec![  
+        let tests = vec![  
             // no snapshot
             (Some(new_entry(5,1)), 5, None, false, 0),
             (None, 0, None, false, 0),
@@ -201,7 +201,7 @@ mod test {
     #[test]
     fn test_maybe_last_index() {
         // entry, offset, snap, wok, windex,
-        let tests: Vec<(Option<Entry>, u64, Option<Snapshot>, bool, u64)> = vec![  
+        let tests = vec![  
             (Some(new_entry(5,1)), 5, None, true, 5),
             (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), true, 5),
             // last in snapshot
@@ -227,7 +227,7 @@ mod test {
     #[test]
     fn test_maybe_term() {
         // entry, offset, snap, index, wok, wterm
-        let tests: Vec<(Option<Entry>, u64, Option<Snapshot>, u64, bool, u64)> = vec![  
+        let tests = vec![  
             // term from entries
             (Some(new_entry(5,1)), 5, None, 5, true, 1),
             (Some(new_entry(5,1)), 5, None, 6, false, 0),
@@ -275,7 +275,7 @@ mod test {
     #[test]
     fn test_stable_to() {
         // entries, offset, snap, index, term, woffset, wlen
-        let tests: Vec<(Vec<Entry>, u64, Option<Snapshot>, u64, u64, u64, usize)> = vec![  
+        let tests = vec![  
             (vec![], 0, None, 5, 1, 0, 0),
             // stable to the first entry
             (vec![new_entry(5,1)], 5, None, 5, 1, 6, 0),
@@ -313,12 +313,7 @@ mod test {
     #[test]
     fn test_truncate_and_append() {
         // entries, offset, snap, to_append, woffset, wentries
-        let tests: Vec<(Vec<Entry>,
-                        u64,
-                        Option<Snapshot>,
-                        Vec<Entry>,
-                        u64,
-                        Vec<Entry>)> = vec![
+        let tests = vec![
             // replace to the end
             (vec![new_entry(5, 1)], 5, None, 
                 vec![new_entry(6, 1), new_entry(7, 1)], 
