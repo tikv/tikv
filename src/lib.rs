@@ -4,6 +4,8 @@
 #![feature(btree_range, collections_bound)]
 #![feature(std_panic, recover)]
 #![feature(fnbox)]
+#![feature(plugin)]
+#![plugin(clippy)]
 
 #[macro_use]
 extern crate log;
@@ -17,6 +19,7 @@ extern crate mio;
 extern crate rand;
 extern crate tempdir;
 extern crate rocksdb;
+extern crate uuid;
 
 #[cfg(test)]
 extern crate env_logger;

@@ -1,5 +1,5 @@
-use std::sync::Mutex;
 use std::boxed::{Box, FnBox};
+use std::fmt;
 
 use mio;
 
@@ -16,14 +16,22 @@ pub enum Msg {
     RaftBaseTick,
 
     // For notify.
-    // We can't send protobuf message directly, so using a mutex wraps it.
-    // Although it looks ugly, it is still more convenient than decoding many times
-    // in different threads.
-    RaftMessage(Mutex<RaftMessage>),
+    RaftMessage(RaftMessage),
     RaftCommand {
-        request: Mutex<RaftCommandRequest>,
+        request: RaftCommandRequest,
         callback: Callback,
     },
+}
+
+impl fmt::Debug for Msg {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Msg::Quit => write!(fmt, "Quit"),
+            Msg::RaftBaseTick => write!(fmt, "Raft Base Tick"),
+            Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
+            Msg::RaftCommand{..} => write!(fmt, "Raft Command"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -45,5 +53,16 @@ impl Sender {
     fn send(&self, msg: Msg) -> Result<()> {
         try!(send_msg(&self.sender, msg));
         Ok(())
+    }
+
+    pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
+        self.send(Msg::RaftMessage(msg))
+    }
+
+    pub fn send_command(&self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
+        self.send(Msg::RaftCommand {
+            request: msg,
+            callback: cb,
+        })
     }
 }
