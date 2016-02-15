@@ -30,7 +30,7 @@ pub fn send_msg<M: Send + Sync>(sender: &mio::Sender<M>,
                 value = m;
                 continue;
             }
-            e@_ => {
+            e => {
                 return Err(e);
             }
         }
