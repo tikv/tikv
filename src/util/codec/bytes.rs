@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn test_max_encoded_bytes_size() {
         let n = ENC_GROUP_SIZE;
-        let tbl: Vec<(usize, usize)> = vec![(0, n + 1), (n /2, n + 1), (n, 2 * (n + 1))];
+        let tbl: Vec<(usize, usize)> = vec![(0, n + 1), (n / 2, n + 1), (n, 2 * (n + 1))];
         for (x, y) in tbl {
             assert_eq!(max_encoded_bytes_size(x), y);
         }
