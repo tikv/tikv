@@ -111,11 +111,14 @@ message RaftRequestHeader {
     optional uint64 region_id          = 1;
     optional metapb.Peer peer          = 2;
     // true for read linearization
-    optional bool read_quorum          = 3;  
+    optional bool read_quorum          = 3;
+    // 16 bytes, to distinguish request.  
+    optional bytes uuid                = 4;
 }
 
 message RaftResponseHeader {
     optional errorpb.Error error  = 1;
+    optional bytes uuid           = 2;
 }
 
 message RaftCommandRequest {
