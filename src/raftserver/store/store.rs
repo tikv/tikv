@@ -1,7 +1,7 @@
 #![allow(unused_variables)]
 #![allow(unused_must_use)]
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::option::Option;
 use std::collections::{HashMap, HashSet};
 
@@ -104,9 +104,7 @@ impl<T: Transport> Store<T> {
         self.register_raft_base_tick(event_loop);
     }
 
-    fn handle_raft_message(&mut self, msg: Mutex<RaftMessage>) -> Result<()> {
-        let msg = msg.lock().unwrap();
-
+    fn handle_raft_message(&mut self, msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
@@ -152,9 +150,7 @@ impl<T: Transport> Store<T> {
         Ok(())
     }
 
-    fn propose_raft_command(&mut self, msg: Mutex<RaftCommandRequest>, cb: Callback) -> Result<()> {
-        let msg = msg.into_inner().unwrap();
-
+    fn propose_raft_command(&mut self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
         let region_id = msg.get_header().get_region_id();
         let mut peer = match self.peers.get_mut(&region_id) {
             None => return cb.call_box((cmd_resp::region_not_found_error(region_id),)),
