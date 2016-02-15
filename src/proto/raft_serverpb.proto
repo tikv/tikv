@@ -6,10 +6,10 @@ import "metapb.proto";
 import "raft_cmdpb.proto";
 
 enum MessageType {
-    MsgNone         = 0;
-    MsgCommand      = 1;
-    MsgCommandResp  = 2;
-    MsgRaft         = 3;
+    None         = 0;
+    Command      = 1;
+    CommandResp  = 2;
+    Raft         = 3;
 }
 
 // Message holds all messages communicating with raft server.
@@ -25,12 +25,6 @@ message RaftMessage {
     optional metapb.Peer from_peer    = 2;
     optional metapb.Peer to_peer      = 3;
     optional raftpb.Message message   = 4;
-}
-
-// ConfChangeContext is encoded in the raftpb.ConfChange.Context field.
-message ConfChangeContext {
-    optional uint64 msg_id        = 1;
-    optional metapb.Peer peer     = 2;
 }
 
 message RaftTruncatedState {
