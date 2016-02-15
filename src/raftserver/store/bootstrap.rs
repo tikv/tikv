@@ -56,8 +56,7 @@ pub fn bootstrap_store(engine: Arc<DB>,
 
     let ident_key = keys::store_ident_key();
     try!(engine.get_msg::<StoreIdent>(&ident_key).and_then(|res| {
-        if res.is_some() {
-            let res = res.unwrap();
+        if let Some(res) = res {
             return Err(other(format!("store has already been bootstrapped to cluster {}",
                                      res.get_cluster_id())));
         }
