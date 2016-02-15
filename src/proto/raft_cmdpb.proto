@@ -39,40 +39,28 @@ message DeleteResponse {
     
 }
 
-message WriteBatch {
-    // If value is None, the operation is delete,
-    // else is put.
-    optional bytes key   = 1;
-    optional bytes value = 2;    
-}
-
-message WriteRequest {
-    repeated WriteBatch batch = 1;
-}
-
-message WriteResponse {
-    
-}
-
 enum CommandType {
     InvalidCmd  = 0;
     Get         = 1;
     Seek        = 2;
-    Write       = 3;
+    Put         = 3;
+    Delete      = 4;
 }
 
 message RequestUnion {
     optional CommandType cmd_type      = 1;
     optional GetRequest get            = 2;
     optional SeekRequest seek          = 3;
-    optional WriteRequest write        = 4;
+    optional PutRequest put            = 4;
+    optional DeleteRequest delete      = 5;
 }
 
 message ResponseUnion {
     optional CommandType cmd_type      = 1;
     optional GetResponse get           = 2;
     optional SeekResponse seek         = 3;
-    optional WriteResponse write       = 4;
+    optional PutResponse put           = 4;
+    optional DeleteResponse delete     = 5;
 }
 
 message ChangePeerRequest {
