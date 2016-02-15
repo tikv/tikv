@@ -20,6 +20,9 @@ pub struct KvPair {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for KvPair {}
+
 impl KvPair {
     pub fn new() -> KvPair {
         ::std::default::Default::default()
@@ -137,8 +140,7 @@ impl ::protobuf::Message for KvPair {
                     try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.value));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -261,6 +263,9 @@ pub struct CmdGetRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for CmdGetRequest {}
+
 impl CmdGetRequest {
     pub fn new() -> CmdGetRequest {
         ::std::default::Default::default()
@@ -359,14 +364,13 @@ impl ::protobuf::Message for CmdGetRequest {
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint64());
                     self.version = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -489,6 +493,9 @@ pub struct CmdGetResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for CmdGetResponse {}
+
 impl CmdGetResponse {
     pub fn new() -> CmdGetResponse {
         ::std::default::Default::default()
@@ -581,7 +588,7 @@ impl ::protobuf::Message for CmdGetResponse {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_bool());
                     self.ok = ::std::option::Option::Some(tmp);
@@ -590,8 +597,7 @@ impl ::protobuf::Message for CmdGetResponse {
                     try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.value));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -715,6 +721,9 @@ pub struct CmdScanRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for CmdScanRequest {}
+
 impl CmdScanRequest {
     pub fn new() -> CmdScanRequest {
         ::std::default::Default::default()
@@ -836,21 +845,20 @@ impl ::protobuf::Message for CmdScanRequest {
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint32());
                     self.limit = ::std::option::Option::Some(tmp);
                 },
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint64());
                     self.version = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -986,6 +994,9 @@ pub struct CmdScanResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for CmdScanResponse {}
+
 impl CmdScanResponse {
     pub fn new() -> CmdScanResponse {
         ::std::default::Default::default()
@@ -1067,7 +1078,7 @@ impl ::protobuf::Message for CmdScanResponse {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_bool());
                     self.ok = ::std::option::Option::Some(tmp);
@@ -1076,8 +1087,7 @@ impl ::protobuf::Message for CmdScanResponse {
                     try!(::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.results));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -1203,6 +1213,9 @@ pub struct CmdPrewriteRequest {
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::std::cell::Cell<u32>,
 }
+
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for CmdPrewriteRequest {}
 
 impl CmdPrewriteRequest {
     pub fn new() -> CmdPrewriteRequest {
@@ -1346,14 +1359,13 @@ impl ::protobuf::Message for CmdPrewriteRequest {
                 },
                 4 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint64());
                     self.start_version = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -1501,6 +1513,9 @@ pub struct CmdPrewriteResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for CmdPrewriteResponse {}
+
 impl CmdPrewriteResponse {
     pub fn new() -> CmdPrewriteResponse {
         ::std::default::Default::default()
@@ -1556,14 +1571,13 @@ impl ::protobuf::Message for CmdPrewriteResponse {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_bool());
                     self.ok = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -1673,6 +1687,9 @@ pub struct CmdCommitRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for CmdCommitRequest {}
+
 impl CmdCommitRequest {
     pub fn new() -> CmdCommitRequest {
         ::std::default::Default::default()
@@ -1751,21 +1768,20 @@ impl ::protobuf::Message for CmdCommitRequest {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint64());
                     self.start_version = ::std::option::Option::Some(tmp);
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint64());
                     self.commit_version = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -1887,6 +1903,9 @@ pub struct CmdCommitResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for CmdCommitResponse {}
+
 impl CmdCommitResponse {
     pub fn new() -> CmdCommitResponse {
         ::std::default::Default::default()
@@ -1942,14 +1961,13 @@ impl ::protobuf::Message for CmdCommitResponse {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_bool());
                     self.ok = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -2061,6 +2079,9 @@ pub struct Request {
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::std::cell::Cell<u32>,
 }
+
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for Request {}
 
 impl Request {
     pub fn new() -> Request {
@@ -2253,7 +2274,7 @@ impl ::protobuf::Message for Request {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_enum());
                     self.field_type = ::std::option::Option::Some(tmp);
@@ -2271,8 +2292,7 @@ impl ::protobuf::Message for Request {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.cmd_commit_req));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -2309,7 +2329,7 @@ impl ::protobuf::Message for Request {
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.field_type {
-            try!(os.write_enum(1, v as i32));
+            try!(os.write_enum(1, v.value()));
         };
         if let Some(v) = self.cmd_get_req.as_ref() {
             try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
@@ -2448,6 +2468,9 @@ pub struct Response {
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::std::cell::Cell<u32>,
 }
+
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for Response {}
 
 impl Response {
     pub fn new() -> Response {
@@ -2640,7 +2663,7 @@ impl ::protobuf::Message for Response {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_enum());
                     self.field_type = ::std::option::Option::Some(tmp);
@@ -2658,8 +2681,7 @@ impl ::protobuf::Message for Response {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.cmd_commit_resp));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -2696,7 +2718,7 @@ impl ::protobuf::Message for Response {
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.field_type {
-            try!(os.write_enum(1, v as i32));
+            try!(os.write_enum(1, v.value()));
         };
         if let Some(v) = self.cmd_get_resp.as_ref() {
             try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
