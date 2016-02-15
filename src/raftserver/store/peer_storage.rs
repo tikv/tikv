@@ -161,7 +161,7 @@ impl PeerStorage {
         }
 
         // Here means we don't fetch enough entries.
-        return Err(raft::Error::Store(StorageError::Unavailable));
+        Err(raft::Error::Store(StorageError::Unavailable))
     }
 
     pub fn term(&self, idx: u64) -> raft::Result<u64> {
@@ -171,18 +171,18 @@ impl PeerStorage {
                 if self.truncated_state.get_index() == idx {
                     return Ok(self.truncated_state.get_term());
                 }
-                return Err(e);
+                Err(e)
 
             }
-            Err(e) => return Err(e),
+            Err(e) => Err(e),
             Ok(ents) => {
-                if ents.len() == 0 {
+                if ents.is_empty() {
                     // We can't get empty entries,
                     // maybe we have something wrong in entries function.
                     error!("get empty entries");
-                    return Err(raft::Error::Store(StorageError::Unavailable));
+                    Err(raft::Error::Store(StorageError::Unavailable))
                 } else {
-                    return Ok(ents[0].get_term());
+                    Ok(ents[0].get_term())
                 }
             }
         }
@@ -413,10 +413,10 @@ impl PeerStorage {
     pub fn load_last_index(&self) -> Result<u64> {
         let n = try!(self.engine.get_u64(&keys::raft_last_index_key(self.get_region_id())));
         match n {
-            Some(last_index) => return Ok(last_index),
+            Some(last_index) => Ok(last_index),
             None => {
                 // Log is empty, maybe we starts from scratch or have truncated all logs.
-                return Ok(self.truncated_state.get_index());
+                Ok(self.truncated_state.get_index())
             }
         }
     }
