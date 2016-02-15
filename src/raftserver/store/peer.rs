@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::vec::Vec;
 use std::default::Default;
 
-use rocksdb::{DB, WriteBatch};
+use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
 use uuid::Uuid;
 
@@ -114,6 +114,22 @@ impl Peer {
         Ok(peer)
     }
 
+
+    pub fn destroy(&mut self) -> Result<()> {
+        // Delete all data in this peer.
+        let mut store = self.storage.write().unwrap();
+        let batch = WriteBatch::new();
+        try!(store.scan_region(self.engine.as_ref(),
+                               &mut |key, _| -> Result<bool> {
+                                   try!(batch.delete(key));
+                                   Ok(true)
+                               }));
+
+        try!(self.engine.write(batch));
+
+        Ok(())
+    }
+
     pub fn update_region(&mut self, region: &metapb::Region) -> Result<()> {
         if self.region_id != region.get_region_id() {
             return Err(other(format!("invalid region id {} != {}",
@@ -129,6 +145,10 @@ impl Peer {
     pub fn get_region(&self) -> metapb::Region {
         let store = self.storage.read().unwrap();
         store.get_region().clone()
+    }
+
+    pub fn get_peer_id(&self) -> u64 {
+        self.peer_id
     }
 
     pub fn get_raft_status(&self) -> raft::Status {
