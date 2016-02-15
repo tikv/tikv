@@ -8,7 +8,7 @@ use protobuf::{self, Message};
 use proto::metapb;
 use proto::raftpb::{Entry, Snapshot, HardState, ConfState};
 use proto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
-use raft::{self, Storage, RaftState, StorageError};
+use raft::{self, Storage, RaftState, StorageError, Error as RaftError};
 use raftserver::{Result, Error, other};
 use super::keys;
 use super::engine::{Retriever, Mutator};
@@ -27,20 +27,15 @@ pub struct PeerStorage {
     pub truncated_state: RaftTruncatedState,
 }
 
-fn storage_error<E: Into<Error>>(error: E) -> raft::Error {
-    raft::Error::Store(StorageError::Other(error.into()))
-}
-
-
-impl From<Error> for raft::Error {
-    fn from(err: Error) -> raft::Error {
-        storage_error(err)
+impl From<Error> for RaftError {
+    fn from(err: Error) -> RaftError {
+        RaftError::other(err)
     }
 }
 
-impl<T> From<sync::PoisonError<T>> for raft::Error {
-    fn from(_: sync::PoisonError<T>) -> raft::Error {
-        storage_error("lock failed")
+impl<T> From<sync::PoisonError<T>> for RaftError {
+    fn from(_: sync::PoisonError<T>) -> RaftError {
+        RaftError::other("lock failed")
     }
 }
 
@@ -110,13 +105,13 @@ impl PeerStorage {
 
     pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
         if low > high {
-            return Err(storage_error(format!("low: {} is greater that high: {}", low, high)));
+            return Err(RaftError::other(format!("low: {} is greater that high: {}", low, high)));
         } else if low <= self.truncated_state.get_index() {
-            return Err(raft::Error::Store(StorageError::Compacted));
+            return Err(RaftError::Store(StorageError::Compacted));
         } else if high > self.last_index + 1 {
-            return Err(storage_error(format!("entries' high {} is out of bound lastindex {}",
-                                             high,
-                                             self.last_index)));
+            return Err(RaftError::other(format!("entries' high {} is out of bound lastindex {}",
+                                                high,
+                                                self.last_index)));
         }
 
         let mut ents = vec![];
@@ -157,12 +152,12 @@ impl PeerStorage {
         }
 
         // Here means we don't fetch enough entries.
-        Err(raft::Error::Store(StorageError::Unavailable))
+        Err(RaftError::Store(StorageError::Unavailable))
     }
 
     pub fn term(&self, idx: u64) -> raft::Result<u64> {
         match self.entries(idx, idx + 1, 0) {
-            Err(e@raft::Error::Store(StorageError::Compacted)) => {
+            Err(e@RaftError::Store(StorageError::Compacted)) => {
                 // should we check in truncated_state?
                 if self.truncated_state.get_index() == idx {
                     return Ok(self.truncated_state.get_term());
@@ -176,7 +171,7 @@ impl PeerStorage {
                     // We can't get empty entries,
                     // maybe we have something wrong in entries function.
                     error!("get empty entries");
-                    Err(raft::Error::Store(StorageError::Unavailable))
+                    Err(RaftError::Store(StorageError::Unavailable))
                 } else {
                     Ok(ents[0].get_term())
                 }
