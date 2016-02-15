@@ -96,7 +96,7 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (region_id, peer) in self.peers.iter_mut() {
+        for (region_id, peer) in &mut self.peers {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(*region_id);
         }
