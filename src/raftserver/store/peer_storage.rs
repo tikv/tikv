@@ -1,4 +1,4 @@
-use std::sync::{self, Arc, RwLock};
+use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::vec::Vec;
 use std::error;
 
@@ -27,11 +27,7 @@ pub struct PeerStorage {
     pub truncated_state: RaftTruncatedState,
 }
 
-impl PeerStorage {}
-
-fn storage_error<E>(error: E) -> raft::Error
-    where E: Into<Box<error::Error + Send + Sync>>
-{
+fn storage_error<E: Into<Error>>(error: E) -> raft::Error {
     raft::Error::Store(StorageError::Other(error.into()))
 }
 
@@ -412,13 +408,8 @@ impl PeerStorage {
 
     pub fn load_last_index(&self) -> Result<u64> {
         let n = try!(self.engine.get_u64(&keys::raft_last_index_key(self.get_region_id())));
-        match n {
-            Some(last_index) => Ok(last_index),
-            None => {
-                // Log is empty, maybe we starts from scratch or have truncated all logs.
-                Ok(self.truncated_state.get_index())
-            }
-        }
+        // If log is empty, maybe we starts from scratch or have truncated all logs.
+        Ok(n.unwrap_or(self.truncated_state.get_index()))
     }
 
     pub fn set_last_index(&mut self, last_index: u64) {
@@ -504,44 +495,46 @@ pub fn save_last_index<T: Mutator>(w: &T, region_id: u64, last_index: u64) -> Re
 }
 
 pub struct RaftStorage {
-    store: Arc<RwLock<PeerStorage>>,
+    store: RwLock<PeerStorage>,
 }
 
 impl RaftStorage {
-    pub fn new(store: Arc<RwLock<PeerStorage>>) -> RaftStorage {
-        RaftStorage { store: store }
+    pub fn new(store: PeerStorage) -> RaftStorage {
+        RaftStorage { store: RwLock::new(store) }
+    }
+
+    pub fn rl(&self) -> RwLockReadGuard<PeerStorage> {
+        self.store.read().unwrap()
+    }
+
+    pub fn wl(&self) -> RwLockWriteGuard<PeerStorage> {
+        self.store.write().unwrap()
     }
 }
 
 impl Storage for RaftStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
-        let mut store = self.store.write().unwrap();
-        store.initial_state()
+        self.wl().initial_state()
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
-        let store = self.store.read().unwrap();
-        store.entries(low, high, max_size)
+        self.rl().entries(low, high, max_size)
     }
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
-        let store = self.store.read().unwrap();
-        store.term(idx)
+        self.rl().term(idx)
     }
 
     fn first_index(&self) -> raft::Result<u64> {
-        let store = self.store.read().unwrap();
-        Ok(store.first_index())
+        Ok(self.rl().first_index())
     }
 
     fn last_index(&self) -> raft::Result<u64> {
-        let store = self.store.read().unwrap();
-        Ok(store.last_index())
+        Ok(self.rl().last_index())
     }
 
     fn snapshot(&self) -> raft::Result<Snapshot> {
-        let store = self.store.read().unwrap();
-        store.snapshot()
+        self.rl().snapshot()
     }
 }
 

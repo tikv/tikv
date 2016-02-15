@@ -35,7 +35,7 @@ pub struct Peer {
     region_id: u64,
     leader_id: u64,
     pub raft_group: RawNode<RaftStorage>,
-    pub storage: Arc<RwLock<PeerStorage>>,
+    pub storage: Arc<RaftStorage>,
     pub pending_cmds: HashMap<Uuid, PendingCmd>,
 }
 
@@ -78,7 +78,7 @@ impl Peer {
         let s = try!(PeerStorage::new(store.get_engine(), &region));
 
         let applied_index = s.applied_index();
-        let storage = Arc::new(RwLock::new(s));
+        let storage = Arc::new(RaftStorage::new(s));
 
         let cfg = store.get_config();
         let raft_cfg = raft::Config {
@@ -90,7 +90,7 @@ impl Peer {
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: false,
-            storage: Arc::new(RaftStorage::new(storage.clone())),
+            storage: storage.clone(),
         };
 
         let raft_group = try!(RawNode::new(&raft_cfg, &[]));
@@ -117,13 +117,12 @@ impl Peer {
 
     pub fn destroy(&mut self) -> Result<()> {
         // Delete all data in this peer.
-        let mut store = self.storage.write().unwrap();
         let batch = WriteBatch::new();
-        try!(store.scan_region(self.engine.as_ref(),
-                               &mut |key, _| -> Result<bool> {
-                                   try!(batch.delete(key));
-                                   Ok(true)
-                               }));
+        try!(self.storage.wl().scan_region(self.engine.as_ref(),
+                                           &mut |key, _| -> Result<bool> {
+                                               try!(batch.delete(key));
+                                               Ok(true)
+                                           }));
 
         try!(self.engine.write(batch));
 
@@ -137,14 +136,12 @@ impl Peer {
                                      self.region_id)));
         }
 
-        let mut store = self.storage.write().unwrap();
-        store.set_region(region);
+        self.storage.wl().set_region(region);
         Ok(())
     }
 
     pub fn get_region(&self) -> metapb::Region {
-        let store = self.storage.read().unwrap();
-        store.get_region().clone()
+        self.storage.rl().get_region().clone()
     }
 
     pub fn get_peer_id(&self) -> u64 {
@@ -226,7 +223,7 @@ impl Peer {
 
     fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<()> {
         let batch = WriteBatch::new();
-        let mut storage = self.storage.write().unwrap();
+        let mut storage = self.storage.wl();
         let mut last_index = storage.last_index();
         let mut apply_snap_res: Option<ApplySnapResult> = None;
         if !raft::is_empty_snap(&ready.snapshot) {
@@ -434,7 +431,7 @@ impl Peer {
                           index: u64,
                           cmd: RaftCommandRequest)
                           -> Result<RaftCommandResponse> {
-        let last_applied_index = self.storage.read().unwrap().applied_index();
+        let last_applied_index = self.storage.rl().applied_index();
 
         if last_applied_index >= index {
             return Err(other(format!("applied index moved backwards, {} >= {}",
@@ -455,8 +452,7 @@ impl Peer {
         match self.engine
                   .write(wb) {
             Ok(()) => {
-                let mut storage = self.storage.write().unwrap();
-                storage.set_applied_index(index);
+                self.storage.wl().set_applied_index(index);
 
                 // TODO: handle truncate log command and set truncate log state
                 ()
