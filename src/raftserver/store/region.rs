@@ -137,6 +137,5 @@ pub fn validate_route_meta_split_key(key: &[u8]) -> bool {
         return false;
     }
 
-    return true;
-
+    true
 }

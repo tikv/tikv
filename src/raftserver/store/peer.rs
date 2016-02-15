@@ -236,7 +236,7 @@ impl Peer {
             }));
         }
 
-        if ready.entries.len() > 0 {
+        if !ready.entries.is_empty() {
             last_index = try!(storage.append(&batch, last_index, &ready.entries));
         }
 
@@ -377,17 +377,17 @@ impl Peer {
     }
 
     fn repropose_pending_cmds(&mut self) -> Result<()> {
-        if self.pending_cmds.len() > 0 {
+        if !self.pending_cmds.is_empty() {
             info!("re-propose {} pending commands after empty entry",
                   self.pending_cmds.len());
             // TODO: use a better way to avoid clone.
             let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
-            for (_, cmd) in self.pending_cmds.iter() {
+            for cmd in self.pending_cmds.values() {
                 // We only need uuid and cmd for later re-propose.
                 cmds.push(PendingCmd { cmd: cmd.cmd.clone(), ..Default::default() });
             }
 
-            for mut cmd in cmds.iter_mut() {
+            for mut cmd in &mut cmds {
                 try!(self.propose_pending_cmd(&mut cmd));
             }
         }
@@ -476,7 +476,7 @@ impl Peer {
                             cmd: RaftCommandRequest)
                             -> Result<RaftCommandResponse> {
         // implement later.
-        unreachable!();
+        unimplemented!();
     }
 }
 
