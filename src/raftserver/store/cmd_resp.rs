@@ -2,6 +2,8 @@ use std::boxed::Box;
 use std::error;
 use std::option::Option;
 
+use uuid::Uuid;
+
 use proto::raft_cmdpb::RaftCommandResponse;
 use proto::metapb;
 use proto::errorpb::{self, ErrorDetail};
@@ -45,4 +47,8 @@ fn new_error(err: Box<error::Error + Send + Sync>,
     msg.mut_header().set_error(error_header);
 
     msg
+}
+
+pub fn bind_uuid(resp: &mut RaftCommandResponse, uuid: Uuid) {
+    resp.mut_header().set_uuid(uuid.as_bytes().to_vec());
 }
