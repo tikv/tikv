@@ -85,7 +85,7 @@ impl<T: Storage + Default> Config<T> {
             return Err(Error::ConfigInvalid("invalid node id".to_owned()));
         }
 
-        if self.heartbeat_tick <= 0 {
+        if self.heartbeat_tick == 0 {
             return Err(Error::ConfigInvalid("heartbeat tick must greater than 0".to_owned()));
         }
 
@@ -94,7 +94,7 @@ impl<T: Storage + Default> Config<T> {
                                                 .to_owned()));
         }
 
-        if self.max_inflight_msgs <= 0 {
+        if self.max_inflight_msgs == 0 {
             return Err(Error::ConfigInvalid("max inflight messages must be greater than 0"
                                                 .to_owned()));
         }
@@ -479,7 +479,7 @@ impl<T: Storage + Default> Raft<T> {
             return;
         }
         self.election_elapsed += 1;
-        if self.is_election_timeout() {
+        if self.election_timeout() {
             self.election_elapsed = 0;
             let m = new_message(INVALID_ID, MessageType::MsgHup, Some(self.id));
             self.step(m).is_ok();
@@ -591,9 +591,7 @@ impl<T: Storage + Default> Raft<T> {
                   id,
                   self.term)
         }
-        if !self.votes.contains_key(&id) {
-            self.votes.insert(id, v);
-        }
+        self.votes.entry(id).or_insert(v);
         self.votes.values().filter(|x| **x).count()
     }
 
@@ -1141,10 +1139,10 @@ impl<T: Storage + Default> Raft<T> {
         self.vote = hs.get_vote();
     }
 
-    // is_election_timeout returns true if self.election_elapsed is greater than the
+    // election_timeout returns true if self.election_elapsed is greater than the
     // randomized election timeout in (electiontimeout, 2 * electiontimeout - 1).
     // Otherwise, it returns false.
-    pub fn is_election_timeout(&mut self) -> bool {
+    pub fn election_timeout(&mut self) -> bool {
         if self.election_elapsed < self.election_timeout {
             return false;
         }
@@ -1159,7 +1157,7 @@ impl<T: Storage + Default> Raft<T> {
     fn check_quorum_active(&mut self) -> bool {
         let mut act = 0;
         let self_id = self.id;
-        for (id, p) in self.prs.iter_mut() {
+        for (id, p) in &mut self.prs {
             if id == &self_id {
                 // self is always active
                 act += 1;
