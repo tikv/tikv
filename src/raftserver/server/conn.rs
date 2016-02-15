@@ -151,7 +151,7 @@ impl Conn {
 
         // no data for writing, remove writable.
         self.interest.remove(EventSet::writable());
-        return self.reregister(event_loop);
+        self.reregister(event_loop)
     }
 
     pub fn append_write_buf<T: ServerHandler>(&mut self,

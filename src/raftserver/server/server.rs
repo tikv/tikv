@@ -127,14 +127,14 @@ impl<T: ServerHandler> Server<T> {
                 };
 
                 msgs.and_then(|msgs| {
-                        if msgs.len() == 0 {
+                        if msgs.is_empty() {
                             return Ok(msgs);
                         }
 
                         self.handler.handle_read_data(&self.sender, token, msgs)
                     })
                     .and_then(|res| {
-                        if res.len() == 0 {
+                        if res.is_empty() {
                             return Ok(());
                         }
 
@@ -206,7 +206,7 @@ impl<T: ServerHandler> Server<T> {
         let peer_addr = try!(addr.parse());
         let sock = try!(TcpStream::connect(&peer_addr));
         let token = try!(self.add_new_conn(event_loop, sock, Some(addr.to_string())));
-        self.peers.insert(addr.to_string(), token);
+        self.peers.insert(addr.to_owned(), token);
         Ok(token)
     }
 
