@@ -20,6 +20,9 @@ pub struct NotLeaderError {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for NotLeaderError {}
+
 impl NotLeaderError {
     pub fn new() -> NotLeaderError {
         ::std::default::Default::default()
@@ -106,7 +109,7 @@ impl ::protobuf::Message for NotLeaderError {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint64());
                     self.region_id = ::std::option::Option::Some(tmp);
@@ -115,8 +118,7 @@ impl ::protobuf::Message for NotLeaderError {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.leader));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -241,6 +243,9 @@ pub struct RegionNotFoundError {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for RegionNotFoundError {}
+
 impl RegionNotFoundError {
     pub fn new() -> RegionNotFoundError {
         ::std::default::Default::default()
@@ -293,14 +298,13 @@ impl ::protobuf::Message for RegionNotFoundError {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint64());
                     self.region_id = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -410,6 +414,9 @@ pub struct ErrorDetail {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for ErrorDetail {}
+
 impl ErrorDetail {
     pub fn new() -> ErrorDetail {
         ::std::default::Default::default()
@@ -515,8 +522,7 @@ impl ::protobuf::Message for ErrorDetail {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.region_not_found));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -645,6 +651,9 @@ pub struct Error {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for Error {}
+
 impl Error {
     pub fn new() -> Error {
         ::std::default::Default::default()
@@ -753,8 +762,7 @@ impl ::protobuf::Message for Error {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.detail));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
