@@ -40,14 +40,14 @@ message DeleteResponse {
 }
 
 enum CommandType {
-    InvalidCmd  = 0;
+    Invalid     = 0;
     Get         = 1;
     Seek        = 2;
     Put         = 3;
     Delete      = 4;
 }
 
-message RequestUnion {
+message Request {
     optional CommandType cmd_type      = 1;
     optional GetRequest get            = 2;
     optional SeekRequest seek          = 3;
@@ -55,7 +55,7 @@ message RequestUnion {
     optional DeleteRequest delete      = 5;
 }
 
-message ResponseUnion {
+message Response {
     optional CommandType cmd_type      = 1;
     optional GetResponse get           = 2;
     optional SeekResponse seek         = 3;
@@ -90,18 +90,18 @@ message SplitResponse {
 }
 
 enum AdminCommandType {
-    InvalidAdminCmd = 0;
+    InvalidAdmin    = 0;
     ChangePeer      = 1;
     Split           = 2;
 }
 
-message AdminRequestUnion {
+message AdminRequest {
     optional AdminCommandType cmd_type      = 1;
     optional ChangePeerRequest change_peer  = 2;
     optional SplitRequest split             = 3;
 }
 
-message AdminResponseUnion {
+message AdminResponse {
     optional AdminCommandType cmd_type      = 1;
     optional ChangePeerResponse change_peer = 2;
     optional SplitResponse split            = 3;  
@@ -119,15 +119,15 @@ message RaftResponseHeader {
 }
 
 message RaftCommandRequest {
-    optional RaftRequestHeader header          = 1;
+    optional RaftRequestHeader header     = 1;
     // We can't enclose normal requests and administrator request
     // at same time. 
-    repeated RequestUnion requests             = 2; 
-    optional AdminRequestUnion admin_request   = 3; 
+    repeated Request requests             = 2; 
+    optional AdminRequest admin_request   = 3; 
 }
 
 message RaftCommandResponse {
-    optional RaftResponseHeader header         = 1;
-    repeated ResponseUnion responses           = 2;
-    optional AdminResponseUnion admin_response = 3;
+    optional RaftResponseHeader header    = 1;
+    repeated Response responses           = 2;
+    optional AdminResponse admin_response = 3;
 }
