@@ -360,6 +360,7 @@ impl Peer {
         if self.pending_cmds.len() > 0 {
             info!("re-propose {} pending commands after empty entry",
                   self.pending_cmds.len());
+            // TODO: use a better way to avoid clone.
             let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
             for (_, cmd) in self.pending_cmds.iter() {
                 // We only need uuid and cmd for later re-propose.
