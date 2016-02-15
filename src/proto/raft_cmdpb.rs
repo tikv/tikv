@@ -19,6 +19,9 @@ pub struct GetRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for GetRequest {}
+
 impl GetRequest {
     pub fn new() -> GetRequest {
         ::std::default::Default::default()
@@ -90,8 +93,7 @@ impl ::protobuf::Message for GetRequest {
                     try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.key));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -200,6 +202,9 @@ pub struct GetResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for GetResponse {}
+
 impl GetResponse {
     pub fn new() -> GetResponse {
         ::std::default::Default::default()
@@ -271,8 +276,7 @@ impl ::protobuf::Message for GetResponse {
                     try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.value));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -381,6 +385,9 @@ pub struct SeekRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for SeekRequest {}
+
 impl SeekRequest {
     pub fn new() -> SeekRequest {
         ::std::default::Default::default()
@@ -452,8 +459,7 @@ impl ::protobuf::Message for SeekRequest {
                     try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.key));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -562,6 +568,9 @@ pub struct SeekResponse {
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::std::cell::Cell<u32>,
 }
+
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for SeekResponse {}
 
 impl SeekResponse {
     pub fn new() -> SeekResponse {
@@ -674,8 +683,7 @@ impl ::protobuf::Message for SeekResponse {
                     try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.value));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -798,6 +806,9 @@ pub struct PutRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for PutRequest {}
+
 impl PutRequest {
     pub fn new() -> PutRequest {
         ::std::default::Default::default()
@@ -909,8 +920,7 @@ impl ::protobuf::Message for PutRequest {
                     try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.value));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -1030,6 +1040,9 @@ pub struct PutResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for PutResponse {}
+
 impl PutResponse {
     pub fn new() -> PutResponse {
         ::std::default::Default::default()
@@ -1061,8 +1074,7 @@ impl ::protobuf::Message for PutResponse {
             let (field_number, wire_type) = try!(is.read_tag_unpack());
             match field_number {
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -1158,6 +1170,9 @@ pub struct DeleteRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for DeleteRequest {}
+
 impl DeleteRequest {
     pub fn new() -> DeleteRequest {
         ::std::default::Default::default()
@@ -1229,8 +1244,7 @@ impl ::protobuf::Message for DeleteRequest {
                     try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.key));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -1337,6 +1351,9 @@ pub struct DeleteResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for DeleteResponse {}
+
 impl DeleteResponse {
     pub fn new() -> DeleteResponse {
         ::std::default::Default::default()
@@ -1368,8 +1385,7 @@ impl ::protobuf::Message for DeleteResponse {
             let (field_number, wire_type) = try!(is.read_tag_unpack());
             match field_number {
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -1468,6 +1484,9 @@ pub struct Request {
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::std::cell::Cell<u32>,
 }
+
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for Request {}
 
 impl Request {
     pub fn new() -> Request {
@@ -1657,7 +1676,7 @@ impl ::protobuf::Message for Request {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_enum());
                     self.cmd_type = ::std::option::Option::Some(tmp);
@@ -1675,8 +1694,7 @@ impl ::protobuf::Message for Request {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.delete));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -1713,7 +1731,7 @@ impl ::protobuf::Message for Request {
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.cmd_type {
-            try!(os.write_enum(1, v as i32));
+            try!(os.write_enum(1, v.value()));
         };
         if let Some(v) = self.get.as_ref() {
             try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
@@ -1852,6 +1870,9 @@ pub struct Response {
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::std::cell::Cell<u32>,
 }
+
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for Response {}
 
 impl Response {
     pub fn new() -> Response {
@@ -2041,7 +2062,7 @@ impl ::protobuf::Message for Response {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_enum());
                     self.cmd_type = ::std::option::Option::Some(tmp);
@@ -2059,8 +2080,7 @@ impl ::protobuf::Message for Response {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.delete));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -2097,7 +2117,7 @@ impl ::protobuf::Message for Response {
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.cmd_type {
-            try!(os.write_enum(1, v as i32));
+            try!(os.write_enum(1, v.value()));
         };
         if let Some(v) = self.get.as_ref() {
             try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
@@ -2235,6 +2255,9 @@ pub struct ChangePeerRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for ChangePeerRequest {}
+
 impl ChangePeerRequest {
     pub fn new() -> ChangePeerRequest {
         ::std::default::Default::default()
@@ -2347,7 +2370,7 @@ impl ::protobuf::Message for ChangePeerRequest {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_enum());
                     self.change_type = ::std::option::Option::Some(tmp);
@@ -2359,8 +2382,7 @@ impl ::protobuf::Message for ChangePeerRequest {
                     try!(::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.update_peers));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -2389,7 +2411,7 @@ impl ::protobuf::Message for ChangePeerRequest {
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.change_type {
-            try!(os.write_enum(1, v as i32));
+            try!(os.write_enum(1, v.value()));
         };
         if let Some(v) = self.peer.as_ref() {
             try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
@@ -2498,6 +2520,9 @@ pub struct ChangePeerResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for ChangePeerResponse {}
+
 impl ChangePeerResponse {
     pub fn new() -> ChangePeerResponse {
         ::std::default::Default::default()
@@ -2529,8 +2554,7 @@ impl ::protobuf::Message for ChangePeerResponse {
             let (field_number, wire_type) = try!(is.read_tag_unpack());
             match field_number {
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -2627,6 +2651,9 @@ pub struct SplitRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for SplitRequest {}
+
 impl SplitRequest {
     pub fn new() -> SplitRequest {
         ::std::default::Default::default()
@@ -2719,14 +2746,13 @@ impl ::protobuf::Message for SplitRequest {
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint64());
                     self.new_region_id = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -2849,6 +2875,9 @@ pub struct SplitResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for SplitResponse {}
+
 impl SplitResponse {
     pub fn new() -> SplitResponse {
         ::std::default::Default::default()
@@ -2954,8 +2983,7 @@ impl ::protobuf::Message for SplitResponse {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.right));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -3085,6 +3113,9 @@ pub struct AdminRequest {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for AdminRequest {}
+
 impl AdminRequest {
     pub fn new() -> AdminRequest {
         ::std::default::Default::default()
@@ -3205,7 +3236,7 @@ impl ::protobuf::Message for AdminRequest {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_enum());
                     self.cmd_type = ::std::option::Option::Some(tmp);
@@ -3217,8 +3248,7 @@ impl ::protobuf::Message for AdminRequest {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.split));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -3247,7 +3277,7 @@ impl ::protobuf::Message for AdminRequest {
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.cmd_type {
-            try!(os.write_enum(1, v as i32));
+            try!(os.write_enum(1, v.value()));
         };
         if let Some(v) = self.change_peer.as_ref() {
             try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
@@ -3360,6 +3390,9 @@ pub struct AdminResponse {
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::std::cell::Cell<u32>,
 }
+
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for AdminResponse {}
 
 impl AdminResponse {
     pub fn new() -> AdminResponse {
@@ -3481,7 +3514,7 @@ impl ::protobuf::Message for AdminResponse {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_enum());
                     self.cmd_type = ::std::option::Option::Some(tmp);
@@ -3493,8 +3526,7 @@ impl ::protobuf::Message for AdminResponse {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.split));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -3523,7 +3555,7 @@ impl ::protobuf::Message for AdminResponse {
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.cmd_type {
-            try!(os.write_enum(1, v as i32));
+            try!(os.write_enum(1, v.value()));
         };
         if let Some(v) = self.change_peer.as_ref() {
             try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
@@ -3637,6 +3669,9 @@ pub struct RaftRequestHeader {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for RaftRequestHeader {}
+
 impl RaftRequestHeader {
     pub fn new() -> RaftRequestHeader {
         ::std::default::Default::default()
@@ -3743,7 +3778,7 @@ impl ::protobuf::Message for RaftRequestHeader {
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_uint64());
                     self.region_id = ::std::option::Option::Some(tmp);
@@ -3753,14 +3788,13 @@ impl ::protobuf::Message for RaftRequestHeader {
                 },
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::ProtobufError::WireError("unexpected wire type".to_string()));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
                     let tmp = try!(is.read_bool());
                     self.read_quorum = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -3898,6 +3932,9 @@ pub struct RaftResponseHeader {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for RaftResponseHeader {}
+
 impl RaftResponseHeader {
     pub fn new() -> RaftResponseHeader {
         ::std::default::Default::default()
@@ -3966,8 +4003,7 @@ impl ::protobuf::Message for RaftResponseHeader {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.error));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -4080,6 +4116,9 @@ pub struct RaftCommandRequest {
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::std::cell::Cell<u32>,
 }
+
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for RaftCommandRequest {}
 
 impl RaftCommandRequest {
     pub fn new() -> RaftCommandRequest {
@@ -4215,8 +4254,7 @@ impl ::protobuf::Message for RaftCommandRequest {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.admin_request));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
@@ -4361,6 +4399,9 @@ pub struct RaftCommandResponse {
     cached_size: ::std::cell::Cell<u32>,
 }
 
+// see codegen.rs for the explanation why impl Sync explicitly
+unsafe impl ::std::marker::Sync for RaftCommandResponse {}
+
 impl RaftCommandResponse {
     pub fn new() -> RaftCommandResponse {
         ::std::default::Default::default()
@@ -4495,8 +4536,7 @@ impl ::protobuf::Message for RaftCommandResponse {
                     try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.admin_response));
                 },
                 _ => {
-                    let unknown = try!(is.read_unknown(wire_type));
-                    self.mut_unknown_fields().add_value(field_number, unknown);
+                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
                 },
             };
         }
