@@ -41,6 +41,7 @@ impl Error {
 }
 
 impl cmp::PartialEq for Error {
+    #[allow(match_same_arms)]
     fn eq(&self, other: &Error) -> bool {
         match (self, other) {
             (&Error::StepPeerNotFound, &Error::StepPeerNotFound) => true,
@@ -90,6 +91,7 @@ impl StorageError {
 }
 
 impl cmp::PartialEq for StorageError {
+    #[allow(match_same_arms)]
     fn eq(&self, other: &StorageError) -> bool {
         match (self, other) {
             (&StorageError::Compacted, &StorageError::Compacted) => true,

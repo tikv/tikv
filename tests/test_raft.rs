@@ -893,7 +893,7 @@ fn test_is_election_timeout() {
         sm.election_elapsed = elapse;
         let mut c = 0;
         for _ in 0..10000 {
-            if sm.is_election_timeout() {
+            if sm.election_timeout() {
                 c += 1;
             }
         }
