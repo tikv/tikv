@@ -108,7 +108,7 @@ mod tests {
 
         for i in 1..10 {
             let mut data = vec![];
-            rpc::encode_data(&mut data, i as u64, "hello world".as_bytes()).unwrap();
+            rpc::encode_data(&mut data, i as u64, b"hello world").unwrap();
             for i in data.clone() {
                 conn.write(&[i; 1]).unwrap();
                 conn.flush().unwrap();
@@ -239,10 +239,10 @@ mod tests {
         let (s1, h1) = start_peer(addr1, cnt1.clone());
         let (s2, h2) = start_peer(addr2, cnt2.clone());
 
-        s1.send_peer(addr2.to_string(), ConnData::from_string(1, "ping")).unwrap();
-        s2.send_peer(addr1.to_string(), ConnData::from_string(2, "ping")).unwrap();
-        s1.send_peer(addr1.to_string(), ConnData::from_string(3, "ping")).unwrap();
-        s2.send_peer(addr2.to_string(), ConnData::from_string(4, "ping")).unwrap();
+        s1.send_peer(addr2.to_owned(), ConnData::from_string(1, "ping")).unwrap();
+        s2.send_peer(addr1.to_owned(), ConnData::from_string(2, "ping")).unwrap();
+        s1.send_peer(addr1.to_owned(), ConnData::from_string(3, "ping")).unwrap();
+        s2.send_peer(addr2.to_owned(), ConnData::from_string(4, "ping")).unwrap();
 
         thread::sleep(Duration::from_secs(1));
 

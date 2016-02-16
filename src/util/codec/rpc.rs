@@ -1,7 +1,7 @@
 // This package handles RPC message data encoding/decoding.
 // Every RPC message data contains two parts: header + payload.
 // Header is 16 bytes, format:
-//  | 0xdaf4 (2 bytes magic value) | 0x01 (version 2 bytes) | msg_len (4 bytes) | msg_id (8 bytes) |,
+//  | 0xdaf4(2 bytes magic value) | 0x01(version 2 bytes) | msg_len(4 bytes) | msg_id(8 bytes) |,
 // all use bigendian.
 // Now the version is always 1.
 // Payload can be any arbitrary data, but we use Protobuf in our program default.
@@ -54,6 +54,18 @@ pub fn encode_data<T: io::Write>(w: &mut T, msg_id: u64, data: &[u8]) -> Result<
     Ok(())
 }
 
+// Decodes encoded data, returns message ID and body.
+pub fn decode_data<T: io::Read>(r: &mut T) -> Result<(u64, Vec<u8>)> {
+    let mut header = vec![0;MSG_HEADER_LEN];
+    try!(r.read_exact(&mut header));
+
+    let (msg_id, payload_len) = try!(decode_msg_header(&header));
+    let mut payload = vec![0;payload_len];
+    try!(r.read_exact(&mut payload));
+
+    Ok((msg_id, payload))
+}
+
 // Encodes msg header to a 16 bytes header buffer.
 pub fn encode_msg_header(msg_id: u64, payload_len: usize) -> Vec<u8> {
     let mut buf = vec![0;MSG_HEADER_LEN];
@@ -63,7 +75,7 @@ pub fn encode_msg_header(msg_id: u64, payload_len: usize) -> Vec<u8> {
     BigEndian::write_u32(&mut buf[4..8], payload_len as u32);
     BigEndian::write_u64(&mut buf[8..16], msg_id);
 
-    return buf;
+    buf
 }
 
 // Decodes encoded data, returns message ID and body.

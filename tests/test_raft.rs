@@ -510,12 +510,20 @@ fn test_leader_election() {
         (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER]), StateRole::Candidate),
         (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None]), StateRole::Candidate),
         (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None, None]), StateRole::Leader),
-        
+
         // three logs further along than 0
-        (Network::new(vec![None, Some(ents(vec![1])), Some(ents(vec![2])), Some(ents(vec![1, 3])), None]), StateRole::Follower),
-        
+        (Network::new(vec![None,
+                           Some(ents(vec![1])),
+                           Some(ents(vec![2])),
+                           Some(ents(vec![1, 3])),
+                           None]), StateRole::Follower),
+
         // logs converge
-        (Network::new(vec![Some(ents(vec![1])), None, Some(ents(vec![2])), Some(ents(vec![1])), None]), StateRole::Leader),
+        (Network::new(vec![Some(ents(vec![1])),
+                           None,
+                           Some(ents(vec![2])),
+                           Some(ents(vec![1])),
+                           None]), StateRole::Leader),
     ];
 
     for (i, &mut (ref mut network, state)) in tests.iter_mut().enumerate() {
@@ -537,8 +545,15 @@ fn test_leader_election() {
 #[test]
 fn test_log_replicatioin() {
     let mut tests = vec![
-        (Network::new(vec![None, None, None]), vec![new_message(1, 1, MessageType::MsgPropose, 1)], 2),
-        (Network::new(vec![None, None, None]), vec![new_message(1, 1, MessageType::MsgPropose, 1), new_message(1, 2, MessageType::MsgHup, 0), new_message(1, 2, MessageType::MsgPropose, 1)], 4),
+        (Network::new(vec![None, None, None]),
+            vec![new_message(1, 1, MessageType::MsgPropose, 1)],
+            2),
+
+        (Network::new(vec![None, None, None]),
+            vec![new_message(1, 1, MessageType::MsgPropose, 1),
+                new_message(1, 2, MessageType::MsgHup, 0),
+                new_message(1, 2, MessageType::MsgPropose, 1)],
+            4),
     ];
 
     for (i, &mut (ref mut network, ref msgs, wcommitted)) in tests.iter_mut().enumerate() {
@@ -844,13 +859,13 @@ fn test_commit() {
         (vec![1], vec![empty_entry(1, 1)], 2, 0),
         (vec![2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
         (vec![1], vec![empty_entry(2, 1)], 2, 1),
-        
+
         // odd
         (vec![2, 1, 1], vec![empty_entry(1, 1), empty_entry(2, 2)], 1, 1),
         (vec![2, 1, 1], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
         (vec![2, 1, 2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
         (vec![2, 1, 2], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
-        
+
         // even
         (vec![2, 1, 1, 1], vec![empty_entry(1, 1), empty_entry(2, 2)], 1, 1),
         (vec![2, 1, 1, 1], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
@@ -893,7 +908,7 @@ fn test_is_election_timeout() {
         sm.election_elapsed = elapse;
         let mut c = 0;
         for _ in 0..10000 {
-            if sm.is_election_timeout() {
+            if sm.election_timeout() {
                 c += 1;
             }
         }
@@ -924,7 +939,8 @@ fn test_step_ignore_old_term_msg() {
 // test_handle_msg_append ensures:
 // 1. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm.
 // 2. If an existing entry conflicts with a new one (same index but different terms),
-//    delete the existing entry and all that follow it; append any new entries not already in the log.
+//    delete the existing entry and all that follow it; append any new entries not already in the
+//    log.
 // 3. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry).
 #[test]
 fn test_handle_msg_append() {
@@ -946,17 +962,18 @@ fn test_handle_msg_append() {
         // Ensure 1
         (nm(2, 3, 2, 3, None), 2, 0, true), // previous log mismatch
         (nm(2, 3, 3, 3, None), 2, 0, true), // previous log non-exist
-        
+
         // Ensure 2
         (nm(2, 1, 1, 1, None), 2, 1, false),
         (nm(2, 0, 0, 1, Some(vec![(1, 2)])), 1, 1, false),
         (nm(2, 2, 2, 3, Some(vec![(3, 2), (4, 2)])), 4, 3, false),
         (nm(2, 2, 2, 4, Some(vec![(3, 2)])), 3, 3, false),
         (nm(2, 1, 1, 4, Some(vec![(2, 2)])), 2, 2, false),
-        
+
         // Ensure 3
         (nm(1, 1, 1, 3, None), 2, 1, false), // match entry 1, commit up to last new entry 1
-        (nm(1, 1, 1, 3, Some(vec![(2, 2)])), 2, 2, false), // match entry 1, commit up to last new entry 2
+        (nm(1, 1, 1, 3, Some(vec![(2, 2)])), 2, 2, false), // match entry 1, commit up to last new
+                                                           // entry 2
         (nm(2, 2, 2, 3, None), 2, 2, false), // match entry 2, commit up to last new entry 2
         (nm(2, 2, 2, 4, None), 2, 2, false), // commit up to log.last()
     ];
@@ -1050,7 +1067,8 @@ fn test_handle_heartbeat_resp() {
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].get_msg_type(), MessageType::MsgAppend);
 
-    // A second heartbeat response with no AppResp does not re-send because we are in the wait state.
+    // A second heartbeat response with no AppResp does not re-send because we are in the wait
+    // state.
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
     assert_eq!(msgs.len(), 0);
@@ -1131,25 +1149,25 @@ fn test_recv_msg_request_vote() {
         (StateRole::Follower, 0, 1, INVALID_ID, true),
         (StateRole::Follower, 0, 2, INVALID_ID, true),
         (StateRole::Follower, 0, 3, INVALID_ID, false),
-        
+
         (StateRole::Follower, 1, 0, INVALID_ID, true),
         (StateRole::Follower, 1, 1, INVALID_ID, true),
         (StateRole::Follower, 1, 2, INVALID_ID, true),
         (StateRole::Follower, 1, 3, INVALID_ID, false),
-        
+
         (StateRole::Follower, 2, 0, INVALID_ID, true),
         (StateRole::Follower, 2, 1, INVALID_ID, true),
         (StateRole::Follower, 2, 2, INVALID_ID, false),
         (StateRole::Follower, 2, 3, INVALID_ID, false),
-        
+
         (StateRole::Follower, 3, 0, INVALID_ID, true),
         (StateRole::Follower, 3, 1, INVALID_ID, true),
         (StateRole::Follower, 3, 2, INVALID_ID, false),
         (StateRole::Follower, 3, 3, INVALID_ID, false),
-        
+
         (StateRole::Follower, 3, 2, 2, false),
         (StateRole::Follower, 3, 2, 1, true),
-        
+
         (StateRole::Leader, 3, 3, 1, true),
         (StateRole::Candidate, 3, 3, 1, true),
     ];
@@ -1184,11 +1202,11 @@ fn test_state_transition() {
         (StateRole::Follower, StateRole::Follower, true, 1, INVALID_ID),
         (StateRole::Follower, StateRole::Candidate, true, 1, INVALID_ID),
         (StateRole::Follower, StateRole::Leader, false, 0, INVALID_ID),
-        
+
         (StateRole::Candidate, StateRole::Follower, true, 0, INVALID_ID),
         (StateRole::Candidate, StateRole::Candidate, true, 1, INVALID_ID),
         (StateRole::Candidate, StateRole::Leader, true, 0, 1),
-        
+
         (StateRole::Leader, StateRole::Follower, true, 1, INVALID_ID),
         (StateRole::Leader, StateRole::Candidate, false, 1, INVALID_ID),
         (StateRole::Leader, StateRole::Leader, true, 0, 1),
@@ -1318,7 +1336,8 @@ fn test_leader_append_response() {
     // initial progress: match = 0; next = 3
     let mut tests = vec![
         (3, true, 0, 3, 0, 0, 0), // stale resp; no replies
-        (2, true, 0, 2, 1, 1, 0), // denied resp; leader does not commit; descrease next and send probing msg
+        (2, true, 0, 2, 1, 1, 0), // denied resp; leader does not commit; descrease next and send
+                                  // probing msg
         (2, false, 2, 4, 2, 2, 2), // accept resp; leader commits; broadcast with commit index
         (0, false, 0, 3, 0, 0, 0),
     ];

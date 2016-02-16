@@ -1,24 +1,26 @@
 #![allow(unused_variables)]
 #![allow(unused_must_use)]
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::option::Option;
 use std::collections::{HashMap, HashSet};
 
 use rocksdb::DB;
 use mio::{self, EventLoop};
+use protobuf;
 use uuid::Uuid;
 
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
-use proto::raft_cmdpb::RaftCommandRequest;
+use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 use raftserver::{Result, other};
+use proto::metapb;
 use super::{Sender, Msg};
 use super::keys;
 use super::engine::Retriever;
 use super::config::Config;
 use super::peer::{Peer, PendingCmd};
 use super::msg::Callback;
-use super::cmd_resp;
+use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
 
 pub struct Store<T: Transport> {
@@ -58,7 +60,33 @@ impl<T: Transport> Store<T> {
         })
     }
 
+    // Do something before store runs.
+    fn prepare(&mut self) -> Result<()> {
+        // Scan region meta to get saved regions.
+        let start_key = keys::REGION_META_MIN_KEY;
+        let end_key = keys::REGION_META_MAX_KEY;
+        let engine = self.engine.clone();
+        try!(engine.scan(start_key,
+                         end_key,
+                         &mut |key, value| -> Result<bool> {
+                             let (_, suffix) = try!(keys::decode_region_meta_key(key));
+                             if suffix != keys::REGION_INFO_SUFFIX {
+                                 return Ok(true);
+                             }
+
+                             let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
+                             let peer = try!(Peer::create(self, region));
+                             // TODO: check duplicated peer id later?
+                             self.peers.insert(peer.get_peer_id(), peer);
+                             Ok(true)
+                         }));
+
+        Ok(())
+    }
+
     pub fn run(&mut self) -> Result<()> {
+        try!(self.prepare());
+
         let mut event_loop = self.event_loop.take().unwrap();
         self.register_raft_base_tick(&mut event_loop);
         try!(event_loop.run(self));
@@ -96,7 +124,7 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (region_id, peer) in self.peers.iter_mut() {
+        for (region_id, peer) in &mut self.peers {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(*region_id);
         }
@@ -104,9 +132,7 @@ impl<T: Transport> Store<T> {
         self.register_raft_base_tick(event_loop);
     }
 
-    fn handle_raft_message(&mut self, msg: Mutex<RaftMessage>) -> Result<()> {
-        let msg = msg.lock().unwrap();
-
+    fn handle_raft_message(&mut self, msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
@@ -152,30 +178,59 @@ impl<T: Transport> Store<T> {
         Ok(())
     }
 
-    fn propose_raft_command(&mut self, msg: Mutex<RaftCommandRequest>, cb: Callback) -> Result<()> {
-        let msg = msg.into_inner().unwrap();
+    fn propose_raft_command(&mut self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
+        let mut resp: RaftCommandResponse;
+        let uuid: Uuid = match Uuid::from_bytes(msg.get_header().get_uuid()) {
+            None => {
+                resp = cmd_resp::message_error("missing request uuid");
+                return cb.call_box((resp,));
+            }
+            Some(uuid) => uuid,
+        };
 
         let region_id = msg.get_header().get_region_id();
         let mut peer = match self.peers.get_mut(&region_id) {
-            None => return cb.call_box((cmd_resp::region_not_found_error(region_id),)),
+            None => {
+                resp = cmd_resp::region_not_found_error(region_id);
+                bind_uuid(&mut resp, uuid);
+                return cb.call_box((resp,));
+            }
             Some(peer) => peer,
         };
 
-        // TODO: check leader first.
+        if !peer.is_leader() {
+            let trans = self.trans.read().unwrap();
+            resp = cmd_resp::not_leader_error(region_id, trans.get_peer(peer.get_leader()));
+            bind_uuid(&mut resp, uuid);
+            return cb.call_box((resp,));
+        }
+
+        if peer.pending_cmds.contains_key(&uuid) {
+            resp = cmd_resp::message_error(format!("duplicated uuid {:?}", uuid));
+            bind_uuid(&mut resp, uuid);
+            return cb.call_box((resp,));
+        }
+
+        // Notice:
+        // Here means the peer is leader, it can still step down to follower later,
+        // but it doesn't matter, if the peer is not leader, the proposing command
+        // log entry can't be committed.
+
 
         // TODO: support handing read-only commands later.
         // for read-only, if we don't care stale read, we can
         // execute these commands immediately in leader.
 
         let mut pending_cmd = PendingCmd {
-            uuid: Uuid::new_v4(),
+            uuid: uuid,
             cb: None,
             cmd: Some(msg),
         };
 
         match peer.propose_pending_cmd(&mut pending_cmd) {
             Err(e) => {
-                let resp = cmd_resp::message_error(format!("{:?}", e));
+                resp = cmd_resp::message_error(format!("{:?}", e));
+                bind_uuid(&mut resp, uuid);
                 return cb.call_box((resp,));
             }
             Ok(()) => (), // nothing to do.
@@ -184,7 +239,7 @@ impl<T: Transport> Store<T> {
         // Keep the callback in pending_cmd so that we can call it later
         // after command applied.
         pending_cmd.cb = Some(cb);
-        peer.pending_cmds.insert(pending_cmd.uuid, pending_cmd);
+        peer.pending_cmds.insert(uuid, pending_cmd);
 
         self.pending_raft_groups.insert(region_id);
 

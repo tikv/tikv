@@ -34,9 +34,9 @@ pub trait MvccEngine : Engine {
             None => Meta::new(),
         };
         meta.add(version);
-        let mval = meta.into_bytes();
+        let mval = meta.as_bytes();
         let batch = vec![Modify::Put((&mkey, &mval)), Modify::Put((&dkey, value))];
-        self.write(batch).map_err(|e| Error::from(e))
+        self.write(batch).map_err(Error::from)
     }
 
     fn mvcc_delete(&mut self, key: &[u8], version: u64) -> Result<()> {
@@ -49,12 +49,12 @@ pub trait MvccEngine : Engine {
         };
         let has_old_ver = meta.has_version(version);
         meta.delete(version);
-        let mval = meta.into_bytes();
+        let mval = meta.as_bytes();
         let mut batch = vec![Modify::Put((&mkey, &mval))];
         if has_old_ver {
             batch.push(Modify::Delete(&dkey));
         }
-        self.write(batch).map_err(|e| Error::from(e))
+        self.write(batch).map_err(Error::from)
     }
 
     fn mvcc_scan(&self,

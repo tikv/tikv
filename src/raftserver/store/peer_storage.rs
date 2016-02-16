@@ -1,4 +1,4 @@
-use std::sync::{self, Arc, RwLock};
+use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::vec::Vec;
 use std::error;
 
@@ -8,7 +8,7 @@ use protobuf::{self, Message};
 use proto::metapb;
 use proto::raftpb::{Entry, Snapshot, HardState, ConfState};
 use proto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
-use raft::{self, Storage, RaftState, StorageError};
+use raft::{self, Storage, RaftState, StorageError, Error as RaftError};
 use raftserver::{Result, Error, other};
 use super::keys;
 use super::engine::{Retriever, Mutator};
@@ -27,23 +27,20 @@ pub struct PeerStorage {
     pub truncated_state: RaftTruncatedState,
 }
 
-impl PeerStorage {}
-
 fn storage_error<E>(error: E) -> raft::Error
     where E: Into<Box<error::Error + Send + Sync>>
 {
     raft::Error::Store(StorageError::Other(error.into()))
 }
 
-
-impl From<Error> for raft::Error {
-    fn from(err: Error) -> raft::Error {
+impl From<Error> for RaftError {
+    fn from(err: Error) -> RaftError {
         storage_error(err)
     }
 }
 
-impl<T> From<sync::PoisonError<T>> for raft::Error {
-    fn from(_: sync::PoisonError<T>) -> raft::Error {
+impl<T> From<sync::PoisonError<T>> for RaftError {
+    fn from(_: sync::PoisonError<T>) -> RaftError {
         storage_error("lock failed")
     }
 }
@@ -116,7 +113,7 @@ impl PeerStorage {
         if low > high {
             return Err(storage_error(format!("low: {} is greater that high: {}", low, high)));
         } else if low <= self.truncated_state.get_index() {
-            return Err(raft::Error::Store(StorageError::Compacted));
+            return Err(RaftError::Store(StorageError::Compacted));
         } else if high > self.last_index + 1 {
             return Err(storage_error(format!("entries' high {} is out of bound lastindex {}",
                                              high,
@@ -161,28 +158,28 @@ impl PeerStorage {
         }
 
         // Here means we don't fetch enough entries.
-        return Err(raft::Error::Store(StorageError::Unavailable));
+        Err(RaftError::Store(StorageError::Unavailable))
     }
 
     pub fn term(&self, idx: u64) -> raft::Result<u64> {
         match self.entries(idx, idx + 1, 0) {
-            Err(e@raft::Error::Store(StorageError::Compacted)) => {
+            Err(e@RaftError::Store(StorageError::Compacted)) => {
                 // should we check in truncated_state?
                 if self.truncated_state.get_index() == idx {
                     return Ok(self.truncated_state.get_term());
                 }
-                return Err(e);
+                Err(e)
 
             }
-            Err(e) => return Err(e),
+            Err(e) => Err(e),
             Ok(ents) => {
-                if ents.len() == 0 {
+                if ents.is_empty() {
                     // We can't get empty entries,
                     // maybe we have something wrong in entries function.
                     error!("get empty entries");
-                    return Err(raft::Error::Store(StorageError::Unavailable));
+                    Err(RaftError::Store(StorageError::Unavailable))
                 } else {
-                    return Ok(ents[0].get_term());
+                    Ok(ents[0].get_term())
                 }
             }
         }
@@ -412,13 +409,8 @@ impl PeerStorage {
 
     pub fn load_last_index(&self) -> Result<u64> {
         let n = try!(self.engine.get_u64(&keys::raft_last_index_key(self.get_region_id())));
-        match n {
-            Some(last_index) => return Ok(last_index),
-            None => {
-                // Log is empty, maybe we starts from scratch or have truncated all logs.
-                return Ok(self.truncated_state.get_index());
-            }
-        }
+        // If log is empty, maybe we starts from scratch or have truncated all logs.
+        Ok(n.unwrap_or(self.truncated_state.get_index()))
     }
 
     pub fn set_last_index(&mut self, last_index: u64) {
@@ -456,7 +448,7 @@ impl PeerStorage {
         // So we should skip this.
         let mut data_start_key = self.region.get_start_key();
         if data_start_key == keys::MIN_KEY {
-            data_start_key = keys::LOCAL_MAX;
+            data_start_key = keys::LOCAL_MAX_KEY;
         }
 
         vec![(keys::region_id_prefix(self.get_region_id()),
@@ -504,44 +496,46 @@ pub fn save_last_index<T: Mutator>(w: &T, region_id: u64, last_index: u64) -> Re
 }
 
 pub struct RaftStorage {
-    store: Arc<RwLock<PeerStorage>>,
+    store: RwLock<PeerStorage>,
 }
 
 impl RaftStorage {
-    pub fn new(store: Arc<RwLock<PeerStorage>>) -> RaftStorage {
-        RaftStorage { store: store }
+    pub fn new(store: PeerStorage) -> RaftStorage {
+        RaftStorage { store: RwLock::new(store) }
+    }
+
+    pub fn rl(&self) -> RwLockReadGuard<PeerStorage> {
+        self.store.read().unwrap()
+    }
+
+    pub fn wl(&self) -> RwLockWriteGuard<PeerStorage> {
+        self.store.write().unwrap()
     }
 }
 
 impl Storage for RaftStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
-        let mut store = self.store.write().unwrap();
-        store.initial_state()
+        self.wl().initial_state()
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
-        let store = self.store.read().unwrap();
-        store.entries(low, high, max_size)
+        self.rl().entries(low, high, max_size)
     }
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
-        let store = self.store.read().unwrap();
-        store.term(idx)
+        self.rl().term(idx)
     }
 
     fn first_index(&self) -> raft::Result<u64> {
-        let store = self.store.read().unwrap();
-        Ok(store.first_index())
+        Ok(self.rl().first_index())
     }
 
     fn last_index(&self) -> raft::Result<u64> {
-        let store = self.store.read().unwrap();
-        Ok(store.last_index())
+        Ok(self.rl().last_index())
     }
 
     fn snapshot(&self) -> raft::Result<Snapshot> {
-        let store = self.store.read().unwrap();
-        store.snapshot()
+        self.rl().snapshot()
     }
 }
 

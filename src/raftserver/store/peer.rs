@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::vec::Vec;
 use std::default::Default;
 
-use rocksdb::{DB, WriteBatch};
+use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
 use uuid::Uuid;
 
@@ -33,8 +33,9 @@ pub struct Peer {
     store_id: u64,
     peer_id: u64,
     region_id: u64,
+    leader_id: u64,
     pub raft_group: RawNode<RaftStorage>,
-    pub storage: Arc<RwLock<PeerStorage>>,
+    pub storage: Arc<RaftStorage>,
     pub pending_cmds: HashMap<Uuid, PendingCmd>,
 }
 
@@ -68,12 +69,16 @@ impl Peer {
                          region: metapb::Region,
                          peer_id: u64)
                          -> Result<Peer> {
+        if peer_id == raft::INVALID_ID {
+            return Err(other("invalid peer id"));
+        }
+
         let store_id = store.get_store_id();
 
         let s = try!(PeerStorage::new(store.get_engine(), &region));
 
         let applied_index = s.applied_index();
-        let storage = Arc::new(RwLock::new(s));
+        let storage = Arc::new(RaftStorage::new(s));
 
         let cfg = store.get_config();
         let raft_cfg = raft::Config {
@@ -85,7 +90,7 @@ impl Peer {
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: false,
-            storage: Arc::new(RaftStorage::new(storage.clone())),
+            storage: storage.clone(),
         };
 
         let raft_group = try!(RawNode::new(&raft_cfg, &[]));
@@ -95,6 +100,7 @@ impl Peer {
             store_id: store_id,
             peer_id: peer_id,
             region_id: region.get_region_id(),
+            leader_id: raft::INVALID_ID,
             storage: storage,
             raft_group: raft_group,
             pending_cmds: HashMap::new(),
@@ -108,6 +114,21 @@ impl Peer {
         Ok(peer)
     }
 
+
+    pub fn destroy(&mut self) -> Result<()> {
+        // Delete all data in this peer.
+        let batch = WriteBatch::new();
+        try!(self.storage.wl().scan_region(self.engine.as_ref(),
+                                           &mut |key, _| -> Result<bool> {
+                                               try!(batch.delete(key));
+                                               Ok(true)
+                                           }));
+
+        try!(self.engine.write(batch));
+
+        Ok(())
+    }
+
     pub fn update_region(&mut self, region: &metapb::Region) -> Result<()> {
         if self.region_id != region.get_region_id() {
             return Err(other(format!("invalid region id {} != {}",
@@ -115,18 +136,28 @@ impl Peer {
                                      self.region_id)));
         }
 
-        let mut store = self.storage.write().unwrap();
-        store.set_region(region);
+        self.storage.wl().set_region(region);
         Ok(())
     }
 
     pub fn get_region(&self) -> metapb::Region {
-        let store = self.storage.read().unwrap();
-        store.get_region().clone()
+        self.storage.rl().get_region().clone()
+    }
+
+    pub fn get_peer_id(&self) -> u64 {
+        self.peer_id
     }
 
     pub fn get_raft_status(&self) -> raft::Status {
         self.raft_group.status()
+    }
+
+    pub fn get_leader(&self) -> u64 {
+        self.leader_id
+    }
+
+    pub fn is_leader(&self) -> bool {
+        self.leader_id == self.peer_id
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self, trans: &Arc<RwLock<T>>) -> Result<()> {
@@ -140,6 +171,10 @@ impl Peer {
                self.region_id);
 
         let ready = self.raft_group.ready();
+
+        if let Some(ref ss) = ready.ss {
+            self.leader_id = ss.lead;
+        }
 
         try!(self.handle_raft_ready_in_storage(&ready));
 
@@ -163,7 +198,7 @@ impl Peer {
         }
 
         let cmd = pending_cmd.cmd.take().unwrap();
-        let data = try!(encode_raft_command(&pending_cmd.uuid, &cmd));
+        let data = try!(cmd.write_to_bytes());
 
         let mut reproposable = false;
         // We handle change_peer command as ConfChange entry, and others as normal entry.
@@ -188,7 +223,7 @@ impl Peer {
 
     fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<()> {
         let batch = WriteBatch::new();
-        let mut storage = self.storage.write().unwrap();
+        let mut storage = self.storage.wl();
         let mut last_index = storage.last_index();
         let mut apply_snap_res: Option<ApplySnapResult> = None;
         if !raft::is_empty_snap(&ready.snapshot) {
@@ -198,7 +233,7 @@ impl Peer {
             }));
         }
 
-        if ready.entries.len() > 0 {
+        if !ready.entries.is_empty() {
             last_index = try!(storage.append(&batch, last_index, &ready.entries));
         }
 
@@ -313,9 +348,9 @@ impl Peer {
             return Ok(());
         }
 
-        let (uuid, cmd) = try!(decode_raft_command(data));
+        let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(data));
         // no need to return error here.
-        if let Err(e) = self.process_raft_command(index, uuid, cmd) {
+        if let Err(e) = self.process_raft_command(index, cmd) {
             error!("process raft command at index {} err: {:?}", index, e);
         }
 
@@ -327,8 +362,8 @@ impl Peer {
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
 
-        let (uuid, cmd) = try!(decode_raft_command(conf_change.get_context()));
-        if let Err(e) = self.process_raft_command(index, uuid, cmd) {
+        let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(conf_change.get_context()));
+        if let Err(e) = self.process_raft_command(index, cmd) {
             error!("process raft command at index {} err: {:?}", index, e);
             // If failed, tell raft that the config change was aborted.
             conf_change = raftpb::ConfChange::new();
@@ -339,38 +374,36 @@ impl Peer {
     }
 
     fn repropose_pending_cmds(&mut self) -> Result<()> {
-        if self.pending_cmds.len() > 0 {
+        if !self.pending_cmds.is_empty() {
             info!("re-propose {} pending commands after empty entry",
                   self.pending_cmds.len());
+            // TODO: use a better way to avoid clone.
             let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
-            for (_, cmd) in self.pending_cmds.iter() {
+            for cmd in self.pending_cmds.values() {
                 // We only need uuid and cmd for later re-propose.
-                cmds.push(PendingCmd {
-                    uuid: cmd.uuid.clone(),
-                    cmd: cmd.cmd.clone(),
-                    ..Default::default()
-                });
+                cmds.push(PendingCmd { cmd: cmd.cmd.clone(), ..Default::default() });
             }
 
-            for mut cmd in cmds.iter_mut() {
+            for mut cmd in &mut cmds {
                 try!(self.propose_pending_cmd(&mut cmd));
             }
         }
         Ok(())
     }
 
-    fn process_raft_command(&mut self,
-                            index: u64,
-                            uuid: Uuid,
-                            cmd: RaftCommandRequest)
-                            -> Result<()> {
+    fn process_raft_command(&mut self, index: u64, cmd: RaftCommandRequest) -> Result<()> {
         if index == 0 {
             return Err(other("processing raft command needs a none zero index"));
         }
 
+        let uuid = Uuid::from_bytes(cmd.get_header().get_uuid()).unwrap_or_else(|| {
+            error!("missing request uuid, but we still try to apply this command");
+            Uuid::new_v4()
+        });
+
         let pending_cmd = self.pending_cmds.remove(&uuid);
 
-        let resp = match self.apply_raft_command(index, cmd) {
+        let mut resp = match self.apply_raft_command(index, cmd) {
             Err(e) => {
                 error!("apply raft command err {:?}", e);
                 cmd_resp::message_error(e)
@@ -383,6 +416,8 @@ impl Peer {
                 warn!("pending command callback for entry {} is None", index);
             } else {
                 let cb = pending_cmd.cb.take().unwrap();
+                // Bind uuid here.
+                cmd_resp::bind_uuid(&mut resp, uuid);
                 if let Err(e) = cb.call_box((resp,)) {
                     error!("callback err {:?}", e);
                 }
@@ -396,7 +431,7 @@ impl Peer {
                           index: u64,
                           cmd: RaftCommandRequest)
                           -> Result<RaftCommandResponse> {
-        let last_applied_index = self.storage.read().unwrap().applied_index();
+        let last_applied_index = self.storage.rl().applied_index();
 
         if last_applied_index >= index {
             return Err(other(format!("applied index moved backwards, {} >= {}",
@@ -417,8 +452,7 @@ impl Peer {
         match self.engine
                   .write(wb) {
             Ok(()) => {
-                let mut storage = self.storage.write().unwrap();
-                storage.set_applied_index(index);
+                self.storage.wl().set_applied_index(index);
 
                 // TODO: handle truncate log command and set truncate log state
                 ()
@@ -438,28 +472,8 @@ impl Peer {
                             cmd: RaftCommandRequest)
                             -> Result<RaftCommandResponse> {
         // implement later.
-        unreachable!();
+        unimplemented!();
     }
-}
-
-fn encode_raft_command(uuid: &Uuid, cmd: &RaftCommandRequest) -> Result<Vec<u8>> {
-    let mut data = Vec::with_capacity(16 + cmd.compute_size() as usize);
-    data.extend_from_slice(uuid.as_bytes());
-    try!(cmd.write_to_vec(&mut data));
-
-    Ok(data)
-}
-
-fn decode_raft_command(data: &[u8]) -> Result<(Uuid, RaftCommandRequest)> {
-    if data.len() < 16 {
-        return Err(other(format!("invalid encoded raft data len {}", data.len())));
-    }
-
-    let uuid = Uuid::from_bytes(&data[0..16]).unwrap();
-
-    let msg = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(&data[16..]));
-
-    Ok((uuid, msg))
 }
 
 fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerRequest> {
