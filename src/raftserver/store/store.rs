@@ -1,6 +1,3 @@
-#![allow(unused_variables)]
-#![allow(unused_must_use)]
-
 use std::sync::{Arc, RwLock};
 use std::option::Option;
 use std::collections::{HashMap, HashSet};
@@ -132,6 +129,10 @@ impl<T: Transport> Store<T> {
         self.register_raft_base_tick(event_loop);
     }
 
+    // Clippy doesn't allow hash_map contains_key followed by insert, and suggests
+    // using entry().or_insert() instead, but we can't use this because creating peer
+    // may fail, so we allow map_entry.
+    #[allow(map_entry)]
     fn handle_raft_message(&mut self, msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
@@ -269,7 +270,7 @@ impl<T: Transport> mio::Handler for Store<T> {
     type Timeout = Msg;
     type Message = Msg;
 
-    fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
+    fn notify(&mut self, _: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::RaftMessage(data) => {
                 if let Err(e) = self.handle_raft_message(data) {
@@ -292,7 +293,7 @@ impl<T: Transport> mio::Handler for Store<T> {
         }
     }
 
-    fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
+    fn tick(&mut self, _: &mut EventLoop<Self>) {
         // We handle raft ready in event loop.
         if let Err(e) = self.handle_raft_ready() {
             // TODO: should we panic here or shutdown the store?
