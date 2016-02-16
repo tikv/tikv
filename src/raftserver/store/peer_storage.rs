@@ -27,15 +27,21 @@ pub struct PeerStorage {
     pub truncated_state: RaftTruncatedState,
 }
 
+fn storage_error<E>(error: E) -> raft::Error
+    where E: Into<Box<error::Error + Send + Sync>>
+{
+    raft::Error::Store(StorageError::Other(error.into()))
+}
+
 impl From<Error> for RaftError {
     fn from(err: Error) -> RaftError {
-        RaftError::other(err)
+        storage_error(err)
     }
 }
 
 impl<T> From<sync::PoisonError<T>> for RaftError {
     fn from(_: sync::PoisonError<T>) -> RaftError {
-        RaftError::other("lock failed")
+        storage_error("lock failed")
     }
 }
 
@@ -105,13 +111,13 @@ impl PeerStorage {
 
     pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
         if low > high {
-            return Err(RaftError::other(format!("low: {} is greater that high: {}", low, high)));
+            return Err(storage_error(format!("low: {} is greater that high: {}", low, high)));
         } else if low <= self.truncated_state.get_index() {
             return Err(RaftError::Store(StorageError::Compacted));
         } else if high > self.last_index + 1 {
-            return Err(RaftError::other(format!("entries' high {} is out of bound lastindex {}",
-                                                high,
-                                                self.last_index)));
+            return Err(storage_error(format!("entries' high {} is out of bound lastindex {}",
+                                             high,
+                                             self.last_index)));
         }
 
         let mut ents = vec![];
