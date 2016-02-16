@@ -49,7 +49,7 @@ impl cmp::PartialEq for Error {
             (&Error::Io(ref e1), &Error::Io(ref e2)) => e1.kind() == e2.kind(),
             (&Error::StepLocalMsg, &Error::StepLocalMsg) => true,
             (&Error::ConfigInvalid(ref e1), &Error::ConfigInvalid(ref e2)) => e1 == e2,
-            _ => false, 
+            _ => false,
         }
     }
 }

@@ -162,8 +162,8 @@ impl Conn {
         // Later we can write data directly, if meet WOUNDBLOCK error(don't write all data OK),
         // we can register writable at that time.
         // We must also check `socket is not connected` error too, when we connect to a remote
-        // peer, mio puts this socket in event loop immediately, but this socket may not be connected
-        // at that time, so we must register writable too for this case.
+        // peer, mio puts this socket in event loop immediately, but this socket may not be
+        // connected at that time, so we must register writable too for this case.
         self.res.push_back(msg.encode_to_buf());
 
         if !self.interest.is_writable() {

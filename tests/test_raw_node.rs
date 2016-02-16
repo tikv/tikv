@@ -78,8 +78,8 @@ fn test_raw_node_step() {
     }
 }
 
-// test_raw_node_propose_and_conf_change ensures that RawNode.propose and RawNode.propose_conf_change
-// send the given proposal and ConfChange to the underlying raft.
+// test_raw_node_propose_and_conf_change ensures that RawNode.propose and
+// RawNode.propose_conf_change send the given proposal and ConfChange to the underlying raft.
 #[test]
 fn test_raw_node_propose_and_conf_change() {
     let s = new_storage();
