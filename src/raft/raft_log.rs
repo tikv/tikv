@@ -31,7 +31,8 @@ pub struct RaftLog<T>
     pub applied: u64,
 }
 
-impl<T> ToString for RaftLog<T> where T: Storage
+impl<T> ToString for RaftLog<T>
+    where T: Storage
 {
     fn to_string(&self) -> String {
         format!("committed={}, applied={}, unstable.offset={}, unstable.entries.len()={}",
@@ -42,7 +43,8 @@ impl<T> ToString for RaftLog<T> where T: Storage
     }
 }
 
-impl<T> RaftLog<T> where T: Storage
+impl<T> RaftLog<T>
+    where T: Storage
 {
     pub fn new(storage: Arc<T>) -> RaftLog<T> {
         let first_index = storage.first_index().unwrap_or_else(|e| panic!(e));
@@ -418,7 +420,8 @@ mod test {
             (vec![new_entry(2, 2), new_entry(3, 3)], 0),
             (vec![new_entry(3, 3)], 0),
             // no conflict, but has new entries
-            (vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
+            (vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3), new_entry(4, 4),
+                new_entry(5, 4)], 4),
             (vec![new_entry(2, 2), new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
             (vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
             (vec![new_entry(4, 4), new_entry(5, 4)], 4),
@@ -475,7 +478,8 @@ mod test {
             // conflicts with index 1
             (vec![new_entry(1, 2)], 1, vec![new_entry(1, 2)], 1),
             // conflicts with index 2
-            (vec![new_entry(2, 3), new_entry(3, 3)], 3, vec![new_entry(1, 1), new_entry(2, 3), new_entry(3, 3)], 2),
+            (vec![new_entry(2, 3), new_entry(3, 3)], 3, vec![new_entry(1, 1), new_entry(2, 3),
+                new_entry(3, 3)], 2),
         ];
         for (i, &(ref ents, windex, ref wents, wunstable)) in tests.iter().enumerate() {
             let store = MemStorage::new();
@@ -627,15 +631,15 @@ mod test {
             (snapi + 1, snapt, vec![], snapi + 1),
             (snapi, snapt, vec![], snapi + 1),
             (snapi - 1, snapt, vec![], snapi + 1),
-            
+
             (snapi + 1, snapt + 1, vec![], snapi + 1),
             (snapi, snapt + 1, vec![], snapi + 1),
             (snapi - 1, snapt + 1, vec![], snapi + 1),
-            
+
             (snapi + 1, snapt, vec![new_entry(snapi + 1, snapt)], snapi + 2),
             (snapi, snapt, vec![new_entry(snapi + 1, snapt)], snapi + 1),
             (snapi - 1, snapt, vec![new_entry(snapi + 1, snapt)], snapi + 1),
-            
+
             (snapi + 1, snapt + 1, vec![new_entry(snapi + 1, snapt)], snapi + 1),
             (snapi, snapt + 1, vec![new_entry(snapi + 1, snapt)], snapi + 1),
             (snapi - 1, snapt + 1, vec![new_entry(snapi + 1, snapt)], snapi + 1),
@@ -783,7 +787,8 @@ mod test {
             // test no limit
             (offset - 1, offset + 1, raft_log::NO_LIMIT, vec![], false),
             (offset, offset + 1, raft_log::NO_LIMIT, vec![], false),
-            (half - 1, half + 1, raft_log::NO_LIMIT, vec![new_entry(half - 1, half - 1), new_entry(half, half)], false),
+            (half - 1, half + 1, raft_log::NO_LIMIT, vec![new_entry(half - 1, half - 1),
+                new_entry(half, half)], false),
             (half, half + 1, raft_log::NO_LIMIT, vec![new_entry(half, half)], false),
             (last - 1, last, raft_log::NO_LIMIT, vec![new_entry(last - 1, last - 1)], false),
             (last, last + 1, raft_log::NO_LIMIT, vec![], true),
@@ -791,10 +796,14 @@ mod test {
             // test limit
             (half - 1, half + 1, 0, vec![new_entry(half - 1, half - 1)], false),
             (half - 1, half + 1, halfe_size + 1, vec![new_entry(half - 1, half - 1)], false),
-            (half - 1, half + 1, halfe_size * 2, vec![new_entry(half - 1, half - 1), new_entry(half, half)], false),
-            (half - 1, half + 2, halfe_size * 3, vec![new_entry(half - 1, half - 1), new_entry(half, half), new_entry(half + 1, half + 1)], false),
+            (half - 1, half + 1, halfe_size * 2, vec![new_entry(half - 1, half - 1),
+                                                      new_entry(half, half)], false),
+            (half - 1, half + 2, halfe_size * 3, vec![new_entry(half - 1, half - 1),
+                                                      new_entry(half, half),
+                                                      new_entry(half + 1, half + 1)], false),
             (half, half + 2, halfe_size, vec![new_entry(half, half)], false),
-            (half, half + 2, halfe_size * 2, vec![new_entry(half, half), new_entry(half + 1, half + 1)], false),
+            (half, half + 2, halfe_size * 2, vec![new_entry(half, half),
+                new_entry(half + 1, half + 1)], false),
         ];
 
         for (i, &(from, to, limit, ref w, wpanic)) in tests.iter().enumerate() {
@@ -858,8 +867,10 @@ mod test {
             (last_term, last_index, last_index + 1, vec![new_entry(last_index + 1, 4)],
              Some(last_index + 1), last_index + 1, false),
             (last_term, last_index, last_index + 2, vec![new_entry(last_index + 1, 4)],
-             Some(last_index + 1), last_index + 1, false), // do not increase commit higher than lastnewi
-            (last_term, last_index, last_index + 2, vec![new_entry(last_index + 1, 4), new_entry(last_index + 2, 4)],
+             Some(last_index + 1), last_index + 1, false), // do not increase commit higher than
+                                                           // lastnewi
+            (last_term, last_index, last_index + 2, vec![new_entry(last_index + 1, 4),
+                new_entry(last_index + 2, 4)],
              Some(last_index + 2), last_index + 2, false),
             // match with the the entry in the middle
             (last_term - 1, last_index - 1, last_index, vec![new_entry(last_index, 4)],
@@ -868,7 +879,8 @@ mod test {
              Some(last_index - 1), last_index - 1, false),
             (last_term - 3, last_index - 3, last_index, vec![new_entry(last_index - 2, 4)],
              Some(last_index - 2), last_index - 2, true), // conflict with existing committed entry
-            (last_term - 2, last_index - 2, last_index, vec![new_entry(last_index - 1, 4), new_entry(last_index, 4)],
+            (last_term - 2, last_index - 2, last_index, vec![new_entry(last_index - 1, 4),
+                                                             new_entry(last_index, 4)],
              Some(last_index), last_index, false),
         ];
 

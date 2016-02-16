@@ -209,12 +209,12 @@ fn test_leader_election_in_one_round_rpc() {
         (5, map!(2 => true, 3 => true, 4 => true, 5 => true), StateRole::Leader),
         (5, map!(2 => true, 3 => true, 4 => true), StateRole::Leader),
         (5, map!(2 => true, 3 => true), StateRole::Leader),
-        
+
         // return to follower state if it receives vote denial from a majority
         (3, map!(2 => false, 3 => false), StateRole::Follower),
         (5, map!(2 => false, 3 => false, 4 => false, 5 => false), StateRole::Follower),
         (5, map!(2 => true, 3 => false, 4 => false, 5 => false), StateRole::Follower),
-        
+
         // stay in candidate if it does not obtain the majority
         (3, map!(), StateRole::Candidate),
         (5, map!(2 => true), StateRole::Candidate),
@@ -599,7 +599,7 @@ fn test_follower_check_msg_append() {
         (ents[0].get_term(), ents[0].get_index(), 1, false, 0),
         // match with uncommitted entries
         (ents[1].get_term(), ents[1].get_index(), 2, false, 0),
-        
+
         // unmatch with existing entry
         (ents[0].get_term(), ents[1].get_index(), ents[1].get_index(), true, 2),
         // unexisting entry
@@ -641,8 +641,16 @@ fn test_follower_check_msg_append() {
 #[test]
 fn test_follower_append_entries() {
     let mut tests = vec![
-        (2, 2, vec![empty_entry(3, 3)], vec![empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)], vec![empty_entry(3, 3)]),
-        (1, 1, vec![empty_entry(3, 2), empty_entry(4, 3)], vec![empty_entry(1, 1), empty_entry(3, 2), empty_entry(4, 3)], vec![empty_entry(3, 2), empty_entry(4, 3)]),
+        (2, 2,
+            vec![empty_entry(3, 3)],
+            vec![empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)],
+            vec![empty_entry(3, 3)]),
+
+        (1, 1,
+            vec![empty_entry(3, 2), empty_entry(4, 3)],
+            vec![empty_entry(1, 1), empty_entry(3, 2), empty_entry(4, 3)],
+            vec![empty_entry(3, 2), empty_entry(4, 3)]),
+
         (0, 0, vec![empty_entry(1, 1)], vec![empty_entry(1, 1), empty_entry(2, 2)], vec![]),
         (0, 0, vec![empty_entry(3, 1)], vec![empty_entry(3, 1)], vec![empty_entry(3, 1)]),
     ];
@@ -720,13 +728,14 @@ fn test_leader_sync_follower_log() {
             empty_entry(0, 0),
             empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3),
             empty_entry(4, 4), empty_entry(4, 5), empty_entry(4, 6), empty_entry(4, 7),
-            
+
         ],
         vec![
             empty_entry(0, 0),
             empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3),
             empty_entry(2, 4), empty_entry(2, 5), empty_entry(2, 6),
-            empty_entry(3, 7), empty_entry(3, 8), empty_entry(3, 9), empty_entry(3, 10), empty_entry(3, 11),
+            empty_entry(3, 7), empty_entry(3, 8), empty_entry(3, 9), empty_entry(3, 10),
+                empty_entry(3, 11),
         ],
     ];
     for (i, tt) in tests.drain(..).enumerate() {

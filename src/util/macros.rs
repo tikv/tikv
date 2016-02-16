@@ -1,7 +1,7 @@
 //! The macros crate contains all useful needed macros.
 
 /// Get the count of macro's arguments.
-/// 
+///
 /// # Examples
 ///
 /// ```
@@ -13,7 +13,7 @@
 /// assert_eq!(count_args!(1, 2, 3), 3);
 /// # }
 /// ```
-/// 
+///
 /// [rfc#88](https://github.com/rust-lang/rfcs/pull/88) proposes to use $# to count the number
 /// of args, but it has not been implemented yet.
 #[macro_export]
