@@ -12,14 +12,14 @@ pub struct EngineRocksdb {
 impl EngineRocksdb {
     pub fn new(path: &str) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
-        DB::open_default(path).map(|db| EngineRocksdb { db: db }).map_err(|e| RocksDBError::new(e))
+        DB::open_default(path).map(|db| EngineRocksdb { db: db }).map_err(RocksDBError::new)
     }
 }
 
 impl Engine for EngineRocksdb {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         trace!("EngineRocksdb: get {:?}", key);
-        self.db.get(key).map(|r| r.map(|v| v.to_owned())).map_err(|e| RocksDBError::new(e))
+        self.db.get(key).map(|r| r.map(|v| v.to_owned())).map_err(RocksDBError::new)
     }
 
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
