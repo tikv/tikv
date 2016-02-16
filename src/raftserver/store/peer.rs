@@ -444,9 +444,7 @@ impl Peer {
         }
 
         let wb = WriteBatch::new();
-        let mut resp;
-
-        {
+        let mut resp = {
             let engine = self.engine.clone();
             let ctx = ExecContext {
                 snap: engine.snapshot(),
@@ -454,11 +452,11 @@ impl Peer {
                 request: cmd,
             };
 
-            resp = self.execute_raft_command(&ctx).unwrap_or_else(|e| {
+            self.execute_raft_command(&ctx).unwrap_or_else(|e| {
                 error!("execute raft command err: {:?}", e);
                 cmd_resp::message_error(e)
-            });
-        }
+            })
+        };
 
         peer_storage::save_applied_index(&wb, self.region_id, index)
             .expect("save applied index must not fail");
