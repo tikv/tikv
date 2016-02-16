@@ -96,7 +96,7 @@ impl Conn {
             }
 
             let mut m = Request::new();
-            let _ = try!(rpc::decode_body(&payload.bytes().to_vec(), &mut m));
+            try!(rpc::decode_body(&payload.bytes().to_vec(), &mut m));
             let sender = event_loop.channel();
             let queue_msg: QueueMessage = QueueMessage::Request(token, self.last_msg_id, m);
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));

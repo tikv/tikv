@@ -35,7 +35,7 @@ fn main() {
         None => LogLevelFilter::Info,
     };
     util::init_log(log_filter).unwrap();
-    let default_host: String = "127.0.0.1:61234".to_string();
+    let default_host: String = "127.0.0.1:61234".to_owned();
     let host: String = matches.opt_str("H").unwrap_or(default_host);
     let store: Storage = Storage::new(Dsn::Memory).unwrap();
     info!("Start listenning on {}...", host);
