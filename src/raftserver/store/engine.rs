@@ -23,8 +23,8 @@ impl Deref for DBValue {
     type Target = [u8];
     fn deref(&self) -> &[u8] {
         match *self {
-            DBValue::DBVector(ref v) => return v,
-            DBValue::Box(ref v) => return v,
+            DBValue::DBVector(ref v) => v,
+            DBValue::Box(ref v) => v,
         }
     }
 }
@@ -76,9 +76,9 @@ pub trait Retriever {
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let mut it = self.new_iterator(start_key);
+        let it = self.new_iterator(start_key);
 
-        while let Some((key, value)) = it.next() {
+        for (key, value) in it {
             if key.as_ref() >= end_key {
                 break;
             }
@@ -96,7 +96,7 @@ pub trait Retriever {
 impl Retriever for DB {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
         let v = try!(self.get(key));
-        Ok(v.map(|e| DBValue::DBVector(e)))
+        Ok(v.map(DBValue::DBVector))
     }
 
     fn new_iterator(&self, start_key: &[u8]) -> DBIterator {

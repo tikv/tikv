@@ -39,35 +39,28 @@ message DeleteResponse {
     
 }
 
-message WriteBatch {
-    // If value is None, the operation is delete,
-    // else is put.
-    optional bytes key   = 1;
-    optional bytes value = 2;    
+enum CommandType {
+    Invalid     = 0;
+    Get         = 1;
+    Seek        = 2;
+    Put         = 3;
+    Delete      = 4;
 }
 
-message WriteRequest {
-    repeated WriteBatch batch = 1;
+message Request {
+    optional CommandType cmd_type      = 1;
+    optional GetRequest get            = 2;
+    optional SeekRequest seek          = 3;
+    optional PutRequest put            = 4;
+    optional DeleteRequest delete      = 5;
 }
 
-message WriteResponse {
-    
-}
-
-message RequestUnion {
-    optional GetRequest get            = 1;
-    optional SeekRequest seek          = 2;
-    optional PutRequest put            = 3;
-    optional DeleteRequest delete      = 4;
-    optional WriteRequest write        = 5;
-}
-
-message ResponseUnion {
-    optional GetResponse get           = 1;
-    optional SeekResponse seek         = 2;
-    optional PutResponse put           = 3;
-    optional DeleteResponse delete     = 4;
-    optional WriteResponse write       = 5;
+message Response {
+    optional CommandType cmd_type      = 1;
+    optional GetResponse get           = 2;
+    optional SeekResponse seek         = 3;
+    optional PutResponse put           = 4;
+    optional DeleteResponse delete     = 5;
 }
 
 message ChangePeerRequest {
@@ -96,37 +89,48 @@ message SplitResponse {
     optional metapb.Region right = 2;
 }
 
-message AdminRequestUnion {
-    optional ChangePeerRequest change_peer  = 1;
-    optional SplitRequest split             = 2;
+enum AdminCommandType {
+    InvalidAdmin    = 0;
+    ChangePeer      = 1;
+    Split           = 2;
 }
 
-message AdminResponseUnion {
-    optional ChangePeerResponse change_peer = 1;
-    optional SplitResponse split            = 2;  
+message AdminRequest {
+    optional AdminCommandType cmd_type      = 1;
+    optional ChangePeerRequest change_peer  = 2;
+    optional SplitRequest split             = 3;
+}
+
+message AdminResponse {
+    optional AdminCommandType cmd_type      = 1;
+    optional ChangePeerResponse change_peer = 2;
+    optional SplitResponse split            = 3;  
 }
 
 message RaftRequestHeader {
-  optional uint64 region_id          = 1;
-  optional metapb.Peer peer          = 2;
-  // true for read linearization
-  optional bool read_quorum          = 3;  
+    optional uint64 region_id          = 1;
+    optional metapb.Peer peer          = 2;
+    // true for read linearization
+    optional bool read_quorum          = 3;
+    // 16 bytes, to distinguish request.  
+    optional bytes uuid                = 4;
 }
 
 message RaftResponseHeader {
-  optional errorpb.Error error  = 1;
+    optional errorpb.Error error  = 1;
+    optional bytes uuid           = 2;
 }
 
 message RaftCommandRequest {
-  optional RaftRequestHeader header          = 1;
-  // We can't enclose normal requests and administrator request
-  // at same time. 
-  repeated RequestUnion requests             = 2; 
-  optional AdminRequestUnion admin_request   = 3; 
+    optional RaftRequestHeader header     = 1;
+    // We can't enclose normal requests and administrator request
+    // at same time. 
+    repeated Request requests             = 2; 
+    optional AdminRequest admin_request   = 3; 
 }
 
 message RaftCommandResponse {
-  optional RaftResponseHeader header         = 1;
-  repeated ResponseUnion responses           = 2;
-  optional AdminResponseUnion admin_response = 3;
+    optional RaftResponseHeader header    = 1;
+    repeated Response responses           = 2;
+    optional AdminResponse admin_response = 3;
 }

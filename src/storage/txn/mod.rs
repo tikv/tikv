@@ -54,7 +54,11 @@ impl Scheduler {
                 Pending::Command(Command::Scan{start_key, limit, version, callback}) => {
                     self.exec_scan(start_key, limit, version, callback)
                 }
-                Pending::Command(Command::Prewrite{puts, deletes, locks, start_version, callback}) => {
+                Pending::Command(Command::Prewrite{puts,
+                                                   deletes,
+                                                   locks,
+                                                   start_version,
+                                                   callback}) => {
                     self.exec_prewrite(puts, deletes, locks, start_version, callback)
                 }
                 _ => unreachable!(),
@@ -64,7 +68,7 @@ impl Scheduler {
 
     fn exec_get(&self, key: Key, version: u64, callback: Callback<Option<Value>>) {
         let value = self.engine.mvcc_get(&key, version);
-        callback(value.map_err(|e| super::Error::from(e)));
+        callback(value.map_err(super::Error::from));
     }
 
     fn exec_scan(&self,
@@ -73,7 +77,7 @@ impl Scheduler {
                  version: u64,
                  callback: Callback<Vec<KvPair>>) {
         let pairs = self.engine.mvcc_scan(&start_key, limit, version);
-        callback(pairs.map_err(|e| super::Error::from(e)));
+        callback(pairs.map_err(super::Error::from));
     }
 
     fn exec_prewrite(&mut self,
@@ -96,9 +100,9 @@ impl Scheduler {
     }
 
     fn check_prewrite(&self,
-                      puts: &Vec<KvPair>,
-                      deletes: &Vec<Key>,
-                      locks: &Vec<Key>,
+                      puts: &[KvPair],
+                      deletes: &[Key],
+                      locks: &[Key],
                       start_version: u64)
                       -> Result<()> {
         for key in puts.iter().map(|&(ref x, _)| x).chain(deletes.iter()).chain(locks.iter()) {
@@ -117,7 +121,7 @@ impl Scheduler {
                    deletes: Vec<Key>,
                    commit_version: u64,
                    callback: Callback<()>) {
-        callback(self.try_commit(puts, deletes, commit_version).map_err(|e| super::Error::from(e)));
+        callback(self.try_commit(puts, deletes, commit_version).map_err(super::Error::from));
     }
 
     fn try_commit(&mut self,

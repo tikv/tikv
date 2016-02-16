@@ -84,8 +84,8 @@ impl Ready {
                                  prev_hs: &HardState)
                                  -> Ready {
         let mut rd = Ready {
-            entries: raft.raft_log.unstable_entries().unwrap_or(&vec![]).to_vec(),
-            committed_entries: raft.raft_log.next_entries().unwrap_or(vec![]),
+            entries: raft.raft_log.unstable_entries().unwrap_or(&[]).to_vec(),
+            committed_entries: raft.raft_log.next_entries().unwrap_or_else(Vec::new),
             messages: raft.msgs.drain(..).collect(),
             ..Default::default()
         };

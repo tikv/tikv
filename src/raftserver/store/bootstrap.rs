@@ -1,22 +1,112 @@
 
 use std::sync::Arc;
 
-use rocksdb::DB;
+use rocksdb::{DB, WriteBatch};
 use proto::raft_serverpb::StoreIdent;
 use proto::metapb;
-use raftserver::Result;
+use raftserver::{Result, other};
 use super::keys;
-use super::engine::Mutator;
+use super::engine::{Retriever, Mutator};
 
-// TODO: implement bootstrap later.
-// 1. bootstrap store.
-// 2. bootstrap region 1.
+// How to construct cluster?
+//
+// Use bootstrap_cluster to bootstrap cluster first, this function will create
+// node 1 and store 1 for this cluster.
+// When we start store, we must first check whether the store is bootstrapped or not
+// using is_store_bootstrapped, if not, we must call bootstrap_store to bootstrap it first.
 
-pub fn bootstrap_store(engine: Arc<DB>, cluster_id: u64, meta: metapb::Store) -> Result<()> {
+pub const BOOTSTRAP_FIRST_NODE_ID: u64 = 1;
+pub const BOOTSTRAP_FIRST_STORE_ID: u64 = 1;
+pub const BOOTSTRAP_FIRST_REGION_ID: u64 = 1;
+pub const BOOTSTRAP_FIRST_PEER_ID: u64 = 1;
+
+pub fn is_store_bootstrapped(engine: Arc<DB>, cluster_id: u64) -> Result<bool> {
+    let res = try!(engine.get_msg::<StoreIdent>(&keys::store_ident_key()));
+    match res {
+        None => Ok(false),
+        Some(ident) => {
+            if ident.get_cluster_id() != cluster_id {
+                return Err(other(format!("store is bootstrapped for cluster {} already",
+                                         ident.get_cluster_id())));
+            }
+            Ok(true)
+        }
+    }
+}
+
+// Bootstrap the store, the DB for this store must be empty and has no data.
+pub fn bootstrap_store(engine: Arc<DB>,
+                       cluster_id: u64,
+                       node_id: u64,
+                       store_id: u64)
+                       -> Result<()> {
     let mut ident = StoreIdent::new();
-    ident.set_cluster_id(cluster_id);
-    ident.set_node_id(meta.get_node().get_node_id());
-    ident.set_store_id(meta.get_store_id());
 
-    engine.put_msg(&keys::store_ident_key(), &ident)
+    let mut count: u32 = 0;
+    try!(engine.scan(keys::MIN_KEY,
+                     keys::MAX_KEY,
+                     &mut |_, _| -> Result<(bool)> {
+                         count += 1;
+                         Ok(false)
+                     }));
+
+    if count > 0 {
+        return Err(other("store is not empty and has already had data."));
+    }
+
+    let ident_key = keys::store_ident_key();
+    try!(engine.get_msg::<StoreIdent>(&ident_key).and_then(|res| {
+        if let Some(res) = res {
+            return Err(other(format!("store has already been bootstrapped to cluster {}",
+                                     res.get_cluster_id())));
+        }
+
+        Ok(())
+    }));
+
+    ident.set_cluster_id(cluster_id);
+    ident.set_node_id(node_id);
+    ident.set_store_id(store_id);
+
+    engine.put_msg(&ident_key, &ident)
+}
+
+// Bootstrap first region, the region id must be 1 and start/end key is
+// min_key/max_key. The first peer id is 1 too.
+fn bootstrap_region(engine: Arc<DB>) -> Result<()> {
+    let mut region = metapb::Region::new();
+    region.set_region_id(BOOTSTRAP_FIRST_NODE_ID);
+    region.set_start_key(keys::MIN_KEY.to_vec());
+    region.set_end_key(keys::MAX_KEY.to_vec());
+
+    let mut peer = metapb::Peer::new();
+    peer.set_node_id(BOOTSTRAP_FIRST_NODE_ID);
+    peer.set_store_id(BOOTSTRAP_FIRST_STORE_ID);
+    peer.set_peer_id(BOOTSTRAP_FIRST_PEER_ID);
+
+    let batch = WriteBatch::new();
+    try!(batch.put_msg(&keys::region_info_key(region.get_start_key()), &region));
+
+    // meta2 key for this region is \x03\0xff
+    let meta2_key = keys::region_route_meta_key(keys::MAX_KEY);
+    try!(batch.put_msg(&meta2_key, &region));
+
+    // meta1 key for meta2 is \0x02\0xff
+    let meta1_key = keys::region_route_meta_key(&meta2_key);
+    try!(batch.put_msg(&meta1_key, &region));
+
+    try!(engine.write(batch));
+
+    Ok(())
+}
+
+// Bootstrap cluster, we must bootstrap the first store with node/store id both are 1,
+// and first region.
+pub fn bootstrap_cluster(engine: Arc<DB>, cluster_id: u64) -> Result<()> {
+    try!(bootstrap_store(engine.clone(),
+                         cluster_id,
+                         BOOTSTRAP_FIRST_NODE_ID,
+                         BOOTSTRAP_FIRST_STORE_ID));
+    try!(bootstrap_region(engine.clone()));
+    Ok(())
 }

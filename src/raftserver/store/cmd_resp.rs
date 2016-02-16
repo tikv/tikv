@@ -1,13 +1,26 @@
 use std::boxed::Box;
 use std::error;
+use std::option::Option;
+
+use uuid::Uuid;
 
 use proto::raft_cmdpb::RaftCommandResponse;
+use proto::metapb;
 use proto::errorpb::{self, ErrorDetail};
 
 pub fn region_not_found_error(region_id: u64) -> RaftCommandResponse {
     let mut detail = ErrorDetail::new();
     detail.mut_region_not_found().set_region_id(region_id);
     detail_error("region is not found", detail)
+}
+
+pub fn not_leader_error(region_id: u64, leader: Option<metapb::Peer>) -> RaftCommandResponse {
+    let mut detail = ErrorDetail::new();
+    if let Some(leader) = leader {
+        detail.mut_not_leader().set_leader(leader);
+    }
+    detail.mut_not_leader().set_region_id(region_id);
+    detail_error("peer is not leader", detail)
 }
 
 pub fn message_error<E>(err: E) -> RaftCommandResponse
@@ -34,4 +47,8 @@ fn new_error(err: Box<error::Error + Send + Sync>,
     msg.mut_header().set_error(error_header);
 
     msg
+}
+
+pub fn bind_uuid(resp: &mut RaftCommandResponse, uuid: Uuid) {
+    resp.mut_header().set_uuid(uuid.as_bytes().to_vec());
 }

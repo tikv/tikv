@@ -7,9 +7,14 @@ const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
 const ENC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
 
+// returns the maximum encoded bytes size.
+pub fn max_encoded_bytes_size(n: usize) -> usize {
+    (n / ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1)
+}
+
 // Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
 pub fn encode_bytes(key: &[u8]) -> Vec<u8> {
-    let cap = key.len() / (ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1);
+    let cap = max_encoded_bytes_size(key.len());
     let mut encoded = Vec::<u8>::with_capacity(cap);
     let len = key.len();
     let mut index = 0;
@@ -59,7 +64,7 @@ pub fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_bytes, decode_bytes};
+    use super::{encode_bytes, decode_bytes, max_encoded_bytes_size, ENC_GROUP_SIZE};
     use std::cmp::Ordering;
 
     #[test]
@@ -143,6 +148,15 @@ mod tests {
 
         for (x, y, ord) in pairs {
             assert_eq!(encode_bytes(x).cmp(&encode_bytes(y)), ord);
+        }
+    }
+
+    #[test]
+    fn test_max_encoded_bytes_size() {
+        let n = ENC_GROUP_SIZE;
+        let tbl: Vec<(usize, usize)> = vec![(0, n + 1), (n / 2, n + 1), (n, 2 * (n + 1))];
+        for (x, y) in tbl {
+            assert_eq!(max_encoded_bytes_size(x), y);
         }
     }
 

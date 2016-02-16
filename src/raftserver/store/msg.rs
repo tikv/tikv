@@ -1,4 +1,3 @@
-use std::sync::Mutex;
 use std::boxed::{Box, FnBox};
 use std::fmt;
 
@@ -17,13 +16,9 @@ pub enum Msg {
     RaftBaseTick,
 
     // For notify.
-    // We can't send protobuf message directly, the generated struct has a cell field which
-    // doesn't support send + sync, so using a mutex to wrap it for send + sync.
-    // Although it looks ugly, it is still more convenient than decoding many times
-    // in different threads.
-    RaftMessage(Mutex<RaftMessage>),
+    RaftMessage(RaftMessage),
     RaftCommand {
-        request: Mutex<RaftCommandRequest>,
+        request: RaftCommandRequest,
         callback: Callback,
     },
 }
@@ -61,12 +56,12 @@ impl Sender {
     }
 
     pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
-        self.send(Msg::RaftMessage(Mutex::new(msg)))
+        self.send(Msg::RaftMessage(msg))
     }
 
     pub fn send_command(&self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
         self.send(Msg::RaftCommand {
-            request: Mutex::new(msg),
+            request: msg,
             callback: cb,
         })
     }
