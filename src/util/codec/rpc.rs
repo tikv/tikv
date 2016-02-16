@@ -38,9 +38,8 @@ pub fn encode_msg<T: io::Write, M: protobuf::Message>(w: &mut T,
 
 // Decodes encoded message, returns message ID.
 pub fn decode_msg<T: io::Read, M: protobuf::Message>(r: &mut T, m: &mut M) -> Result<u64> {
-    // Try read, if read UnexpectedEof, then stop
     let (message_id, payload) = try!(decode_data(r));
-    try!(m.merge_from_bytes(&payload));
+    try!(decode_body(&payload, m));
 
     Ok(message_id)
 }
@@ -100,6 +99,12 @@ pub fn decode_msg_header(header: &[u8]) -> Result<(u64, usize)> {
     Ok((message_id, payload_len))
 }
 
+// Decodes only body.
+pub fn decode_body<M: protobuf::Message>(payload: &Vec<u8>, m: &mut M) -> Result<()> {
+    debug!("deocde body {:?}", payload);
+    try!(m.merge_from_bytes(&payload));
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

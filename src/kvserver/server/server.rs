@@ -282,7 +282,7 @@ impl Server {
                 return;
             }
         };
-        conn.read(token, event_loop);
+        let _ = conn.read(token, event_loop);
         event_loop.reregister(&conn.sock, token, conn.interest, PollOpt::edge())
                   .unwrap();
     }
