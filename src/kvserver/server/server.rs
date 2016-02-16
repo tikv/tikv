@@ -48,12 +48,12 @@ pub struct Server {
 
 impl Server {
     pub fn new(listener: TcpListener, conns: HashMap<Token, Conn>, store: Storage) -> Server {
-        return Server {
+        Server {
             listener: listener,
             conns: conns,
             token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             store: store,
-        };
+        }
     }
 
     pub fn handle_get(&mut self,
@@ -64,7 +64,7 @@ impl Server {
                       -> Result<()> {
         if !msg.has_cmd_get_req() {
             error!("Msg doesn't contain a CmdGetRequest");
-            return Err(ServerError::FormatError("Msg doesn't contain a CmdGetRequest".to_string()));
+            return Err(ServerError::FormatError("Msg doesn't contain a CmdGetRequest".to_owned()));
         }
         let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
         let key = cmd_get_req.get_key().to_vec();
@@ -77,7 +77,7 @@ impl Server {
         });
         self.store
             .async_get(key, cmd_get_req.get_version(), received_cb)
-            .map_err(|e| ServerError::Storage(e))
+            .map_err(ServerError::Storage)
     }
 
     pub fn handle_scan(&mut self,
@@ -89,7 +89,7 @@ impl Server {
         if !msg.has_cmd_scan_req() {
             error!("Msg doesn't containe a CmdScanRequest");
             return Err(ServerError::FormatError("Msg doesn't containe a CmdScanRequest"
-                                                    .to_string()));
+                                                    .to_owned()));
         }
         let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
         let sender = event_loop.channel();
@@ -106,7 +106,7 @@ impl Server {
                         cmd_scan_req.get_limit() as usize,
                         cmd_scan_req.get_version(),
                         received_cb)
-            .map_err(|e| ServerError::Storage(e))
+            .map_err(ServerError::Storage)
     }
 
     pub fn handle_prewrite(&mut self,
@@ -118,7 +118,7 @@ impl Server {
         if !msg.has_cmd_prewrite_req() {
             error!("Msg doesn't containe a CmdPrewriteRequest");
             return Err(ServerError::FormatError("Msg doesn't containe a CmdPrewriteRequest"
-                                                    .to_string()));
+                                                    .to_owned()));
         }
         let cmd_prewrite_req: &CmdPrewriteRequest = msg.get_cmd_prewrite_req();
         let sender = event_loop.channel();
@@ -141,7 +141,7 @@ impl Server {
                             locks,
                             cmd_prewrite_req.get_start_version(),
                             received_cb)
-            .map_err(|e| ServerError::Storage(e))
+            .map_err(ServerError::Storage)
     }
 
     pub fn handle_commit(&mut self,
@@ -153,7 +153,7 @@ impl Server {
         if !msg.has_cmd_commit_req() {
             error!("Msg doesn't contain a CmdCommitRequest");
             return Err(ServerError::FormatError("Msg doesn't contain a CmdCommitRequest"
-                                                    .to_string()));
+                                                    .to_owned()));
         }
         let cmd_commit_req: &CmdCommitRequest = msg.get_cmd_commit_req();
         let sender = event_loop.channel();
@@ -167,7 +167,7 @@ impl Server {
             .async_commit(cmd_commit_req.get_start_version(),
                           cmd_commit_req.get_commit_version(),
                           received_cb)
-            .map_err(|e| ServerError::Storage(e))
+            .map_err(ServerError::Storage)
     }
 
     fn cmd_get_done(r: ResultStorage<Option<Value>>) -> Response {
