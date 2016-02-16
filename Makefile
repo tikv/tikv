@@ -18,4 +18,5 @@ genprotobuf:
 	cd ./src/proto && protoc --rust_out . *.proto
 
 format:
-	rustfmt --write-mode overwrite src/lib.rs src/bin/*.rs tests/tests.rs
+	@cargo fmt -- --write-mode overwrite | grep -v "found TODO" || exit 0
+	@rustfmt --write-mode overwrite tests/tests.rs | grep -v "found TODO" || exit 0

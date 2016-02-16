@@ -54,7 +54,11 @@ impl Scheduler {
                 Pending::Command(Command::Scan{start_key, limit, version, callback}) => {
                     self.exec_scan(start_key, limit, version, callback)
                 }
-                Pending::Command(Command::Prewrite{puts, deletes, locks, start_version, callback}) => {
+                Pending::Command(Command::Prewrite{puts,
+                                                   deletes,
+                                                   locks,
+                                                   start_version,
+                                                   callback}) => {
                     self.exec_prewrite(puts, deletes, locks, start_version, callback)
                 }
                 _ => unreachable!(),
