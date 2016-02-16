@@ -270,40 +270,35 @@ impl Peer {
         let mut snap_status = SnapshotStatus::SnapshotFinish;
         let mut unreachable = false;
 
-        let to_peer_id;
-        let to_store_id;
+        let trans = trans.read().unwrap();
+        let from_peer = try!(trans.get_peer(msg.get_from()).ok_or_else(|| {
+            other(format!("failed to lookup sender peer {} in region {}",
+                          msg.get_from(),
+                          self.region_id))
+        }));
 
-        {
-            let trans = trans.read().unwrap();
-            let from_peer = try!(trans.get_peer(msg.get_from()).ok_or_else(|| {
-                other(format!("failed to lookup sender peer {} in region {}",
-                              msg.get_from(),
-                              self.region_id))
-            }));
+        let to_peer = try!(trans.get_peer(msg.get_to()).ok_or_else(|| {
+            other(format!("failed to look up recipient peer {} in region {}",
+                          msg.get_to(),
+                          self.region_id))
+        }));
 
-            let to_peer = try!(trans.get_peer(msg.get_to()).ok_or_else(|| {
-                other(format!("failed to look up recipient peer {} in region {}",
-                              msg.get_to(),
-                              self.region_id))
-            }));
+        let to_peer_id = to_peer.get_peer_id();
+        let to_store_id = to_peer.get_store_id();
 
-            to_peer_id = to_peer.get_peer_id();
-            to_store_id = to_peer.get_store_id();
+        send_msg.set_from_peer(from_peer);
+        send_msg.set_to_peer(to_peer);
 
-            send_msg.set_from_peer(from_peer);
-            send_msg.set_to_peer(to_peer);
+        if let Err(e) = trans.send(send_msg) {
+            warn!("region {} on store {} failed to send msg to {} in store {}, err: {:?}",
+                  self.region_id,
+                  self.store_id,
+                  to_peer_id,
+                  to_store_id,
+                  e);
 
-            let _ = trans.send(send_msg).map_err(|e| {
-                warn!("region {} on store {} failed to send msg to {} in store {}, err: {:?}",
-                      self.region_id,
-                      self.store_id,
-                      to_peer_id,
-                      to_store_id,
-                      e);
-
-                unreachable = true;
-                snap_status = SnapshotStatus::SnapshotFailure;
-            });
+            unreachable = true;
+            snap_status = SnapshotStatus::SnapshotFailure;
         }
 
         if unreachable {
@@ -384,7 +379,7 @@ impl Peer {
             // TODO: use a better way to avoid clone.
             let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
             for cmd in self.pending_cmds.values() {
-                // We only need uuid and cmd for later re-propose.
+                // We only need cmd for later re-propose.
                 cmds.push(PendingCmd { cmd: cmd.cmd.clone(), ..Default::default() });
             }
 
