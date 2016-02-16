@@ -44,6 +44,7 @@ impl MetaItem {
         }
     }
 
+    #[allow(match_same_arms)]
     fn version(self) -> u64 {
         match self {
             MetaItem::WithValue(v) => v,
@@ -91,7 +92,7 @@ impl Meta {
         Ok(Meta { items: v })
     }
 
-    pub fn into_bytes(&self) -> Vec<u8> {
+    pub fn as_bytes(&self) -> Vec<u8> {
         let mut v = Vec::<u8>::with_capacity(self.items.len() * META_ITEM_ENCODE_SIZE);
         for item in &self.items {
             item.write(&mut v);
@@ -221,20 +222,20 @@ mod tests {
         meta.add(10);
         meta.delete(20);
 
-        let bytes = meta.into_bytes();
+        let bytes = meta.as_bytes();
         let meta2 = Meta::parse(&bytes).unwrap();
-        assert_eq!(bytes, meta2.into_bytes());
+        assert_eq!(bytes, meta2.as_bytes());
     }
 
     use test::Bencher;
 
     #[bench]
-    fn bench_into_bytes(b: &mut Bencher) {
+    fn bench_as_bytes(b: &mut Bencher) {
         let mut meta = Meta::new();
         for v in 1..10 {
             meta.add(v);
         }
-        b.iter(|| meta.into_bytes());
+        b.iter(|| meta.as_bytes());
     }
 
     #[bench]
@@ -243,7 +244,7 @@ mod tests {
         for v in 1..10 {
             meta.add(v);
         }
-        let bytes = meta.into_bytes();
+        let bytes = meta.as_bytes();
         b.iter(|| Meta::parse(&bytes));
     }
 }

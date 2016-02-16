@@ -19,7 +19,7 @@ impl Engine for EngineBtree {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         trace!("EngineBtree: get {:?}", key);
         let m = self.map.read().unwrap(); // Use unwrap here since the usage pattern is simple, should never be poisoned.
-        Ok(m.get(key).map(|v| v.clone()))
+        Ok(m.get(key).cloned())
     }
 
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
