@@ -549,7 +549,7 @@ mod test {
     use super::*;
     use std::sync::*;
     use rocksdb::*;
-    use proto::raftpb::{Entry, ConfState, Snapshot};
+    use proto::raftpb::{Entry, ConfState};
     use proto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;

@@ -40,18 +40,12 @@ fn new_progress(state: ProgressState,
     }
 }
 
-pub fn new_test_config(id: u64,
-                       peers: Vec<u64>,
-                       election: usize,
-                       heartbeat: usize,
-                       storage: Arc<MemStorage>)
-                       -> Config<MemStorage> {
+pub fn new_test_config(id: u64, peers: Vec<u64>, election: usize, heartbeat: usize) -> Config {
     Config {
         id: id,
         peers: peers,
         election_tick: election,
         heartbeat_tick: heartbeat,
-        storage: storage,
         max_size_per_msg: NO_LIMIT,
         max_inflight_msgs: 256,
         ..Default::default()
@@ -64,10 +58,10 @@ pub fn new_test_raft(id: u64,
                      heartbeat: usize,
                      storage: Arc<MemStorage>)
                      -> Interface {
-    Interface::new(Raft::new(&new_test_config(id, peers, election, heartbeat, storage)))
+    Interface::new(Raft::new(&new_test_config(id, peers, election, heartbeat), storage))
 }
 
-fn read_messages<T: Storage + Default>(raft: &mut Raft<T>) -> Vec<Message> {
+fn read_messages<T: Storage>(raft: &mut Raft<T>) -> Vec<Message> {
     raft.msgs.drain(..).collect()
 }
 

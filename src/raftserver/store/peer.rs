@@ -94,10 +94,9 @@ impl Peer {
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: false,
-            storage: storage.clone(),
         };
 
-        let raft_group = try!(RawNode::new(&raft_cfg, &[]));
+        let raft_group = try!(RawNode::new(&raft_cfg, storage.clone(), &[]));
 
         let mut peer = Peer {
             engine: store.get_engine(),
