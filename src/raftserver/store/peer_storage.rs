@@ -687,6 +687,7 @@ mod test {
         let mut data = RaftSnapshotData::new();
         protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).expect("");
         assert_eq!(data.get_region().get_region_id(), 1);
+        assert_eq!(data.get_region().get_peers().len(), 1);
     }
 
     #[test]

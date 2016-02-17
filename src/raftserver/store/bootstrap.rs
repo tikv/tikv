@@ -83,6 +83,7 @@ pub fn bootstrap_region(engine: Arc<DB>) -> Result<metapb::Region> {
     peer.set_node_id(BOOTSTRAP_FIRST_NODE_ID);
     peer.set_store_id(BOOTSTRAP_FIRST_STORE_ID);
     peer.set_peer_id(BOOTSTRAP_FIRST_PEER_ID);
+    region.mut_peers().push(peer);
 
     let batch = WriteBatch::new();
     try!(batch.put_msg(&keys::region_info_key(region.get_start_key()), &region));
