@@ -166,3 +166,13 @@ pub fn validate_region_route_meta_key(key: &[u8]) -> Result<()> {
 
     Ok(())
 }
+
+pub fn validate_data_key(key: &[u8]) -> Result<()> {
+    if !key.starts_with(DATA_PREFIX_KEY) {
+        return Err(other(format!("invalid data key {:?}, must start with {}",
+                                 key,
+                                 DATA_PREFIX)));
+    }
+
+    Ok(())
+}
