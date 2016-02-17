@@ -73,7 +73,7 @@ pub fn bootstrap_store(engine: Arc<DB>,
 
 // Bootstrap first region, the region id must be 1 and start/end key is
 // min_key/max_key. The first peer id is 1 too.
-fn bootstrap_region(engine: Arc<DB>) -> Result<()> {
+pub fn bootstrap_region(engine: Arc<DB>) -> Result<metapb::Region> {
     let mut region = metapb::Region::new();
     region.set_region_id(BOOTSTRAP_FIRST_NODE_ID);
     region.set_start_key(keys::MIN_KEY.to_vec());
@@ -83,6 +83,7 @@ fn bootstrap_region(engine: Arc<DB>) -> Result<()> {
     peer.set_node_id(BOOTSTRAP_FIRST_NODE_ID);
     peer.set_store_id(BOOTSTRAP_FIRST_STORE_ID);
     peer.set_peer_id(BOOTSTRAP_FIRST_PEER_ID);
+    region.mut_peers().push(peer);
 
     let batch = WriteBatch::new();
     try!(batch.put_msg(&keys::region_info_key(region.get_start_key()), &region));
@@ -97,7 +98,7 @@ fn bootstrap_region(engine: Arc<DB>) -> Result<()> {
 
     try!(engine.write(batch));
 
-    Ok(())
+    Ok(region)
 }
 
 // Bootstrap cluster, we must bootstrap the first store with node/store id both are 1,
