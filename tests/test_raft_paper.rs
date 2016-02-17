@@ -116,7 +116,7 @@ fn test_leader_bcast_beat() {
     r.become_candidate();
     r.become_leader();
     for i in 0..10 {
-        r.append_entry(&mut vec![empty_entry(0, i as u64 + 1)]);
+        r.append_entry(&mut [empty_entry(0, i as u64 + 1)]);
     }
 
     for _ in 0..hi {
@@ -367,8 +367,8 @@ fn test_nonleaders_election_timeout_nonconfict(state: StateRole) {
     let size = 5;
     let mut rs = Vec::with_capacity(size);
     let ids: Vec<u64> = (1..size as u64 + 1).collect();
-    for k in 0..size {
-        rs.push(new_test_raft(ids[k], ids.clone(), et, 1, new_storage()));
+    for id in ids.iter().take(size) {
+        rs.push(new_test_raft(*id, ids.clone(), et, 1, new_storage()));
     }
     let mut conflicts = 0;
     for _ in 0..1000 {
@@ -525,7 +525,7 @@ fn test_leader_commit_preceding_entries() {
         vec![empty_entry(1, 1)],
     ];
 
-    for (i, tt) in tests.drain(..).enumerate() {
+    for (i, mut tt) in tests.drain(..).enumerate() {
         let s = new_storage();
         s.wl().append(&tt).expect("");
         let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, s);
@@ -538,7 +538,6 @@ fn test_leader_commit_preceding_entries() {
             r.step(accept_and_reply(m)).expect("");
         }
 
-        let mut tt = tt;
         let li = tt.len() as u64;
         tt.append(&mut vec![empty_entry(3, li + 1), new_entry(3, li + 2, SOME_DATA)]);
         let g = r.raft_log.next_entries();
