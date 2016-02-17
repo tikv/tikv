@@ -295,10 +295,7 @@ mod tests {
         ];
 
         for (key, ok) in tbls {
-            match validate_region_route_meta_key(&key) {
-                Ok(_) => assert!(ok),
-                Err(_) => assert!(!ok),
-            }
+            assert_eq!(validate_region_route_meta_key(&key).is_ok(), ok);
         }
     }
 
