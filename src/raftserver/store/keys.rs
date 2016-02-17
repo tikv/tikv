@@ -4,6 +4,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 
 use util::codec::bytes;
 use raftserver::{Result, other};
+use std::mem;
 
 pub const MIN_KEY: &'static [u8] = &[];
 pub const MAX_KEY: &'static [u8] = &[0xFF];
@@ -49,7 +50,9 @@ pub fn store_ident_key() -> Vec<u8> {
 }
 
 fn make_region_id_key(region_id: u64, suffix: u8, extra_cap: usize) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_ID_PREFIX_KEY.len() + 8 + 1 + extra_cap);
+    let mut key = Vec::with_capacity(REGION_ID_PREFIX_KEY.len() + mem::size_of::<u64>() +
+                                     mem::size_of::<u8>() +
+                                     extra_cap);
     key.extend_from_slice(REGION_ID_PREFIX_KEY);
     // no need check error here, can't panic;
     key.write_u64::<BigEndian>(region_id).unwrap();
@@ -58,7 +61,7 @@ fn make_region_id_key(region_id: u64, suffix: u8, extra_cap: usize) -> Vec<u8> {
 }
 
 pub fn region_id_prefix(region_id: u64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_ID_PREFIX_KEY.len() + 8);
+    let mut key = Vec::with_capacity(REGION_ID_PREFIX_KEY.len() + mem::size_of::<u64>());
     key.extend_from_slice(REGION_ID_PREFIX_KEY);
     // no need check error here, can't panic;
     key.write_u64::<BigEndian>(region_id).unwrap();
@@ -66,7 +69,7 @@ pub fn region_id_prefix(region_id: u64) -> Vec<u8> {
 }
 
 pub fn raft_log_key(region_id: u64, log_index: u64) -> Vec<u8> {
-    let mut key = make_region_id_key(region_id, RAFT_LOG_SUFFIX, 8);
+    let mut key = make_region_id_key(region_id, RAFT_LOG_SUFFIX, mem::size_of::<u64>());
     // no need check error here, can't panic;
     key.write_u64::<BigEndian>(log_index).unwrap();
     key
