@@ -28,7 +28,7 @@ fn test_msg_app_flow_control_full() {
     for i in 0..10 {
         r.step(new_message(1, 1, MessageType::MsgPropose, 1)).expect("");
         let ms = r.read_messages();
-        if ms.len() != 0 {
+        if !ms.is_empty() {
             panic!("#{}: ms count = {}, want 0", i, ms.len());
         }
     }
