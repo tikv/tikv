@@ -551,6 +551,7 @@ impl Peer {
     }
 
     fn execute_get(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+        // TODO: the get_get looks wried, maybe we should think a better name later. 
         let request = request.get_get();
         let key = request.get_key();
         try!(keys::validate_data_key(key));
