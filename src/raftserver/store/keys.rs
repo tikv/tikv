@@ -171,6 +171,16 @@ pub fn validate_region_route_meta_key(key: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_data_key(key: &[u8]) -> Result<()> {
+    if !key.starts_with(DATA_PREFIX_KEY) {
+        return Err(other(format!("invalid data key {:?}, must start with {}",
+                                 key,
+                                 DATA_PREFIX)));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +300,11 @@ mod tests {
                 Err(_) => assert!(!ok),
             }
         }
+    }
+
+    #[test]
+    fn test_data_key() {
+        validate_data_key(&data_key(b"abc")).unwrap();
+        validate_data_key(b"abc").unwrap_err();
     }
 }
