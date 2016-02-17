@@ -1,4 +1,6 @@
 #![feature(std_panic, recover)]
+#![feature(plugin)]
+#![plugin(clippy)]
 
 #[macro_use]
 extern crate log;
