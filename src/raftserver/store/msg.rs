@@ -98,6 +98,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn test_sender() {
         let mut event_loop = EventLoop::new().unwrap();
         let sender = Sender::new(event_loop.channel());

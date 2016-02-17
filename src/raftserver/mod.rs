@@ -34,8 +34,6 @@ pub fn send_msg<M: Send>(sender: &mio::Sender<M>, msg: M) -> Result<()> {
         }
     }
 
-    // Now sender only supports Send trait, no Sync, so we can' use `try!` directly 
-    // for outer use because our result error supports Sync + Send.
-    // TODO: We can refactor it later if using quick_error.
+    // TODO: if we refactor with quick_error, we can use NotifyError instead later.
     Err(other("notify channel is full"))
 }
