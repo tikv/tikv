@@ -13,9 +13,7 @@ pub use self::errors::{Result, Error, other};
 const MAX_SEND_RETRY_CNT: i32 = 20;
 
 // send_msg wraps Sender and retries some times if queue is full.
-pub fn send_msg<M: Send + Sync>(sender: &mio::Sender<M>,
-                                msg: M)
-                                -> ::std::result::Result<(), NotifyError<M>> {
+pub fn send_msg<M: Send>(sender: &mio::Sender<M>, msg: M) -> Result<()> {
     let mut value: M = msg;
     for _ in 0..MAX_SEND_RETRY_CNT {
         let r = sender.send(value);
@@ -31,10 +29,14 @@ pub fn send_msg<M: Send + Sync>(sender: &mio::Sender<M>,
                 continue;
             }
             e => {
-                return Err(e);
+                return Err(other(format!("{:?}", e)));
             }
         }
     }
 
-    Err(NotifyError::Full(value))
+    // Now sender only supports Send trait, no Sync, so we can' use `try!` directly 
+    // for outer use because our result error supports Sync + Send.
+    // So here returns result instead of Err(NotifyError::Full(value)).
+    // TODO: We can refactor it later if using quick_error.
+    Err(other("notify channel is full"))
 }
