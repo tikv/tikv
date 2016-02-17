@@ -91,6 +91,12 @@ pub trait Retriever {
 
         Ok(())
     }
+
+    // Seek the first key >= given key, if no found, return None.
+    fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let pair = self.new_iterator(key).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
+        Ok(pair)
+    }
 }
 
 impl Retriever for DB {
@@ -211,6 +217,9 @@ mod tests {
               .unwrap();
 
         assert_eq!(data.len(), 2);
+        let pair = engine.seek(b"a1").unwrap().unwrap();
+        assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
+        assert!(engine.seek(b"a3").unwrap().is_none());
 
         data.clear();
         let mut index = 0;
@@ -228,6 +237,11 @@ mod tests {
         let snap = engine.snapshot();
 
         engine.put(b"a3", b"v3").unwrap();
+        assert!(engine.seek(b"a3").unwrap().is_some());
+
+        let pair = snap.seek(b"a1").unwrap().unwrap();
+        assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
+        assert!(snap.seek(b"a3").unwrap().is_none());
 
         data.clear();
 
