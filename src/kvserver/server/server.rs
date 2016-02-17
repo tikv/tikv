@@ -233,7 +233,7 @@ impl Server {
                     -> Result<(Token)> {
         let new_token = Token(self.token_counter);
         let _ = sock.set_nodelay(true).map_err(|e| error!("set nodelay failed {:?}", e));
-        self.conns.insert(new_token, Conn::new(sock));
+        self.conns.insert(new_token, Conn::new(sock, new_token));
         self.token_counter += 1;
 
         event_loop.register(&self.conns[&new_token].sock,
@@ -282,9 +282,7 @@ impl Server {
                 return;
             }
         };
-        let _ = conn.read(token, event_loop);
-        event_loop.reregister(&conn.sock, token, conn.interest, PollOpt::edge())
-                  .unwrap();
+        let _ = conn.read(event_loop);
     }
 
     fn handle_writable(&mut self, event_loop: &mut EventLoop<Server>, token: Token) {
@@ -295,9 +293,7 @@ impl Server {
                 return;
             }
         };
-        conn.write();
-        event_loop.reregister(&conn.sock, token, conn.interest, PollOpt::edge())
-                  .unwrap();
+        conn.write(event_loop);
     }
 
     fn handle_request(&mut self,
@@ -350,15 +346,7 @@ impl Server {
                 return;
             }
         };
-        conn.res.clear();
-        let resp_len: usize = MSG_HEADER_LEN + resp.compute_size() as usize;
-        if conn.res.capacity() < resp_len {
-            conn.res = Vec::with_capacity(resp_len);
-        }
-        encode_msg(&mut conn.res, msg_id, &resp).unwrap();
-        conn.interest.insert(EventSet::writable());
-        event_loop.reregister(&conn.sock, token, conn.interest, PollOpt::edge())
-                  .unwrap();
+        conn.append_write_buf(event_loop, msg_id, resp);
     }
 }
 

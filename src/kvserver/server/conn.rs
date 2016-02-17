@@ -1,12 +1,14 @@
-use std::io::{Read, Write};
+use std::collections::VecDeque;
+use std::error::Error;
 
-use mio::{Token, EventLoop, EventSet, TryRead};
+use mio::{Token, EventLoop, EventSet, TryRead, TryWrite, PollOpt};
 use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
+use protobuf::core::Message;
 
-use proto::kvrpcpb::Request;
+use proto::kvrpcpb::{Request, Response};
 use util::codec::rpc;
-use util::codec::Error;
+use kvserver::Result;
 use super::server::{Server, QueueMessage};
 
 // alloc exactly s length
@@ -16,7 +18,7 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
     }
 }
 
-fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<(), Error> {
+fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
     if buf.remaining() == 0 {
         return Ok(());
     }
@@ -40,9 +42,10 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<(), Er
 // Conn is a abstraction of remote client
 pub struct Conn {
     pub sock: TcpStream,
+    pub token: Token,
     pub interest: EventSet,
-    pub res: Vec<u8>,
 
+    res: VecDeque<ByteBuf>,
     // message content
     last_msg_id: u64,
     header: MutByteBuf,
@@ -50,27 +53,48 @@ pub struct Conn {
 }
 
 impl Conn {
-    pub fn new(sock: TcpStream) -> Conn {
+    pub fn new(sock: TcpStream, token: Token) -> Conn {
         Conn {
             sock: sock,
+            token: token,
             interest: EventSet::readable(),
-            res: Vec::with_capacity(1024),
+            res: VecDeque::new(),
             last_msg_id: 0,
             header: create_mem_buf(rpc::MSG_HEADER_LEN),
             payload: None,
         }
     }
 
-    pub fn write(&mut self) {
-        match self.sock.write(&self.res) {
-            Ok(n) => debug!("write {} bytes successfully", n),
-            Err(e) => warn!("sock write failed {:?}", e),
+    fn write_buf(&mut self) -> Result<usize> {
+        // we check empty before.
+        let mut buf = self.res.front_mut().unwrap();
+
+        let n = try!(self.sock.try_write(buf.bytes()));
+        match n {
+            None => {}
+            Some(n) => buf.advance(n),
         }
-        self.interest.remove(EventSet::writable());
-        self.interest.insert(EventSet::readable());
+
+        Ok(buf.remaining())
     }
 
-    pub fn read(&mut self, token: Token, event_loop: &mut EventLoop<Server>) -> Result<(), Error> {
+    pub fn write(&mut self, event_loop: &mut EventLoop<Server>) -> Result<()> {
+        while !self.res.is_empty() {
+            let remaining = try!(self.write_buf());
+
+            if remaining > 0 {
+                // we don't write all data, so must try later.
+                // we have already registered writable, no need registering again.
+                return Ok(());
+            }
+            self.res.pop_front();
+        }
+        self.interest.remove(EventSet::writable());
+        try!(event_loop.reregister(&self.sock, self.token, self.interest, PollOpt::edge()));
+        Ok(())
+    }
+
+    pub fn read(&mut self, event_loop: &mut EventLoop<Server>) -> Result<()> {
         let payload: Option<MutByteBuf> = None;
         loop {
             // Because we use the edge trigger, so here we must read whole data.
@@ -98,13 +122,28 @@ impl Conn {
             let mut m = Request::new();
             try!(rpc::decode_body(&payload.bytes().to_vec(), &mut m));
             let sender = event_loop.channel();
-            let queue_msg: QueueMessage = QueueMessage::Request(token, self.last_msg_id, m);
+            let queue_msg: QueueMessage = QueueMessage::Request(self.token, self.last_msg_id, m);
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
 
             self.payload = None;
             self.header.clear();
         }
-        self.interest.remove(EventSet::readable());
+        Ok(())
+    }
+
+    pub fn append_write_buf(&mut self,
+                            event_loop: &mut EventLoop<Server>,
+                            msg_id: u64,
+                            resp: Response)
+                            -> Result<()> {
+        let resp_len: usize = rpc::MSG_HEADER_LEN + resp.compute_size() as usize;
+        let mut resp_buf = ByteBuf::mut_with_capacity(resp_len);
+        rpc::encode_msg(&mut resp_buf, msg_id, &resp).unwrap();
+        self.res.push_back(resp_buf.flip());
+        if !self.interest.is_writable() {
+            self.interest.insert(EventSet::writable());
+            try!(event_loop.reregister(&self.sock, self.token, self.interest, PollOpt::edge()));
+        }
         Ok(())
     }
 }
