@@ -270,8 +270,7 @@ impl<T: Storage + Default> Raft<T> {
     }
 
     // send persists state to stable storage and then sends to its mailbox.
-    fn send(&mut self, m: Message) {
-        let mut m = m;
+    fn send(&mut self, mut m: Message) {
         m.set_from(self.id);
         // do not attach term to MsgPropose
         // proposals are a way to forward to the leader and
@@ -788,7 +787,7 @@ impl<T: Storage + Default> Raft<T> {
               self.term);
     }
 
-    fn step_leader(&mut self, m: Message) {
+    fn step_leader(&mut self, mut m: Message) {
         // These message types do not require any progress for m.From.
         match m.get_msg_type() {
             MessageType::MsgBeat => {
@@ -814,7 +813,6 @@ impl<T: Storage + Default> Raft<T> {
                     // drop any new proposals.
                     return;
                 }
-                let mut m = m;
                 for e in m.mut_entries().iter_mut() {
                     if e.get_entry_type() == EntryType::EntryConfChange {
                         if self.pending_conf {
@@ -905,7 +903,7 @@ impl<T: Storage + Default> Raft<T> {
         }
     }
 
-    fn step_follower(&mut self, m: Message) {
+    fn step_follower(&mut self, mut m: Message) {
         let term = self.term;
         match m.get_msg_type() {
             MessageType::MsgPropose => {
@@ -915,7 +913,6 @@ impl<T: Storage + Default> Raft<T> {
                           term);
                     return;
                 }
-                let mut m = m;
                 m.set_to(self.lead);
                 self.send(m);
             }
@@ -1001,8 +998,7 @@ impl<T: Storage + Default> Raft<T> {
         self.send(to_send);
     }
 
-    fn handle_snapshot(&mut self, m: Message) {
-        let mut m = m;
+    fn handle_snapshot(&mut self, mut m: Message) {
         let (sindex, sterm) = (m.get_snapshot().get_metadata().get_index(),
                                m.get_snapshot().get_metadata().get_term());
         if self.restore(m.take_snapshot()) {

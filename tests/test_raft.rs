@@ -85,13 +85,13 @@ fn ents(terms: Vec<u64>) -> Interface {
 }
 
 fn next_ents(r: &mut Raft<MemStorage>, s: &MemStorage) -> Vec<Entry> {
-    s.wl().append(&r.raft_log.unstable_entries().unwrap_or(&vec![])).expect("");
+    s.wl().append(&r.raft_log.unstable_entries().unwrap_or(&[])).expect("");
     let (last_idx, last_term) = (r.raft_log.last_index(), r.raft_log.last_term());
     r.raft_log.stable_to(last_idx, last_term);
     let ents = r.raft_log.next_entries();
     let committed = r.raft_log.committed;
     r.raft_log.applied_to(committed);
-    ents.unwrap_or(vec![])
+    ents.unwrap_or_else(Vec::new)
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Hash)]
@@ -127,7 +127,7 @@ impl Interface {
         }
     }
 
-    fn initial(&mut self, id: u64, ids: &Vec<u64>) {
+    fn initial(&mut self, id: u64, ids: &[u64]) {
         if self.raft.is_some() {
             self.id = id;
             self.prs = HashMap::with_capacity(ids.len());
@@ -217,12 +217,11 @@ impl Network {
     // A nil node will be replaced with a new *stateMachine.
     // A *stateMachine will get its k, id.
     // When using stateMachine, the address list is always [1, n].
-    pub fn new(peers: Vec<Option<Interface>>) -> Network {
+    pub fn new(mut peers: Vec<Option<Interface>>) -> Network {
         let size = peers.len();
         let peer_addrs: Vec<u64> = (1..size as u64 + 1).collect();
         let mut nstorage: HashMap<u64, Arc<MemStorage>> = HashMap::new();
         let mut npeers: HashMap<u64, Interface> = HashMap::new();
-        let mut peers = peers;
         for (p, id) in peers.drain(..).zip(peer_addrs.clone()) {
             match p {
                 None => {
@@ -230,8 +229,7 @@ impl Network {
                     let r = new_test_raft(id, peer_addrs.clone(), 10, 1, nstorage[&id].clone());
                     npeers.insert(id, r);
                 }
-                Some(p) => {
-                    let mut p = p;
+                Some(mut p) => {
                     p.initial(id, &peer_addrs);
                     npeers.insert(id, p);
                 }
@@ -248,32 +246,29 @@ impl Network {
         self.ignorem.insert(t, true);
     }
 
-    fn filter(&self, msgs: Vec<Message>) -> Vec<Message> {
-        let mut msgs = msgs;
-        let msgs: Vec<Message> =
-            msgs.drain(..)
-                .filter(|m| {
-                    if self.ignorem.get(&m.get_msg_type()).map(|x| *x).unwrap_or(false) {
-                        return false;
-                    }
-                    // hups never go over the network, so don't drop them but panic
-                    assert!(m.get_msg_type() != MessageType::MsgHup, "unexpected msgHup");
-                    let perc = self.dropm
-                                   .get(&Connem {
-                                       from: m.get_from(),
-                                       to: m.get_to(),
-                                   })
-                                   .map(|x| *x)
-                                   .unwrap_or(0f64);
-                    rand::random::<f64>() >= perc
-                })
-                .collect();
-        msgs
+    fn filter(&self, mut msgs: Vec<Message>) -> Vec<Message> {
+        msgs.drain(..)
+            .filter(|m| {
+                if self.ignorem.get(&m.get_msg_type()).cloned().unwrap_or(false) {
+                    return false;
+                }
+                // hups never go over the network, so don't drop them but panic
+                assert!(m.get_msg_type() != MessageType::MsgHup, "unexpected msgHup");
+                let perc = self.dropm
+                               .get(&Connem {
+                                   from: m.get_from(),
+                                   to: m.get_to(),
+                               })
+                               .cloned()
+                               .unwrap_or(0f64);
+                rand::random::<f64>() >= perc
+            })
+            .collect()
     }
 
     pub fn send(&mut self, msgs: Vec<Message>) {
         let mut msgs = msgs;
-        while msgs.len() > 0 {
+        while !msgs.is_empty() {
             let mut new_msgs = vec![];
             for m in msgs.drain(..) {
                 let resp = {
@@ -493,7 +488,7 @@ fn test_progress_paused() {
     m.set_to(1);
     m.set_msg_type(MessageType::MsgPropose);
     let mut e = Entry::new();
-    e.set_data("some_data".as_bytes().to_vec());
+    e.set_data(b"some_data".to_vec());
     m.set_entries(RepeatedField::from_vec(vec![e]));
     raft.step(m.clone()).expect("");
     raft.step(m.clone()).expect("");
@@ -562,7 +557,7 @@ fn test_log_replicatioin() {
             network.send(vec![m.clone()]);
         }
 
-        for (j, x) in network.peers.iter_mut() {
+        for (j, x) in &mut network.peers {
             if x.raft_log.committed != wcommitted {
                 panic!("#{}.{}: committed = {}, want {}",
                        i,
@@ -732,7 +727,7 @@ fn test_candidate_concede() {
 
     let ents = vec![empty_entry(1, 1), new_entry(1, 2, Some(data))];
     let want_log = ltoa(&new_raft_log(ents, 3, 2));
-    for (id, p) in tt.peers.iter() {
+    for (id, p) in &tt.peers {
         let l = ltoa(&p.raft_log);
         if l != want_log {
             panic!("#{}: raft_log: {}, want: {}", id, l, want_log);
@@ -769,7 +764,7 @@ fn test_old_messages() {
                     new_entry(3, 4, SOME_DATA)];
     let ilog = new_raft_log(ents, 5, 4);
     let base = ltoa(&ilog);
-    for (id, p) in tt.peers.iter() {
+    for (id, p) in &tt.peers {
         let l = ltoa(&p.raft_log);
         if l != base {
             panic!("#{}: raft_log: {}, want: {}", id, l, base);
@@ -789,8 +784,7 @@ fn test_proposal() {
         (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None, None]), true),
     ];
 
-    for (j, (network, success)) in tests.drain(..).enumerate() {
-        let mut nw = network;
+    for (j, (mut nw, success)) in tests.drain(..).enumerate() {
         let send = |nw: &mut Network, m| {
             let mut network_wrapper = panic::AssertRecoverSafe::new(nw);
             let res = panic::recover(move || network_wrapper.send(vec![m]));
@@ -807,7 +801,7 @@ fn test_proposal() {
             RaftLog::new(new_storage())
         };
         let base = ltoa(&want_log);
-        for (id, p) in nw.peers.iter() {
+        for (id, p) in &nw.peers {
             if p.raft.is_some() {
                 let l = ltoa(&p.raft_log);
                 if l != base {
@@ -836,7 +830,7 @@ fn test_proposal_by_proxy() {
 
         let want_log = new_raft_log(vec![empty_entry(1, 1), new_entry(1, 2, SOME_DATA)], 3, 2);
         let base = ltoa(&want_log);
-        for (id, p) in tt.peers.iter() {
+        for (id, p) in &tt.peers {
             if p.raft.is_none() {
                 continue;
             }
@@ -916,7 +910,7 @@ fn test_is_election_timeout() {
         if round {
             got = (got * 10.0 + 0.5).floor() / 10.0;
         }
-        if got != wprobability {
+        if (got - wprobability).abs() > 0.000001 {
             panic!("#{}: possibility = {}, want {}", i, got, wprobability);
         }
     }
@@ -1400,7 +1394,7 @@ fn test_bcast_beat() {
     sm.become_candidate();
     sm.become_leader();
     for i in 0..10 {
-        sm.append_entry(&mut vec![empty_entry(0, i as u64 + 1)]);
+        sm.append_entry(&mut [empty_entry(0, i as u64 + 1)]);
     }
     // slow follower
     let mut_pr = |sm: &mut Interface, n, matched, next_idx| {
@@ -1518,7 +1512,7 @@ fn test_send_append_for_progress_probe() {
     // each round is a heartbeat
     for _ in 0..3 {
         // we expect that raft will only send out one msgAPP per heartbeat timeout
-        r.append_entry(&mut vec![new_entry(0, 0, SOME_DATA)]);
+        r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
         r.send_append(2);
         let mut msg = r.read_messages();
         assert_eq!(msg.len(), 1);
@@ -1526,7 +1520,7 @@ fn test_send_append_for_progress_probe() {
 
         assert!(r.prs[&2].paused);
         for _ in 0..10 {
-            r.append_entry(&mut vec![new_entry(0, 0, SOME_DATA)]);
+            r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
             r.send_append(2);
             assert_eq!(r.read_messages().len(), 0);
         }
@@ -1551,7 +1545,7 @@ fn test_send_append_for_progress_replicate() {
     r.prs.get_mut(&2).unwrap().become_replicate();
 
     for _ in 0..10 {
-        r.append_entry(&mut vec![new_entry(0, 0, SOME_DATA)]);
+        r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
         r.send_append(2);
         assert_eq!(r.read_messages().len(), 1);
     }
@@ -1566,7 +1560,7 @@ fn test_send_append_for_progress_snapshot() {
     r.prs.get_mut(&2).unwrap().become_snapshot(10);
 
     for _ in 0..10 {
-        r.append_entry(&mut vec![new_entry(0, 0, SOME_DATA)]);
+        r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
         r.send_append(2);
         assert_eq!(r.read_messages().len(), 0);
     }
@@ -1774,7 +1768,7 @@ fn test_recover_pending_config() {
         let mut r = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
         let mut e = Entry::new();
         e.set_entry_type(ent_type);
-        r.append_entry(&mut vec![e]);
+        r.append_entry(&mut [e]);
         r.become_candidate();
         r.become_leader();
         if r.pending_conf != wpending {
@@ -1794,8 +1788,8 @@ fn test_recover_double_pending_config() {
     let mut r = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
     let mut e = Entry::new();
     e.set_entry_type(EntryType::EntryConfChange);
-    r.append_entry(&mut vec![e.clone()]);
-    r.append_entry(&mut vec![e]);
+    r.append_entry(&mut [e.clone()]);
+    r.append_entry(&mut [e]);
     r.become_candidate();
     r.become_leader();
 }
