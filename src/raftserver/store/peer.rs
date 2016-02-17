@@ -4,12 +4,14 @@ use std::vec::Vec;
 use std::default::Default;
 
 use rocksdb::{DB, WriteBatch, Writable};
+use rocksdb::rocksdb::Snapshot;
 use protobuf::{self, Message};
 use uuid::Uuid;
 
 use proto::metapb;
 use proto::raftpb;
 use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse, ChangePeerRequest};
+use proto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminResponse};
 use proto::raft_serverpb::RaftMessage;
 use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other};
@@ -19,6 +21,8 @@ use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
+use super::keys;
+use super::engine::Retriever;
 
 #[derive(Default)]
 pub struct PendingCmd {
@@ -266,40 +270,35 @@ impl Peer {
         let mut snap_status = SnapshotStatus::SnapshotFinish;
         let mut unreachable = false;
 
-        let to_peer_id;
-        let to_store_id;
+        let trans = trans.read().unwrap();
+        let from_peer = try!(trans.get_peer(msg.get_from()).ok_or_else(|| {
+            other(format!("failed to lookup sender peer {} in region {}",
+                          msg.get_from(),
+                          self.region_id))
+        }));
 
-        {
-            let trans = trans.read().unwrap();
-            let from_peer = try!(trans.get_peer(msg.get_from()).ok_or_else(|| {
-                other(format!("failed to lookup sender peer {} in region {}",
-                              msg.get_from(),
-                              self.region_id))
-            }));
+        let to_peer = try!(trans.get_peer(msg.get_to()).ok_or_else(|| {
+            other(format!("failed to look up recipient peer {} in region {}",
+                          msg.get_to(),
+                          self.region_id))
+        }));
 
-            let to_peer = try!(trans.get_peer(msg.get_to()).ok_or_else(|| {
-                other(format!("failed to look up recipient peer {} in region {}",
-                              msg.get_to(),
-                              self.region_id))
-            }));
+        let to_peer_id = to_peer.get_peer_id();
+        let to_store_id = to_peer.get_store_id();
 
-            to_peer_id = to_peer.get_peer_id();
-            to_store_id = to_peer.get_store_id();
+        send_msg.set_from_peer(from_peer);
+        send_msg.set_to_peer(to_peer);
 
-            send_msg.set_from_peer(from_peer);
-            send_msg.set_to_peer(to_peer);
+        if let Err(e) = trans.send(send_msg) {
+            warn!("region {} on store {} failed to send msg to {} in store {}, err: {:?}",
+                  self.region_id,
+                  self.store_id,
+                  to_peer_id,
+                  to_store_id,
+                  e);
 
-            let _ = trans.send(send_msg).map_err(|e| {
-                warn!("region {} on store {} failed to send msg to {} in store {}, err: {:?}",
-                      self.region_id,
-                      self.store_id,
-                      to_peer_id,
-                      to_store_id,
-                      e);
-
-                unreachable = true;
-                snap_status = SnapshotStatus::SnapshotFailure;
-            });
+            unreachable = true;
+            snap_status = SnapshotStatus::SnapshotFailure;
         }
 
         if unreachable {
@@ -380,7 +379,7 @@ impl Peer {
             // TODO: use a better way to avoid clone.
             let mut cmds: Vec<PendingCmd> = Vec::with_capacity(self.pending_cmds.len());
             for cmd in self.pending_cmds.values() {
-                // We only need uuid and cmd for later re-propose.
+                // We only need cmd for later re-propose.
                 cmds.push(PendingCmd { cmd: cmd.cmd.clone(), ..Default::default() });
             }
 
@@ -440,11 +439,19 @@ impl Peer {
         }
 
         let wb = WriteBatch::new();
+        let mut resp = {
+            let engine = self.engine.clone();
+            let ctx = ExecContext {
+                snap: engine.snapshot(),
+                wb: &wb,
+                request: cmd,
+            };
 
-        let mut resp = self.execute_raft_command(&wb, index, cmd).unwrap_or_else(|e| {
-            error!("execute raft command err: {:?}", e);
-            cmd_resp::message_error(e)
-        });
+            self.execute_raft_command(&ctx).unwrap_or_else(|e| {
+                error!("execute raft command err: {:?}", e);
+                cmd_resp::message_error(e)
+            })
+        };
 
         peer_storage::save_applied_index(&wb, self.region_id, index)
             .expect("save applied index must not fail");
@@ -465,15 +472,6 @@ impl Peer {
 
         Ok(resp)
     }
-
-    fn execute_raft_command(&mut self,
-                            wb: &WriteBatch,
-                            index: u64,
-                            cmd: RaftCommandRequest)
-                            -> Result<RaftCommandResponse> {
-        // implement later.
-        unimplemented!();
-    }
 }
 
 fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerRequest> {
@@ -486,4 +484,123 @@ fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerReques
     }
 
     Some(req.get_change_peer())
+}
+
+struct ExecContext<'a> {
+    pub snap: Snapshot<'a>,
+    pub wb: &'a WriteBatch,
+    pub request: RaftCommandRequest,
+}
+
+// Here we implement all commands.
+impl Peer {
+    fn execute_raft_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
+        if ctx.request.has_admin_request() {
+            self.execute_admin_command(ctx)
+        } else {
+            self.execute_write_command(ctx)
+        }
+    }
+
+    fn execute_admin_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
+        let request = ctx.request.get_admin_request();
+        let cmd_type = request.get_cmd_type();
+        let mut response = try!(match cmd_type {
+            cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
+            cmd::AdminCommandType::Split => self.execute_split(ctx, request),
+            e => Err(other(format!("unsupported admin command type {:?}", e))),
+        });
+        response.set_cmd_type(cmd_type);
+
+        let mut resp = RaftCommandResponse::new();
+        resp.set_admin_response(response);
+        Ok(resp)
+    }
+
+    fn execute_change_peer(&mut self, _: &ExecContext, _: &AdminRequest) -> Result<AdminResponse> {
+        unimplemented!();
+    }
+
+    fn execute_split(&mut self, _: &ExecContext, _: &AdminRequest) -> Result<AdminResponse> {
+        unimplemented!();
+    }
+
+    fn execute_write_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
+        let requests = ctx.request.get_requests();
+
+        let mut responses: Vec<Response> = Vec::with_capacity(requests.len());
+
+        for request in requests {
+            let cmd_type = request.get_cmd_type();
+            let mut resp = try!(match cmd_type {
+                cmd::CommandType::Get => self.execute_get(ctx, request),
+                cmd::CommandType::Seek => self.execute_seek(ctx, request),
+                cmd::CommandType::Put => self.execute_put(ctx, request),
+                cmd::CommandType::Delete => self.execute_delete(ctx, request),
+                e => Err(other(format!("unsupported command type {:?}", e))),
+            });
+
+            resp.set_cmd_type(cmd_type);
+
+            responses.push(resp);
+        }
+
+        let mut resp = RaftCommandResponse::new();
+        resp.set_responses(protobuf::RepeatedField::from_vec(responses));
+        Ok(resp)
+    }
+
+    fn execute_get(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+        // TODO: the get_get looks wried, maybe we should think a better name later.
+        let request = request.get_get();
+        let key = request.get_key();
+        try!(keys::validate_data_key(key));
+
+        let mut resp = Response::new();
+        let res: Option<Vec<u8>> = try!(ctx.snap.get_value(key).map(|r| r.map(|v| v.to_vec())));
+        if let Some(res) = res {
+            resp.mut_get().set_value(res)
+        }
+
+        Ok(resp)
+    }
+
+    fn execute_seek(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+        let request = request.get_seek();
+        let key = request.get_key();
+        try!(keys::validate_data_key(key));
+
+        let mut resp = Response::new();
+        let res: Option<(Vec<u8>, Vec<u8>)> = try!(ctx.snap.seek(key));
+        if let Some(res) = res {
+            resp.mut_seek().set_key(res.0);
+            resp.mut_seek().set_value(res.1);
+        }
+
+        Ok(resp)
+    }
+
+    fn execute_put(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+        let request = request.get_put();
+        let key = request.get_key();
+        try!(keys::validate_data_key(key));
+
+        let resp = Response::new();
+        try!(ctx.wb.put(key, request.get_value()));
+
+        // Should we call mut_put() explicitly?
+        Ok(resp)
+    }
+
+    fn execute_delete(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+        let request = request.get_delete();
+        let key = request.get_key();
+        try!(keys::validate_data_key(key));
+
+        let resp = Response::new();
+        try!(ctx.wb.delete(key));
+
+        // Should we call mut_delete() explicitly?
+        Ok(resp)
+    }
 }
