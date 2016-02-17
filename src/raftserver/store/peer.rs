@@ -508,7 +508,7 @@ impl Peer {
         let mut response = try!(match cmd_type {
             cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
             cmd::AdminCommandType::Split => self.execute_split(ctx, request),
-            e => return Err(other(format!("unsupported admin command type {:?}", e))),
+            e => Err(other(format!("unsupported admin command type {:?}", e))),
         });
         response.set_cmd_type(cmd_type);
 
@@ -537,7 +537,7 @@ impl Peer {
                 cmd::CommandType::Seek => self.execute_seek(ctx, request),
                 cmd::CommandType::Put => self.execute_put(ctx, request),
                 cmd::CommandType::Delete => self.execute_delete(ctx, request),
-                e => return Err(other(format!("unsupported command type {:?}", e))),
+                e => Err(other(format!("unsupported command type {:?}", e))),
             });
 
             resp.set_cmd_type(cmd_type);
