@@ -175,8 +175,8 @@ mod tests {
 
     #[test]
     fn test_region_id_key() {
-        let tbls = vec![0, 1, 1024, !0];
-        for region_id in tbls {
+        let region_ids = vec![0, 1, 1024, !0];
+        for region_id in region_ids {
             let prefix = region_id_prefix(region_id);
 
             assert!(raft_log_prefix(region_id).starts_with(&prefix));
@@ -189,10 +189,10 @@ mod tests {
 
         // test sort.
         let tbls = vec![(1, 0, Ordering::Greater), (1, 1, Ordering::Equal), (1, 2, Ordering::Less)];
-        for tbl in tbls {
-            let lhs = region_id_prefix(tbl.0);
-            let rhs = region_id_prefix(tbl.1);
-            assert_eq!(lhs.partial_cmp(&rhs), Some(tbl.2));
+        for (lid, rid, order) in tbls {
+            let lhs = region_id_prefix(lid);
+            let rhs = region_id_prefix(rid);
+            assert_eq!(lhs.partial_cmp(&rhs), Some(order));
         }
     }
 
@@ -202,17 +202,17 @@ mod tests {
                         (2, 1, 1, 2, Ordering::Greater),
                         (1, 1, 1, 1, Ordering::Equal)];
 
-        for tbl in tbls {
-            let lhs = raft_log_key(tbl.0, tbl.1);
-            let rhs = raft_log_key(tbl.2, tbl.3);
-            assert_eq!(lhs.partial_cmp(&rhs), Some(tbl.4));
+        for (lid, l_log_id, rid, r_log_id, order) in tbls {
+            let lhs = raft_log_key(lid, l_log_id);
+            let rhs = raft_log_key(rid, r_log_id);
+            assert_eq!(lhs.partial_cmp(&rhs), Some(order));
         }
     }
 
     #[test]
     fn test_region_meta_key() {
-        let tbls: Vec<&[u8]> = vec![b"123", b"abc", b"hello_world"];
-        for key in tbls {
+        let keys: Vec<&[u8]> = vec![b"123", b"abc", b"hello_world"];
+        for key in keys {
             let prefix = region_meta_prefix(key);
             let info_key = region_info_key(key);
             assert!(info_key.starts_with(&prefix));
@@ -229,10 +229,10 @@ mod tests {
         (b"2", b"123", Ordering::Greater),
         ];
 
-        for tbl in tbls {
-            let lhs = region_info_key(tbl.0);
-            let rhs = region_info_key(tbl.1);
-            assert_eq!(lhs.partial_cmp(&rhs), Some(tbl.2));
+        for (lkey, rkey, order) in tbls {
+            let lhs = region_info_key(lkey);
+            let rhs = region_info_key(rkey);
+            assert_eq!(lhs.partial_cmp(&rhs), Some(order));
         }
     }
 
@@ -265,8 +265,8 @@ mod tests {
             (dkey.clone(), meta2_key(&dkey)),
         ];
 
-        for tbl in tbls {
-            assert_eq!(region_route_meta_key(&tbl.0), tbl.1);
+        for (lkey, rkey) in tbls {
+            assert_eq!(region_route_meta_key(&lkey), rkey);
         }
 
         let tbls = vec![
@@ -281,10 +281,10 @@ mod tests {
             (vec![META2_PREFIX, 0xFF, 1], false),
         ];
 
-        for tbl in tbls {
-            match validate_region_route_meta_key(&tbl.0) {
-                Ok(_) => assert!(tbl.1),
-                Err(_) => assert!(!tbl.1),
+        for (key, ok) in tbls {
+            match validate_region_route_meta_key(&key) {
+                Ok(_) => assert!(ok),
+                Err(_) => assert!(!ok),
             }
         }
     }
