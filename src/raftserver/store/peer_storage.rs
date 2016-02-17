@@ -24,6 +24,9 @@ pub struct PeerStorage {
     pub region: metapb::Region,
     pub last_index: u64,
     pub applied_index: u64,
+    // Truncated state is used for two cases:
+    // 1, a truncated state preceded the first log entry.
+    // 2, a dummy entry for the start point of the empty log.
     pub truncated_state: RaftTruncatedState,
 }
 
@@ -164,7 +167,7 @@ impl PeerStorage {
     pub fn term(&self, idx: u64) -> raft::Result<u64> {
         match self.entries(idx, idx + 1, 0) {
             Err(e@RaftError::Store(StorageError::Compacted)) => {
-                // should we check in truncated_state?
+                // Maybe the dummy entry.
                 if self.truncated_state.get_index() == idx {
                     return Ok(self.truncated_state.get_term());
                 }
@@ -350,7 +353,7 @@ impl PeerStorage {
 
     // Discard all log entries prior to compact_index. We must guarantee
     // that the compact_index is not greater than applied index.
-    pub fn compact<T: Mutator>(&self, w: &T, compact_index: u64) -> Result<()> {
+    pub fn compact<T: Mutator>(&self, w: &T, compact_index: u64) -> Result<(RaftTruncatedState)> {
         debug!("compact log entries to prior to {} for region {}",
                compact_index,
                self.get_region_id());
@@ -379,7 +382,7 @@ impl PeerStorage {
         state.set_term(term);
         try!(w.put_msg(&keys::raft_truncated_state_key(self.get_region_id()),
                        &state));
-        Ok(())
+        Ok(state)
     }
 
     // Truncated state contains the meta about log preceded the first current entry.
