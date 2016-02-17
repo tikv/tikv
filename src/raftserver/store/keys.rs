@@ -150,6 +150,7 @@ pub fn validate_region_route_meta_key(key: &[u8]) -> Result<()> {
         return Ok(());
     }
 
+    // TODO: Maybe no necessary to check this, remove later?
     if key.len() < META1_PREFIX_KEY.len() {
         return Err(other(format!("{:?} is too short", key)));
     }
@@ -165,4 +166,126 @@ pub fn validate_region_route_meta_key(key: &[u8]) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn test_region_id_key() {
+        let tbls = vec![0, 1, 1024, !0];
+        for region_id in tbls {
+            let prefix = region_id_prefix(region_id);
+
+            assert!(raft_log_prefix(region_id).starts_with(&prefix));
+            assert!(raft_log_key(region_id, 1).starts_with(&prefix));
+            assert!(raft_hard_state_key(region_id).starts_with(&prefix));
+            assert!(raft_applied_index_key(region_id).starts_with(&prefix));
+            assert!(raft_last_index_key(region_id).starts_with(&prefix));
+            assert!(raft_truncated_state_key(region_id).starts_with(&prefix));
+        }
+
+        // test sort.
+        let tbls = vec![(1, 0, Ordering::Greater), (1, 1, Ordering::Equal), (1, 2, Ordering::Less)];
+        for tbl in tbls {
+            let lhs = region_id_prefix(tbl.0);
+            let rhs = region_id_prefix(tbl.1);
+            assert_eq!(lhs.partial_cmp(&rhs), Some(tbl.2));
+        }
+    }
+
+    #[test]
+    fn test_raft_log_sort() {
+        let tbls = vec![(1, 1, 1, 2, Ordering::Less),
+                        (2, 1, 1, 2, Ordering::Greater),
+                        (1, 1, 1, 1, Ordering::Equal)];
+
+        for tbl in tbls {
+            let lhs = raft_log_key(tbl.0, tbl.1);
+            let rhs = raft_log_key(tbl.2, tbl.3);
+            assert_eq!(lhs.partial_cmp(&rhs), Some(tbl.4));
+        }
+    }
+
+    #[test]
+    fn test_region_meta_key() {
+        let tbls: Vec<&[u8]> = vec![b"123", b"abc", b"hello_world"];
+        for key in tbls {
+            let prefix = region_meta_prefix(key);
+            let info_key = region_info_key(key);
+            assert!(info_key.starts_with(&prefix));
+
+            assert_eq!(decode_region_meta_key(&info_key).unwrap(),
+                       (key.to_vec(), REGION_INFO_SUFFIX));
+        }
+
+        // test sort.
+        let tbls: Vec<(&[u8], &[u8], Ordering)> = vec![
+        (b"1", b"2", Ordering::Less),
+        (b"1", b"1", Ordering::Equal),
+        (b"2", b"1", Ordering::Greater),
+        (b"2", b"123", Ordering::Greater),
+        ];
+
+        for tbl in tbls {
+            let lhs = region_info_key(tbl.0);
+            let rhs = region_info_key(tbl.1);
+            assert_eq!(lhs.partial_cmp(&rhs), Some(tbl.2));
+        }
+    }
+
+    fn route_key(prefix: u8, key: &[u8]) -> Vec<u8> {
+        let mut v = vec![];
+        v.push(prefix);
+        v.extend_from_slice(key);
+        v
+    }
+
+    fn meta1_key(key: &[u8]) -> Vec<u8> {
+        route_key(META1_PREFIX, key)
+    }
+
+    fn meta2_key(key: &[u8]) -> Vec<u8> {
+        route_key(META2_PREFIX, key)
+    }
+
+    fn data_key(key: &[u8]) -> Vec<u8> {
+        route_key(DATA_PREFIX, key)
+    }
+
+    #[test]
+    fn test_region_route_meta_key() {
+        let dkey = data_key(b"abc");
+        let tbls = vec![
+            (vec![], vec![]),
+            (meta1_key(&dkey), vec![]),
+            (meta2_key(&dkey), meta1_key(&dkey)),
+            (dkey.clone(), meta2_key(&dkey)),
+        ];
+
+        for tbl in tbls {
+            assert_eq!(region_route_meta_key(&tbl.0), tbl.1);
+        }
+
+        let tbls = vec![
+            (vec![], true),
+            (vec![0xFF], false),
+            (vec![DATA_PREFIX, 1], false),
+            (vec![META1_PREFIX - 1, 1], false),
+            (vec![META2_PREFIX + 1, 1], false),
+            (vec![META1_PREFIX, 1], true),
+            (vec![META2_PREFIX, 1], true),
+            (vec![META1_PREFIX, 0xFF, 1], false),
+            (vec![META2_PREFIX, 0xFF, 1], false),
+        ];
+
+        for tbl in tbls {
+            match validate_region_route_meta_key(&tbl.0) {
+                Ok(_) => assert!(tbl.1),
+                Err(_) => assert!(!tbl.1),
+            }
+        }
+    }
 }
