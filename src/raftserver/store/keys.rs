@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_region_id_key() {
-        let region_ids = vec![0, 1, 1024, !0];
+        let region_ids = vec![0, 1, 1024, ::std::u64::MAX];
         for region_id in region_ids {
             let prefix = region_id_prefix(region_id);
 
