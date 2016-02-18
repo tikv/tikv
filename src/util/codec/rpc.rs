@@ -39,7 +39,7 @@ pub fn encode_msg<T: io::Write, M: protobuf::Message>(w: &mut T,
 // Decodes encoded message, returns message ID.
 pub fn decode_msg<T: io::Read, M: protobuf::Message>(r: &mut T, m: &mut M) -> Result<u64> {
     let (message_id, payload) = try!(decode_data(r));
-    try!(m.merge_from_bytes(&payload));
+    try!(decode_body(&payload, m));
 
     Ok(message_id)
 }
@@ -54,18 +54,6 @@ pub fn encode_data<T: io::Write>(w: &mut T, msg_id: u64, data: &[u8]) -> Result<
     Ok(())
 }
 
-// Decodes encoded data, returns message ID and body.
-pub fn decode_data<T: io::Read>(r: &mut T) -> Result<(u64, Vec<u8>)> {
-    let mut header = vec![0;MSG_HEADER_LEN];
-    try!(r.read_exact(&mut header));
-
-    let (msg_id, payload_len) = try!(decode_msg_header(&header));
-    let mut payload = vec![0;payload_len];
-    try!(r.read_exact(&mut payload));
-
-    Ok((msg_id, payload))
-}
-
 // Encodes msg header to a 16 bytes header buffer.
 pub fn encode_msg_header(msg_id: u64, payload_len: usize) -> Vec<u8> {
     let mut buf = vec![0;MSG_HEADER_LEN];
@@ -76,6 +64,17 @@ pub fn encode_msg_header(msg_id: u64, payload_len: usize) -> Vec<u8> {
     BigEndian::write_u64(&mut buf[8..16], msg_id);
 
     buf
+}
+
+// Decodes encoded data, returns message ID and body.
+pub fn decode_data<T: io::Read>(r: &mut T) -> Result<(u64, Vec<u8>)> {
+    let mut header = vec![0;MSG_HEADER_LEN];
+    try!(r.read_exact(&mut header));
+    let (msg_id, payload_len) = try!(decode_msg_header(&header));
+    let mut payload = vec![0;payload_len];
+    try!(r.read_exact(&mut payload));
+
+    Ok((msg_id, payload))
 }
 
 // Decodes msg header in header buffer, the buffer length size must be equal MSG_HEADER_LEN;
@@ -100,6 +99,11 @@ pub fn decode_msg_header(header: &[u8]) -> Result<(u64, usize)> {
     Ok((message_id, payload_len))
 }
 
+// Decodes only body.
+pub fn decode_body<M: protobuf::Message>(payload: &[u8], m: &mut M) -> Result<()> {
+    try!(m.merge_from_bytes(&payload));
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
