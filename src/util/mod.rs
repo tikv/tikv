@@ -1,4 +1,3 @@
-use std::cell::UnsafeCell;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use rand::{self, ThreadRng};
@@ -49,42 +48,6 @@ pub fn limit_size<T: Message + Clone>(entries: &[T], max: u64) -> Vec<T> {
     }
     entries[..limit].to_vec()
 }
-
-/// A simple general wrapper for struct that is thread-safe for interior mutability already.
-pub struct SyncCell<T: Sync>(UnsafeCell<T>);
-
-impl<T: Sync> SyncCell<T> {
-    pub fn new(t: T) -> SyncCell<T> {
-        SyncCell(UnsafeCell::new(t))
-    }
-
-    pub fn into_inner(self) -> T {
-        let SyncCell(c) = self;
-        unsafe { c.into_inner() }
-    }
-
-    pub fn borrow_mut(&self) -> &mut T {
-        let &SyncCell(ref c) = self;
-        unsafe { &mut *c.get() }
-    }
-}
-
-impl<T: Sync + Default> Default for SyncCell<T> {
-    fn default() -> SyncCell<T> {
-        SyncCell::new(Default::default())
-    }
-}
-
-impl<T: Sync> Deref for SyncCell<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        let &SyncCell(ref c) = self;
-        unsafe { &*c.get() }
-    }
-}
-
-unsafe impl<T: Sync> Sync for SyncCell<T> {}
 
 pub struct DefaultRng {
     rng: ThreadRng,

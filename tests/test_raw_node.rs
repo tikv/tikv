@@ -56,7 +56,8 @@ fn new_raw_node(id: u64,
                 storage: Arc<MemStorage>,
                 peer_nodes: Vec<Peer>)
                 -> RawNode<MemStorage> {
-    RawNode::new(&new_test_config(id, peers, election, heartbeat, storage),
+    RawNode::new(&new_test_config(id, peers, election, heartbeat),
+                 storage,
                  &peer_nodes)
         .unwrap()
 }

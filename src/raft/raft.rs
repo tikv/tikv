@@ -29,7 +29,7 @@ pub const INVALID_ID: u64 = 0;
 
 /// Config contains the parameters to start a raft.
 #[derive(Default)]
-pub struct Config<T: Storage + Default> {
+pub struct Config {
     /// id is the identity of the local raft. ID cannot be 0.
     pub id: u64,
 
@@ -52,11 +52,6 @@ pub struct Config<T: Storage + Default> {
     /// message to mausizeain the leadership every heartbeat usizeerval.
     pub heartbeat_tick: usize,
 
-    /// Storage is the storage for raft. raft generates entires and
-    /// states to be stored in storage. raft reads the persisted entires
-    /// and states out of Storage when it needs. raft reads out the previous
-    /// state and configuration out of storage when restarting.
-    pub storage: Arc<T>,
     /// Applied is the last applied index. It should only be set when restarting
     /// raft. raft will not return entries to the application smaller or equal to Applied.
     /// If Applied is unset when restarting, raft might return previous applied entries.
@@ -79,7 +74,7 @@ pub struct Config<T: Storage + Default> {
     pub check_quorum: bool,
 }
 
-impl<T: Storage + Default> Config<T> {
+impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.id == INVALID_ID {
             return Err(Error::ConfigInvalid("invalid node id".to_owned()));
@@ -112,7 +107,7 @@ pub struct SoftState {
 }
 
 #[derive(Default)]
-pub struct Raft<T: Default + Storage> {
+pub struct Raft<T: Storage> {
     pub term: u64,
     pub vote: u64,
 
@@ -175,10 +170,9 @@ fn new_message(to: u64, field_type: MessageType, from: Option<u64>) -> Message {
     m
 }
 
-impl<T: Storage + Default> Raft<T> {
-    pub fn new(c: &Config<T>) -> Raft<T> {
+impl<T: Storage> Raft<T> {
+    pub fn new(c: &Config, store: Arc<T>) -> Raft<T> {
         c.validate().expect("configuration is invalid");
-        let store = c.storage.clone();
         let rs = store.initial_state().expect("");
         let raft_log = RaftLog::new(store);
         let mut peers: &[u64] = &c.peers;
@@ -201,7 +195,16 @@ impl<T: Storage + Default> Raft<T> {
             check_quorum: c.check_quorum,
             heartbeat_timeout: c.heartbeat_tick,
             election_timeout: c.election_tick,
-            ..Default::default()
+            votes: Default::default(),
+            msgs: Default::default(),
+            lead: Default::default(),
+            rng: Default::default(),
+            term: Default::default(),
+            election_elapsed: Default::default(),
+            pending_conf: Default::default(),
+            skip_step: Default::default(),
+            vote: Default::default(),
+            heartbeat_elapsed: Default::default(),
         };
         for p in peers {
             r.prs.insert(*p, new_progress(1, r.max_inflight));
