@@ -1,3 +1,6 @@
+#![feature(plugin)]
+#![plugin(clippy)]
+
 extern crate tikv;
 extern crate getopts;
 #[macro_use]

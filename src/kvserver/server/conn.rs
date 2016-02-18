@@ -25,12 +25,8 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
     // TODO: use try_read_buf directly if we can solve the compile problem.
     unsafe {
         // header is not full read, we will try read more.
-        let n = try!(r.try_read(buf.mut_bytes()));
-        match n {
-            None => {
-                // nothing to do here now
-            }
-            Some(n) => buf.advance(n),
+        if let Some(n) = try!(r.try_read(buf.mut_bytes())) {
+            buf.advance(n);
         }
     }
 
@@ -67,10 +63,8 @@ impl Conn {
         // we check empty before.
         let mut buf = self.res.front_mut().unwrap();
 
-        let n = try!(self.sock.try_write(buf.bytes()));
-        match n {
-            None => {}
-            Some(n) => buf.advance(n),
+        if let Some(n) = try!(self.sock.try_write(buf.bytes())) {
+            buf.advance(n);
         }
 
         Ok(buf.remaining())
@@ -93,11 +87,10 @@ impl Conn {
     }
 
     pub fn read(&mut self, event_loop: &mut EventLoop<Server>) -> Result<()> {
-        let payload: Option<MutByteBuf> = None;
         loop {
             // Because we use the edge trigger, so here we must read whole data.
-            // payload.is_none() means need read header completely first
-            if payload.is_none() {
+            // self.payload.is_none() means need read header completely first
+            if self.payload.is_none() {
                 try!(try_read_data(&mut self.sock, &mut self.header));
                 if self.header.remaining() > 0 {
                     // We need to read more data for header.
@@ -108,7 +101,7 @@ impl Conn {
                 self.last_msg_id = msg_id;
                 self.payload = Some(create_mem_buf(payload_len));
             }
-            // Payload here can't be None.
+            // payload here can't be None.
             let mut payload = self.payload.take().unwrap();
             try!(try_read_data(&mut self.sock, &mut payload));
             if payload.remaining() > 0 {

@@ -70,8 +70,9 @@ impl Server {
         let received_cb = Box::new(move |v: ResultStorage<Option<Value>>| {
             let resp: Response = Server::cmd_get_done(v);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            let _ = sender.send(queue_msg)
-                          .map_err(|e| error!("{:?}", e));
+            if let Err(e) = sender.send(queue_msg) {
+                error!("{:?}", e);
+            }
         });
         self.store
             .async_get(key, cmd_get_req.get_version(), received_cb)
@@ -97,7 +98,9 @@ impl Server {
         let received_cb = Box::new(move |kvs: ResultStorage<Vec<KvPair>>| {
             let resp: Response = Server::cmd_scan_done(kvs);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+            if let Err(e) = sender.send(queue_msg) {
+                error!("{:?}", e);
+            }
         });
         self.store
             .async_scan(start_key,
@@ -307,27 +310,13 @@ impl Server {
                token.0,
                msg_id,
                req.get_field_type());
-        match req.get_field_type() {
-            MessageType::CmdGet => {
-                if let Err(e) = self.handle_get(&req, msg_id, token, event_loop) {
-                    error!("Some error occur err[{:?}]", e);
-                };
-            }
-            MessageType::CmdScan => {
-                if let Err(e) = self.handle_scan(&req, msg_id, token, event_loop) {
-                    error!("Some error occur err[{:?}]", e);
-                }
-            }
-            MessageType::CmdPrewrite => {
-                if let Err(e) = self.handle_prewrite(&req, msg_id, token, event_loop) {
-                    error!("Some error occur err[{:?}]", e);
-                }
-            }
-            MessageType::CmdCommit => {
-                if let Err(e) = self.handle_commit(&req, msg_id, token, event_loop) {
-                    error!("Some error occur err[{:?}]", e);
-                }
-            }
+        if let Err(e) = match req.get_field_type() {
+            MessageType::CmdGet => self.handle_get(&req, msg_id, token, event_loop),
+            MessageType::CmdScan => self.handle_scan(&req, msg_id, token, event_loop),
+            MessageType::CmdPrewrite => self.handle_prewrite(&req, msg_id, token, event_loop),
+            MessageType::CmdCommit => self.handle_commit(&req, msg_id, token, event_loop),
+        } {
+            error!("Some error occur err[{:?}]", e);
         }
     }
 
