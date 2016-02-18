@@ -86,9 +86,7 @@ fn test_update_term_from_message(state: StateRole) {
 #[test]
 fn test_reject_stale_term_message() {
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
-    r.skip_step = Some(Box::new(|| {
-        panic!("step func should not be called!");
-    }));
+    r.allow_step = false;
     r.load_state(hard_state(2, 0, 0));
 
     let mut m = new_message(0, 0, MessageType::MsgAppend, 0);
@@ -343,6 +341,7 @@ fn test_non_leader_election_timeout_randomized(state: StateRole) {
         timeouts.insert(time, true);
     }
 
+    assert!(timeouts.len() <= et && timeouts.len() >= et - 1);
     for d in et + 1..2 * et {
         assert!(timeouts[&d]);
     }
