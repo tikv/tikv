@@ -109,7 +109,7 @@ mod tests {
 
         let (tx, rx) = channel();
         sender.send_command(RaftCommandRequest::new(),
-                            Box::new(move |resp: RaftCommandResponse| -> Result<()> {
+                            Box::new(move |_: RaftCommandResponse| -> Result<()> {
                                 tx.send(1).unwrap();
                                 Ok(())
                             }))
