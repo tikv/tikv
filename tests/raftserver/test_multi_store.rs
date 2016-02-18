@@ -1,10 +1,12 @@
 use std::sync::Arc;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use rocksdb::{DB, WriteBatch};
 
 use tikv::raftserver::store::*;
 use tikv::proto::metapb;
+use tikv::proto::raft_cmdpb::{StatusCommandType, CommandType};
 
 use super::util::*;
 use super::cluster::Cluster;
@@ -44,6 +46,27 @@ fn bootstrap_multi_store(engines: &HashMap<u64, Arc<DB>>) {
     }
 }
 
+fn get_leader(cluster: &Cluster) -> Option<metapb::Peer> {
+    for id in cluster.get_senders().keys() {
+        let id = *id;
+        let peer = new_peer(id, id, id);
+        let region_leader = new_status_request(1, peer.clone(), new_region_leader_cmd());
+        let resp = cluster.call_command(region_leader, Duration::from_secs(3)).unwrap();
+        assert!(resp.has_status_response());
+        assert_eq!(resp.get_status_response().get_cmd_type(),
+                   StatusCommandType::RegionLeader);
+        let region_leader = resp.get_status_response().get_region_leader();
+        if !region_leader.has_leader() {
+            sleep_ms(100);
+            continue;
+        }
+
+        return Some(region_leader.get_leader().clone());
+    }
+
+    None
+}
+
 #[test]
 fn test_multi_store() {
     // init_env_log();
@@ -55,10 +78,34 @@ fn test_multi_store() {
 
     bootstrap_multi_store(cluster.get_engines());
 
+    // cache all peers here.
+    // we should find a better way to cache peers later.
+    let trans = cluster.get_transport();
+    for i in 0..count {
+        let id = i as u64 + 1;
+        trans.write().unwrap().cache_peer(id, new_peer(id, id, id));
+    }
+
     cluster.run_all_stores();
 
     // Let raft run.
     sleep_ms(500);
 
-    // TODO: add more tests later.
+    // Get leader first,
+    let peer = get_leader(&cluster).unwrap();
+
+    let put = new_request(1,
+                          peer.clone(),
+                          vec![new_put_cmd(&keys::data_key(b"a1"), b"v1")]);
+    let resp = cluster.call_command(put, Duration::from_secs(3)).unwrap();
+    assert_eq!(resp.get_responses().len(), 1);
+    assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Put);
+
+    let get = new_request(1, peer.clone(), vec![new_get_cmd(&keys::data_key(b"a1"))]);
+    let resp = cluster.call_command(get, Duration::from_secs(3)).unwrap();
+    assert_eq!(resp.get_responses().len(), 1);
+    assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Get);
+
+
+
 }
