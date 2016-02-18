@@ -3,12 +3,12 @@
 use std::option::Option;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-pub use std::time::Duration;
+use std::time::Duration;
 use std::thread;
 use env_logger;
 
 use rocksdb::DB;
-pub use tempdir::TempDir;
+use tempdir::TempDir;
 use uuid::Uuid;
 use protobuf;
 
@@ -16,8 +16,9 @@ use tikv::raftserver::store::*;
 use tikv::raftserver::{Result, other};
 use tikv::proto::metapb;
 use tikv::proto::raft_serverpb;
-use tikv::proto::raft_cmdpb::{Request, RaftCommandRequest};
+use tikv::proto::raft_cmdpb::{Request, RaftCommandRequest, RaftCommandResponse};
 use tikv::proto::raft_cmdpb::CommandType;
+use tikv::raft::INVALID_ID;
 
 pub struct StoreTransport {
     peers: HashMap<u64, metapb::Peer>,
@@ -35,6 +36,10 @@ impl StoreTransport {
 
     pub fn add_sender(&mut self, store_id: u64, sender: Sender) {
         self.senders.insert(store_id, sender);
+    }
+
+    pub fn remove_sender(&mut self, store_id: u64) {
+        self.senders.remove(&store_id);
     }
 }
 
@@ -131,4 +136,33 @@ pub fn sleep_ms(ms: u64) {
 // A help function to simplify using env_logger.
 pub fn init_env_log() {
     env_logger::init().expect("");
+}
+
+pub fn is_error_response(resp: &RaftCommandResponse) -> bool {
+    resp.get_header().has_error()
+}
+
+// If the resp is "not leader error", get the real leader.
+// Sometimes, we may still can't get leader even in "not leader error",
+// returns a INVALID_PEER for this.
+pub fn check_not_leader_error(resp: &RaftCommandResponse) -> Option<metapb::Peer> {
+    if !is_error_response(resp) {
+        return None;
+    }
+
+    let err = resp.get_header().get_error().get_detail();
+    if !err.has_not_leader() {
+        return None;
+    }
+
+    let err = err.get_not_leader();
+    if err.has_leader() {
+        return Some(new_peer(INVALID_ID, INVALID_ID, INVALID_ID));
+    }
+
+    Some(err.get_leader().clone())
+}
+
+pub fn is_invalid_peer(peer: &metapb::Peer) -> bool {
+    peer.get_peer_id() == INVALID_ID
 }

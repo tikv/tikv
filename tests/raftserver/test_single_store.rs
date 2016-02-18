@@ -1,4 +1,7 @@
 use std::thread;
+use std::time::Duration;
+
+use tempdir::TempDir;
 
 use tikv::raftserver::store::*;
 use tikv::proto::raft_cmdpb::*;
