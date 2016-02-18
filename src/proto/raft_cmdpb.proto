@@ -107,6 +107,29 @@ message AdminResponse {
     optional SplitResponse split            = 3;  
 }
 
+message RegionLeaderRequest {
+    
+}
+
+message RegionLeaderResponse {
+    optional metapb.Peer leader = 1;
+}
+
+enum StatusCommandType {
+    InvalidStatus    = 0;
+    RegionLeader     = 1;
+}
+
+message StatusRequest {
+    optional StatusCommandType cmd_type           = 1;
+    optional RegionLeaderRequest region_leader    = 2;
+}
+
+message StatusResponse {
+    optional StatusCommandType cmd_type           = 1;
+    optional RegionLeaderResponse region_leader   = 2;
+}
+
 message RaftRequestHeader {
     optional uint64 region_id          = 1;
     optional metapb.Peer peer          = 2;
@@ -127,10 +150,12 @@ message RaftCommandRequest {
     // at same time. 
     repeated Request requests             = 2; 
     optional AdminRequest admin_request   = 3; 
+    optional StatusRequest status_request = 4;
 }
 
 message RaftCommandResponse {
-    optional RaftResponseHeader header    = 1;
-    repeated Response responses           = 2;
-    optional AdminResponse admin_response = 3;
+    optional RaftResponseHeader header      = 1;
+    repeated Response responses             = 2;
+    optional AdminResponse admin_response   = 3;
+    optional StatusResponse status_response = 4;
 }
