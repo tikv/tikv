@@ -8,6 +8,9 @@ use proto::raft_cmdpb::RaftCommandResponse;
 use proto::metapb;
 use proto::errorpb::{self, ErrorDetail};
 
+// TODO: use quick_error for store so that we can use RaftCommandResponse
+// in Result error.
+
 pub fn region_not_found_error(region_id: u64) -> RaftCommandResponse {
     let mut detail = ErrorDetail::new();
     detail.mut_region_not_found().set_region_id(region_id);
