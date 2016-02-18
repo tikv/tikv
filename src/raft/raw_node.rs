@@ -6,6 +6,7 @@ use proto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType,
                     ConfChangeType, ConfState};
 use raft::raft::{Config, Raft, SoftState, INVALID_ID};
 use raft::Status;
+use std::sync::Arc;
 
 #[derive(Debug, Default)]
 pub struct Peer {
@@ -79,10 +80,7 @@ pub struct Ready {
 }
 
 impl Ready {
-    fn new<T: Storage + Default>(raft: &mut Raft<T>,
-                                 prev_ss: &SoftState,
-                                 prev_hs: &HardState)
-                                 -> Ready {
+    fn new<T: Storage>(raft: &mut Raft<T>, prev_ss: &SoftState, prev_hs: &HardState) -> Ready {
         let mut rd = Ready {
             entries: raft.raft_log.unstable_entries().unwrap_or(&[]).to_vec(),
             committed_entries: raft.raft_log.next_entries().unwrap_or_else(Vec::new),
@@ -107,19 +105,22 @@ impl Ready {
 // RawNode is a thread-unsafe Node.
 // The methods of this struct correspond to the methods of Node and are described
 // more fully there.
-#[derive(Default)]
-pub struct RawNode<T: Storage + Default> {
+pub struct RawNode<T: Storage> {
     pub raft: Raft<T>,
     prev_ss: SoftState,
     prev_hs: HardState,
 }
 
-impl<T: Storage + Default> RawNode<T> {
+impl<T: Storage> RawNode<T> {
     // NewRawNode returns a new RawNode given configuration and a list of raft peers.
-    pub fn new(config: &Config<T>, peers: &[Peer]) -> Result<RawNode<T>> {
+    pub fn new(config: &Config, store: Arc<T>, peers: &[Peer]) -> Result<RawNode<T>> {
         assert!(config.id != 0, "config.id must not be zero");
-        let r = Raft::new(config);
-        let mut rn = RawNode { raft: r, ..Default::default() };
+        let r = Raft::new(config, store);
+        let mut rn = RawNode {
+            raft: r,
+            prev_hs: Default::default(),
+            prev_ss: Default::default(),
+        };
         let last_index = rn.raft.get_store().last_index().expect("");
         if last_index == 0 {
             rn.raft.become_follower(1, INVALID_ID);
