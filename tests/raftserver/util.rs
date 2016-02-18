@@ -2,9 +2,8 @@
 
 use std::option::Option;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock, Mutex, Condvar};
+use std::sync::{Arc, RwLock};
 pub use std::time::Duration;
-use std::boxed::Box;
 use std::thread;
 use env_logger;
 
@@ -17,7 +16,7 @@ use tikv::raftserver::store::*;
 use tikv::raftserver::{Result, other};
 use tikv::proto::metapb;
 use tikv::proto::raft_serverpb;
-use tikv::proto::raft_cmdpb::{Request, RaftCommandRequest, RaftCommandResponse};
+use tikv::proto::raft_cmdpb::{Request, RaftCommandRequest};
 use tikv::proto::raft_cmdpb::CommandType;
 
 pub struct StoreTransport {
@@ -123,41 +122,6 @@ pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
     peer.set_store_id(store_id);
     peer.set_peer_id(peer_id);
     peer
-}
-
-// Send the request and wait the response until timeout.
-// Use Condvar to support call timeout. if timeout, return None.
-// TODO: should we move this to the Sender member function?
-pub fn call_timeout(sender: &Sender,
-                    request: RaftCommandRequest,
-                    timeout: Duration)
-                    -> Option<RaftCommandResponse> {
-    let resp: Option<RaftCommandResponse> = None;
-    let pair = Arc::new((Mutex::new(resp), Condvar::new()));
-    let pair2 = pair.clone();
-
-    sender.send_command(request,
-                        Box::new(move |resp: RaftCommandResponse| -> Result<()> {
-                            let &(ref lock, ref cvar) = &*pair2;
-                            let mut v = lock.lock().unwrap();
-                            *v = Some(resp);
-                            cvar.notify_one();
-                            Ok(())
-                        }))
-          .unwrap();
-
-    let &(ref lock, ref cvar) = &*pair;
-    let mut v = lock.lock().unwrap();
-    while v.is_none() {
-        let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
-        if timeout_res.timed_out() {
-            return None;
-        }
-
-        v = resp
-    }
-
-    Some(v.take().unwrap())
 }
 
 pub fn sleep_ms(ms: u64) {

@@ -1,5 +1,7 @@
 use std::boxed::{Box, FnBox};
+use std::sync::{Arc, Mutex, Condvar};
 use std::fmt;
+use std::time::Duration;
 
 use mio;
 
@@ -69,14 +71,52 @@ impl Sender {
     pub fn send_quit(&self) -> Result<()> {
         self.send(Msg::Quit)
     }
+
+    // Send the request and wait the response until timeout.
+    // Use Condvar to support call timeout. if timeout, return None.
+    // We should know that even timeout happens, the command may still
+    // be handled in store later.
+    pub fn call_command(&self,
+                        request: RaftCommandRequest,
+                        timeout: Duration)
+                        -> Result<Option<RaftCommandResponse>> {
+        let resp: Option<RaftCommandResponse> = None;
+        let pair = Arc::new((Mutex::new(resp), Condvar::new()));
+        let pair2 = pair.clone();
+
+        try!(self.send_command(request,
+                               Box::new(move |resp: RaftCommandResponse| -> Result<()> {
+                                   let &(ref lock, ref cvar) = &*pair2;
+                                   let mut v = lock.lock().unwrap();
+                                   *v = Some(resp);
+                                   cvar.notify_one();
+                                   Ok(())
+                               })));
+
+        let &(ref lock, ref cvar) = &*pair;
+        let mut v = lock.lock().unwrap();
+        while v.is_none() {
+            let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
+            if timeout_res.timed_out() {
+                return Ok(None);
+            }
+
+            v = resp
+        }
+
+        Ok(Some(v.take().unwrap()))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use mio::{EventLoop, Handler};
-    use super::*;
     use std::thread;
     use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    use mio::{EventLoop, Handler};
+
+    use super::*;
     use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
     use raftserver::Result;
 
@@ -89,7 +129,11 @@ mod tests {
         fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Self::Message) {
             match msg {
                 Msg::Quit => event_loop.shutdown(),
-                Msg::RaftCommand{callback, ..} => {
+                Msg::RaftCommand{callback, request} => {
+                    // a trick for test timeout.
+                    if request.get_header().get_region_id() == u64::max_value() {
+                        thread::sleep(Duration::from_millis(100));
+                    }
                     callback.call_box((RaftCommandResponse::new(),)).unwrap()
                 }
                 // we only test above message types, others panic.
@@ -116,6 +160,15 @@ mod tests {
               .unwrap();
 
         rx.recv().unwrap();
+
+        let mut request = RaftCommandRequest::new();
+        request.mut_header().set_region_id(u64::max_value());
+        assert!(sender.call_command(request.clone(), Duration::from_millis(500))
+                      .unwrap()
+                      .is_some());
+        assert!(sender.call_command(request.clone(), Duration::from_millis(10))
+                      .unwrap()
+                      .is_none());
 
         sender.send_quit().unwrap();
 
