@@ -181,6 +181,13 @@ pub fn validate_data_key(key: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub fn data_key(key: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(DATA_PREFIX_KEY.len() + key.len());
+    v.extend_from_slice(DATA_PREFIX_KEY);
+    v.extend_from_slice(key);
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,10 +269,6 @@ mod tests {
 
     fn meta2_key(key: &[u8]) -> Vec<u8> {
         route_key(META2_PREFIX, key)
-    }
-
-    fn data_key(key: &[u8]) -> Vec<u8> {
-        route_key(DATA_PREFIX, key)
     }
 
     #[test]
