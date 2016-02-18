@@ -1,6 +1,7 @@
 use log::LogLevelFilter;
 pub fn get_level_by_string(lv: &str) -> LogLevelFilter {
-    match &*lv.to_string().to_lowercase() {
+    #![allow(match_same_arms)]
+    match &*lv.to_owned().to_lowercase() {
         "trace" => LogLevelFilter::Trace,
         "debug" => LogLevelFilter::Debug,
         "info" => LogLevelFilter::Info,
