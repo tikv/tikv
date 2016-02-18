@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock, Mutex, Condvar};
 pub use std::time::Duration;
 use std::boxed::Box;
 use std::thread;
-
+use env_logger;
 
 use rocksdb::DB;
 pub use tempdir::TempDir;
@@ -18,7 +18,7 @@ use tikv::raftserver::{Result, other};
 use tikv::proto::metapb;
 use tikv::proto::raft_serverpb;
 use tikv::proto::raft_cmdpb::{Request, RaftCommandRequest, RaftCommandResponse};
-use tikv::proto::raft_cmdpb::{CommandType};
+use tikv::proto::raft_cmdpb::CommandType;
 
 pub struct StoreTransport {
     peers: HashMap<u64, metapb::Peer>,
@@ -98,21 +98,21 @@ pub fn new_put_cmd(key: &[u8], value: &[u8]) -> Request {
 
 pub fn new_get_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
-     cmd.set_cmd_type(CommandType::Get);
-         cmd.mut_get().set_key(key.to_vec());
+    cmd.set_cmd_type(CommandType::Get);
+    cmd.mut_get().set_key(key.to_vec());
     cmd
 }
 
 pub fn new_delete_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
-        cmd.set_cmd_type(CommandType::Delete);
+    cmd.set_cmd_type(CommandType::Delete);
     cmd.mut_delete().set_key(key.to_vec());
     cmd
 }
 
 pub fn new_seek_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
-        cmd.set_cmd_type(CommandType::Seek);
+    cmd.set_cmd_type(CommandType::Seek);
     cmd.mut_seek().set_key(key.to_vec());
     cmd
 }
@@ -162,4 +162,9 @@ pub fn call_timeout(sender: &Sender,
 
 pub fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
+}
+
+// A help function to simplify using env_logger.
+pub fn init_env_log() {
+    env_logger::init().expect("");
 }
