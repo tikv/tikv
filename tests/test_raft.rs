@@ -896,7 +896,7 @@ fn test_is_election_timeout() {
         sm.election_elapsed = elapse;
         let mut c = 0;
         for _ in 0..10000 {
-            if sm.election_timeout() {
+            if sm.is_election_timeout() {
                 c += 1;
             }
         }
@@ -915,9 +915,7 @@ fn test_is_election_timeout() {
 #[test]
 fn test_step_ignore_old_term_msg() {
     let mut sm = new_test_raft(1, vec![1], 10, 1, new_storage());
-    sm.skip_step = Some(Box::new(move || {
-        panic!("step function should not be called.");
-    }));
+    sm.allow_step = false;
     sm.term = 2;
     let mut m = new_message(0, 0, MessageType::MsgAppend, 0);
     m.set_term(1);
