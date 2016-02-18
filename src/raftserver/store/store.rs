@@ -3,7 +3,7 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet};
 
 use rocksdb::DB;
-use mio::{self, EventLoop};
+use mio::{self, EventLoop, EventLoopConfig};
 use protobuf;
 use uuid::Uuid;
 
@@ -42,7 +42,11 @@ impl<T: Transport> Store<T> {
             }
         }));
 
-        let event_loop = try!(EventLoop::new());
+        // We use base raft tick as the event loop timer tick.
+        let mut event_cfg = EventLoopConfig::new();
+        event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
+        let event_loop = try!(EventLoop::configured(event_cfg));
+
         let sender = Sender::new(event_loop.channel());
 
         Ok(Store {
@@ -72,9 +76,10 @@ impl<T: Transport> Store<T> {
                              }
 
                              let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
+                             let region_id = region.get_region_id();
                              let peer = try!(Peer::create(self, region));
-                             // TODO: check duplicated peer id later?
-                             self.peers.insert(peer.get_peer_id(), peer);
+                             // TODO: check duplicated region id later?
+                             self.peers.insert(region_id, peer);
                              Ok(true)
                          }));
 
