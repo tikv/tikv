@@ -90,7 +90,7 @@ impl Cluster {
         &self.senders
     }
 
-    pub fn call_command(&mut self,
+    pub fn call_command(&self,
                         request: RaftCommandRequest,
                         timeout: Duration)
                         -> Option<(RaftCommandResponse)> {

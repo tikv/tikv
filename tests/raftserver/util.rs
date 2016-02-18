@@ -16,8 +16,8 @@ use tikv::raftserver::store::*;
 use tikv::raftserver::{Result, other};
 use tikv::proto::metapb;
 use tikv::proto::raft_serverpb;
-use tikv::proto::raft_cmdpb::{Request, RaftCommandRequest, RaftCommandResponse};
-use tikv::proto::raft_cmdpb::CommandType;
+use tikv::proto::raft_cmdpb::{Request, StatusRequest, RaftCommandRequest, RaftCommandResponse};
+use tikv::proto::raft_cmdpb::{CommandType, StatusCommandType};
 use tikv::raft::INVALID_ID;
 
 pub struct StoreTransport {
@@ -67,7 +67,14 @@ pub fn new_engine(path: &TempDir) -> Arc<DB> {
 }
 
 pub fn new_store(engine: Arc<DB>, trans: Arc<RwLock<StoreTransport>>) -> Store<StoreTransport> {
-    let store = Store::new(Config::default(), engine, trans.clone()).unwrap();
+    // base tick 20ms to speed up raft.
+    let cfg = Config {
+        raft_base_tick_interval: 20,
+        raft_heartbeat_ticks: 2,
+        raft_election_timeout_ticks: 10,
+        ..Config::default()
+    };
+    let store = Store::new(cfg, engine, trans.clone()).unwrap();
 
     trans.write().unwrap().add_sender(store.get_store_id(), store.get_sender());
 
@@ -118,6 +125,21 @@ pub fn new_seek_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CommandType::Seek);
     cmd.mut_seek().set_key(key.to_vec());
+    cmd
+}
+
+pub fn new_status_request(region_id: u64,
+                          peer: metapb::Peer,
+                          request: StatusRequest)
+                          -> RaftCommandRequest {
+    let mut req = new_base_request(region_id, peer);
+    req.set_status_request(request);
+    req
+}
+
+pub fn new_region_leader_cmd() -> StatusRequest {
+    let mut cmd = StatusRequest::new();
+    cmd.set_cmd_type(StatusCommandType::RegionLeader);
     cmd
 }
 
