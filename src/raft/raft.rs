@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 use std::cmp;
 use raft::storage::Storage;
-use util::DefaultRng;
-use rand::Rng;
+use rand;
 use proto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
 use protobuf::repeated::RepeatedField;
 use raft::progress::{Progress, Inflights, ProgressState};
@@ -148,8 +147,7 @@ pub struct Raft<T: Storage> {
     election_timeout: usize,
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
-    pub skip_step: Option<Box<FnMut() -> bool>>,
-    rng: DefaultRng,
+    pub allow_step: bool,
 }
 
 fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
@@ -198,11 +196,10 @@ impl<T: Storage> Raft<T> {
             votes: Default::default(),
             msgs: Default::default(),
             lead: Default::default(),
-            rng: Default::default(),
             term: Default::default(),
             election_elapsed: Default::default(),
             pending_conf: Default::default(),
-            skip_step: Default::default(),
+            allow_step: true,
             vote: Default::default(),
             heartbeat_elapsed: Default::default(),
         };
@@ -481,7 +478,7 @@ impl<T: Storage> Raft<T> {
             return;
         }
         self.election_elapsed += 1;
-        if self.election_timeout() {
+        if self.is_election_timeout() {
             self.election_elapsed = 0;
             let m = new_message(INVALID_ID, MessageType::MsgHup, Some(self.id));
             self.step(m).is_ok();
@@ -635,12 +632,11 @@ impl<T: Storage> Raft<T> {
             return Ok(());
         }
 
-        if self.skip_step.is_none() || !self.skip_step.as_mut().unwrap()() {
-            match self.state {
-                StateRole::Candidate => self.step_candidate(m),
-                StateRole::Follower => self.step_follower(m),
-                StateRole::Leader => self.step_leader(m),
-            }
+        assert!(self.allow_step);
+        match self.state {
+            StateRole::Candidate => self.step_candidate(m),
+            StateRole::Follower => self.step_follower(m),
+            StateRole::Leader => self.step_leader(m),
         }
         Ok(())
     }
@@ -1138,15 +1134,16 @@ impl<T: Storage> Raft<T> {
         self.vote = hs.get_vote();
     }
 
-    // election_timeout returns true if self.election_elapsed is greater than the
+    // is_election_timeout returns true if self.election_elapsed is greater than the
     // randomized election timeout in (electiontimeout, 2 * electiontimeout - 1).
     // Otherwise, it returns false.
-    pub fn election_timeout(&mut self) -> bool {
+    pub fn is_election_timeout(&self) -> bool {
         if self.election_elapsed < self.election_timeout {
             return false;
         }
         let d = self.election_elapsed - self.election_timeout;
-        d > self.rng.gen_range(0, self.election_timeout)
+        let p = rand::random::<u32>() as f64 / u32::max_value() as f64;
+        d > ((self.election_timeout - 1) as f64 * p).round() as usize
     }
 
     // check_quorum_active returns true if the quorum is active from
