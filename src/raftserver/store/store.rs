@@ -8,7 +8,7 @@ use protobuf;
 use uuid::Uuid;
 
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
-use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use proto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
 use raftserver::{Result, other};
 use proto::metapb;
 use super::{Sender, Msg};
@@ -189,6 +189,16 @@ impl<T: Transport> Store<T> {
             Some(uuid) => uuid,
         };
 
+        if msg.has_status_request() {
+            // For status commands, we handle it here directly.
+            resp = match self.execute_status_command(msg) {
+                Err(e) => cmd_resp::message_error(format!("{:?}", e)),
+                Ok(resp) => resp,
+            };
+            bind_uuid(&mut resp, uuid);
+            return cb.call_box((resp,));
+        }
+
         let region_id = msg.get_header().get_region_id();
         let mut peer = match self.peers.get_mut(&region_id) {
             None => {
@@ -299,5 +309,44 @@ impl<T: Transport> mio::Handler for Store<T> {
             // TODO: should we panic here or shutdown the store?
             error!("handle raft ready err: {:?}", e);
         }
+    }
+}
+
+impl<T: Transport> Store<T> {
+    // Handle status commands here, separate the logic, maybe we can move it
+    // to another file later.
+    // Unlike other commands (write or admin), status commands only show current
+    // store status, so no need to handle it in raft group.
+    fn execute_status_command(&mut self,
+                              request: RaftCommandRequest)
+                              -> Result<RaftCommandResponse> {
+        let cmd_type = request.get_status_request().get_cmd_type();
+        let mut response = try!(match cmd_type {
+            cmd::StatusCommandType::RegionLeader => self.execute_region_leader(request),
+            e => Err(other(format!("unsupported status command type {:?}", e))),
+        });
+        response.set_cmd_type(cmd_type);
+
+        let mut resp = RaftCommandResponse::new();
+        resp.set_status_response(response);
+        Ok(resp)
+    }
+
+    fn execute_region_leader(&mut self,
+                             request: RaftCommandRequest)
+                             -> Result<cmd::StatusResponse> {
+        let region_id = request.get_header().get_region_id();
+        let peer = match self.peers.get_mut(&region_id) {
+            None => return Err(other(format!("region {} not found", region_id))),
+            Some(peer) => peer,
+        };
+
+        let mut resp = cmd::StatusResponse::new();
+        let trans = self.trans.read().unwrap();
+        if let Some(leader) = trans.get_peer(peer.get_leader()) {
+            resp.mut_region_leader().set_leader(leader);
+        }
+
+        Ok(resp)
     }
 }
