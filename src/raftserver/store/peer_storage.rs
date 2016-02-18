@@ -144,13 +144,12 @@ impl PeerStorage {
 
                                   next_index += 1;
 
-                                  // We only check if max_size > 0.
-                                  if max_size > 0 {
-                                      total_size += entry.compute_size() as u64;
-                                      exceeded_max_size = total_size > max_size;
-                                  }
+                                  total_size += entry.compute_size() as u64;
+                                  exceeded_max_size = total_size > max_size;
 
-                                  ents.push(entry);
+                                  if !exceeded_max_size || ents.is_empty() {
+                                      ents.push(entry);
+                                  }
 
                                   Ok(!exceeded_max_size)
                               }));
@@ -296,10 +295,7 @@ impl PeerStorage {
     }
 
     // Apply the peer with given snapshot.
-    pub fn apply_snapshot<T: Mutator>(&mut self,
-                                      w: &T,
-                                      snap: &Snapshot)
-                                      -> Result<ApplySnapResult> {
+    pub fn apply_snapshot<T: Mutator>(&self, w: &T, snap: &Snapshot) -> Result<ApplySnapResult> {
         debug!("begin to apply snapshot for region {}",
                self.get_region_id());
 
@@ -358,7 +354,7 @@ impl PeerStorage {
                compact_index,
                self.get_region_id());
 
-        if compact_index <= self.first_index() {
+        if compact_index <= self.truncated_state.get_index() {
             return Err(other("try to truncate compacted entries"));
         } else if compact_index > self.applied_index {
             return Err(other(format!("compact index {} > applied index {}",
@@ -545,5 +541,199 @@ impl Storage for RaftStorage {
 impl Default for RaftStorage {
     fn default() -> RaftStorage {
         unreachable!();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::sync::*;
+    use rocksdb::*;
+    use proto::raftpb::{Entry, ConfState, Snapshot};
+    use proto::raft_serverpb::RaftSnapshotData;
+    use raft::{StorageError, Error as RaftError};
+    use tempdir::*;
+    use protobuf;
+    use raft::Storage;
+    use raftserver::store::bootstrap;
+
+    fn new_storage(path: &TempDir) -> RaftStorage {
+        let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
+        let db = Arc::new(db);
+        bootstrap::bootstrap_store(db.clone(),
+                                   1,
+                                   bootstrap::BOOTSTRAP_FIRST_NODE_ID,
+                                   bootstrap::BOOTSTRAP_FIRST_STORE_ID)
+            .expect("");
+        let region = bootstrap::bootstrap_region(db.clone()).expect("");
+        RaftStorage::new(PeerStorage::new(db, &region).unwrap())
+    }
+
+    fn new_storage_from_ents(path: &TempDir, ents: &[Entry]) -> RaftStorage {
+        let store = new_storage(path);
+        let wb = WriteBatch::new();
+        let li = store.rl().append(&wb, 0, &ents[1..]).expect("");
+        store.rl().engine.write(wb).expect("");
+        store.wl().set_last_index(li);
+        store.wl().truncated_state.set_index(ents[0].get_index());
+        store.wl().truncated_state.set_term(ents[0].get_term());
+        store.wl().set_applied_index(ents.last().unwrap().get_index());
+        store
+    }
+
+    fn new_entry(index: u64, term: u64) -> Entry {
+        let mut e = Entry::new();
+        e.set_index(index);
+        e.set_term(term);
+        e
+    }
+
+    fn size_of<T: protobuf::Message>(m: &T) -> u32 {
+        m.compute_size()
+    }
+
+    #[test]
+    fn test_storage_term() {
+        let ents = vec![
+            new_entry(3, 3),
+            new_entry(4, 4),
+            new_entry(5, 5),
+        ];
+
+        let mut tests = vec![
+            (2, Err(RaftError::Store(StorageError::Compacted))),
+            (3, Ok(3)),
+            (4, Ok(4)),
+            (5, Ok(5)),
+        ];
+        for (i, (idx, wterm)) in tests.drain(..).enumerate() {
+            let td = TempDir::new("tikv-store-test").unwrap();
+            let store = new_storage_from_ents(&td, &ents);
+            let t = store.rl().term(idx);
+            if wterm != t {
+                panic!("#{}: expect res {:?}, got {:?}", i, wterm, t);
+            }
+        }
+    }
+
+    #[test]
+    fn test_storage_entries() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+        let max_u64 = u64::max_value();
+        let mut tests = vec![
+            (2, 6, max_u64, Err(RaftError::Store(StorageError::Compacted))),
+            (3, 4, max_u64, Err(RaftError::Store(StorageError::Compacted))),
+            (4, 5, max_u64, Ok(vec![new_entry(4, 4)])),
+            (4, 6, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+            // even if maxsize is zero, the first entry should be returned
+            (4, 7, 0, Ok(vec![new_entry(4, 4)])),
+            // limit to 2
+            (4, 7, (size_of(&ents[1]) + size_of(&ents[2])) as u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+            // all
+            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+        ];
+
+        for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
+            let td = TempDir::new("tikv-store-test").unwrap();
+            let store = new_storage_from_ents(&td, &ents);
+            let e = store.rl().entries(lo, hi, maxsize);
+            if e != wentries {
+                panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
+            }
+        }
+    }
+
+    // last_index and first_index are not mutated by PeerStorage on its own, so we don't test them here.
+
+    #[test]
+    fn test_storage_compact() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut tests = vec![
+            (2, Err(RaftError::Store(StorageError::Compacted))),
+            (3, Err(RaftError::Store(StorageError::Compacted))),
+            (4, Ok(())),
+            (5, Ok(())),
+        ];
+        for (i, (idx, werr)) in tests.drain(..).enumerate() {
+            let td = TempDir::new("tikv-store-test").unwrap();
+            let store = new_storage_from_ents(&td, &ents);
+            let wb = WriteBatch::new();
+            let res = store.rl().compact(&wb, idx);
+            // TODO check exact error type after refactoring error.
+            if res.is_err() ^ werr.is_err() {
+                panic!("#{}: want {:?}, got {:?}", i, werr, res);
+            }
+            if res.is_ok() {
+                store.rl().engine.write(wb).expect("");
+            }
+        }
+    }
+
+    #[test]
+    fn test_storage_create_snapshot() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut cs = ConfState::new();
+        cs.set_nodes(vec![1, 2, 3]);
+
+        let td = TempDir::new("tikv-store-test").unwrap();
+        let s = new_storage_from_ents(&td, &ents);
+        let snap = s.rl().snapshot().unwrap();
+        assert_eq!(snap.get_metadata().get_index(), 5);
+        assert_eq!(snap.get_metadata().get_term(), 5);
+        assert!(!snap.get_data().is_empty());
+        let mut data = RaftSnapshotData::new();
+        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).expect("");
+        assert_eq!(data.get_region().get_region_id(), 1);
+        assert_eq!(data.get_region().get_peers().len(), 1);
+    }
+
+    #[test]
+    fn test_storage_append() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut tests = vec![
+            (
+                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
+                vec![new_entry(4, 4), new_entry(5, 5)],
+            ),
+            (
+                vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
+                vec![new_entry(4, 6), new_entry(5, 6)],
+            ),
+            (
+                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+            ),
+            // truncate incoming entries, truncate the existing entries and append
+            (
+                vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)],
+                vec![new_entry(4, 5)],
+            ),
+            // truncate the existing entries and append
+            (
+                vec![new_entry(4, 5)],
+                vec![new_entry(4, 5)],
+            ),
+            // direct append
+            (
+                vec![new_entry(6, 5)],
+                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+            ),
+        ];
+        for (i, (entries, wentries)) in tests.drain(..).enumerate() {
+            let td = TempDir::new("tikv-store-test").unwrap();
+            let store = new_storage_from_ents(&td, &ents);
+            let mut li = store.rl().last_index();
+            let wb = WriteBatch::new();
+            li = store.wl().append(&wb, li, &entries).expect("");
+            store.wl().set_last_index(li);
+            store.wl().engine.write(wb).expect("");
+            let actual_entries = store.rl().entries(4, li + 1, u64::max_value()).expect("");
+            if actual_entries != wentries {
+                panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
+            }
+        }
     }
 }
