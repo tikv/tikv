@@ -538,12 +538,6 @@ impl Storage for RaftStorage {
     }
 }
 
-impl Default for RaftStorage {
-    fn default() -> RaftStorage {
-        unreachable!();
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
