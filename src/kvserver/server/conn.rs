@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::error::Error;
 
 use mio::{Token, EventLoop, EventSet, TryRead, TryWrite, PollOpt};
 use mio::tcp::TcpStream;
@@ -29,8 +28,7 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
         let n = try!(r.try_read(buf.mut_bytes()));
         match n {
             None => {
-                // nothing to do here now, but should we return an error or panic?
-                error!("connection read None data");
+                // nothing to do here now
             }
             Some(n) => buf.advance(n),
         }
@@ -120,10 +118,12 @@ impl Conn {
             }
 
             let mut m = Request::new();
-            try!(rpc::decode_body(&payload.bytes().to_vec(), &mut m));
+            try!(rpc::decode_body(payload.bytes(), &mut m));
             let sender = event_loop.channel();
             let queue_msg: QueueMessage = QueueMessage::Request(self.token, self.last_msg_id, m);
-            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+            if let Err(e) = sender.send(queue_msg) {
+                error!("{:?}", e);
+            }
 
             self.payload = None;
             self.header.clear();
