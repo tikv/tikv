@@ -20,11 +20,6 @@ use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
 
-// We will initialize store in the main thread, move it
-// to another store and then communicate with it using store sender.
-// So we should let Store support Send.
-unsafe impl<T: Transport> Send for Store<T> {}
-
 pub struct Store<T: Transport> {
     cfg: Config,
     ident: StoreIdent,
