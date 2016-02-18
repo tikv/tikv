@@ -93,7 +93,7 @@ fn test_raw_node_propose_and_conf_change() {
         s.wl().append(&rd.entries).expect("");
         // Once we are the leader, propose a command and a ConfChange.
         if !proposed && rd.ss.is_some() && rd.ss.as_ref().unwrap().lead == raw_node.raft.id {
-            raw_node.propose("somedata".as_bytes().to_vec()).expect("");
+            raw_node.propose(b"somedata".to_vec()).expect("");
 
             let cc = conf_change(ConfChangeType::ConfChangeAddNode, 1);
             ccdata = protobuf::Message::write_to_bytes(&cc).unwrap();
@@ -149,7 +149,7 @@ fn test_raw_node_start() {
     store.wl().append(&rd.entries).expect("");
     raw_node.advance(rd);
 
-    raw_node.propose("foo".as_bytes().to_vec()).expect("");
+    raw_node.propose(b"foo".to_vec()).expect("");
     let rd = raw_node.ready();
     assert_eq!(rd, wants[1]);
     store.wl().append(&rd.entries).expect("");
