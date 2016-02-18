@@ -623,11 +623,15 @@ mod test {
             // even if maxsize is zero, the first entry should be returned
             (4, 7, 0, Ok(vec![new_entry(4, 4)])),
             // limit to 2
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2])) as u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, (size_of(&ents[1]) + size_of(&ents[2])) as u64,
+             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
+             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
+             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
             // all
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
+             Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
         ];
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
@@ -640,7 +644,8 @@ mod test {
         }
     }
 
-    // last_index and first_index are not mutated by PeerStorage on its own, so we don't test them here.
+    // last_index and first_index are not mutated by PeerStorage on its own,
+    // so we don't test them here.
 
     #[test]
     fn test_storage_compact() {
