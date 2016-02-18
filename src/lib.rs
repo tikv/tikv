@@ -15,8 +15,8 @@ extern crate test;
 extern crate protobuf;
 extern crate bytes;
 extern crate byteorder;
-extern crate mio;
 extern crate rand;
+extern crate mio;
 extern crate tempdir;
 extern crate rocksdb;
 extern crate uuid;
@@ -29,4 +29,7 @@ pub mod raft;
 #[allow(clippy)]
 pub mod proto;
 pub mod storage;
+pub mod kvserver;
+
+pub use storage::{Storage, Dsn};
 pub mod raftserver;

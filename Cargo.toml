@@ -8,6 +8,8 @@ name = "tikv"
 
 [[bin]]
 name = "server"
+[[bin]]
+name = "kvserver"
 
 [[test]]
 name = "tests"
@@ -16,10 +18,11 @@ name = "tests"
 log = "0.3"
 rocksdb = "0.3"
 byteorder = "0.4"
-mio = "0.5"
 rand = "0.3"
+mio = "0.5"
 quick-error = "0.2"
 tempdir = "0.3"
+getopts = "0.2"
 uuid = "0.1"
 clippy = "*"
 
