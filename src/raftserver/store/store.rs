@@ -20,6 +20,11 @@ use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
 
+// We will initialize store in the main thread, move it
+// to another store and then communicate with it using store sender.
+// So we should let Store support Send.
+unsafe impl<T: Transport> Send for Store<T> {}
+
 pub struct Store<T: Transport> {
     cfg: Config,
     ident: StoreIdent,
@@ -206,6 +211,15 @@ impl<T: Transport> Store<T> {
             return cb.call_box((resp,));
         }
 
+        let peer_id = msg.get_header().get_peer().get_peer_id();
+        if peer.get_peer_id() != peer_id {
+            resp = cmd_resp::message_error(format!("mismatch peer id {} != {}",
+                                                   peer.get_peer_id(),
+                                                   peer_id));
+            bind_uuid(&mut resp, uuid);
+            return cb.call_box((resp,));
+        }
+
         if peer.pending_cmds.contains_key(&uuid) {
             resp = cmd_resp::message_error(format!("duplicated uuid {:?}", uuid));
             bind_uuid(&mut resp, uuid);
@@ -270,7 +284,7 @@ impl<T: Transport> mio::Handler for Store<T> {
     type Timeout = Msg;
     type Message = Msg;
 
-    fn notify(&mut self, _: &mut EventLoop<Self>, msg: Msg) {
+    fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::RaftMessage(data) => {
                 if let Err(e) = self.handle_raft_message(data) {
@@ -281,6 +295,10 @@ impl<T: Transport> mio::Handler for Store<T> {
                 if let Err(e) = self.propose_raft_command(request, callback) {
                     error!("propose raft command err: {:?}", e);
                 }
+            }
+            Msg::Quit => {
+                info!("receive quit message");
+                event_loop.shutdown();
             }
             _ => panic!("invalid notify msg type {:?}", msg),
         }
@@ -293,7 +311,12 @@ impl<T: Transport> mio::Handler for Store<T> {
         }
     }
 
-    fn tick(&mut self, _: &mut EventLoop<Self>) {
+    fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        if !event_loop.is_running() {
+            // TODO: do some close here.
+            return;
+        }
+
         // We handle raft ready in event loop.
         if let Err(e) = self.handle_raft_ready() {
             // TODO: should we panic here or shutdown the store?
