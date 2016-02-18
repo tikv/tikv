@@ -1,5 +1,4 @@
 use std::thread;
-use env_logger;
 
 use tikv::raftserver::store::*;
 use tikv::proto::raft_cmdpb::*;
@@ -8,7 +7,7 @@ use super::util::*;
 
 #[test]
 fn test_single_store() {
-    env_logger::init().expect("");
+    // init_env_log();
 
     let trans = StoreTransport::new();
     let path = TempDir::new("test_single_store").unwrap();
@@ -25,7 +24,7 @@ fn test_single_store() {
         store.run().unwrap();
     });
 
-    // wait to let raft run. 
+    // wait to let raft run.
     sleep_ms(500);
 
     // TODO: send RaftCommandRequest, wait the response.
@@ -42,7 +41,7 @@ fn test_single_store() {
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Get);
 
-    // TODO: add more tests 
+    // TODO: add more tests
 
     sender.send_quit().unwrap();
 
