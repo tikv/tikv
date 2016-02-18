@@ -75,7 +75,7 @@ pub fn bootstrap_store(engine: Arc<DB>,
 // min_key/max_key. The first peer id is 1 too.
 pub fn bootstrap_region(engine: Arc<DB>) -> Result<metapb::Region> {
     let mut region = metapb::Region::new();
-    region.set_region_id(BOOTSTRAP_FIRST_NODE_ID);
+    region.set_region_id(BOOTSTRAP_FIRST_REGION_ID);
     region.set_start_key(keys::MIN_KEY.to_vec());
     region.set_end_key(keys::MAX_KEY.to_vec());
 
