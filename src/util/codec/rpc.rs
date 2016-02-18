@@ -100,7 +100,7 @@ pub fn decode_msg_header(header: &[u8]) -> Result<(u64, usize)> {
 }
 
 // Decodes only body.
-pub fn decode_body<M: protobuf::Message>(payload: &Vec<u8>, m: &mut M) -> Result<()> {
+pub fn decode_body<M: protobuf::Message>(payload: &[u8], m: &mut M) -> Result<()> {
     try!(m.merge_from_bytes(&payload));
     Ok(())
 }

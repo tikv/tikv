@@ -4,14 +4,12 @@ use std::io::{Read, Write};
 
 use mio::{self, Token, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
-use protobuf::core::Message;
 use protobuf::RepeatedField;
 
 use proto::kvrpcpb;
 use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
                      CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
                      Request, Response, MessageType};
-use util::codec::rpc::{encode_msg, MSG_HEADER_LEN};
 use storage;
 use storage::{Key, Storage, Value, KvPair};
 
@@ -192,10 +190,10 @@ impl Server {
             Ok(v) => {
                 // convert storage::KvPair to kvrpcpb::KvPair
                 let mut new_kvs: Vec<kvrpcpb::KvPair> = Vec::new();
-                for x in &v {
+                for &(ref key, ref value) in &v {
                     let mut new_kv: kvrpcpb::KvPair = kvrpcpb::KvPair::new();
-                    new_kv.set_key(x.0.clone());
-                    new_kv.set_value(x.1.clone());
+                    new_kv.set_key(key.clone());
+                    new_kv.set_value(value.clone());
                     new_kvs.push(new_kv);
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
@@ -282,7 +280,9 @@ impl Server {
                 return;
             }
         };
-        let _ = conn.read(event_loop);
+        if let Err(e) = conn.read(event_loop) {
+            error!("read failed with {:?}", e);
+        }
     }
 
     fn handle_writable(&mut self, event_loop: &mut EventLoop<Server>, token: Token) {
@@ -293,7 +293,9 @@ impl Server {
                 return;
             }
         };
-        conn.write(event_loop);
+        if let Err(e) = conn.write(event_loop) {
+            error!("write failed with {:?}", e);
+        }
     }
 
     fn handle_request(&mut self,
@@ -346,7 +348,7 @@ impl Server {
                 return;
             }
         };
-        conn.append_write_buf(event_loop, msg_id, resp);
+        let _ = conn.append_write_buf(event_loop, msg_id, resp);
     }
 }
 
