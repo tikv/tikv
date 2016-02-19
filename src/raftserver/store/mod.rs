@@ -17,5 +17,5 @@ pub use self::store::Store;
 pub use self::config::Config;
 pub use self::transport::Transport;
 pub use self::peer::Peer;
-pub use self::bootstrap::{bootstrap_store, bootstrap_region, bootstrap_cluster};
+pub use self::bootstrap::{bootstrap_store, bootstrap_region, bootstrap_cluster, write_region};
 pub use self::engine::{Retriever, Mutator};
