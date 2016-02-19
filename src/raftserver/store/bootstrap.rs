@@ -55,14 +55,6 @@ pub fn bootstrap_store(engine: Arc<DB>,
     }
 
     let ident_key = keys::store_ident_key();
-    try!(engine.get_msg::<StoreIdent>(&ident_key).and_then(|res| {
-        if let Some(res) = res {
-            return Err(other(format!("store has already been bootstrapped to cluster {}",
-                                     res.get_cluster_id())));
-        }
-
-        Ok(())
-    }));
 
     ident.set_cluster_id(cluster_id);
     ident.set_node_id(node_id);
@@ -75,7 +67,7 @@ pub fn bootstrap_store(engine: Arc<DB>,
 // min_key/max_key. The first peer id is 1 too.
 pub fn bootstrap_region(engine: Arc<DB>) -> Result<metapb::Region> {
     let mut region = metapb::Region::new();
-    region.set_region_id(BOOTSTRAP_FIRST_NODE_ID);
+    region.set_region_id(BOOTSTRAP_FIRST_REGION_ID);
     region.set_start_key(keys::MIN_KEY.to_vec());
     region.set_end_key(keys::MAX_KEY.to_vec());
 
