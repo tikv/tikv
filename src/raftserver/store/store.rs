@@ -3,7 +3,7 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet};
 
 use rocksdb::DB;
-use mio::{self, EventLoop};
+use mio::{self, EventLoop, EventLoopConfig};
 use protobuf;
 use uuid::Uuid;
 
@@ -42,7 +42,11 @@ impl<T: Transport> Store<T> {
             }
         }));
 
-        let event_loop = try!(EventLoop::new());
+        // We use base raft tick as the event loop timer tick.
+        let mut event_cfg = EventLoopConfig::new();
+        event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
+        let event_loop = try!(EventLoop::configured(event_cfg));
+
         let sender = Sender::new(event_loop.channel());
 
         Ok(Store {
@@ -72,9 +76,10 @@ impl<T: Transport> Store<T> {
                              }
 
                              let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
+                             let region_id = region.get_region_id();
                              let peer = try!(Peer::create(self, region));
-                             // TODO: check duplicated peer id later?
-                             self.peers.insert(peer.get_peer_id(), peer);
+                             // TODO: check duplicated region id later?
+                             self.peers.insert(region_id, peer);
                              Ok(true)
                          }));
 
@@ -216,6 +221,15 @@ impl<T: Transport> Store<T> {
             return cb.call_box((resp,));
         }
 
+        let peer_id = msg.get_header().get_peer().get_peer_id();
+        if peer.get_peer_id() != peer_id {
+            resp = cmd_resp::message_error(format!("mismatch peer id {} != {}",
+                                                   peer.get_peer_id(),
+                                                   peer_id));
+            bind_uuid(&mut resp, uuid);
+            return cb.call_box((resp,));
+        }
+
         if peer.pending_cmds.contains_key(&uuid) {
             resp = cmd_resp::message_error(format!("duplicated uuid {:?}", uuid));
             bind_uuid(&mut resp, uuid);
@@ -280,7 +294,7 @@ impl<T: Transport> mio::Handler for Store<T> {
     type Timeout = Msg;
     type Message = Msg;
 
-    fn notify(&mut self, _: &mut EventLoop<Self>, msg: Msg) {
+    fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::RaftMessage(data) => {
                 if let Err(e) = self.handle_raft_message(data) {
@@ -291,6 +305,10 @@ impl<T: Transport> mio::Handler for Store<T> {
                 if let Err(e) = self.propose_raft_command(request, callback) {
                     error!("propose raft command err: {:?}", e);
                 }
+            }
+            Msg::Quit => {
+                info!("receive quit message");
+                event_loop.shutdown();
             }
             _ => panic!("invalid notify msg type {:?}", msg),
         }
@@ -303,7 +321,12 @@ impl<T: Transport> mio::Handler for Store<T> {
         }
     }
 
-    fn tick(&mut self, _: &mut EventLoop<Self>) {
+    fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        if !event_loop.is_running() {
+            // TODO: do some close here.
+            return;
+        }
+
         // We handle raft ready in event loop.
         if let Err(e) = self.handle_raft_ready() {
             // TODO: should we panic here or shutdown the store?
