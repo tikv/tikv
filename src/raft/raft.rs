@@ -401,7 +401,7 @@ impl<T: Storage> Raft<T> {
         }
     }
 
-    // bcastHeartbeat sends RPC, without entries to all the peers.
+    // bcast_heartbeat sends RPC, without entries to all the peers.
     pub fn bcast_heartbeat(&mut self) {
         // TODO: avoid copy
         let keys: Vec<u64> = self.prs.keys().cloned().collect();
