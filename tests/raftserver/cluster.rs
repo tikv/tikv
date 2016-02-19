@@ -8,13 +8,17 @@ use std::time::Duration;
 use rocksdb::DB;
 use tempdir::TempDir;
 
+use tikv::raftserver::Result;
 use tikv::raftserver::store::*;
 use super::util::*;
 use tikv::proto::raft_cmdpb::*;
+use tikv::proto::metapb;
 
 // We simulate 3 or 5 nodes, each has a store, the node id and store id are same.
 // E,g, for node 1, the node id and store id are both 1.
 pub struct Cluster {
+    id: u64,
+    leader: Option<metapb::Peer>,
     paths: HashMap<u64, TempDir>,
     engines: HashMap<u64, Arc<DB>>,
 
@@ -25,8 +29,10 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    pub fn new(count: usize) -> Cluster {
+    pub fn new(id: u64, count: usize) -> Cluster {
         let mut c = Cluster {
+            id: id,
+            leader: None,
             paths: HashMap::new(),
             engines: HashMap::new(),
             senders: HashMap::new(),
@@ -93,27 +99,71 @@ impl Cluster {
     pub fn call_command(&self,
                         request: RaftCommandRequest,
                         timeout: Duration)
-                        -> Option<(RaftCommandResponse)> {
+                        -> Option<RaftCommandResponse> {
         let store_id = request.get_header().get_peer().get_store_id();
         let sender = self.senders.get(&store_id).unwrap();
 
         sender.call_command(request, timeout).unwrap()
     }
+    
+    pub fn call_command_on_leader(&mut self, mut request: RaftCommandRequest, timeout: Duration) -> Option<RaftCommandResponse> {
+        request.mut_header().set_peer(self.leader().clone().unwrap());
+        self.call_command(request, timeout)
+    }
 
     pub fn get_transport(&self) -> Arc<RwLock<StoreTransport>> {
         self.trans.clone()
+    }
+    
+    
+    pub fn leader(&mut self) -> Option<metapb::Peer> {
+        if self.leader.is_some() {
+            return self.leader.clone();
+        }
+        let mut leader = None;
+        for id in self.get_senders().keys() {
+            let id = *id;
+            let peer = new_peer(id, id, id);
+            let find_leader = new_status_request(1, &peer, new_region_leader_cmd());
+            let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
+            let region_leader = resp.get_status_response().get_region_leader();
+            if region_leader.has_leader() {
+                leader = Some(region_leader.get_leader().clone());
+                break;
+            }
+            sleep_ms(100);
+        }
+
+        self.leader = leader.clone();
+        leader
+    }
+    
+    pub fn bootstrap_single_region(&self) -> Result<()> {
+        let mut region = metapb::Region::new();
+        region.set_region_id(1);
+        region.set_start_key(keys::MIN_KEY.to_vec());
+        region.set_end_key(keys::MAX_KEY.to_vec());
+        
+        let trans = self.get_transport();
+        for (&id, engine) in &self.engines {
+            let peer = new_peer(id, id, id);
+            region.mut_peers().push(peer.clone());
+            bootstrap_store(engine.clone(), self.id, id, id).unwrap();
+            trans.write().unwrap().cache_peer(id, peer);
+        }
+        
+        for engine in self.engines.values() {
+            try!(write_region(&engine, &region));
+        }
+        Ok(())
     }
 }
 
 impl Drop for Cluster {
     fn drop(&mut self) {
-        for (id, sender) in self.senders.drain() {
-            let h = self.handles.remove(&id).unwrap();
-
-            self.trans.write().unwrap().remove_sender(id);
-            sender.send_quit().unwrap();
-
-            h.join().unwrap();
+        let keys: Vec<u64> = self.senders.keys().cloned().collect();
+        for id in keys {
+            self.stop_store(id);
         }
     }
 }

@@ -82,19 +82,17 @@ pub fn new_store(engine: Arc<DB>, trans: Arc<RwLock<StoreTransport>>) -> Store<S
 }
 
 // Create a base request.
-pub fn new_base_request(region_id: u64, peer: metapb::Peer) -> RaftCommandRequest {
+pub fn new_base_request(region_id: u64) -> RaftCommandRequest {
     let mut req = RaftCommandRequest::new();
     req.mut_header().set_region_id(region_id);
-    req.mut_header().set_peer(peer);
     req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
     req
 }
 
 pub fn new_request(region_id: u64,
-                   peer: metapb::Peer,
                    requests: Vec<Request>)
                    -> RaftCommandRequest {
-    let mut req = new_base_request(region_id, peer);
+    let mut req = new_base_request(region_id);
     req.set_requests(protobuf::RepeatedField::from_vec(requests));
     req
 }
@@ -129,10 +127,11 @@ pub fn new_seek_cmd(key: &[u8]) -> Request {
 }
 
 pub fn new_status_request(region_id: u64,
-                          peer: metapb::Peer,
+                          peer: &metapb::Peer,
                           request: StatusRequest)
                           -> RaftCommandRequest {
-    let mut req = new_base_request(region_id, peer);
+    let mut req = new_base_request(region_id);
+    req.mut_header().set_peer(peer.clone());
     req.set_status_request(request);
     req
 }
