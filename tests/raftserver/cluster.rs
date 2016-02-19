@@ -20,7 +20,7 @@ pub struct Cluster {
     id: u64,
     leader: Option<metapb::Peer>,
     paths: HashMap<u64, TempDir>,
-    engines: HashMap<u64, Arc<DB>>,
+    pub engines: HashMap<u64, Arc<DB>>,
 
     senders: HashMap<u64, Sender>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
@@ -105,8 +105,11 @@ impl Cluster {
 
         sender.call_command(request, timeout).unwrap()
     }
-    
-    pub fn call_command_on_leader(&mut self, mut request: RaftCommandRequest, timeout: Duration) -> Option<RaftCommandResponse> {
+
+    pub fn call_command_on_leader(&mut self,
+                                  mut request: RaftCommandRequest,
+                                  timeout: Duration)
+                                  -> Option<RaftCommandResponse> {
         request.mut_header().set_peer(self.leader().clone().unwrap());
         self.call_command(request, timeout)
     }
@@ -114,8 +117,7 @@ impl Cluster {
     pub fn get_transport(&self) -> Arc<RwLock<StoreTransport>> {
         self.trans.clone()
     }
-    
-    
+
     pub fn leader(&mut self) -> Option<metapb::Peer> {
         if self.leader.is_some() {
             return self.leader.clone();
@@ -137,13 +139,13 @@ impl Cluster {
         self.leader = leader.clone();
         leader
     }
-    
+
     pub fn bootstrap_single_region(&self) -> Result<()> {
         let mut region = metapb::Region::new();
         region.set_region_id(1);
         region.set_start_key(keys::MIN_KEY.to_vec());
         region.set_end_key(keys::MAX_KEY.to_vec());
-        
+
         let trans = self.get_transport();
         for (&id, engine) in &self.engines {
             let peer = new_peer(id, id, id);
@@ -151,19 +153,51 @@ impl Cluster {
             bootstrap_store(engine.clone(), self.id, id, id).unwrap();
             trans.write().unwrap().cache_peer(id, peer);
         }
-        
+
         for engine in self.engines.values() {
             try!(write_region(&engine, &region));
         }
         Ok(())
     }
-}
 
-impl Drop for Cluster {
-    fn drop(&mut self) {
+    pub fn count_fit_peer<F: Fn(&DB) -> bool>(&self, condition: F) -> usize {
+        let mut fit_count = 0;
+        for engine in self.engines.values() {
+            if condition(engine) {
+                fit_count += 1;
+            }
+        }
+        fit_count
+    }
+
+    pub fn reset_leader(&mut self) {
+        self.leader = None;
+    }
+
+    pub fn shutdown(&mut self) {
         let keys: Vec<u64> = self.senders.keys().cloned().collect();
         for id in keys {
             self.stop_store(id);
         }
+        self.leader = None;
+    }
+
+    pub fn get_value(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+        let get = new_request(1, vec![new_get_cmd(key)]);
+        let mut resp = self.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
+        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Get);
+        let mut get = resp.mut_responses()[0].take_get();
+        if get.has_value() {
+            Some(get.take_value())
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for Cluster {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
