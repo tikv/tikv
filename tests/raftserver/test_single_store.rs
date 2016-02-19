@@ -13,7 +13,7 @@ fn test_single_store() {
     let mut cluster = Cluster::new(0, 1);
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
-    
+
     // wait to let raft run.
     sleep_ms(500);
 

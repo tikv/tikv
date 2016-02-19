@@ -69,7 +69,7 @@ pub fn new_engine(path: &TempDir) -> Arc<DB> {
 pub fn new_store(engine: Arc<DB>, trans: Arc<RwLock<StoreTransport>>) -> Store<StoreTransport> {
     // base tick 20ms to speed up raft.
     let cfg = Config {
-        raft_base_tick_interval: 20,
+        raft_base_tick_interval: 10,
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 10,
         ..Config::default()
@@ -89,9 +89,7 @@ pub fn new_base_request(region_id: u64) -> RaftCommandRequest {
     req
 }
 
-pub fn new_request(region_id: u64,
-                   requests: Vec<Request>)
-                   -> RaftCommandRequest {
+pub fn new_request(region_id: u64, requests: Vec<Request>) -> RaftCommandRequest {
     let mut req = new_base_request(region_id);
     req.set_requests(protobuf::RepeatedField::from_vec(requests));
     req
