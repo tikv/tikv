@@ -182,8 +182,8 @@ impl Cluster {
         self.leader = None;
     }
 
-    pub fn get_value(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        let get = new_request(1, vec![new_get_cmd(key)]);
+    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+        let get = new_request(1, vec![new_get_cmd(&keys::data_key(key))]);
         let mut resp = self.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Get);
@@ -193,6 +193,36 @@ impl Cluster {
         } else {
             None
         }
+    }
+
+    pub fn put(&mut self, key: &[u8], value: &[u8]) {
+        let put = new_request(1, vec![new_put_cmd(&keys::data_key(key), value)]);
+        let resp = self.call_command_on_leader(put, Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error());
+        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Put);
+    }
+
+    pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+        let seek = new_request(1, vec![new_seek_cmd(&keys::data_key(key))]);
+        let resp = self.call_command_on_leader(seek, Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error());
+        assert_eq!(resp.get_responses().len(), 1);
+        let resp = &resp.get_responses()[0];
+        assert_eq!(resp.get_cmd_type(), CommandType::Seek);
+        if !resp.has_seek() {
+            None
+        } else {
+            Some((resp.get_seek().get_key().to_vec(),
+                  resp.get_seek().get_value().to_vec()))
+        }
+    }
+
+    pub fn delete(&mut self, key: &[u8]) {
+        let delete = new_request(1, vec![new_delete_cmd(&keys::data_key(key))]);
+        let resp = self.call_command_on_leader(delete, Duration::from_secs(3)).unwrap();
+        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Delete);
     }
 }
 
