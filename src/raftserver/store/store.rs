@@ -24,7 +24,7 @@ pub struct Store<T: Transport> {
     cfg: Config,
     ident: StoreIdent,
     engine: Arc<DB>,
-    sender: SendCh,
+    sendch: SendCh,
     event_loop: Option<EventLoop<Store<T>>>,
 
     peers: HashMap<u64, Peer>,
@@ -47,13 +47,13 @@ impl<T: Transport> Store<T> {
         event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
         let event_loop = try!(EventLoop::configured(event_cfg));
 
-        let sender = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel());
 
         Ok(Store {
             cfg: cfg,
             ident: ident,
             engine: engine,
-            sender: sender,
+            sendch: sendch,
             event_loop: Some(event_loop),
             peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
@@ -96,7 +96,7 @@ impl<T: Transport> Store<T> {
     }
 
     pub fn get_sendch(&self) -> SendCh {
-        self.sender.clone()
+        self.sendch.clone()
     }
 
     pub fn get_engine(&self) -> Arc<DB> {
