@@ -18,11 +18,11 @@ use tikv::proto::metapb;
 // E,g, for node 1, the node id and store id are both 1.
 pub struct Cluster {
     id: u64,
-    leader: Option<metapb::Peer>,
+    leaders: HashMap<u64, metapb::Peer>,
     paths: HashMap<u64, TempDir>,
     pub engines: HashMap<u64, Arc<DB>>,
 
-    senders: HashMap<u64, Sender>,
+    senders: HashMap<u64, SendCh>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
 
     trans: Arc<RwLock<StoreTransport>>,
@@ -32,7 +32,7 @@ impl Cluster {
     pub fn new(id: u64, count: usize) -> Cluster {
         let mut c = Cluster {
             id: id,
-            leader: None,
+            leaders: HashMap::new(),
             paths: HashMap::new(),
             engines: HashMap::new(),
             senders: HashMap::new(),
@@ -62,7 +62,7 @@ impl Cluster {
         let engine = self.engines.get(&store_id).unwrap();
         let mut store = new_store(engine.clone(), self.trans.clone());
 
-        let sender = store.get_sender();
+        let sender = store.get_sendch();
         let t = thread::spawn(move || {
             store.run().unwrap();
         });
@@ -92,7 +92,7 @@ impl Cluster {
         &self.engines
     }
 
-    pub fn get_senders(&self) -> &HashMap<u64, Sender> {
+    pub fn get_senders(&self) -> &HashMap<u64, SendCh> {
         &self.senders
     }
 
@@ -103,14 +103,15 @@ impl Cluster {
         let store_id = request.get_header().get_peer().get_store_id();
         let sender = self.senders.get(&store_id).unwrap();
 
-        sender.call_command(request, timeout).unwrap()
+        call_command(sender, request, timeout).unwrap()
     }
 
     pub fn call_command_on_leader(&mut self,
+                                  region_id: u64,
                                   mut request: RaftCommandRequest,
                                   timeout: Duration)
                                   -> Option<RaftCommandResponse> {
-        request.mut_header().set_peer(self.leader().clone().unwrap());
+        request.mut_header().set_peer(self.leader_of_region(region_id).clone().unwrap());
         self.call_command(request, timeout)
     }
 
@@ -118,15 +119,15 @@ impl Cluster {
         self.trans.clone()
     }
 
-    pub fn leader(&mut self) -> Option<metapb::Peer> {
-        if self.leader.is_some() {
-            return self.leader.clone();
+    pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
+        if let Some(l) = self.leaders.get(&region_id) {
+            return Some(l.clone());
         }
         let mut leader = None;
         for id in self.get_senders().keys() {
             let id = *id;
             let peer = new_peer(id, id, id);
-            let find_leader = new_status_request(1, &peer, new_region_leader_cmd());
+            let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
             let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
             let region_leader = resp.get_status_response().get_region_leader();
             if region_leader.has_leader() {
@@ -136,8 +137,10 @@ impl Cluster {
             sleep_ms(100);
         }
 
-        self.leader = leader.clone();
-        leader
+        if let Some(l) = leader {
+            self.leaders.insert(region_id, l);
+        }
+        self.leaders.get(&region_id).cloned()
     }
 
     pub fn bootstrap_single_region(&self) -> Result<()> {
@@ -155,23 +158,20 @@ impl Cluster {
         }
 
         for engine in self.engines.values() {
-            try!(write_region(&engine, &region));
+            try!(write_first_region(&engine, &region));
         }
         Ok(())
     }
 
-    pub fn count_fit_peer<F: Fn(&DB) -> bool>(&self, condition: F) -> usize {
-        let mut fit_count = 0;
-        for engine in self.engines.values() {
-            if condition(engine) {
-                fit_count += 1;
-            }
-        }
-        fit_count
+    pub fn reset_leader_of_region(&mut self, region_id: u64) {
+        self.leaders.remove(&region_id);
     }
 
-    pub fn reset_leader(&mut self) {
-        self.leader = None;
+    pub fn check_quorum<F: FnMut(&&Arc<DB>) -> bool>(&self, condition: F) -> bool {
+        if self.engines.is_empty() {
+            return true;
+        }
+        self.engines.values().filter(condition).count() > self.engines.len() / 2
     }
 
     pub fn shutdown(&mut self) {
@@ -179,12 +179,12 @@ impl Cluster {
         for id in keys {
             self.stop_store(id);
         }
-        self.leader = None;
+        self.leaders.clear();
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let get = new_request(1, vec![new_get_cmd(&keys::data_key(key))]);
-        let mut resp = self.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
+        let mut resp = self.call_command_on_leader(1, get, Duration::from_secs(3)).unwrap();
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Get);
         let mut get = resp.mut_responses()[0].take_get();
@@ -197,7 +197,7 @@ impl Cluster {
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
         let put = new_request(1, vec![new_put_cmd(&keys::data_key(key), value)]);
-        let resp = self.call_command_on_leader(put, Duration::from_secs(3)).unwrap();
+        let resp = self.call_command_on_leader(1, put, Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error());
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Put);
@@ -205,7 +205,7 @@ impl Cluster {
 
     pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
         let seek = new_request(1, vec![new_seek_cmd(&keys::data_key(key))]);
-        let resp = self.call_command_on_leader(seek, Duration::from_secs(3)).unwrap();
+        let resp = self.call_command_on_leader(1, seek, Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error());
         assert_eq!(resp.get_responses().len(), 1);
         let resp = &resp.get_responses()[0];
@@ -220,7 +220,7 @@ impl Cluster {
 
     pub fn delete(&mut self, key: &[u8]) {
         let delete = new_request(1, vec![new_delete_cmd(&keys::data_key(key))]);
-        let resp = self.call_command_on_leader(delete, Duration::from_secs(3)).unwrap();
+        let resp = self.call_command_on_leader(1, delete, Duration::from_secs(3)).unwrap();
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Delete);
     }

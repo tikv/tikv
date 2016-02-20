@@ -36,24 +36,60 @@ impl fmt::Debug for Msg {
     }
 }
 
-#[derive(Debug)]
-pub struct Sender {
-    sender: mio::Sender<Msg>,
+// Send the request and wait the response until timeout.
+// Use Condvar to support call timeout. if timeout, return None.
+// We should know that even timeout happens, the command may still
+// be handled in store later.
+pub fn call_command(sendch: &SendCh,
+                    request: RaftCommandRequest,
+                    timeout: Duration)
+                    -> Result<Option<RaftCommandResponse>> {
+    let resp: Option<RaftCommandResponse> = None;
+    let pair = Arc::new((Mutex::new(resp), Condvar::new()));
+    let pair2 = pair.clone();
+
+    try!(sendch.send_command(request,
+                             Box::new(move |resp: RaftCommandResponse| -> Result<()> {
+                                 let &(ref lock, ref cvar) = &*pair2;
+                                 let mut v = lock.lock().unwrap();
+                                 *v = Some(resp);
+                                 cvar.notify_one();
+                                 Ok(())
+                             })));
+
+    let &(ref lock, ref cvar) = &*pair;
+    let mut v = lock.lock().unwrap();
+    while v.is_none() {
+        let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
+        if timeout_res.timed_out() {
+            return Ok(None);
+        }
+
+        v = resp
+    }
+
+    Ok(Some(v.take().unwrap()))
 }
 
-impl Clone for Sender {
-    fn clone(&self) -> Sender {
-        Sender { sender: self.sender.clone() }
+
+#[derive(Debug)]
+pub struct SendCh {
+    ch: mio::Sender<Msg>,
+}
+
+impl Clone for SendCh {
+    fn clone(&self) -> SendCh {
+        SendCh { ch: self.ch.clone() }
     }
 }
 
-impl Sender {
-    pub fn new(sender: mio::Sender<Msg>) -> Sender {
-        Sender { sender: sender }
+impl SendCh {
+    pub fn new(ch: mio::Sender<Msg>) -> SendCh {
+        SendCh { ch: ch }
     }
 
     fn send(&self, msg: Msg) -> Result<()> {
-        try!(send_msg(&self.sender, msg));
+        try!(send_msg(&self.ch, msg));
         Ok(())
     }
 
@@ -70,41 +106,6 @@ impl Sender {
 
     pub fn send_quit(&self) -> Result<()> {
         self.send(Msg::Quit)
-    }
-
-    // Send the request and wait the response until timeout.
-    // Use Condvar to support call timeout. if timeout, return None.
-    // We should know that even timeout happens, the command may still
-    // be handled in store later.
-    pub fn call_command(&self,
-                        request: RaftCommandRequest,
-                        timeout: Duration)
-                        -> Result<Option<RaftCommandResponse>> {
-        let resp: Option<RaftCommandResponse> = None;
-        let pair = Arc::new((Mutex::new(resp), Condvar::new()));
-        let pair2 = pair.clone();
-
-        try!(self.send_command(request,
-                               Box::new(move |resp: RaftCommandResponse| -> Result<()> {
-                                   let &(ref lock, ref cvar) = &*pair2;
-                                   let mut v = lock.lock().unwrap();
-                                   *v = Some(resp);
-                                   cvar.notify_one();
-                                   Ok(())
-                               })));
-
-        let &(ref lock, ref cvar) = &*pair;
-        let mut v = lock.lock().unwrap();
-        while v.is_none() {
-            let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
-            if timeout_res.timed_out() {
-                return Ok(None);
-            }
-
-            v = resp
-        }
-
-        Ok(Some(v.take().unwrap()))
     }
 }
 
@@ -145,14 +146,14 @@ mod tests {
     #[test]
     fn test_sender() {
         let mut event_loop = EventLoop::new().unwrap();
-        let sender = Sender::new(event_loop.channel());
+        let sendch = &SendCh::new(event_loop.channel());
 
         let t = thread::spawn(move || {
             event_loop.run(&mut TestHandler).unwrap();
         });
 
         let (tx, rx) = channel();
-        sender.send_command(RaftCommandRequest::new(),
+        sendch.send_command(RaftCommandRequest::new(),
                             Box::new(move |_: RaftCommandResponse| -> Result<()> {
                                 tx.send(1).unwrap();
                                 Ok(())
@@ -163,14 +164,14 @@ mod tests {
 
         let mut request = RaftCommandRequest::new();
         request.mut_header().set_region_id(u64::max_value());
-        assert!(sender.call_command(request.clone(), Duration::from_millis(500))
-                      .unwrap()
-                      .is_some());
-        assert!(sender.call_command(request.clone(), Duration::from_millis(10))
-                      .unwrap()
-                      .is_none());
+        assert!(call_command(sendch, request.clone(), Duration::from_millis(500))
+                    .unwrap()
+                    .is_some());
+        assert!(call_command(sendch, request.clone(), Duration::from_millis(10))
+                    .unwrap()
+                    .is_none());
 
-        sender.send_quit().unwrap();
+        sendch.send_quit().unwrap();
 
         t.join().unwrap();
     }
