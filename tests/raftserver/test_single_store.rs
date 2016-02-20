@@ -32,7 +32,7 @@ fn test_put() {
     }
 
     let put = new_request(1, vec![new_put_cmd(b"a2", b"v2")]);
-    let resp = cluster.call_command_on_leader(put, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(1, put, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "invalid key should be rejected.");
     assert!(cluster.engines[&1].get_value(b"a2").unwrap().is_none());

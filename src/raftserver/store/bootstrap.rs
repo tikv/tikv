@@ -63,15 +63,13 @@ pub fn bootstrap_store(engine: Arc<DB>,
     engine.put_msg(&ident_key, &ident)
 }
 
-pub fn write_region(engine: &DB, region: &metapb::Region) -> Result<()> {
+pub fn write_first_region(engine: &DB, region: &metapb::Region) -> Result<()> {
     let batch = WriteBatch::new();
     try!(batch.put_msg(&keys::region_info_key(region.get_start_key()), region));
 
-    // meta2 key for this region is \x03\0xff
-    let meta2_key = keys::region_route_meta_key(keys::MAX_KEY);
+    let meta2_key = keys::region_route_meta_key(region.get_end_key());
     try!(batch.put_msg(&meta2_key, region));
 
-    // meta1 key for meta2 is \0x02\0xff
     let meta1_key = keys::region_route_meta_key(&meta2_key);
     try!(batch.put_msg(&meta1_key, region));
 
@@ -93,7 +91,7 @@ pub fn bootstrap_region(engine: Arc<DB>) -> Result<metapb::Region> {
     peer.set_peer_id(BOOTSTRAP_FIRST_PEER_ID);
     region.mut_peers().push(peer);
 
-    try!(write_region(&engine, &region));
+    try!(write_first_region(&engine, &region));
 
     Ok(region)
 }

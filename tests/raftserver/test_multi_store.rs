@@ -22,21 +22,21 @@ fn test_multi_store() {
     cluster.put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let sync_count = cluster.count_fit_peer(|engine| {
+    let check_res = cluster.check_quorum(|engine| {
         match engine.get_value(&keys::data_key(key)).unwrap() {
             None => false,
             Some(v) => &*v == value,
         }
     });
-    assert!(sync_count > count / 2);
+    assert!(check_res);
 
     cluster.delete(key);
     assert_eq!(cluster.get(key), None);
 
-    let sync_count = cluster.count_fit_peer(|engine| {
+    let check_res = cluster.check_quorum(|engine| {
         engine.get_value(&keys::data_key(key)).unwrap().is_none()
     });
-    assert!(sync_count > count / 2);
+    assert!(check_res);
 }
 
 #[test]
@@ -52,12 +52,12 @@ fn test_multi_store_leader_crash() {
 
     cluster.put(key1, value1);
 
-    let last_leader = cluster.leader().unwrap();
+    let last_leader = cluster.leader_of_region(1).unwrap();
     cluster.stop_store(last_leader.get_store_id());
 
     sleep_ms(500);
-    cluster.reset_leader();
-    let new_leader = cluster.leader().expect("leader should be elected.");
+    cluster.reset_leader_of_region(1);
+    let new_leader = cluster.leader_of_region(1).expect("leader should be elected.");
     assert!(new_leader != last_leader);
 
     assert_eq!(cluster.get(key1), Some(value1.to_vec()));
@@ -100,7 +100,7 @@ fn test_multi_store_cluster_restart() {
 
     sleep_ms(300);
 
-    assert!(cluster.leader().is_some());
+    assert!(cluster.leader_of_region(1).is_some());
     assert_eq!(cluster.get(key), None);
     cluster.put(key, value);
 
@@ -111,30 +111,32 @@ fn test_multi_store_cluster_restart() {
 
     sleep_ms(300);
 
-    assert!(cluster.leader().is_some());
+    assert!(cluster.leader_of_region(1).is_some());
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 }
 
 #[test]
 fn test_multi_store_lost_majority() {
-    let count = 5;
-    let mut cluster = Cluster::new(0, count);
-    cluster.bootstrap_single_region().expect("");
-    cluster.run_all_stores();
+    let mut tests = vec![4, 5];
+    for count in tests.drain(..) {
+        let mut cluster = Cluster::new(0, count);
+        cluster.bootstrap_single_region().expect("");
+        cluster.run_all_stores();
 
-    sleep_ms(300);
+        sleep_ms(300);
 
-    let half = count as u64 / 2 + 1;
-    for i in 1..half + 1 {
-        cluster.stop_store(i);
-    }
-    if let Some(leader) = cluster.leader() {
-        if leader.get_store_id() >= half + 1 {
-            cluster.stop_store(leader.get_store_id());
+        let half = (count as u64 + 1) / 2;
+        for i in 1..half + 1 {
+            cluster.stop_store(i);
         }
-    }
-    cluster.reset_leader();
-    sleep_ms(600);
+        if let Some(leader) = cluster.leader_of_region(1) {
+            if leader.get_store_id() >= half + 1 {
+                cluster.stop_store(leader.get_store_id());
+            }
+        }
+        cluster.reset_leader_of_region(1);
+        sleep_ms(600);
 
-    assert!(cluster.leader().is_none());
+        assert!(cluster.leader_of_region(1).is_none());
+    }
 }

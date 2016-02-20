@@ -13,10 +13,10 @@ pub use self::errors::{Result, Error, other};
 const MAX_SEND_RETRY_CNT: i32 = 20;
 
 // send_msg wraps Sender and retries some times if queue is full.
-pub fn send_msg<M: Send>(sender: &mio::Sender<M>, msg: M) -> Result<()> {
+pub fn send_msg<M: Send>(ch: &mio::Sender<M>, msg: M) -> Result<()> {
     let mut value: M = msg;
     for _ in 0..MAX_SEND_RETRY_CNT {
-        let r = sender.send(value);
+        let r = ch.send(value);
         if r.is_ok() {
             return Ok(());
         }
