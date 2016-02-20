@@ -97,7 +97,7 @@ impl Cluster {
         let store_id = request.get_header().get_peer().get_store_id();
         let sender = self.senders.get(&store_id).unwrap();
 
-        sender.call_command(request, timeout).unwrap()
+        call_command(sender, request, timeout).unwrap()
     }
 
     pub fn get_transport(&self) -> Arc<RwLock<StoreTransport>> {

@@ -21,7 +21,7 @@ fn test_single_store() {
 
     let mut store = new_store(engine, trans);
 
-    let sender = store.get_sendch();
+    let sendch = &store.get_sendch();
 
     let t = thread::spawn(move || {
         store.run().unwrap();
@@ -34,18 +34,18 @@ fn test_single_store() {
     let put = new_request(1,
                           peer.clone(),
                           vec![new_put_cmd(&keys::data_key(b"a1"), b"v1")]);
-    let resp = sender.call_command(put, Duration::from_secs(3)).unwrap().unwrap();
+    let resp = call_command(sendch, put, Duration::from_secs(3)).unwrap().unwrap();
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Put);
 
     let get = new_request(1, peer.clone(), vec![new_get_cmd(&keys::data_key(b"a1"))]);
-    let resp = sender.call_command(get, Duration::from_secs(3)).unwrap().unwrap();
+    let resp = call_command(sendch, get, Duration::from_secs(3)).unwrap().unwrap();
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Get);
 
     // TODO: add more tests
 
-    sender.send_quit().unwrap();
+    sendch.send_quit().unwrap();
 
     t.join().unwrap();
 }
