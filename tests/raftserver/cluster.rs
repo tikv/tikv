@@ -18,7 +18,7 @@ pub struct Cluster {
     paths: HashMap<u64, TempDir>,
     engines: HashMap<u64, Arc<DB>>,
 
-    senders: HashMap<u64, Sender>,
+    senders: HashMap<u64, SendCh>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
 
     trans: Arc<RwLock<StoreTransport>>,
@@ -56,7 +56,7 @@ impl Cluster {
         let engine = self.engines.get(&store_id).unwrap();
         let mut store = new_store(engine.clone(), self.trans.clone());
 
-        let sender = store.get_sender();
+        let sender = store.get_sendch();
         let t = thread::spawn(move || {
             store.run().unwrap();
         });
@@ -86,7 +86,7 @@ impl Cluster {
         &self.engines
     }
 
-    pub fn get_senders(&self) -> &HashMap<u64, Sender> {
+    pub fn get_senders(&self) -> &HashMap<u64, SendCh> {
         &self.senders
     }
 
@@ -97,7 +97,7 @@ impl Cluster {
         let store_id = request.get_header().get_peer().get_store_id();
         let sender = self.senders.get(&store_id).unwrap();
 
-        sender.call_command(request, timeout).unwrap()
+        call_command(sender, request, timeout).unwrap()
     }
 
     pub fn get_transport(&self) -> Arc<RwLock<StoreTransport>> {
