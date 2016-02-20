@@ -21,7 +21,7 @@ fn test_single_store() {
 
     let mut store = new_store(engine, trans);
 
-    let sender = store.get_sender();
+    let sender = store.get_sendch();
 
     let t = thread::spawn(move || {
         store.run().unwrap();

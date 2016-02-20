@@ -23,7 +23,7 @@ use tikv::raft::INVALID_ID;
 pub struct StoreTransport {
     peers: HashMap<u64, metapb::Peer>,
 
-    senders: HashMap<u64, Sender>,
+    senders: HashMap<u64, SendCh>,
 }
 
 impl StoreTransport {
@@ -34,7 +34,7 @@ impl StoreTransport {
         }))
     }
 
-    pub fn add_sender(&mut self, store_id: u64, sender: Sender) {
+    pub fn add_sender(&mut self, store_id: u64, sender: SendCh) {
         self.senders.insert(store_id, sender);
     }
 
@@ -76,7 +76,7 @@ pub fn new_store(engine: Arc<DB>, trans: Arc<RwLock<StoreTransport>>) -> Store<S
     };
     let store = Store::new(cfg, engine, trans.clone()).unwrap();
 
-    trans.write().unwrap().add_sender(store.get_store_id(), store.get_sender());
+    trans.write().unwrap().add_sender(store.get_store_id(), store.get_sendch());
 
     store
 }

@@ -11,7 +11,7 @@ use proto::raft_serverpb::{RaftMessage, StoreIdent};
 use proto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
 use raftserver::{Result, other};
 use proto::metapb;
-use super::{Sender, Msg};
+use super::{SendCh, Msg};
 use super::keys;
 use super::engine::Retriever;
 use super::config::Config;
@@ -24,7 +24,7 @@ pub struct Store<T: Transport> {
     cfg: Config,
     ident: StoreIdent,
     engine: Arc<DB>,
-    sender: Sender,
+    sender: SendCh,
     event_loop: Option<EventLoop<Store<T>>>,
 
     peers: HashMap<u64, Peer>,
@@ -47,7 +47,7 @@ impl<T: Transport> Store<T> {
         event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
         let event_loop = try!(EventLoop::configured(event_cfg));
 
-        let sender = Sender::new(event_loop.channel());
+        let sender = SendCh::new(event_loop.channel());
 
         Ok(Store {
             cfg: cfg,
@@ -95,7 +95,7 @@ impl<T: Transport> Store<T> {
         Ok(())
     }
 
-    pub fn get_sender(&self) -> Sender {
+    pub fn get_sendch(&self) -> SendCh {
         self.sender.clone()
     }
 
