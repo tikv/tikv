@@ -37,23 +37,23 @@ impl fmt::Debug for Msg {
 }
 
 #[derive(Debug)]
-pub struct Sender {
-    sender: mio::Sender<Msg>,
+pub struct SendCh {
+    ch: mio::Sender<Msg>,
 }
 
-impl Clone for Sender {
-    fn clone(&self) -> Sender {
-        Sender { sender: self.sender.clone() }
+impl Clone for SendCh {
+    fn clone(&self) -> SendCh {
+        SendCh { ch: self.ch.clone() }
     }
 }
 
-impl Sender {
-    pub fn new(sender: mio::Sender<Msg>) -> Sender {
-        Sender { sender: sender }
+impl SendCh {
+    pub fn new(ch: mio::Sender<Msg>) -> SendCh {
+        SendCh { ch: ch }
     }
 
     fn send(&self, msg: Msg) -> Result<()> {
-        try!(send_msg(&self.sender, msg));
+        try!(send_msg(&self.ch, msg));
         Ok(())
     }
 
@@ -145,14 +145,14 @@ mod tests {
     #[test]
     fn test_sender() {
         let mut event_loop = EventLoop::new().unwrap();
-        let sender = Sender::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel());
 
         let t = thread::spawn(move || {
             event_loop.run(&mut TestHandler).unwrap();
         });
 
         let (tx, rx) = channel();
-        sender.send_command(RaftCommandRequest::new(),
+        sendch.send_command(RaftCommandRequest::new(),
                             Box::new(move |_: RaftCommandResponse| -> Result<()> {
                                 tx.send(1).unwrap();
                                 Ok(())
@@ -163,14 +163,14 @@ mod tests {
 
         let mut request = RaftCommandRequest::new();
         request.mut_header().set_region_id(u64::max_value());
-        assert!(sender.call_command(request.clone(), Duration::from_millis(500))
+        assert!(sendch.call_command(request.clone(), Duration::from_millis(500))
                       .unwrap()
                       .is_some());
-        assert!(sender.call_command(request.clone(), Duration::from_millis(10))
+        assert!(sendch.call_command(request.clone(), Duration::from_millis(10))
                       .unwrap()
                       .is_none());
 
-        sender.send_quit().unwrap();
+        sendch.send_quit().unwrap();
 
         t.join().unwrap();
     }
