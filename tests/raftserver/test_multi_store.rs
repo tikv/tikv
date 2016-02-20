@@ -1,7 +1,4 @@
-use std::time::Duration;
-
 use tikv::raftserver::store::*;
-use tikv::proto::raft_cmdpb::CommandType;
 
 use super::util::*;
 use super::cluster::Cluster;
@@ -20,31 +17,25 @@ fn test_multi_store() {
     // Let raft run.
     sleep_ms(300);
 
-    let (key, value) = (&keys::data_key(b"a1"), b"v1");
+    let (key, value) = (b"a1", b"v1");
 
-    let put = new_request(1, vec![new_put_cmd(&key, value)]);
-    let resp = cluster.call_command_on_leader(put, Duration::from_secs(3)).unwrap();
-    assert_eq!(resp.get_responses().len(), 1);
-    assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Put);
-
-    assert_eq!(cluster.get_value(key), Some(value.to_vec()));
+    cluster.put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let sync_count = cluster.count_fit_peer(|engine| {
-        match engine.get_value(&key).unwrap() {
+        match engine.get_value(&keys::data_key(key)).unwrap() {
             None => false,
             Some(v) => &*v == value,
         }
     });
     assert!(sync_count > count / 2);
 
-    let delete = new_request(1, vec![new_delete_cmd(&key)]);
-    let resp = cluster.call_command_on_leader(delete, Duration::from_secs(3)).unwrap();
-    assert_eq!(resp.get_responses().len(), 1);
-    assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Delete);
+    cluster.delete(key);
+    assert_eq!(cluster.get(key), None);
 
-    assert_eq!(cluster.get_value(key), None);
-
-    let sync_count = cluster.count_fit_peer(|engine| engine.get_value(&key).unwrap().is_none());
+    let sync_count = cluster.count_fit_peer(|engine| {
+        engine.get_value(&keys::data_key(key)).unwrap().is_none()
+    });
     assert!(sync_count > count / 2);
 }
 
@@ -55,12 +46,11 @@ fn test_multi_store_leader_crash() {
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
 
-    let (key, value) = (&keys::data_key(b"a1"), b"v1");
+    let (key1, value1) = (b"a1", b"v1");
 
     sleep_ms(300);
-    let put = new_request(1, vec![new_put_cmd(&key, value)]);
-    let resp = cluster.call_command_on_leader(put, Duration::from_secs(3)).unwrap();
-    assert!(!resp.get_header().has_error());
+
+    cluster.put(key1, value1);
 
     let last_leader = cluster.leader().unwrap();
     cluster.stop_store(last_leader.get_store_id());
@@ -70,21 +60,33 @@ fn test_multi_store_leader_crash() {
     let new_leader = cluster.leader().expect("leader should be elected.");
     assert!(new_leader != last_leader);
 
-    assert_eq!(cluster.get_value(key), Some(value.to_vec()));
+    assert_eq!(cluster.get(key1), Some(value1.to_vec()));
 
-    let (key2, value2) = (keys::data_key(b"a2"), b"v2");
-    let put = new_request(1, vec![new_put_cmd(&key2, value2)]);
-    let resp = cluster.call_command_on_leader(put, Duration::from_secs(3)).unwrap();
-    assert!(!resp.get_header().has_error());
+    let (key2, value2) = (b"a2", b"v2");
 
-    assert!(cluster.engines[&last_leader.get_store_id()].get_value(&key2).unwrap().is_none());
+    cluster.put(key2, value2);
+    cluster.delete(key1);
+    assert!(cluster.engines[&last_leader.get_store_id()]
+                .get_value(&keys::data_key(key2))
+                .unwrap()
+                .is_none());
+    assert!(cluster.engines[&last_leader.get_store_id()]
+                .get_value(&keys::data_key(key1))
+                .unwrap()
+                .is_some());
 
     cluster.run_store(last_leader.get_store_id());
 
     sleep_ms(300);
-
-    let v = cluster.engines[&last_leader.get_store_id()].get_value(&key2).unwrap().unwrap();
+    let v = cluster.engines[&last_leader.get_store_id()]
+                .get_value(&keys::data_key(key2))
+                .unwrap()
+                .unwrap();
     assert_eq!(&*v, value2);
+    assert!(cluster.engines[&last_leader.get_store_id()]
+                .get_value(&keys::data_key(key1))
+                .unwrap()
+                .is_none());
 }
 
 #[test]
@@ -94,17 +96,15 @@ fn test_multi_store_cluster_restart() {
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
 
-    let (key, value) = (&keys::data_key(b"a1"), b"v1");
+    let (key, value) = (b"a1", b"v1");
 
     sleep_ms(300);
 
     assert!(cluster.leader().is_some());
-    assert_eq!(cluster.get_value(key), None);
-    let put = new_request(1, vec![new_put_cmd(&key, value)]);
-    let resp = cluster.call_command_on_leader(put, Duration::from_secs(3)).unwrap();
-    assert!(!resp.get_header().has_error());
+    assert_eq!(cluster.get(key), None);
+    cluster.put(key, value);
 
-    assert_eq!(cluster.get_value(key), Some(value.to_vec()));
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     cluster.shutdown();
     cluster.run_all_stores();
@@ -112,5 +112,29 @@ fn test_multi_store_cluster_restart() {
     sleep_ms(300);
 
     assert!(cluster.leader().is_some());
-    assert_eq!(cluster.get_value(key), Some(value.to_vec()));
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+}
+
+#[test]
+fn test_multi_store_lost_majority() {
+    let count = 5;
+    let mut cluster = Cluster::new(0, count);
+    cluster.bootstrap_single_region().expect("");
+    cluster.run_all_stores();
+
+    sleep_ms(300);
+
+    let half = count as u64 / 2 + 1;
+    for i in 1..half + 1 {
+        cluster.stop_store(i);
+    }
+    if let Some(leader) = cluster.leader() {
+        if leader.get_store_id() >= half + 1 {
+            cluster.stop_store(leader.get_store_id());
+        }
+    }
+    cluster.reset_leader();
+    sleep_ms(600);
+
+    assert!(cluster.leader().is_none());
 }
