@@ -36,6 +36,42 @@ impl fmt::Debug for Msg {
     }
 }
 
+// Send the request and wait the response until timeout.
+// Use Condvar to support call timeout. if timeout, return None.
+// We should know that even timeout happens, the command may still
+// be handled in store later.
+pub fn call_command(sendch: &SendCh,
+                    request: RaftCommandRequest,
+                    timeout: Duration)
+                    -> Result<Option<RaftCommandResponse>> {
+    let resp: Option<RaftCommandResponse> = None;
+    let pair = Arc::new((Mutex::new(resp), Condvar::new()));
+    let pair2 = pair.clone();
+
+    try!(sendch.send_command(request,
+                             Box::new(move |resp: RaftCommandResponse| -> Result<()> {
+                                 let &(ref lock, ref cvar) = &*pair2;
+                                 let mut v = lock.lock().unwrap();
+                                 *v = Some(resp);
+                                 cvar.notify_one();
+                                 Ok(())
+                             })));
+
+    let &(ref lock, ref cvar) = &*pair;
+    let mut v = lock.lock().unwrap();
+    while v.is_none() {
+        let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
+        if timeout_res.timed_out() {
+            return Ok(None);
+        }
+
+        v = resp
+    }
+
+    Ok(Some(v.take().unwrap()))
+}
+
+
 #[derive(Debug)]
 pub struct SendCh {
     ch: mio::Sender<Msg>,
@@ -70,41 +106,6 @@ impl SendCh {
 
     pub fn send_quit(&self) -> Result<()> {
         self.send(Msg::Quit)
-    }
-
-    // Send the request and wait the response until timeout.
-    // Use Condvar to support call timeout. if timeout, return None.
-    // We should know that even timeout happens, the command may still
-    // be handled in store later.
-    pub fn call_command(&self,
-                        request: RaftCommandRequest,
-                        timeout: Duration)
-                        -> Result<Option<RaftCommandResponse>> {
-        let resp: Option<RaftCommandResponse> = None;
-        let pair = Arc::new((Mutex::new(resp), Condvar::new()));
-        let pair2 = pair.clone();
-
-        try!(self.send_command(request,
-                               Box::new(move |resp: RaftCommandResponse| -> Result<()> {
-                                   let &(ref lock, ref cvar) = &*pair2;
-                                   let mut v = lock.lock().unwrap();
-                                   *v = Some(resp);
-                                   cvar.notify_one();
-                                   Ok(())
-                               })));
-
-        let &(ref lock, ref cvar) = &*pair;
-        let mut v = lock.lock().unwrap();
-        while v.is_none() {
-            let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
-            if timeout_res.timed_out() {
-                return Ok(None);
-            }
-
-            v = resp
-        }
-
-        Ok(Some(v.take().unwrap()))
     }
 }
 
@@ -145,7 +146,7 @@ mod tests {
     #[test]
     fn test_sender() {
         let mut event_loop = EventLoop::new().unwrap();
-        let sendch = SendCh::new(event_loop.channel());
+        let sendch = &SendCh::new(event_loop.channel());
 
         let t = thread::spawn(move || {
             event_loop.run(&mut TestHandler).unwrap();
@@ -163,12 +164,12 @@ mod tests {
 
         let mut request = RaftCommandRequest::new();
         request.mut_header().set_region_id(u64::max_value());
-        assert!(sendch.call_command(request.clone(), Duration::from_millis(500))
-                      .unwrap()
-                      .is_some());
-        assert!(sendch.call_command(request.clone(), Duration::from_millis(10))
-                      .unwrap()
-                      .is_none());
+        assert!(call_command(sendch, request.clone(), Duration::from_millis(500))
+                    .unwrap()
+                    .is_some());
+        assert!(call_command(sendch, request.clone(), Duration::from_millis(10))
+                    .unwrap()
+                    .is_none());
 
         sendch.send_quit().unwrap();
 
