@@ -180,9 +180,11 @@ impl<T: Transport> Store<T> {
             if let Some(peer) = self.peers.get_mut(&region_id) {
                 if let Err(e) = peer.handle_raft_ready(&self.trans) {
                     // TODO: should we panic here or shutdown the store?
-                    error!("handle raft ready err: {:?}", e);
+                    error!("handle raft ready at region {} err: {:?}", region_id, e);
                     return Err(e);
                 }
+
+                // TODO: handle ready result later.
             }
         }
 
