@@ -24,8 +24,8 @@ impl Unstable {
             entries: vec![],
         }
     }
-    // maybe_first_index returns the last index if it has at least one
-    // unstable entry or snapshot.
+    // maybe_first_index returns the index of the first possible entry in entries
+    // if it has a snapshot.
     pub fn maybe_first_index(&self) -> Option<u64> {
         self.snapshot
             .as_ref()
@@ -102,9 +102,11 @@ impl Unstable {
         self.snapshot = Some(snap);
     }
 
+    // append entries to unstable, truncate local block first if overlapped.
     pub fn truncate_and_append(&mut self, ents: &[Entry]) {
         let after = ents[0].get_index() - 1;
         if after == self.offset + self.entries.len() as u64 - 1 {
+            // after is the last index in the self.entries, append directly
             self.entries.extend_from_slice(ents);
         } else if after < self.offset {
             // The log is being truncated to before our current offset
@@ -113,8 +115,7 @@ impl Unstable {
             self.entries.clear();
             self.entries.extend_from_slice(ents);
         } else {
-            // truncate to after and copy to self.entries
-            // then append
+            // truncate to after and copy to self.entries then append
             let off = self.offset;
             self.entries = {
                 let cut_ents = self.slice(off, after + 1);
