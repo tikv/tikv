@@ -31,6 +31,8 @@ pub struct Store<T: Transport> {
     pending_raft_groups: HashSet<u64>,
 
     trans: Arc<RwLock<T>>,
+
+    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
 }
 
 impl<T: Transport> Store<T> {
@@ -49,6 +51,8 @@ impl<T: Transport> Store<T> {
 
         let sendch = SendCh::new(event_loop.channel());
 
+        let peer_cache = HashMap::new();
+
         Ok(Store {
             cfg: cfg,
             ident: ident,
@@ -58,6 +62,7 @@ impl<T: Transport> Store<T> {
             peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             trans: trans,
+            peer_cache: Arc::new(RwLock::new(peer_cache)),
         })
     }
 
@@ -115,6 +120,10 @@ impl<T: Transport> Store<T> {
         &self.cfg
     }
 
+    pub fn get_peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
+        self.peer_cache.clone()
+    }
+
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
@@ -147,11 +156,8 @@ impl<T: Transport> Store<T> {
                from_peer.get_peer_id(),
                to_peer.get_peer_id());
 
-        {
-            let mut trans = self.trans.write().unwrap();
-            trans.cache_peer(from_peer.get_peer_id(), from_peer.clone());
-            trans.cache_peer(to_peer.get_peer_id(), to_peer.clone());
-        }
+        self.peer_cache.write().unwrap().insert(from_peer.get_peer_id(), from_peer.clone());
+        self.peer_cache.write().unwrap().insert(to_peer.get_peer_id(), to_peer.clone());
 
         if !self.peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self, region_id, to_peer.get_peer_id()));
@@ -216,8 +222,8 @@ impl<T: Transport> Store<T> {
         };
 
         if !peer.is_leader() {
-            let trans = self.trans.read().unwrap();
-            resp = cmd_resp::not_leader_error(region_id, trans.get_peer(peer.get_leader()));
+            resp = cmd_resp::not_leader_error(region_id,
+                                              peer.get_peer_from_cache(peer.get_leader()));
             bind_uuid(&mut resp, uuid);
             return cb.call_box((resp,));
         }
@@ -366,8 +372,7 @@ impl<T: Transport> Store<T> {
         };
 
         let mut resp = cmd::StatusResponse::new();
-        let trans = self.trans.read().unwrap();
-        if let Some(leader) = trans.get_peer(peer.get_leader()) {
+        if let Some(leader) = peer.get_peer_from_cache(peer.get_leader()) {
             resp.mut_region_leader().set_leader(leader);
         }
 
