@@ -155,6 +155,11 @@ impl<T: Transport> Store<T> {
                from_peer.get_peer_id(),
                to_peer.get_peer_id());
 
+        // TODO: We may receive a message which is not in region, and
+        // if the message peer id is <= region max_peer_id, we can think
+        // this is a stale message and can ignore it directly.
+        // Should we only handle this in heartbeat message?
+
         self.peer_cache.write().unwrap().insert(from_peer.get_peer_id(), from_peer.clone());
         self.peer_cache.write().unwrap().insert(to_peer.get_peer_id(), to_peer.clone());
 
