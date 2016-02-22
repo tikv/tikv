@@ -149,12 +149,10 @@ impl Cluster {
         region.set_start_key(keys::MIN_KEY.to_vec());
         region.set_end_key(keys::MAX_KEY.to_vec());
 
-        let trans = self.get_transport();
         for (&id, engine) in &self.engines {
             let peer = new_peer(id, id, id);
             region.mut_peers().push(peer.clone());
             bootstrap_store(engine.clone(), self.id, id, id).unwrap();
-            trans.write().unwrap().cache_peer(id, peer);
         }
 
         for engine in self.engines.values() {
