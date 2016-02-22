@@ -67,9 +67,9 @@ pub fn new_engine(path: &TempDir) -> Arc<DB> {
 }
 
 pub fn new_store(engine: Arc<DB>, trans: Arc<RwLock<StoreTransport>>) -> Store<StoreTransport> {
-    // base tick 20ms to speed up raft.
+    // base tick 10ms to speed up raft.
     let cfg = Config {
-        raft_base_tick_interval: 20,
+        raft_base_tick_interval: 10,
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 10,
         ..Config::default()
@@ -82,19 +82,15 @@ pub fn new_store(engine: Arc<DB>, trans: Arc<RwLock<StoreTransport>>) -> Store<S
 }
 
 // Create a base request.
-pub fn new_base_request(region_id: u64, peer: metapb::Peer) -> RaftCommandRequest {
+pub fn new_base_request(region_id: u64) -> RaftCommandRequest {
     let mut req = RaftCommandRequest::new();
     req.mut_header().set_region_id(region_id);
-    req.mut_header().set_peer(peer);
     req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
     req
 }
 
-pub fn new_request(region_id: u64,
-                   peer: metapb::Peer,
-                   requests: Vec<Request>)
-                   -> RaftCommandRequest {
-    let mut req = new_base_request(region_id, peer);
+pub fn new_request(region_id: u64, requests: Vec<Request>) -> RaftCommandRequest {
+    let mut req = new_base_request(region_id);
     req.set_requests(protobuf::RepeatedField::from_vec(requests));
     req
 }
@@ -129,10 +125,11 @@ pub fn new_seek_cmd(key: &[u8]) -> Request {
 }
 
 pub fn new_status_request(region_id: u64,
-                          peer: metapb::Peer,
+                          peer: &metapb::Peer,
                           request: StatusRequest)
                           -> RaftCommandRequest {
-    let mut req = new_base_request(region_id, peer);
+    let mut req = new_base_request(region_id);
+    req.mut_header().set_peer(peer.clone());
     req.set_status_request(request);
     req
 }

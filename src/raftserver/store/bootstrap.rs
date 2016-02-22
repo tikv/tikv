@@ -63,6 +63,20 @@ pub fn bootstrap_store(engine: Arc<DB>,
     engine.put_msg(&ident_key, &ident)
 }
 
+pub fn write_first_region(engine: &DB, region: &metapb::Region) -> Result<()> {
+    let batch = WriteBatch::new();
+    try!(batch.put_msg(&keys::region_info_key(region.get_region_id()), region));
+
+    let meta2_key = keys::region_route_meta_key(region.get_end_key());
+    try!(batch.put_msg(&meta2_key, region));
+
+    let meta1_key = keys::region_route_meta_key(&meta2_key);
+    try!(batch.put_msg(&meta1_key, region));
+
+    try!(engine.write(batch));
+    Ok(())
+}
+
 // Bootstrap first region, the region id must be 1 and start/end key is
 // min_key/max_key. The first peer id is 1 too.
 pub fn bootstrap_region(engine: Arc<DB>) -> Result<metapb::Region> {
@@ -70,6 +84,7 @@ pub fn bootstrap_region(engine: Arc<DB>) -> Result<metapb::Region> {
     region.set_region_id(BOOTSTRAP_FIRST_REGION_ID);
     region.set_start_key(keys::MIN_KEY.to_vec());
     region.set_end_key(keys::MAX_KEY.to_vec());
+    region.set_max_peer_id(BOOTSTRAP_FIRST_REGION_ID);
 
     let mut peer = metapb::Peer::new();
     peer.set_node_id(BOOTSTRAP_FIRST_NODE_ID);
@@ -77,18 +92,7 @@ pub fn bootstrap_region(engine: Arc<DB>) -> Result<metapb::Region> {
     peer.set_peer_id(BOOTSTRAP_FIRST_PEER_ID);
     region.mut_peers().push(peer);
 
-    let batch = WriteBatch::new();
-    try!(batch.put_msg(&keys::region_info_key(BOOTSTRAP_FIRST_REGION_ID), &region));
-
-    // meta2 key for this region is \x03\0xff
-    let meta2_key = keys::region_route_meta_key(keys::MAX_KEY);
-    try!(batch.put_msg(&meta2_key, &region));
-
-    // meta1 key for meta2 is \0x02\0xff
-    let meta1_key = keys::region_route_meta_key(&meta2_key);
-    try!(batch.put_msg(&meta1_key, &region));
-
-    try!(engine.write(batch));
+    try!(write_first_region(&engine, &region));
 
     Ok(region)
 }
