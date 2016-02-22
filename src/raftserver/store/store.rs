@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
 use proto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
+use proto::raftpb::ConfChangeType;
 use raftserver::{Result, other};
 use proto::metapb;
 use super::{SendCh, Msg};
@@ -207,6 +208,24 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
+        // handle executing committed log results
+        for result in &ready_result.exec_results {
+            match *result {
+                ExecResult::ChangePeer{ref change_type, ref peer, ..} => {
+                    // We only care remove itself now.
+                    if *change_type == ConfChangeType::ConfChangeRemoveNode &&
+                       peer.get_store_id() == self.get_store_id() {
+                        // The remove peer is in the same store.
+                        // TODO: should we check None here?
+                        // Can we destroy it in another thread later?
+                        let mut peer = self.peers.remove(&region_id).unwrap();
+                        try!(peer.destroy());
+                    }
+                }
+            }
+
+        }
+
         Ok(())
     }
 
