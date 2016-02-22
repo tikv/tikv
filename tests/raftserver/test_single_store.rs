@@ -1,51 +1,106 @@
-use std::thread;
 use std::time::Duration;
 
-use tempdir::TempDir;
-
 use tikv::raftserver::store::*;
-use tikv::proto::raft_cmdpb::*;
+use super::cluster::Cluster;
 
 use super::util::*;
 
 #[test]
-fn test_single_store() {
-    // init_env_log();
+fn test_put() {
+    let mut cluster = Cluster::new(0, 1);
+    cluster.bootstrap_single_region().expect("");
+    cluster.run_all_stores();
 
-    let trans = StoreTransport::new();
-    let path = TempDir::new("test_single_store").unwrap();
-    let engine = new_engine(&path);
+    sleep_ms(300);
 
-    // we use cluster id 0.
-    bootstrap_cluster(engine.clone(), 0).unwrap();
+    for i in 1..1000 {
+        let (k, v) = (format!("key{}", i), format!("value{}", i));
+        let putk = k.as_bytes();
+        let putv = v.as_bytes();
+        cluster.put(putk, putv);
+        let v = cluster.get(putk);
+        assert_eq!(v, Some(putv.to_vec()));
+    }
+    // value should be overwrited.
+    for i in 1..1000 {
+        let (k, v) = (format!("key{}", i), format!("value{}", i + 1));
+        let putk = k.as_bytes();
+        let putv = v.as_bytes();
+        cluster.put(putk, putv);
+        let v = cluster.get(putk);
+        assert_eq!(v, Some(putv.to_vec()));
+    }
 
-    let mut store = new_store(engine, trans);
+    let put = new_request(1, vec![new_put_cmd(b"a2", b"v2")]);
+    let resp = cluster.call_command_on_leader(1, put, Duration::from_secs(3)).unwrap();
+    assert!(resp.get_header().has_error(),
+            "invalid key should be rejected.");
+    assert!(cluster.engines[&1].get_value(b"a2").unwrap().is_none());
+}
 
-    let sendch = &store.get_sendch();
+#[test]
+fn test_delete() {
+    let mut cluster = Cluster::new(0, 1);
+    cluster.bootstrap_single_region().expect("");
+    cluster.run_all_stores();
 
-    let t = thread::spawn(move || {
-        store.run().unwrap();
-    });
+    sleep_ms(300);
 
-    // wait to let raft run.
-    sleep_ms(500);
+    for i in 1..1000 {
+        let (k, v) = (format!("key{}", i), format!("value{}", i));
+        let putk = k.as_bytes();
+        let putv = v.as_bytes();
+        cluster.put(putk, putv);
+        let v = cluster.get(putk);
+        assert_eq!(v, Some(putv.to_vec()));
+    }
 
-    let peer = new_peer(1, 1, 1);
-    let put = new_request(1,
-                          peer.clone(),
-                          vec![new_put_cmd(&keys::data_key(b"a1"), b"v1")]);
-    let resp = call_command(sendch, put, Duration::from_secs(3)).unwrap().unwrap();
-    assert_eq!(resp.get_responses().len(), 1);
-    assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Put);
+    for i in 1..1000 {
+        let k = format!("key{}", i);
+        let putk = k.as_bytes();
+        cluster.delete(putk);
+        assert!(cluster.get(putk).is_none());
+    }
+}
 
-    let get = new_request(1, peer.clone(), vec![new_get_cmd(&keys::data_key(b"a1"))]);
-    let resp = call_command(sendch, get, Duration::from_secs(3)).unwrap().unwrap();
-    assert_eq!(resp.get_responses().len(), 1);
-    assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Get);
+#[test]
+fn test_seek() {
+    let mut cluster = Cluster::new(0, 1);
+    cluster.bootstrap_single_region().expect("");
+    cluster.run_all_stores();
 
-    // TODO: add more tests
+    sleep_ms(300);
 
-    sendch.send_quit().unwrap();
+    for i in 100..200 {
+        let (k, v) = (format!("key{}", i), format!("value{}", i));
+        let putk = k.as_bytes();
+        let putv = v.as_bytes();
+        cluster.put(putk, putv);
+    }
 
-    t.join().unwrap();
+    for i in 0..100 {
+        let k = format!("key{:03}", i);
+        let putk = k.as_bytes();
+        let (k, v) = cluster.seek(putk).unwrap();
+        assert_eq!(k, keys::data_key(b"key100"));
+        assert_eq!(v, b"value100");
+    }
+
+    for i in 100..200 {
+        let (k, v) = (format!("key{}", i), format!("value{}", i));
+        let putk = k.as_bytes();
+        let putv = v.as_bytes();
+        let (sk, sv) = cluster.seek(putk).unwrap();
+        assert_eq!(sk, keys::data_key(putk));
+        assert_eq!(sv, putv);
+    }
+
+    for i in 200..300 {
+        let k = format!("key{}", i);
+        let putk = k.as_bytes();
+        assert!(cluster.seek(putk).is_none());
+    }
+
+    assert!(cluster.seek(b"key2").is_none(),
+            "seek should follow binary order");
 }
