@@ -505,7 +505,14 @@ impl Peer {
             Ok(()) => {
                 self.storage.wl().set_applied_index(index);
 
-                // TODO: handle truncate log command and set truncate log state
+                if let Some(ref exec_result) = exec_result {
+                    match *exec_result {
+                        ExecResult::ChangePeer{ref region, ..} => {
+                            self.storage.wl().set_region(region);
+                        }
+                        // TODO: handle truncate log command and set truncate log state
+                    }
+                }
                 ()
             }
             Err(e) => {
