@@ -41,6 +41,7 @@ pub struct Peer {
     pub raft_group: RawNode<RaftStorage>,
     pub storage: Arc<RaftStorage>,
     pub pending_cmds: HashMap<Uuid, PendingCmd>,
+    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
 }
 
 impl Peer {
@@ -107,6 +108,7 @@ impl Peer {
             storage: storage,
             raft_group: raft_group,
             pending_cmds: HashMap::new(),
+            peer_cache: store.get_peer_cache(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -256,6 +258,22 @@ impl Peer {
         Ok(())
     }
 
+    pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+        if let Some(peer) = self.peer_cache.read().unwrap().get(&peer_id).cloned() {
+            return Some(peer);
+        }
+
+        // Try to find in region, if found, set in cache.
+        for peer in self.storage.rl().get_region().get_peers() {
+            if peer.get_peer_id() == peer_id {
+                self.peer_cache.write().unwrap().insert(peer_id, peer.clone());
+                return Some(peer.clone());
+            }
+        }
+
+        None
+    }
+
     fn send_raft_message<T: Transport>(&mut self,
                                        msg: &raftpb::Message,
                                        trans: &Arc<RwLock<T>>)
@@ -270,13 +288,13 @@ impl Peer {
         let mut unreachable = false;
 
         let trans = trans.read().unwrap();
-        let from_peer = try!(trans.get_peer(msg.get_from()).ok_or_else(|| {
+        let from_peer = try!(self.get_peer_from_cache(msg.get_from()).ok_or_else(|| {
             other(format!("failed to lookup sender peer {} in region {}",
                           msg.get_from(),
                           self.region_id))
         }));
 
-        let to_peer = try!(trans.get_peer(msg.get_to()).ok_or_else(|| {
+        let to_peer = try!(self.get_peer_from_cache(msg.get_to()).ok_or_else(|| {
             other(format!("failed to look up recipient peer {} in region {}",
                           msg.get_to(),
                           self.region_id))
@@ -517,6 +535,7 @@ impl Peer {
     }
 
     fn execute_change_peer(&mut self, _: &ExecContext, _: &AdminRequest) -> Result<AdminResponse> {
+        // TODO: remove peer cache after ConfChange remove node.
         unimplemented!();
     }
 
