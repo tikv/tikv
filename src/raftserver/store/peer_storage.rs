@@ -212,7 +212,7 @@ impl PeerStorage {
         let applied_index = try!(self.load_applied_index(&snap));
 
         let region: metapb::Region = try!(snap.get_msg::<metapb::Region>(
-                                            &keys::region_info_key(self.region.get_start_key())).
+                                            &keys::region_info_key(self.get_region_id())).
         and_then(|res| {
             match res {
                 None => return Err(other("could not find region info")),
@@ -439,8 +439,8 @@ impl PeerStorage {
     }
 
     // For region snapshot, we return three key ranges in database for this region.
-    // [region id, region id + 1) -> saving raft entries, applied index, etc.
-    // [region meta start, region meta end) -> saving region information.
+    // [region raft start, region raft end) -> saving raft entries, applied index, etc.
+    // [region meta start, region meta end) -> saving region meta information except raft.
     // [region data start, region data end) -> saving region data.
     fn region_key_ranges(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
         // The first range starts at MIN_KEY, but it contains unnecessary local data.
@@ -450,10 +450,11 @@ impl PeerStorage {
             data_start_key = keys::LOCAL_MAX_KEY;
         }
 
-        vec![(keys::region_id_prefix(self.get_region_id()),
-              keys::region_id_prefix(self.get_region_id() + 1)),
-             (keys::region_meta_prefix(self.region.get_start_key()),
-              keys::region_meta_prefix(self.region.get_end_key())),
+        let region_id = self.get_region_id();
+        vec![(keys::region_raft_prefix(region_id),
+              keys::region_raft_prefix(region_id + 1)),
+             (keys::region_meta_prefix(region_id),
+              keys::region_meta_prefix(region_id + 1)),
              (data_start_key.to_vec(), self.region.get_end_key().to_vec())]
 
     }
