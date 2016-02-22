@@ -9,7 +9,7 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use proto::metapb;
-use proto::raftpb;
+use proto::raftpb::{self, ConfChangeType};
 use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse, ChangePeerRequest};
 use proto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminResponse};
 use proto::raft_serverpb::RaftMessage;
@@ -30,6 +30,31 @@ pub struct PendingCmd {
     pub cb: Option<Callback>,
     // Sometimes we should re-propose pending command (only ConfChnage).
     pub cmd: Option<RaftCommandRequest>,
+}
+
+
+pub enum ExecResult {
+    ChangePeer {
+        change_type: ConfChangeType,
+        peer: metapb::Peer,
+        region: metapb::Region,
+    },
+}
+
+// When we apply commands in handing ready, we should also need a way to
+// let outer store do something after handing ready over.
+// We can save these intermediate results in ready context.
+// Most of time, we only need to care administration commands.
+pub struct ReadyContext {
+    // We can execute multi commands like 1, conf change, 2 split region, ...
+    // in one ready, and outer store should handle these results sequentially too.
+    pub results: Vec<ExecResult>,
+}
+
+impl ReadyContext {
+    pub fn new() -> ReadyContext {
+        ReadyContext { results: vec![] }
+    }
 }
 
 pub struct Peer {
@@ -165,7 +190,10 @@ impl Peer {
         self.leader_id == self.peer_id
     }
 
-    pub fn handle_raft_ready<T: Transport>(&mut self, trans: &Arc<RwLock<T>>) -> Result<()> {
+    pub fn handle_raft_ready<T: Transport>(&mut self,
+                                           ctx: &mut ReadyContext,
+                                           trans: &Arc<RwLock<T>>)
+                                           -> Result<()> {
         if !self.raft_group.has_ready() {
             debug!("raft group is not ready for {}", self.peer_id);
             return Ok(());
@@ -187,7 +215,7 @@ impl Peer {
             try!(self.send_raft_message(&msg, trans));
         }
 
-        try!(self.handle_raft_commit_entries(&ready.committed_entries));
+        try!(self.handle_raft_commit_entries(ctx, &ready.committed_entries));
 
         self.raft_group.advance(ready);
         Ok(())
@@ -330,7 +358,10 @@ impl Peer {
         Ok(())
     }
 
-    fn handle_raft_commit_entries(&mut self, committed_entries: &[raftpb::Entry]) -> Result<()> {
+    fn handle_raft_commit_entries(&mut self,
+                                  ctx: &mut ReadyContext,
+                                  committed_entries: &[raftpb::Entry])
+                                  -> Result<()> {
         // If we send multi ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -338,10 +369,10 @@ impl Peer {
         for entry in committed_entries {
             match entry.get_entry_type() {
                 raftpb::EntryType::EntryNormal => {
-                    try!(self.handle_raft_entry_normal(entry, &mut need_repropose));
+                    try!(self.handle_raft_entry_normal(ctx, entry, &mut need_repropose));
                 }
                 raftpb::EntryType::EntryConfChange => {
-                    try!(self.handle_raft_entry_conf_change(entry));
+                    try!(self.handle_raft_entry_conf_change(ctx, entry));
                 }
             }
         }
@@ -354,6 +385,7 @@ impl Peer {
     }
 
     fn handle_raft_entry_normal(&mut self,
+                                ctx: &mut ReadyContext,
                                 entry: &raftpb::Entry,
                                 repropose: &mut bool)
                                 -> Result<()> {
@@ -366,20 +398,23 @@ impl Peer {
 
         let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(data));
         // no need to return error here.
-        if let Err(e) = self.process_raft_command(index, cmd) {
+        if let Err(e) = self.process_raft_command(ctx, index, cmd) {
             error!("process raft command at index {} err: {:?}", index, e);
         }
 
         Ok(())
     }
 
-    fn handle_raft_entry_conf_change(&mut self, entry: &raftpb::Entry) -> Result<()> {
+    fn handle_raft_entry_conf_change(&mut self,
+                                     ctx: &mut ReadyContext,
+                                     entry: &raftpb::Entry)
+                                     -> Result<()> {
         let index = entry.get_index();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
 
         let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(conf_change.get_context()));
-        if let Err(e) = self.process_raft_command(index, cmd) {
+        if let Err(e) = self.process_raft_command(ctx, index, cmd) {
             error!("process raft command at index {} err: {:?}", index, e);
             // If failed, tell raft that the config change was aborted.
             conf_change = raftpb::ConfChange::new();
@@ -407,7 +442,11 @@ impl Peer {
         Ok(())
     }
 
-    fn process_raft_command(&mut self, index: u64, cmd: RaftCommandRequest) -> Result<()> {
+    fn process_raft_command(&mut self,
+                            ctx: &mut ReadyContext,
+                            index: u64,
+                            cmd: RaftCommandRequest)
+                            -> Result<()> {
         if index == 0 {
             return Err(other("processing raft command needs a none zero index"));
         }
@@ -419,7 +458,7 @@ impl Peer {
 
         let pending_cmd = self.pending_cmds.remove(&uuid);
 
-        let mut resp = match self.apply_raft_command(index, cmd) {
+        let mut resp = match self.apply_raft_command(ctx, index, cmd) {
             Err(e) => {
                 error!("apply raft command err {:?}", e);
                 cmd_resp::message_error(e)
@@ -444,6 +483,7 @@ impl Peer {
     }
 
     fn apply_raft_command(&mut self,
+                          ctx: &mut ReadyContext,
                           index: u64,
                           cmd: RaftCommandRequest)
                           -> Result<RaftCommandResponse> {
@@ -456,18 +496,23 @@ impl Peer {
         }
 
         let wb = WriteBatch::new();
-        let mut resp = {
+        let (mut resp, exec_res) = {
             let engine = self.engine.clone();
-            let ctx = ExecContext {
+            let mut exec_ctx = ExecContext {
                 snap: engine.snapshot(),
                 wb: &wb,
-                request: cmd,
+                result: None,
             };
 
-            self.execute_raft_command(&ctx).unwrap_or_else(|e| {
+            // Now ReadyContext only cares execute commands, and we should
+            // add it later after engine commits successfully.
+            // If we need to set others in ReadyContext, we can add a mutable
+            // reference in ExecContext field later.
+            (self.execute_raft_command(&mut exec_ctx, cmd).unwrap_or_else(|e| {
                 error!("execute raft command err: {:?}", e);
                 cmd_resp::message_error(e)
-            })
+            }),
+             exec_ctx.result.take())
         };
 
         peer_storage::save_applied_index(&wb, self.region_id, index)
@@ -478,7 +523,14 @@ impl Peer {
             Ok(()) => {
                 self.storage.wl().set_applied_index(index);
 
-                // TODO: handle truncate log command and set truncate log state
+                if let Some(exec_res) = exec_res {
+                    // TODO: handle region info for conf change.
+                    // TODO: handle truncate log command and set truncate log state
+
+                    // Add the execute result into ReadyContext for outer Store use.
+                    ctx.results.push(exec_res);
+                }
+
                 ()
             }
             Err(e) => {
@@ -506,21 +558,28 @@ fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerReques
 struct ExecContext<'a> {
     pub snap: Snapshot<'a>,
     pub wb: &'a WriteBatch,
-    pub request: RaftCommandRequest,
+    // Use result to keep intermediate result for outer use.
+    pub result: Option<ExecResult>,
 }
 
 // Here we implement all commands.
 impl Peer {
-    fn execute_raft_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
-        if ctx.request.has_admin_request() {
-            self.execute_admin_command(ctx)
+    fn execute_raft_command(&mut self,
+                            ctx: &mut ExecContext,
+                            request: RaftCommandRequest)
+                            -> Result<RaftCommandResponse> {
+        if request.has_admin_request() {
+            self.execute_admin_command(ctx, request)
         } else {
-            self.execute_write_command(ctx)
+            self.execute_write_command(ctx, request)
         }
     }
 
-    fn execute_admin_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
-        let request = ctx.request.get_admin_request();
+    fn execute_admin_command(&mut self,
+                             ctx: &mut ExecContext,
+                             request: RaftCommandRequest)
+                             -> Result<RaftCommandResponse> {
+        let request = request.get_admin_request();
         let cmd_type = request.get_cmd_type();
         let mut response = try!(match cmd_type {
             cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
@@ -534,17 +593,24 @@ impl Peer {
         Ok(resp)
     }
 
-    fn execute_change_peer(&mut self, _: &ExecContext, _: &AdminRequest) -> Result<AdminResponse> {
+
+    fn execute_change_peer(&mut self,
+                           _: &mut ExecContext,
+                           _: &AdminRequest)
+                           -> Result<AdminResponse> {
         // TODO: remove peer cache after ConfChange remove node.
         unimplemented!();
     }
 
-    fn execute_split(&mut self, _: &ExecContext, _: &AdminRequest) -> Result<AdminResponse> {
+    fn execute_split(&mut self, _: &mut ExecContext, _: &AdminRequest) -> Result<AdminResponse> {
         unimplemented!();
     }
 
-    fn execute_write_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
-        let requests = ctx.request.get_requests();
+    fn execute_write_command(&mut self,
+                             ctx: &ExecContext,
+                             request: RaftCommandRequest)
+                             -> Result<RaftCommandResponse> {
+        let requests = request.get_requests();
 
         let mut responses: Vec<Response> = Vec::with_capacity(requests.len());
 

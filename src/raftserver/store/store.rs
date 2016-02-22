@@ -15,7 +15,7 @@ use super::{SendCh, Msg};
 use super::keys;
 use super::engine::Retriever;
 use super::config::Config;
-use super::peer::{Peer, PendingCmd};
+use super::peer::{Peer, PendingCmd, ReadyContext};
 use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
@@ -178,7 +178,8 @@ impl<T: Transport> Store<T> {
 
         for region_id in ids {
             if let Some(peer) = self.peers.get_mut(&region_id) {
-                if let Err(e) = peer.handle_raft_ready(&self.trans) {
+                let mut ctx = ReadyContext::new();
+                if let Err(e) = peer.handle_raft_ready(&mut ctx, &self.trans) {
                     // TODO: should we panic here or shutdown the store?
                     error!("handle raft ready err: {:?}", e);
                     return Err(e);
