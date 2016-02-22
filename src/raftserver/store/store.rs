@@ -70,13 +70,12 @@ impl<T: Transport> Store<T> {
         try!(engine.scan(start_key,
                          end_key,
                          &mut |key, value| -> Result<bool> {
-                             let (_, suffix) = try!(keys::decode_region_meta_key(key));
+                             let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
                              if suffix != keys::REGION_INFO_SUFFIX {
                                  return Ok(true);
                              }
 
                              let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
-                             let region_id = region.get_region_id();
                              let peer = try!(Peer::create(self, region));
                              // TODO: check duplicated region id later?
                              self.peers.insert(region_id, peer);

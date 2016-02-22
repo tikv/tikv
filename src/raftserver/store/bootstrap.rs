@@ -78,7 +78,7 @@ pub fn bootstrap_region(engine: Arc<DB>) -> Result<metapb::Region> {
     region.mut_peers().push(peer);
 
     let batch = WriteBatch::new();
-    try!(batch.put_msg(&keys::region_info_key(region.get_start_key()), &region));
+    try!(batch.put_msg(&keys::region_info_key(BOOTSTRAP_FIRST_REGION_ID), &region));
 
     // meta2 key for this region is \x03\0xff
     let meta2_key = keys::region_route_meta_key(keys::MAX_KEY);
