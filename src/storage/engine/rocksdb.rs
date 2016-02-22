@@ -12,14 +12,19 @@ pub struct EngineRocksdb {
 impl EngineRocksdb {
     pub fn new(path: &str) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
-        DB::open_default(path).map(|db| EngineRocksdb { db: db }).map_err(RocksDBError::new)
+        DB::open_default(path)
+            .map(|db| EngineRocksdb { db: db })
+            .map_err(|e| RocksDBError::new(e).to_engine_error())
     }
 }
 
 impl Engine for EngineRocksdb {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         trace!("EngineRocksdb: get {:?}", key);
-        self.db.get(key).map(|r| r.map(|v| v.to_owned())).map_err(RocksDBError::new)
+        self.db
+            .get(key)
+            .map(|r| r.map(|v| v.to_owned()))
+            .map_err(|e| RocksDBError::new(e).to_engine_error())
     }
 
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
@@ -35,13 +40,13 @@ impl Engine for EngineRocksdb {
                 Modify::Delete(k) => {
                     trace!("EngineRocksdb: delete {:?}", k);
                     if let Err(msg) = self.db.delete(k) {
-                        return Err(RocksDBError::new(msg));
+                        return Err(RocksDBError::new(msg).to_engine_error());
                     }
                 }
                 Modify::Put((k, v)) => {
                     trace!("EngineRocksdb: put {:?},{:?}", k, v);
                     if let Err(msg) = self.db.put(k, v) {
-                        return Err(RocksDBError::new(msg));
+                        return Err(RocksDBError::new(msg).to_engine_error());
                     }
                 }
             }
@@ -50,14 +55,18 @@ impl Engine for EngineRocksdb {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RocksDBError {
     message: String,
 }
 
 impl RocksDBError {
-    fn new(msg: String) -> super::Error {
-        super::Error::Other(Box::new(RocksDBError { message: msg }))
+    fn new(msg: String) -> RocksDBError {
+        RocksDBError { message: msg }
+    }
+
+    fn to_engine_error(&self) -> super::Error {
+        super::Error::Other(Box::new(self.clone()))
     }
 }
 
