@@ -138,7 +138,7 @@ pub fn region_info_key(region_id: u64) -> Vec<u8> {
 }
 
 // When a peer is destroyed, we would record current region max peer id as
-// the tombstone value, any newer peer for this region with a peer id <= tombstone
+// the tombstone value, any peer for this region with a peer id <= tombstone
 // value is not allowed to create in this store.
 pub fn region_tombstone_key(region_id: u64) -> Vec<u8> {
     make_region_meta_key(region_id, REGION_TOMBSTONE_SUFFIX)
