@@ -21,17 +21,12 @@ use tikv::proto::raft_cmdpb::{CommandType, StatusCommandType};
 use tikv::raft::INVALID_ID;
 
 pub struct StoreTransport {
-    peers: HashMap<u64, metapb::Peer>,
-
     senders: HashMap<u64, SendCh>,
 }
 
 impl StoreTransport {
     pub fn new() -> Arc<RwLock<StoreTransport>> {
-        Arc::new(RwLock::new(StoreTransport {
-            peers: HashMap::new(),
-            senders: HashMap::new(),
-        }))
+        Arc::new(RwLock::new(StoreTransport { senders: HashMap::new() }))
     }
 
     pub fn add_sender(&mut self, store_id: u64, sender: SendCh) {
@@ -44,14 +39,6 @@ impl StoreTransport {
 }
 
 impl Transport for StoreTransport {
-    fn cache_peer(&mut self, peer_id: u64, peer: metapb::Peer) {
-        self.peers.insert(peer_id, peer);
-    }
-
-    fn get_peer(&self, peer_id: u64) -> Option<metapb::Peer> {
-        self.peers.get(&peer_id).cloned()
-    }
-
     fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         let to_store = msg.get_to_peer().get_store_id();
         match self.senders.get(&to_store) {
