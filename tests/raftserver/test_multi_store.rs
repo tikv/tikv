@@ -41,7 +41,7 @@ fn bootstrap_multi_store(engines: &HashMap<u64, Arc<DB>>) {
         bootstrap_region(engine.clone()).unwrap();
 
         let batch = WriteBatch::new();
-        batch.put_msg(&keys::region_info_key(region.get_start_key()), &region).unwrap();
+        batch.put_msg(&keys::region_info_key(region.get_region_id()), &region).unwrap();
         engine.write(batch).unwrap();
     }
 }
