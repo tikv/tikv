@@ -478,18 +478,23 @@ impl Peer {
         }
 
         let wb = WriteBatch::new();
-        let mut resp = {
+        let (mut resp, exec_res) = {
             let engine = self.engine.clone();
-            let ctx = ExecContext {
+            let mut exec_ctx = ExecContext {
                 snap: engine.snapshot(),
                 wb: &wb,
-                request: cmd,
+                result: None,
             };
 
-            self.execute_raft_command(&ctx).unwrap_or_else(|e| {
+            // Now ReadyContext only cares execute commands, and we should
+            // add it later after engine commits successfully.
+            // If we need to set others in ReadyContext, we can add a mutable
+            // reference in ExecContext field later.
+            (self.execute_raft_command(&mut exec_ctx, cmd).unwrap_or_else(|e| {
                 error!("execute raft command err: {:?}", e);
                 cmd_resp::message_error(e)
-            })
+            }),
+             exec_ctx.result.take())
         };
 
         peer_storage::save_applied_index(&wb, self.region_id, index)
@@ -500,7 +505,14 @@ impl Peer {
             Ok(()) => {
                 self.storage.wl().set_applied_index(index);
 
-                // TODO: handle truncate log command and set truncate log state
+                if let Some(exec_res) = exec_res {
+                    // TODO: handle region info for conf change.
+                    // TODO: handle truncate log command and set truncate log state
+
+                    // Add the execute result into ReadyContext for outer Store use.
+                    ctx.results.push(exec_res);
+                }
+
                 ()
             }
             Err(e) => {
@@ -528,21 +540,28 @@ fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerReques
 struct ExecContext<'a> {
     pub snap: Snapshot<'a>,
     pub wb: &'a WriteBatch,
-    pub request: RaftCommandRequest,
+    // Use result to keep intermediate result for outer use.
+    pub result: Option<ExecResult>,
 }
 
 // Here we implement all commands.
 impl Peer {
-    fn execute_raft_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
-        if ctx.request.has_admin_request() {
-            self.execute_admin_command(ctx)
+    fn execute_raft_command(&mut self,
+                            ctx: &mut ExecContext,
+                            request: RaftCommandRequest)
+                            -> Result<RaftCommandResponse> {
+        if request.has_admin_request() {
+            self.execute_admin_command(ctx, request)
         } else {
-            self.execute_write_command(ctx)
+            self.execute_write_command(ctx, request)
         }
     }
 
-    fn execute_admin_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
-        let request = ctx.request.get_admin_request();
+    fn execute_admin_command(&mut self,
+                             ctx: &mut ExecContext,
+                             request: RaftCommandRequest)
+                             -> Result<RaftCommandResponse> {
+        let request = request.get_admin_request();
         let cmd_type = request.get_cmd_type();
         let mut response = try!(match cmd_type {
             cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
@@ -556,16 +575,22 @@ impl Peer {
         Ok(resp)
     }
 
-    fn execute_change_peer(&mut self, _: &ExecContext, _: &AdminRequest) -> Result<AdminResponse> {
+    fn execute_change_peer(&mut self,
+                           _: &mut ExecContext,
+                           _: &AdminRequest)
+                           -> Result<AdminResponse> {
         unimplemented!();
     }
 
-    fn execute_split(&mut self, _: &ExecContext, _: &AdminRequest) -> Result<AdminResponse> {
+    fn execute_split(&mut self, _: &mut ExecContext, _: &AdminRequest) -> Result<AdminResponse> {
         unimplemented!();
     }
 
-    fn execute_write_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
-        let requests = ctx.request.get_requests();
+    fn execute_write_command(&mut self,
+                             ctx: &ExecContext,
+                             request: RaftCommandRequest)
+                             -> Result<RaftCommandResponse> {
+        let requests = request.get_requests();
 
         let mut responses: Vec<Response> = Vec::with_capacity(requests.len());
 
