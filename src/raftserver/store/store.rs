@@ -15,7 +15,7 @@ use super::{SendCh, Msg};
 use super::keys;
 use super::engine::Retriever;
 use super::config::Config;
-use super::peer::{Peer, PendingCmd};
+use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
@@ -174,20 +174,39 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_raft_ready(&mut self) -> Result<()> {
-        let ids = self.pending_raft_groups.drain();
+        let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
 
         for region_id in ids {
-            if let Some(peer) = self.peers.get_mut(&region_id) {
-                if let Err(e) = peer.handle_raft_ready(&self.trans) {
-                    // TODO: should we panic here or shutdown the store?
-                    error!("handle raft ready at region {} err: {:?}", region_id, e);
+            let ready_result = {
+                match self.peers.get_mut(&region_id) {
+                    None => None,
+                    Some(peer) => {
+                        match peer.handle_raft_ready(&self.trans) {
+                            Err(e) => {
+                                // TODO: should we panic here or shutdown the store?
+                                error!("handle raft ready at region {} err: {:?}", region_id, e);
+                                return Err(e);
+                            }
+                            Ok(ready) => ready,
+                        }
+                    }
+                }
+            };
+
+            if let Some(ready_result) = ready_result {
+                if let Err(e) = self.handle_ready_result(region_id, ready_result) {
+                    error!("handle raft ready result at region {} err: {:?}",
+                           region_id,
+                           e);
                     return Err(e);
                 }
-
-                // TODO: handle ready result later.
             }
         }
 
+        Ok(())
+    }
+
+    fn handle_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
         Ok(())
     }
 
