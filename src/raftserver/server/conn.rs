@@ -85,7 +85,7 @@ impl Conn {
 
     pub fn read<T: ServerHandler>(&mut self,
                                   _: &mut EventLoop<Server<T>>)
-                                  -> Result<(Vec<ConnData>)> {
+                                  -> Result<Vec<ConnData>> {
         let mut bufs = vec![];
 
         loop {
@@ -121,7 +121,7 @@ impl Conn {
             self.header.clear();
         }
 
-        Ok((bufs))
+        Ok(bufs)
     }
 
     fn write_buf(&mut self) -> Result<usize> {
