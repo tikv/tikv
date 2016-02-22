@@ -1,8 +1,7 @@
 use std::vec::Vec;
 
-use byteorder::{BigEndian, WriteBytesExt};
+use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
 
-use util::codec::bytes;
 use raftserver::{Result, other};
 use std::mem;
 
@@ -27,8 +26,12 @@ pub const DATA_PREFIX_KEY: &'static [u8] = &[DATA_PREFIX];
 
 // Following keys are all local keys, so the first byte must be 0x01.
 pub const STORE_IDENT_KEY: &'static [u8] = &[LOCAL_PREFIX, 0x01];
-pub const REGION_ID_PREFIX: u8 = 0x02;
-pub const REGION_ID_PREFIX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_ID_PREFIX];
+// We save two types region data in DB, for raft and other meta data.
+// When the store starts, we should iterate all region meta data to
+// construct peer, no need to travel large raft data, so we separate them
+// with different prefixes.
+pub const REGION_RAFT_PREFIX: u8 = 0x02;
+pub const REGION_RAFT_PREFIX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
 pub const REGION_META_PREFIX: u8 = 0x03;
 pub const REGION_META_PREFIX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
 pub const REGION_META_MIN_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
@@ -50,19 +53,19 @@ pub fn store_ident_key() -> Vec<u8> {
 }
 
 fn make_region_id_key(region_id: u64, suffix: u8, extra_cap: usize) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_ID_PREFIX_KEY.len() + mem::size_of::<u64>() +
+    let mut key = Vec::with_capacity(REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>() +
                                      mem::size_of::<u8>() +
                                      extra_cap);
-    key.extend_from_slice(REGION_ID_PREFIX_KEY);
+    key.extend_from_slice(REGION_RAFT_PREFIX_KEY);
     // no need check error here, can't panic;
     key.write_u64::<BigEndian>(region_id).unwrap();
     key.push(suffix);
     key
 }
 
-pub fn region_id_prefix(region_id: u64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_ID_PREFIX_KEY.len() + mem::size_of::<u64>());
-    key.extend_from_slice(REGION_ID_PREFIX_KEY);
+pub fn region_raft_prefix(region_id: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>());
+    key.extend_from_slice(REGION_RAFT_PREFIX_KEY);
     // no need check error here, can't panic;
     key.write_u64::<BigEndian>(region_id).unwrap();
     key
@@ -95,40 +98,42 @@ pub fn raft_truncated_state_key(region_id: u64) -> Vec<u8> {
     make_region_id_key(region_id, RAFT_TRUNCATED_STATE_SUFFIX, 0)
 }
 
-fn make_region_meta_key(region_key: &[u8], suffix: u8) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_META_PREFIX_KEY.len() + 1 +
-                                     bytes::max_encoded_bytes_size(region_key.len()));
+fn make_region_meta_key(region_id: u64, suffix: u8) -> Vec<u8> {
+    let mut key = Vec::with_capacity(REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>() +
+                                     mem::size_of::<u8>());
     key.extend_from_slice(REGION_META_PREFIX_KEY);
-    key.extend(bytes::encode_bytes(region_key));
+    // no need to check error here, can't panic;
+    key.write_u64::<BigEndian>(region_id).unwrap();
     key.push(suffix);
     key
 }
 
-// Decode encoded region meta key, return the region key and meta suffix type.
-pub fn decode_region_meta_key(key: &[u8]) -> Result<(Vec<u8>, u8)> {
+// Decode region meta key, return the region key and meta suffix type.
+pub fn decode_region_meta_key(key: &[u8]) -> Result<(u64, u8)> {
+    if REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>() + mem::size_of::<u8>() != key.len() {
+        return Err(other(format!("invalid region meta key length for key {:?}", key)));
+    }
+
     if !key.starts_with(REGION_META_PREFIX_KEY) {
         return Err(other(format!("invalid region meta prefix for key {:?}", key)));
     }
 
-    let (region_key, cnt) = try!(bytes::decode_bytes(&key[REGION_META_PREFIX_KEY.len()..]));
-    // The last character must be the suffix type, 1 byte.
-    if REGION_META_PREFIX_KEY.len() + cnt + 1 != key.len() {
-        return Err(other(format!("invalid region meta suffix for key {:?}", key)));
-    }
+    let region_id =
+        BigEndian::read_u64(&key[REGION_META_PREFIX_KEY.len()..REGION_META_PREFIX_KEY.len() +
+                                                               mem::size_of::<u64>()]);
 
-    Ok((region_key, key[key.len() - 1]))
+    Ok((region_id, key[key.len() - 1]))
 }
 
-pub fn region_meta_prefix(region_key: &[u8]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_META_PREFIX_KEY.len() +
-                                     bytes::max_encoded_bytes_size(region_key.len()));
+pub fn region_meta_prefix(region_id: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>());
     key.extend_from_slice(REGION_META_PREFIX_KEY);
-    key.extend(bytes::encode_bytes(region_key));
+    key.write_u64::<BigEndian>(region_id).unwrap();
     key
 }
 
-pub fn region_info_key(region_key: &[u8]) -> Vec<u8> {
-    make_region_meta_key(region_key, REGION_INFO_SUFFIX)
+pub fn region_info_key(region_id: u64) -> Vec<u8> {
+    make_region_meta_key(region_id, REGION_INFO_SUFFIX)
 }
 
 // Returns a region route meta (meta1, meta2) indexing key for the
@@ -197,7 +202,7 @@ mod tests {
     fn test_region_id_key() {
         let region_ids = vec![0, 1, 1024, ::std::u64::MAX];
         for region_id in region_ids {
-            let prefix = region_id_prefix(region_id);
+            let prefix = region_raft_prefix(region_id);
 
             assert!(raft_log_prefix(region_id).starts_with(&prefix));
             assert!(raft_log_key(region_id, 1).starts_with(&prefix));
@@ -210,8 +215,8 @@ mod tests {
         // test sort.
         let tbls = vec![(1, 0, Ordering::Greater), (1, 1, Ordering::Equal), (1, 2, Ordering::Less)];
         for (lid, rid, order) in tbls {
-            let lhs = region_id_prefix(lid);
-            let rhs = region_id_prefix(rid);
+            let lhs = region_raft_prefix(lid);
+            let rhs = region_raft_prefix(rid);
             assert_eq!(lhs.partial_cmp(&rhs), Some(order));
         }
     }
@@ -231,22 +236,21 @@ mod tests {
 
     #[test]
     fn test_region_meta_key() {
-        let keys: Vec<&[u8]> = vec![b"123", b"abc", b"hello_world"];
-        for key in keys {
-            let prefix = region_meta_prefix(key);
-            let info_key = region_info_key(key);
+        let ids: Vec<u64> = vec![1, 1024, u64::max_value()];
+        for id in ids {
+            let prefix = region_meta_prefix(id);
+            let info_key = region_info_key(id);
             assert!(info_key.starts_with(&prefix));
 
             assert_eq!(decode_region_meta_key(&info_key).unwrap(),
-                       (key.to_vec(), REGION_INFO_SUFFIX));
+                       (id, REGION_INFO_SUFFIX));
         }
 
         // test sort.
-        let tbls: Vec<(&[u8], &[u8], Ordering)> = vec![
-        (b"1", b"2", Ordering::Less),
-        (b"1", b"1", Ordering::Equal),
-        (b"2", b"1", Ordering::Greater),
-        (b"2", b"123", Ordering::Greater),
+        let tbls: Vec<(u64, u64, Ordering)> = vec![
+        (1, 2, Ordering::Less),
+        (1, 1, Ordering::Equal),
+        (2, 1, Ordering::Greater),
         ];
 
         for (lkey, rkey, order) in tbls {
