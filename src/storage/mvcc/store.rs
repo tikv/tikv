@@ -156,18 +156,16 @@ impl<'a> RowTxn<'a> {
     }
 
     pub fn commit(&mut self, start_ts: u64, commit_ts: u64) -> Result<()> {
-        match self.meta.get_lock() {
-            Some(lock) if lock.get_start_ts() == start_ts => {}
+        let read_only = match self.meta.get_lock() {
+            Some(lock) if lock.get_start_ts() == start_ts => lock.get_read_only(),
             _ => return Err(Error::TxnAbortedWhileWorking),
-        }
-        let meta_item = {
-            let lock = self.meta.get_lock().unwrap();
-            let mut item = MetaItem::new();
-            item.set_start_ts(lock.get_start_ts());
-            item.set_commit_ts(commit_ts);
-            item
         };
-        self.meta.push_item(meta_item);
+        if !read_only {
+            let mut item = MetaItem::new();
+            item.set_start_ts(start_ts);
+            item.set_commit_ts(commit_ts);
+            self.meta.push_item(item);
+        }
         self.meta.clear_lock();
         let modify = Modify::Put((self.meta_key.clone(), self.meta_bytes()));
         self.writes.push(modify);
