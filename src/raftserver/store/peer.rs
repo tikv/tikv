@@ -643,9 +643,6 @@ impl Peer {
 
                 util::remove_peer(&mut region, store_id).unwrap();
             }
-            raftpb::ConfChangeType::UpdateNode => {
-                return Err(other("unsupported conf chagne update node now"))
-            }
         }
 
         try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));

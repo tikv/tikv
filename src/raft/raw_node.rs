@@ -229,7 +229,6 @@ impl<T: Storage> RawNode<T> {
         match cc.get_change_type() {
             ConfChangeType::AddNode => self.raft.add_node(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
-            ConfChangeType::UpdateNode => self.raft.reset_pending_conf(),
         }
         let mut cs = ConfState::new();
         cs.set_nodes(self.raft.nodes());
