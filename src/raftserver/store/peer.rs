@@ -200,7 +200,6 @@ impl Peer {
                                            trans: &Arc<RwLock<T>>)
                                            -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
-            debug!("raft group is not ready for {}", self.peer_id);
             return Ok(None);
         }
 
@@ -245,6 +244,11 @@ impl Peer {
             cc.set_change_type(change_peer.get_change_type());
             cc.set_node_id(change_peer.get_peer().get_peer_id());
             cc.set_context(data);
+
+            info!("propose conf change {:?} peer {:?} at region {}",
+                  cc.get_change_type(),
+                  cc.get_node_id(),
+                  self.region_id);
 
             try!(self.raft_group.propose_conf_change(cc));
             reproposable = true;
@@ -317,7 +321,7 @@ impl Peer {
         send_msg.set_region_id(self.region_id);
         send_msg.set_message(msg.clone());
 
-        let mut snap_status = SnapshotStatus::SnapshotFinish;
+        let mut snap_status = SnapshotStatus::Finish;
         let mut unreachable = false;
 
         let trans = trans.read().unwrap();
@@ -348,7 +352,7 @@ impl Peer {
                   e);
 
             unreachable = true;
-            snap_status = SnapshotStatus::SnapshotFailure;
+            snap_status = SnapshotStatus::Failure;
         }
 
         if unreachable {
@@ -413,6 +417,7 @@ impl Peer {
     fn handle_raft_entry_conf_change(&mut self,
                                      entry: &raftpb::Entry)
                                      -> Result<Option<ExecResult>> {
+
         let index = entry.get_index();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
@@ -471,6 +476,8 @@ impl Peer {
             if pending_cmd.cb.is_none() {
                 warn!("pending command callback for entry {} is None", index);
             } else {
+                // TODO: if we have exec_result, maybe we should return this callback too. Outer
+                // store will call it after handing exec result.
                 let cb = pending_cmd.cb.take().unwrap();
                 // Bind uuid here.
                 cmd_resp::bind_uuid(&mut resp, uuid);
@@ -518,7 +525,14 @@ impl Peer {
             Ok(()) => {
                 self.storage.wl().set_applied_index(index);
 
-                // TODO: handle truncate log command and set truncate log state
+                if let Some(ref exec_result) = exec_result {
+                    match *exec_result {
+                        ExecResult::ChangePeer{ref region, ..} => {
+                            self.storage.wl().set_region(region);
+                        }
+                        // TODO: handle truncate log command and set truncate log state
+                    }
+                }
                 ()
             }
             Err(e) => {
@@ -567,6 +581,10 @@ impl Peer {
                              -> Result<(RaftCommandResponse, Option<ExecResult>)> {
         let request = ctx.request.get_admin_request();
         let cmd_type = request.get_cmd_type();
+        info!("execute admin command {:?} at region {}",
+              request,
+              self.region_id);
+
         let (mut response, exec_result) = try!(match cmd_type {
             cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
             cmd::AdminCommandType::Split => self.execute_split(ctx, request),
@@ -580,11 +598,67 @@ impl Peer {
     }
 
     fn execute_change_peer(&mut self,
-                           _: &ExecContext,
-                           _: &AdminRequest)
+                           ctx: &ExecContext,
+                           request: &AdminRequest)
                            -> Result<(AdminResponse, Option<ExecResult>)> {
-        // TODO: remove peer cache after ConfChange remove node.
-        unimplemented!();
+        let request = request.get_change_peer();
+        let peer = request.get_peer();
+        let mut region = self.get_region().clone();
+        let store_id = peer.get_store_id();
+        // TODO: we should need more check, like peer validation, duplicated id, etc.
+        let exists = util::find_peer(&region, store_id).is_some();
+        let change_type = request.get_change_type();
+        match change_type {
+            raftpb::ConfChangeType::ConfChangeAddNode => {
+                if exists {
+                    return Err(other(format!("add duplicated peer {:?} to store {}",
+                                             peer,
+                                             store_id)));
+                }
+
+                if peer.get_peer_id() <= region.get_max_peer_id() {
+                    return Err(other(format!("add peer id {} <= max region peer id {}",
+                                             peer.get_peer_id(),
+                                             region.get_max_peer_id())));
+                }
+
+                region.set_max_peer_id(peer.get_peer_id());
+
+                // TODO: Do we allow adding peer in same node?
+
+                // Add this peer to cache.
+                self.peer_cache.write().unwrap().insert(peer.get_peer_id(), peer.clone());
+
+                region.mut_peers().push(peer.clone());
+            }
+            raftpb::ConfChangeType::ConfChangeRemoveNode => {
+                if !exists {
+                    return Err(other(format!("remove missing peer {:?} from store {}",
+                                             peer,
+                                             store_id)));
+                }
+
+                // Remove this peer from cache.
+                self.peer_cache.write().unwrap().remove(&peer.get_peer_id());
+
+                util::remove_peer(&mut region, store_id).unwrap();
+            }
+            raftpb::ConfChangeType::ConfChangeUpdateNode => {
+                return Err(other("unsupported conf chagne update node now"))
+            }
+        }
+
+        try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
+
+        // TODO: update route meta, now we only use 1 region, so no need to do it.
+
+        let resp = AdminResponse::new();
+        Ok((resp,
+            Some(ExecResult::ChangePeer {
+            change_type: change_type,
+            peer: peer.clone(),
+            region: region,
+        })))
     }
 
     fn execute_split(&mut self,

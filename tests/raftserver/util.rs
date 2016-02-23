@@ -16,8 +16,10 @@ use tikv::raftserver::store::*;
 use tikv::raftserver::{Result, other};
 use tikv::proto::metapb;
 use tikv::proto::raft_serverpb;
-use tikv::proto::raft_cmdpb::{Request, StatusRequest, RaftCommandRequest, RaftCommandResponse};
-use tikv::proto::raft_cmdpb::{CommandType, StatusCommandType};
+use tikv::proto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCommandRequest,
+                              RaftCommandResponse};
+use tikv::proto::raft_cmdpb::{CommandType, StatusCommandType, AdminCommandType};
+use tikv::proto::raftpb::ConfChangeType;
 use tikv::raft::INVALID_ID;
 
 pub struct StoreTransport {
@@ -124,6 +126,20 @@ pub fn new_status_request(region_id: u64,
 pub fn new_region_leader_cmd() -> StatusRequest {
     let mut cmd = StatusRequest::new();
     cmd.set_cmd_type(StatusCommandType::RegionLeader);
+    cmd
+}
+
+pub fn new_admin_request(region_id: u64, request: AdminRequest) -> RaftCommandRequest {
+    let mut req = new_base_request(region_id);
+    req.set_admin_request(request);
+    req
+}
+
+pub fn new_change_peer_cmd(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
+    let mut cmd = AdminRequest::new();
+    cmd.set_cmd_type(AdminCommandType::ChangePeer);
+    cmd.mut_change_peer().set_change_type(change_type);
+    cmd.mut_change_peer().set_peer(peer);
     cmd
 }
 
