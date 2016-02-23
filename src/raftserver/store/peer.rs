@@ -200,7 +200,6 @@ impl Peer {
                                            trans: &Arc<RwLock<T>>)
                                            -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
-            debug!("raft group is not ready for {}", self.peer_id);
             return Ok(None);
         }
 
@@ -245,6 +244,11 @@ impl Peer {
             cc.set_change_type(change_peer.get_change_type());
             cc.set_node_id(change_peer.get_peer().get_peer_id());
             cc.set_context(data);
+
+            info!("propose conf change {:?} peer {:?} at region {}",
+                  cc.get_change_type(),
+                  cc.get_node_id(),
+                  self.region_id);
 
             try!(self.raft_group.propose_conf_change(cc));
             reproposable = true;
@@ -413,6 +417,7 @@ impl Peer {
     fn handle_raft_entry_conf_change(&mut self,
                                      entry: &raftpb::Entry)
                                      -> Result<Option<ExecResult>> {
+
         let index = entry.get_index();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
@@ -471,6 +476,8 @@ impl Peer {
             if pending_cmd.cb.is_none() {
                 warn!("pending command callback for entry {} is None", index);
             } else {
+                // TODO: if we have exec_result, maybe we should return this callback too. Outer
+                // store will call it after handing exec result.
                 let cb = pending_cmd.cb.take().unwrap();
                 // Bind uuid here.
                 cmd_resp::bind_uuid(&mut resp, uuid);
@@ -574,6 +581,10 @@ impl Peer {
                              -> Result<(RaftCommandResponse, Option<ExecResult>)> {
         let request = ctx.request.get_admin_request();
         let cmd_type = request.get_cmd_type();
+        info!("execute admin command {:?} at region {}",
+              request,
+              self.region_id);
+
         let (mut response, exec_result) = try!(match cmd_type {
             cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
             cmd::AdminCommandType::Split => self.execute_split(ctx, request),
