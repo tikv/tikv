@@ -321,7 +321,7 @@ impl Peer {
         send_msg.set_region_id(self.region_id);
         send_msg.set_message(msg.clone());
 
-        let mut snap_status = SnapshotStatus::SnapshotFinish;
+        let mut snap_status = SnapshotStatus::Finish;
         let mut unreachable = false;
 
         let trans = trans.read().unwrap();
@@ -352,7 +352,7 @@ impl Peer {
                   e);
 
             unreachable = true;
-            snap_status = SnapshotStatus::SnapshotFailure;
+            snap_status = SnapshotStatus::Failure;
         }
 
         if unreachable {
