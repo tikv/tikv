@@ -29,7 +29,7 @@ fn test_simple_conf_change() {
     let engine_2 = cluster.get_engine(2);
     assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
     // add peer (2,2,2) to region 1.
-    cluster.change_peer(1, ConfChangeType::ConfChangeAddNode, new_peer(2, 2, 2));
+    cluster.change_peer(1, ConfChangeType::AddNode, new_peer(2, 2, 2));
 
     let (key, value) = (b"a2", b"v2");
     cluster.put(key, value);
@@ -42,9 +42,9 @@ fn test_simple_conf_change() {
                b"v2");
 
     // add peer (3, 3, 3) to region 1.
-    cluster.change_peer(1, ConfChangeType::ConfChangeAddNode, new_peer(3, 3, 3));
+    cluster.change_peer(1, ConfChangeType::AddNode, new_peer(3, 3, 3));
     // Remove peer (2, 2, 2) from region 1.
-    cluster.change_peer(1, ConfChangeType::ConfChangeRemoveNode, new_peer(2, 2, 2));
+    cluster.change_peer(1, ConfChangeType::RemoveNode, new_peer(2, 2, 2));
 
     let (key, value) = (b"a3", b"v3");
     cluster.put(key, value);
@@ -64,16 +64,16 @@ fn test_simple_conf_change() {
 
     // add peer 2 again, we can't add it.
     let change_peer = new_admin_request(1,
-                                        new_change_peer_cmd(ConfChangeType::ConfChangeAddNode,
+                                        new_change_peer_cmd(ConfChangeType::AddNode,
                                                             new_peer(2, 2, 2)));
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3))
                       .unwrap();
     assert!(is_error_response(&resp));
 
     // add peer (2, 2, 4) to region 1.
-    cluster.change_peer(1, ConfChangeType::ConfChangeAddNode, new_peer(2, 2, 4));
+    cluster.change_peer(1, ConfChangeType::AddNode, new_peer(2, 2, 4));
     // Remove peer (3, 3, 3) from region 1.
-    cluster.change_peer(1, ConfChangeType::ConfChangeRemoveNode, new_peer(3, 3, 3));
+    cluster.change_peer(1, ConfChangeType::RemoveNode, new_peer(3, 3, 3));
 
     let (key, value) = (b"a4", b"v4");
     cluster.put(key, value);
