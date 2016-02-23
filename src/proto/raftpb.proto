@@ -68,7 +68,6 @@ message ConfState {
 enum ConfChangeType {
     AddNode    = 0;
     RemoveNode = 1;
-    UpdateNode = 2;
 }
 
 message ConfChange {
