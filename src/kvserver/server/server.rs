@@ -388,3 +388,69 @@ impl mio::Handler for Server {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use mio::{EventLoop, Handler};
+
+    use proto::kvrpcpb::*;
+    use storage::{Key, Value, Storage, Dsn};
+    use storage::Error::Other;
+    use super::*;
+
+    #[test]
+    fn test_quit() {
+        use std::collections::HashMap;
+        use mio::tcp::TcpListener;
+        let mut event_loop = EventLoop::new().unwrap();
+        let sender = event_loop.channel();
+        let h = thread::spawn(move || {
+            let l: TcpListener = TcpListener::bind(&"127.0.0.1:64321".parse().unwrap()).unwrap();
+            let store: Storage = Storage::new(Dsn::Memory).unwrap();
+            let mut srv: Server = Server::new(l, HashMap::new(), store);
+            event_loop.run(&mut srv).unwrap();
+        });
+        // Without this thread will be hang.
+        let _ = sender.send(QueueMessage::Quit);
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn test_get_done_none() {
+        let actual_resp: Response = Server::cmd_get_done(Ok(None));
+        let mut exp_resp: Response = Response::new();
+        let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
+        exp_cmd_resp.set_ok(true);
+        exp_cmd_resp.set_value(Vec::new());
+        exp_resp.set_field_type(MessageType::CmdGet);
+        exp_resp.set_cmd_get_resp(exp_cmd_resp);
+        assert_eq!(exp_resp, actual_resp);
+    }
+
+    #[test]
+    fn test_get_done_some() {
+        let storage_val: Vec<_> = vec![0u8; 8];
+        let actual_resp: Response = Server::cmd_get_done(Ok(Some(storage_val)));
+        let mut exp_resp: Response = Response::new();
+        let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
+        exp_cmd_resp.set_ok(true);
+        exp_cmd_resp.set_value(vec![0u8; 8]);
+        exp_resp.set_field_type(MessageType::CmdGet);
+        exp_resp.set_cmd_get_resp(exp_cmd_resp);
+        assert_eq!(exp_resp, actual_resp);
+    }
+
+    #[test]
+    // #[should_panic]
+    fn test_get_done_error() {
+        let actual_resp: Response = Server::cmd_get_done(Err(Other(Box::new("error"))));
+        let mut exp_resp: Response = Response::new();
+        let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
+        exp_cmd_resp.set_ok(false);
+        exp_resp.set_field_type(MessageType::CmdGet);
+        exp_resp.set_cmd_get_resp(exp_cmd_resp);
+        assert_eq!(exp_resp, actual_resp);
+    }
+}
