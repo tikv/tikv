@@ -19,8 +19,7 @@ impl Scheduler {
     }
 
     fn exec_get(&self, key: Key, ts: u64) -> Result<Option<Value>> {
-        let txn = try!(self.store.start_row_transaction(key));
-        Ok(try!(txn.get(ts)))
+        Ok(try!(self.store.get(key, ts)))
     }
 
     fn exec_prewrite(&mut self,
@@ -32,18 +31,15 @@ impl Scheduler {
         let primary = Self::primary_key(&puts, &deletes, &locks);
         let mut locked_keys = Vec::<Key>::new();
         for (k, v) in puts {
-            let mut txn = try!(self.store.start_row_transaction(k.clone()));
-            try!(txn.prewrite(Prewrite::Put(v), primary.clone(), start_ts));
+            try!(self.store.prewrite(k.clone(), Prewrite::Put(v), primary.clone(), start_ts));
             locked_keys.push(k);
         }
         for k in deletes {
-            let mut txn = try!(self.store.start_row_transaction(k.clone()));
-            try!(txn.prewrite(Prewrite::Delete, primary.clone(), start_ts));
+            try!(self.store.prewrite(k.clone(), Prewrite::Delete, primary.clone(), start_ts));
             locked_keys.push(k);
         }
         for k in locks {
-            let mut txn = try!(self.store.start_row_transaction(k.clone()));
-            try!(txn.prewrite(Prewrite::Lock, primary.clone(), start_ts));
+            try!(self.store.prewrite(k.clone(), Prewrite::Lock, primary.clone(), start_ts));
             locked_keys.push(k);
         }
         self.lock_keys.insert(start_ts, locked_keys);
@@ -59,11 +55,9 @@ impl Scheduler {
             Some(x) => x,
             None => return Ok(()),
         };
-        let mut txn = try!(self.store.start_row_transaction(primary.clone()));
-        try!(txn.commit(start_ts, commit_ts));
+        try!(self.store.commit(primary.clone(), start_ts, commit_ts));
         for k in secondaries {
-            let mut txn = try!(self.store.start_row_transaction(k.clone()));
-            try!(txn.commit(start_ts, commit_ts));
+            try!(self.store.commit(k.clone(), start_ts, commit_ts));
         }
         Ok(())
     }

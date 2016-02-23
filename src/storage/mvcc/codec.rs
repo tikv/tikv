@@ -3,9 +3,9 @@ use super::{Result, Error};
 
 use util::codec::bytes;
 
-pub fn encode_key(key: &[u8], suffix: u64) -> Vec<u8> {
+pub fn encode_key(key: &[u8], ts: u64) -> Vec<u8> {
     let mut v = bytes::encode_bytes(key);
-    v.write_u64::<BigEndian>(suffix).unwrap();
+    v.write_u64::<BigEndian>(ts).unwrap();
     v
 }
 
