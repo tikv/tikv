@@ -117,7 +117,6 @@ impl Cluster {
                                   timeout: Duration)
                                   -> Option<RaftCommandResponse> {
         request.mut_header().set_peer(self.leader_of_region(region_id).clone().unwrap());
-        println!("{:?}", request);
         self.call_command(request, timeout)
     }
 

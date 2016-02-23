@@ -183,21 +183,17 @@ impl<T: Transport> Store<T> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
 
         for region_id in ids {
-            let ready_result = {
-                match self.peers.get_mut(&region_id) {
-                    None => None,
-                    Some(peer) => {
-                        match peer.handle_raft_ready(&self.trans) {
-                            Err(e) => {
-                                // TODO: should we panic here or shutdown the store?
-                                error!("handle raft ready at region {} err: {:?}", region_id, e);
-                                return Err(e);
-                            }
-                            Ok(ready) => ready,
-                        }
+            let mut ready_result = None;
+            if let Some(peer) = self.peers.get_mut(&region_id) {
+                match peer.handle_raft_ready(&self.trans) {
+                    Err(e) => {
+                        // TODO: should we panic here or shutdown the store?
+                        error!("handle raft ready at region {} err: {:?}", region_id, e);
+                        return Err(e);
                     }
+                    Ok(ready) => ready_result = ready,
                 }
-            };
+            }
 
             if let Some(ready_result) = ready_result {
                 if let Err(e) = self.handle_ready_result(region_id, ready_result) {
@@ -303,13 +299,10 @@ impl<T: Transport> Store<T> {
             cmd: Some(msg),
         };
 
-        match peer.propose_pending_cmd(&mut pending_cmd) {
-            Err(e) => {
-                resp = cmd_resp::message_error(format!("{:?}", e));
-                bind_uuid(&mut resp, uuid);
-                return cb.call_box((resp,));
-            }
-            Ok(()) => (), // nothing to do.
+        if let Err(e) = peer.propose_pending_cmd(&mut pending_cmd) {
+            resp = cmd_resp::message_error(format!("{:?}", e));
+            bind_uuid(&mut resp, uuid);
+            return cb.call_box((resp,));
         };
 
         // Keep the callback in pending_cmd so that we can call it later

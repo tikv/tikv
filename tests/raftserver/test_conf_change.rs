@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tikv::raftserver::store::*;
 use tikv::proto::raftpb::ConfChangeType;
 
@@ -6,7 +8,7 @@ use super::util::*;
 
 #[test]
 fn test_simple_conf_change() {
-    init_env_log();
+    // init_env_log();
 
     let count = 5;
     let mut cluster = Cluster::new(0, count);
@@ -24,6 +26,8 @@ fn test_simple_conf_change() {
     cluster.put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
+    let engine_2 = cluster.get_engine(2);
+    assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
     // add peer (2,2,2) to region 1.
     cluster.change_peer(1, ConfChangeType::ConfChangeAddNode, new_peer(2, 2, 2));
 
@@ -32,7 +36,6 @@ fn test_simple_conf_change() {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     // now peer 2 must have v1 and v2;
-    let engine_2 = cluster.get_engine(2);
     assert_eq!(&*engine_2.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
                b"v1");
     assert_eq!(&*engine_2.get_value(&keys::data_key(b"a2")).unwrap().unwrap(),
@@ -58,6 +61,35 @@ fn test_simple_conf_change() {
     // peer 2 has nothing
     assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
     assert!(engine_2.get_value(&keys::data_key(b"a2")).unwrap().is_none());
+
+    // add peer 2 again, we can't add it.
+    let change_peer = new_admin_request(1,
+                                        new_change_peer_cmd(ConfChangeType::ConfChangeAddNode,
+                                                            new_peer(2, 2, 2)));
+    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3))
+                      .unwrap();
+    assert!(is_error_response(&resp));
+
+    // add peer (2, 2, 4) to region 1.
+    cluster.change_peer(1, ConfChangeType::ConfChangeAddNode, new_peer(2, 2, 4));
+    // Remove peer (3, 3, 3) from region 1.
+    cluster.change_peer(1, ConfChangeType::ConfChangeRemoveNode, new_peer(3, 3, 3));
+
+    let (key, value) = (b"a4", b"v4");
+    cluster.put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+    // now peer 4 in store 2 must have v1, v2, v3, v4, we check v1 and v4 here.
+    let engine_2 = cluster.get_engine(2);
+
+    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
+               b"v1");
+    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a4")).unwrap().unwrap(),
+               b"v4");
+
+    // peer 3 has nothing, we check v1 and v4 here.
+    assert!(engine_3.get_value(&keys::data_key(b"a1")).unwrap().is_none());
+    assert!(engine_3.get_value(&keys::data_key(b"a4")).unwrap().is_none());
+
 
     // TODO: add more tests.
 }
