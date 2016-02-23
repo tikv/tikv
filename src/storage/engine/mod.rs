@@ -1,26 +1,28 @@
-use self::memory::EngineBtree;
 use std::{error, result};
+use std::fmt::Debug;
+use self::memory::EngineBtree;
 use self::rocksdb::EngineRocksdb;
+use storage::{Key, RefKey, Value, KvPair};
 
 mod memory;
 mod rocksdb;
 
 #[derive(Debug)]
-pub enum Modify<'a> {
-    Delete(&'a [u8]),
-    Put((&'a [u8], &'a [u8])),
+pub enum Modify {
+    Delete(Key),
+    Put(KvPair),
 }
 
-pub trait Engine : Send + Sync {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
-    fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>>;
+pub trait Engine : Send + Sync + Debug {
+    fn get(&self, key: RefKey) -> Result<Option<Value>>;
+    fn seek(&self, key: RefKey) -> Result<Option<KvPair>>;
     fn write(&self, batch: Vec<Modify>) -> Result<()>;
 
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put(&self, key: Key, value: Value) -> Result<()> {
         self.write(vec![Modify::Put((key, value))])
     }
 
-    fn delete(&self, key: &[u8]) -> Result<()> {
+    fn delete(&self, key: Key) -> Result<()> {
         self.write(vec![Modify::Delete(key)])
     }
 }
@@ -31,8 +33,8 @@ pub enum Dsn<'a> {
     RocksDBPath(&'a str),
 }
 
-pub fn new_engine(desc: Dsn) -> Result<Box<Engine>> {
-    match desc {
+pub fn new_engine(dsn: Dsn) -> Result<Box<Engine>> {
+    match dsn {
         Dsn::Memory => Ok(Box::new(EngineBtree::new())),
         Dsn::RocksDBPath(path) => {
             EngineRocksdb::new(path).map(|engine| -> Box<Engine> { Box::new(engine) })
@@ -55,24 +57,32 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use super::{Dsn, Engine, Modify};
+    use super::*;
     use tempdir::TempDir;
 
     #[test]
     fn memory() {
-        let mut e = super::new_engine(Dsn::Memory).unwrap();
-        get_put(e.as_mut());
-        batch(e.as_mut());
-        seek(e.as_mut());
+        let e = new_engine(Dsn::Memory).unwrap();
+        get_put(e.as_ref());
+        batch(e.as_ref());
+        seek(e.as_ref());
     }
 
     #[test]
     fn rocksdb() {
         let dir = TempDir::new("rocksdb_test").unwrap();
-        let mut e = super::new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap())).unwrap();
-        get_put(e.as_mut());
-        batch(e.as_mut());
-        seek(e.as_mut());
+        let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap())).unwrap();
+        get_put(e.as_ref());
+        batch(e.as_ref());
+        seek(e.as_ref());
+    }
+
+    fn must_put<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
+        engine.put(key.to_vec(), value.to_vec()).unwrap();
+    }
+
+    fn must_delete<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
+        engine.delete(key.to_vec()).unwrap();
     }
 
     fn assert_has<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
@@ -88,33 +98,36 @@ mod tests {
         assert_eq!((&k as &[u8], &v as &[u8]), pair);
     }
 
-    fn get_put<T: Engine + ?Sized>(engine: &mut T) {
+    fn get_put<T: Engine + ?Sized>(engine: &T) {
         assert_none(engine, b"x");
-        engine.put(b"x", b"1").unwrap();
+        must_put(engine, b"x", b"1");
         assert_has(engine, b"x", b"1");
-        engine.put(b"x", b"2").unwrap();
+        must_put(engine, b"x", b"2");
         assert_has(engine, b"x", b"2");
     }
 
-    fn batch<T: Engine + ?Sized>(engine: &mut T) {
-        engine.write(vec![Modify::Put((b"x", b"1")), Modify::Put((b"y", b"2"))]).unwrap();
+    fn batch<T: Engine + ?Sized>(engine: &T) {
+        engine.write(vec![Modify::Put((b"x".to_vec(), b"1".to_vec())),
+                          Modify::Put((b"y".to_vec(), b"2".to_vec()))])
+              .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
-        engine.write(vec![Modify::Delete(b"x"), Modify::Delete(b"y")]).unwrap();
+        engine.write(vec![Modify::Delete(b"x".to_vec()), Modify::Delete(b"y".to_vec())])
+              .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
     }
 
-    fn seek<T: Engine + ?Sized>(engine: &mut T) {
-        engine.put(b"x", b"1").unwrap();
+    fn seek<T: Engine + ?Sized>(engine: &T) {
+        must_put(engine, b"x", b"1");
         assert_seek(engine, b"x", (b"x", b"1"));
         assert_seek(engine, b"a", (b"x", b"1"));
-        engine.put(b"z", b"2").unwrap();
+        must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
         assert_eq!(engine.seek(b"z\x00").unwrap(), None);
-        engine.delete(b"x").unwrap();
-        engine.delete(b"z").unwrap();
+        must_delete(engine, b"x");
+        must_delete(engine, b"z");
     }
 }
