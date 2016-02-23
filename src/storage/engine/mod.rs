@@ -57,12 +57,12 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use super::{Dsn, Engine, Modify};
+    use super::*;
     use tempdir::TempDir;
 
     #[test]
     fn memory() {
-        let e = super::new_engine(Dsn::Memory).unwrap();
+        let e = new_engine(Dsn::Memory).unwrap();
         get_put(e.as_ref());
         batch(e.as_ref());
         seek(e.as_ref());
@@ -71,7 +71,8 @@ mod tests {
     #[test]
     fn rocksdb() {
         let dir = TempDir::new("rocksdb_test").unwrap();
-        let e = super::new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap())).unwrap();
+        let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap())).unwrap();
+
         get_put(e.as_ref());
         batch(e.as_ref());
         seek(e.as_ref());

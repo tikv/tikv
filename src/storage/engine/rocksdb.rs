@@ -42,24 +42,24 @@ impl Engine for EngineRocksdb {
     }
 
     fn write(&self, batch: Vec<Modify>) -> Result<()> {
-        let write_batch = WriteBatch::new();
+        let wb = WriteBatch::new();
         for rev in batch {
             match rev {
                 Modify::Delete(k) => {
                     trace!("EngineRocksdb: delete {:?}", k);
-                    if let Err(msg) = write_batch.delete(&k) {
+                    if let Err(msg) = wb.delete(&k) {
                         return Err(RocksDBError::new(msg).to_engine_error());
                     }
                 }
                 Modify::Put((k, v)) => {
                     trace!("EngineRocksdb: put {:?},{:?}", k, v);
-                    if let Err(msg) = write_batch.put(&k, &v) {
+                    if let Err(msg) = wb.put(&k, &v) {
                         return Err(RocksDBError::new(msg).to_engine_error());
                     }
                 }
             }
         }
-        if let Err(msg) = self.db.write(write_batch) {
+        if let Err(msg) = self.db.write(wb) {
             return Err(RocksDBError::new(msg).to_engine_error());
         }
         Ok(())
