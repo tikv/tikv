@@ -609,7 +609,7 @@ impl Peer {
         let exists = util::find_peer(&region, store_id).is_some();
         let change_type = request.get_change_type();
         match change_type {
-            raftpb::ConfChangeType::ConfChangeAddNode => {
+            raftpb::ConfChangeType::AddNode => {
                 if exists {
                     return Err(other(format!("add duplicated peer {:?} to store {}",
                                              peer,
@@ -631,7 +631,7 @@ impl Peer {
 
                 region.mut_peers().push(peer.clone());
             }
-            raftpb::ConfChangeType::ConfChangeRemoveNode => {
+            raftpb::ConfChangeType::RemoveNode => {
                 if !exists {
                     return Err(other(format!("remove missing peer {:?} from store {}",
                                              peer,
@@ -642,9 +642,6 @@ impl Peer {
                 self.peer_cache.write().unwrap().remove(&peer.get_peer_id());
 
                 util::remove_peer(&mut region, store_id).unwrap();
-            }
-            raftpb::ConfChangeType::ConfChangeUpdateNode => {
-                return Err(other("unsupported conf chagne update node now"))
             }
         }
 

@@ -96,7 +96,7 @@ fn test_raw_node_propose_and_conf_change() {
         if !proposed && rd.ss.is_some() && rd.ss.as_ref().unwrap().lead == raw_node.raft.id {
             raw_node.propose(b"somedata".to_vec()).expect("");
 
-            let cc = conf_change(ConfChangeType::ConfChangeAddNode, 1);
+            let cc = conf_change(ConfChangeType::AddNode, 1);
             ccdata = protobuf::Message::write_to_bytes(&cc).unwrap();
             raw_node.propose_conf_change(cc).expect("");
 
@@ -124,7 +124,7 @@ fn test_raw_node_propose_and_conf_change() {
 // proposals.
 #[test]
 fn test_raw_node_start() {
-    let cc = conf_change(ConfChangeType::ConfChangeAddNode, 1);
+    let cc = conf_change(ConfChangeType::AddNode, 1);
     let ccdata = protobuf::Message::write_to_bytes(&cc).unwrap();
     let wants = vec![new_ready(Some(soft_state(1, StateRole::Leader)),
                                Some(hard_state(2, 2, 1)),
