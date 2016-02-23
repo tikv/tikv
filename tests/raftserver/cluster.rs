@@ -13,6 +13,7 @@ use tikv::raftserver::store::*;
 use super::util::*;
 use tikv::proto::raft_cmdpb::*;
 use tikv::proto::metapb;
+use tikv::proto::raftpb::ConfChangeType;
 
 // We simulate 3 or 5 nodes, each has a store, the node id and store id are same.
 // E,g, for node 1, the node id and store id are both 1.
@@ -96,6 +97,10 @@ impl Cluster {
         &self.senders
     }
 
+    pub fn get_engine(&self, store_id: u64) -> Arc<DB> {
+        self.engines.get(&store_id).unwrap().clone()
+    }
+
     pub fn call_command(&self,
                         request: RaftCommandRequest,
                         timeout: Duration)
@@ -112,6 +117,7 @@ impl Cluster {
                                   timeout: Duration)
                                   -> Option<RaftCommandResponse> {
         request.mut_header().set_peer(self.leader_of_region(region_id).clone().unwrap());
+        println!("{:?}", request);
         self.call_command(request, timeout)
     }
 
@@ -159,6 +165,16 @@ impl Cluster {
             try!(write_first_region(&engine, &region));
         }
         Ok(())
+    }
+
+    // 5 store, and store 1 bootstraps first region.
+    pub fn bootstrap_conf_change(&self) {
+        for (&id, engine) in &self.engines {
+            bootstrap_store(engine.clone(), self.id, id, id).unwrap();
+        }
+
+        let store_id = 1;
+        bootstrap_region(self.engines.get(&store_id).unwrap().clone()).unwrap();
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {
@@ -221,6 +237,17 @@ impl Cluster {
         let resp = self.call_command_on_leader(1, delete, Duration::from_secs(3)).unwrap();
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Delete);
+    }
+
+    pub fn change_peer(&mut self,
+                       region_id: u64,
+                       change_type: ConfChangeType,
+                       peer: metapb::Peer) {
+        let change_peer = new_admin_request(region_id, new_change_peer_cmd(change_type, peer));
+        let resp = self.call_command_on_leader(region_id, change_peer, Duration::from_secs(3))
+                       .unwrap();
+        assert_eq!(resp.get_admin_response().get_cmd_type(),
+                   AdminCommandType::ChangePeer);
     }
 }
 

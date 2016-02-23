@@ -220,15 +220,16 @@ impl<T: Transport> Store<T> {
                     // We only care remove itself now.
                     if *change_type == ConfChangeType::ConfChangeRemoveNode &&
                        peer.get_store_id() == self.get_store_id() {
+                        info!("destory peer {:?} for region {}", peer, region_id);
                         // The remove peer is in the same store.
                         // TODO: should we check None here?
                         // Can we destroy it in another thread later?
-                        let mut peer = self.peers.remove(&region_id).unwrap();
-                        try!(peer.destroy());
+                        let mut p = self.peers.remove(&region_id).unwrap();
+                        try!(p.destroy());
                     }
                 }
             }
-
+            // TODO: should we need to call command callback here?
         }
 
         Ok(())
