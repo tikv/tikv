@@ -9,13 +9,14 @@ use uuid::Uuid;
 
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
 use proto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
+use proto::raftpb::ConfChangeType;
 use raftserver::{Result, other};
 use proto::metapb;
 use super::{SendCh, Msg};
 use super::keys;
 use super::engine::Retriever;
 use super::config::Config;
-use super::peer::{Peer, PendingCmd};
+use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
@@ -179,18 +180,52 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_raft_ready(&mut self) -> Result<()> {
-        let ids = self.pending_raft_groups.drain();
+        let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
 
         for region_id in ids {
+            let mut ready_result = None;
             if let Some(peer) = self.peers.get_mut(&region_id) {
-                if let Err(e) = peer.handle_raft_ready(&self.trans) {
-                    // TODO: should we panic here or shutdown the store?
-                    error!("handle raft ready at region {} err: {:?}", region_id, e);
+                match peer.handle_raft_ready(&self.trans) {
+                    Err(e) => {
+                        // TODO: should we panic here or shutdown the store?
+                        error!("handle raft ready at region {} err: {:?}", region_id, e);
+                        return Err(e);
+                    }
+                    Ok(ready) => ready_result = ready,
+                }
+            }
+
+            if let Some(ready_result) = ready_result {
+                if let Err(e) = self.handle_ready_result(region_id, ready_result) {
+                    error!("handle raft ready result at region {} err: {:?}",
+                           region_id,
+                           e);
                     return Err(e);
                 }
-
-                // TODO: handle ready result later.
             }
+        }
+
+        Ok(())
+    }
+
+    fn handle_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
+        // handle executing committed log results
+        for result in &ready_result.exec_results {
+            match *result {
+                ExecResult::ChangePeer{ref change_type, ref peer, ..} => {
+                    // We only care remove itself now.
+                    if *change_type == ConfChangeType::ConfChangeRemoveNode &&
+                       peer.get_store_id() == self.get_store_id() {
+                        info!("destory peer {:?} for region {}", peer, region_id);
+                        // The remove peer is in the same store.
+                        // TODO: should we check None here?
+                        // Can we destroy it in another thread later?
+                        let mut p = self.peers.remove(&region_id).unwrap();
+                        try!(p.destroy());
+                    }
+                }
+            }
+            // TODO: should we need to call command callback here?
         }
 
         Ok(())
@@ -264,13 +299,10 @@ impl<T: Transport> Store<T> {
             cmd: Some(msg),
         };
 
-        match peer.propose_pending_cmd(&mut pending_cmd) {
-            Err(e) => {
-                resp = cmd_resp::message_error(format!("{:?}", e));
-                bind_uuid(&mut resp, uuid);
-                return cb.call_box((resp,));
-            }
-            Ok(()) => (), // nothing to do.
+        if let Err(e) = peer.propose_pending_cmd(&mut pending_cmd) {
+            resp = cmd_resp::message_error(format!("{:?}", e));
+            bind_uuid(&mut resp, uuid);
+            return cb.call_box((resp,));
         };
 
         // Keep the callback in pending_cmd so that we can call it later
