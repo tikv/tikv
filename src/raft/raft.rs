@@ -214,7 +214,7 @@ impl<T: Storage> Raft<T> {
         }
         let term = r.term;
         r.become_follower(term, INVALID_ID);
-        let nodes_str = r.nodes().iter().fold(String::new(), |b, n| b + &format!("{}", n));
+        let nodes_str = r.nodes().iter().fold(String::new(), |b, n| b + &n.to_string());
         info!("newRaft {:x} [peers: [{}], term: {:?}, commit: {}, applied: {}, last_index: {}, \
                last_term: {}]",
               r.id,
