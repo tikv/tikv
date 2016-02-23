@@ -4,7 +4,7 @@ use std::fmt;
 
 use storage::{Key, RefKey, Value};
 use storage::engine::{Engine, Modify};
-use proto::mvccpb::{MetaLock, MetaItem};
+use proto::mvccpb::{MetaLock, MetaLock_Type, MetaItem};
 use util::codec::bytes;
 use super::meta::Meta;
 use super::codec;
@@ -138,12 +138,12 @@ impl<'a> RowTxn<'a> {
         }
 
         let mut lock = MetaLock::new();
+        lock.set_field_type(match args {
+            Prewrite::Lock => MetaLock_Type::ReadOnly,
+            _ => MetaLock_Type::ReadWrite,
+        });
         lock.set_primary_key(primary);
         lock.set_start_ts(ts);
-        lock.set_read_only(match args {
-            Prewrite::Lock => true,
-            _ => false,
-        });
         self.meta.set_lock(lock);
         let modify = Modify::Put((self.meta_key.clone(), self.meta_bytes()));
         self.writes.push(modify);
@@ -156,11 +156,11 @@ impl<'a> RowTxn<'a> {
     }
 
     pub fn commit(&mut self, start_ts: u64, commit_ts: u64) -> Result<()> {
-        let read_only = match self.meta.get_lock() {
-            Some(lock) if lock.get_start_ts() == start_ts => lock.get_read_only(),
+        let lock_type = match self.meta.get_lock() {
+            Some(lock) if lock.get_start_ts() == start_ts => lock.get_field_type(),
             _ => return Err(Error::TxnAbortedWhileWorking),
         };
-        if !read_only {
+        if lock_type == MetaLock_Type::ReadWrite {
             let mut item = MetaItem::new();
             item.set_start_ts(start_ts);
             item.set_commit_ts(commit_ts);
@@ -176,7 +176,7 @@ impl<'a> RowTxn<'a> {
     pub fn rollback(&mut self, start_ts: u64) -> Result<()> {
         match self.meta.get_lock() {
             Some(lock) if lock.get_start_ts() == start_ts => {
-                if !lock.get_read_only() {
+                if lock.get_field_type() == MetaLock_Type::ReadWrite {
                     let value_key = codec::encode_key(&self.row_key, lock.get_start_ts());
                     self.writes.push(Modify::Delete(value_key));
                 }
