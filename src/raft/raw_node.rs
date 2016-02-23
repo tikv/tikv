@@ -242,7 +242,7 @@ impl<T: Storage> RawNode<T> {
         if is_local_msg(&m) {
             return Err(Error::StepLocalMsg);
         }
-        if self.raft.prs.contains_key(&m.get_from()) || is_response_msg(&m) {
+        if self.raft.prs.contains_key(&m.get_from()) || !is_response_msg(&m) {
             return self.raft.step(m);
         }
         Err(Error::StepPeerNotFound)

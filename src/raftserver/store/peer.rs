@@ -83,6 +83,15 @@ impl Peer {
                                    region_id: u64,
                                    peer_id: u64)
                                    -> Result<Peer> {
+        // we must first check the peer id validation.
+        let last_max_id = try!(store.get_engine().get_u64(&keys::region_tombstone_key(region_id)));
+        if let Some(last_max_id) = last_max_id {
+            if peer_id <= last_max_id {
+                // We receive a stale message and we can't re-create the peer with the peer id.
+                return Err(other(format!("peer id {} <= tombstone id {}", peer_id, last_max_id)));
+            }
+        }
+
         let mut region = metapb::Region::new();
         region.set_region_id(region_id);
         Peer::new(store, region, peer_id)
@@ -146,6 +155,10 @@ impl Peer {
                                                try!(batch.delete(key));
                                                Ok(true)
                                            }));
+
+        // set the tombstone key here.
+        try!(batch.put_u64(&keys::region_tombstone_key(self.region_id),
+                           self.get_region().get_max_peer_id()));
 
         try!(self.engine.write(batch));
 

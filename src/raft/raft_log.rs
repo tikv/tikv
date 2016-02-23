@@ -105,7 +105,7 @@ impl<T> RaftLog<T>
 
 
     // find_conflict finds the index of the conflict.
-    // It returns the first pair of conflicting entries between the existing
+    // It returns the first index of conflicting entries between the existing
     // entries and the given entries, if there are any.
     // If there is no conflicting entries, and the existing entries contain
     // all the given entries, zero will be returned.
@@ -131,26 +131,18 @@ impl<T> RaftLog<T>
     }
 
     pub fn zero_term_on_err_compacted(&self, res: Result<u64>) -> u64 {
-        match res {
-            Ok(term) => term,
-            Err(e) => {
-                if e == Error::Store(StorageError::Compacted) {
-                    return 0;
-                }
-                panic!(e)
-            }
+        if let Err(Error::Store(StorageError::Compacted)) = res {
+            panic!(res.unwrap_err());
         }
+        res.unwrap_or(0)
     }
 
     pub fn match_term(&self, idx: u64, term: u64) -> bool {
-        match self.term(idx) {
-            Ok(t) => t == term,
-            Err(_) => false,
-        }
+        self.term(idx).map(|t| t == term).unwrap_or(false)
     }
 
     // maybe_append returns None if the entries cannot be appended. Otherwise,
-    // it returns (last index of new entries, true).
+    // it returns Some(last index of new entries).
     pub fn maybe_append(&mut self,
                         idx: u64,
                         term: u64,
@@ -159,15 +151,15 @@ impl<T> RaftLog<T>
                         -> Option<u64> {
         let last_new_index = idx + ents.len() as u64;
         if self.match_term(idx, term) {
-            let commit_idx = self.find_conflict(ents);
-            if commit_idx == 0 {
-            } else if commit_idx < self.committed {
+            let conflict_idx = self.find_conflict(ents);
+            if conflict_idx == 0 {
+            } else if conflict_idx < self.committed {
                 panic!("entry {} conflict with committed entry {}",
-                       commit_idx,
+                       conflict_idx,
                        self.committed)
             } else {
                 let offset = idx + 1;
-                self.append(&ents[(commit_idx - offset) as usize..]);
+                self.append(&ents[(conflict_idx - offset) as usize..]);
             }
             self.commit_to(cmp::min(committed, last_new_index));
             return Some(last_new_index);
@@ -177,14 +169,15 @@ impl<T> RaftLog<T>
 
     pub fn commit_to(&mut self, to_commit: u64) {
         // never decrease commit
-        if self.committed < to_commit {
-            if self.last_index() < to_commit {
-                panic!("to_commit {} is out of range [last_index {}]",
-                       to_commit,
-                       self.last_index())
-            }
-            self.committed = to_commit;
+        if self.committed >= to_commit {
+            return;
         }
+        if self.last_index() < to_commit {
+            panic!("to_commit {} is out of range [last_index {}]",
+                   to_commit,
+                   self.last_index())
+        }
+        self.committed = to_commit;
     }
 
     pub fn applied_to(&mut self, idx: u64) {
@@ -241,7 +234,7 @@ impl<T> RaftLog<T>
     pub fn entries(&self, idx: u64, max_size: u64) -> Result<Vec<Entry>> {
         let last = self.last_index();
         if idx > last {
-            return Ok(Vec::<Entry>::new());
+            return Ok(Vec::new());
         }
         self.slice(idx, last + 1, max_size)
     }
@@ -261,10 +254,15 @@ impl<T> RaftLog<T>
         }
     }
 
+    // is_up_to_date determines if the given (lastIndex,term) log is more up-to-date
+    // by comparing the index and term of the last entry in the existing logs.
+    // If the logs have last entry with different terms, then the log with the
+    // later term is more up-to-date. If the logs end with the same term, then
+    // whichever log has the larger last_index is more up-to-date. If the logs are
+    // the same, the given log is up-to-date.
     pub fn is_up_to_date(&self, last_index: u64, term: u64) -> bool {
         term > self.last_term() || (term == self.last_term() && last_index >= self.last_index())
     }
-
 
     // next_entries returns all the available entries for execution.
     // If applied is smaller than the index of snapshot, it returns all committed

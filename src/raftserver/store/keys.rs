@@ -47,6 +47,7 @@ pub const RAFT_TRUNCATED_STATE_SUFFIX: u8 = 0x05;
 
 // For region meta
 pub const REGION_INFO_SUFFIX: u8 = 0x01;
+pub const REGION_TOMBSTONE_SUFFIX: u8 = 0x02;
 
 pub fn store_ident_key() -> Vec<u8> {
     STORE_IDENT_KEY.to_vec()
@@ -134,6 +135,13 @@ pub fn region_meta_prefix(region_id: u64) -> Vec<u8> {
 
 pub fn region_info_key(region_id: u64) -> Vec<u8> {
     make_region_meta_key(region_id, REGION_INFO_SUFFIX)
+}
+
+// When a peer is destroyed, we would record current region max peer id as
+// the tombstone value, any peer for this region with a peer id <= tombstone
+// value is not allowed to create in this store.
+pub fn region_tombstone_key(region_id: u64) -> Vec<u8> {
+    make_region_meta_key(region_id, REGION_TOMBSTONE_SUFFIX)
 }
 
 // Returns a region route meta (meta1, meta2) indexing key for the
