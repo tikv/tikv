@@ -65,7 +65,7 @@ pub struct Config {
     /// max_inflight_msgs limits the max number of in-flight append messages during optimistic
     /// replication phase. The application transportation layer usually has its own sending
     /// buffer over TCP/UDP. Setting MaxInflightMsgs to avoid overflowing that sending buffer.
-    /// TODO (xiangli): feedback to application to limit the proposal rate?
+    /// TODO: feedback to application to limit the proposal rate?
     pub max_inflight_msgs: usize,
 
     /// check_quorum specifies if the leader should check quorum activity. Leader steps down when
@@ -176,7 +176,7 @@ impl<T: Storage> Raft<T> {
         let mut peers: &[u64] = &c.peers;
         if rs.conf_state.get_nodes().len() > 0 {
             if peers.len() > 0 {
-                // TODO(bdarnell): the peers argument is always nil except in
+                // TODO: the peers argument is always nil except in
                 // tests; the argument should be removed and these tests should be
                 // updated to specify their nodes through a snap
                 panic!("cannot specify both new(peers) and ConfState.Nodes")
