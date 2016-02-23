@@ -39,12 +39,6 @@ impl Meta {
         self.pb.clear_lock();
     }
 
-    pub fn alloc_suffix(&mut self) -> u64 {
-        let current = self.pb.get_next_suffix();
-        self.pb.set_next_suffix(current + 1);
-        current
-    }
-
     pub fn iter_items(&self) -> Iter<MetaItem> {
         self.pb.get_items().iter()
     }
@@ -66,35 +60,25 @@ mod tests {
             let mut item = MetaItem::new();
             item.set_start_ts(1);
             item.set_commit_ts(2);
-            item.set_key_suffix(3);
             item
         });
         meta.push_item({
             let mut item = MetaItem::new();
-            item.set_start_ts(4);
-            item.set_commit_ts(5);
-            item.set_key_suffix(6);
+            item.set_start_ts(3);
+            item.set_commit_ts(4);
             item
         });
-
-        assert_eq!(meta.alloc_suffix(), 0);
-        assert_eq!(meta.alloc_suffix(), 1);
 
         let mut data = vec![];
         meta.write_to(&mut data);
 
-        let mut meta2 = Meta::parse(&data).unwrap();
-        {
-            let items: Vec<&_> = meta2.iter_items().collect();
-            assert_eq!(items.len(), 2);
-            assert_eq!(items[0].get_start_ts(), 4);
-            assert_eq!(items[0].get_commit_ts(), 5);
-            assert_eq!(items[0].get_key_suffix(), 6);
-            assert_eq!(items[1].get_start_ts(), 1);
-            assert_eq!(items[1].get_commit_ts(), 2);
-            assert_eq!(items[1].get_key_suffix(), 3);
-        }
-        assert_eq!(meta2.alloc_suffix(), 2);
+        let meta2 = Meta::parse(&data).unwrap();
+        let items: Vec<&_> = meta2.iter_items().collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].get_start_ts(), 3);
+        assert_eq!(items[0].get_commit_ts(), 4);
+        assert_eq!(items[1].get_start_ts(), 1);
+        assert_eq!(items[1].get_commit_ts(), 2);
     }
 
     #[test]
@@ -104,14 +88,12 @@ mod tests {
         let mut lock = MetaLock::new();
         lock.set_start_ts(1);
         lock.set_primary_key(b"pk".to_vec());
-        lock.set_key_suffix(2);
         meta.set_lock(lock);
 
         {
             let lock = meta.get_lock().unwrap();
             assert_eq!(lock.get_start_ts(), 1);
             assert_eq!(lock.get_primary_key(), b"pk");
-            assert_eq!(lock.get_key_suffix(), 2);
             assert_eq!(lock.get_read_only(), false);
         }
 

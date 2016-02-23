@@ -4,18 +4,15 @@ package mvccpb;
 message MetaItem {
     optional uint64 start_ts   = 1;
     optional uint64 commit_ts  = 2;
-    optional uint64 key_suffix = 3;
 }
 
 message MetaLock {
     optional uint64 start_ts    = 1;
     optional bytes  primary_key = 2;
-    optional uint64 key_suffix  = 3;
-    optional bool   read_only   = 4;
+    optional bool   read_only   = 3;
 }
 
 message Meta {
     optional MetaLock lock        = 1;
     repeated MetaItem items       = 2;
-    optional uint64   next_suffix = 3;
 }
