@@ -16,8 +16,8 @@ pub struct Peer {
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum SnapshotStatus {
-    SnapshotFinish,
-    SnapshotFailure,
+    Finish,
+    Failure,
 }
 
 fn is_local_msg(m: &Message) -> bool {
@@ -296,7 +296,7 @@ impl<T: Storage> RawNode<T> {
 
     // ReportSnapshot reports the status of the sent snapshot.
     pub fn report_snapshot(&mut self, id: u64, status: SnapshotStatus) {
-        let rej = status == SnapshotStatus::SnapshotFailure;
+        let rej = status == SnapshotStatus::Failure;
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgSnapStatus);
         m.set_from(id);
