@@ -1867,7 +1867,7 @@ fn test_commit_after_remove_node() {
     let mut e = Entry::new();
     e.set_entry_type(EntryType::EntryConfChange);
     let mut cc = ConfChange::new();
-    cc.set_change_type(ConfChangeType::ConfChangeRemoveNode);
+    cc.set_change_type(ConfChangeType::RemoveNode);
     cc.set_node_id(2);
     e.set_data(protobuf::Message::write_to_bytes(&cc).unwrap());
     m.mut_entries().push(e);

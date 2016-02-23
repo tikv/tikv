@@ -214,7 +214,7 @@ impl<T: Transport> Store<T> {
             match *result {
                 ExecResult::ChangePeer{ref change_type, ref peer, ..} => {
                     // We only care remove itself now.
-                    if *change_type == ConfChangeType::ConfChangeRemoveNode &&
+                    if *change_type == ConfChangeType::RemoveNode &&
                        peer.get_store_id() == self.get_store_id() {
                         info!("destory peer {:?} for region {}", peer, region_id);
                         // The remove peer is in the same store.
