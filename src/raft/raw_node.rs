@@ -127,7 +127,7 @@ impl<T: Storage> RawNode<T> {
             let mut ents = Vec::with_capacity(peers.len());
             for (i, peer) in peers.iter().enumerate() {
                 let mut cc = ConfChange::new();
-                cc.set_change_type(ConfChangeType::ConfChangeAddNode);
+                cc.set_change_type(ConfChangeType::AddNode);
                 cc.set_node_id(peer.id);
                 if peer.context.is_some() {
                     cc.set_context(peer.context.as_ref().unwrap().clone());
@@ -227,9 +227,8 @@ impl<T: Storage> RawNode<T> {
         let nid = cc.get_node_id();
         assert!(cc.has_change_type(), "unexpected conf type");
         match cc.get_change_type() {
-            ConfChangeType::ConfChangeAddNode => self.raft.add_node(nid),
-            ConfChangeType::ConfChangeRemoveNode => self.raft.remove_node(nid),
-            ConfChangeType::ConfChangeUpdateNode => self.raft.reset_pending_conf(),
+            ConfChangeType::AddNode => self.raft.add_node(nid),
+            ConfChangeType::RemoveNode => self.raft.remove_node(nid),
         }
         let mut cs = ConfState::new();
         cs.set_nodes(self.raft.nodes());
