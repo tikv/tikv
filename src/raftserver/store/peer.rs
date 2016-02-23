@@ -611,8 +611,18 @@ impl Peer {
         match change_type {
             raftpb::ConfChangeType::ConfChangeAddNode => {
                 if exists {
-                    return Err(other(format!("add duplicated peer {:?}", peer)));
+                    return Err(other(format!("add duplicated peer {:?} to store {}",
+                                             peer,
+                                             store_id)));
                 }
+
+                if peer.get_peer_id() <= region.get_max_peer_id() {
+                    return Err(other(format!("add peer id {} <= max region peer id {}",
+                                             peer.get_peer_id(),
+                                             region.get_max_peer_id())));
+                }
+
+                region.set_max_peer_id(peer.get_peer_id());
 
                 // TODO: Do we allow adding peer in same node?
 
@@ -623,7 +633,9 @@ impl Peer {
             }
             raftpb::ConfChangeType::ConfChangeRemoveNode => {
                 if !exists {
-                    return Err(other(format!("remove missing peer {:?}", peer)));
+                    return Err(other(format!("remove missing peer {:?} from store {}",
+                                             peer,
+                                             store_id)));
                 }
 
                 // Remove this peer from cache.
