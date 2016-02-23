@@ -341,6 +341,7 @@ impl Server {
     }
 }
 
+#[allow(dead_code)]
 pub enum QueueMessage {
     // Request(token, msg_id, kvrpc_request)
     Request(Token, u64, Request),
