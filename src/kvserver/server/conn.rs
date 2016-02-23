@@ -10,7 +10,7 @@ use util::codec::rpc;
 use kvserver::Result;
 use super::server::{Server, QueueMessage};
 
-// alloc exactly s length
+// Alloc exactly s length.
 fn create_mem_buf(s: usize) -> MutByteBuf {
     unsafe {
         ByteBuf::from_mem_ref(alloc::heap(s.next_power_of_two()), s as u32, 0, s as u32).flip()
