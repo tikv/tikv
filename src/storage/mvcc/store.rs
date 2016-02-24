@@ -42,14 +42,14 @@ impl MvccStore {
         RowTxn::new(self.engine.as_ref(), key, guard)
     }
 
-    pub fn get(&self, key: Key, ts: u64) -> Result<Option<Value>> {
+    pub fn get(&self, key: Key, start_ts: u64) -> Result<Option<Value>> {
         let txn = try!(self.start_row_transaction(key));
-        txn.get(ts)
+        txn.get(start_ts)
     }
 
-    pub fn prewrite(&self, key: Key, args: Prewrite, primary: Key, ts: u64) -> Result<()> {
+    pub fn prewrite(&self, key: Key, args: Prewrite, primary: Key, start_ts: u64) -> Result<()> {
         let mut txn = try!(self.start_row_transaction(key));
-        try!(txn.prewrite(args, primary, ts));
+        try!(txn.prewrite(args, primary, start_ts));
         try!(txn.write());
         Ok(())
     }
@@ -108,16 +108,16 @@ impl<'a> RowTxn<'a> {
         Ok(())
     }
 
-    pub fn get(&self, ts: u64) -> Result<Option<Value>> {
+    pub fn get(&self, start_ts: u64) -> Result<Option<Value>> {
         if let Some(lock) = self.meta.get_lock() {
-            if lock.get_start_ts() <= ts {
+            if lock.get_start_ts() <= start_ts {
                 return Err(Error::KeyIsLocked {
                     primary: lock.get_primary_key().to_vec(),
                     ts: lock.get_start_ts(),
                 });
             }
         }
-        match self.meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
+        match self.meta.iter_items().find(|x| x.get_commit_ts() <= start_ts) {
             Some(x) => {
                 let data_key = codec::encode_key(&self.row_key, x.get_start_ts());
                 Ok(try!(self.engine.get(&data_key)))
@@ -126,7 +126,7 @@ impl<'a> RowTxn<'a> {
         }
     }
 
-    pub fn prewrite(&mut self, args: Prewrite, primary: Key, ts: u64) -> Result<()> {
+    pub fn prewrite(&mut self, args: Prewrite, primary: Key, start_ts: u64) -> Result<()> {
         if let Some(lock) = self.meta.get_lock() {
             return Err(Error::KeyIsLocked {
                 primary: lock.get_primary_key().to_vec(),
@@ -134,7 +134,7 @@ impl<'a> RowTxn<'a> {
             });
         }
         match self.meta.iter_items().nth(0) {
-            Some(item) if item.get_commit_ts() >= ts => return Err(Error::WriteConflict),
+            Some(item) if item.get_commit_ts() >= start_ts => return Err(Error::WriteConflict),
             _ => {}
         }
 
@@ -144,13 +144,13 @@ impl<'a> RowTxn<'a> {
             _ => MetaLock_Type::ReadWrite,
         });
         lock.set_primary_key(primary);
-        lock.set_start_ts(ts);
+        lock.set_start_ts(start_ts);
         self.meta.set_lock(lock);
         let modify = Modify::Put((self.meta_key.clone(), self.meta_bytes()));
         self.writes.push(modify);
 
         if let Prewrite::Put(value) = args {
-            let value_key = codec::encode_key(&self.row_key, ts);
+            let value_key = codec::encode_key(&self.row_key, start_ts);
             self.writes.push(Modify::Put((value_key, value)));
         }
         Ok(())

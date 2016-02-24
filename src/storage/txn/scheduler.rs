@@ -18,8 +18,8 @@ impl Scheduler {
         }
     }
 
-    fn exec_get(&self, key: Key, ts: u64) -> Result<Option<Value>> {
-        Ok(try!(self.store.get(key, ts)))
+    fn exec_get(&self, key: Key, start_ts: u64) -> Result<Option<Value>> {
+        Ok(try!(self.store.get(key, start_ts)))
     }
 
     fn exec_prewrite(&mut self,
@@ -28,7 +28,7 @@ impl Scheduler {
                      locks: Vec<Key>,
                      start_ts: u64)
                      -> Result<()> {
-        let primary = Self::primary_key(&puts, &deletes, &locks);
+        let primary = Self::primary_key(&puts, &deletes);
         let mut locked_keys = Vec::<Key>::new();
         for (k, v) in puts {
             try!(self.store.prewrite(k.clone(), Prewrite::Put(v), primary.clone(), start_ts));
@@ -62,13 +62,12 @@ impl Scheduler {
         Ok(())
     }
 
-    #[allow(unused_variables)]
     pub fn handle_cmd(&mut self, cmd: Command) {
         match cmd {
-            Command::Get{key, ts, callback} => {
-                callback(self.exec_get(key, ts).map_err(::storage::Error::from));
+            Command::Get{key, start_ts, callback} => {
+                callback(self.exec_get(key, start_ts).map_err(::storage::Error::from));
             }
-            Command::Scan{start_key, limit, ts, callback} => {
+            Command::Scan{..} => {
                 unimplemented!();
             }
             Command::Prewrite{puts, deletes, locks, start_ts, callback} => {
@@ -81,16 +80,13 @@ impl Scheduler {
         }
     }
 
-    fn primary_key(puts: &[KvPair], deletes: &[Key], locks: &[Key]) -> Key {
+    fn primary_key(puts: &[KvPair], deletes: &[Key]) -> Key {
         if !puts.is_empty() {
             return puts[0].0.clone();
         }
         if !deletes.is_empty() {
             return deletes[0].clone();
         }
-        if !locks.is_empty() {
-            return locks[0].clone();
-        }
-        unreachable!();
+        panic!("no puts or deletes");
     }
 }
