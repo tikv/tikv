@@ -195,9 +195,47 @@ impl Cluster {
         self.leaders.clear();
     }
 
+    // If the resp is "not leader error", get the real leader.
+    // Sometimes, we may still can't get leader even in "not leader error",
+    // returns a INVALID_PEER for this.
+    pub fn refresh_leader_if_needed(&mut self, resp: &RaftCommandResponse, region_id: u64) -> bool {
+        if !is_error_response(resp) {
+            return false;
+        }
+
+        let err = resp.get_header().get_error().get_detail();
+        if !err.has_not_leader() {
+            return false;
+        }
+
+        let err = err.get_not_leader();
+        if !err.has_leader() {
+            return false;
+        }
+        self.leaders.insert(region_id, err.get_leader().clone());
+        true
+    }
+
+    pub fn request(&mut self,
+                   region_id: u64,
+                   request: RaftCommandRequest,
+                   timeout: Duration)
+                   -> RaftCommandResponse {
+        loop {
+            let resp = self.call_command_on_leader(region_id, request.clone(), timeout).unwrap();
+            if !resp.get_header().has_error() || !self.refresh_leader_if_needed(&resp, region_id) {
+                return resp;
+            }
+            error!("refreshed leader of region {}", region_id);
+        }
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let get = new_request(1, vec![new_get_cmd(&keys::data_key(key))]);
-        let mut resp = self.call_command_on_leader(1, get, Duration::from_secs(3)).unwrap();
+        let mut resp = self.request(1, get, Duration::from_secs(3));
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Get);
         let mut get = resp.mut_responses()[0].take_get();
@@ -210,16 +248,20 @@ impl Cluster {
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
         let put = new_request(1, vec![new_put_cmd(&keys::data_key(key), value)]);
-        let resp = self.call_command_on_leader(1, put, Duration::from_secs(3)).unwrap();
-        assert!(!resp.get_header().has_error());
+        let resp = self.request(1, put, Duration::from_secs(3));
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Put);
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
         let seek = new_request(1, vec![new_seek_cmd(&keys::data_key(key))]);
-        let resp = self.call_command_on_leader(1, seek, Duration::from_secs(3)).unwrap();
-        assert!(!resp.get_header().has_error());
+        let resp = self.request(1, seek, Duration::from_secs(3));
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
         assert_eq!(resp.get_responses().len(), 1);
         let resp = &resp.get_responses()[0];
         assert_eq!(resp.get_cmd_type(), CommandType::Seek);
@@ -233,7 +275,10 @@ impl Cluster {
 
     pub fn delete(&mut self, key: &[u8]) {
         let delete = new_request(1, vec![new_delete_cmd(&keys::data_key(key))]);
-        let resp = self.call_command_on_leader(1, delete, Duration::from_secs(3)).unwrap();
+        let resp = self.request(1, delete, Duration::from_secs(3));
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Delete);
     }
