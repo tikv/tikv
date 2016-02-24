@@ -2,41 +2,71 @@
 #![allow(unused_must_use)]
 
 use std::collections::HashMap;
+use std::option::Option;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
 use raftserver::{Result, other};
-use super::{SERVER_TOKEN, DEFAULT_BASE_TICK_MS};
+use super::DEFAULT_BASE_TICK_MS;
 use super::{Msg, SendCh, ConnData, TimerMsg};
 use super::conn::Conn;
 use super::handler::ServerHandler;
+use super::config::Config;
 
+const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const INVALID_TOKEN: Token = Token(0);
-// Maximum connections we should support at same time.
-// TODO: Use a config for it later.
-const MAX_CONN_CAPACITY: usize = 4096;
 
 pub struct Server<T: ServerHandler> {
-    pub listener: TcpListener,
-    pub conns: Slab<Conn>,
-    pub sendch: SendCh,
+    cfg: Config,
+
+    listener: TcpListener,
+    conns: Slab<Conn>,
+    sendch: SendCh,
 
     peers: HashMap<String, Token>,
     handler: T,
+
+    event_loop: Option<EventLoop<Server<T>>>,
 }
 
 impl<T: ServerHandler> Server<T> {
-    pub fn new(h: T, l: TcpListener, sendch: SendCh) -> Server<T> {
-        Server {
+    pub fn new(cfg: Config, h: T) -> Result<Server<T>> {
+        let addr = try!((&cfg.addr).parse());
+        let listener = try!(TcpListener::bind(&addr));
+
+        // create a event loop;
+        let mut event_loop = try!(EventLoop::new());
+        try!(event_loop.register(&listener,
+                                 SERVER_TOKEN,
+                                 EventSet::readable(),
+                                 PollOpt::edge()));
+
+        let sendch = SendCh::new(event_loop.channel());
+
+        let max_conn_capacity = cfg.max_conn_capacity;
+
+        Ok(Server {
+            cfg: cfg,
             handler: h,
-            listener: l,
+            listener: listener,
             sendch: sendch,
-            conns: Slab::new_starting_at(FIRST_CUSTOM_TOKEN, MAX_CONN_CAPACITY),
+            conns: Slab::new_starting_at(FIRST_CUSTOM_TOKEN, max_conn_capacity),
             peers: HashMap::new(),
-        }
+            event_loop: Some(event_loop),
+        })
+    }
+
+    pub fn run(&mut self) -> Result<()> {
+        let mut event_loop = self.event_loop.take().unwrap();
+        try!(event_loop.run(self));
+        Ok(())
+    }
+
+    pub fn get_sendch(&self) -> SendCh {
+        self.sendch.clone()
     }
 
     pub fn register_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) -> Result<()> {

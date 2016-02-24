@@ -1,55 +1,3 @@
-#![allow(dead_code)]
-
-use std::option::Option;
-
-use mio::{EventLoop, EventSet, PollOpt};
-use mio::tcp::TcpListener;
-
-use raftserver::Result;
-use super::{SendCh, SERVER_TOKEN};
-use super::server::Server;
-use super::handler::ServerHandler;
-
-pub struct Runner<T: ServerHandler> {
-    sendch: SendCh,
-    listener: Option<TcpListener>,
-    event_loop: EventLoop<Server<T>>,
-}
-
-impl<T: ServerHandler> Runner<T> {
-    // Create a runner with listening address.
-    pub fn new(addr: &str) -> Result<(Runner<T>)> {
-        let addr = try!(addr.parse());
-        let listener = try!(TcpListener::bind(&addr));
-
-        // create a event loop;
-        let mut event_loop = try!(EventLoop::new());
-        try!(event_loop.register(&listener,
-                                 SERVER_TOKEN,
-                                 EventSet::readable(),
-                                 PollOpt::edge()));
-
-        let sendch = SendCh::new(event_loop.channel());
-        Ok(Runner {
-            sendch: sendch,
-            event_loop: event_loop,
-            listener: Some(listener),
-        })
-    }
-
-    pub fn get_sendch(&self) -> SendCh {
-        self.sendch.clone()
-    }
-
-    pub fn run(&mut self, h: T) -> Result<()> {
-        let mut server = Server::new(h, self.listener.take().unwrap(), self.sendch.clone());
-        try!(server.register_tick(&mut self.event_loop));
-        try!(self.event_loop.run(&mut server));
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     // TODO: remove whole tests later.
@@ -77,6 +25,12 @@ mod tests {
     use raftserver::Result;
     use util::codec::rpc;
 
+    fn new_server<T: ServerHandler>(addr: &str, h: T) -> Server {
+        let cfg = Config { addr: addr.to_owned(), ..Default::default() };
+
+        Server::new(addr, h).unwrap()
+    }
+
     struct BaseHandler;
 
     impl ServerHandler for BaseHandler {}
@@ -84,7 +38,8 @@ mod tests {
     #[test]
     fn test_base() {
         let addr = "127.0.0.1:0";
-        let mut r = Runner::new(addr).unwrap();
+        let h = BaseHandler;
+        let mut r = new_server(addr, h);
 
         let sender = r.get_sendch();
         thread::spawn(move || {
@@ -92,20 +47,19 @@ mod tests {
             sender.kill().unwrap();
         });
 
-        let h = BaseHandler;
-        r.run(h).unwrap();
+        r.run().unwrap();
     }
 
     #[test]
     fn test_conn() {
         let addr = "127.0.0.1:12345";
-        let mut r = Runner::new(addr).unwrap();
+        let h = BaseHandler;
+        let mut r = new_server(addr, h);
 
         let sender = r.get_sendch();
 
         thread::spawn(move || {
-            let h = BaseHandler;
-            r.run(h).unwrap();
+            r.run().unwrap();
         });
 
         thread::sleep(Duration::from_millis(500));
@@ -143,7 +97,9 @@ mod tests {
     #[test]
     fn test_tick() {
         let addr = "127.0.0.1:0";
-        let mut r = Runner::new(addr).unwrap();
+        let n = Arc::new(Mutex::new(1));
+        let h = TickHandler { n: n.clone() };
+        let mut r = new_server(addr, h);
 
         let sender = r.get_sendch();
         thread::spawn(move || {
@@ -151,9 +107,7 @@ mod tests {
             sender.kill().unwrap();
         });
 
-        let n = Arc::new(Mutex::new(1));
-        let h = TickHandler { n: n.clone() };
-        r.run(h).unwrap();
+        r.run().unwrap();
 
         let n = n.lock().unwrap();
         assert!(*n > 1);
@@ -174,11 +128,11 @@ mod tests {
     #[test]
     fn test_timer() {
         let addr = "127.0.0.1:0";
-        let mut r = Runner::new(addr).unwrap();
-
-        let sender = r.get_sendch();
         let n = Arc::new(Mutex::new(1));
         let h = TimerHandler { n: n.clone() };
+        let mut r = new_server(addr, h);
+
+        let sender = r.get_sendch();
         sender.timeout_ms(100, TimerMsg::None)
               .unwrap();
 
@@ -187,7 +141,7 @@ mod tests {
             sender.kill().unwrap();
         });
 
-        r.run(h).unwrap();
+        r.run().unwrap();
 
         let n = n.lock().unwrap();
         assert_eq!(*n, 0);
@@ -220,12 +174,11 @@ mod tests {
     }
 
     fn start_peer(addr: &str, cnt: Arc<Mutex<(u64, u64)>>) -> (SendCh, thread::JoinHandle<(())>) {
-        let mut r = Runner::new(addr).unwrap();
+        let h = PeerHandler { cnt: cnt };
+        let mut r = new_server(addr, h);
         let s = r.get_sendch();
         let t = thread::spawn(move || {
-            let h = PeerHandler { cnt: cnt };
-
-            r.run(h).unwrap();
+            r.run().unwrap();
 
             ()
         });
@@ -278,18 +231,18 @@ mod tests {
     #[test]
     fn test_quit() {
         let addr = "127.0.0.1:0";
-        let mut r = Runner::new(addr).unwrap();
-
-        let sender = r.get_sendch();
         let n = Arc::new(Mutex::new(1));
         let h = QuitHandler { n: n.clone() };
+        let mut r = new_server(addr, h);
+
+        let sender = r.get_sendch();
 
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(500));
             sender.kill().unwrap();
         });
 
-        r.run(h).unwrap();
+        r.run().unwrap();
 
         let n = n.lock().unwrap();
         assert_eq!(*n, 0);

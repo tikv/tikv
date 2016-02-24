@@ -11,12 +11,9 @@ mod bench;
 mod conn;
 pub mod server;
 pub mod handler;
-pub mod run;
 
-pub use self::run::Runner;
 pub use self::handler::ServerHandler;
 
-const SERVER_TOKEN: Token = Token(1);
 const DEFAULT_BASE_TICK_MS: u64 = 100;
 
 pub struct ConnData {
