@@ -6,9 +6,10 @@ use mio::{self, Token};
 use raftserver::{Result, send_msg};
 use util::codec::rpc;
 
+pub mod config;
 mod bench;
 mod conn;
-mod server;
+pub mod server;
 pub mod handler;
 pub mod run;
 
@@ -74,23 +75,23 @@ pub enum Msg {
 }
 
 #[derive(Debug)]
-pub struct Sender {
-    sender: mio::Sender<Msg>,
+pub struct SendCh {
+    ch: mio::Sender<Msg>,
 }
 
-impl Clone for Sender {
-    fn clone(&self) -> Sender {
-        Sender { sender: self.sender.clone() }
+impl Clone for SendCh {
+    fn clone(&self) -> SendCh {
+        SendCh { ch: self.ch.clone() }
     }
 }
 
-impl Sender {
-    pub fn new(sender: mio::Sender<Msg>) -> Sender {
-        Sender { sender: sender }
+impl SendCh {
+    pub fn new(ch: mio::Sender<Msg>) -> SendCh {
+        SendCh { ch: ch }
     }
 
     fn send(&self, msg: Msg) -> Result<()> {
-        try!(send_msg(&self.sender, msg));
+        try!(send_msg(&self.ch, msg));
         Ok(())
     }
 
@@ -151,7 +152,7 @@ mod tests {
     #[test]
     fn test_sender() {
         let mut event_loop = EventLoop::new().unwrap();
-        let sender = Sender::new(event_loop.channel());
+        let sender = SendCh::new(event_loop.channel());
         let h = thread::spawn(move || {
             event_loop.run(&mut SenderHandler).unwrap();
         });
