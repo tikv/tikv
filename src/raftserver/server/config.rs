@@ -1,4 +1,4 @@
-const DEFAULT_LISTENING_ADDR: &'static str = "0.0.0.0:0";
+const DEFAULT_LISTENING_ADDR: &'static str = "0.0.0.0:20160";
 const DEFAULT_MAX_CONN_CAPACITY: usize = 4096;
 
 pub struct Config {

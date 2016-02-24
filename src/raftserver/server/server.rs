@@ -9,7 +9,7 @@ use mio::util::Slab;
 
 use raftserver::{Result, other};
 use super::{SERVER_TOKEN, DEFAULT_BASE_TICK_MS};
-use super::{Msg, Sender, ConnData, TimerMsg};
+use super::{Msg, SendCh, ConnData, TimerMsg};
 use super::conn::Conn;
 use super::handler::ServerHandler;
 
@@ -22,18 +22,18 @@ const MAX_CONN_CAPACITY: usize = 4096;
 pub struct Server<T: ServerHandler> {
     pub listener: TcpListener,
     pub conns: Slab<Conn>,
-    pub sender: Sender,
+    pub sendch: SendCh,
 
     peers: HashMap<String, Token>,
     handler: T,
 }
 
 impl<T: ServerHandler> Server<T> {
-    pub fn new(h: T, l: TcpListener, sender: Sender) -> Server<T> {
+    pub fn new(h: T, l: TcpListener, sendch: SendCh) -> Server<T> {
         Server {
             handler: h,
             listener: l,
-            sender: sender,
+            sendch: sendch,
             conns: Slab::new_starting_at(FIRST_CUSTOM_TOKEN, MAX_CONN_CAPACITY),
             peers: HashMap::new(),
         }
@@ -137,7 +137,7 @@ impl<T: ServerHandler> Server<T> {
                             return Ok(msgs);
                         }
 
-                        self.handler.handle_read_data(&self.sender, token, msgs)
+                        self.handler.handle_read_data(&self.sendch, token, msgs)
                     })
                     .and_then(|res| {
                         if res.is_empty() {
@@ -196,7 +196,7 @@ impl<T: ServerHandler> Server<T> {
 
     fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
         self.handler
-            .handle_tick(&self.sender)
+            .handle_tick(&self.sendch)
             .map_err(|e| warn!("handle tick err {:?}", e));
 
         self.register_tick(event_loop);
@@ -204,7 +204,7 @@ impl<T: ServerHandler> Server<T> {
 
     fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, msg: TimerMsg) {
         self.handler
-            .handle_timer(&self.sender, msg)
+            .handle_timer(&self.sendch, msg)
             .map_err(|e| warn!("handle timer err {:?}", e));
     }
 

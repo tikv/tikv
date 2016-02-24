@@ -6,12 +6,12 @@ use mio::{EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;
 
 use raftserver::Result;
-use super::{Sender, SERVER_TOKEN};
+use super::{SendCh, SERVER_TOKEN};
 use super::server::Server;
 use super::handler::ServerHandler;
 
 pub struct Runner<T: ServerHandler> {
-    sender: Sender,
+    sendch: SendCh,
     listener: Option<TcpListener>,
     event_loop: EventLoop<Server<T>>,
 }
@@ -29,20 +29,20 @@ impl<T: ServerHandler> Runner<T> {
                                  EventSet::readable(),
                                  PollOpt::edge()));
 
-        let sender = Sender::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel());
         Ok(Runner {
-            sender: sender,
+            sendch: sendch,
             event_loop: event_loop,
             listener: Some(listener),
         })
     }
 
-    pub fn get_sender(&self) -> Sender {
-        self.sender.clone()
+    pub fn get_sendch(&self) -> SendCh {
+        self.sendch.clone()
     }
 
     pub fn run(&mut self, h: T) -> Result<()> {
-        let mut server = Server::new(h, self.listener.take().unwrap(), self.sender.clone());
+        let mut server = Server::new(h, self.listener.take().unwrap(), self.sendch.clone());
         try!(server.register_tick(&mut self.event_loop));
         try!(self.event_loop.run(&mut server));
 
@@ -86,7 +86,7 @@ mod tests {
         let addr = "127.0.0.1:0";
         let mut r = Runner::new(addr).unwrap();
 
-        let sender = r.get_sender();
+        let sender = r.get_sendch();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(500));
             sender.kill().unwrap();
@@ -101,7 +101,7 @@ mod tests {
         let addr = "127.0.0.1:12345";
         let mut r = Runner::new(addr).unwrap();
 
-        let sender = r.get_sender();
+        let sender = r.get_sendch();
 
         thread::spawn(move || {
             let h = BaseHandler;
@@ -133,7 +133,7 @@ mod tests {
     }
 
     impl ServerHandler for TickHandler {
-        fn handle_tick(&mut self, sender: &Sender) -> Result<()> {
+        fn handle_tick(&mut self, sender: &SendCh) -> Result<()> {
             let mut v = self.n.lock().unwrap();
             *v += 1;
             Ok(())
@@ -145,7 +145,7 @@ mod tests {
         let addr = "127.0.0.1:0";
         let mut r = Runner::new(addr).unwrap();
 
-        let sender = r.get_sender();
+        let sender = r.get_sendch();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(500));
             sender.kill().unwrap();
@@ -164,7 +164,7 @@ mod tests {
     }
 
     impl ServerHandler for TimerHandler {
-        fn handle_timer(&mut self, sender: &Sender, msg: TimerMsg) -> Result<()> {
+        fn handle_timer(&mut self, sender: &SendCh, msg: TimerMsg) -> Result<()> {
             let mut v = self.n.lock().unwrap();
             *v = 0;
             Ok(())
@@ -176,7 +176,7 @@ mod tests {
         let addr = "127.0.0.1:0";
         let mut r = Runner::new(addr).unwrap();
 
-        let sender = r.get_sender();
+        let sender = r.get_sendch();
         let n = Arc::new(Mutex::new(1));
         let h = TimerHandler { n: n.clone() };
         sender.timeout_ms(100, TimerMsg::None)
@@ -199,7 +199,7 @@ mod tests {
 
     impl ServerHandler for PeerHandler {
         fn handle_read_data(&mut self,
-                            sender: &Sender,
+                            sender: &SendCh,
                             token: Token,
                             msgs: Vec<ConnData>)
                             -> Result<(Vec<ConnData>)> {
@@ -219,9 +219,9 @@ mod tests {
         }
     }
 
-    fn start_peer(addr: &str, cnt: Arc<Mutex<(u64, u64)>>) -> (Sender, thread::JoinHandle<(())>) {
+    fn start_peer(addr: &str, cnt: Arc<Mutex<(u64, u64)>>) -> (SendCh, thread::JoinHandle<(())>) {
         let mut r = Runner::new(addr).unwrap();
-        let s = r.get_sender();
+        let s = r.get_sendch();
         let t = thread::spawn(move || {
             let h = PeerHandler { cnt: cnt };
 
@@ -280,7 +280,7 @@ mod tests {
         let addr = "127.0.0.1:0";
         let mut r = Runner::new(addr).unwrap();
 
-        let sender = r.get_sender();
+        let sender = r.get_sendch();
         let n = Arc::new(Mutex::new(1));
         let h = QuitHandler { n: n.clone() };
 

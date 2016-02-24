@@ -6,7 +6,7 @@ use std::vec::Vec;
 use mio::Token;
 
 use raftserver::Result;
-use super::{ConnData, Sender, TimerMsg};
+use super::{ConnData, SendCh, TimerMsg};
 
 // TODO: remove ServerHandler later.
 // We will implement raft logic in Server directly, no need to abstract a handler to do it.
@@ -24,7 +24,7 @@ pub trait ServerHandler :Sized {
     // Returns some messages for later writing to this connection.
     // You can use sender to communicate with event loop.
     fn handle_read_data(&mut self,
-                        sender: &Sender,
+                        sendch: &SendCh,
                         token: Token,
                         msgs: Vec<ConnData>)
                         -> Result<(Vec<ConnData>)> {
@@ -32,12 +32,12 @@ pub trait ServerHandler :Sized {
     }
 
     // Handles tick.
-    fn handle_tick(&mut self, sender: &Sender) -> Result<()> {
+    fn handle_tick(&mut self, sendch: &SendCh) -> Result<()> {
         Ok(())
     }
 
     // Handles customized timer.
-    fn handle_timer(&mut self, sender: &Sender, msg: TimerMsg) -> Result<()> {
+    fn handle_timer(&mut self, sendch: &SendCh, msg: TimerMsg) -> Result<()> {
         Ok(())
     }
 
