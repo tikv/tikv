@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::vec::Vec;
 // use std::io::{Read, Write};
 use std::collections::VecDeque;

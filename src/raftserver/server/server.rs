@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_must_use)]
-
 use std::collections::HashMap;
 use std::option::Option;
 
@@ -77,7 +74,9 @@ impl<T: ServerHandler> Server<T> {
                     self.peers.remove(&addr);
                 }
 
-                event_loop.deregister(&conn.sock);
+                if let Err(e) = event_loop.deregister(&conn.sock) {
+                    error!("deregister conn err {:?}", e);
+                }
             }
             None => {
                 warn!("missing connection for token {}", token.as_usize());
@@ -108,7 +107,40 @@ impl<T: ServerHandler> Server<T> {
             .ok_or_else(|| other("add new connection failed"))
     }
 
-    fn handle_readeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+    fn handle_conn_readable(&mut self,
+                            event_loop: &mut EventLoop<Server<T>>,
+                            token: Token)
+                            -> Result<()> {
+        let msgs = try!(match self.conns.get_mut(token) {
+            None => {
+                warn!("missing conn for token {:?}", token);
+                return Ok(());
+            }
+            Some(conn) => conn.read(event_loop),
+        });
+
+        if msgs.is_empty() {
+            // Read no message, no need to handle.
+            return Ok(());
+        }
+
+        // TODO: we will refactor later without handler.
+        let res = try!(self.handler.handle_read_data(&self.sendch, token, msgs));
+        if res.is_empty() {
+            return Ok(());
+        }
+
+        // append to write buffer here, no need using sender to notify.
+        if let Some(conn) = self.conns.get_mut(token) {
+            for data in res {
+                try!(conn.append_write_buf(event_loop, data));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_readable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         match token {
             SERVER_TOKEN => {
                 loop {
@@ -128,45 +160,16 @@ impl<T: ServerHandler> Server<T> {
                         }
                     };
 
-                    self.add_new_conn(event_loop, sock, None)
-                        .map_err(|e| {
-                            error!("register conn err {:?}", e);
-                        });
+                    if let Err(e) = self.add_new_conn(event_loop, sock, None) {
+                        error!("register conn err {:?}", e);
+                    }
                 }
             }
             token => {
-                let msgs = match self.conns.get_mut(token) {
-                    None => {
-                        warn!("missing conn for token {:?}", token);
-                        return;
-                    }
-                    Some(conn) => conn.read(event_loop),
-                };
-
-                msgs.and_then(|msgs| {
-                        if msgs.is_empty() {
-                            return Ok(msgs);
-                        }
-
-                        self.handler.handle_read_data(&self.sendch, token, msgs)
-                    })
-                    .and_then(|res| {
-                        if res.is_empty() {
-                            return Ok(());
-                        }
-
-                        // append to write buffer here, no need using sender to notify.
-                        if let Some(conn) = self.conns.get_mut(token) {
-                            for data in res {
-                                try!(conn.append_write_buf(event_loop, data));
-                            }
-                        }
-                        Ok(())
-                    })
-                    .map_err(|e| {
-                        warn!("handle read conn err {:?}, remove", e);
-                        self.remove_conn(event_loop, token);
-                    });
+                if let Err(e) = self.handle_conn_readable(event_loop, token) {
+                    warn!("handle read conn for token {:?} err {:?}, remove", token, e);
+                    self.remove_conn(event_loop, token);
+                }
             }
 
         }
@@ -181,10 +184,10 @@ impl<T: ServerHandler> Server<T> {
             Some(conn) => conn.write(event_loop),
         };
 
-        res.map_err(|e| {
+        if let Err(e) = res {
             warn!("handle write conn err {:?}, remove", e);
             self.remove_conn(event_loop, token);
-        });
+        }
     }
 
     fn handle_writedata(&mut self,
@@ -199,10 +202,10 @@ impl<T: ServerHandler> Server<T> {
             Some(conn) => conn.append_write_buf(event_loop, data),
         };
 
-        res.map_err(|e| {
+        if let Err(e) = res {
             warn!("handle write data err {:?}, remove", e);
             self.remove_conn(event_loop, token);
-        });
+        }
     }
 
     fn connect_peer(&mut self, event_loop: &mut EventLoop<Server<T>>, addr: &str) -> Result<Token> {
@@ -245,7 +248,7 @@ impl<T: ServerHandler> Handler for Server<T> {
         }
 
         if events.is_readable() {
-            self.handle_readeable(event_loop, token);
+            self.handle_readable(event_loop, token);
         }
 
         if events.is_writable() {
