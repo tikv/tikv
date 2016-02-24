@@ -3,6 +3,8 @@ pub const DEFAULT_RAFT_HEARTBEAT_TICKS: usize = 3;
 pub const DEFAULT_RAFT_ELECTION_TIMEOUT_TICKS: usize = 15;
 pub const DEFAULT_RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
 pub const DEFAULT_RAFT_MAX_INFLIGHT_MSGS: usize = 256;
+pub const DEFAULT_RAFT_GC_LOG_INTERVAL: u64 = 1000;
+pub const DEFAULT_RAFT_GC_LOG_THRESHOLD: u64 = 1;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -12,6 +14,12 @@ pub struct Config {
     pub raft_election_timeout_ticks: usize,
     pub raft_max_size_per_msg: u64,
     pub raft_max_inflight_msgs: usize,
+
+    // Interval to gc unnecessary raft log (ms).
+    // If the log is
+    pub raft_gc_log_tick_interval: u64,
+    // A threshold to gc stale raft log, must >= 1.
+    pub raft_gc_log_threshold: u64,
 }
 
 impl Default for Config {
@@ -22,6 +30,8 @@ impl Default for Config {
             raft_election_timeout_ticks: DEFAULT_RAFT_ELECTION_TIMEOUT_TICKS,
             raft_max_size_per_msg: DEFAULT_RAFT_MAX_SIZE_PER_MSG,
             raft_max_inflight_msgs: DEFAULT_RAFT_MAX_INFLIGHT_MSGS,
+            raft_gc_log_tick_interval: DEFAULT_RAFT_GC_LOG_INTERVAL,
+            raft_gc_log_threshold: DEFAULT_RAFT_GC_LOG_THRESHOLD,
         }
     }
 }
