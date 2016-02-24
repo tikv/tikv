@@ -82,40 +82,6 @@ mod tests {
         sender.kill().unwrap();
     }
 
-    struct TimerHandler {
-        n: Arc<Mutex<u64>>,
-    }
-
-    impl ServerHandler for TimerHandler {
-        fn handle_timer(&mut self, sender: &SendCh, msg: TimerMsg) -> Result<()> {
-            let mut v = self.n.lock().unwrap();
-            *v = 0;
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn test_timer() {
-        let addr = "127.0.0.1:0";
-        let n = Arc::new(Mutex::new(1));
-        let h = TimerHandler { n: n.clone() };
-        let mut r = new_server(addr, h);
-
-        let sender = r.get_sendch();
-        sender.timeout_ms(100, TimerMsg::None)
-              .unwrap();
-
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(500));
-            sender.kill().unwrap();
-        });
-
-        r.run().unwrap();
-
-        let n = n.lock().unwrap();
-        assert_eq!(*n, 0);
-    }
-
     struct PeerHandler {
         cnt: Arc<Mutex<(u64, u64)>>,
     }
