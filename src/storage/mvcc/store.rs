@@ -133,8 +133,9 @@ impl<'a> RowTxn<'a> {
                 ts: lock.get_start_ts(),
             });
         }
-        if self.meta.iter_items().any(|x| x.get_commit_ts() >= ts) {
-            return Err(Error::WriteConflict);
+        match self.meta.iter_items().nth(0) {
+            Some(item) if item.get_commit_ts() >= ts => return Err(Error::WriteConflict),
+            _ => {}
         }
 
         let mut lock = MetaLock::new();
