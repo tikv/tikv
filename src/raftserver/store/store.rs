@@ -357,6 +357,10 @@ impl<T: Transport> Store<T> {
             // and we will do compact again with compact index 11, in cycles...
             // So we introduce a threshold, if applied index - first index > threshold,
             // we will try to compact log.
+            // raft log entries[..............................................]
+            //                  ^                                       ^
+            //                  |-----------------threshold------------ |
+            //              first_index                         applied_index
             let applied_index = peer.storage.rl().applied_index();
             let first_index = peer.storage.rl().first_index();
             if applied_index < first_index {
