@@ -6,9 +6,10 @@ use mio::{self, Token};
 use raftserver::{Result, send_msg};
 use util::codec::rpc;
 
+pub mod config;
 mod bench;
 mod conn;
-mod server;
+pub mod server;
 pub mod handler;
 pub mod run;
 

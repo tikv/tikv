@@ -16,7 +16,7 @@ use super::handler::ServerHandler;
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const INVALID_TOKEN: Token = Token(0);
 // Maximum connections we should support at same time.
-// TODO: Use a config for it later. 
+// TODO: Use a config for it later.
 const MAX_CONN_CAPACITY: usize = 4096;
 
 pub struct Server<T: ServerHandler> {
