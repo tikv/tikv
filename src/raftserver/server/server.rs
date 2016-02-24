@@ -270,15 +270,9 @@ impl<T: ServerHandler> Handler for Server<T> {
         event_loop.shutdown();
     }
 
-    fn tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
-        if event_loop.is_running() {
-            return;
-        }
-
+    fn tick(&mut self, _: &mut EventLoop<Server<T>>) {
         // tick is called in the end of the loop, so if we notify to quit,
         // we will quit the server here.
-        info!("begin to quit server......");
-        self.handler.handle_quit();
-        info!("quit server over");
+        // TODO: handle quit server if event_loop is_running() returns false.
     }
 }

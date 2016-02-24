@@ -30,8 +30,4 @@ pub trait ServerHandler :Sized {
                         -> Result<(Vec<ConnData>)> {
         Ok((msgs))
     }
-
-    // Handle quit, this will be called when we quit the server.
-    // We should do our cleanup in this function here.
-    fn handle_quit(&mut self) {}
 }
