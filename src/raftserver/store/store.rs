@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 use std::option::Option;
 use std::collections::{HashMap, HashSet};
+use std::boxed::{Box, FnBox};
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopConfig};
@@ -38,6 +39,8 @@ pub struct Store<T: Transport> {
 
 impl<T: Transport> Store<T> {
     pub fn new(cfg: Config, engine: Arc<DB>, trans: Arc<RwLock<T>>) -> Result<Store<T>> {
+        try!(cfg.validate());
+
         let ident: StoreIdent = try!(load_store_ident(engine.as_ref()).and_then(|res| {
             match res {
                 None => Err(other("store must be bootstrapped first")),
@@ -96,6 +99,7 @@ impl<T: Transport> Store<T> {
 
         let mut event_loop = self.event_loop.take().unwrap();
         self.register_raft_base_tick(&mut event_loop);
+        self.register_raft_gc_log_tick(&mut event_loop);
         try!(event_loop.run(self));
         Ok(())
     }
@@ -110,6 +114,10 @@ impl<T: Transport> Store<T> {
 
     pub fn get_ident(&self) -> &StoreIdent {
         &self.ident
+    }
+
+    pub fn get_node_id(&self) -> u64 {
+        self.ident.get_node_id()
     }
 
     pub fn get_store_id(&self) -> u64 {
@@ -221,11 +229,19 @@ impl<T: Transport> Store<T> {
                         // TODO: should we check None here?
                         // Can we destroy it in another thread later?
                         let mut p = self.peers.remove(&region_id).unwrap();
-                        try!(p.destroy());
+                        if let Err(e) = p.destroy() {
+                            error!("destroy peer {:?} for region {} in store {} err {:?}",
+                                   peer,
+                                   region_id,
+                                   self.get_store_id(),
+                                   e);
+                        }
                     }
                 }
+                ExecResult::CompactLog{..} => {
+                    // Nothing to do, skip to handle it.
+                }
             }
-            // TODO: should we need to call command callback here?
         }
 
         Ok(())
@@ -317,6 +333,68 @@ impl<T: Transport> Store<T> {
 
         Ok(())
     }
+
+    fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Msg::RaftLogGcTick,
+                                       self.cfg.raft_log_gc_tick_interval) {
+            // If failed, we can't cleanup the raft log regularly.
+            // Although the log size will grow larger and larger, it doesn't affect
+            // whole raft logic, and we can send truncate log command to compact it.
+            error!("register raft gc log tick err: {:?}", e);
+        };
+    }
+
+    fn handle_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        for (&region_id, peer) in &mut self.peers {
+            if !peer.is_leader() {
+                continue;
+            }
+
+            // Leader will replicate the compact log command to followers,
+            // If we use current applied_index (like 10) as the compact index,
+            // when we apply this log, the newest applied_index will be 11,
+            // but we only compact the log to 10, not 11, at that time,
+            // the first index is 10, and applied index is 11, with an extra log,
+            // and we will do compact again with compact index 11, in cycles...
+            // So we introduce a threshold, if applied index - first index > threshold,
+            // we will try to compact log.
+            // raft log entries[..............................................]
+            //                  ^                                       ^
+            //                  |-----------------threshold------------ |
+            //              first_index                         applied_index
+            let applied_index = peer.storage.rl().applied_index();
+            let first_index = peer.storage.rl().first_index();
+            if applied_index < first_index {
+                // The peer is leader, so the applied_index can't < first index.
+                error!("applied_index {} < first_index {} for leader peer {:?} at region {}",
+                       applied_index,
+                       first_index,
+                       peer.peer,
+                       region_id);
+                continue;
+            }
+
+            if applied_index - first_index <= self.cfg.raft_log_gc_threshold {
+                continue;
+            }
+
+            // Create a compact log request and notify directly.
+            let request = new_compact_log_request(region_id, peer.peer.clone(), applied_index);
+
+            let cb = Box::new(move |_: RaftCommandResponse| -> Result<()> { Ok(()) });
+
+            if let Err(e) = self.sendch.send_command(request, cb) {
+                error!("send compact log {} to region {} err {:?}",
+                       applied_index,
+                       region_id,
+                       e);
+            }
+        }
+
+
+        self.register_raft_gc_log_tick(event_loop);
+    }
 }
 
 fn load_store_ident<T: Retriever>(r: &T) -> Result<Option<StoreIdent>> {
@@ -332,6 +410,22 @@ fn register_timer<T: Transport>(event_loop: &mut EventLoop<Store<T>>,
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
     event_loop.timeout_ms(msg, delay).map_err(|e| other(format!("register timer err: {:?}", e)))
+}
+
+fn new_compact_log_request(region_id: u64,
+                           peer: metapb::Peer,
+                           compact_index: u64)
+                           -> RaftCommandRequest {
+    let mut request = RaftCommandRequest::new();
+    request.mut_header().set_region_id(region_id);
+    request.mut_header().set_peer(peer);
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+    let mut admin = cmd::AdminRequest::new();
+    admin.set_cmd_type(cmd::AdminCommandType::CompactLog);
+    admin.mut_compact_log().set_compact_index(compact_index);
+    request.set_admin_request(admin);
+    request
 }
 
 impl<T: Transport> mio::Handler for Store<T> {
@@ -361,6 +455,7 @@ impl<T: Transport> mio::Handler for Store<T> {
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Msg) {
         match timeout {
             Msg::RaftBaseTick => self.handle_raft_base_tick(event_loop),
+            Msg::RaftLogGcTick => self.handle_raft_gc_log_tick(event_loop),
             _ => panic!("invalid timeout msg type {:?}", timeout),
         }
     }
