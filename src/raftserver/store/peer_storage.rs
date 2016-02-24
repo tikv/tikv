@@ -349,7 +349,7 @@ impl PeerStorage {
 
     // Discard all log entries prior to compact_index. We must guarantee
     // that the compact_index is not greater than applied index.
-    pub fn compact<T: Mutator>(&self, w: &T, compact_index: u64) -> Result<(RaftTruncatedState)> {
+    pub fn compact<T: Mutator>(&self, w: &T, compact_index: u64) -> Result<RaftTruncatedState> {
         debug!("compact log entries to prior to {} for region {}",
                compact_index,
                self.get_region_id());
