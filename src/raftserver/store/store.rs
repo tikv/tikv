@@ -365,9 +365,7 @@ impl<T: Transport> Store<T> {
             }
 
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id,
-                                                  peer.get_peer().clone(),
-                                                  applied_index);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), applied_index);
 
             let cb = Box::new(move |_: RaftCommandResponse| -> Result<()> { Ok(()) });
 
