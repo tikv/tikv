@@ -5,17 +5,23 @@ use std::collections::HashMap;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
+use mio::util::Slab;
 
-use raftserver::Result;
-use super::{SERVER_TOKEN, FIRST_CUSTOM_TOKEN, DEFAULT_BASE_TICK_MS, INVALID_TOKEN};
+use raftserver::{Result, other};
+use super::{SERVER_TOKEN, DEFAULT_BASE_TICK_MS};
 use super::{Msg, Sender, ConnData, TimerMsg};
 use super::conn::Conn;
 use super::handler::ServerHandler;
 
+const FIRST_CUSTOM_TOKEN: Token = Token(1024);
+const INVALID_TOKEN: Token = Token(0);
+// Maximum connections we should support at same time.
+// TODO: Use a config for it later. 
+const MAX_CONN_CAPACITY: usize = 4096;
+
 pub struct Server<T: ServerHandler> {
     pub listener: TcpListener,
-    pub conns: HashMap<Token, Conn>,
-    pub token_counter: usize,
+    pub conns: Slab<Conn>,
     pub sender: Sender,
 
     peers: HashMap<String, Token>,
@@ -28,9 +34,8 @@ impl<T: ServerHandler> Server<T> {
             handler: h,
             listener: l,
             sender: sender,
-            conns: HashMap::new(),
+            conns: Slab::new_starting_at(FIRST_CUSTOM_TOKEN, MAX_CONN_CAPACITY),
             peers: HashMap::new(),
-            token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
         }
     }
 
@@ -53,7 +58,7 @@ impl<T: ServerHandler> Server<T> {
     }
 
     fn remove_conn(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
-        let conn = self.conns.remove(&token);
+        let conn = self.conns.remove(token);
         match conn {
             Some(conn) => {
                 // if connected to remote peer, remove this too.
@@ -73,22 +78,23 @@ impl<T: ServerHandler> Server<T> {
                     event_loop: &mut EventLoop<Server<T>>,
                     sock: TcpStream,
                     peer_addr: Option<String>)
-                    -> Result<(Token)> {
-        let new_token = Token(self.token_counter);
-        self.token_counter += 1;
-
+                    -> Result<Token> {
         try!(sock.set_nodelay(true));
 
-        try!(event_loop.register(&sock,
-                                 new_token,
-                                 EventSet::readable() | EventSet::hup(),
-                                 PollOpt::edge()));
+        // TODO: now slab crate doesn't support insert_with_opt, we should use it instead later.
+        self.conns
+            .insert_with(|new_token: Token| -> Conn {
+                // TODO: if insert_with_opt used, we will return None for register error.
+                // Now, just panic for this.
+                event_loop.register(&sock,
+                                    new_token,
+                                    EventSet::readable() | EventSet::hup(),
+                                    PollOpt::edge())
+                          .unwrap();
 
-        let conn = Conn::new(sock, new_token, peer_addr);
-
-        self.conns.insert(new_token, conn);
-
-        Ok(new_token)
+                Conn::new(sock, new_token, peer_addr)
+            })
+            .ok_or_else(|| other("add new connection failed"))
     }
 
     fn handle_readeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
@@ -118,7 +124,7 @@ impl<T: ServerHandler> Server<T> {
                 }
             }
             token => {
-                let msgs = match self.conns.get_mut(&token) {
+                let msgs = match self.conns.get_mut(token) {
                     None => {
                         warn!("missing conn for token {:?}", token);
                         return;
@@ -139,7 +145,7 @@ impl<T: ServerHandler> Server<T> {
                         }
 
                         // append to write buffer here, no need using sender to notify.
-                        if let Some(conn) = self.conns.get_mut(&token) {
+                        if let Some(conn) = self.conns.get_mut(token) {
                             for data in res {
                                 try!(conn.append_write_buf(event_loop, data));
                             }
@@ -156,7 +162,7 @@ impl<T: ServerHandler> Server<T> {
     }
 
     fn handle_writable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
-        let res = match self.conns.get_mut(&token) {
+        let res = match self.conns.get_mut(token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
@@ -174,7 +180,7 @@ impl<T: ServerHandler> Server<T> {
                         event_loop: &mut EventLoop<Server<T>>,
                         token: Token,
                         data: ConnData) {
-        let res = match self.conns.get_mut(&token) {
+        let res = match self.conns.get_mut(token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
