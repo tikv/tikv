@@ -31,11 +31,6 @@ pub trait ServerHandler :Sized {
         Ok((msgs))
     }
 
-    // Handles tick.
-    fn handle_tick(&mut self, sendch: &SendCh) -> Result<()> {
-        Ok(())
-    }
-
     // Handles customized timer.
     fn handle_timer(&mut self, sendch: &SendCh, msg: TimerMsg) -> Result<()> {
         Ok(())

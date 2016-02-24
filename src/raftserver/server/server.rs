@@ -9,7 +9,6 @@ use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
 use raftserver::{Result, other};
-use super::DEFAULT_BASE_TICK_MS;
 use super::{Msg, SendCh, ConnData, TimerMsg};
 use super::conn::Conn;
 use super::handler::ServerHandler;
@@ -67,13 +66,6 @@ impl<T: ServerHandler> Server<T> {
 
     pub fn get_sendch(&self) -> SendCh {
         self.sendch.clone()
-    }
-
-    pub fn register_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) -> Result<()> {
-        let token = Msg::Tick;
-        // must ok, maybe check error later.
-        event_loop.timeout_ms(token, DEFAULT_BASE_TICK_MS);
-        Ok(())
     }
 
     fn register_timer(&mut self,
@@ -224,14 +216,6 @@ impl<T: ServerHandler> Server<T> {
         });
     }
 
-    fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
-        self.handler
-            .handle_tick(&self.sendch)
-            .map_err(|e| warn!("handle tick err {:?}", e));
-
-        self.register_tick(event_loop);
-    }
-
     fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, msg: TimerMsg) {
         self.handler
             .handle_timer(&self.sendch, msg)
@@ -298,7 +282,6 @@ impl<T: ServerHandler> Handler for Server<T> {
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
         match msg {
-            Msg::Tick => self.handle_tick(event_loop),
             Msg::Timer{msg, ..} => self.handle_timer(event_loop, msg),
             _ => panic!("unexpected msg"),
         }
