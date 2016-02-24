@@ -334,8 +334,8 @@ impl<T: Transport> Store<T> {
 
     fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
-                                       Msg::RaftGcLogTick,
-                                       self.cfg.raft_gc_log_tick_interval) {
+                                       Msg::RaftLogGcTick,
+                                       self.cfg.raft_log_gc_tick_interval) {
             // If failed, we can't cleanup the raft log regularly.
             // Although the log size will grow larger and larger, it doesn't affect
             // whole raft logic, and we can send truncate log command to compact it.
@@ -359,7 +359,7 @@ impl<T: Transport> Store<T> {
             let applied_index = peer.storage.rl().applied_index();
             let first_index = peer.storage.rl().first_index();
             if applied_index < first_index ||
-               applied_index - first_index <= self.cfg.raft_gc_log_threshold {
+               applied_index - first_index <= self.cfg.raft_log_gc_threshold {
                 // When we initialize the peer, the first index > applied_index, skip it.
                 continue;
             }
@@ -442,7 +442,7 @@ impl<T: Transport> mio::Handler for Store<T> {
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Msg) {
         match timeout {
             Msg::RaftBaseTick => self.handle_raft_base_tick(event_loop),
-            Msg::RaftGcLogTick => self.handle_raft_gc_log_tick(event_loop),
+            Msg::RaftLogGcTick => self.handle_raft_gc_log_tick(event_loop),
             _ => panic!("invalid timeout msg type {:?}", timeout),
         }
     }

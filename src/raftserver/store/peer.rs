@@ -591,8 +591,8 @@ impl Peer {
         let request = ctx.request.get_admin_request();
         let cmd_type = request.get_cmd_type();
         info!("execute admin command {:?} at region {}",
-               request,
-               self.region_id);
+              request,
+              self.region_id);
 
         let (mut response, exec_result) = try!(match cmd_type {
             cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),

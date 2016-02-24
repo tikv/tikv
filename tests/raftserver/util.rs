@@ -61,7 +61,7 @@ pub fn new_store(engine: Arc<DB>, trans: Arc<RwLock<StoreTransport>>) -> Store<S
         raft_base_tick_interval: 10,
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 10,
-        raft_gc_log_tick_interval: 100,
+        raft_log_gc_tick_interval: 100,
         ..Config::default()
     };
     let store = Store::new(cfg, engine, trans.clone()).unwrap();
