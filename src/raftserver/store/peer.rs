@@ -55,7 +55,7 @@ pub struct ReadyResult {
 
 pub struct Peer {
     engine: Arc<DB>,
-    peer: metapb::Peer,
+    pub peer: metapb::Peer,
     region_id: u64,
     leader_id: u64,
     pub raft_group: RawNode<RaftStorage>,
@@ -186,10 +186,6 @@ impl Peer {
         self.peer.get_peer_id()
     }
 
-    pub fn get_peer(&self) -> &metapb::Peer {
-        &self.peer
-    }
-
     pub fn get_raft_status(&self) -> raft::Status {
         self.raft_group.status()
     }
@@ -210,7 +206,7 @@ impl Peer {
         }
 
         debug!("handle raft ready for peer {:?} at region {}",
-               self.get_peer(),
+               self.peer,
                self.region_id);
 
         let ready = self.raft_group.ready();
@@ -236,7 +232,7 @@ impl Peer {
             // This may only occur in re-propose.
             debug!("pending command msg is none for region {} in peer {:?}",
                    self.region_id,
-                   self.get_peer());
+                   self.peer);
             return Ok(());
         }
 
@@ -352,7 +348,7 @@ impl Peer {
         if let Err(e) = trans.send(send_msg) {
             warn!("region {} with peer {:?} failed to send msg to {} in store {}, err: {:?}",
                   self.region_id,
-                  self.get_peer(),
+                  self.peer,
                   to_peer_id,
                   to_store_id,
                   e);
