@@ -3,9 +3,9 @@ use super::{Result, Error};
 
 use util::codec::bytes;
 
-pub fn encode_key(key: &[u8], version: u64) -> Vec<u8> {
+pub fn encode_key(key: &[u8], ts: u64) -> Vec<u8> {
     let mut v = bytes::encode_bytes(key);
-    v.write_u64::<BigEndian>(version).unwrap();
+    v.write_u64::<BigEndian>(ts).unwrap();
     v
 }
 
@@ -30,8 +30,8 @@ mod tests {
 
         for (x, y) in pairs {
             let data = encode_key(x, y);
-            let (k, ver) = decode_key(&data).unwrap();
-            assert_eq!((x, y), (&k as &[u8], ver));
+            let (k, ts) = decode_key(&data).unwrap();
+            assert_eq!((x, y), (&k as &[u8], ts));
         }
     }
 
