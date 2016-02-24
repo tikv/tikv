@@ -9,7 +9,7 @@ use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
 use raftserver::{Result, other};
-use super::{Msg, SendCh, ConnData, TimerMsg};
+use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::handler::ServerHandler;
 use super::config::Config;
@@ -66,17 +66,6 @@ impl<T: ServerHandler> Server<T> {
 
     pub fn get_sendch(&self) -> SendCh {
         self.sendch.clone()
-    }
-
-    fn register_timer(&mut self,
-                      event_loop: &mut EventLoop<Server<T>>,
-                      delay: u64,
-                      msg: TimerMsg) {
-        let token = Msg::Timer {
-            delay: delay,
-            msg: msg,
-        };
-        event_loop.timeout_ms(token, delay);
     }
 
     fn remove_conn(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
@@ -216,12 +205,6 @@ impl<T: ServerHandler> Server<T> {
         });
     }
 
-    fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, msg: TimerMsg) {
-        self.handler
-            .handle_timer(&self.sendch, msg)
-            .map_err(|e| warn!("handle timer err {:?}", e));
-    }
-
     fn connect_peer(&mut self, event_loop: &mut EventLoop<Server<T>>, addr: &str) -> Result<Token> {
         let peer_addr = try!(addr.parse());
         let sock = try!(TcpStream::connect(&peer_addr));
@@ -274,17 +257,13 @@ impl<T: ServerHandler> Handler for Server<T> {
         match msg {
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData{token, data} => self.handle_writedata(event_loop, token, data),
-            Msg::Timer{delay, msg} => self.register_timer(event_loop, delay, msg),
             Msg::SendPeer{addr, data} => self.handle_sendpeer(event_loop, addr, data),
             _ => panic!("unexpected msg"),
         }
     }
 
-    fn timeout(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
-        match msg {
-            Msg::Timer{msg, ..} => self.handle_timer(event_loop, msg),
-            _ => panic!("unexpected msg"),
-        }
+    fn timeout(&mut self, _: &mut EventLoop<Server<T>>, _: Msg) {
+        // nothing to do now.
     }
 
     fn interrupted(&mut self, event_loop: &mut EventLoop<Server<T>>) {
