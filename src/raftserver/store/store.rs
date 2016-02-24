@@ -39,6 +39,8 @@ pub struct Store<T: Transport> {
 
 impl<T: Transport> Store<T> {
     pub fn new(cfg: Config, engine: Arc<DB>, trans: Arc<RwLock<T>>) -> Result<Store<T>> {
+        try!(cfg.validate());
+
         let ident: StoreIdent = try!(load_store_ident(engine.as_ref()).and_then(|res| {
             match res {
                 None => Err(other("store must be bootstrapped first")),

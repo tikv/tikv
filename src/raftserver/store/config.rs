@@ -1,3 +1,5 @@
+use raftserver::{Result, other};
+
 pub const DEFAULT_RAFT_BASE_TICK_INTERVAL: u64 = 100;
 pub const DEFAULT_RAFT_HEARTBEAT_TICKS: usize = 3;
 pub const DEFAULT_RAFT_ELECTION_TIMEOUT_TICKS: usize = 15;
@@ -39,5 +41,14 @@ impl Default for Config {
 impl Config {
     pub fn new() -> Config {
         Config::default()
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.raft_log_gc_threshold < 1 {
+            return Err(other(format!("raft log gc threshold must >= 1, not {}",
+                                     self.raft_log_gc_threshold)));
+        }
+
+        Ok(())
     }
 }
