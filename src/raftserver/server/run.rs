@@ -151,35 +151,4 @@ mod tests {
         assert_eq!(r1, r2);
         assert_eq!(r1, (2, 2));
     }
-
-    struct QuitHandler {
-        n: Arc<Mutex<u64>>,
-    }
-
-    impl ServerHandler for QuitHandler {
-        fn handle_quit(&mut self) {
-            let mut v = self.n.lock().unwrap();
-            *v = 0;
-        }
-    }
-
-    #[test]
-    fn test_quit() {
-        let addr = "127.0.0.1:0";
-        let n = Arc::new(Mutex::new(1));
-        let h = QuitHandler { n: n.clone() };
-        let mut r = new_server(addr, h);
-
-        let sender = r.get_sendch();
-
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(500));
-            sender.kill().unwrap();
-        });
-
-        r.run().unwrap();
-
-        let n = n.lock().unwrap();
-        assert_eq!(*n, 0);
-    }
 }
