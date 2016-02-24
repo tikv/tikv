@@ -350,17 +350,26 @@ impl<T: Transport> Store<T> {
             }
 
             // Leader will replicate the compact log command to followers,
-            // If we use current applied_index (an) as the compact index,
-            // when we apply this log, the newest applied_index will be an + 1,
-            // but we only compact the log to an, not an + 1, at that time,
-            // the first index is an, and applied index is an + 1, with an extra log.
+            // If we use current applied_index (like 10) as the compact index,
+            // when we apply this log, the newest applied_index will be 11,
+            // but we only compact the log to 10, not 11, at that time,
+            // the first index is 10, and applied index is 11, with an extra log,
+            // and we will do compact again with compact index 11, in cycles...
             // So we introduce a threshold, if applied index - first index > threshold,
             // we will try to compact log.
             let applied_index = peer.storage.rl().applied_index();
             let first_index = peer.storage.rl().first_index();
-            if applied_index < first_index ||
-               applied_index - first_index <= self.cfg.raft_log_gc_threshold {
-                // When we initialize the peer, the first index > applied_index, skip it.
+            if applied_index < first_index {
+                // The peer is leader, so the applied_index can't < first index.
+                error!("applied_index {} < first_index {} for leader peer {:?} at region {}",
+                       applied_index,
+                       first_index,
+                       peer.peer,
+                       region_id);
+                continue;
+            }
+
+            if applied_index - first_index <= self.cfg.raft_log_gc_threshold {
                 continue;
             }
 
