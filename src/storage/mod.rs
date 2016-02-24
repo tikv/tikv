@@ -9,6 +9,7 @@ mod mvcc;
 mod txn;
 
 pub type Key = Vec<u8>;
+pub type RefKey<'a> = &'a [u8];
 pub type Value = Vec<u8>;
 pub type KvPair = (Key, Value);
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
@@ -17,25 +18,25 @@ pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 pub enum Command {
     Get {
         key: Key,
-        version: u64,
+        start_ts: u64,
         callback: Callback<Option<Value>>,
     },
     Scan {
         start_key: Key,
         limit: usize,
-        version: u64,
+        start_ts: u64,
         callback: Callback<Vec<KvPair>>,
     },
     Prewrite {
         puts: Vec<KvPair>,
         deletes: Vec<Key>,
         locks: Vec<Key>,
-        start_version: u64,
+        start_ts: u64,
         callback: Callback<()>,
     },
     Commit {
-        start_version: u64,
-        commit_version: u64,
+        start_ts: u64,
+        commit_ts: u64,
         callback: Callback<()>,
     },
 }
@@ -43,29 +44,26 @@ pub enum Command {
 impl fmt::Debug for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Command::Get{ref key, version, ..} => {
-                write!(f, "kv::command::get {:?} @ {}", key, version)
+            Command::Get{ref key, start_ts, ..} => {
+                write!(f, "kv::command::get {:?} @ {}", key, start_ts)
             }
-            Command::Scan{ref start_key, limit, version, ..} => {
+            Command::Scan{ref start_key, limit, start_ts, ..} => {
                 write!(f,
                        "kv::command::scan {:?}({}) @ {}",
                        start_key,
                        limit,
-                       version)
+                       start_ts)
             }
-            Command::Prewrite {ref puts, ref deletes, ref locks, start_version, ..} => {
+            Command::Prewrite {ref puts, ref deletes, ref locks, start_ts, ..} => {
                 write!(f,
                        "kv::command::prewrite puts({}), deletes({}), locks({}) @ {}",
                        puts.len(),
                        deletes.len(),
                        locks.len(),
-                       start_version)
+                       start_ts)
             }
-            Command::Commit{start_version, commit_version, ..} => {
-                write!(f,
-                       "kv::command::commit {} -> {}",
-                       start_version,
-                       commit_version)
+            Command::Commit{start_ts, commit_ts, ..} => {
+                write!(f, "kv::command::commit {} -> {}", start_ts, commit_ts)
             }
         }
     }
@@ -113,12 +111,12 @@ impl Storage {
 
     pub fn async_get(&self,
                      key: Key,
-                     version: u64,
+                     start_ts: u64,
                      callback: Callback<Option<Value>>)
                      -> Result<()> {
         let cmd = Command::Get {
             key: key,
-            version: version,
+            start_ts: start_ts,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -128,13 +126,13 @@ impl Storage {
     pub fn async_scan(&self,
                       start_key: Key,
                       limit: usize,
-                      version: u64,
+                      start_ts: u64,
                       callback: Callback<Vec<KvPair>>)
                       -> Result<()> {
         let cmd = Command::Scan {
             start_key: start_key,
             limit: limit,
-            version: version,
+            start_ts: start_ts,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -145,14 +143,14 @@ impl Storage {
                           puts: Vec<KvPair>,
                           deletes: Vec<Key>,
                           locks: Vec<Key>,
-                          start_version: u64,
+                          start_ts: u64,
                           callback: Callback<()>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
             puts: puts,
             deletes: deletes,
             locks: locks,
-            start_version: start_version,
+            start_ts: start_ts,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -160,13 +158,13 @@ impl Storage {
     }
 
     pub fn async_commit(&self,
-                        start_version: u64,
-                        commit_version: u64,
+                        start_ts: u64,
+                        commit_ts: u64,
                         callback: Callback<()>)
                         -> Result<()> {
         let cmd = Command::Commit {
-            start_version: start_version,
-            commit_version: commit_version,
+            start_ts: start_ts,
+            commit_ts: commit_ts,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));

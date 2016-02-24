@@ -88,22 +88,33 @@ message SplitResponse {
     optional metapb.Region right = 2;
 }
 
+message CompactLogRequest {
+    optional uint64 compact_index = 1;
+}
+
+message CompactLogResponse {
+    
+}
+
 enum AdminCommandType {
     InvalidAdmin    = 0;
     ChangePeer      = 1;
     Split           = 2;
+    CompactLog      = 3;
 }
 
 message AdminRequest {
     optional AdminCommandType cmd_type      = 1;
     optional ChangePeerRequest change_peer  = 2;
     optional SplitRequest split             = 3;
+    optional CompactLogRequest compact_log  = 4;
 }
 
 message AdminResponse {
     optional AdminCommandType cmd_type      = 1;
     optional ChangePeerResponse change_peer = 2;
-    optional SplitResponse split            = 3;  
+    optional SplitResponse split            = 3;
+    optional CompactLogResponse compact_log = 4;  
 }
 
 message RegionLeaderRequest {
