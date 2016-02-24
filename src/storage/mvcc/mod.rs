@@ -35,7 +35,7 @@ pub trait MvccEngine : Engine {
         };
         meta.add(version);
         let mval = meta.as_bytes();
-        let batch = vec![Modify::Put((&mkey, &mval)), Modify::Put((&dkey, value))];
+        let batch = vec![Modify::Put((mkey, mval)), Modify::Put((dkey, value.to_vec()))];
         self.write(batch).map_err(Error::from)
     }
 
@@ -50,9 +50,9 @@ pub trait MvccEngine : Engine {
         let has_old_ver = meta.has_version(version);
         meta.delete(version);
         let mval = meta.as_bytes();
-        let mut batch = vec![Modify::Put((&mkey, &mval))];
+        let mut batch = vec![Modify::Put((mkey, mval))];
         if has_old_ver {
-            batch.push(Modify::Delete(&dkey));
+            batch.push(Modify::Delete(dkey));
         }
         self.write(batch).map_err(Error::from)
     }
@@ -146,11 +146,11 @@ mod tests {
         must_get(eng.as_ref(), b"x", 10, b"x");
         must_get(eng.as_ref(), b"x", 11, b"x");
         // delete meta
-        eng.delete(&encode_key(b"x", 0u64)).unwrap();
+        eng.delete(encode_key(b"x", 0u64)).unwrap();
         must_none(eng.as_ref(), b"x", 10);
         // data missing
         must_put(eng.as_mut(), b"y", b"y", 10);
-        eng.delete(&encode_key(b"y", 10)).unwrap();
+        eng.delete(encode_key(b"y", 10)).unwrap();
         assert!(eng.mvcc_get(b"y", 10).is_err());
     }
 

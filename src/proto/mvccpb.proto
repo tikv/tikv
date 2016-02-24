@@ -1,0 +1,22 @@
+syntax = "proto2";
+package mvccpb;
+
+message MetaItem {
+    optional uint64 start_ts   = 1;
+    optional uint64 commit_ts  = 2;
+}
+
+message MetaLock {
+    enum Type {
+        ReadOnly  = 1;
+        ReadWrite = 2;
+    }
+    optional Type   type        = 1;
+    optional uint64 start_ts    = 2;
+    optional bytes  primary_key = 3;
+}
+
+message Meta {
+    optional MetaLock lock        = 1;
+    repeated MetaItem items       = 2;
+}
