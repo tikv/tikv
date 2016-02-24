@@ -8,6 +8,9 @@ use mio::Token;
 use raftserver::Result;
 use super::{ConnData, Sender, TimerMsg};
 
+// TODO: remove ServerHandler later.
+// We will implement raft logic in Server directly, no need to abstract a handler to do it.
+
 // ServerHandler is for server logic, we must implement it for our raft server.
 // We use a event loop to handle all events, when an event is triggered,
 // event loop will call its associated event handler, after we do something

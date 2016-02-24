@@ -52,6 +52,11 @@ impl<T: ServerHandler> Runner<T> {
 
 #[cfg(test)]
 mod tests {
+    // TODO: remove whole tests later.
+    // Following tests are just for studying mio, now we will
+    // implement our own raft server logic, so they are no need.
+    // Later we will add another tests for server.
+
     #![allow(unused_imports)]
     #![allow(unused_variables)]
     #![allow(dead_code)]
@@ -69,7 +74,7 @@ mod tests {
     use mio::{EventLoop, Token};
 
     use super::super::*;
-    use raftserver::*;
+    use raftserver::Result;
     use util::codec::rpc;
 
     struct BaseHandler;
