@@ -21,13 +21,13 @@ pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 pub enum Command {
     Get {
         key: Key,
-        ts: u64,
+        start_ts: u64,
         callback: Callback<Option<Value>>,
     },
     Scan {
         start_key: Key,
         limit: usize,
-        ts: u64,
+        start_ts: u64,
         callback: Callback<Vec<KvPair>>,
     },
     Prewrite {
@@ -47,9 +47,15 @@ pub enum Command {
 impl fmt::Debug for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Command::Get{ref key, ts, ..} => write!(f, "kv::command::get {:?} @ {}", key, ts),
-            Command::Scan{ref start_key, limit, ts, ..} => {
-                write!(f, "kv::command::scan {:?}({}) @ {}", start_key, limit, ts)
+            Command::Get{ref key, start_ts, ..} => {
+                write!(f, "kv::command::get {:?} @ {}", key, start_ts)
+            }
+            Command::Scan{ref start_key, limit, start_ts, ..} => {
+                write!(f,
+                       "kv::command::scan {:?}({}) @ {}",
+                       start_key,
+                       limit,
+                       start_ts)
             }
             Command::Prewrite {ref puts, ref deletes, ref locks, start_ts, ..} => {
                 write!(f,
@@ -104,10 +110,14 @@ impl Storage {
         Ok(())
     }
 
-    pub fn async_get(&self, key: Key, ts: u64, callback: Callback<Option<Value>>) -> Result<()> {
+    pub fn async_get(&self,
+                     key: Key,
+                     start_ts: u64,
+                     callback: Callback<Option<Value>>)
+                     -> Result<()> {
         let cmd = Command::Get {
             key: key,
-            ts: ts,
+            start_ts: start_ts,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -117,13 +127,13 @@ impl Storage {
     pub fn async_scan(&self,
                       start_key: Key,
                       limit: usize,
-                      ts: u64,
+                      start_ts: u64,
                       callback: Callback<Vec<KvPair>>)
                       -> Result<()> {
         let cmd = Command::Scan {
             start_key: start_key,
             limit: limit,
-            ts: ts,
+            start_ts: start_ts,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
