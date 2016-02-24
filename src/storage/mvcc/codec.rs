@@ -31,8 +31,8 @@ mod tests {
 
         for (x, y) in pairs {
             let data = encode_key(x, y);
-            let (k, ver) = decode_key(&data).unwrap();
-            assert_eq!((x, y), (&k as &[u8], ver));
+            let (k, ts) = decode_key(&data).unwrap();
+            assert_eq!((x, y), (&k as &[u8], ts));
         }
     }
 }
