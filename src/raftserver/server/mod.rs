@@ -14,8 +14,6 @@ pub mod handler;
 
 pub use self::handler::ServerHandler;
 
-const DEFAULT_BASE_TICK_MS: u64 = 100;
-
 pub struct ConnData {
     msg_id: u64,
     data: ByteBuf,
@@ -57,8 +55,6 @@ pub enum Msg {
         token: Token,
         data: ConnData,
     },
-    // Tick is for base internal tick message.
-    Tick,
     // Timer is for custom timeout message.
     Timer {
         delay: u64,
