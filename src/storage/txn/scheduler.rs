@@ -58,7 +58,9 @@ impl Scheduler {
             }
             Command::Scan{start_key, limit, start_ts, callback} => {
                 callback(match self.exec_scan(start_key, limit, start_ts) {
-                    Ok(mut results) => Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect()),
+                    Ok(mut results) => {
+                        Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
+                    }
                     Err(e) => Err(::storage::Error::from(e)),
                 });
             }
