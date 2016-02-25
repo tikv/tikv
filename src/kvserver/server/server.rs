@@ -95,7 +95,7 @@ impl Server {
         // convert [u8] to Vec[u8]
         let start_key: Key = cmd_scan_req.get_key().to_vec();
         debug!("start_key [{:?}]", start_key);
-        let received_cb = Box::new(move |kvs: ResultStorage<Vec<KvPair>>| {
+        let received_cb = Box::new(move |kvs: ResultStorage<Vec<ResultStorage<KvPair>>>| {
             let resp: Response = Server::cmd_scan_done(kvs);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             if let Err(e) = sender.send(queue_msg) {
@@ -185,7 +185,8 @@ impl Server {
         resp
     }
 
-    fn cmd_scan_done(kvs: ResultStorage<Vec<KvPair>>) -> Response {
+    #[allow(single_match)]
+    fn cmd_scan_done(kvs: ResultStorage<Vec<ResultStorage<KvPair>>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_scan_resp: CmdScanResponse = CmdScanResponse::new();
         cmd_scan_resp.set_ok(kvs.is_ok());
@@ -193,11 +194,17 @@ impl Server {
             Ok(v) => {
                 // convert storage::KvPair to kvrpcpb::KvPair
                 let mut new_kvs: Vec<kvrpcpb::KvPair> = Vec::new();
-                for &(ref key, ref value) in &v {
-                    let mut new_kv: kvrpcpb::KvPair = kvrpcpb::KvPair::new();
-                    new_kv.set_key(key.clone());
-                    new_kv.set_value(value.clone());
-                    new_kvs.push(new_kv);
+                for result in v {
+                    match result {
+                        Ok((ref key, ref value)) => {
+                            let mut new_kv: kvrpcpb::KvPair = kvrpcpb::KvPair::new();
+                            new_kv.set_key(key.clone());
+                            new_kv.set_value(value.clone());
+                            new_kvs.push(new_kv);
+                        }
+                        Err(_) => {} // TODO(disksing): should send lock to client
+                    }
+
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
             }
