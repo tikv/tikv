@@ -65,15 +65,9 @@ impl TxnStore {
                     start_ts: u64)
                     -> Result<Vec<Key>> {
         let mut locked_keys = vec![];
-        for &(ref k, _) in &puts {
-            locked_keys.push(k.clone());
-        }
-        for k in &deletes {
-            locked_keys.push(k.clone());
-        }
-        for k in &locks {
-            locked_keys.push(k.clone());
-        }
+        locked_keys.extend(puts.iter().map(|&(ref x, _)| x.clone()));
+        locked_keys.extend(deletes.iter().cloned());
+        locked_keys.extend(locks.iter().cloned());
 
         let _guard = self.shard_lock.lock(&locked_keys);
         let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
