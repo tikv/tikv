@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::vec::Vec;
 // use std::io::{Read, Write};
 use std::collections::VecDeque;
@@ -45,8 +43,7 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
         let n = try!(r.try_read(buf.mut_bytes()));
         match n {
             None => {
-                // nothing to do here now, but should we return an error or panic?
-                error!("connection read None data");
+                // nothing to do here.
             }
             Some(n) => buf.advance(n),
         }

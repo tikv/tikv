@@ -21,20 +21,21 @@ pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb:
     }
 }
 
+// a helper function to create peer easily.
+pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
+    let mut peer = metapb::Peer::new();
+    peer.set_node_id(node_id);
+    peer.set_store_id(store_id);
+    peer.set_peer_id(peer_id);
+
+    peer
+}
+
  #[cfg(test)]
 mod tests {
     use proto::metapb;
 
     use super::*;
-
-    fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
-        let mut peer = metapb::Peer::new();
-        peer.set_node_id(node_id);
-        peer.set_store_id(store_id);
-        peer.set_peer_id(peer_id);
-
-        peer
-    }
 
     #[test]
     fn test_peer() {

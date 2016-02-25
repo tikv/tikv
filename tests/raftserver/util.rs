@@ -1,13 +1,12 @@
 #![allow(dead_code)]
 
-use std::option::Option;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::thread;
 use env_logger;
 
-use rocksdb::DB;
+use rocksdb::{DB, WriteBatch, Writable};
 use tempdir::TempDir;
 use uuid::Uuid;
 use protobuf;
@@ -60,7 +59,8 @@ pub fn new_store(engine: Arc<DB>, trans: Arc<RwLock<StoreTransport>>) -> Store<S
     let cfg = Config {
         raft_base_tick_interval: 10,
         raft_heartbeat_ticks: 2,
-        raft_election_timeout_ticks: 10,
+        raft_election_timeout_ticks: 20,
+        raft_log_gc_tick_interval: 100,
         ..Config::default()
     };
     let store = Store::new(cfg, engine, trans.clone()).unwrap();
@@ -164,27 +164,14 @@ pub fn is_error_response(resp: &RaftCommandResponse) -> bool {
     resp.get_header().has_error()
 }
 
-// If the resp is "not leader error", get the real leader.
-// Sometimes, we may still can't get leader even in "not leader error",
-// returns a INVALID_PEER for this.
-pub fn check_not_leader_error(resp: &RaftCommandResponse) -> Option<metapb::Peer> {
-    if !is_error_response(resp) {
-        return None;
-    }
-
-    let err = resp.get_header().get_error().get_detail();
-    if !err.has_not_leader() {
-        return None;
-    }
-
-    let err = err.get_not_leader();
-    if err.has_leader() {
-        return Some(new_peer(INVALID_ID, INVALID_ID, INVALID_ID));
-    }
-
-    Some(err.get_leader().clone())
-}
-
 pub fn is_invalid_peer(peer: &metapb::Peer) -> bool {
     peer.get_peer_id() == INVALID_ID
+}
+
+pub fn write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
+    let wb = WriteBatch::new();
+    for &(ref k, ref v) in kvs {
+        wb.put(&keys::data_key(k), &v).expect("");
+    }
+    db.write(wb).unwrap();
 }
