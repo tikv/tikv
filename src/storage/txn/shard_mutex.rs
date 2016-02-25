@@ -1,20 +1,16 @@
 use std::sync::{Mutex, MutexGuard};
 use std::hash::{Hash, SipHasher, Hasher};
 
-pub struct ShardLock {
+pub struct ShardMutex {
+    mutex: Vec<Mutex<()>>,
     size: usize,
-    locks: Vec<Mutex<()>>,
 }
 
-impl ShardLock {
-    pub fn new(size: usize) -> ShardLock {
-        let mut locks = Vec::<_>::with_capacity(size);
-        for _ in 0..size {
-            locks.push(Mutex::new(()));
-        }
-        ShardLock {
+impl ShardMutex {
+    pub fn new(size: usize) -> ShardMutex {
+        ShardMutex {
+            mutex: (0..size).map(|_| Mutex::new(())).collect(),
             size: size,
-            locks: locks,
         }
     }
 
@@ -24,7 +20,7 @@ impl ShardLock {
         let mut indices: Vec<usize> = keys.iter().map(|x| self.shard_index(x)).collect();
         indices.sort();
         indices.dedup();
-        indices.iter().map(|&i| self.locks[i].lock().unwrap()).collect()
+        indices.iter().map(|&i| self.mutex[i].lock().unwrap()).collect()
     }
 
     fn shard_index<H>(&self, key: &H) -> usize

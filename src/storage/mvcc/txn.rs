@@ -63,7 +63,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         Ok((meta_key, meta))
     }
 
-    pub fn commit(&mut self) -> Result<()> {
+    pub fn submit(&mut self) -> Result<()> {
         let batch = self.writes.drain(..).collect();
         try!(self.engine.write(batch));
         Ok(())
@@ -117,7 +117,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         Ok(())
     }
 
-    pub fn write(&mut self, key: RefKey, commit_ts: u64) -> Result<()> {
+    pub fn commit(&mut self, key: RefKey, commit_ts: u64) -> Result<()> {
         let (meta_key, mut meta) = try!(self.load_meta(key));
         let lock_type = match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => lock.get_field_type(),
@@ -169,13 +169,13 @@ mod tests {
         must_get_none(engine.as_ref(), b"x", 3);
         must_get_err(engine.as_ref(), b"x", 7);
 
-        must_write(engine.as_ref(), b"x", 5, 10);
+        must_commit(engine.as_ref(), b"x", 5, 10);
         must_get_none(engine.as_ref(), b"x", 3);
         must_get_none(engine.as_ref(), b"x", 7);
         must_get(engine.as_ref(), b"x", 13, b"x5");
 
         must_prewrite_delete(engine.as_ref(), b"x", b"x", 15);
-        must_write(engine.as_ref(), b"x", 15, 20);
+        must_commit(engine.as_ref(), b"x", 15, 20);
         must_get_none(engine.as_ref(), b"x", 3);
         must_get_none(engine.as_ref(), b"x", 7);
         must_get(engine.as_ref(), b"x", 13, b"x5");
@@ -189,7 +189,7 @@ mod tests {
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_prewrite_lock_err(engine.as_ref(), b"x", b"x", 6);
-        must_write(engine.as_ref(), b"x", 5, 10);
+        must_commit(engine.as_ref(), b"x", 5, 10);
         must_prewrite_lock_err(engine.as_ref(), b"x", b"x", 6);
         must_prewrite_lock(engine.as_ref(), b"x", b"x", 12);
     }
@@ -225,19 +225,19 @@ mod tests {
                                              ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
         txn.prewrite(Prewrite::Put(key.to_vec(), value.to_vec()), pk).unwrap();
-        txn.commit().unwrap();
+        txn.submit().unwrap();
     }
 
     fn must_prewrite_delete<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
         txn.prewrite(Prewrite::Delete(key.to_vec()), pk).unwrap();
-        txn.commit().unwrap();
+        txn.submit().unwrap();
     }
 
     fn must_prewrite_lock<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
         txn.prewrite(Prewrite::Lock(key.to_vec()), pk).unwrap();
-        txn.commit().unwrap();
+        txn.submit().unwrap();
     }
 
     fn must_prewrite_lock_err<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
@@ -245,15 +245,15 @@ mod tests {
         assert!(txn.prewrite(Prewrite::Lock(key.to_vec()), pk).is_err());
     }
 
-    fn must_write<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
+    fn must_commit<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
         let mut txn = MvccTxn::new(engine, start_ts);
-        txn.write(key, commit_ts).unwrap();
-        txn.commit().unwrap();
+        txn.commit(key, commit_ts).unwrap();
+        txn.submit().unwrap();
     }
 
     fn must_rollback<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
         let mut txn = MvccTxn::new(engine, start_ts);
         txn.rollback(key).unwrap();
-        txn.commit().unwrap();
+        txn.submit().unwrap();
     }
 }
