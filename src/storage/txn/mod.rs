@@ -1,4 +1,4 @@
-mod shard_lock;
+mod shard_mutex;
 mod store;
 mod scheduler;
 
