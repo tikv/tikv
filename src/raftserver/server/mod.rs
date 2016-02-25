@@ -6,19 +6,13 @@ use mio::{self, Token};
 use raftserver::{Result, send_msg};
 use util::codec::rpc;
 
+pub mod config;
 mod bench;
 mod conn;
-mod server;
+pub mod server;
 pub mod handler;
-pub mod run;
 
-pub use self::run::Runner;
 pub use self::handler::ServerHandler;
-
-const SERVER_TOKEN: Token = Token(1);
-const FIRST_CUSTOM_TOKEN: Token = Token(1024);
-const INVALID_TOKEN: Token = Token(0);
-const DEFAULT_BASE_TICK_MS: u64 = 100;
 
 pub struct ConnData {
     msg_id: u64,
@@ -43,11 +37,6 @@ impl ConnData {
     }
 }
 
-pub enum TimerMsg {
-    // None is just for test, we will remove this later.
-    None,
-}
-
 pub enum Msg {
     // Quit event loop.
     Quit,
@@ -61,13 +50,6 @@ pub enum Msg {
         token: Token,
         data: ConnData,
     },
-    // Tick is for base internal tick message.
-    Tick,
-    // Timer is for custom timeout message.
-    Timer {
-        delay: u64,
-        msg: TimerMsg,
-    },
     // Send data to remote peer with address.
     SendPeer {
         addr: String,
@@ -76,23 +58,23 @@ pub enum Msg {
 }
 
 #[derive(Debug)]
-pub struct Sender {
-    sender: mio::Sender<Msg>,
+pub struct SendCh {
+    ch: mio::Sender<Msg>,
 }
 
-impl Clone for Sender {
-    fn clone(&self) -> Sender {
-        Sender { sender: self.sender.clone() }
+impl Clone for SendCh {
+    fn clone(&self) -> SendCh {
+        SendCh { ch: self.ch.clone() }
     }
 }
 
-impl Sender {
-    pub fn new(sender: mio::Sender<Msg>) -> Sender {
-        Sender { sender: sender }
+impl SendCh {
+    pub fn new(ch: mio::Sender<Msg>) -> SendCh {
+        SendCh { ch: ch }
     }
 
     fn send(&self, msg: Msg) -> Result<()> {
-        try!(send_msg(&self.sender, msg));
+        try!(send_msg(&self.ch, msg));
         Ok(())
     }
 
@@ -105,15 +87,6 @@ impl Sender {
         try!(self.send(Msg::WriteData {
             token: token,
             data: data,
-        }));
-
-        Ok(())
-    }
-
-    pub fn timeout_ms(&self, delay: u64, m: TimerMsg) -> Result<()> {
-        try!(self.send(Msg::Timer {
-            delay: delay,
-            msg: m,
         }));
 
         Ok(())
@@ -153,14 +126,10 @@ mod tests {
     #[test]
     fn test_sender() {
         let mut event_loop = EventLoop::new().unwrap();
-        let sender = Sender::new(event_loop.channel());
+        let sender = SendCh::new(event_loop.channel());
         let h = thread::spawn(move || {
             event_loop.run(&mut SenderHandler).unwrap();
         });
-
-        for _ in 1..10000 {
-            sender.timeout_ms(100, TimerMsg::None).unwrap();
-        }
 
         sender.kill().unwrap();
 

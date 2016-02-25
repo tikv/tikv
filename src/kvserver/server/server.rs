@@ -400,11 +400,12 @@ impl mio::Handler for Server {
 mod tests {
     use std::thread;
 
-    use mio::{EventLoop, Handler};
+    use mio::EventLoop;
 
     use proto::kvrpcpb::*;
     use storage::{Key, Value, Storage, Dsn};
     use storage::Error::Other;
+    use storage::KvPair as StorageKV;
     use super::*;
 
     #[test]
@@ -459,5 +460,65 @@ mod tests {
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
         assert_eq!(exp_resp, actual_resp);
+    }
+
+    #[test]
+    fn test_scan_done_empty() {
+        let actual_resp: Response = Server::cmd_scan_done(Ok(Vec::new()));
+        let mut exp_resp: Response = Response::new();
+        let mut exp_cmd_resp: CmdScanResponse = CmdScanResponse::new();
+        exp_cmd_resp.set_ok(true);
+        exp_resp.set_field_type(MessageType::CmdScan);
+        exp_resp.set_cmd_scan_resp(exp_cmd_resp);
+        assert_eq!(exp_resp, actual_resp);
+    }
+
+    #[test]
+    fn test_scan_done_some() {
+        let k0: Key = vec![0u8, 0u8];
+        let v0: Value = vec![255u8, 255u8];
+        let k1: Key = vec![0u8, 1u8];
+        let v1: Value = vec![255u8, 254u8];
+        let kvs: Vec<StorageKV> = vec![(k0.clone(), v0.clone()), (k1.clone(), v1.clone())];
+        let actual_resp: Response = Server::cmd_scan_done(Ok(kvs));
+        assert_eq!(MessageType::CmdScan, actual_resp.get_field_type());
+        let actual_cmd_resp: &CmdScanResponse = actual_resp.get_cmd_scan_resp();
+        assert_eq!(true, actual_cmd_resp.get_ok());
+        let actual_kvs = actual_cmd_resp.get_results();
+        assert_eq!(2, actual_kvs.len());
+        assert_eq!(k0, actual_kvs[0].get_key());
+        assert_eq!(v0, actual_kvs[0].get_value());
+        assert_eq!(k1, actual_kvs[1].get_key());
+        assert_eq!(v1, actual_kvs[1].get_value());
+    }
+
+    #[test]
+    fn test_prewrite_done_ok() {
+        let actual_resp: Response = Server::cmd_prewrite_done(Ok(()));
+        assert_eq!(MessageType::CmdPrewrite, actual_resp.get_field_type());
+        assert_eq!(true, actual_resp.get_cmd_prewrite_resp().get_ok());
+    }
+
+    #[test]
+    fn test_prewrite_done_err() {
+        let err = Other(Box::new("prewrite error"));
+        let actual_resp: Response = Server::cmd_prewrite_done(Err(err));
+        assert_eq!(MessageType::CmdPrewrite, actual_resp.get_field_type());
+        assert_eq!(false, actual_resp.get_cmd_prewrite_resp().get_ok());
+    }
+
+    #[test]
+    fn test_commit_done_ok() {
+        let actual_resp: Response = Server::cmd_commit_done(Ok(()));
+        assert_eq!(MessageType::CmdCommit, actual_resp.get_field_type());
+        assert_eq!(true, actual_resp.get_cmd_commit_resp().get_ok());
+    }
+
+    #[test]
+    fn test_commit_done_err() {
+        let err = Other(Box::new("commit error"));
+        let actual_resp: Response = Server::cmd_commit_done(Err(err));
+        assert_eq!(MessageType::CmdCommit, actual_resp.get_field_type());
+        assert_eq!(false, actual_resp.get_cmd_commit_resp().get_ok());
     }
 }

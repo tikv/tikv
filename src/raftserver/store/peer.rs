@@ -12,7 +12,7 @@ use proto::metapb;
 use proto::raftpb::{self, ConfChangeType};
 use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse, ChangePeerRequest};
 use proto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminResponse};
-use proto::raft_serverpb::RaftMessage;
+use proto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other};
 use super::store::Store;
@@ -38,6 +38,9 @@ pub enum ExecResult {
         peer: metapb::Peer,
         region: metapb::Region,
     },
+    CompactLog {
+        state: RaftTruncatedState,
+    },
 }
 
 // When we apply commands in handing ready, we should also need a way to
@@ -52,8 +55,7 @@ pub struct ReadyResult {
 
 pub struct Peer {
     engine: Arc<DB>,
-    store_id: u64,
-    peer_id: u64,
+    pub peer: metapb::Peer,
     region_id: u64,
     leader_id: u64,
     pub raft_group: RawNode<RaftStorage>,
@@ -126,10 +128,10 @@ impl Peer {
 
         let raft_group = try!(RawNode::new(&raft_cfg, storage.clone(), &[]));
 
+        let node_id = store.get_node_id();
         let mut peer = Peer {
             engine: store.get_engine(),
-            store_id: store_id,
-            peer_id: peer_id,
+            peer: util::new_peer(node_id, store_id, peer_id),
             region_id: region.get_region_id(),
             leader_id: raft::INVALID_ID,
             storage: storage,
@@ -181,7 +183,7 @@ impl Peer {
     }
 
     pub fn get_peer_id(&self) -> u64 {
-        self.peer_id
+        self.peer.get_peer_id()
     }
 
     pub fn get_raft_status(&self) -> raft::Status {
@@ -193,7 +195,7 @@ impl Peer {
     }
 
     pub fn is_leader(&self) -> bool {
-        self.leader_id == self.peer_id
+        self.leader_id == self.get_peer_id()
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self,
@@ -203,8 +205,8 @@ impl Peer {
             return Ok(None);
         }
 
-        debug!("handle raft ready for peer {} at region {}",
-               self.peer_id,
+        debug!("handle raft ready for peer {:?} at region {}",
+               self.peer,
                self.region_id);
 
         let ready = self.raft_group.ready();
@@ -228,9 +230,9 @@ impl Peer {
     pub fn propose_pending_cmd(&mut self, pending_cmd: &mut PendingCmd) -> Result<()> {
         if pending_cmd.cmd.is_none() {
             // This may only occur in re-propose.
-            debug!("pending command msg is none for region {} in peer {}",
+            debug!("pending command msg is none for region {} in peer {:?}",
                    self.region_id,
-                   self.peer_id);
+                   self.peer);
             return Ok(());
         }
 
@@ -344,9 +346,9 @@ impl Peer {
         send_msg.set_to_peer(to_peer);
 
         if let Err(e) = trans.send(send_msg) {
-            warn!("region {} on store {} failed to send msg to {} in store {}, err: {:?}",
+            warn!("region {} with peer {:?} failed to send msg to {} in store {}, err: {:?}",
                   self.region_id,
-                  self.store_id,
+                  self.peer,
                   to_peer_id,
                   to_store_id,
                   e);
@@ -522,7 +524,7 @@ impl Peer {
 
         match self.engine
                   .write(wb) {
-            Ok(()) => {
+            Ok(_) => {
                 self.storage.wl().set_applied_index(index);
 
                 if let Some(ref exec_result) = exec_result {
@@ -530,10 +532,13 @@ impl Peer {
                         ExecResult::ChangePeer{ref region, ..} => {
                             self.storage.wl().set_region(region);
                         }
-                        // TODO: handle truncate log command and set truncate log state
+                        ExecResult::CompactLog{ref state} => {
+                            self.storage.wl().set_truncated_state(state);
+                            // TODO: we can set exec_result to None, because outer store
+                            // doesn't need it.
+                        }
                     }
-                }
-                ()
+                };
             }
             Err(e) => {
                 error!("commit batch failed err {:?}", e);
@@ -588,6 +593,7 @@ impl Peer {
         let (mut response, exec_result) = try!(match cmd_type {
             cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
             cmd::AdminCommandType::Split => self.execute_split(ctx, request),
+            cmd::AdminCommandType::CompactLog => self.execute_compact_log(ctx, request),
             e => Err(other(format!("unsupported admin command type {:?}", e))),
         });
         response.set_cmd_type(cmd_type);
@@ -663,6 +669,26 @@ impl Peer {
                      _: &AdminRequest)
                      -> Result<(AdminResponse, Option<ExecResult>)> {
         unimplemented!();
+    }
+
+    fn execute_compact_log(&mut self,
+                           ctx: &ExecContext,
+                           request: &AdminRequest)
+                           -> Result<(AdminResponse, Option<ExecResult>)> {
+        let request = request.get_compact_log();
+        let compact_index = request.get_compact_index();
+        let resp = AdminResponse::new();
+
+        let first_index = self.storage.rl().first_index();
+        if compact_index <= first_index {
+            debug!("compact index {} <= first index {}, no need to compact",
+                   compact_index,
+                   first_index);
+            return Ok((resp, None));
+        }
+
+        let state = try!(self.storage.rl().compact(ctx.wb, compact_index));
+        Ok((resp, Some(ExecResult::CompactLog { state: state })))
     }
 
     fn execute_write_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
