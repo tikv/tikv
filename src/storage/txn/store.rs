@@ -2,7 +2,7 @@ use storage::{Key, RefKey, Value, KvPair};
 use storage::Engine;
 use storage::mvcc::{MvccTxn, Prewrite};
 use super::shard_lock::ShardLock;
-use super::Result;
+use super::{Error, Result};
 
 pub struct TxnStore {
     engine: Box<Engine>,
@@ -23,6 +23,38 @@ impl TxnStore {
         let _guard = self.shard_lock.lock(&[key]);
         let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
         Ok(try!(txn.get(key)))
+    }
+
+    #[allow(dead_code)]
+    pub fn batch_get(&self, keys: &[RefKey], start_ts: u64) -> Vec<Result<Option<Value>>> {
+        let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let mut results = Vec::<_>::with_capacity(keys.len());
+        for k in keys {
+            let _guard = self.shard_lock.lock(keys);
+            results.push(txn.get(k).map_err(Error::from));
+        }
+        results
+    }
+
+    pub fn scan(&self, key: RefKey, limit: usize, start_ts: u64) -> Result<Vec<Result<KvPair>>> {
+        let mut results = vec![];
+        let mut key = key.to_vec();
+        let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        while results.len() < limit {
+            let mut next_key = match try!(self.engine.seek(&key)) {
+                Some((key, _)) => key,
+                None => break,
+            };
+            let _guard = self.shard_lock.lock(&next_key);
+            match txn.get(&next_key) {
+                Ok(Some(value)) => results.push(Ok((next_key.clone(), value))),
+                Ok(None) => {}
+                Err(e) => results.push(Err(Error::from(e))),
+            };
+            next_key.push(b'\0');
+            key = next_key;
+        }
+        Ok(results)
     }
 
     pub fn prewrite(&self,

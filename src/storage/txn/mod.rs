@@ -4,12 +4,16 @@ mod scheduler;
 
 pub use self::scheduler::Scheduler;
 pub use self::store::TxnStore;
-use storage::mvcc;
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Mvcc(err: mvcc::Error) {
+        Engine(err: ::storage::engine::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Mvcc(err: ::storage::mvcc::Error) {
             from()
             cause(err)
             description(err.description())

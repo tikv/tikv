@@ -22,6 +22,14 @@ impl Scheduler {
         Ok(try!(self.store.get(&key, start_ts)))
     }
 
+    fn exec_scan(&self,
+                 start_key: Key,
+                 limit: usize,
+                 start_ts: u64)
+                 -> Result<Vec<Result<KvPair>>> {
+        Ok(try!(self.store.scan(&start_key, limit, start_ts)))
+    }
+
     fn exec_prewrite(&mut self,
                      puts: Vec<KvPair>,
                      deletes: Vec<Key>,
@@ -48,8 +56,11 @@ impl Scheduler {
             Command::Get{key, start_ts, callback} => {
                 callback(self.exec_get(key, start_ts).map_err(::storage::Error::from));
             }
-            Command::Scan{..} => {
-                unimplemented!();
+            Command::Scan{start_key, limit, start_ts, callback} => {
+                callback(match self.exec_scan(start_key, limit, start_ts) {
+                    Ok(mut results) => Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect()),
+                    Err(e) => Err(::storage::Error::from(e)),
+                });
             }
             Command::Prewrite{puts, deletes, locks, start_ts, callback} => {
                 callback(self.exec_prewrite(puts, deletes, locks, start_ts)

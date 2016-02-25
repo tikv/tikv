@@ -27,7 +27,7 @@ pub enum Command {
         start_key: Key,
         limit: usize,
         start_ts: u64,
-        callback: Callback<Vec<KvPair>>,
+        callback: Callback<Vec<Result<KvPair>>>,
     },
     Prewrite {
         puts: Vec<KvPair>,
@@ -127,7 +127,7 @@ impl Storage {
                       start_key: Key,
                       limit: usize,
                       start_ts: u64,
-                      callback: Callback<Vec<KvPair>>)
+                      callback: Callback<Vec<Result<KvPair>>>)
                       -> Result<()> {
         let cmd = Command::Scan {
             start_key: start_key,
