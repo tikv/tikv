@@ -479,7 +479,7 @@ mod tests {
         let v0: Value = vec![255u8, 255u8];
         let k1: Key = vec![0u8, 1u8];
         let v1: Value = vec![255u8, 254u8];
-        let kvs: Vec<StorageKV> = vec![(k0.clone(), v0.clone()), (k1.clone(), v1.clone())];
+        let kvs: Vec<ResultStorage<StorageKV>> = vec![Ok((k0.clone(), v0.clone())), Ok((k1.clone(), v1.clone()))];
         let actual_resp: Response = Server::cmd_scan_done(Ok(kvs));
         assert_eq!(MessageType::CmdScan, actual_resp.get_field_type());
         let actual_cmd_resp: &CmdScanResponse = actual_resp.get_cmd_scan_resp();
