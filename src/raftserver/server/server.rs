@@ -1,60 +1,68 @@
-#![allow(dead_code)]
-#![allow(unused_must_use)]
-
 use std::collections::HashMap;
+use std::option::Option;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
 use raftserver::{Result, other};
-use super::{SERVER_TOKEN, DEFAULT_BASE_TICK_MS};
-use super::{Msg, SendCh, ConnData, TimerMsg};
+use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::handler::ServerHandler;
+use super::config::Config;
 
+const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const INVALID_TOKEN: Token = Token(0);
-// Maximum connections we should support at same time.
-// TODO: Use a config for it later.
-const MAX_CONN_CAPACITY: usize = 4096;
 
 pub struct Server<T: ServerHandler> {
-    pub listener: TcpListener,
-    pub conns: Slab<Conn>,
-    pub sendch: SendCh,
+    cfg: Config,
+
+    listener: TcpListener,
+    conns: Slab<Conn>,
+    sendch: SendCh,
 
     peers: HashMap<String, Token>,
     handler: T,
+
+    event_loop: Option<EventLoop<Server<T>>>,
 }
 
 impl<T: ServerHandler> Server<T> {
-    pub fn new(h: T, l: TcpListener, sendch: SendCh) -> Server<T> {
-        Server {
+    pub fn new(cfg: Config, h: T) -> Result<Server<T>> {
+        let addr = try!((&cfg.addr).parse());
+        let listener = try!(TcpListener::bind(&addr));
+
+        // create a event loop;
+        let mut event_loop = try!(EventLoop::new());
+        try!(event_loop.register(&listener,
+                                 SERVER_TOKEN,
+                                 EventSet::readable(),
+                                 PollOpt::edge()));
+
+        let sendch = SendCh::new(event_loop.channel());
+
+        let max_conn_capacity = cfg.max_conn_capacity;
+
+        Ok(Server {
+            cfg: cfg,
             handler: h,
-            listener: l,
+            listener: listener,
             sendch: sendch,
-            conns: Slab::new_starting_at(FIRST_CUSTOM_TOKEN, MAX_CONN_CAPACITY),
+            conns: Slab::new_starting_at(FIRST_CUSTOM_TOKEN, max_conn_capacity),
             peers: HashMap::new(),
-        }
+            event_loop: Some(event_loop),
+        })
     }
 
-    pub fn register_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) -> Result<()> {
-        let token = Msg::Tick;
-        // must ok, maybe check error later.
-        event_loop.timeout_ms(token, DEFAULT_BASE_TICK_MS);
+    pub fn run(&mut self) -> Result<()> {
+        let mut event_loop = self.event_loop.take().unwrap();
+        try!(event_loop.run(self));
         Ok(())
     }
 
-    fn register_timer(&mut self,
-                      event_loop: &mut EventLoop<Server<T>>,
-                      delay: u64,
-                      msg: TimerMsg) {
-        let token = Msg::Timer {
-            delay: delay,
-            msg: msg,
-        };
-        event_loop.timeout_ms(token, delay);
+    pub fn get_sendch(&self) -> SendCh {
+        self.sendch.clone()
     }
 
     fn remove_conn(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
@@ -66,7 +74,9 @@ impl<T: ServerHandler> Server<T> {
                     self.peers.remove(&addr);
                 }
 
-                event_loop.deregister(&conn.sock);
+                if let Err(e) = event_loop.deregister(&conn.sock) {
+                    error!("deregister conn err {:?}", e);
+                }
             }
             None => {
                 warn!("missing connection for token {}", token.as_usize());
@@ -97,7 +107,40 @@ impl<T: ServerHandler> Server<T> {
             .ok_or_else(|| other("add new connection failed"))
     }
 
-    fn handle_readeable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+    fn handle_conn_readable(&mut self,
+                            event_loop: &mut EventLoop<Server<T>>,
+                            token: Token)
+                            -> Result<()> {
+        let msgs = try!(match self.conns.get_mut(token) {
+            None => {
+                warn!("missing conn for token {:?}", token);
+                return Ok(());
+            }
+            Some(conn) => conn.read(event_loop),
+        });
+
+        if msgs.is_empty() {
+            // Read no message, no need to handle.
+            return Ok(());
+        }
+
+        // TODO: we will refactor later without handler.
+        let res = try!(self.handler.handle_read_data(&self.sendch, token, msgs));
+        if res.is_empty() {
+            return Ok(());
+        }
+
+        // append to write buffer here, no need using sender to notify.
+        if let Some(conn) = self.conns.get_mut(token) {
+            for data in res {
+                try!(conn.append_write_buf(event_loop, data));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_readable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
         match token {
             SERVER_TOKEN => {
                 loop {
@@ -117,45 +160,16 @@ impl<T: ServerHandler> Server<T> {
                         }
                     };
 
-                    self.add_new_conn(event_loop, sock, None)
-                        .map_err(|e| {
-                            error!("register conn err {:?}", e);
-                        });
+                    if let Err(e) = self.add_new_conn(event_loop, sock, None) {
+                        error!("register conn err {:?}", e);
+                    }
                 }
             }
             token => {
-                let msgs = match self.conns.get_mut(token) {
-                    None => {
-                        warn!("missing conn for token {:?}", token);
-                        return;
-                    }
-                    Some(conn) => conn.read(event_loop),
-                };
-
-                msgs.and_then(|msgs| {
-                        if msgs.is_empty() {
-                            return Ok(msgs);
-                        }
-
-                        self.handler.handle_read_data(&self.sendch, token, msgs)
-                    })
-                    .and_then(|res| {
-                        if res.is_empty() {
-                            return Ok(());
-                        }
-
-                        // append to write buffer here, no need using sender to notify.
-                        if let Some(conn) = self.conns.get_mut(token) {
-                            for data in res {
-                                try!(conn.append_write_buf(event_loop, data));
-                            }
-                        }
-                        Ok(())
-                    })
-                    .map_err(|e| {
-                        warn!("handle read conn err {:?}, remove", e);
-                        self.remove_conn(event_loop, token);
-                    });
+                if let Err(e) = self.handle_conn_readable(event_loop, token) {
+                    warn!("handle read conn for token {:?} err {:?}, remove", token, e);
+                    self.remove_conn(event_loop, token);
+                }
             }
 
         }
@@ -170,10 +184,10 @@ impl<T: ServerHandler> Server<T> {
             Some(conn) => conn.write(event_loop),
         };
 
-        res.map_err(|e| {
+        if let Err(e) = res {
             warn!("handle write conn err {:?}, remove", e);
             self.remove_conn(event_loop, token);
-        });
+        }
     }
 
     fn handle_writedata(&mut self,
@@ -188,24 +202,10 @@ impl<T: ServerHandler> Server<T> {
             Some(conn) => conn.append_write_buf(event_loop, data),
         };
 
-        res.map_err(|e| {
+        if let Err(e) = res {
             warn!("handle write data err {:?}, remove", e);
             self.remove_conn(event_loop, token);
-        });
-    }
-
-    fn handle_tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
-        self.handler
-            .handle_tick(&self.sendch)
-            .map_err(|e| warn!("handle tick err {:?}", e));
-
-        self.register_tick(event_loop);
-    }
-
-    fn handle_timer(&mut self, _: &mut EventLoop<Server<T>>, msg: TimerMsg) {
-        self.handler
-            .handle_timer(&self.sendch, msg)
-            .map_err(|e| warn!("handle timer err {:?}", e));
+        }
     }
 
     fn connect_peer(&mut self, event_loop: &mut EventLoop<Server<T>>, addr: &str) -> Result<Token> {
@@ -248,7 +248,7 @@ impl<T: ServerHandler> Handler for Server<T> {
         }
 
         if events.is_readable() {
-            self.handle_readeable(event_loop, token);
+            self.handle_readable(event_loop, token);
         }
 
         if events.is_writable() {
@@ -260,33 +260,22 @@ impl<T: ServerHandler> Handler for Server<T> {
         match msg {
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData{token, data} => self.handle_writedata(event_loop, token, data),
-            Msg::Timer{delay, msg} => self.register_timer(event_loop, delay, msg),
             Msg::SendPeer{addr, data} => self.handle_sendpeer(event_loop, addr, data),
             _ => panic!("unexpected msg"),
         }
     }
 
-    fn timeout(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
-        match msg {
-            Msg::Tick => self.handle_tick(event_loop),
-            Msg::Timer{msg, ..} => self.handle_timer(event_loop, msg),
-            _ => panic!("unexpected msg"),
-        }
+    fn timeout(&mut self, _: &mut EventLoop<Server<T>>, _: Msg) {
+        // nothing to do now.
     }
 
     fn interrupted(&mut self, event_loop: &mut EventLoop<Server<T>>) {
         event_loop.shutdown();
     }
 
-    fn tick(&mut self, event_loop: &mut EventLoop<Server<T>>) {
-        if event_loop.is_running() {
-            return;
-        }
-
+    fn tick(&mut self, _: &mut EventLoop<Server<T>>) {
         // tick is called in the end of the loop, so if we notify to quit,
         // we will quit the server here.
-        info!("begin to quit server......");
-        self.handler.handle_quit();
-        info!("quit server over");
+        // TODO: handle quit server if event_loop is_running() returns false.
     }
 }
