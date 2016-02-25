@@ -11,13 +11,8 @@ mod bench;
 mod conn;
 pub mod server;
 pub mod handler;
-pub mod run;
 
-pub use self::run::Runner;
 pub use self::handler::ServerHandler;
-
-const SERVER_TOKEN: Token = Token(1);
-const DEFAULT_BASE_TICK_MS: u64 = 100;
 
 pub struct ConnData {
     msg_id: u64,
@@ -42,11 +37,6 @@ impl ConnData {
     }
 }
 
-pub enum TimerMsg {
-    // None is just for test, we will remove this later.
-    None,
-}
-
 pub enum Msg {
     // Quit event loop.
     Quit,
@@ -59,13 +49,6 @@ pub enum Msg {
     WriteData {
         token: Token,
         data: ConnData,
-    },
-    // Tick is for base internal tick message.
-    Tick,
-    // Timer is for custom timeout message.
-    Timer {
-        delay: u64,
-        msg: TimerMsg,
     },
     // Send data to remote peer with address.
     SendPeer {
@@ -109,15 +92,6 @@ impl SendCh {
         Ok(())
     }
 
-    pub fn timeout_ms(&self, delay: u64, m: TimerMsg) -> Result<()> {
-        try!(self.send(Msg::Timer {
-            delay: delay,
-            msg: m,
-        }));
-
-        Ok(())
-    }
-
     pub fn send_peer(&self, addr: String, data: ConnData) -> Result<()> {
         try!(self.send(Msg::SendPeer {
             addr: addr,
@@ -156,10 +130,6 @@ mod tests {
         let h = thread::spawn(move || {
             event_loop.run(&mut SenderHandler).unwrap();
         });
-
-        for _ in 1..10000 {
-            sender.timeout_ms(100, TimerMsg::None).unwrap();
-        }
 
         sender.kill().unwrap();
 
