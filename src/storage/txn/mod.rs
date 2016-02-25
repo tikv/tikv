@@ -1,7 +1,9 @@
+mod shard_lock;
+mod store;
 mod scheduler;
 
 pub use self::scheduler::Scheduler;
-
+pub use self::store::TxnStore;
 use storage::mvcc;
 
 quick_error! {

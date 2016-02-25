@@ -1,25 +1,25 @@
 use std::collections::BTreeMap;
 
-use storage::{Engine, MvccStore};
-use storage::mvcc::Prewrite;
+use storage::Engine;
 use storage::{Command, Key, Value, KvPair};
 use super::{Result, Error};
+use super::store::TxnStore;
 
 pub struct Scheduler {
-    store: MvccStore,
+    store: TxnStore,
     lock_keys: BTreeMap<u64, Vec<Key>>,
 }
 
 impl Scheduler {
     pub fn new(engine: Box<Engine>) -> Scheduler {
         Scheduler {
-            store: MvccStore::new(engine),
+            store: TxnStore::new(engine),
             lock_keys: BTreeMap::new(),
         }
     }
 
     fn exec_get(&self, key: Key, start_ts: u64) -> Result<Option<Value>> {
-        Ok(try!(self.store.get(key, start_ts)))
+        Ok(try!(self.store.get(&key, start_ts)))
     }
 
     fn exec_prewrite(&mut self,
@@ -29,19 +29,7 @@ impl Scheduler {
                      start_ts: u64)
                      -> Result<()> {
         let primary = Self::primary_key(&puts, &deletes);
-        let mut locked_keys = Vec::<Key>::new();
-        for (k, v) in puts {
-            try!(self.store.prewrite(k.clone(), Prewrite::Put(v), primary.clone(), start_ts));
-            locked_keys.push(k);
-        }
-        for k in deletes {
-            try!(self.store.prewrite(k.clone(), Prewrite::Delete, primary.clone(), start_ts));
-            locked_keys.push(k);
-        }
-        for k in locks {
-            try!(self.store.prewrite(k.clone(), Prewrite::Lock, primary.clone(), start_ts));
-            locked_keys.push(k);
-        }
+        let locked_keys = try!(self.store.prewrite(primary, puts, deletes, locks, start_ts));
         self.lock_keys.insert(start_ts, locked_keys);
         Ok(())
     }
@@ -51,14 +39,7 @@ impl Scheduler {
             Some(x) => x,
             None => return Err(Error::TxnNotFound),
         };
-        let (primary, secondaries) = match keys.split_first() {
-            Some(x) => x,
-            None => return Ok(()),
-        };
-        try!(self.store.commit(primary.clone(), start_ts, commit_ts));
-        for k in secondaries {
-            try!(self.store.commit(k.clone(), start_ts, commit_ts));
-        }
+        try!(self.store.commit(keys, start_ts, commit_ts));
         Ok(())
     }
 

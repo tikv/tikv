@@ -1,8 +1,8 @@
 mod meta;
 mod codec;
-mod store;
+mod txn;
 
-pub use self::store::{MvccStore, Prewrite};
+pub use self::txn::{MvccTxn, Prewrite};
 
 quick_error! {
     #[derive(Debug)]

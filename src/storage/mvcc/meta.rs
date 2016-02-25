@@ -23,6 +23,12 @@ impl Meta {
         self.pb.write_to_vec(os).unwrap();
     }
 
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut os = vec![];
+        self.write_to(&mut os);
+        os
+    }
+
     pub fn get_lock(&self) -> Option<&MetaLock> {
         if self.pb.has_lock() {
             Some(self.pb.get_lock())

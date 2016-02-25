@@ -9,7 +9,6 @@ mod mvcc;
 mod txn;
 
 pub use self::engine::{Engine, Dsn};
-pub use self::mvcc::{MvccStore, Prewrite};
 
 pub type Key = Vec<u8>;
 pub type RefKey<'a> = &'a [u8];
