@@ -1,6 +1,7 @@
-use storage::{Key, RefKey, Value, KvPair};
+
+use storage::{Key, RefKey, Value, KvPair, Write};
 use storage::Engine;
-use storage::mvcc::{MvccTxn, Prewrite};
+use storage::mvcc::MvccTxn;
 use super::shard_mutex::ShardMutex;
 use super::{Error, Result};
 
@@ -57,28 +58,13 @@ impl TxnStore {
         Ok(results)
     }
 
-    pub fn prewrite(&self,
-                    primary: Key,
-                    puts: Vec<KvPair>,
-                    deletes: Vec<Key>,
-                    locks: Vec<Key>,
-                    start_ts: u64)
-                    -> Result<Vec<Key>> {
-        let mut locked_keys = vec![];
-        locked_keys.extend(puts.iter().map(|&(ref x, _)| x.clone()));
-        locked_keys.extend(deletes.iter().cloned());
-        locked_keys.extend(locks.iter().cloned());
+    pub fn prewrite(&self, writes: Vec<Write>, primary: Key, start_ts: u64) -> Result<Vec<Key>> {
+        let locked_keys: Vec<Key> = writes.iter().map(|x| x.key().to_owned()).collect();
 
         let _guard = self.shard_mutex.lock(&locked_keys);
         let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
-        for (k, v) in puts {
-            try!(txn.prewrite(Prewrite::Put(k, v), &primary));
-        }
-        for k in deletes {
-            try!(txn.prewrite(Prewrite::Delete(k), &primary));
-        }
-        for k in locks {
-            try!(txn.prewrite(Prewrite::Lock(k), &primary));
+        for w in writes {
+            try!(txn.prewrite(w, &primary));
         }
         try!(txn.submit());
         // TODO(disksing): rollback if error occurs

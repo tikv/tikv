@@ -1,6 +1,6 @@
 use std::fmt;
 
-use storage::{Key, RefKey, Value};
+use storage::{Key, RefKey, Value, Write};
 use storage::engine::{Engine, Modify};
 use proto::mvccpb::{MetaLock, MetaLock_Type, MetaItem};
 use util::codec::bytes;
@@ -8,28 +8,10 @@ use super::meta::Meta;
 use super::codec;
 use super::{Error, Result};
 
-#[derive(Debug)]
-pub enum Prewrite {
-    Put(Key, Value),
-    Delete(Key),
-    Lock(Key),
-}
-
-#[allow(match_same_arms)]
-impl Prewrite {
-    fn key(&self) -> RefKey {
-        match *self {
-            Prewrite::Put(ref key, _) => key,
-            Prewrite::Delete(ref key) => key,
-            Prewrite::Lock(ref key) => key,
-        }
-    }
-
-    fn meta_lock_type(&self) -> MetaLock_Type {
-        match *self {
-            Prewrite::Put(..) | Prewrite::Delete(_) => MetaLock_Type::ReadWrite,
-            Prewrite::Lock(_) => MetaLock_Type::ReadOnly,
-        }
+fn meta_lock_type(write: &Write) -> MetaLock_Type {
+    match *write {
+        Write::Put(_) | Write::Delete(_) => MetaLock_Type::ReadWrite,
+        Write::Lock(_) => MetaLock_Type::ReadOnly,
     }
 }
 
@@ -88,8 +70,8 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         }
     }
 
-    pub fn prewrite(&mut self, pw: Prewrite, primary: RefKey) -> Result<()> {
-        let key = pw.key();
+    pub fn prewrite(&mut self, w: Write, primary: RefKey) -> Result<()> {
+        let key = w.key();
         let (meta_key, mut meta) = try!(self.load_meta(key));
         if let Some(lock) = meta.get_lock() {
             return Err(Error::KeyIsLocked {
@@ -103,14 +85,14 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         }
 
         let mut lock = MetaLock::new();
-        lock.set_field_type(pw.meta_lock_type());
+        lock.set_field_type(meta_lock_type(&w));
         lock.set_primary_key(primary.to_vec());
         lock.set_start_ts(self.start_ts);
         meta.set_lock(lock);
         let modify = Modify::Put((meta_key.clone(), meta.to_bytes()));
         self.writes.push(modify);
 
-        if let Prewrite::Put(_, ref value) = pw {
+        if let Write::Put((_, ref value)) = w {
             let value_key = codec::encode_key(key, self.start_ts);
             self.writes.push(Modify::Put((value_key, value.clone())));
         }
@@ -156,7 +138,8 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MvccTxn, Prewrite};
+    use super::MvccTxn;
+    use storage::Write;
     use storage::engine::{self, Engine, Dsn};
     use util::codec::bytes;
 
@@ -267,25 +250,25 @@ mod tests {
                                              pk: &[u8],
                                              ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        txn.prewrite(Prewrite::Put(key.to_vec(), value.to_vec()), pk).unwrap();
+        txn.prewrite(Write::Put((key.to_vec(), value.to_vec())), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_delete<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        txn.prewrite(Prewrite::Delete(key.to_vec()), pk).unwrap();
+        txn.prewrite(Write::Delete(key.to_vec()), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_lock<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        txn.prewrite(Prewrite::Lock(key.to_vec()), pk).unwrap();
+        txn.prewrite(Write::Lock(key.to_vec()), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_lock_err<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        assert!(txn.prewrite(Prewrite::Lock(key.to_vec()), pk).is_err());
+        assert!(txn.prewrite(Write::Lock(key.to_vec()), pk).is_err());
     }
 
     fn must_commit<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {

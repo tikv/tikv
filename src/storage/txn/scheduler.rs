@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use storage::Engine;
-use storage::{Command, Key, Value, KvPair};
+use storage::{Command, Key, Value, KvPair, Write};
 use super::{Result, Error};
 use super::store::TxnStore;
 
@@ -30,14 +30,9 @@ impl Scheduler {
         Ok(try!(self.store.scan(&start_key, limit, start_ts)))
     }
 
-    fn exec_prewrite(&mut self,
-                     puts: Vec<KvPair>,
-                     deletes: Vec<Key>,
-                     locks: Vec<Key>,
-                     start_ts: u64)
-                     -> Result<()> {
-        let primary = Self::primary_key(&puts, &deletes);
-        let locked_keys = try!(self.store.prewrite(primary, puts, deletes, locks, start_ts));
+    fn exec_prewrite(&mut self, writes: Vec<Write>, start_ts: u64) -> Result<()> {
+        let primary = Self::primary_key(&writes);
+        let locked_keys = try!(self.store.prewrite(writes, primary, start_ts));
         self.lock_keys.insert(start_ts, locked_keys);
         Ok(())
     }
@@ -64,8 +59,8 @@ impl Scheduler {
                     Err(e) => Err(::storage::Error::from(e)),
                 });
             }
-            Command::Prewrite{puts, deletes, locks, start_ts, callback} => {
-                callback(self.exec_prewrite(puts, deletes, locks, start_ts)
+            Command::Prewrite{writes, start_ts, callback} => {
+                callback(self.exec_prewrite(writes, start_ts)
                              .map_err(::storage::Error::from));
             }
             Command::Commit{start_ts, commit_ts, callback} => {
@@ -74,12 +69,14 @@ impl Scheduler {
         }
     }
 
-    fn primary_key(puts: &[KvPair], deletes: &[Key]) -> Key {
-        if !puts.is_empty() {
-            return puts[0].0.clone();
-        }
-        if !deletes.is_empty() {
-            return deletes[0].clone();
+    #[allow(match_same_arms)]
+    fn primary_key(writes: &[Write]) -> Key {
+        for w in writes {
+            match *w {
+                Write::Put((ref key, _)) => return key.to_vec(),
+                Write::Delete(ref key) => return key.to_vec(),
+                _ => {}
+            }
         }
         panic!("no puts or deletes");
     }

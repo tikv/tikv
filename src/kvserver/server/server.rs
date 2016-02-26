@@ -11,7 +11,7 @@ use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRespo
                      CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
                      Request, Response, MessageType};
 use storage;
-use storage::{Key, Storage, Value, KvPair};
+use storage::{Key, Storage, Value, KvPair, Write as StorageWrite};
 
 use super::conn::Conn;
 
@@ -123,25 +123,23 @@ impl Server {
         }
         let cmd_prewrite_req: &CmdPrewriteRequest = msg.get_cmd_prewrite_req();
         let sender = event_loop.channel();
-        let puts: Vec<_> = cmd_prewrite_req.get_puts()
-                                           .iter()
-                                           .map(|kv| {
-                                               (kv.get_key().to_vec(), kv.get_value().to_vec())
-                                           })
-                                           .collect();
-        let deletes: Vec<_> = cmd_prewrite_req.get_dels().to_vec();
-        let locks: Vec<_> = cmd_prewrite_req.get_locks().to_vec();
+        let mut writes = vec![];
+        writes.extend(cmd_prewrite_req.get_puts().iter().map(|kv| {
+            StorageWrite::Put((kv.get_key().to_vec(), kv.get_value().to_vec()))
+        }));
+        writes.extend(cmd_prewrite_req.get_dels()
+                                      .iter()
+                                      .map(|k| StorageWrite::Delete(k.to_owned())));
+        writes.extend(cmd_prewrite_req.get_locks()
+                                      .iter()
+                                      .map(|k| StorageWrite::Lock(k.to_owned())));
         let received_cb = Box::new(move |r: ResultStorage<()>| {
             let resp: Response = Server::cmd_prewrite_done(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         });
         self.store
-            .async_prewrite(puts,
-                            deletes,
-                            locks,
-                            cmd_prewrite_req.get_start_version(),
-                            received_cb)
+            .async_prewrite(writes, cmd_prewrite_req.get_start_version(), received_cb)
             .map_err(ServerError::Storage)
     }
 
