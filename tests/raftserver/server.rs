@@ -59,12 +59,13 @@ impl ClusterSimulator for ServerCluster {
         assert!(!self.senders.contains_key(&store_id));
 
         let cfg = self.new_config();
-        let mut server = Server::new(cfg, vec![engine]).unwrap();
+        let mut event_loop = create_event_loop().unwrap();
+        let mut server = Server::new(&mut event_loop, cfg, vec![engine]).unwrap();
         let addr = server.get_listen_addr().unwrap();
 
         let sender = server.get_sendch();
         let t = thread::spawn(move || {
-            server.run().unwrap();
+            server.run(&mut event_loop).unwrap();
         });
 
         self.handles.insert(store_id, t);

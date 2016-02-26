@@ -12,7 +12,7 @@ use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
 use raftserver::{Result, other};
-use raftserver::store::{Store, cmd_resp};
+use raftserver::store::{self, Store, cmd_resp};
 use proto::raft_serverpb::{Message, MessageType, StoreIdent};
 use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 use super::{Msg, SendCh, ConnData};
@@ -34,17 +34,23 @@ pub struct Server {
 
     peers: HashMap<String, Token>,
 
-    event_loop: Option<EventLoop<Server>>,
-
     store_handles: HashMap<u64, thread::JoinHandle<()>>,
 
     trans: Arc<RwLock<ServerTransport>>,
 }
 
+pub fn create_event_loop() -> Result<EventLoop<Server>> {
+    let event_loop = try!(EventLoop::new());
+    Ok(event_loop)
+}
+
 impl Server {
     // Create a server with already initialized engines.
     // We must bootstrap all stores before running the server.
-    pub fn new(cfg: Config, engines: Vec<Arc<DB>>) -> Result<Server> {
+    pub fn new(event_loop: &mut EventLoop<Self>,
+               cfg: Config,
+               engines: Vec<Arc<DB>>)
+               -> Result<Server> {
         try!(cfg.validate());
 
         let idents = try!(bootstrap::check_all_bootstrapped(cfg.cluster_id, &engines));
@@ -53,8 +59,6 @@ impl Server {
         let addr = try!((&cfg.addr).parse());
         let listener = try!(TcpListener::bind(&addr));
 
-        // create a event loop;
-        let mut event_loop = try!(EventLoop::new());
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
                                  EventSet::readable(),
@@ -71,7 +75,6 @@ impl Server {
             sendch: sendch,
             conns: Slab::new_starting_at(FIRST_CUSTOM_TOKEN, max_conn_capacity),
             peers: HashMap::new(),
-            event_loop: Some(event_loop),
             store_handles: HashMap::new(),
             trans: trans,
         };
@@ -81,8 +84,7 @@ impl Server {
         Ok(svr)
     }
 
-    pub fn run(&mut self) -> Result<()> {
-        let mut event_loop = self.event_loop.take().unwrap();
+    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(event_loop.run(self));
         Ok(())
     }
@@ -115,12 +117,14 @@ impl Server {
             return Err(other(format!("duplicated store id {}", store_id)));
         }
 
-        let mut store = try!(Store::new(self.cfg.store_cfg.clone(), engine, self.trans.clone()));
+        let cfg = self.cfg.store_cfg.clone();
+        let mut event_loop = try!(store::create_event_loop(&cfg));
+        let mut store = try!(Store::new(&mut event_loop, cfg, engine, self.trans.clone()));
         let ch = store.get_sendch();
         self.trans.write().unwrap().add_sendch(store_id, ch);
 
         let h = thread::spawn(move || {
-            if let Err(e) = store.run() {
+            if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);
             };
         });
