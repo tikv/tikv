@@ -13,6 +13,7 @@ use tikv::raftserver::server::*;
 use tikv::util::codec::{self, rpc};
 use tikv::proto::raft_serverpb::{Message, MessageType};
 use tikv::proto::raft_cmdpb::*;
+use super::util;
 
 
 pub struct ServerCluster {
@@ -36,13 +37,7 @@ impl ServerCluster {
     }
 
     fn new_config(&self) -> Config {
-        let store_cfg = StoreConfig {
-            raft_base_tick_interval: 10,
-            raft_heartbeat_ticks: 2,
-            raft_election_timeout_ticks: 20,
-            raft_log_gc_tick_interval: 100,
-            ..StoreConfig::default()
-        };
+        let store_cfg = util::new_store_cfg();
 
         Config {
             cluster_id: self.cluster_id,
@@ -61,7 +56,7 @@ impl ClusterSimulator for ServerCluster {
         let cfg = self.new_config();
         let mut event_loop = create_event_loop().unwrap();
         let mut server = Server::new(&mut event_loop, cfg, vec![engine]).unwrap();
-        let addr = server.get_listen_addr().unwrap();
+        let addr = server.listening_addr().unwrap();
 
         let sender = server.get_sendch();
         let t = thread::spawn(move || {
