@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use tikv::raftserver::store::*;
-use super::cluster::new_store_cluster;
+use super::store::new_store_cluster;
 
 use super::util::*;
 
