@@ -93,10 +93,10 @@ impl Server {
         self.sendch.clone()
     }
 
-    // Return listen address, this may only be used for outer test
+    // Return listening address, this may only be used for outer test
     // to get the real address because we may use "127.0.0.1:0"
     // in test to avoid port conflict.
-    pub fn get_listen_addr(&self) -> Result<SocketAddr> {
+    pub fn listening_addr(&self) -> Result<SocketAddr> {
         let addr = try!(self.listener.local_addr());
         Ok(addr)
     }
