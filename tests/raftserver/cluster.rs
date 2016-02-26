@@ -19,9 +19,9 @@ use tikv::proto::raftpb::ConfChangeType;
 // E,g, for node 1, the node id and store id are both 1.
 
 pub trait ClusterSimulator {
-    fn run_store(&mut self, store_id: u64, engine: Arc<DB>);
-    fn stop_store(&mut self, store_id: u64);
-    fn get_store_ids(&self) -> Vec<u64>;
+    fn run_node(&mut self, node_id: u64, engine: Arc<DB>);
+    fn stop_node(&mut self, node_id: u64);
+    fn get_node_ids(&self) -> Vec<u64>;
     fn call_command(&self,
                     request: RaftCommandRequest,
                     timeout: Duration)
@@ -63,28 +63,28 @@ impl<T: ClusterSimulator> Cluster<T> {
         }
     }
 
-    pub fn run_store(&mut self, store_id: u64) {
-        let engine = self.engines.get(&store_id).unwrap();
-        self.sim.run_store(store_id, engine.clone());
+    pub fn run_node(&mut self, node_id: u64) {
+        let engine = self.engines.get(&node_id).unwrap();
+        self.sim.run_node(node_id, engine.clone());
     }
 
-    pub fn run_all_stores(&mut self) {
+    pub fn run_all_nodes(&mut self) {
         let count = self.engines.len();
         for i in 0..count {
-            self.run_store(i as u64 + 1);
+            self.run_node(i as u64 + 1);
         }
     }
 
-    pub fn stop_store(&mut self, store_id: u64) {
-        self.sim.stop_store(store_id);
+    pub fn stop_node(&mut self, node_id: u64) {
+        self.sim.stop_node(node_id);
     }
 
     pub fn get_engines(&self) -> &HashMap<u64, Arc<DB>> {
         &self.engines
     }
 
-    pub fn get_engine(&self, store_id: u64) -> Arc<DB> {
-        self.engines.get(&store_id).unwrap().clone()
+    pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
+        self.engines.get(&node_id).unwrap().clone()
     }
 
     pub fn call_command(&self,
@@ -108,7 +108,7 @@ impl<T: ClusterSimulator> Cluster<T> {
             return Some(l.clone());
         }
         let mut leader = None;
-        for id in self.sim.get_store_ids() {
+        for id in self.sim.get_node_ids() {
             let peer = new_peer(id, id, id);
             let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
             let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
@@ -150,8 +150,8 @@ impl<T: ClusterSimulator> Cluster<T> {
             bootstrap_store(engine.clone(), self.id, id, id).unwrap();
         }
 
-        let store_id = 1;
-        bootstrap_region(self.engines.get(&store_id).unwrap().clone()).unwrap();
+        let node_id = 1;
+        bootstrap_region(self.engines.get(&node_id).unwrap().clone()).unwrap();
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {
@@ -166,9 +166,9 @@ impl<T: ClusterSimulator> Cluster<T> {
     }
 
     pub fn shutdown(&mut self) {
-        let keys: Vec<u64> = self.sim.get_store_ids();
+        let keys: Vec<u64> = self.sim.get_node_ids();
         for id in keys {
-            self.stop_store(id);
+            self.stop_node(id);
         }
         self.leaders.clear();
     }
@@ -298,9 +298,9 @@ impl StoreCluster {
 }
 
 impl ClusterSimulator for StoreCluster {
-    fn run_store(&mut self, store_id: u64, engine: Arc<DB>) {
-        assert!(!self.handles.contains_key(&store_id));
-        assert!(!self.senders.contains_key(&store_id));
+    fn run_node(&mut self, node_id: u64, engine: Arc<DB>) {
+        assert!(!self.handles.contains_key(&node_id));
+        assert!(!self.senders.contains_key(&node_id));
 
         let cfg = new_store_cfg();
 
@@ -309,28 +309,28 @@ impl ClusterSimulator for StoreCluster {
         let mut store = Store::new(&mut event_loop, cfg, engine.clone(), self.trans.clone())
                             .unwrap();
 
-        self.trans.write().unwrap().add_sender(store.get_store_id(), store.get_sendch());
+        self.trans.write().unwrap().add_sender(store.get_node_id(), store.get_sendch());
 
         let sender = store.get_sendch();
         let t = thread::spawn(move || {
             store.run(&mut event_loop).unwrap();
         });
 
-        self.handles.insert(store_id, t);
-        self.senders.insert(store_id, sender);
+        self.handles.insert(node_id, t);
+        self.senders.insert(node_id, sender);
     }
 
-    fn stop_store(&mut self, store_id: u64) {
-        let h = self.handles.remove(&store_id).unwrap();
-        let sender = self.senders.remove(&store_id).unwrap();
+    fn stop_node(&mut self, node_id: u64) {
+        let h = self.handles.remove(&node_id).unwrap();
+        let sender = self.senders.remove(&node_id).unwrap();
 
-        self.trans.write().unwrap().remove_sender(store_id);
+        self.trans.write().unwrap().remove_sender(node_id);
 
         sender.send_quit().unwrap();
         h.join().unwrap();
     }
 
-    fn get_store_ids(&self) -> Vec<u64> {
+    fn get_node_ids(&self) -> Vec<u64> {
         self.senders.keys().cloned().collect()
     }
 
@@ -338,8 +338,8 @@ impl ClusterSimulator for StoreCluster {
                     request: RaftCommandRequest,
                     timeout: Duration)
                     -> Option<RaftCommandResponse> {
-        let store_id = request.get_header().get_peer().get_store_id();
-        let sender = self.senders.get(&store_id).unwrap();
+        let node_id = request.get_header().get_peer().get_node_id();
+        let sender = self.senders.get(&node_id).unwrap();
 
         call_command(sender, request, timeout).unwrap()
     }

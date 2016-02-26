@@ -12,7 +12,7 @@ fn test_multi_store() {
     let count = 5;
     let mut cluster = new_store_cluster(0, count);
     cluster.bootstrap_single_region().expect("");
-    cluster.run_all_stores();
+    cluster.run_all_nodes();
 
     // Let raft run.
     sleep_ms(400);
@@ -44,7 +44,7 @@ fn test_multi_store_leader_crash() {
     let count = 5;
     let mut cluster = new_store_cluster(0, count);
     cluster.bootstrap_single_region().expect("");
-    cluster.run_all_stores();
+    cluster.run_all_nodes();
 
     let (key1, value1) = (b"a1", b"v1");
 
@@ -53,7 +53,7 @@ fn test_multi_store_leader_crash() {
     cluster.put(key1, value1);
 
     let last_leader = cluster.leader_of_region(1).unwrap();
-    cluster.stop_store(last_leader.get_store_id());
+    cluster.stop_node(last_leader.get_node_id());
 
     sleep_ms(500);
     cluster.reset_leader_of_region(1);
@@ -66,24 +66,24 @@ fn test_multi_store_leader_crash() {
 
     cluster.put(key2, value2);
     cluster.delete(key1);
-    assert!(cluster.engines[&last_leader.get_store_id()]
+    assert!(cluster.engines[&last_leader.get_node_id()]
                 .get_value(&keys::data_key(key2))
                 .unwrap()
                 .is_none());
-    assert!(cluster.engines[&last_leader.get_store_id()]
+    assert!(cluster.engines[&last_leader.get_node_id()]
                 .get_value(&keys::data_key(key1))
                 .unwrap()
                 .is_some());
 
-    cluster.run_store(last_leader.get_store_id());
+    cluster.run_node(last_leader.get_node_id());
 
     sleep_ms(400);
-    let v = cluster.engines[&last_leader.get_store_id()]
+    let v = cluster.engines[&last_leader.get_node_id()]
                 .get_value(&keys::data_key(key2))
                 .unwrap()
                 .unwrap();
     assert_eq!(&*v, value2);
-    assert!(cluster.engines[&last_leader.get_store_id()]
+    assert!(cluster.engines[&last_leader.get_node_id()]
                 .get_value(&keys::data_key(key1))
                 .unwrap()
                 .is_none());
@@ -94,7 +94,7 @@ fn test_multi_store_cluster_restart() {
     let count = 5;
     let mut cluster = new_store_cluster(0, count);
     cluster.bootstrap_single_region().expect("");
-    cluster.run_all_stores();
+    cluster.run_all_nodes();
 
     let (key, value) = (b"a1", b"v1");
 
@@ -107,7 +107,7 @@ fn test_multi_store_cluster_restart() {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     cluster.shutdown();
-    cluster.run_all_stores();
+    cluster.run_all_nodes();
 
     sleep_ms(400);
 
@@ -121,17 +121,17 @@ fn test_multi_store_lost_majority() {
     for count in tests.drain(..) {
         let mut cluster = new_store_cluster(0, count);
         cluster.bootstrap_single_region().expect("");
-        cluster.run_all_stores();
+        cluster.run_all_nodes();
 
         sleep_ms(400);
 
         let half = (count as u64 + 1) / 2;
         for i in 1..half + 1 {
-            cluster.stop_store(i);
+            cluster.stop_node(i);
         }
         if let Some(leader) = cluster.leader_of_region(1) {
-            if leader.get_store_id() >= half + 1 {
-                cluster.stop_store(leader.get_store_id());
+            if leader.get_node_id() >= half + 1 {
+                cluster.stop_node(leader.get_node_id());
             }
         }
         cluster.reset_leader_of_region(1);

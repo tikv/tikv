@@ -15,7 +15,7 @@ fn test_compact_log() {
     let count = 5;
     let mut cluster = new_store_cluster(0, count);
     cluster.bootstrap_single_region().expect("");
-    cluster.run_all_stores();
+    cluster.run_all_nodes();
 
     sleep_ms(400);
 
