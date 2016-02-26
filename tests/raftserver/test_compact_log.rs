@@ -4,7 +4,7 @@ use tikv::raftserver::store::*;
 use tikv::proto::raft_serverpb::RaftTruncatedState;
 
 use super::util::*;
-use super::cluster::new_store_cluster;
+use super::store::new_store_cluster;
 
 #[test]
 fn test_compact_log() {

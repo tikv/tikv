@@ -3,6 +3,7 @@ use rand::{self, Rng};
 
 use super::cluster::*;
 use super::util::*;
+use super::store::{StoreCluster, new_store_cluster};
 
 use tikv::raftserver::store::*;
 

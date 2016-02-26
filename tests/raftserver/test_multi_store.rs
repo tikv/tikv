@@ -1,7 +1,7 @@
 use tikv::raftserver::store::*;
 
 use super::util::*;
-use super::cluster::new_store_cluster;
+use super::store::new_store_cluster;
 
 #[test]
 fn test_multi_store() {
