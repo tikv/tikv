@@ -15,7 +15,7 @@ fn test_multi_store() {
     cluster.run_all_stores();
 
     // Let raft run.
-    sleep_ms(300);
+    sleep_ms(400);
 
     let (key, value) = (b"a1", b"v1");
 
@@ -48,7 +48,7 @@ fn test_multi_store_leader_crash() {
 
     let (key1, value1) = (b"a1", b"v1");
 
-    sleep_ms(300);
+    sleep_ms(400);
 
     cluster.put(key1, value1);
 
@@ -77,7 +77,7 @@ fn test_multi_store_leader_crash() {
 
     cluster.run_store(last_leader.get_store_id());
 
-    sleep_ms(300);
+    sleep_ms(400);
     let v = cluster.engines[&last_leader.get_store_id()]
                 .get_value(&keys::data_key(key2))
                 .unwrap()
@@ -98,7 +98,7 @@ fn test_multi_store_cluster_restart() {
 
     let (key, value) = (b"a1", b"v1");
 
-    sleep_ms(300);
+    sleep_ms(400);
 
     assert!(cluster.leader_of_region(1).is_some());
     assert_eq!(cluster.get(key), None);
@@ -109,7 +109,7 @@ fn test_multi_store_cluster_restart() {
     cluster.shutdown();
     cluster.run_all_stores();
 
-    sleep_ms(300);
+    sleep_ms(400);
 
     assert!(cluster.leader_of_region(1).is_some());
     assert_eq!(cluster.get(key), Some(value.to_vec()));
@@ -123,7 +123,7 @@ fn test_multi_store_lost_majority() {
         cluster.bootstrap_single_region().expect("");
         cluster.run_all_stores();
 
-        sleep_ms(300);
+        sleep_ms(400);
 
         let half = (count as u64 + 1) / 2;
         for i in 1..half + 1 {
