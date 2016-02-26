@@ -49,9 +49,9 @@ impl ServerCluster {
 }
 
 impl ClusterSimulator for ServerCluster {
-    fn run_store(&mut self, store_id: u64, engine: Arc<DB>) {
-        assert!(!self.handles.contains_key(&store_id));
-        assert!(!self.senders.contains_key(&store_id));
+    fn run_node(&mut self, node_id: u64, engine: Arc<DB>) {
+        assert!(!self.handles.contains_key(&node_id));
+        assert!(!self.senders.contains_key(&node_id));
 
         let cfg = self.new_config();
         let mut event_loop = create_event_loop().unwrap();
@@ -63,21 +63,21 @@ impl ClusterSimulator for ServerCluster {
             server.run(&mut event_loop).unwrap();
         });
 
-        self.handles.insert(store_id, t);
-        self.senders.insert(store_id, sender);
-        self.addrs.insert(store_id, addr);
+        self.handles.insert(node_id, t);
+        self.senders.insert(node_id, sender);
+        self.addrs.insert(node_id, addr);
     }
 
-    fn stop_store(&mut self, store_id: u64) {
-        let h = self.handles.remove(&store_id).unwrap();
-        let sender = self.senders.remove(&store_id).unwrap();
-        self.addrs.remove(&store_id).unwrap();
+    fn stop_node(&mut self, node_id: u64) {
+        let h = self.handles.remove(&node_id).unwrap();
+        let sender = self.senders.remove(&node_id).unwrap();
+        self.addrs.remove(&node_id).unwrap();
 
         sender.kill().unwrap();
         h.join().unwrap();
     }
 
-    fn get_store_ids(&self) -> Vec<u64> {
+    fn get_node_ids(&self) -> Vec<u64> {
         self.senders.keys().cloned().collect()
     }
 
@@ -85,8 +85,8 @@ impl ClusterSimulator for ServerCluster {
                     request: RaftCommandRequest,
                     timeout: Duration)
                     -> Option<RaftCommandResponse> {
-        let store_id = request.get_header().get_peer().get_store_id();
-        let addr = self.addrs.get(&store_id).unwrap();
+        let node_id = request.get_header().get_peer().get_node_id();
+        let addr = self.addrs.get(&node_id).unwrap();
         let mut conn = TcpStream::connect(addr).unwrap();
 
         conn.set_write_timeout(Some(timeout)).unwrap();

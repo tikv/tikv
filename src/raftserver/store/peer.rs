@@ -71,7 +71,11 @@ impl Peer {
     pub fn create<T: Transport>(store: &mut Store<T>, region: metapb::Region) -> Result<Peer> {
         let store_id = store.get_store_id();
         let peer_id = match util::find_peer(&region, store_id) {
-            None => return Err(other(format!("find no peer for store {}", store_id))),
+            None => {
+                return Err(other(format!("find no peer for store {} in region {:?}",
+                                         store_id,
+                                         region)))
+            }
             Some(peer) => peer.get_peer_id(),
         };
 

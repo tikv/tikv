@@ -11,7 +11,7 @@ use super::util::*;
 fn test_put() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.bootstrap_single_region().expect("");
-    cluster.run_all_stores();
+    cluster.run_all_nodes();
 
     sleep_ms(300);
 
@@ -44,7 +44,7 @@ fn test_put() {
 fn test_delete() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.bootstrap_single_region().expect("");
-    cluster.run_all_stores();
+    cluster.run_all_nodes();
 
     sleep_ms(300);
 
@@ -69,7 +69,7 @@ fn test_delete() {
 fn test_seek() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.bootstrap_single_region().expect("");
-    cluster.run_all_stores();
+    cluster.run_all_nodes();
 
     sleep_ms(300);
 

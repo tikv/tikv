@@ -15,7 +15,7 @@ fn test_simple_conf_change() {
 
     cluster.bootstrap_conf_change();
 
-    cluster.run_all_stores();
+    cluster.run_all_nodes();
 
     // Let raft run.
     sleep_ms(400);
