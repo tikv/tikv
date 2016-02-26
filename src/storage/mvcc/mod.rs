@@ -2,7 +2,7 @@ mod meta;
 mod codec;
 mod txn;
 
-pub use self::txn::{MvccTxn, Prewrite};
+pub use self::txn::MvccTxn;
 
 quick_error! {
     #[derive(Debug)]
