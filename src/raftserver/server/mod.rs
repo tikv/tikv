@@ -1,37 +1,40 @@
 use std::string::String;
 
-use bytes::{Buf, ByteBuf};
+use bytes::ByteBuf;
 use mio::{self, Token};
+use protobuf::Message;
 
 use raftserver::{Result, send_msg};
 use util::codec::rpc;
 
+use proto::raft_serverpb;
+
+pub mod bootstrap;
 pub mod config;
 mod bench;
 mod conn;
 pub mod server;
-pub mod handler;
-
-pub use self::handler::ServerHandler;
+mod transport;
 
 pub struct ConnData {
     msg_id: u64,
-    data: ByteBuf,
+    msg: raft_serverpb::Message,
 }
 
 impl ConnData {
-    pub fn from_string<S: Into<String>>(msg_id: u64, data: S) -> ConnData {
+    pub fn new(msg_id: u64, msg: raft_serverpb::Message) -> ConnData {
         ConnData {
             msg_id: msg_id,
-            data: ByteBuf::from_slice(data.into().as_bytes()),
+            msg: msg,
         }
     }
 
     pub fn encode_to_buf(&self) -> ByteBuf {
-        let mut buf = ByteBuf::mut_with_capacity(rpc::MSG_HEADER_LEN + self.data.bytes().len());
+        let mut buf = ByteBuf::mut_with_capacity(rpc::MSG_HEADER_LEN +
+                                                 self.msg.compute_size() as usize);
 
         // Must ok here
-        rpc::encode_data(&mut buf, self.msg_id, self.data.bytes()).unwrap();
+        rpc::encode_msg(&mut buf, self.msg_id, &self.msg).unwrap();
 
         buf.flip()
     }
