@@ -27,7 +27,6 @@ pub struct Store<T: Transport> {
     ident: StoreIdent,
     engine: Arc<DB>,
     sendch: SendCh,
-    event_loop: Option<EventLoop<Store<T>>>,
 
     peers: HashMap<u64, Peer>,
     pending_raft_groups: HashSet<u64>,
@@ -37,8 +36,20 @@ pub struct Store<T: Transport> {
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
 }
 
+pub fn create_event_loop<T: Transport>(cfg: &Config) -> Result<EventLoop<Store<T>>> {
+    // We use base raft tick as the event loop timer tick.
+    let mut event_cfg = EventLoopConfig::new();
+    event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
+    let event_loop = try!(EventLoop::configured(event_cfg));
+    Ok(event_loop)
+}
+
 impl<T: Transport> Store<T> {
-    pub fn new(cfg: Config, engine: Arc<DB>, trans: Arc<RwLock<T>>) -> Result<Store<T>> {
+    pub fn new(event_loop: &mut EventLoop<Self>,
+               cfg: Config,
+               engine: Arc<DB>,
+               trans: Arc<RwLock<T>>)
+               -> Result<Store<T>> {
         try!(cfg.validate());
 
         let ident: StoreIdent = try!(load_store_ident(engine.as_ref()).and_then(|res| {
@@ -47,11 +58,6 @@ impl<T: Transport> Store<T> {
                 Some(ident) => Ok(ident),
             }
         }));
-
-        // We use base raft tick as the event loop timer tick.
-        let mut event_cfg = EventLoopConfig::new();
-        event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
-        let event_loop = try!(EventLoop::configured(event_cfg));
 
         let sendch = SendCh::new(event_loop.channel());
 
@@ -62,7 +68,6 @@ impl<T: Transport> Store<T> {
             ident: ident,
             engine: engine,
             sendch: sendch,
-            event_loop: Some(event_loop),
             peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             trans: trans,
@@ -94,12 +99,11 @@ impl<T: Transport> Store<T> {
         Ok(())
     }
 
-    pub fn run(&mut self) -> Result<()> {
+    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(self.prepare());
 
-        let mut event_loop = self.event_loop.take().unwrap();
-        self.register_raft_base_tick(&mut event_loop);
-        self.register_raft_gc_log_tick(&mut event_loop);
+        self.register_raft_base_tick(event_loop);
+        self.register_raft_gc_log_tick(event_loop);
         try!(event_loop.run(self));
         Ok(())
     }

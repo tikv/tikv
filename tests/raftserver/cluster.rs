@@ -302,11 +302,18 @@ impl ClusterSimulator for StoreCluster {
         assert!(!self.handles.contains_key(&store_id));
         assert!(!self.senders.contains_key(&store_id));
 
-        let mut store = new_store(engine, self.trans.clone());
+        let cfg = new_store_cfg();
+
+        let mut event_loop = create_event_loop(&cfg).unwrap();
+
+        let mut store = Store::new(&mut event_loop, cfg, engine.clone(), self.trans.clone())
+                            .unwrap();
+
+        self.trans.write().unwrap().add_sender(store.get_store_id(), store.get_sendch());
 
         let sender = store.get_sendch();
         let t = thread::spawn(move || {
-            store.run().unwrap();
+            store.run(&mut event_loop).unwrap();
         });
 
         self.handles.insert(store_id, t);
