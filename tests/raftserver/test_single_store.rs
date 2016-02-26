@@ -1,13 +1,13 @@
 use std::time::Duration;
 
 use tikv::raftserver::store::*;
-use super::cluster::Cluster;
+use super::cluster::new_store_cluster;
 
 use super::util::*;
 
 #[test]
 fn test_put() {
-    let mut cluster = Cluster::new(0, 1);
+    let mut cluster = new_store_cluster(0, 1);
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
 
@@ -40,7 +40,7 @@ fn test_put() {
 
 #[test]
 fn test_delete() {
-    let mut cluster = Cluster::new(0, 1);
+    let mut cluster = new_store_cluster(0, 1);
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
 
@@ -65,7 +65,7 @@ fn test_delete() {
 
 #[test]
 fn test_seek() {
-    let mut cluster = Cluster::new(0, 1);
+    let mut cluster = new_store_cluster(0, 1);
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
 

@@ -17,28 +17,35 @@ use tikv::proto::raftpb::ConfChangeType;
 
 // We simulate 3 or 5 nodes, each has a store, the node id and store id are same.
 // E,g, for node 1, the node id and store id are both 1.
-pub struct Cluster {
+
+pub trait ClusterSimulator {
+    fn run_store(&mut self, store_id: u64, engine: Arc<DB>);
+    fn stop_store(&mut self, store_id: u64);
+    fn get_store_ids(&self) -> Vec<u64>;
+    fn call_command(&self,
+                    request: RaftCommandRequest,
+                    timeout: Duration)
+                    -> Option<RaftCommandResponse>;
+}
+
+pub struct Cluster<T: ClusterSimulator> {
     id: u64,
     leaders: HashMap<u64, metapb::Peer>,
     paths: HashMap<u64, TempDir>,
     pub engines: HashMap<u64, Arc<DB>>,
 
-    senders: HashMap<u64, SendCh>,
-    handles: HashMap<u64, thread::JoinHandle<()>>,
-
-    trans: Arc<RwLock<StoreTransport>>,
+    sim: T,
 }
 
-impl Cluster {
-    pub fn new(id: u64, count: usize) -> Cluster {
+impl<T: ClusterSimulator> Cluster<T> {
+    // Create the default Store cluster.
+    pub fn new(id: u64, count: usize, sim: T) -> Cluster<T> {
         let mut c = Cluster {
             id: id,
             leaders: HashMap::new(),
             paths: HashMap::new(),
             engines: HashMap::new(),
-            senders: HashMap::new(),
-            handles: HashMap::new(),
-            trans: StoreTransport::new(),
+            sim: sim,
         };
 
         c.create_engines(count);
@@ -57,19 +64,8 @@ impl Cluster {
     }
 
     pub fn run_store(&mut self, store_id: u64) {
-        assert!(!self.handles.contains_key(&store_id));
-        assert!(!self.senders.contains_key(&store_id));
-
         let engine = self.engines.get(&store_id).unwrap();
-        let mut store = new_store(engine.clone(), self.trans.clone());
-
-        let sender = store.get_sendch();
-        let t = thread::spawn(move || {
-            store.run().unwrap();
-        });
-
-        self.handles.insert(store_id, t);
-        self.senders.insert(store_id, sender);
+        self.sim.run_store(store_id, engine.clone());
     }
 
     pub fn run_all_stores(&mut self) {
@@ -80,21 +76,11 @@ impl Cluster {
     }
 
     pub fn stop_store(&mut self, store_id: u64) {
-        let h = self.handles.remove(&store_id).unwrap();
-        let sender = self.senders.remove(&store_id).unwrap();
-
-        self.trans.write().unwrap().remove_sender(store_id);
-
-        sender.send_quit().unwrap();
-        h.join().unwrap();
+        self.sim.stop_store(store_id);
     }
 
     pub fn get_engines(&self) -> &HashMap<u64, Arc<DB>> {
         &self.engines
-    }
-
-    pub fn get_senders(&self) -> &HashMap<u64, SendCh> {
-        &self.senders
     }
 
     pub fn get_engine(&self, store_id: u64) -> Arc<DB> {
@@ -105,10 +91,7 @@ impl Cluster {
                         request: RaftCommandRequest,
                         timeout: Duration)
                         -> Option<RaftCommandResponse> {
-        let store_id = request.get_header().get_peer().get_store_id();
-        let sender = self.senders.get(&store_id).unwrap();
-
-        call_command(sender, request, timeout).unwrap()
+        self.sim.call_command(request, timeout)
     }
 
     pub fn call_command_on_leader(&mut self,
@@ -120,17 +103,12 @@ impl Cluster {
         self.call_command(request, timeout)
     }
 
-    pub fn get_transport(&self) -> Arc<RwLock<StoreTransport>> {
-        self.trans.clone()
-    }
-
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
         if let Some(l) = self.leaders.get(&region_id) {
             return Some(l.clone());
         }
         let mut leader = None;
-        for id in self.get_senders().keys() {
-            let id = *id;
+        for id in self.sim.get_store_ids() {
             let peer = new_peer(id, id, id);
             let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
             let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
@@ -188,7 +166,7 @@ impl Cluster {
     }
 
     pub fn shutdown(&mut self) {
-        let keys: Vec<u64> = self.senders.keys().cloned().collect();
+        let keys: Vec<u64> = self.sim.get_store_ids();
         for id in keys {
             self.stop_store(id);
         }
@@ -295,8 +273,71 @@ impl Cluster {
     }
 }
 
-impl Drop for Cluster {
+impl<T: ClusterSimulator> Drop for Cluster<T> {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+
+pub struct StoreCluster {
+    senders: HashMap<u64, SendCh>,
+    handles: HashMap<u64, thread::JoinHandle<()>>,
+
+    trans: Arc<RwLock<StoreTransport>>,
+}
+
+impl StoreCluster {
+    pub fn new() -> StoreCluster {
+        StoreCluster {
+            senders: HashMap::new(),
+            handles: HashMap::new(),
+            trans: StoreTransport::new(),
+        }
+    }
+}
+
+impl ClusterSimulator for StoreCluster {
+    fn run_store(&mut self, store_id: u64, engine: Arc<DB>) {
+        assert!(!self.handles.contains_key(&store_id));
+        assert!(!self.senders.contains_key(&store_id));
+
+        let mut store = new_store(engine, self.trans.clone());
+
+        let sender = store.get_sendch();
+        let t = thread::spawn(move || {
+            store.run().unwrap();
+        });
+
+        self.handles.insert(store_id, t);
+        self.senders.insert(store_id, sender);
+    }
+
+    fn stop_store(&mut self, store_id: u64) {
+        let h = self.handles.remove(&store_id).unwrap();
+        let sender = self.senders.remove(&store_id).unwrap();
+
+        self.trans.write().unwrap().remove_sender(store_id);
+
+        sender.send_quit().unwrap();
+        h.join().unwrap();
+    }
+
+    fn get_store_ids(&self) -> Vec<u64> {
+        self.senders.keys().cloned().collect()
+    }
+
+    fn call_command(&self,
+                    request: RaftCommandRequest,
+                    timeout: Duration)
+                    -> Option<RaftCommandResponse> {
+        let store_id = request.get_header().get_peer().get_store_id();
+        let sender = self.senders.get(&store_id).unwrap();
+
+        call_command(sender, request, timeout).unwrap()
+    }
+}
+
+pub fn new_store_cluster(id: u64, count: usize) -> Cluster<StoreCluster> {
+    Cluster::new(id, count, StoreCluster::new())
 }
