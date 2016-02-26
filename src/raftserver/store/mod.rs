@@ -5,7 +5,7 @@ pub mod config;
 pub mod transport;
 pub mod bootstrap;
 
-mod cmd_resp;
+pub mod cmd_resp;
 mod store;
 mod peer;
 mod peer_storage;
@@ -13,7 +13,7 @@ mod route;
 mod util;
 
 pub use self::msg::{Msg, SendCh, Callback, call_command};
-pub use self::store::Store;
+pub use self::store::{Store, create_event_loop};
 pub use self::config::Config;
 pub use self::transport::Transport;
 pub use self::peer::Peer;

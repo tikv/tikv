@@ -12,6 +12,7 @@ extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
 extern crate uuid;
+extern crate mio;
 
 mod test_raft;
 mod test_raft_snap;

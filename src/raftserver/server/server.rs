@@ -1,21 +1,30 @@
 use std::collections::HashMap;
 use std::option::Option;
+use std::sync::{Arc, RwLock};
+use std::vec::Vec;
+use std::thread;
+use std::boxed::Box;
 
+use rocksdb::DB;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
 use raftserver::{Result, other};
+use raftserver::store::{self, Store, cmd_resp};
+use proto::raft_serverpb::{Message, MessageType, StoreIdent};
+use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
-use super::handler::ServerHandler;
 use super::config::Config;
+use super::transport::ServerTransport;
+use super::bootstrap;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const INVALID_TOKEN: Token = Token(0);
 
-pub struct Server<T: ServerHandler> {
+pub struct Server {
     cfg: Config,
 
     listener: TcpListener,
@@ -23,18 +32,32 @@ pub struct Server<T: ServerHandler> {
     sendch: SendCh,
 
     peers: HashMap<String, Token>,
-    handler: T,
 
-    event_loop: Option<EventLoop<Server<T>>>,
+    store_handles: HashMap<u64, thread::JoinHandle<()>>,
+
+    trans: Arc<RwLock<ServerTransport>>,
 }
 
-impl<T: ServerHandler> Server<T> {
-    pub fn new(cfg: Config, h: T) -> Result<Server<T>> {
+pub fn create_event_loop() -> Result<EventLoop<Server>> {
+    let event_loop = try!(EventLoop::new());
+    Ok(event_loop)
+}
+
+impl Server {
+    // Create a server with already initialized engines.
+    // We must bootstrap all stores before running the server.
+    pub fn new(event_loop: &mut EventLoop<Self>,
+               cfg: Config,
+               engines: Vec<Arc<DB>>)
+               -> Result<Server> {
+        try!(cfg.validate());
+
+        let idents = try!(bootstrap::check_all_bootstrapped(cfg.cluster_id, &engines));
+        let node_id = idents[0].get_node_id();
+
         let addr = try!((&cfg.addr).parse());
         let listener = try!(TcpListener::bind(&addr));
 
-        // create a event loop;
-        let mut event_loop = try!(EventLoop::new());
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
                                  EventSet::readable(),
@@ -43,20 +66,24 @@ impl<T: ServerHandler> Server<T> {
         let sendch = SendCh::new(event_loop.channel());
 
         let max_conn_capacity = cfg.max_conn_capacity;
+        let trans = Arc::new(RwLock::new(ServerTransport::new(node_id)));
 
-        Ok(Server {
+        let mut svr = Server {
             cfg: cfg,
-            handler: h,
             listener: listener,
             sendch: sendch,
             conns: Slab::new_starting_at(FIRST_CUSTOM_TOKEN, max_conn_capacity),
             peers: HashMap::new(),
-            event_loop: Some(event_loop),
-        })
+            store_handles: HashMap::new(),
+            trans: trans,
+        };
+
+        try!(svr.start_stores(engines, idents));
+
+        Ok(svr)
     }
 
-    pub fn run(&mut self) -> Result<()> {
-        let mut event_loop = self.event_loop.take().unwrap();
+    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(event_loop.run(self));
         Ok(())
     }
@@ -65,7 +92,60 @@ impl<T: ServerHandler> Server<T> {
         self.sendch.clone()
     }
 
-    fn remove_conn(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+    fn start_stores(&mut self, engines: Vec<Arc<DB>>, idents: Vec<StoreIdent>) -> Result<()> {
+        for (i, engine) in engines.iter().enumerate() {
+
+            let store_id = idents[i].get_store_id();
+
+            try!(self.start_store(store_id, engine.clone()));
+        }
+
+        Ok(())
+    }
+
+    fn start_store(&mut self, store_id: u64, engine: Arc<DB>) -> Result<()> {
+        if self.store_handles.contains_key(&store_id) {
+            return Err(other(format!("duplicated store id {}", store_id)));
+        }
+
+        let cfg = self.cfg.store_cfg.clone();
+        let mut event_loop = try!(store::create_event_loop(&cfg));
+        let mut store = try!(Store::new(&mut event_loop, cfg, engine, self.trans.clone()));
+        let ch = store.get_sendch();
+        self.trans.write().unwrap().add_sendch(store_id, ch);
+
+        let h = thread::spawn(move || {
+            if let Err(e) = store.run(&mut event_loop) {
+                error!("store {} run err {:?}", store_id, e);
+            };
+        });
+
+        self.store_handles.insert(store_id, h);
+        Ok(())
+    }
+
+    fn stop_store(&mut self, store_id: u64) -> Result<()> {
+        let ch = self.trans.write().unwrap().remove_sendch(store_id);
+
+        if ch.is_none() {
+            return Err(other(format!("stop invalid store with id {}", store_id)));
+        }
+
+        let h = self.store_handles.remove(&store_id);
+        if h.is_none() {
+            return Err(other(format!("store {} thread has already gone", store_id)));
+        }
+
+        try!(ch.unwrap().send_quit());
+
+        if let Err(e) = h.unwrap().join() {
+            return Err(other(format!("join store {} thread err {:?}", store_id, e)));
+        }
+
+        Ok(())
+    }
+
+    fn remove_conn(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         let conn = self.conns.remove(token);
         match conn {
             Some(conn) => {
@@ -85,7 +165,7 @@ impl<T: ServerHandler> Server<T> {
     }
 
     fn add_new_conn(&mut self,
-                    event_loop: &mut EventLoop<Server<T>>,
+                    event_loop: &mut EventLoop<Self>,
                     sock: TcpStream,
                     peer_addr: Option<String>)
                     -> Result<Token> {
@@ -108,7 +188,7 @@ impl<T: ServerHandler> Server<T> {
     }
 
     fn handle_conn_readable(&mut self,
-                            event_loop: &mut EventLoop<Server<T>>,
+                            event_loop: &mut EventLoop<Self>,
                             token: Token)
                             -> Result<()> {
         let msgs = try!(match self.conns.get_mut(token) {
@@ -124,8 +204,15 @@ impl<T: ServerHandler> Server<T> {
             return Ok(());
         }
 
-        // TODO: we will refactor later without handler.
-        let res = try!(self.handler.handle_read_data(&self.sendch, token, msgs));
+        let mut res = vec![];
+        for msg in msgs {
+            let resp = try!(self.handle_conn_msg(token, msg));
+            if let Some(resp) = resp {
+                res.push(resp);
+            }
+
+        }
+
         if res.is_empty() {
             return Ok(());
         }
@@ -140,7 +227,79 @@ impl<T: ServerHandler> Server<T> {
         Ok(())
     }
 
-    fn handle_readable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+    fn handle_conn_msg(&mut self, token: Token, data: ConnData) -> Result<Option<ConnData>> {
+        let msg_id = data.msg_id;
+        let mut msg = data.msg;
+
+        let msg_type = msg.get_msg_type();
+        let res = try!(match msg_type {
+            MessageType::Raft => {
+                if let Err(e) = self.trans.read().unwrap().send_raft_msg(msg.take_raft()) {
+                    // Should we return error to let outer close this connection later?
+                    error!("send raft message for token {:?} with msg id {} err {:?}",
+                           token,
+                           msg_id,
+                           e);
+                }
+                Ok(None)
+            }
+            MessageType::Command => self.handle_conn_command(token, msg_id, msg.take_cmd_req()),
+            MessageType::CommandResp => {
+                // Now we have no way to handle CommandResp type,
+                // so log an error here and do nothing.
+                error!("unsupported command response msg {:?} for token {:?} with msg id {}",
+                       msg,
+                       token,
+                       msg_id);
+                Ok(None)
+            }
+            _ => {
+                Err(other(format!("unsupported message {:?} for token {:?} with msg id {}",
+                                  msg_type,
+                                  token,
+                                  msg_id)))
+            }
+
+        });
+
+        Ok(res)
+    }
+
+    fn handle_conn_command(&mut self,
+                           token: Token,
+                           msg_id: u64,
+                           msg: RaftCommandRequest)
+                           -> Result<Option<ConnData>> {
+        let ch = self.sendch.clone();
+        let cb = Box::new(move |resp: RaftCommandResponse| -> Result<()> {
+            let mut resp_msg = Message::new();
+            resp_msg.set_msg_type(MessageType::CommandResp);
+            resp_msg.set_cmd_resp(resp);
+            // Use send channel to let server return the
+            // response to the specified connection with token.
+            ch.write_data(token, ConnData::new(msg_id, resp_msg))
+        });
+
+        let uuid = msg.get_header().get_uuid().to_vec();
+        if let Err(e) = self.trans.read().unwrap().send_command(msg, cb) {
+            // send error, reply an error response.
+            warn!("send command for token {:?} with msg id {} err {:?}",
+                  token,
+                  msg_id,
+                  e);
+            let mut resp = cmd_resp::message_error(e);
+            resp.mut_header().set_uuid(uuid);
+            let mut resp_msg = Message::new();
+            resp_msg.set_msg_type(MessageType::CommandResp);
+            resp_msg.set_cmd_resp(resp);
+            return Ok(Some(ConnData::new(msg_id, resp_msg)));
+        }
+
+        Ok(None)
+    }
+
+
+    fn handle_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         match token {
             SERVER_TOKEN => {
                 loop {
@@ -175,7 +334,7 @@ impl<T: ServerHandler> Server<T> {
         }
     }
 
-    fn handle_writable(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token) {
+    fn handle_writable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         let res = match self.conns.get_mut(token) {
             None => {
                 warn!("missing conn for token {:?}", token);
@@ -191,7 +350,7 @@ impl<T: ServerHandler> Server<T> {
     }
 
     fn handle_writedata(&mut self,
-                        event_loop: &mut EventLoop<Server<T>>,
+                        event_loop: &mut EventLoop<Self>,
                         token: Token,
                         data: ConnData) {
         let res = match self.conns.get_mut(token) {
@@ -208,7 +367,7 @@ impl<T: ServerHandler> Server<T> {
         }
     }
 
-    fn connect_peer(&mut self, event_loop: &mut EventLoop<Server<T>>, addr: &str) -> Result<Token> {
+    fn connect_peer(&mut self, event_loop: &mut EventLoop<Self>, addr: &str) -> Result<Token> {
         let peer_addr = try!(addr.parse());
         let sock = try!(TcpStream::connect(&peer_addr));
         let token = try!(self.add_new_conn(event_loop, sock, Some(addr.to_string())));
@@ -216,10 +375,7 @@ impl<T: ServerHandler> Server<T> {
         Ok(token)
     }
 
-    fn handle_sendpeer(&mut self,
-                       event_loop: &mut EventLoop<Server<T>>,
-                       addr: String,
-                       data: ConnData) {
+    fn handle_sendpeer(&mut self, event_loop: &mut EventLoop<Self>, addr: String, data: ConnData) {
         // check the corresponding token for peer address.
         let mut token = self.peers.get(&addr).map_or(INVALID_TOKEN, |t| *t);
 
@@ -237,11 +393,11 @@ impl<T: ServerHandler> Server<T> {
     }
 }
 
-impl<T: ServerHandler> Handler for Server<T> {
+impl Handler for Server {
     type Timeout = Msg;
     type Message = Msg;
 
-    fn ready(&mut self, event_loop: &mut EventLoop<Server<T>>, token: Token, events: EventSet) {
+    fn ready(&mut self, event_loop: &mut EventLoop<Self>, token: Token, events: EventSet) {
         if events.is_hup() || events.is_error() {
             self.remove_conn(event_loop, token);
             return;
@@ -256,7 +412,7 @@ impl<T: ServerHandler> Handler for Server<T> {
         }
     }
 
-    fn notify(&mut self, event_loop: &mut EventLoop<Server<T>>, msg: Msg) {
+    fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData{token, data} => self.handle_writedata(event_loop, token, data),
@@ -265,17 +421,28 @@ impl<T: ServerHandler> Handler for Server<T> {
         }
     }
 
-    fn timeout(&mut self, _: &mut EventLoop<Server<T>>, _: Msg) {
+    fn timeout(&mut self, _: &mut EventLoop<Self>, _: Msg) {
         // nothing to do now.
     }
 
-    fn interrupted(&mut self, event_loop: &mut EventLoop<Server<T>>) {
+    fn interrupted(&mut self, event_loop: &mut EventLoop<Self>) {
         event_loop.shutdown();
     }
 
-    fn tick(&mut self, _: &mut EventLoop<Server<T>>) {
+    fn tick(&mut self, _: &mut EventLoop<Self>) {
         // tick is called in the end of the loop, so if we notify to quit,
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let ids: Vec<u64> = self.store_handles.keys().cloned().collect();
+        for id in ids {
+            if let Err(e) = self.stop_store(id) {
+                error!("stop store {} err {:?}", id, e);
+            }
+        }
     }
 }
