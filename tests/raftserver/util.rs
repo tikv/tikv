@@ -54,20 +54,14 @@ pub fn new_engine(path: &TempDir) -> Arc<DB> {
     Arc::new(db)
 }
 
-pub fn new_store(engine: Arc<DB>, trans: Arc<RwLock<StoreTransport>>) -> Store<StoreTransport> {
-    // base tick 10ms to speed up raft.
-    let cfg = Config {
+pub fn new_store_cfg() -> Config {
+    Config {
         raft_base_tick_interval: 10,
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 20,
         raft_log_gc_tick_interval: 100,
         ..Config::default()
-    };
-    let store = Store::new(cfg, engine, trans.clone()).unwrap();
-
-    trans.write().unwrap().add_sender(store.get_store_id(), store.get_sendch());
-
-    store
+    }
 }
 
 // Create a base request.
