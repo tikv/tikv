@@ -3,7 +3,7 @@ use std::time::Duration;
 use tikv::raftserver::store::*;
 use tikv::proto::raftpb::ConfChangeType;
 
-use super::cluster::Cluster;
+use super::cluster::new_store_cluster;
 use super::util::*;
 
 #[test]
@@ -11,7 +11,7 @@ fn test_simple_conf_change() {
     // init_env_log();
 
     let count = 5;
-    let mut cluster = Cluster::new(0, count);
+    let mut cluster = new_store_cluster(0, count);
 
     cluster.bootstrap_conf_change();
 

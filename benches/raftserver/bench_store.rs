@@ -52,8 +52,8 @@ fn bench_store_set_4096_bytes_in_5_node(b: &mut Bencher) {
     bench_set(b, 5, 4096)
 }
 
-fn prepare_cluster(node_count: usize) -> Cluster {
-    let mut cluster = Cluster::new(0, node_count);
+fn prepare_cluster(node_count: usize) -> Cluster<StoreCluster> {
+    let mut cluster = new_store_cluster(0, node_count);
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
     sleep_ms(400);
