@@ -16,6 +16,9 @@ mod conn;
 pub mod server;
 mod transport;
 
+pub use self::config::{Config, StoreConfig};
+pub use self::server::Server;
+
 pub struct ConnData {
     msg_id: u64,
     msg: raft_serverpb::Message,
