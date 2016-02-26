@@ -11,7 +11,7 @@ fn test_put() {
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
 
-    sleep_ms(300);
+    sleep_ms(400);
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
@@ -44,7 +44,7 @@ fn test_delete() {
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
 
-    sleep_ms(300);
+    sleep_ms(400);
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
@@ -69,7 +69,7 @@ fn test_seek() {
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_stores();
 
-    sleep_ms(300);
+    sleep_ms(400);
 
     for i in 100..200 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
