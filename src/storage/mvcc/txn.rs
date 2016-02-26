@@ -158,6 +158,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
 mod tests {
     use super::{MvccTxn, Prewrite};
     use storage::engine::{self, Engine, Dsn};
+    use util::codec::bytes;
 
     #[test]
     fn test_mvcc_txn_read() {
@@ -181,26 +182,68 @@ mod tests {
         must_get(engine.as_ref(), b"x", 13, b"x5");
         must_get(engine.as_ref(), b"x", 17, b"x5");
         must_get_none(engine.as_ref(), b"x", 23);
+
+        // insert bad format data
+        engine.put(bytes::encode_bytes(b"y"), b"dummy".to_vec()).unwrap();
+        must_get_err(engine.as_ref(), b"y", 100);
     }
 
     #[test]
-    fn test_mvcc_txn_write() {
+    fn test_mvcc_txn_prewrite() {
         let engine = engine::new_engine(Dsn::Memory).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
+        // Key is locked.
         must_prewrite_lock_err(engine.as_ref(), b"x", b"x", 6);
         must_commit(engine.as_ref(), b"x", 5, 10);
+        // Write conflict
         must_prewrite_lock_err(engine.as_ref(), b"x", b"x", 6);
+        // Not conflict
         must_prewrite_lock(engine.as_ref(), b"x", b"x", 12);
+        must_rollback(engine.as_ref(), b"x", 12);
+        // Can prewrite after rollback
+        must_prewrite_lock(engine.as_ref(), b"x", b"x", 13);
+        must_rollback(engine.as_ref(), b"x", 13);
+    }
+
+    #[test]
+    fn test_mvcc_txn_commit_ok() {
+        let engine = engine::new_engine(Dsn::Memory).unwrap();
+        must_prewrite_put(engine.as_ref(), b"x", b"x10", b"x", 10);
+        must_commit(engine.as_ref(), b"x", 10, 15);
+    }
+
+    #[test]
+    fn test_mvcc_txn_commit_err() {
+        let engine = engine::new_engine(Dsn::Memory).unwrap();
+
+        // Not prewrite yet
+        must_commit_err(engine.as_ref(), b"x", 1, 2);
+        must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
+        // start_ts not match
+        must_commit_err(engine.as_ref(), b"x", 4, 5);
+        must_rollback(engine.as_ref(), b"x", 5);
+        // commit after rollback
+        must_commit_err(engine.as_ref(), b"x", 5, 6);
     }
 
     #[test]
     fn test_mvcc_txn_rollback() {
         let engine = engine::new_engine(Dsn::Memory).unwrap();
 
+        // Not prewrite yet
+        must_rollback_err(engine.as_ref(), b"x", 1);
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
+        // start_ts not match
+        must_rollback_err(engine.as_ref(), b"x", 4);
+        must_rollback_err(engine.as_ref(), b"x", 6);
+        // rollback
         must_rollback(engine.as_ref(), b"x", 5);
-        must_prewrite_lock(engine.as_ref(), b"x", b"x", 6);
+        // lock is released
+        must_prewrite_lock(engine.as_ref(), b"x", b"x", 10);
+        must_rollback(engine.as_ref(), b"x", 10);
+        // data is dropped
+        must_get_none(engine.as_ref(), b"x", 20);
     }
 
     fn must_get<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64, expect: &[u8]) {
@@ -251,9 +294,19 @@ mod tests {
         txn.submit().unwrap();
     }
 
+    fn must_commit_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
+        let mut txn = MvccTxn::new(engine, start_ts);
+        assert!(txn.commit(key, commit_ts).is_err());
+    }
+
     fn must_rollback<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
         let mut txn = MvccTxn::new(engine, start_ts);
         txn.rollback(key).unwrap();
         txn.submit().unwrap();
+    }
+
+    fn must_rollback_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
+        let mut txn = MvccTxn::new(engine, start_ts);
+        assert!(txn.rollback(key).is_err());
     }
 }
