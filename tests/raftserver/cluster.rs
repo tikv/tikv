@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use std::thread;
+use std::sync::Arc;
 use std::time::Duration;
 
 use rocksdb::DB;
@@ -17,28 +16,35 @@ use tikv::proto::raftpb::ConfChangeType;
 
 // We simulate 3 or 5 nodes, each has a store, the node id and store id are same.
 // E,g, for node 1, the node id and store id are both 1.
-pub struct Cluster {
+
+pub trait Simulator {
+    fn run_node(&mut self, node_id: u64, engine: Arc<DB>);
+    fn stop_node(&mut self, node_id: u64);
+    fn get_node_ids(&self) -> Vec<u64>;
+    fn call_command(&self,
+                    request: RaftCommandRequest,
+                    timeout: Duration)
+                    -> Option<RaftCommandResponse>;
+}
+
+pub struct Cluster<T: Simulator> {
     id: u64,
     leaders: HashMap<u64, metapb::Peer>,
     paths: HashMap<u64, TempDir>,
     pub engines: HashMap<u64, Arc<DB>>,
 
-    senders: HashMap<u64, SendCh>,
-    handles: HashMap<u64, thread::JoinHandle<()>>,
-
-    trans: Arc<RwLock<StoreTransport>>,
+    sim: T,
 }
 
-impl Cluster {
-    pub fn new(id: u64, count: usize) -> Cluster {
+impl<T: Simulator> Cluster<T> {
+    // Create the default Store cluster.
+    pub fn new(id: u64, count: usize, sim: T) -> Cluster<T> {
         let mut c = Cluster {
             id: id,
             leaders: HashMap::new(),
             paths: HashMap::new(),
             engines: HashMap::new(),
-            senders: HashMap::new(),
-            handles: HashMap::new(),
-            trans: StoreTransport::new(),
+            sim: sim,
         };
 
         c.create_engines(count);
@@ -56,66 +62,35 @@ impl Cluster {
         }
     }
 
-    pub fn run_store(&mut self, store_id: u64) {
-        assert!(!self.handles.contains_key(&store_id));
-        assert!(!self.senders.contains_key(&store_id));
-
-        let engine = self.engines.get(&store_id).unwrap();
-        let cfg = new_store_cfg();
-
-        let mut event_loop = create_event_loop(&cfg).unwrap();
-
-        let mut store = Store::new(&mut event_loop, cfg, engine.clone(), self.trans.clone())
-                            .unwrap();
-
-        self.trans.write().unwrap().add_sender(store.get_store_id(), store.get_sendch());
-
-        let sender = store.get_sendch();
-        let t = thread::spawn(move || {
-            store.run(&mut event_loop).unwrap();
-        });
-
-        self.handles.insert(store_id, t);
-        self.senders.insert(store_id, sender);
+    pub fn run_node(&mut self, node_id: u64) {
+        let engine = self.engines.get(&node_id).unwrap();
+        self.sim.run_node(node_id, engine.clone());
     }
 
-    pub fn run_all_stores(&mut self) {
+    pub fn run_all_nodes(&mut self) {
         let count = self.engines.len();
         for i in 0..count {
-            self.run_store(i as u64 + 1);
+            self.run_node(i as u64 + 1);
         }
     }
 
-    pub fn stop_store(&mut self, store_id: u64) {
-        let h = self.handles.remove(&store_id).unwrap();
-        let sender = self.senders.remove(&store_id).unwrap();
-
-        self.trans.write().unwrap().remove_sender(store_id);
-
-        sender.send_quit().unwrap();
-        h.join().unwrap();
+    pub fn stop_node(&mut self, node_id: u64) {
+        self.sim.stop_node(node_id);
     }
 
     pub fn get_engines(&self) -> &HashMap<u64, Arc<DB>> {
         &self.engines
     }
 
-    pub fn get_senders(&self) -> &HashMap<u64, SendCh> {
-        &self.senders
-    }
-
-    pub fn get_engine(&self, store_id: u64) -> Arc<DB> {
-        self.engines.get(&store_id).unwrap().clone()
+    pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
+        self.engines.get(&node_id).unwrap().clone()
     }
 
     pub fn call_command(&self,
                         request: RaftCommandRequest,
                         timeout: Duration)
                         -> Option<RaftCommandResponse> {
-        let store_id = request.get_header().get_peer().get_store_id();
-        let sender = self.senders.get(&store_id).unwrap();
-
-        call_command(sender, request, timeout).unwrap()
+        self.sim.call_command(request, timeout)
     }
 
     pub fn call_command_on_leader(&mut self,
@@ -127,31 +102,32 @@ impl Cluster {
         self.call_command(request, timeout)
     }
 
-    pub fn get_transport(&self) -> Arc<RwLock<StoreTransport>> {
-        self.trans.clone()
-    }
-
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
         if let Some(l) = self.leaders.get(&region_id) {
             return Some(l.clone());
         }
         let mut leader = None;
-        for id in self.get_senders().keys() {
-            let id = *id;
-            let peer = new_peer(id, id, id);
-            let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
-            let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
-            let region_leader = resp.get_status_response().get_region_leader();
-            if region_leader.has_leader() {
-                leader = Some(region_leader.get_leader().clone());
-                break;
+        let mut retry_cnt = 100;
+
+        while leader.is_none() && retry_cnt > 0 {
+            for id in self.sim.get_node_ids() {
+                let peer = new_peer(id, id, id);
+                let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
+                let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
+                let region_leader = resp.get_status_response().get_region_leader();
+                if region_leader.has_leader() {
+                    leader = Some(region_leader.get_leader().clone());
+                    break;
+                }
             }
-            sleep_ms(100);
+            sleep_ms(10);
+            retry_cnt -= 1;
         }
 
         if let Some(l) = leader {
             self.leaders.insert(region_id, l);
         }
+
         self.leaders.get(&region_id).cloned()
     }
 
@@ -179,8 +155,8 @@ impl Cluster {
             bootstrap_store(engine.clone(), self.id, id, id).unwrap();
         }
 
-        let store_id = 1;
-        bootstrap_region(self.engines.get(&store_id).unwrap().clone()).unwrap();
+        let node_id = 1;
+        bootstrap_region(self.engines.get(&node_id).unwrap().clone()).unwrap();
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {
@@ -195,9 +171,9 @@ impl Cluster {
     }
 
     pub fn shutdown(&mut self) {
-        let keys: Vec<u64> = self.senders.keys().cloned().collect();
+        let keys: Vec<u64> = self.sim.get_node_ids();
         for id in keys {
-            self.stop_store(id);
+            self.stop_node(id);
         }
         self.leaders.clear();
     }
@@ -302,7 +278,7 @@ impl Cluster {
     }
 }
 
-impl Drop for Cluster {
+impl<T: Simulator> Drop for Cluster<T> {
     fn drop(&mut self) {
         self.shutdown();
     }

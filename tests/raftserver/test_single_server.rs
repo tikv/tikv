@@ -1,17 +1,19 @@
 use std::time::Duration;
 
-use tikv::raftserver::store::*;
-use super::store::new_store_cluster;
+use super::server::new_server_cluster;
+use tikv::raftserver::store::{keys, Retriever};
 
 use super::util::*;
 
+// TODO: unify store/server test later.
+
 #[test]
 fn test_put() {
-    let mut cluster = new_store_cluster(0, 1);
+    let mut cluster = new_server_cluster(0, 1);
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_nodes();
 
-    sleep_ms(400);
+    sleep_ms(300);
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
@@ -40,11 +42,11 @@ fn test_put() {
 
 #[test]
 fn test_delete() {
-    let mut cluster = new_store_cluster(0, 1);
+    let mut cluster = new_server_cluster(0, 1);
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_nodes();
 
-    sleep_ms(400);
+    sleep_ms(300);
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
@@ -65,11 +67,11 @@ fn test_delete() {
 
 #[test]
 fn test_seek() {
-    let mut cluster = new_store_cluster(0, 1);
+    let mut cluster = new_server_cluster(0, 1);
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_nodes();
 
-    sleep_ms(400);
+    sleep_ms(300);
 
     for i in 100..200 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
