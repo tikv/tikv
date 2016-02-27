@@ -30,18 +30,18 @@ impl StoreTransport {
         Arc::new(RwLock::new(StoreTransport { senders: HashMap::new() }))
     }
 
-    pub fn add_sender(&mut self, store_id: u64, sender: SendCh) {
-        self.senders.insert(store_id, sender);
+    pub fn add_sender(&mut self, node_id: u64, sender: SendCh) {
+        self.senders.insert(node_id, sender);
     }
 
-    pub fn remove_sender(&mut self, store_id: u64) {
-        self.senders.remove(&store_id);
+    pub fn remove_sender(&mut self, node_id: u64) {
+        self.senders.remove(&node_id);
     }
 }
 
 impl Transport for StoreTransport {
     fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        let to_store = msg.get_to_peer().get_store_id();
+        let to_store = msg.get_to_peer().get_node_id();
         match self.senders.get(&to_store) {
             None => Err(other(format!("missing sender for store {}", to_store))),
             Some(sender) => sender.send_raft_msg(msg),

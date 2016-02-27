@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::vec::Vec;
 use std::thread;
 use std::boxed::Box;
+use std::net::SocketAddr;
 
 use rocksdb::DB;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
@@ -90,6 +91,14 @@ impl Server {
 
     pub fn get_sendch(&self) -> SendCh {
         self.sendch.clone()
+    }
+
+    // Return listening address, this may only be used for outer test
+    // to get the real address because we may use "127.0.0.1:0"
+    // in test to avoid port conflict.
+    pub fn listening_addr(&self) -> Result<SocketAddr> {
+        let addr = try!(self.listener.local_addr());
+        Ok(addr)
     }
 
     fn start_stores(&mut self, engines: Vec<Arc<DB>>, idents: Vec<StoreIdent>) -> Result<()> {
