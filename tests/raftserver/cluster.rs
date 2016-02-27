@@ -107,21 +107,27 @@ impl<T: ClusterSimulator> Cluster<T> {
             return Some(l.clone());
         }
         let mut leader = None;
-        for id in self.sim.get_node_ids() {
-            let peer = new_peer(id, id, id);
-            let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
-            let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
-            let region_leader = resp.get_status_response().get_region_leader();
-            if region_leader.has_leader() {
-                leader = Some(region_leader.get_leader().clone());
-                break;
+        let mut retry_cnt = 100;
+
+        while leader.is_none() && retry_cnt > 0 {
+            for id in self.sim.get_node_ids() {
+                let peer = new_peer(id, id, id);
+                let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
+                let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
+                let region_leader = resp.get_status_response().get_region_leader();
+                if region_leader.has_leader() {
+                    leader = Some(region_leader.get_leader().clone());
+                    break;
+                }
             }
-            sleep_ms(100);
+            sleep_ms(10);
+            retry_cnt -= 1;
         }
 
         if let Some(l) = leader {
             self.leaders.insert(region_id, l);
         }
+
         self.leaders.get(&region_id).cloned()
     }
 

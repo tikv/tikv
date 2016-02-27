@@ -17,8 +17,6 @@ fn test_compact_log() {
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_nodes();
 
-    sleep_ms(400);
-
     let mut before_states = HashMap::new();
 
     for (&id, engine) in &cluster.engines {
