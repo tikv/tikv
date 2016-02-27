@@ -17,9 +17,6 @@ fn test_simple_conf_change() {
 
     cluster.run_all_nodes();
 
-    // Let raft run.
-    sleep_ms(400);
-
     // Now region 1 only has peer (1, 1, 1);
     let (key, value) = (b"a1", b"v1");
 
