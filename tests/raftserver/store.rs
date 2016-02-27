@@ -71,7 +71,7 @@ impl ClusterSimulator for StoreCluster {
         let node_id = request.get_header().get_peer().get_node_id();
         let sender = self.senders.get(&node_id).unwrap();
 
-        call_command(sender, request, timeout).unwrap()
+        msg::call_command(sender, request, timeout).unwrap()
     }
 }
 
