@@ -50,7 +50,7 @@ fn test_multi_store_leader_crash() {
     let last_leader = cluster.leader_of_region(1).unwrap();
     cluster.stop_node(last_leader.get_node_id());
 
-    sleep_ms(500);
+    sleep_ms(800);
     cluster.reset_leader_of_region(1);
     let new_leader = cluster.leader_of_region(1).expect("leader should be elected.");
     assert!(new_leader != last_leader);
