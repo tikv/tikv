@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use rocksdb::DB;
 
-use super::cluster::{ClusterSimulator, Cluster};
+use super::cluster::{Simulator, Cluster};
 use tikv::raftserver::server::*;
 use tikv::util::codec::{self, rpc};
 use tikv::proto::raft_serverpb::{Message, MessageType};
@@ -48,7 +48,7 @@ impl ServerCluster {
     }
 }
 
-impl ClusterSimulator for ServerCluster {
+impl Simulator for ServerCluster {
     fn run_node(&mut self, node_id: u64, engine: Arc<DB>) {
         assert!(!self.handles.contains_key(&node_id));
         assert!(!self.senders.contains_key(&node_id));

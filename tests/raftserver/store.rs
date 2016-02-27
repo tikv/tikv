@@ -5,11 +5,13 @@ use std::time::Duration;
 
 use rocksdb::DB;
 
-use super::cluster::{ClusterSimulator, Cluster};
+use super::cluster::{Simulator, Cluster};
 use tikv::raftserver::store::*;
 use tikv::proto::raft_cmdpb::*;
 use super::util::*;
 
+// TODO: Now we treat Store as the Node directly, we can use Node instead
+// after we implement it later.
 pub struct StoreCluster {
     senders: HashMap<u64, SendCh>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
@@ -27,7 +29,7 @@ impl StoreCluster {
     }
 }
 
-impl ClusterSimulator for StoreCluster {
+impl Simulator for StoreCluster {
     fn run_node(&mut self, node_id: u64, engine: Arc<DB>) {
         assert!(!self.handles.contains_key(&node_id));
         assert!(!self.senders.contains_key(&node_id));
