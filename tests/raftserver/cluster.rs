@@ -17,7 +17,7 @@ use tikv::proto::raftpb::ConfChangeType;
 // We simulate 3 or 5 nodes, each has a store, the node id and store id are same.
 // E,g, for node 1, the node id and store id are both 1.
 
-pub trait ClusterSimulator {
+pub trait Simulator {
     fn run_node(&mut self, node_id: u64, engine: Arc<DB>);
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> Vec<u64>;
@@ -27,7 +27,7 @@ pub trait ClusterSimulator {
                     -> Option<RaftCommandResponse>;
 }
 
-pub struct Cluster<T: ClusterSimulator> {
+pub struct Cluster<T: Simulator> {
     id: u64,
     leaders: HashMap<u64, metapb::Peer>,
     paths: HashMap<u64, TempDir>,
@@ -36,7 +36,7 @@ pub struct Cluster<T: ClusterSimulator> {
     sim: T,
 }
 
-impl<T: ClusterSimulator> Cluster<T> {
+impl<T: Simulator> Cluster<T> {
     // Create the default Store cluster.
     pub fn new(id: u64, count: usize, sim: T) -> Cluster<T> {
         let mut c = Cluster {
@@ -278,7 +278,7 @@ impl<T: ClusterSimulator> Cluster<T> {
     }
 }
 
-impl<T: ClusterSimulator> Drop for Cluster<T> {
+impl<T: Simulator> Drop for Cluster<T> {
     fn drop(&mut self) {
         self.shutdown();
     }
