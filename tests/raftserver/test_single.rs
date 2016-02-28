@@ -1,13 +1,13 @@
 use std::time::Duration;
 
+use super::cluster::{Cluster, Simulator};
 use tikv::raftserver::store::*;
 use super::store::new_store_cluster;
+use super::server::new_server_cluster;
 
 use super::util::*;
 
-#[test]
-fn test_put() {
-    let mut cluster = new_store_cluster(0, 1);
+fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_nodes();
 
@@ -38,9 +38,7 @@ fn test_put() {
     assert!(cluster.engines[&1].get_value(b"a2").unwrap().is_none());
 }
 
-#[test]
-fn test_delete() {
-    let mut cluster = new_store_cluster(0, 1);
+fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_nodes();
 
@@ -63,9 +61,7 @@ fn test_delete() {
     }
 }
 
-#[test]
-fn test_seek() {
-    let mut cluster = new_store_cluster(0, 1);
+fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_single_region().expect("");
     cluster.run_all_nodes();
 
@@ -103,4 +99,40 @@ fn test_seek() {
 
     assert!(cluster.seek(b"key2").is_none(),
             "seek should follow binary order");
+}
+
+#[test]
+fn test_store_put() {
+    let mut cluster = new_store_cluster(0, 1);
+    test_put(&mut cluster);
+}
+
+#[test]
+fn test_store_delete() {
+    let mut cluster = new_store_cluster(0, 1);
+    test_delete(&mut cluster);
+}
+
+#[test]
+fn test_store_seek() {
+    let mut cluster = new_store_cluster(0, 1);
+    test_seek(&mut cluster);
+}
+
+#[test]
+fn test_server_put() {
+    let mut cluster = new_server_cluster(0, 1);
+    test_put(&mut cluster);
+}
+
+#[test]
+fn test_server_delete() {
+    let mut cluster = new_server_cluster(0, 1);
+    test_delete(&mut cluster);
+}
+
+#[test]
+fn test_server_seek() {
+    let mut cluster = new_server_cluster(0, 1);
+    test_seek(&mut cluster);
 }
