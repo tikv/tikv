@@ -79,8 +79,11 @@ pub trait Client {
     // and peers will be removed.
     // When doing auto-balance, pd determines how to move the region from one store to another.
 
-    // Get node address so that we can send message to it.
-    fn get_node_addr(&self, cluster_id: u64, node_id: u64) -> Result<String>;
+    // Get node information.
+    fn get_node(&self, cluster_id: u64, node_id: u64) -> Result<metapb::Node>;
+
+    // Get store information.
+    fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store>;
 
     // For route.
     // Get the region which the key belongs to.
