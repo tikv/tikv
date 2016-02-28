@@ -5,19 +5,24 @@ pub use self::errors::{Result, Error};
 
 use proto::metapb;
 
+pub type Key = Vec<u8>;
+
 // Client to communicate with placement driver (pd).
 pub trait Client {
-    // Bootstrap the cluster with cluster ID, if the cluster is
-    // already bootstrapped, return ClusterBootstrapped error.
-    // We must first bootstrap the cluster and then use it.
+    // Create the cluster with cluster ID, node, stores and first region.
+    // If the cluster is already bootstrapped, return ClusterBootstrapped error.
     // When a node starts, if it finds nothing in the node and
-    // cluster is not bootstrapped, it begin to bootstrap
-    // itself with node 1, store 1 and peer 1 for region 1,
+    // cluster is not bootstrapped, it begins to create node, stores, first region
     // and then call bootstrap_cluster to let pd know it.
     // It may happen that multi nodes start at same time to try to
     // bootstrap, and only one can success, others will fail
-    // and must remove their created local data themselves.
-    fn bootstrap_cluster(&mut self, cluster_id: u64) -> Result<()>;
+    // and must remove their created local region data themselves.
+    fn boostrap_cluster(&mut self,
+                        cluster_id: u64,
+                        node: metapb::Node,
+                        stores: Vec<metapb::Store>,
+                        region: metapb::Region)
+                        -> Result<()>;
 
     // Return whether the cluster is bootstrapped or not.
     // We must use the cluster after bootstrapped, so when the
@@ -25,32 +30,24 @@ pub trait Client {
     // and panic if not bootstrapped.
     fn is_cluster_bootstrapped(&self, cluster_id: u64) -> Result<bool>;
 
-    // Allocate a node id for this cluster. Pd must guarantee that
-    // the id is increased monotonically, because we use node 1
-    // for bootstrap already, so this function returns 2 at first.
-    fn alloc_node_id(&mut self, cluster_id: u64) -> Result<u64>;
+    // Allocate a unique node id.
+    fn alloc_node_id(&mut self) -> Result<u64>;
 
-    // Allocate a store id for this cluster. Pd must guarantee that
-    // the id is increased monotonically, because we use store 1
-    // for bootstrap already, so this function returns 2 at first.
-    fn alloc_store_id(&mut self, cluster_id: u64) -> Result<u64>;
+    // Allocate a unique store id.
+    fn alloc_store_id(&mut self) -> Result<u64>;
 
-    // Allocate a peer id for this cluster. Pd must guarantee that
-    // the id is increased monotonically, because we use peer 1
-    // for bootstrap already, so this function returns 2 at first.
-    fn alloc_peer_id(&mut self, cluster_id: u64) -> Result<u64>;
+    // Allocate a unique peer id.
+    fn alloc_peer_id(&mut self) -> Result<u64>;
 
-    // Allocate a region id for this cluster. Pd must guarantee that
-    // the id is increased monotonically, because we use region 1
-    // for bootstrap already, so this function returns 2 at first.
-    fn alloc_region_id(&mut self, cluster_id: u64) -> Result<u64>;
+    // Allocate a unique region id.
+    fn alloc_region_id(&mut self) -> Result<u64>;
 
     // When the node starts, or some node information changed, it
-    // uses put_node to tell pd know it.
+    // uses put_node to inform pd.
     fn put_node(&mut self, cluster_id: u64, node: metapb::Node) -> Result<()>;
 
     // When the store starts, or some store information changed, it
-    // uses put_store to tell pd know it.
+    // uses put_store to inform pd.
     fn put_store(&mut self, cluster_id: u64, store: metapb::Store) -> Result<()>;
 
     // Delete the node from cluster, it is a very dangerous operation
@@ -88,7 +85,7 @@ pub trait Client {
     // For route.
     // Get all regions which the keys belong to.
     // The returned regions are unique, if multi keys belong to same region, only one returns.
-    fn get_regions(&self, cluster_id: u64, keys: Vec<Vec<u8>>) -> Result<Vec<metapb::Region>>;
+    fn get_regions(&self, cluster_id: u64, keys: Vec<Key>) -> Result<Vec<metapb::Region>>;
 
     // For route.
     // Scan all regions which the region key range is in [start_key, end_key].
