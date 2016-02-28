@@ -10,7 +10,7 @@ message Node {
 
 message Store {
     optional uint64 store_id  = 1;
-    optional Node node        = 2;
+    optional uint64 node_id   = 2;
     // more attributes......
 }
 
