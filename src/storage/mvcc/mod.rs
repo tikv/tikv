@@ -29,7 +29,8 @@ quick_error! {
         TxnAbortedWhileWorking {description("txn aborted while working")}
         WriteConflict {description("write conflict")}
         KeyVersion {description("bad format key(version)")}
-        DataMissing {description("data missing")}
+        AlreadyCommitted {description("txn already committed")}
+        AlreadyRollbacked {description("txn already rollbacked")}
     }
 }
 
