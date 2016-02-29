@@ -120,18 +120,23 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
     #[allow(dead_code)]
     pub fn rollback(&mut self, key: RefKey) -> Result<()> {
         let (meta_key, mut meta) = try!(self.load_meta(key));
-        match meta.get_lock() {
+        let same_lock = match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => {
-                if lock.get_field_type() == MetaLock_Type::ReadWrite {
-                    let value_key = codec::encode_key(key, lock.get_start_ts());
-                    self.writes.push(Modify::Delete(value_key));
-                }
+                let value_key = codec::encode_key(key, lock.get_start_ts());
+                self.writes.push(Modify::Delete(value_key));
+                true
             }
-            _ => return Err(Error::TxnAbortedWhileWorking),
+            _ => false,
+        };
+        if same_lock {
+            meta.clear_lock();
+            let modify = Modify::Put((meta_key, meta.to_bytes()));
+            self.writes.push(modify);
+        } else if meta.iter_items().any(|x| x.get_start_ts() == self.start_ts) {
+            return Err(Error::AlreadyCommitted);
+        } else {
+            return Err(Error::AlreadyRollbacked);
         }
-        meta.clear_lock();
-        let modify = Modify::Put((meta_key, meta.to_bytes()));
-        self.writes.push(modify);
         Ok(())
     }
 }
