@@ -33,3 +33,4 @@ pub mod kvserver;
 
 pub use storage::{Storage, Dsn};
 pub mod raftserver;
+pub mod pd;

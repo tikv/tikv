@@ -12,3 +12,5 @@ pub mod errorpb;
 pub mod raft_cmdpb;
 #[cfg_attr(rustfmt, rustfmt_skip)]
 pub mod mvccpb;
+#[cfg_attr(rustfmt, rustfmt_skip)]
+pub mod pdpb;
