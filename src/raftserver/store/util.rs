@@ -2,6 +2,9 @@ use std::option::Option;
 
 use proto::metapb;
 
+use proto::raft_cmdpb::RaftCommandRequest;
+use uuid::Uuid;
+
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     for peer in region.get_peers() {
         if peer.get_store_id() == store_id {
@@ -29,6 +32,10 @@ pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
     peer.set_peer_id(peer_id);
 
     peer
+}
+
+pub fn get_uuid_from_req(cmd: &RaftCommandRequest) -> Option<Uuid> {
+    Uuid::from_bytes(cmd.get_header().get_uuid())
 }
 
  #[cfg(test)]

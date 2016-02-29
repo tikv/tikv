@@ -29,9 +29,8 @@ impl Deref for DBValue {
     }
 }
 
-pub trait Retriever {
+pub trait Peekable {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>>;
-    fn new_iterator(&self, start_key: &[u8]) -> DBIterator;
 
     fn get_msg<M>(&self, key: &[u8]) -> Result<Option<M>>
         where M: protobuf::Message + protobuf::MessageStatic
@@ -70,6 +69,10 @@ pub trait Retriever {
             Some(n) => Ok(Some(n as i64)),
         }
     }
+}
+
+pub trait Iterable {
+    fn new_iterator(&self, start_key: &[u8]) -> DBIterator;
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
@@ -99,18 +102,20 @@ pub trait Retriever {
     }
 }
 
-impl Retriever for DB {
+impl Peekable for DB {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
         let v = try!(self.get(key));
         Ok(v.map(DBValue::DBVector))
     }
+}
 
+impl Iterable for DB {
     fn new_iterator(&self, start_key: &[u8]) -> DBIterator {
         self.iterator(IteratorMode::From(start_key, Direction::forward))
     }
 }
 
-impl<'a> Retriever for Snapshot<'a> {
+impl<'a> Peekable for Snapshot<'a> {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
         let mut it = self.iterator(IteratorMode::From(key, Direction::forward));
         if let Some((seek_key, value)) = it.next() {
@@ -120,13 +125,15 @@ impl<'a> Retriever for Snapshot<'a> {
         }
         Ok(None)
     }
+}
 
+impl<'a> Iterable for Snapshot<'a> {
     fn new_iterator(&self, start_key: &[u8]) -> DBIterator {
         self.iterator(IteratorMode::From(start_key, Direction::forward))
     }
 }
 
-pub trait Mutator : Writable{
+pub trait Mutable : Writable{
     fn put_msg<M: protobuf::Message>(&self, key: &[u8], m: &M) -> Result<()> {
         let value = try!(m.write_to_bytes());
         try!(self.put(key, &value));
@@ -145,8 +152,8 @@ pub trait Mutator : Writable{
     }
 }
 
-impl Mutator for DB {}
-impl Mutator for WriteBatch {}
+impl Mutable for DB {}
+impl Mutable for WriteBatch {}
 
 
 #[cfg(test)]
