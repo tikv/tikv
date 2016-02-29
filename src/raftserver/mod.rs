@@ -8,6 +8,7 @@ use mio::{self, NotifyError};
 pub mod store;
 pub mod errors;
 pub mod server;
+pub mod coprocessor;
 pub use self::errors::{Result, Error, other};
 
 const MAX_SEND_RETRY_CNT: i32 = 20;

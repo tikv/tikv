@@ -17,4 +17,5 @@ pub use self::config::Config;
 pub use self::transport::Transport;
 pub use self::peer::Peer;
 pub use self::bootstrap::{bootstrap_store, bootstrap_region, bootstrap_cluster, write_first_region};
-pub use self::engine::{Retriever, Mutator};
+pub use self::engine::{Peekable, Iterable, Mutable};
+pub use self::peer_storage::PeerStorage;

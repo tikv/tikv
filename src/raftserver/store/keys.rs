@@ -153,6 +153,11 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
     v
 }
 
+pub fn origin_key(key: &[u8]) -> &[u8] {
+    validate_data_key(key).expect("");
+    &key[DATA_PREFIX_KEY.len()..]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

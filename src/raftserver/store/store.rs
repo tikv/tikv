@@ -13,9 +13,10 @@ use proto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
 use proto::raftpb::ConfChangeType;
 use raftserver::{Result, other};
 use proto::metapb;
+use super::util;
 use super::{SendCh, Msg};
 use super::keys;
-use super::engine::Retriever;
+use super::engine::{Peekable, Iterable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::msg::Callback;
@@ -253,7 +254,7 @@ impl<T: Transport> Store<T> {
 
     fn propose_raft_command(&mut self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
         let mut resp: RaftCommandResponse;
-        let uuid: Uuid = match Uuid::from_bytes(msg.get_header().get_uuid()) {
+        let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {
                 resp = cmd_resp::message_error("missing request uuid");
                 return cb.call_box((resp,));
@@ -401,7 +402,7 @@ impl<T: Transport> Store<T> {
     }
 }
 
-fn load_store_ident<T: Retriever>(r: &T) -> Result<Option<StoreIdent>> {
+fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
     let ident = try!(r.get_msg::<StoreIdent>(&keys::store_ident_key()));
 
     Ok(ident)
