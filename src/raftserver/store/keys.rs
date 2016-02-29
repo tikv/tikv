@@ -12,14 +12,6 @@ pub const MAX_KEY: &'static [u8] = &[0xFF];
 pub const LOCAL_PREFIX: u8 = 0x01;
 pub const LOCAL_MIN_KEY: &'static [u8] = &[LOCAL_PREFIX];
 pub const LOCAL_MAX_KEY: &'static [u8] = &[LOCAL_PREFIX + 1];
-pub const META1_PREFIX: u8 = 0x02;
-pub const META2_PREFIX: u8 = 0x03;
-pub const META1_PREFIX_KEY: &'static [u8] = &[META1_PREFIX];
-pub const META2_PREFIX_KEY: &'static [u8] = &[META2_PREFIX];
-pub const META_MIN_KEY: &'static [u8] = &[META1_PREFIX];
-pub const META_MAX_KEY: &'static [u8] = &[META2_PREFIX + 1];
-pub const META1_MAX_KEY: &'static [u8] = &[META1_PREFIX, MAX_KEY[0]];
-pub const META2_MAX_KEY: &'static [u8] = &[META2_PREFIX, MAX_KEY[0]];
 
 pub const DATA_PREFIX: u8 = b'z';
 pub const DATA_PREFIX_KEY: &'static [u8] = &[DATA_PREFIX];
@@ -144,46 +136,6 @@ pub fn region_tombstone_key(region_id: u64) -> Vec<u8> {
     make_region_meta_key(region_id, REGION_TOMBSTONE_SUFFIX)
 }
 
-// Returns a region route meta (meta1, meta2) indexing key for the
-// given key.
-// For data key, it returns a meta2 key, e.g, "zabc" -> \0x03"zabc"
-// For meta2 key, it returns a meta1 key, e.g, \0x03\"zabc" -> \0x02"zabc"
-// For meta1 key, it returns a MIN_KEY, e.g, \x02\"zabc" -> ""
-pub fn region_route_meta_key(key: &[u8]) -> Vec<u8> {
-    if key.len() == 0 {
-        return MIN_KEY.to_vec();
-    }
-
-    match key[0] {
-        META1_PREFIX => MIN_KEY.to_vec(),
-        META2_PREFIX => vec![META1_PREFIX_KEY, &key[1..]].concat(),
-        _ => vec![META2_PREFIX_KEY, key].concat(),
-    }
-}
-
-pub fn validate_region_route_meta_key(key: &[u8]) -> Result<()> {
-    if key == MIN_KEY {
-        return Ok(());
-    }
-
-    // TODO: Maybe no necessary to check this, remove later?
-    if key.len() < META1_PREFIX_KEY.len() {
-        return Err(other(format!("{:?} is too short", key)));
-    }
-
-    let prefix = key[0];
-    if prefix != META2_PREFIX && prefix != META1_PREFIX {
-        return Err(other(format!("{:?} is not a meta key", key)));
-    }
-
-    // TODO: check data prefix later?
-    if MAX_KEY < &key[META1_PREFIX_KEY.len()..] {
-        return Err(other(format!("{:?} is > {:?}", key, MAX_KEY)));
-    }
-
-    Ok(())
-}
-
 pub fn validate_data_key(key: &[u8]) -> Result<()> {
     if !key.starts_with(DATA_PREFIX_KEY) {
         return Err(other(format!("invalid data key {:?}, must start with {}",
@@ -265,52 +217,6 @@ mod tests {
             let lhs = region_info_key(lkey);
             let rhs = region_info_key(rkey);
             assert_eq!(lhs.partial_cmp(&rhs), Some(order));
-        }
-    }
-
-    fn route_key(prefix: u8, key: &[u8]) -> Vec<u8> {
-        let mut v = vec![];
-        v.push(prefix);
-        v.extend_from_slice(key);
-        v
-    }
-
-    fn meta1_key(key: &[u8]) -> Vec<u8> {
-        route_key(META1_PREFIX, key)
-    }
-
-    fn meta2_key(key: &[u8]) -> Vec<u8> {
-        route_key(META2_PREFIX, key)
-    }
-
-    #[test]
-    fn test_region_route_meta_key() {
-        let dkey = data_key(b"abc");
-        let tbls = vec![
-            (vec![], vec![]),
-            (meta1_key(&dkey), vec![]),
-            (meta2_key(&dkey), meta1_key(&dkey)),
-            (dkey.clone(), meta2_key(&dkey)),
-        ];
-
-        for (lkey, rkey) in tbls {
-            assert_eq!(region_route_meta_key(&lkey), rkey);
-        }
-
-        let tbls = vec![
-            (vec![], true),
-            (vec![0xFF], false),
-            (vec![DATA_PREFIX, 1], false),
-            (vec![META1_PREFIX - 1, 1], false),
-            (vec![META2_PREFIX + 1, 1], false),
-            (vec![META1_PREFIX, 1], true),
-            (vec![META2_PREFIX, 1], true),
-            (vec![META1_PREFIX, 0xFF, 1], false),
-            (vec![META2_PREFIX, 0xFF, 1], false),
-        ];
-
-        for (key, ok) in tbls {
-            assert_eq!(validate_region_route_meta_key(&key).is_ok(), ok);
         }
     }
 

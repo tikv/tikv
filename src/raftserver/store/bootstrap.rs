@@ -67,12 +67,6 @@ pub fn write_first_region(engine: &DB, region: &metapb::Region) -> Result<()> {
     let batch = WriteBatch::new();
     try!(batch.put_msg(&keys::region_info_key(region.get_region_id()), region));
 
-    let meta2_key = keys::region_route_meta_key(region.get_end_key());
-    try!(batch.put_msg(&meta2_key, region));
-
-    let meta1_key = keys::region_route_meta_key(&meta2_key);
-    try!(batch.put_msg(&meta1_key, region));
-
     try!(engine.write(batch));
     Ok(())
 }
