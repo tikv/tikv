@@ -88,11 +88,10 @@ pub trait Client {
     fn get_regions(&self, cluster_id: u64, keys: Vec<Key>) -> Result<Vec<metapb::Region>>;
 
     // For route.
-    // Scan all regions which the region key range is in [start_key, end_key].
+    // Scan all regions which the region start key >= given start key.
     fn scan_regions(&self,
                     cluster_id: u64,
-                    start_key: &[u8],
-                    end_key: &[u8],
+                    start_key: Vec<u8>,
                     limit: u32)
                     -> Result<Vec<metapb::Region>>;
 }
