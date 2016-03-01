@@ -198,12 +198,12 @@ impl PdClient {
 }
 
 impl Client for PdClient {
-    fn boostrap_cluster(&mut self,
-                        cluster_id: u64,
-                        node: metapb::Node,
-                        stores: Vec<metapb::Store>,
-                        region: metapb::Region)
-                        -> Result<()> {
+    fn bootstrap_cluster(&mut self,
+                         cluster_id: u64,
+                         node: metapb::Node,
+                         stores: Vec<metapb::Store>,
+                         region: metapb::Region)
+                         -> Result<()> {
         if self.is_cluster_bootstrapped(cluster_id).unwrap() {
             return Err(Error::ClusterBootstrapped(cluster_id));
         }

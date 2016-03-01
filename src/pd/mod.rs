@@ -7,6 +7,8 @@ use proto::metapb;
 
 pub type Key = Vec<u8>;
 
+pub const INVALID_ID: u64 = 0;
+
 // Client to communicate with placement driver (pd).
 pub trait Client {
     // Create the cluster with cluster ID, node, stores and first region.
@@ -17,12 +19,12 @@ pub trait Client {
     // It may happen that multi nodes start at same time to try to
     // bootstrap, and only one can success, others will fail
     // and must remove their created local region data themselves.
-    fn boostrap_cluster(&mut self,
-                        cluster_id: u64,
-                        node: metapb::Node,
-                        stores: Vec<metapb::Store>,
-                        region: metapb::Region)
-                        -> Result<()>;
+    fn bootstrap_cluster(&mut self,
+                         cluster_id: u64,
+                         node: metapb::Node,
+                         stores: Vec<metapb::Store>,
+                         region: metapb::Region)
+                         -> Result<()>;
 
     // Return whether the cluster is bootstrapped or not.
     // We must use the cluster after bootstrapped, so when the
@@ -30,16 +32,16 @@ pub trait Client {
     // and panic if not bootstrapped.
     fn is_cluster_bootstrapped(&self, cluster_id: u64) -> Result<bool>;
 
-    // Allocate a unique node id.
+    // Allocate a unique node id, 0 is invalid.
     fn alloc_node_id(&mut self) -> Result<u64>;
 
-    // Allocate a unique store id.
+    // Allocate a unique store id, 0 is invalid.
     fn alloc_store_id(&mut self) -> Result<u64>;
 
-    // Allocate a unique peer id.
+    // Allocate a unique peer id, 0 is invalid.
     fn alloc_peer_id(&mut self) -> Result<u64>;
 
-    // Allocate a unique region id.
+    // Allocate a unique region id, 0 is invalid.
     fn alloc_region_id(&mut self) -> Result<u64>;
 
     // When the node starts, or some node information changed, it
