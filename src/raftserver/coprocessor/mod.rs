@@ -2,8 +2,10 @@ mod region_snapshot;
 pub mod dispatcher;
 
 pub use self::region_snapshot::RegionSnapshot;
+pub use self::dispatcher::{CoprocessorHost, Registry};
 
 use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use raftserver::store::PeerStorage;
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.
@@ -21,16 +23,38 @@ pub struct RequestContext<'a> {
     pub bypass: bool,
 }
 
+impl<'a> RequestContext<'a> {
+    pub fn new(peer: &'a PeerStorage, cmd: RaftCommandRequest) -> RequestContext<'a> {
+        RequestContext {
+            snap: RegionSnapshot::new(&peer),
+            req: cmd,
+            bypass: false,
+        }
+    }
+}
+
 /// Context of response.
 pub struct ResponseContext<'a> {
     snap: RegionSnapshot<'a>,
     req: RaftCommandRequest,
-    pub res: RaftCommandResponse,
+    pub resp: RaftCommandResponse,
     /// Whether to bypass following observer post-hook.
     pub bypass: bool,
 }
 
 impl<'a> ResponseContext<'a> {
+    pub fn new(peer: &'a PeerStorage,
+               cmd: RaftCommandRequest,
+               resp: RaftCommandResponse)
+               -> ResponseContext<'a> {
+        ResponseContext {
+            snap: RegionSnapshot::new(peer),
+            req: cmd,
+            resp: resp,
+            bypass: false,
+        }
+    }
+
     /// Get a snapshot of requested snapshot.
     pub fn get_snapshot(&self) -> &RegionSnapshot {
         &self.snap

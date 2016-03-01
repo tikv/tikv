@@ -15,6 +15,7 @@ use proto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminRespo
 use proto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other};
+use raftserver::coprocessor::{CoprocessorHost, RequestContext, ResponseContext};
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
@@ -62,6 +63,7 @@ pub struct Peer {
     pub storage: Arc<RaftStorage>,
     pub pending_cmds: HashMap<Uuid, PendingCmd>,
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
+    coprocessor_host: CoprocessorHost,
 }
 
 impl Peer {
@@ -142,7 +144,10 @@ impl Peer {
             raft_group: raft_group,
             pending_cmds: HashMap::new(),
             peer_cache: store.get_peer_cache(),
+            coprocessor_host: CoprocessorHost::new(),
         };
+
+        peer.load_all_coprocessors();
 
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
@@ -151,7 +156,6 @@ impl Peer {
 
         Ok(peer)
     }
-
 
     pub fn destroy(&mut self) -> Result<()> {
         // Delete all data in this peer.
@@ -168,7 +172,13 @@ impl Peer {
 
         try!(self.engine.write(batch));
 
+        self.coprocessor_host.shutdown();
+
         Ok(())
+    }
+
+    pub fn load_all_coprocessors(&mut self) {
+        // TODO: load processors.
     }
 
     pub fn update_region(&mut self, region: &metapb::Region) -> Result<()> {
@@ -240,12 +250,10 @@ impl Peer {
             return Ok(());
         }
 
-        let cmd = pending_cmd.cmd.take().unwrap();
-        let data = try!(cmd.write_to_bytes());
-
-        let mut reproposable = false;
         // We handle change_peer command as ConfChange entry, and others as normal entry.
-        if let Some(change_peer) = get_change_peer_command(&cmd) {
+        if let Some(change_peer) = get_change_peer_command(pending_cmd.cmd.as_ref().unwrap()) {
+            let data = try!(pending_cmd.cmd.as_ref().unwrap().write_to_bytes());
+
             let mut cc = raftpb::ConfChange::new();
             cc.set_change_type(change_peer.get_change_type());
             cc.set_node_id(change_peer.get_peer().get_peer_id());
@@ -257,15 +265,17 @@ impl Peer {
                   self.region_id);
 
             try!(self.raft_group.propose_conf_change(cc));
-            reproposable = true;
-        } else {
-            // TODO handle Observer pre hook here.
-            try!(self.raft_group.propose(data));
+            return Ok(());
         }
 
-        if reproposable {
-            pending_cmd.cmd = Some(cmd);
-        }
+        let cmd = {
+            let peer_storage = self.storage.rl();
+            let mut ctx = RequestContext::new(&peer_storage, pending_cmd.cmd.take().unwrap());
+            self.coprocessor_host.pre_propose(&mut ctx);
+            ctx.req
+        };
+        let data = try!(cmd.write_to_bytes());
+        try!(self.raft_group.propose(data));
 
         Ok(())
     }
@@ -471,13 +481,18 @@ impl Peer {
 
         let pending_cmd = self.pending_cmds.remove(&uuid);
 
-        let (mut resp, exec_result) = self.apply_raft_command(index, cmd).unwrap_or_else(|e| {
+        let (resp, exec_result) = self.apply_raft_command(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);
             (cmd_resp::message_error(e), None)
         });
 
-        // TODO: handle Observer post_apply here.
         if let Some(mut pending_cmd) = pending_cmd {
+            let mut resp = {
+                let peer_storage = self.storage.rl();
+                let mut ctx = ResponseContext::new(&peer_storage, cmd, resp);
+                self.coprocessor_host.post_apply(&mut ctx);
+                ctx.resp
+            };
             if pending_cmd.cb.is_none() {
                 warn!("pending command callback for entry {} is None", index);
             } else {
@@ -497,7 +512,7 @@ impl Peer {
 
     fn apply_raft_command(&mut self,
                           index: u64,
-                          cmd: RaftCommandRequest)
+                          cmd: &RaftCommandRequest)
                           -> Result<(RaftCommandResponse, Option<ExecResult>)> {
         let last_applied_index = self.storage.rl().applied_index();
 
@@ -568,7 +583,7 @@ fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerReques
 struct ExecContext<'a> {
     pub snap: Snapshot<'a>,
     pub wb: &'a WriteBatch,
-    pub request: RaftCommandRequest,
+    pub request: &'a RaftCommandRequest,
 }
 
 // Here we implement all commands.
