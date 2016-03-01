@@ -9,12 +9,12 @@ use tikv::pd::{Client, Result, Error, Key};
 
 struct Store {
     store: metapb::Store,
-    regions: HashSet<Key>,
+    region_ids: HashSet<u64>,
 }
 
 struct Node {
     node: metapb::Node,
-    stores: HashSet<u64>,
+    store_ids: HashSet<u64>,
 }
 
 impl Node {
@@ -27,7 +27,7 @@ impl Node {
 
         Node {
             node: node,
-            stores: ids,
+            store_ids: ids,
         }
     }
 }
@@ -63,11 +63,11 @@ impl Cluster {
             let store_id = v.get_store_id();
             let mut store = Store {
                 store: v,
-                regions: HashSet::new(),
+                region_ids: HashSet::new(),
             };
 
             if store_id == first_store_id {
-                store.regions.insert(end_key.clone());
+                store.region_ids.insert(region.get_region_id());
             }
 
             c.stores.insert(store_id, store);
@@ -93,7 +93,7 @@ impl Cluster {
     fn delete_node(&mut self, node_id: u64) -> Result<()> {
         {
             let n = self.nodes.get(&node_id).unwrap();
-            if !n.stores.is_empty() {
+            if !n.store_ids.is_empty() {
                 return Err(Error::DeleteNotEmptyNode(node_id));
             }
         }
@@ -105,12 +105,12 @@ impl Cluster {
     fn delete_store(&mut self, store_id: u64) -> Result<()> {
         {
             let s = self.stores.get(&store_id).unwrap();
-            if !s.regions.is_empty() {
+            if !s.region_ids.is_empty() {
                 return Err(Error::DeleteNotEmptyStore(store_id));
             }
 
             let mut n = self.nodes.get_mut(&s.store.get_node_id()).unwrap();
-            n.stores.remove(&store_id);
+            n.store_ids.remove(&store_id);
         }
 
         self.stores.remove(&store_id);
@@ -148,11 +148,7 @@ impl Cluster {
         let iter = self.regions.range::<Key, Key>(Included(&start_key), Unbounded);
 
         let mut regions: Vec<metapb::Region> = vec![];
-        for (n, (_, region)) in iter.enumerate() {
-            if n >= limit as usize {
-                break;
-            }
-
+        for (_, region) in iter.take(limit as usize) {
             if region.get_start_key() >= &start_key {
                 regions.push(region.clone());
             }
