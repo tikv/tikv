@@ -32,16 +32,16 @@ pub trait Client {
     // and panic if not bootstrapped.
     fn is_cluster_bootstrapped(&self, cluster_id: u64) -> Result<bool>;
 
-    // Allocate a unique node id, 0 is invalid.
+    // Allocate a unique positive node id.
     fn alloc_node_id(&mut self) -> Result<u64>;
 
-    // Allocate a unique store id, 0 is invalid.
+    // Allocate a unique positive store id.
     fn alloc_store_id(&mut self) -> Result<u64>;
 
-    // Allocate a unique peer id, 0 is invalid.
+    // Allocate a unique positive peer id.
     fn alloc_peer_id(&mut self) -> Result<u64>;
 
-    // Allocate a unique region id, 0 is invalid.
+    // Allocate a unique positive region id.
     fn alloc_region_id(&mut self) -> Result<u64>;
 
     // When the node starts, or some node information changed, it
@@ -67,9 +67,9 @@ pub trait Client {
     // auto-balance and then delete the store.
     fn delete_store(&mut self, cluster_id: u64, store_id: u64) -> Result<()>;
 
-    // Discuss (@ngaut): We don't need to support region and peer put/delete,
+    // We don't need to support region and peer put/delete,
     // because pd knows all region and peers itself.
-    // When bootstrapping, pd knows region 1 and peer 1 exists in node 1, store 1.
+    // When bootstrapping, pd knows first region with bootstrap_cluster.
     // When changing peer, pd determines where to add a new peer in some store
     // for this region.
     // When region splitting, pd determines the new region id and peer id for the
