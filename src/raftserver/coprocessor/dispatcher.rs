@@ -13,7 +13,8 @@ pub struct Registry {
 
 impl Registry {
     /// register an Observer to dispatcher.
-    pub fn register_observer(&mut self, priority: u32, ro: Box<RegionObserver>) {
+    pub fn register_observer(&mut self, priority: u32, mut ro: Box<RegionObserver>) {
+        ro.start();
         let o = self.observers.binary_search_by(|t| t.priority.cmp(&priority));
         let r = ObserverEntry {
             priority: priority,
@@ -65,6 +66,18 @@ impl CoprocessorHost {
                 break;
             }
         }
+    }
+
+    pub fn shutdown(&mut self) {
+        for entry in &mut self.registry.observers {
+            entry.observer.stop();
+        }
+    }
+}
+
+impl Drop for CoprocessorHost {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
