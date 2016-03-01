@@ -3,6 +3,7 @@ use std::vec::Vec;
 use std::error;
 
 use rocksdb::DB;
+use rocksdb::rocksdb::Snapshot as RocksDBSnapshot;
 use protobuf::{self, Message};
 
 use proto::metapb;
@@ -11,7 +12,7 @@ use proto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError};
 use raftserver::{Result, Error, other};
 use super::keys;
-use super::engine::{Retriever, Mutator};
+use super::engine::{Peekable, Iterable, Mutable};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -203,6 +204,10 @@ impl PeerStorage {
         &self.region
     }
 
+    pub fn raw_snapshot(&self) -> RocksDBSnapshot {
+        self.engine.snapshot()
+    }
+
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
         debug!("begin to generate a snapshot for region {}",
                self.get_region_id());
@@ -265,7 +270,7 @@ impl PeerStorage {
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append<T: Mutator>(&self,
+    pub fn append<T: Mutable>(&self,
                               w: &T,
                               prev_last_index: u64,
                               entries: &[Entry])
@@ -295,7 +300,7 @@ impl PeerStorage {
     }
 
     // Apply the peer with given snapshot.
-    pub fn apply_snapshot<T: Mutator>(&self, w: &T, snap: &Snapshot) -> Result<ApplySnapResult> {
+    pub fn apply_snapshot<T: Mutable>(&self, w: &T, snap: &Snapshot) -> Result<ApplySnapResult> {
         debug!("begin to apply snapshot for region {}",
                self.get_region_id());
 
@@ -349,7 +354,7 @@ impl PeerStorage {
 
     // Discard all log entries prior to compact_index. We must guarantee
     // that the compact_index is not greater than applied index.
-    pub fn compact<T: Mutator>(&self, w: &T, compact_index: u64) -> Result<RaftTruncatedState> {
+    pub fn compact<T: Mutable>(&self, w: &T, compact_index: u64) -> Result<RaftTruncatedState> {
         debug!("compact log entries to prior to {} for region {}",
                compact_index,
                self.get_region_id());
@@ -428,7 +433,7 @@ impl PeerStorage {
         self.region = region.clone();
     }
 
-    pub fn load_applied_index<T: Retriever>(&self, db: &T) -> Result<u64> {
+    pub fn load_applied_index<T: Peekable>(&self, db: &T) -> Result<u64> {
         let mut applied_index: u64 = 0;
         if self.is_initialized() {
             applied_index = RAFT_INIT_LOG_INDEX;
@@ -460,7 +465,7 @@ impl PeerStorage {
     }
 
     pub fn scan_region<T, F>(&self, db: &T, f: &mut F) -> Result<()>
-        where T: Retriever,
+        where T: Iterable,
               F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
         let ranges = self.region_key_ranges();
@@ -476,22 +481,22 @@ impl PeerStorage {
     }
 }
 
-pub fn save_hard_state<T: Mutator>(w: &T, region_id: u64, state: &HardState) -> Result<()> {
+pub fn save_hard_state<T: Mutable>(w: &T, region_id: u64, state: &HardState) -> Result<()> {
     w.put_msg(&keys::raft_hard_state_key(region_id), state)
 }
 
-pub fn save_truncated_state<T: Mutator>(w: &T,
+pub fn save_truncated_state<T: Mutable>(w: &T,
                                         region_id: u64,
                                         state: &RaftTruncatedState)
                                         -> Result<()> {
     w.put_msg(&keys::raft_truncated_state_key(region_id), state)
 }
 
-pub fn save_applied_index<T: Mutator>(w: &T, region_id: u64, applied_index: u64) -> Result<()> {
+pub fn save_applied_index<T: Mutable>(w: &T, region_id: u64, applied_index: u64) -> Result<()> {
     w.put_u64(&keys::raft_applied_index_key(region_id), applied_index)
 }
 
-pub fn save_last_index<T: Mutator>(w: &T, region_id: u64, last_index: u64) -> Result<()> {
+pub fn save_last_index<T: Mutable>(w: &T, region_id: u64, last_index: u64) -> Result<()> {
     w.put_u64(&keys::raft_last_index_key(region_id), last_index)
 }
 

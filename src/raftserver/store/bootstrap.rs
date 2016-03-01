@@ -6,7 +6,7 @@ use proto::raft_serverpb::StoreIdent;
 use proto::metapb;
 use raftserver::{Result, other};
 use super::keys;
-use super::engine::{Retriever, Mutator};
+use super::engine::{Peekable, Iterable, Mutable};
 
 // How to construct cluster?
 //
