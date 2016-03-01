@@ -2,7 +2,7 @@ use super::{RegionObserver, RequestContext, ResponseContext};
 
 struct ObserverEntry {
     priority: u32,
-    observer: Box<RegionObserver>,
+    observer: Box<RegionObserver + Send>,
 }
 
 /// Registry contains all registered coprocessors.
@@ -13,7 +13,7 @@ pub struct Registry {
 
 impl Registry {
     /// register an Observer to dispatcher.
-    pub fn register_observer(&mut self, priority: u32, mut ro: Box<RegionObserver>) {
+    pub fn register_observer(&mut self, priority: u32, mut ro: Box<RegionObserver + Send>) {
         ro.start();
         let r = ObserverEntry {
             priority: priority,
@@ -72,7 +72,6 @@ impl Drop for CoprocessorHost {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use raftserver::coprocessor::*;
     use tempdir::TempDir;
     use raftserver::store::engine::*;
@@ -139,7 +138,7 @@ mod test {
         ResponseContext {
             snap: RegionSnapshot::new(ps),
             req: RaftCommandRequest::new(),
-            res: RaftCommandResponse::new(),
+            resp: RaftCommandResponse::new(),
             bypass: false,
         }
     }
