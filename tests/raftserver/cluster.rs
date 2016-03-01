@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use rocksdb::DB;
@@ -13,6 +13,8 @@ use super::util::*;
 use tikv::proto::raft_cmdpb::*;
 use tikv::proto::metapb;
 use tikv::proto::raftpb::ConfChangeType;
+use tikv::pd::Client;
+use super::pd::PdClient;
 
 // We simulate 3 or 5 nodes, each has a store, the node id and store id are same.
 // E,g, for node 1, the node id and store id are both 1.
@@ -34,17 +36,19 @@ pub struct Cluster<T: Simulator> {
     pub engines: HashMap<u64, Arc<DB>>,
 
     sim: T,
+    pd_client: Arc<RwLock<PdClient>>,
 }
 
 impl<T: Simulator> Cluster<T> {
     // Create the default Store cluster.
-    pub fn new(id: u64, count: usize, sim: T) -> Cluster<T> {
+    pub fn new(id: u64, count: usize, sim: T, pd_client: Arc<RwLock<PdClient>>) -> Cluster<T> {
         let mut c = Cluster {
             id: id,
             leaders: HashMap::new(),
             paths: HashMap::new(),
             engines: HashMap::new(),
             sim: sim,
+            pd_client: pd_client,
         };
 
         c.create_engines(count);
@@ -131,7 +135,7 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.get(&region_id).cloned()
     }
 
-    pub fn bootstrap_single_region(&self) -> Result<()> {
+    pub fn bootstrap_single_region(&mut self) -> Result<()> {
         let mut region = metapb::Region::new();
         region.set_region_id(1);
         region.set_start_key(keys::MIN_KEY.to_vec());
@@ -146,17 +150,40 @@ impl<T: Simulator> Cluster<T> {
         for engine in self.engines.values() {
             try!(write_region(&engine, &region));
         }
+
+        self.bootstrap_cluster(region);
+
         Ok(())
     }
 
     // 5 store, and store 1 bootstraps first region.
-    pub fn bootstrap_conf_change(&self) {
+    pub fn bootstrap_conf_change(&mut self) {
         for (&id, engine) in &self.engines {
             bootstrap_store(engine.clone(), self.id, id, id).unwrap();
         }
 
         let node_id = 1;
-        bootstrap_region(self.engines.get(&node_id).unwrap().clone(), 1, 1, 1, 1).unwrap();
+        let region = bootstrap_region(self.engines.get(&node_id).unwrap().clone(), 1, 1, 1, 1)
+                         .unwrap();
+        self.bootstrap_cluster(region);
+    }
+
+    fn bootstrap_cluster(&mut self, region: metapb::Region) {
+        // TODO: use pd to mange all bootstrap.
+
+        self.pd_client
+            .write()
+            .unwrap()
+            .bootstrap_cluster(self.id,
+                               new_node(1, "".to_owned()),
+                               vec![new_store(1, 1)],
+                               region)
+            .unwrap();
+
+        for &id in self.engines.keys() {
+            self.pd_client.write().unwrap().put_node(self.id, new_node(id, "".to_owned())).unwrap();
+            self.pd_client.write().unwrap().put_store(self.id, new_store(id, id)).unwrap();
+        }
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {

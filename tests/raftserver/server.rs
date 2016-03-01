@@ -3,7 +3,7 @@ use std::thread;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::io::ErrorKind;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use rocksdb::DB;
@@ -13,7 +13,9 @@ use tikv::raftserver::server::*;
 use tikv::util::codec::{self, rpc};
 use tikv::proto::raft_serverpb::{Message, MessageType};
 use tikv::proto::raft_cmdpb::*;
+use tikv::pd::Client;
 use super::util;
+use super::pd::PdClient;
 
 
 pub struct ServerCluster {
@@ -23,16 +25,18 @@ pub struct ServerCluster {
     addrs: HashMap<u64, SocketAddr>,
 
     msg_id: Mutex<u64>,
+    pd_client: Arc<RwLock<PdClient>>,
 }
 
 impl ServerCluster {
-    pub fn new(cluster_id: u64) -> ServerCluster {
+    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<PdClient>>) -> ServerCluster {
         ServerCluster {
             cluster_id: cluster_id,
             senders: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
             msg_id: Mutex::new(0),
+            pd_client: pd_client,
         }
     }
 
@@ -49,14 +53,24 @@ impl ServerCluster {
 }
 
 impl Simulator for ServerCluster {
+    #[allow(useless_format)]
     fn run_node(&mut self, node_id: u64, engine: Arc<DB>) {
         assert!(!self.handles.contains_key(&node_id));
         assert!(!self.senders.contains_key(&node_id));
 
         let cfg = self.new_config();
         let mut event_loop = create_event_loop().unwrap();
-        let mut server = Server::new(&mut event_loop, cfg, vec![engine]).unwrap();
+        let mut server = Server::new(&mut event_loop, cfg, vec![engine], self.pd_client.clone())
+                             .unwrap();
         let addr = server.listening_addr().unwrap();
+
+        // We must get real listening address and re-update pd again.
+        self.pd_client
+            .write()
+            .unwrap()
+            .put_node(self.cluster_id,
+                      util::new_node(server.get_node_id(), format!("{}", addr)))
+            .unwrap();
 
         let sender = server.get_sendch();
         let t = thread::spawn(move || {
@@ -125,5 +139,9 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    Cluster::new(id, count, ServerCluster::new(id))
+    let pd_client = Arc::new(RwLock::new(PdClient::new()));
+    Cluster::new(id,
+                 count,
+                 ServerCluster::new(id, pd_client.clone()),
+                 pd_client)
 }

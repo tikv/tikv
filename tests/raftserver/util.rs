@@ -145,6 +145,22 @@ pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
     peer
 }
 
+pub fn new_node(node_id: u64, addr: String) -> metapb::Node {
+    let mut node = metapb::Node::new();
+    node.set_node_id(node_id);
+    node.set_address(addr);
+
+    node
+}
+
+pub fn new_store(node_id: u64, store_id: u64) -> metapb::Store {
+    let mut store = metapb::Store::new();
+    store.set_node_id(node_id);
+    store.set_store_id(store_id);
+
+    store
+}
+
 pub fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
 }
