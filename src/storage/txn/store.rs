@@ -1,5 +1,5 @@
 
-use storage::{Key, RefKey, Value, KvPair, Write};
+use storage::{Key, RefKey, Value, KvPair, Mutation};
 use storage::Engine;
 use storage::mvcc::MvccTxn;
 use super::shard_mutex::ShardMutex;
@@ -58,7 +58,7 @@ impl TxnStore {
         Ok(results)
     }
 
-    pub fn prewrite(&self, writes: Vec<Write>, primary: Key, start_ts: u64) -> Result<Vec<Key>> {
+    pub fn prewrite(&self, writes: Vec<Mutation>, primary: Key, start_ts: u64) -> Result<Vec<Key>> {
         let locked_keys: Vec<Key> = writes.iter().map(|x| x.key().to_owned()).collect();
 
         let _guard = self.shard_mutex.lock(&locked_keys);

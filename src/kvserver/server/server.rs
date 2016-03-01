@@ -11,7 +11,7 @@ use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRespo
                      CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
                      Request, Response, MessageType};
 use storage;
-use storage::{Key, Storage, Value, KvPair, Write as StorageWrite};
+use storage::{Key, Storage, Value, KvPair, Mutation};
 
 use super::conn::Conn;
 
@@ -123,23 +123,23 @@ impl Server {
         }
         let cmd_prewrite_req: &CmdPrewriteRequest = msg.get_cmd_prewrite_req();
         let sender = event_loop.channel();
-        let mut writes = vec![];
-        writes.extend(cmd_prewrite_req.get_puts().iter().map(|kv| {
-            StorageWrite::Put((kv.get_key().to_vec(), kv.get_value().to_vec()))
+        let mut mutations = vec![];
+        mutations.extend(cmd_prewrite_req.get_puts().iter().map(|kv| {
+            Mutation::Put((kv.get_key().to_vec(), kv.get_value().to_vec()))
         }));
-        writes.extend(cmd_prewrite_req.get_dels()
-                                      .iter()
-                                      .map(|k| StorageWrite::Delete(k.to_owned())));
-        writes.extend(cmd_prewrite_req.get_locks()
-                                      .iter()
-                                      .map(|k| StorageWrite::Lock(k.to_owned())));
+        mutations.extend(cmd_prewrite_req.get_dels()
+                                         .iter()
+                                         .map(|k| Mutation::Delete(k.to_owned())));
+        mutations.extend(cmd_prewrite_req.get_locks()
+                                         .iter()
+                                         .map(|k| Mutation::Lock(k.to_owned())));
         let received_cb = Box::new(move |r: ResultStorage<()>| {
             let resp: Response = Server::cmd_prewrite_done(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         });
         self.store
-            .async_prewrite(writes, cmd_prewrite_req.get_start_version(), received_cb)
+            .async_prewrite(mutations, cmd_prewrite_req.get_start_version(), received_cb)
             .map_err(ServerError::Storage)
     }
 
@@ -189,10 +189,10 @@ impl Server {
         let mut cmd_scan_resp: CmdScanResponse = CmdScanResponse::new();
         cmd_scan_resp.set_ok(kvs.is_ok());
         match kvs {
-            Ok(v) => {
+            Ok(kvs) => {
                 // convert storage::KvPair to kvrpcpb::KvPair
                 let mut new_kvs: Vec<kvrpcpb::KvPair> = Vec::new();
-                for result in v {
+                for result in kvs {
                     match result {
                         Ok((ref key, ref value)) => {
                             let mut new_kv: kvrpcpb::KvPair = kvrpcpb::KvPair::new();
@@ -202,7 +202,6 @@ impl Server {
                         }
                         Err(_) => {} // TODO(disksing): should send lock to client
                     }
-
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
             }
