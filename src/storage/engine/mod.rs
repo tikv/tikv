@@ -72,6 +72,7 @@ mod tests {
     fn rocksdb() {
         let dir = TempDir::new("rocksdb_test").unwrap();
         let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap())).unwrap();
+
         get_put(e.as_ref());
         batch(e.as_ref());
         seek(e.as_ref());

@@ -29,7 +29,7 @@ impl Engine for EngineBtree {
         trace!("EngineBtree: seek {:?}", key);
         let m = self.map.read().unwrap(); // Use unwrap here since the usage pattern is simple,
                                           // should never be poisoned.
-        let mut iter = m.range::<Key, Value>(Included(&key.to_vec()), Unbounded);
+        let mut iter = m.range::<Key, Key>(Included(&key.to_vec()), Unbounded);
         Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
     }
 
