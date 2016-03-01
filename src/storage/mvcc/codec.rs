@@ -9,6 +9,7 @@ pub fn encode_key(key: &[u8], ts: u64) -> Vec<u8> {
     v
 }
 
+#[allow(dead_code)]
 pub fn decode_key(data: &[u8]) -> Result<(Vec<u8>, u64)> {
     let (key, read_size) = try!(bytes::decode_bytes(data));
     match data[read_size..].as_ref().read_u64::<BigEndian>() {
@@ -33,14 +34,5 @@ mod tests {
             let (k, ts) = decode_key(&data).unwrap();
             assert_eq!((x, y), (&k as &[u8], ts));
         }
-    }
-
-    #[test]
-    fn test_key_compare() {
-        let a1 = encode_key(b"A", 1);
-        let a2 = encode_key(b"A", 2);
-        let b1 = encode_key(b"B", 1);
-        assert!(a2 > a1);
-        assert!(a2 < b1);
     }
 }

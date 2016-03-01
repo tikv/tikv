@@ -8,11 +8,31 @@ mod engine;
 mod mvcc;
 mod txn;
 
+pub use self::engine::{Engine, Dsn};
+
 pub type Key = Vec<u8>;
 pub type RefKey<'a> = &'a [u8];
 pub type Value = Vec<u8>;
 pub type KvPair = (Key, Value);
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
+
+#[derive(Debug)]
+pub enum Mutation {
+    Put(KvPair),
+    Delete(Key),
+    Lock(Key),
+}
+
+#[allow(match_same_arms)]
+impl Mutation {
+    pub fn key(&self) -> RefKey {
+        match *self {
+            Mutation::Put((ref key, _)) => key,
+            Mutation::Delete(ref key) => key,
+            Mutation::Lock(ref key) => key,
+        }
+    }
+}
 
 #[allow(type_complexity)]
 pub enum Command {
@@ -25,12 +45,10 @@ pub enum Command {
         start_key: Key,
         limit: usize,
         start_ts: u64,
-        callback: Callback<Vec<KvPair>>,
+        callback: Callback<Vec<Result<KvPair>>>,
     },
     Prewrite {
-        puts: Vec<KvPair>,
-        deletes: Vec<Key>,
-        locks: Vec<Key>,
+        mutations: Vec<Mutation>,
         start_ts: u64,
         callback: Callback<()>,
     },
@@ -54,12 +72,10 @@ impl fmt::Debug for Command {
                        limit,
                        start_ts)
             }
-            Command::Prewrite {ref puts, ref deletes, ref locks, start_ts, ..} => {
+            Command::Prewrite {ref mutations, start_ts, ..} => {
                 write!(f,
-                       "kv::command::prewrite puts({}), deletes({}), locks({}) @ {}",
-                       puts.len(),
-                       deletes.len(),
-                       locks.len(),
+                       "kv::command::prewrite mutations({}) @ {}",
+                       mutations.len(),
                        start_ts)
             }
             Command::Commit{start_ts, commit_ts, ..} => {
@@ -68,8 +84,6 @@ impl fmt::Debug for Command {
         }
     }
 }
-
-pub use self::engine::{Engine, Dsn};
 
 pub struct Storage {
     tx: Sender<Message>,
@@ -127,7 +141,7 @@ impl Storage {
                       start_key: Key,
                       limit: usize,
                       start_ts: u64,
-                      callback: Callback<Vec<KvPair>>)
+                      callback: Callback<Vec<Result<KvPair>>>)
                       -> Result<()> {
         let cmd = Command::Scan {
             start_key: start_key,
@@ -140,16 +154,12 @@ impl Storage {
     }
 
     pub fn async_prewrite(&self,
-                          puts: Vec<KvPair>,
-                          deletes: Vec<Key>,
-                          locks: Vec<Key>,
+                          mutations: Vec<Mutation>,
                           start_ts: u64,
                           callback: Callback<()>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
-            puts: puts,
-            deletes: deletes,
-            locks: locks,
+            mutations: mutations,
             start_ts: start_ts,
             callback: callback,
         };
@@ -216,7 +226,7 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use super::{Dsn, Storage, Result, Value, Callback};
+    use super::{Dsn, Storage, Result, Value, Callback, Mutation};
 
     fn expect_get_none() -> Callback<Option<Value>> {
         Box::new(|x: Result<Option<Value>>| assert_eq!(x.unwrap(), None))
@@ -238,12 +248,7 @@ mod tests {
     fn test_get_put() {
         let storage = Storage::new(Dsn::Memory).unwrap();
         storage.async_get(vec![b'x'], 100u64, expect_get_none()).unwrap();
-        storage.async_prewrite(vec![(vec![b'x'], b"100".to_vec())],
-                               vec![],
-                               vec![],
-                               100u64,
-                               expect_ok())
-               .unwrap();
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))], 100, expect_ok()).unwrap();
         storage.async_commit(100u64, 101u64, expect_ok()).unwrap();
         storage.async_get(vec![b'x'], 100u64, expect_get_none()).unwrap();
         storage.async_get(vec![b'x'], 101u64, expect_get_val(b"100".to_vec())).unwrap();
@@ -253,28 +258,13 @@ mod tests {
     #[test]
     fn test_txn() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_prewrite(vec![(vec![b'x'], b"100".to_vec())],
-                               vec![],
-                               vec![],
-                               100u64,
-                               expect_ok())
-               .unwrap();
-        storage.async_prewrite(vec![(vec![b'y'], b"101".to_vec())],
-                               vec![],
-                               vec![],
-                               101u64,
-                               expect_ok())
-               .unwrap();
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))], 100, expect_ok()).unwrap();
+        storage.async_prewrite(vec![Mutation::Put((b"y".to_vec(), b"101".to_vec()))], 101, expect_ok()).unwrap();
         storage.async_commit(100u64, 110u64, expect_ok()).unwrap();
         storage.async_commit(101u64, 111u64, expect_ok()).unwrap();
         storage.async_get(vec![b'x'], 120u64, expect_get_val(b"100".to_vec())).unwrap();
         storage.async_get(vec![b'y'], 120u64, expect_get_val(b"101".to_vec())).unwrap();
-        storage.async_prewrite(vec![(vec![b'x'], b"105".to_vec())],
-                               vec![],
-                               vec![],
-                               105u64,
-                               expect_fail())
-               .unwrap();
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"105".to_vec()))], 105, expect_fail()).unwrap();
         storage.stop().unwrap();
     }
 }

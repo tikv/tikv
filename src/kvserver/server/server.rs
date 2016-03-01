@@ -11,7 +11,7 @@ use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRespo
                      CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
                      Request, Response, MessageType};
 use storage;
-use storage::{Key, Storage, Value, KvPair};
+use storage::{Key, Storage, Value, KvPair, Mutation};
 
 use super::conn::Conn;
 
@@ -95,7 +95,7 @@ impl Server {
         // convert [u8] to Vec[u8]
         let start_key: Key = cmd_scan_req.get_key().to_vec();
         debug!("start_key [{:?}]", start_key);
-        let received_cb = Box::new(move |kvs: ResultStorage<Vec<KvPair>>| {
+        let received_cb = Box::new(move |kvs: ResultStorage<Vec<ResultStorage<KvPair>>>| {
             let resp: Response = Server::cmd_scan_done(kvs);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             if let Err(e) = sender.send(queue_msg) {
@@ -123,25 +123,23 @@ impl Server {
         }
         let cmd_prewrite_req: &CmdPrewriteRequest = msg.get_cmd_prewrite_req();
         let sender = event_loop.channel();
-        let puts: Vec<_> = cmd_prewrite_req.get_puts()
-                                           .iter()
-                                           .map(|kv| {
-                                               (kv.get_key().to_vec(), kv.get_value().to_vec())
-                                           })
-                                           .collect();
-        let deletes: Vec<_> = cmd_prewrite_req.get_dels().to_vec();
-        let locks: Vec<_> = cmd_prewrite_req.get_locks().to_vec();
+        let mut mutations = vec![];
+        mutations.extend(cmd_prewrite_req.get_puts().iter().map(|kv| {
+            Mutation::Put((kv.get_key().to_vec(), kv.get_value().to_vec()))
+        }));
+        mutations.extend(cmd_prewrite_req.get_dels()
+                                         .iter()
+                                         .map(|k| Mutation::Delete(k.to_owned())));
+        mutations.extend(cmd_prewrite_req.get_locks()
+                                         .iter()
+                                         .map(|k| Mutation::Lock(k.to_owned())));
         let received_cb = Box::new(move |r: ResultStorage<()>| {
             let resp: Response = Server::cmd_prewrite_done(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         });
         self.store
-            .async_prewrite(puts,
-                            deletes,
-                            locks,
-                            cmd_prewrite_req.get_start_version(),
-                            received_cb)
+            .async_prewrite(mutations, cmd_prewrite_req.get_start_version(), received_cb)
             .map_err(ServerError::Storage)
     }
 
@@ -185,19 +183,25 @@ impl Server {
         resp
     }
 
-    fn cmd_scan_done(kvs: ResultStorage<Vec<KvPair>>) -> Response {
+    #[allow(single_match)]
+    fn cmd_scan_done(kvs: ResultStorage<Vec<ResultStorage<KvPair>>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_scan_resp: CmdScanResponse = CmdScanResponse::new();
         cmd_scan_resp.set_ok(kvs.is_ok());
         match kvs {
-            Ok(v) => {
+            Ok(kvs) => {
                 // convert storage::KvPair to kvrpcpb::KvPair
                 let mut new_kvs: Vec<kvrpcpb::KvPair> = Vec::new();
-                for &(ref key, ref value) in &v {
-                    let mut new_kv: kvrpcpb::KvPair = kvrpcpb::KvPair::new();
-                    new_kv.set_key(key.clone());
-                    new_kv.set_value(value.clone());
-                    new_kvs.push(new_kv);
+                for result in kvs {
+                    match result {
+                        Ok((ref key, ref value)) => {
+                            let mut new_kv: kvrpcpb::KvPair = kvrpcpb::KvPair::new();
+                            new_kv.set_key(key.clone());
+                            new_kv.set_value(value.clone());
+                            new_kvs.push(new_kv);
+                        }
+                        Err(_) => {} // TODO(disksing): should send lock to client
+                    }
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
             }
@@ -472,7 +476,8 @@ mod tests {
         let v0: Value = vec![255u8, 255u8];
         let k1: Key = vec![0u8, 1u8];
         let v1: Value = vec![255u8, 254u8];
-        let kvs: Vec<StorageKV> = vec![(k0.clone(), v0.clone()), (k1.clone(), v1.clone())];
+        let kvs: Vec<ResultStorage<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
+                                                      Ok((k1.clone(), v1.clone()))];
         let actual_resp: Response = Server::cmd_scan_done(Ok(kvs));
         assert_eq!(MessageType::CmdScan, actual_resp.get_field_type());
         let actual_cmd_resp: &CmdScanResponse = actual_resp.get_cmd_scan_resp();
