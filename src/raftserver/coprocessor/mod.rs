@@ -1,4 +1,5 @@
 mod region_snapshot;
+pub mod dispatcher;
 
 pub use self::region_snapshot::RegionSnapshot;
 
