@@ -57,7 +57,7 @@ impl Meta {
 #[cfg(test)]
 mod tests {
     use super::Meta;
-    use proto::mvccpb::{MetaLock, MetaLock_Type, MetaItem};
+    use proto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 
     #[test]
     fn test_meta() {
@@ -92,7 +92,7 @@ mod tests {
         let mut meta = Meta::new();
         assert!(meta.get_lock().is_none());
         let mut lock = MetaLock::new();
-        lock.set_field_type(MetaLock_Type::ReadWrite);
+        lock.set_field_type(MetaLockType::ReadWrite);
         lock.set_start_ts(1);
         lock.set_primary_key(b"pk".to_vec());
         meta.set_lock(lock);
@@ -101,7 +101,7 @@ mod tests {
             let lock = meta.get_lock().unwrap();
             assert_eq!(lock.get_start_ts(), 1);
             assert_eq!(lock.get_primary_key(), b"pk");
-            assert_eq!(lock.get_field_type(), MetaLock_Type::ReadWrite);
+            assert_eq!(lock.get_field_type(), MetaLockType::ReadWrite);
         }
 
         meta.clear_lock();

@@ -26,7 +26,7 @@ quick_error! {
             description("key is locked (backoff or cleanup)")
             display("key is locked (backoff or cleanup) {:?}@{}", primary, ts)
         }
-        TxnAbortedWhileWorking {description("txn aborted while working")}
+        TxnLockNotFound {description("txn lock not found")}
         WriteConflict {description("write conflict")}
         KeyVersion {description("bad format key(version)")}
         AlreadyCommitted {description("txn already committed")}

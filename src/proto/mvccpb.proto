@@ -6,14 +6,15 @@ message MetaItem {
     optional uint64 commit_ts  = 2;
 }
 
+enum MetaLockType {
+    ReadOnly  = 1;
+    ReadWrite = 2;
+}
+
 message MetaLock {
-    enum Type {
-        ReadOnly  = 1;
-        ReadWrite = 2;
-    }
-    optional Type   type        = 1;
-    optional uint64 start_ts    = 2;
-    optional bytes  primary_key = 3;
+    optional MetaLockType type        = 1;
+    optional uint64       start_ts    = 2;
+    optional bytes        primary_key = 3;
 }
 
 message Meta {

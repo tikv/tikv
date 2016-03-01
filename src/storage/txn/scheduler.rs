@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use storage::Engine;
-use storage::{Command, Key, Value, KvPair, Write};
+use storage::{Command, Key, Value, KvPair, Mutation};
 use super::{Result, Error};
 use super::store::TxnStore;
 
@@ -30,9 +30,9 @@ impl Scheduler {
         Ok(try!(self.store.scan(&start_key, limit, start_ts)))
     }
 
-    fn exec_prewrite(&mut self, writes: Vec<Write>, start_ts: u64) -> Result<()> {
-        let primary = Self::primary_key(&writes);
-        let locked_keys = try!(self.store.prewrite(writes, primary, start_ts));
+    fn exec_prewrite(&mut self, mutations: Vec<Mutation>, start_ts: u64) -> Result<()> {
+        let primary = Self::primary_key(&mutations);
+        let locked_keys = try!(self.store.prewrite(mutations, primary, start_ts));
         self.lock_keys.insert(start_ts, locked_keys);
         Ok(())
     }
@@ -59,8 +59,8 @@ impl Scheduler {
                     Err(e) => Err(::storage::Error::from(e)),
                 });
             }
-            Command::Prewrite{writes, start_ts, callback} => {
-                callback(self.exec_prewrite(writes, start_ts)
+            Command::Prewrite{mutations, start_ts, callback} => {
+                callback(self.exec_prewrite(mutations, start_ts)
                              .map_err(::storage::Error::from));
             }
             Command::Commit{start_ts, commit_ts, callback} => {
@@ -70,11 +70,11 @@ impl Scheduler {
     }
 
     #[allow(match_same_arms)]
-    fn primary_key(writes: &[Write]) -> Key {
-        for w in writes {
-            match *w {
-                Write::Put((ref key, _)) => return key.to_vec(),
-                Write::Delete(ref key) => return key.to_vec(),
+    fn primary_key(mutations: &[Mutation]) -> Key {
+        for m in mutations {
+            match *m {
+                Mutation::Put((ref key, _)) => return key.to_vec(),
+                Mutation::Delete(ref key) => return key.to_vec(),
                 _ => {}
             }
         }

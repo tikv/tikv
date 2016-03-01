@@ -1,17 +1,17 @@
 use std::fmt;
 
-use storage::{Key, RefKey, Value, Write};
+use storage::{Key, RefKey, Value, Mutation};
 use storage::engine::{Engine, Modify};
-use proto::mvccpb::{MetaLock, MetaLock_Type, MetaItem};
+use proto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 use util::codec::bytes;
 use super::meta::Meta;
 use super::codec;
 use super::{Error, Result};
 
-fn meta_lock_type(write: &Write) -> MetaLock_Type {
-    match *write {
-        Write::Put(_) | Write::Delete(_) => MetaLock_Type::ReadWrite,
-        Write::Lock(_) => MetaLock_Type::ReadOnly,
+fn meta_lock_type(mutation: &Mutation) -> MetaLockType {
+    match *mutation {
+        Mutation::Put(_) | Mutation::Delete(_) => MetaLockType::ReadWrite,
+        Mutation::Lock(_) => MetaLockType::ReadOnly,
     }
 }
 
@@ -70,8 +70,8 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         }
     }
 
-    pub fn prewrite(&mut self, w: Write, primary: RefKey) -> Result<()> {
-        let key = w.key();
+    pub fn prewrite(&mut self, mutation: Mutation, primary: RefKey) -> Result<()> {
+        let key = mutation.key();
         let (meta_key, mut meta) = try!(self.load_meta(key));
         if let Some(lock) = meta.get_lock() {
             return Err(Error::KeyIsLocked {
@@ -85,14 +85,14 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         }
 
         let mut lock = MetaLock::new();
-        lock.set_field_type(meta_lock_type(&w));
+        lock.set_field_type(meta_lock_type(&mutation));
         lock.set_primary_key(primary.to_vec());
         lock.set_start_ts(self.start_ts);
         meta.set_lock(lock);
         let modify = Modify::Put((meta_key.clone(), meta.to_bytes()));
         self.writes.push(modify);
 
-        if let Write::Put((_, ref value)) = w {
+        if let Mutation::Put((_, ref value)) = mutation {
             let value_key = codec::encode_key(key, self.start_ts);
             self.writes.push(Modify::Put((value_key, value.clone())));
         }
@@ -103,9 +103,9 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         let (meta_key, mut meta) = try!(self.load_meta(key));
         let lock_type = match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => lock.get_field_type(),
-            _ => return Err(Error::TxnAbortedWhileWorking),
+            _ => return Err(Error::TxnLockNotFound),
         };
-        if lock_type == MetaLock_Type::ReadWrite {
+        if lock_type == MetaLockType::ReadWrite {
             let mut item = MetaItem::new();
             item.set_start_ts(self.start_ts);
             item.set_commit_ts(commit_ts);
@@ -144,7 +144,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::MvccTxn;
-    use storage::Write;
+    use storage::Mutation;
     use storage::engine::{self, Engine, Dsn};
     use util::codec::bytes;
 
@@ -255,25 +255,25 @@ mod tests {
                                              pk: &[u8],
                                              ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        txn.prewrite(Write::Put((key.to_vec(), value.to_vec())), pk).unwrap();
+        txn.prewrite(Mutation::Put((key.to_vec(), value.to_vec())), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_delete<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        txn.prewrite(Write::Delete(key.to_vec()), pk).unwrap();
+        txn.prewrite(Mutation::Delete(key.to_vec()), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_lock<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        txn.prewrite(Write::Lock(key.to_vec()), pk).unwrap();
+        txn.prewrite(Mutation::Lock(key.to_vec()), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_lock_err<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        assert!(txn.prewrite(Write::Lock(key.to_vec()), pk).is_err());
+        assert!(txn.prewrite(Mutation::Lock(key.to_vec()), pk).is_err());
     }
 
     fn must_commit<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
