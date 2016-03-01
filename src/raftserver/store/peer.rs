@@ -22,7 +22,7 @@ use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
-use super::engine::{Retriever, Mutator};
+use super::engine::{Peekable, Iterable, Mutable};
 
 #[derive(Default)]
 pub struct PendingCmd {
@@ -259,6 +259,7 @@ impl Peer {
             try!(self.raft_group.propose_conf_change(cc));
             reproposable = true;
         } else {
+            // TODO handle Observer pre hook here.
             try!(self.raft_group.propose(data));
         }
 
@@ -466,10 +467,7 @@ impl Peer {
             return Err(other("processing raft command needs a none zero index"));
         }
 
-        let uuid = Uuid::from_bytes(cmd.get_header().get_uuid()).unwrap_or_else(|| {
-            error!("missing request uuid, but we still try to apply this command");
-            Uuid::new_v4()
-        });
+        let uuid = util::get_uuid_from_req(&cmd).unwrap();
 
         let pending_cmd = self.pending_cmds.remove(&uuid);
 
@@ -478,6 +476,7 @@ impl Peer {
             (cmd_resp::message_error(e), None)
         });
 
+        // TODO: handle Observer post_apply here.
         if let Some(mut pending_cmd) = pending_cmd {
             if pending_cmd.cb.is_none() {
                 warn!("pending command callback for entry {} is None", index);

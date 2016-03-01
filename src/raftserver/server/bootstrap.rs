@@ -5,7 +5,7 @@ use rocksdb::DB;
 
 use proto::raft_serverpb::StoreIdent;
 use raftserver::{Result, other};
-use raftserver::store::{keys, Retriever};
+use raftserver::store::{keys, Peekable};
 
 const INVALID_NODE_ID: u64 = 0;
 
