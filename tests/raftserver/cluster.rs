@@ -169,8 +169,8 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn bootstrap_cluster(&mut self, region: metapb::Region) {
-        // TODO: use pd to manage all bootstrap.
-
+        // This is only for fixed id test before.
+        // Later all the tests should use random id allocated by pd.
         self.pd_client
             .write()
             .unwrap()
@@ -302,6 +302,9 @@ impl<T: Simulator> Cluster<T> {
                        .unwrap();
         assert_eq!(resp.get_admin_response().get_cmd_type(),
                    AdminCommandType::ChangePeer);
+
+        let region = resp.get_admin_response().get_change_peer().get_region();
+        self.pd_client.write().unwrap().update_region(self.id, region.clone()).unwrap();
     }
 }
 
