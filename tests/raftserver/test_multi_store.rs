@@ -11,7 +11,7 @@ fn test_multi_store() {
     // every node has a store and a peer with same id as node's.
     let count = 5;
     let mut cluster = new_store_cluster(0, count);
-    cluster.bootstrap_single_region().expect("");
+    cluster.bootstrap_region().expect("");
     cluster.run_all_nodes();
 
     let (key, value) = (b"a1", b"v1");
@@ -40,7 +40,7 @@ fn test_multi_store() {
 fn test_multi_store_leader_crash() {
     let count = 5;
     let mut cluster = new_store_cluster(0, count);
-    cluster.bootstrap_single_region().expect("");
+    cluster.bootstrap_region().expect("");
     cluster.run_all_nodes();
 
     let (key1, value1) = (b"a1", b"v1");
@@ -89,7 +89,7 @@ fn test_multi_store_leader_crash() {
 fn test_multi_store_cluster_restart() {
     let count = 5;
     let mut cluster = new_store_cluster(0, count);
-    cluster.bootstrap_single_region().expect("");
+    cluster.bootstrap_region().expect("");
     cluster.run_all_nodes();
 
     let (key, value) = (b"a1", b"v1");
@@ -112,7 +112,7 @@ fn test_multi_store_lost_majority() {
     let mut tests = vec![4, 5];
     for count in tests.drain(..) {
         let mut cluster = new_store_cluster(0, count);
-        cluster.bootstrap_single_region().expect("");
+        cluster.bootstrap_region().expect("");
         cluster.run_all_nodes();
 
         let half = (count as u64 + 1) / 2;

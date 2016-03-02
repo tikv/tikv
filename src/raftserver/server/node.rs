@@ -41,22 +41,18 @@ impl<T, Trans> Node<T, Trans>
         }
     }
 
-    pub fn start(&mut self, engines: Vec<Arc<DB>>) -> Result<()>
-        where Trans: Transport + Send + Sync + 'static
-    {
-        if engines.is_empty() {
-            return Err(other("empty stores to check"));
-        }
+    pub fn start(&mut self, engines: Vec<Arc<DB>>) -> Result<()> {
+        assert!(!engines.is_empty());
 
-        let cluster_bootrapped = try!(self.pd_client
-                                          .read()
-                                          .unwrap()
-                                          .is_cluster_bootstrapped(self.cluster_id));
+        let bootstrapped = try!(self.pd_client
+                                    .read()
+                                    .unwrap()
+                                    .is_cluster_bootstrapped(self.cluster_id));
         let (node_id, mut store_ids) = try!(self.check_stores(&engines));
         if node_id != INVALID_ID {
             self.node_id = node_id;
             // We have saved data before, and the cluster must be bootstrapped.
-            if !cluster_bootrapped {
+            if !bootstrapped {
                 return Err(other(format!("node {} is not empty, but cluster {} is not \
                                           bootstrapped",
                                          self.node_id,
@@ -74,7 +70,7 @@ impl<T, Trans> Node<T, Trans>
             }
         }
 
-        if !cluster_bootrapped {
+        if !bootstrapped {
             // cluster is not bootstrapped, and we choose first store to bootstrap
             // first region.
             let region = try!(self.bootstrap_first_region(engines[0].clone(), store_ids[0]));
@@ -203,7 +199,7 @@ impl<T, Trans> Node<T, Trans>
                                                                 region) {
             Err(PdError::ClusterBootstrapped(_)) => {
                 error!("cluster {} is already bootstrapped", self.cluster_id);
-                try!(store::clear_first_region(&engine, region_id));
+                try!(store::clear_region(&engine, region_id));
                 Ok(())
             }
             Err(e) => Err(other(format!("bootstrap cluster {} err: {:?}", self.cluster_id, e))),
@@ -214,9 +210,7 @@ impl<T, Trans> Node<T, Trans>
         }
     }
 
-    fn start_store(&mut self, store_id: u64, engine: Arc<DB>) -> Result<()>
-        where Trans: Transport + Send + Sync + 'static
-    {
+    fn start_store(&mut self, store_id: u64, engine: Arc<DB>) -> Result<()> {
         if self.store_handles.contains_key(&store_id) {
             return Err(other(format!("duplicated store id {}", store_id)));
         }

@@ -92,7 +92,7 @@ impl Cluster {
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
         let mut n = self.nodes.get_mut(&store.get_node_id()).unwrap();
         let mut s = self.stores.entry(store.get_store_id()).or_insert_with(Store::default);
-        n.stores.insert(store.get_store_id());
+        n.store_ids.insert(store.get_store_id());
         s.store = store;
         Ok(())
     }
