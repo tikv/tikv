@@ -14,7 +14,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // test a cluster with five nodes [1, 5], only one region (region 1).
     // every node has a store and a peer with same id as node's.
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     let mut before_states = HashMap::new();
 

@@ -43,9 +43,9 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, engine: Arc<DB>) {
-        assert!(!self.handles.contains_key(&node_id));
-        assert!(!self.senders.contains_key(&node_id));
+    fn run_node(&mut self, node_id: u64, engine: Arc<DB>) -> u64 {
+        assert!(node_id == 0 || !self.handles.contains_key(&node_id));
+        assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
         let cfg = util::new_server_config(self.cluster_id);
         let mut event_loop = create_event_loop().unwrap();
@@ -53,15 +53,18 @@ impl Simulator for ServerCluster {
                              .unwrap();
         let addr = server.listening_addr().unwrap();
 
+        assert!(node_id == 0 || node_id == server.get_node_id());
+        let node_id = server.get_node_id();
+
         // We must get real listening address and re-update pd again.
         self.pd_client
             .write()
             .unwrap()
-            .put_node(self.cluster_id,
-                      util::new_node(server.get_node_id(), format!("{}", addr)))
+            .put_node(self.cluster_id, util::new_node(node_id, addr.to_string()))
             .unwrap();
 
         let sender = server.get_sendch();
+
         let t = thread::spawn(move || {
             server.run(&mut event_loop).unwrap();
         });
@@ -69,6 +72,8 @@ impl Simulator for ServerCluster {
         self.handles.insert(node_id, t);
         self.senders.insert(node_id, sender);
         self.addrs.insert(node_id, addr);
+
+        node_id
     }
 
     fn stop_node(&mut self, node_id: u64) {

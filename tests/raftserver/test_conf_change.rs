@@ -12,7 +12,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
     cluster.bootstrap_conf_change();
 
-    cluster.run_all_nodes();
+    cluster.start();
 
     // Now region 1 only has peer (1, 1, 1);
     let (key, value) = (b"a1", b"v1");
