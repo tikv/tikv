@@ -656,9 +656,9 @@ impl Peer {
 
         try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
 
-        // TODO: update route meta, now we only use 1 region, so no need to do it.
+        let mut resp = AdminResponse::new();
+        resp.mut_change_peer().set_region(region.clone());
 
-        let resp = AdminResponse::new();
         Ok((resp,
             Some(ExecResult::ChangePeer {
             change_type: change_type,
