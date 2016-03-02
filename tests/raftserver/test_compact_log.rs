@@ -14,7 +14,7 @@ fn test_compact_log() {
     // every node has a store and a peer with same id as node's.
     let count = 5;
     let mut cluster = new_store_cluster(0, count);
-    cluster.bootstrap_single_region().expect("");
+    cluster.bootstrap_region().expect("");
     cluster.run_all_nodes();
 
     let mut before_states = HashMap::new();
