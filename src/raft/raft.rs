@@ -40,15 +40,16 @@ pub struct Config {
     /// peer is private and only used for testing right now.
     pub peers: Vec<u64>,
 
-    /// ElectionTick is the election timeout. If a follower does not
-    /// receive any message from the leader of current term during
-    /// ElectionTick, it will become candidate and start an election.
-    /// ElectionTick must be greater than HeartbeatTick. We suggest
-    /// to use ElectionTick = 10 * HeartbeatTick to avoid unnecessary
-    /// leader switching.
+    /// ElectionTick is the number of node.tick invocations that must pass between
+    /// elections. That is, if a follower does not receive any message from the
+    /// leader of current term before ElectionTick has elapsed, it will become
+    /// candidate and start an election. election_tick must be greater than
+    /// HeartbeatTick. We suggest election_tick = 10 * HeartbeatTick to avoid
+    /// unnecessary leader switching
     pub election_tick: usize,
-    /// HeartbeatTick is the heartbeat usizeerval. A leader sends heartbeat
-    /// message to mausizeain the leadership every heartbeat usizeerval.
+    /// HeartbeatTick is the number of node.tick invocations that must pass between
+    /// heartbeats. That is, a leader sends heartbeat messages to maintain its
+    /// leadership every heartbeat ticks.
     pub heartbeat_tick: usize,
 
     /// Applied is the last applied index. It should only be set when restarting
