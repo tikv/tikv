@@ -29,17 +29,17 @@ impl StoreTransport {
     pub fn new() -> Arc<RwLock<StoreTransport>> {
         Arc::new(RwLock::new(StoreTransport { senders: HashMap::new() }))
     }
-
-    pub fn add_sender(&mut self, node_id: u64, sender: SendCh) {
-        self.senders.insert(node_id, sender);
-    }
-
-    pub fn remove_sender(&mut self, node_id: u64) {
-        self.senders.remove(&node_id);
-    }
 }
 
 impl Transport for StoreTransport {
+    fn add_sendch(&mut self, node_id: u64, sender: SendCh) {
+        self.senders.insert(node_id, sender);
+    }
+
+    fn remove_sendch(&mut self, node_id: u64) -> Option<SendCh> {
+        self.senders.remove(&node_id)
+    }
+
     fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         let to_store = msg.get_to_peer().get_node_id();
         match self.senders.get(&to_store) {
