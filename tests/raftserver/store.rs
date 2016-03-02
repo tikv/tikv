@@ -41,7 +41,7 @@ impl Simulator for StoreCluster {
         let mut store = Store::new(&mut event_loop, cfg, engine.clone(), self.trans.clone())
                             .unwrap();
 
-        self.trans.write().unwrap().add_sender(store.get_node_id(), store.get_sendch());
+        self.trans.write().unwrap().add_sendch(store.get_node_id(), store.get_sendch());
 
         let sender = store.get_sendch();
         let t = thread::spawn(move || {
@@ -56,7 +56,7 @@ impl Simulator for StoreCluster {
         let h = self.handles.remove(&node_id).unwrap();
         let sender = self.senders.remove(&node_id).unwrap();
 
-        self.trans.write().unwrap().remove_sender(node_id);
+        self.trans.write().unwrap().remove_sendch(node_id);
 
         sender.send_quit().unwrap();
         h.join().unwrap();

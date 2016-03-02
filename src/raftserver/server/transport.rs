@@ -21,14 +21,6 @@ impl ServerTransport {
 }
 
 impl ServerTransport {
-    pub fn add_sendch(&mut self, store_id: u64, ch: StoreSendCh) {
-        self.stores.insert(store_id, ch);
-    }
-
-    pub fn remove_sendch(&mut self, store_id: u64) -> Option<StoreSendCh> {
-        self.stores.remove(&store_id)
-    }
-
     // Send RaftMessage to specified store, the store must exist in current node.
     // Unlike Transport trait Send, this function can only send message to local store.
     pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
@@ -70,6 +62,14 @@ impl ServerTransport {
 }
 
 impl Transport for ServerTransport {
+    fn add_sendch(&mut self, store_id: u64, ch: StoreSendCh) {
+        self.stores.insert(store_id, ch);
+    }
+
+    fn remove_sendch(&mut self, store_id: u64) -> Option<StoreSendCh> {
+        self.stores.remove(&store_id)
+    }
+
     fn send(&self, msg: RaftMessage) -> Result<()> {
         let to_node_id = msg.get_to_peer().get_store_id();
         if to_node_id == self.node_id {

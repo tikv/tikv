@@ -12,7 +12,7 @@ use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
 use raftserver::{Result, other};
-use raftserver::store::{self, Store, cmd_resp};
+use raftserver::store::{self, Store, cmd_resp, Transport};
 use proto::raft_serverpb::{Message, MessageType, StoreIdent};
 use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 use super::{Msg, SendCh, ConnData};
