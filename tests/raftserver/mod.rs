@@ -2,6 +2,7 @@ mod util;
 mod cluster;
 mod server;
 mod store;
+mod pd;
 
 mod test_single;
 mod test_multi_store;
