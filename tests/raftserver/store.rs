@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::thread;
 use std::sync::{Arc, RwLock};
@@ -9,6 +11,7 @@ use super::cluster::{Simulator, Cluster};
 use tikv::raftserver::store::*;
 use tikv::proto::raft_cmdpb::*;
 use super::util::*;
+use super::pd::PdClient;
 
 // TODO: Now we treat Store as the Node directly, we can use Node instead
 // after we implement it later.
@@ -17,14 +20,16 @@ pub struct StoreCluster {
     handles: HashMap<u64, thread::JoinHandle<()>>,
 
     trans: Arc<RwLock<StoreTransport>>,
+    pd_client: Arc<RwLock<PdClient>>,
 }
 
 impl StoreCluster {
-    pub fn new() -> StoreCluster {
+    pub fn new(pd_client: Arc<RwLock<PdClient>>) -> StoreCluster {
         StoreCluster {
             senders: HashMap::new(),
             handles: HashMap::new(),
             trans: StoreTransport::new(),
+            pd_client: pd_client,
         }
     }
 }
@@ -78,5 +83,6 @@ impl Simulator for StoreCluster {
 }
 
 pub fn new_store_cluster(id: u64, count: usize) -> Cluster<StoreCluster> {
-    Cluster::new(id, count, StoreCluster::new())
+    let pd_client = Arc::new(RwLock::new(PdClient::new()));
+    Cluster::new(id, count, StoreCluster::new(pd_client.clone()), pd_client)
 }

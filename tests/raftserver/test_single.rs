@@ -8,7 +8,7 @@ use super::server::new_server_cluster;
 use super::util::*;
 
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_single_region().expect("");
+    cluster.bootstrap_region().expect("");
     cluster.run_all_nodes();
 
     sleep_ms(400);
@@ -39,7 +39,7 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_single_region().expect("");
+    cluster.bootstrap_region().expect("");
     cluster.run_all_nodes();
 
     sleep_ms(400);
@@ -62,7 +62,7 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_single_region().expect("");
+    cluster.bootstrap_region().expect("");
     cluster.run_all_nodes();
 
     sleep_ms(400);

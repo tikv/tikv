@@ -7,11 +7,13 @@ use std::collections::Bound::{Included, Unbounded};
 use tikv::proto::metapb;
 use tikv::pd::{Client, Result, Error, Key};
 
+#[derive(Default)]
 struct Store {
     store: metapb::Store,
     region_ids: HashSet<u64>,
 }
 
+#[derive(Default)]
 struct Node {
     node: metapb::Node,
     store_ids: HashSet<u64>,
@@ -55,7 +57,10 @@ impl Cluster {
         let node_id = node.get_node_id();
         c.nodes.insert(node_id, Node::new(node, &stores));
 
-        assert_eq!(region.get_peers().len(), 1);
+        // Now, some tests use multi peers in bootstrap,
+        // disable this check.
+        // TODO: enable this check later.
+        // assert_eq!(region.get_peers().len(), 1);
         let end_key = region.get_end_key().to_vec();
         let first_store_id = region.get_peers()[0].get_store_id();
 
@@ -79,13 +84,15 @@ impl Cluster {
     }
 
     fn put_node(&mut self, node: metapb::Node) -> Result<()> {
-        let mut n = self.nodes.get_mut(&node.get_node_id()).unwrap();
+        let mut n = self.nodes.entry(node.get_node_id()).or_insert_with(Node::default);
         n.node = node;
         Ok(())
     }
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
-        let mut s = self.stores.get_mut(&store.get_store_id()).unwrap();
+        let mut n = self.nodes.get_mut(&store.get_node_id()).unwrap();
+        let mut s = self.stores.entry(store.get_store_id()).or_insert_with(Store::default);
+        n.store_ids.insert(store.get_store_id());
         s.store = store;
         Ok(())
     }
@@ -171,10 +178,12 @@ impl PdClient {
     pub fn new() -> PdClient {
         PdClient {
             clusters: HashMap::new(),
-            node_id: 0,
-            store_id: 0,
-            region_id: 0,
-            peer_id: 0,
+            // We use 1 for bootstrap in some tests,
+            // so here use a larger base value to avoid conflict.
+            node_id: 1000,
+            store_id: 1000,
+            region_id: 1000,
+            peer_id: 1000,
         }
     }
 
