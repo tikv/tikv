@@ -560,12 +560,8 @@ mod test {
     fn new_storage(path: &TempDir) -> RaftStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
         let db = Arc::new(db);
-        bootstrap::bootstrap_store(db.clone(),
-                                   1,
-                                   bootstrap::BOOTSTRAP_FIRST_NODE_ID,
-                                   bootstrap::BOOTSTRAP_FIRST_STORE_ID)
-            .expect("");
-        let region = bootstrap::bootstrap_region(db.clone()).expect("");
+        bootstrap::bootstrap_store(db.clone(), 1, 1, 1).expect("");
+        let region = bootstrap::bootstrap_region(db.clone(), 1, 1, 1, 1).expect("");
         RaftStorage::new(PeerStorage::new(db, &region).unwrap())
     }
 

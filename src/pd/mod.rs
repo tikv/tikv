@@ -7,6 +7,8 @@ use proto::metapb;
 
 pub type Key = Vec<u8>;
 
+pub const INVALID_ID: u64 = 0;
+
 // Client to communicate with placement driver (pd).
 pub trait Client {
     // Create the cluster with cluster ID, node, stores and first region.
@@ -17,12 +19,12 @@ pub trait Client {
     // It may happen that multi nodes start at same time to try to
     // bootstrap, and only one can success, others will fail
     // and must remove their created local region data themselves.
-    fn boostrap_cluster(&mut self,
-                        cluster_id: u64,
-                        node: metapb::Node,
-                        stores: Vec<metapb::Store>,
-                        region: metapb::Region)
-                        -> Result<()>;
+    fn bootstrap_cluster(&mut self,
+                         cluster_id: u64,
+                         node: metapb::Node,
+                         stores: Vec<metapb::Store>,
+                         region: metapb::Region)
+                         -> Result<()>;
 
     // Return whether the cluster is bootstrapped or not.
     // We must use the cluster after bootstrapped, so when the
@@ -30,16 +32,16 @@ pub trait Client {
     // and panic if not bootstrapped.
     fn is_cluster_bootstrapped(&self, cluster_id: u64) -> Result<bool>;
 
-    // Allocate a unique node id.
+    // Allocate a unique positive node id.
     fn alloc_node_id(&mut self) -> Result<u64>;
 
-    // Allocate a unique store id.
+    // Allocate a unique positive store id.
     fn alloc_store_id(&mut self) -> Result<u64>;
 
-    // Allocate a unique peer id.
+    // Allocate a unique positive peer id.
     fn alloc_peer_id(&mut self) -> Result<u64>;
 
-    // Allocate a unique region id.
+    // Allocate a unique positive region id.
     fn alloc_region_id(&mut self) -> Result<u64>;
 
     // When the node starts, or some node information changed, it
@@ -65,9 +67,9 @@ pub trait Client {
     // auto-balance and then delete the store.
     fn delete_store(&mut self, cluster_id: u64, store_id: u64) -> Result<()>;
 
-    // Discuss (@ngaut): We don't need to support region and peer put/delete,
+    // We don't need to support region and peer put/delete,
     // because pd knows all region and peers itself.
-    // When bootstrapping, pd knows region 1 and peer 1 exists in node 1, store 1.
+    // When bootstrapping, pd knows first region with bootstrap_cluster.
     // When changing peer, pd determines where to add a new peer in some store
     // for this region.
     // When region splitting, pd determines the new region id and peer id for the
@@ -88,11 +90,10 @@ pub trait Client {
     fn get_regions(&self, cluster_id: u64, keys: Vec<Key>) -> Result<Vec<metapb::Region>>;
 
     // For route.
-    // Scan all regions which the region key range is in [start_key, end_key].
+    // Scan all regions which the region start key >= given start key.
     fn scan_regions(&self,
                     cluster_id: u64,
-                    start_key: &[u8],
-                    end_key: &[u8],
+                    start_key: Vec<u8>,
                     limit: u32)
                     -> Result<Vec<metapb::Region>>;
 }

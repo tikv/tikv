@@ -144,7 +144,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for engine in self.engines.values() {
-            try!(write_first_region(&engine, &region));
+            try!(write_region(&engine, &region));
         }
         Ok(())
     }
@@ -156,7 +156,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        bootstrap_region(self.engines.get(&node_id).unwrap().clone()).unwrap();
+        bootstrap_region(self.engines.get(&node_id).unwrap().clone(), 1, 1, 1, 1).unwrap();
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {
