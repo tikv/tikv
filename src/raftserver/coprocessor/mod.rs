@@ -1,5 +1,6 @@
 mod region_snapshot;
 pub mod dispatcher;
+pub mod split_observer;
 
 pub use self::region_snapshot::RegionSnapshot;
 pub use self::dispatcher::{CoprocessorHost, Registry};
