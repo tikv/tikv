@@ -271,6 +271,7 @@ impl Peer {
         let cmd = {
             let peer_storage = self.storage.rl();
             let mut ctx = RequestContext::new(&peer_storage, pending_cmd.cmd.take().unwrap());
+            // TODO: validate request for unexpected changes.
             self.coprocessor_host.pre_propose(&mut ctx);
             ctx.req
         };
