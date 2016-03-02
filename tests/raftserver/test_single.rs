@@ -9,7 +9,7 @@ use super::util::*;
 
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     sleep_ms(400);
 
@@ -40,7 +40,7 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     sleep_ms(400);
 
@@ -63,7 +63,7 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     sleep_ms(400);
 

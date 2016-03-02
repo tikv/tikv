@@ -11,7 +11,7 @@ fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     // test a cluster with five nodes [1, 5], only one region (region 1).
     // every node has a store and a peer with same id as node's.
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     let (key, value) = (b"a1", b"v1");
 
@@ -38,7 +38,7 @@ fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     let (key1, value1) = (b"a1", b"v1");
 
@@ -85,7 +85,7 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     let (key, value) = (b"a1", b"v1");
 
@@ -96,7 +96,7 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     cluster.shutdown();
-    cluster.run_all_nodes();
+    cluster.start();
 
     assert!(cluster.leader_of_region(1).is_some());
     assert_eq!(cluster.get(key), Some(value.to_vec()));
@@ -104,7 +104,7 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     let half = (count as u64 + 1) / 2;
     for i in 1..half + 1 {

@@ -173,8 +173,8 @@ impl Cluster {
 
         for peer in region.get_peers() {
             let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
-            // TODO: check duplicate later.
-            store.region_ids.insert(region.get_region_id());
+            // check duplicated.
+            assert!(store.region_ids.insert(region.get_region_id()));
         }
 
         self.regions.insert(end_key, region);
@@ -206,13 +206,17 @@ impl Cluster {
 
         for peer in region.get_peers() {
             let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
-            // TODO: check missing later.
-            store.region_ids.remove(&region.get_region_id());
+            // check missing.
+            assert!(store.region_ids.remove(&region.get_region_id()));
         }
 
         self.regions.remove(&end_key);
 
         Ok(())
+    }
+
+    fn get_stores(&self) -> Vec<metapb::Store> {
+        self.stores.values().map(|s| s.store.clone()).collect()
     }
 }
 
@@ -265,6 +269,11 @@ impl PdClient {
     pub fn remove_region(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
         let mut cluster = try!(self.get_mut_cluster(cluster_id));
         cluster.remove_region(region)
+    }
+
+    pub fn get_stores(&mut self, cluster_id: u64) -> Result<Vec<metapb::Store>> {
+        let cluster = try!(self.get_cluster(cluster_id));
+        Ok(cluster.get_stores())
     }
 }
 
