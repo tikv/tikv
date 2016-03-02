@@ -248,7 +248,10 @@ mod tests {
     fn test_get_put() {
         let storage = Storage::new(Dsn::Memory).unwrap();
         storage.async_get(vec![b'x'], 100u64, expect_get_none()).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))], 100, expect_ok()).unwrap();
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))],
+                               100,
+                               expect_ok())
+               .unwrap();
         storage.async_commit(100u64, 101u64, expect_ok()).unwrap();
         storage.async_get(vec![b'x'], 100u64, expect_get_none()).unwrap();
         storage.async_get(vec![b'x'], 101u64, expect_get_val(b"100".to_vec())).unwrap();
@@ -258,13 +261,22 @@ mod tests {
     #[test]
     fn test_txn() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))], 100, expect_ok()).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"y".to_vec(), b"101".to_vec()))], 101, expect_ok()).unwrap();
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))],
+                               100,
+                               expect_ok())
+               .unwrap();
+        storage.async_prewrite(vec![Mutation::Put((b"y".to_vec(), b"101".to_vec()))],
+                               101,
+                               expect_ok())
+               .unwrap();
         storage.async_commit(100u64, 110u64, expect_ok()).unwrap();
         storage.async_commit(101u64, 111u64, expect_ok()).unwrap();
         storage.async_get(vec![b'x'], 120u64, expect_get_val(b"100".to_vec())).unwrap();
         storage.async_get(vec![b'y'], 120u64, expect_get_val(b"101".to_vec())).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"105".to_vec()))], 105, expect_fail()).unwrap();
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"105".to_vec()))],
+                               105,
+                               expect_fail())
+               .unwrap();
         storage.stop().unwrap();
     }
 }
