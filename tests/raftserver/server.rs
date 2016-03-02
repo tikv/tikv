@@ -39,17 +39,6 @@ impl ServerCluster {
             pd_client: pd_client,
         }
     }
-
-    fn new_config(&self) -> Config {
-        let store_cfg = util::new_store_cfg();
-
-        Config {
-            cluster_id: self.cluster_id,
-            addr: "127.0.0.1:0".to_owned(),
-            store_cfg: store_cfg,
-            ..Config::default()
-        }
-    }
 }
 
 impl Simulator for ServerCluster {
@@ -58,7 +47,7 @@ impl Simulator for ServerCluster {
         assert!(!self.handles.contains_key(&node_id));
         assert!(!self.senders.contains_key(&node_id));
 
-        let cfg = self.new_config();
+        let cfg = util::new_server_config(self.cluster_id);
         let mut event_loop = create_event_loop().unwrap();
         let mut server = Server::new(&mut event_loop, cfg, vec![engine], self.pd_client.clone())
                              .unwrap();

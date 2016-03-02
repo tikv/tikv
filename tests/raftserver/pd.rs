@@ -6,6 +6,7 @@ use std::collections::Bound::{Included, Unbounded};
 
 use tikv::proto::metapb;
 use tikv::pd::{Client, Result, Error, Key};
+use tikv::pd::errors::other;
 
 #[derive(Default)]
 struct Store {
@@ -163,6 +164,56 @@ impl Cluster {
 
         Ok(regions)
     }
+
+    fn add_region(&mut self, region: metapb::Region) -> Result<()> {
+        let end_key = region.get_end_key().to_vec();
+        if self.regions.contains_key(&end_key) {
+            return Err(other(format!("region {:?} has already existed", region)));
+        }
+
+        for peer in region.get_peers() {
+            let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
+            // TODO: check duplicate later.
+            store.region_ids.insert(region.get_region_id());
+        }
+
+        self.regions.insert(end_key, region);
+
+        Ok(())
+    }
+
+    fn update_region(&mut self, region: metapb::Region) -> Result<()> {
+        let end_key = region.get_end_key().to_vec();
+        if !self.regions.contains_key(&end_key) {
+            return Err(other(format!("region {:?} doesn't exist", region)));
+        }
+
+        for peer in region.get_peers() {
+            let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
+            store.region_ids.insert(region.get_region_id());
+        }
+
+        self.regions.insert(end_key, region);
+
+        Ok(())
+    }
+
+    fn remove_region(&mut self, region: metapb::Region) -> Result<()> {
+        let end_key = region.get_end_key().to_vec();
+        if !self.regions.contains_key(&end_key) {
+            return Err(other(format!("region {:?} doesn't exist", region)));
+        }
+
+        for peer in region.get_peers() {
+            let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
+            // TODO: check missing later.
+            store.region_ids.remove(&region.get_region_id());
+        }
+
+        self.regions.remove(&end_key);
+
+        Ok(())
+    }
 }
 
 pub struct PdClient {
@@ -199,6 +250,21 @@ impl PdClient {
             None => Err(Error::ClusterNotBootstrapped(cluster_id)),
             Some(cluster) => Ok(cluster),
         }
+    }
+
+    pub fn add_region(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
+        let mut cluster = try!(self.get_mut_cluster(cluster_id));
+        cluster.add_region(region)
+    }
+
+    pub fn update_region(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
+        let mut cluster = try!(self.get_mut_cluster(cluster_id));
+        cluster.update_region(region)
+    }
+
+    pub fn remove_region(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
+        let mut cluster = try!(self.get_mut_cluster(cluster_id));
+        cluster.remove_region(region)
     }
 }
 
