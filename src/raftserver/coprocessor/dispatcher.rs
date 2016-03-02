@@ -15,23 +15,12 @@ impl Registry {
     /// register an Observer to dispatcher.
     pub fn register_observer(&mut self, priority: u32, mut ro: Box<RegionObserver>) {
         ro.start();
-        let o = self.observers.binary_search_by(|t| t.priority.cmp(&priority));
         let r = ObserverEntry {
             priority: priority,
             observer: ro,
         };
-        match o {
-            Err(i) => self.observers.insert(i, r),
-            Ok(n) => {
-                for i in n + 1..self.observers.len() {
-                    if self.observers[i].priority != priority {
-                        self.observers.insert(i, r);
-                        return;
-                    }
-                }
-                self.observers.push(r);
-            }
-        }
+        self.observers.push(r);
+        self.observers.sort_by(|l, r| l.priority.cmp(&r.priority));
     }
 }
 
