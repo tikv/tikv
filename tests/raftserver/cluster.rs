@@ -135,7 +135,7 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.get(&region_id).cloned()
     }
 
-    pub fn bootstrap_single_region(&mut self) -> Result<()> {
+    pub fn bootstrap_region(&mut self) -> Result<()> {
         let mut region = metapb::Region::new();
         region.set_region_id(1);
         region.set_start_key(keys::MIN_KEY.to_vec());
@@ -169,7 +169,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn bootstrap_cluster(&mut self, region: metapb::Region) {
-        // TODO: use pd to mange all bootstrap.
+        // TODO: use pd to manage all bootstrap.
 
         self.pd_client
             .write()
