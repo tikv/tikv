@@ -16,11 +16,17 @@ use tikv::proto::raftpb::ConfChangeType;
 use tikv::pd::Client;
 use super::pd::PdClient;
 
-// We simulate 3 or 5 nodes, each has a store, the node id and store id are same.
+// We simulate 3 or 5 nodes, each has a store.
+// Sometimes, we use fixed id to test, which means the id
+// isn't allocated by pd, and node id, store id are same.
 // E,g, for node 1, the node id and store id are both 1.
 
 pub trait Simulator {
-    fn run_node(&mut self, node_id: u64, engine: Arc<DB>);
+    // Pass 0 to let pd allocate a node id if db is empty.
+    // If node id > 0, the node must be created in db already,
+    // and the node id must be the same as given argument.
+    // Return the node id.
+    fn run_node(&mut self, node_id: u64, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> Vec<u64>;
     fn call_command(&self,
@@ -30,13 +36,16 @@ pub trait Simulator {
 }
 
 pub struct Cluster<T: Simulator> {
-    id: u64,
+    pub id: u64,
     leaders: HashMap<u64, metapb::Peer>,
-    paths: HashMap<u64, TempDir>,
+    paths: Vec<TempDir>,
+    dbs: Vec<Arc<DB>>,
+
+    // node id -> db engine.
     pub engines: HashMap<u64, Arc<DB>>,
 
     sim: T,
-    pd_client: Arc<RwLock<PdClient>>,
+    pub pd_client: Arc<RwLock<PdClient>>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -45,7 +54,8 @@ impl<T: Simulator> Cluster<T> {
         let mut c = Cluster {
             id: id,
             leaders: HashMap::new(),
-            paths: HashMap::new(),
+            paths: vec![],
+            dbs: vec![],
             engines: HashMap::new(),
             sim: sim,
             pd_client: pd_client,
@@ -57,12 +67,19 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engines(&mut self, count: usize) {
-        for i in 0..count {
-            self.paths.insert(i as u64 + 1, TempDir::new("test_cluster").unwrap());
+        for _ in 0..count {
+            self.paths.push(TempDir::new("test_cluster").unwrap());
         }
 
-        for (i, item) in &self.paths {
-            self.engines.insert(*i, new_engine(item));
+        for item in &self.paths {
+            self.dbs.push(new_engine(item));
+        }
+    }
+
+    pub fn start(&mut self) {
+        for engine in &self.dbs {
+            let node_id = self.sim.run_node(0, engine.clone());
+            self.engines.insert(node_id, engine.clone());
         }
     }
 
@@ -71,19 +88,8 @@ impl<T: Simulator> Cluster<T> {
         self.sim.run_node(node_id, engine.clone());
     }
 
-    pub fn run_all_nodes(&mut self) {
-        let count = self.engines.len();
-        for i in 0..count {
-            self.run_node(i as u64 + 1);
-        }
-    }
-
     pub fn stop_node(&mut self, node_id: u64) {
         self.sim.stop_node(node_id);
-    }
-
-    pub fn get_engines(&self) -> &HashMap<u64, Arc<DB>> {
-        &self.engines
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
@@ -135,7 +141,15 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.get(&region_id).cloned()
     }
 
+    // Multiple nodes with fixed node id, like node 1, 2, .. 5,
+    // First region 1 is in all stores with peer 1, 2, .. 5.
+    // Peer 1 is in node 1, store 1, etc.
     pub fn bootstrap_region(&mut self) -> Result<()> {
+        for (id, engine) in self.dbs.iter().enumerate() {
+            let id = id as u64 + 1;
+            self.engines.insert(id, engine.clone());
+        }
+
         let mut region = metapb::Region::new();
         region.set_region_id(1);
         region.set_start_key(keys::MIN_KEY.to_vec());
@@ -156,8 +170,14 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
-    // 5 store, and store 1 bootstraps first region.
+    // Multiple nodes with fixed node id, like node 1, 2, .. 5.
+    // First region 1 is only in node 1, store 1 with peer 1.
     pub fn bootstrap_conf_change(&mut self) {
+        for (id, engine) in self.dbs.iter().enumerate() {
+            let id = id as u64 + 1;
+            self.engines.insert(id, engine.clone());
+        }
+
         for (&id, engine) in &self.engines {
             bootstrap_store(engine.clone(), self.id, id, id).unwrap();
         }
@@ -168,9 +188,8 @@ impl<T: Simulator> Cluster<T> {
         self.bootstrap_cluster(region);
     }
 
+    // This is only for fixed id test.
     fn bootstrap_cluster(&mut self, region: metapb::Region) {
-        // TODO: use pd to manage all bootstrap.
-
         self.pd_client
             .write()
             .unwrap()
@@ -302,6 +321,9 @@ impl<T: Simulator> Cluster<T> {
                        .unwrap();
         assert_eq!(resp.get_admin_response().get_cmd_type(),
                    AdminCommandType::ChangePeer);
+
+        let region = resp.get_admin_response().get_change_peer().get_region();
+        self.pd_client.write().unwrap().update_region(self.id, region.clone()).unwrap();
     }
 }
 

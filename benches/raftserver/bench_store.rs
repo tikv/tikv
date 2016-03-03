@@ -3,7 +3,7 @@ use rand::{self, Rng};
 
 use super::cluster::*;
 use super::util::*;
-use super::store::{StoreCluster, new_store_cluster};
+use super::node::{NodeCluster, new_node_cluster};
 
 use tikv::raftserver::store::*;
 
@@ -53,10 +53,10 @@ fn bench_store_set_4096_bytes_in_5_node(b: &mut Bencher) {
     bench_set(b, 5, 4096)
 }
 
-fn prepare_cluster(node_count: usize) -> Cluster<StoreCluster> {
-    let mut cluster = new_store_cluster(0, node_count);
+fn prepare_cluster(node_count: usize) -> Cluster<NodeCluster> {
+    let mut cluster = new_node_cluster(0, node_count);
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
     sleep_ms(400);
     assert!(cluster.leader_of_region(1).is_some());
     cluster

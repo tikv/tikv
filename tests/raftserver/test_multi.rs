@@ -1,18 +1,17 @@
 use tikv::raftserver::store::*;
 
 use super::util::*;
-use super::store::new_store_cluster;
+use super::cluster::{Cluster, Simulator};
+use super::node::new_node_cluster;
+use super::server::new_server_cluster;
 
-#[test]
-fn test_multi_store() {
+fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
 
     // test a cluster with five nodes [1, 5], only one region (region 1).
     // every node has a store and a peer with same id as node's.
-    let count = 5;
-    let mut cluster = new_store_cluster(0, count);
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     let (key, value) = (b"a1", b"v1");
 
@@ -36,12 +35,10 @@ fn test_multi_store() {
     assert!(check_res);
 }
 
-#[test]
-fn test_multi_store_leader_crash() {
-    let count = 5;
-    let mut cluster = new_store_cluster(0, count);
+
+fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     let (key1, value1) = (b"a1", b"v1");
 
@@ -85,12 +82,10 @@ fn test_multi_store_leader_crash() {
                 .is_none());
 }
 
-#[test]
-fn test_multi_store_cluster_restart() {
-    let count = 5;
-    let mut cluster = new_store_cluster(0, count);
+
+fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
-    cluster.run_all_nodes();
+    cluster.start();
 
     let (key, value) = (b"a1", b"v1");
 
@@ -101,32 +96,88 @@ fn test_multi_store_cluster_restart() {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     cluster.shutdown();
-    cluster.run_all_nodes();
+    cluster.start();
 
     assert!(cluster.leader_of_region(1).is_some());
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 }
 
+fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+
+    let half = (count as u64 + 1) / 2;
+    for i in 1..half + 1 {
+        cluster.stop_node(i);
+    }
+    if let Some(leader) = cluster.leader_of_region(1) {
+        if leader.get_node_id() >= half + 1 {
+            cluster.stop_node(leader.get_node_id());
+        }
+    }
+    cluster.reset_leader_of_region(1);
+    sleep_ms(600);
+
+    assert!(cluster.leader_of_region(1).is_none());
+
+}
+
 #[test]
-fn test_multi_store_lost_majority() {
+fn test_multi_node_base() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_base(&mut cluster)
+}
+
+#[test]
+fn test_multi_server_base() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_multi_base(&mut cluster)
+}
+
+#[test]
+fn test_multi_node_leader_crash() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_leader_crash(&mut cluster)
+}
+
+#[test]
+fn test_multi_server_leader_crash() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_multi_leader_crash(&mut cluster)
+}
+
+#[test]
+fn test_multi_node_cluster_restart() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_cluster_restart(&mut cluster)
+}
+
+#[test]
+fn test_multi_server_cluster_restart() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_multi_cluster_restart(&mut cluster)
+}
+
+#[test]
+fn test_multi_node_lost_majority() {
     let mut tests = vec![4, 5];
     for count in tests.drain(..) {
-        let mut cluster = new_store_cluster(0, count);
-        cluster.bootstrap_region().expect("");
-        cluster.run_all_nodes();
+        let mut cluster = new_node_cluster(0, count);
+        test_multi_lost_majority(&mut cluster, count)
+    }
+}
 
-        let half = (count as u64 + 1) / 2;
-        for i in 1..half + 1 {
-            cluster.stop_node(i);
-        }
-        if let Some(leader) = cluster.leader_of_region(1) {
-            if leader.get_node_id() >= half + 1 {
-                cluster.stop_node(leader.get_node_id());
-            }
-        }
-        cluster.reset_leader_of_region(1);
-        sleep_ms(600);
-
-        assert!(cluster.leader_of_region(1).is_none());
+#[test]
+fn test_multi_server_lost_majority() {
+    let mut tests = vec![4, 5];
+    for count in tests.drain(..) {
+        let mut cluster = new_server_cluster(0, count);
+        test_multi_lost_majority(&mut cluster, count)
     }
 }
