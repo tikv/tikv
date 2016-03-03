@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -28,7 +28,7 @@ pub trait Simulator {
     // Return the node id.
     fn run_node(&mut self, node_id: u64, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
-    fn get_node_ids(&self) -> Vec<u64>;
+    fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self,
                     request: RaftCommandRequest,
                     timeout: Duration)
@@ -119,9 +119,18 @@ impl<T: Simulator> Cluster<T> {
         let mut leader = None;
         let mut retry_cnt = 100;
 
+        let stores = self.pd_client.read().unwrap().get_stores(self.id).unwrap();
+        let node_ids: HashSet<u64> = self.sim.get_node_ids();
         while leader.is_none() && retry_cnt > 0 {
-            for id in self.sim.get_node_ids() {
-                let peer = new_peer(id, id, id);
+            for store in &stores {
+                // For some tests, we stop the node but pd still has this information,
+                // and we must skip this.
+                if !node_ids.contains(&store.get_node_id()) {
+                    continue;
+                }
+
+                // To get region leader, we don't care real peer id, so use 0 instead.
+                let peer = new_peer(store.get_node_id(), store.get_store_id(), 0);
                 let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
                 let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
                 let region_leader = resp.get_status_response().get_region_leader();
@@ -217,7 +226,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn shutdown(&mut self) {
-        let keys: Vec<u64> = self.sim.get_node_ids();
+        let keys: HashSet<u64> = self.sim.get_node_ids();
         for id in keys {
             self.stop_node(id);
         }
@@ -259,9 +268,22 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn get_region(&self, key: &[u8]) -> metapb::Region {
+        self.pd_client
+            .read()
+            .unwrap()
+            .get_region(self.id, key)
+            .unwrap()
+    }
+
+    pub fn get_region_id(&self, key: &[u8]) -> u64 {
+        self.get_region(key).get_region_id()
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        let get = new_request(1, vec![new_get_cmd(&keys::data_key(key))]);
-        let mut resp = self.request(1, get, Duration::from_secs(3));
+        let region_id = self.get_region_id(key);
+        let get = new_request(region_id, vec![new_get_cmd(&keys::data_key(key))]);
+        let mut resp = self.request(region_id, get, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -276,8 +298,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
-        let put = new_request(1, vec![new_put_cmd(&keys::data_key(key), value)]);
-        let resp = self.request(1, put, Duration::from_secs(3));
+        let region_id = self.get_region_id(key);
+        let put = new_request(region_id, vec![new_put_cmd(&keys::data_key(key), value)]);
+        let resp = self.request(region_id, put, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -286,8 +309,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-        let seek = new_request(1, vec![new_seek_cmd(&keys::data_key(key))]);
-        let resp = self.request(1, seek, Duration::from_secs(3));
+        let region_id = self.get_region_id(key);
+        let seek = new_request(region_id, vec![new_seek_cmd(&keys::data_key(key))]);
+        let resp = self.request(region_id, seek, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -303,8 +327,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn delete(&mut self, key: &[u8]) {
-        let delete = new_request(1, vec![new_delete_cmd(&keys::data_key(key))]);
-        let resp = self.request(1, delete, Duration::from_secs(3));
+        let region_id = self.get_region_id(key);
+        let delete = new_request(region_id, vec![new_delete_cmd(&keys::data_key(key))]);
+        let resp = self.request(region_id, delete, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
