@@ -85,15 +85,6 @@ pub trait Client {
     fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store>;
 
     // For route.
-    // Get all regions which the keys belong to.
-    // The returned regions are unique, if multi keys belong to same region, only one returns.
-    fn get_regions(&self, cluster_id: u64, keys: Vec<Key>) -> Result<Vec<metapb::Region>>;
-
-    // For route.
-    // Scan all regions which the region start key >= given start key.
-    fn scan_regions(&self,
-                    cluster_id: u64,
-                    start_key: Vec<u8>,
-                    limit: u32)
-                    -> Result<Vec<metapb::Region>>;
+    // Get region which the key belong to.
+    fn get_region(&self, cluster_id: u64, key: &[u8]) -> Result<metapb::Region>;
 }

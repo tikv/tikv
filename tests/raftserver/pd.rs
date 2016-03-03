@@ -134,35 +134,14 @@ impl Cluster {
         Ok(self.stores.get(&store_id).unwrap().store.clone())
     }
 
-    fn get_regions(&self, keys: Vec<Key>) -> Result<Vec<metapb::Region>> {
-        let mut end_keys: HashSet<Key> = HashSet::new();
-        let mut regions: Vec<metapb::Region> = vec![];
-        for key in keys {
-            // must exist a region contains this key.
-            let (end_key, region) = self.regions
-                                        .range::<Key, Key>(Included(&key), Unbounded)
-                                        .next()
-                                        .unwrap();
-            if !end_keys.insert(end_key.clone()) {
-                regions.push(region.clone());
-            }
-        }
+    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+        // must exist a region contains this key.
+        let (_, region) = self.regions
+                              .range::<Key, Key>(Included(&key.to_vec()), Unbounded)
+                              .next()
+                              .unwrap();
 
-        Ok(regions)
-    }
-
-
-    fn scan_regions(&self, start_key: Vec<u8>, limit: u32) -> Result<Vec<metapb::Region>> {
-        let iter = self.regions.range::<Key, Key>(Included(&start_key), Unbounded);
-
-        let mut regions: Vec<metapb::Region> = vec![];
-        for (_, region) in iter.take(limit as usize) {
-            if region.get_start_key() >= &start_key {
-                regions.push(region.clone());
-            }
-        }
-
-        Ok(regions)
+        Ok(region.clone())
     }
 
     fn add_region(&mut self, region: metapb::Region) -> Result<()> {
@@ -271,7 +250,7 @@ impl PdClient {
         cluster.remove_region(region)
     }
 
-    pub fn get_stores(&mut self, cluster_id: u64) -> Result<Vec<metapb::Store>> {
+    pub fn get_stores(&self, cluster_id: u64) -> Result<Vec<metapb::Store>> {
         let cluster = try!(self.get_cluster(cluster_id));
         Ok(cluster.get_stores())
     }
@@ -348,18 +327,8 @@ impl Client for PdClient {
     }
 
 
-    fn get_regions(&self, cluster_id: u64, keys: Vec<Key>) -> Result<Vec<metapb::Region>> {
+    fn get_region(&self, cluster_id: u64, key: &[u8]) -> Result<metapb::Region> {
         let cluster = try!(self.get_cluster(cluster_id));
-        cluster.get_regions(keys)
-    }
-
-
-    fn scan_regions(&self,
-                    cluster_id: u64,
-                    start_key: Vec<u8>,
-                    limit: u32)
-                    -> Result<Vec<metapb::Region>> {
-        let cluster = try!(self.get_cluster(cluster_id));
-        cluster.scan_regions(start_key, limit)
+        cluster.get_region(key)
     }
 }

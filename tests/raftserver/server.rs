@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::thread;
 use std::net::SocketAddr;
 use std::net::TcpStream;
@@ -85,7 +85,7 @@ impl Simulator for ServerCluster {
         h.join().unwrap();
     }
 
-    fn get_node_ids(&self) -> Vec<u64> {
+    fn get_node_ids(&self) -> HashSet<u64> {
         self.senders.keys().cloned().collect()
     }
 
