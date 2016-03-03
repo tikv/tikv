@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 use env_logger;
@@ -12,42 +11,14 @@ use uuid::Uuid;
 use protobuf;
 
 use tikv::raftserver::store::*;
-use tikv::raftserver::{Result, other};
+use tikv::raftserver::server::Config as ServerConfig;
 use tikv::proto::metapb;
-use tikv::proto::raft_serverpb;
 use tikv::proto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCommandRequest,
                               RaftCommandResponse};
 use tikv::proto::raft_cmdpb::{CommandType, StatusCommandType, AdminCommandType};
 use tikv::proto::raftpb::ConfChangeType;
 use tikv::raft::INVALID_ID;
 
-pub struct StoreTransport {
-    senders: HashMap<u64, SendCh>,
-}
-
-impl StoreTransport {
-    pub fn new() -> Arc<RwLock<StoreTransport>> {
-        Arc::new(RwLock::new(StoreTransport { senders: HashMap::new() }))
-    }
-}
-
-impl Transport for StoreTransport {
-    fn add_sendch(&mut self, node_id: u64, sender: SendCh) {
-        self.senders.insert(node_id, sender);
-    }
-
-    fn remove_sendch(&mut self, node_id: u64) -> Option<SendCh> {
-        self.senders.remove(&node_id)
-    }
-
-    fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        let to_store = msg.get_to_peer().get_node_id();
-        match self.senders.get(&to_store) {
-            None => Err(other(format!("missing sender for store {}", to_store))),
-            Some(sender) => sender.send_raft_msg(msg),
-        }
-    }
-}
 
 pub fn new_engine(path: &TempDir) -> Arc<DB> {
     let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
@@ -61,6 +32,17 @@ pub fn new_store_cfg() -> Config {
         raft_election_timeout_ticks: 20,
         raft_log_gc_tick_interval: 100,
         ..Config::default()
+    }
+}
+
+pub fn new_server_config(cluster_id: u64) -> ServerConfig {
+    let store_cfg = new_store_cfg();
+
+    ServerConfig {
+        cluster_id: cluster_id,
+        addr: "127.0.0.1:0".to_owned(),
+        store_cfg: store_cfg,
+        ..ServerConfig::default()
     }
 }
 

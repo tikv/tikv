@@ -3,19 +3,16 @@ use std::time::Duration;
 use tikv::raftserver::store::*;
 use tikv::proto::raftpb::ConfChangeType;
 
-use super::store::new_store_cluster;
+use super::cluster::{Cluster, Simulator};
+use super::node::new_node_cluster;
+use super::server::new_server_cluster;
 use super::util::*;
 
-#[test]
-fn test_simple_conf_change() {
+fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
-
-    let count = 5;
-    let mut cluster = new_store_cluster(0, count);
-
     cluster.bootstrap_conf_change();
 
-    cluster.run_all_nodes();
+    cluster.start();
 
     // Now region 1 only has peer (1, 1, 1);
     let (key, value) = (b"a1", b"v1");
@@ -89,4 +86,18 @@ fn test_simple_conf_change() {
 
 
     // TODO: add more tests.
+}
+
+#[test]
+fn test_node_simple_conf_change() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_simple_conf_change(&mut cluster);
+}
+
+#[test]
+fn test_server_simple_conf_change() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_simple_conf_change(&mut cluster);
 }
