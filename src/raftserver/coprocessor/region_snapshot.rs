@@ -56,6 +56,10 @@ impl<'a> RegionSnapshot<'a> {
                        .map(|(k, v)| (keys::origin_key(&k).to_vec(), v.into_vec()));
         Ok(pair)
     }
+    
+    pub fn get_region(&self) -> &metapb::Region {
+        &self.region
+    }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
