@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -88,7 +88,7 @@ impl Simulator for NodeCluster {
         drop(node);
     }
 
-    fn get_node_ids(&self) -> Vec<u64> {
+    fn get_node_ids(&self) -> HashSet<u64> {
         self.nodes.keys().cloned().collect()
     }
 
