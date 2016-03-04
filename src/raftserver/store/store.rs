@@ -92,7 +92,9 @@ impl<T: Transport> Store<T> {
 
                              let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
                              let peer = try!(Peer::create(self, region));
-                             // TODO: check duplicated region id later?
+
+        // No need to check duplicated here, because we use region id as the key
+        // in DB.
                              self.peers.insert(region_id, peer);
                              Ok(true)
                          }));
@@ -253,6 +255,14 @@ impl<T: Transport> Store<T> {
                             error!("create new split region {:?} err {:?}", right, e);
                         }
                         Ok(mut new_peer) => {
+                            if self.peers.contains_key(&new_region_id) {
+                                // This is a very serious error, should we close the store here?
+                                // because the raft group can not run correctly
+                                // for this split region.
+                                error!("duplicated region {} for split region", new_region_id);
+                                break;
+                            }
+
                             // If the peer for the region before split is leader,
                             // we can force the new peer for the new split region to campaign
                             // to become the leader too.
@@ -266,7 +276,6 @@ impl<T: Transport> Store<T> {
                                 }
                             }
 
-                            // TODO: check duplicated region id.
                             self.peers.insert(new_region_id, new_peer);
                         }
                     }
