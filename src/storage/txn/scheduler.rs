@@ -47,6 +47,7 @@ impl Scheduler {
     }
 
     pub fn handle_cmd(&mut self, cmd: Command) {
+        debug!("scheduler::handle_cmd: {:?}", cmd);
         match cmd {
             Command::Get{key, start_ts, callback} => {
                 callback(self.exec_get(key, start_ts).map_err(::storage::Error::from));
