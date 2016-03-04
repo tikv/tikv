@@ -735,6 +735,9 @@ impl Peer {
             let peer_id = new_peer_ids[index];
             peer.set_peer_id(peer_id);
             max_peer_id = cmp::max(max_peer_id, peer_id);
+
+            // Add this peer to cache.
+            self.peer_cache.write().unwrap().insert(peer_id, peer.clone());
         }
 
         new_region.set_max_peer_id(max_peer_id);

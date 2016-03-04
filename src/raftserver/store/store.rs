@@ -270,8 +270,6 @@ impl<T: Transport> Store<T> {
                             self.peers.insert(new_region_id, new_peer);
                         }
                     }
-
-
                 }
             }
         }
