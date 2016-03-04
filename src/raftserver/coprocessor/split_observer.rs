@@ -1,10 +1,20 @@
-use super::{Coprocessor, RegionObserver, RequestContext, ResponseContext};
+use super::{Coprocessor, RegionObserver, ObserverContext};
 
-/// SplitObserver handles how to split a region.
+use proto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response, AdminCommandType};
+use protobuf::RepeatedField;
+
+/// SplitObserver assign a split key to SplitRequest if it doesn't have one.
 pub struct SplitObserver;
 
 impl SplitObserver {
-    fn handle_split(&mut self, split: )
+    //fn get_appromi
+    
+    fn handle_split(&mut self, ctx: &mut ObserverContext, split: &mut SplitRequest) {
+        if split.has_split_key() {
+            return;
+        }
+        //ctx.snap
+    }
 }
 
 impl Coprocessor for SplitObserver {
@@ -13,20 +23,22 @@ impl Coprocessor for SplitObserver {
 }
 
 impl RegionObserver for SplitObserver {
-    fn pre_propose(&mut self, ctx: &mut RequestContext) {
-        if !ctx.req.has_admin_request() {
+    fn pre_admin(&mut self, ctx: &mut ObserverContext, req: &mut AdminRequest) {
+        if req.get_cmd_type() != AdminCommandType::Split {
             return;
         }
-        let admin_req = ctx.req.mut_admin_request();
-        if admin_req.get_cmd_type() != AdminCommandType::Split {
-            continue;
-        }
-        if !admin_req.has_split() {
+        if !req.has_split() {
             error!("cmd_type is Split but it doesn't have split request, message maybe corrupted!");
-            continue;
+            return;
         }
-        self.handle_split(&mut )
+        self.handle_split(ctx, req.mut_split());
     }
     
-    fn post_apply(&mut self, ctx: &mut ResponseContext) {}
+    fn post_admin(&mut self, _: &mut ObserverContext, _: &AdminRequest, _: &mut AdminResponse) {}
+    
+    /// Hook to call before execute read/write request.
+    fn pre_query(&mut self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) -> () {}
+    
+    /// Hook to call after read/write request being executed.
+    fn post_query(&mut self, _: &mut ObserverContext, _: &[Request], _: &mut RepeatedField<Response>) -> () {}
 }

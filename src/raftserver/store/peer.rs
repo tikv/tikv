@@ -15,7 +15,7 @@ use proto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminRespo
 use proto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other};
-use raftserver::coprocessor::{CoprocessorHost, RequestContext, ResponseContext};
+use raftserver::coprocessor::CoprocessorHost;
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
@@ -268,13 +268,9 @@ impl Peer {
             return Ok(());
         }
 
-        let cmd = {
-            let peer_storage = self.storage.rl();
-            let mut ctx = RequestContext::new(&peer_storage, pending_cmd.cmd.take().unwrap());
-            // TODO: validate request for unexpected changes.
-            self.coprocessor_host.pre_propose(&mut ctx);
-            ctx.req
-        };
+        // TODO: validate request for unexpected changes.
+        let mut cmd = pending_cmd.cmd.take().unwrap();
+        self.coprocessor_host.pre_propose(&self.storage.rl(), &mut cmd);
         let data = try!(cmd.write_to_bytes());
         try!(self.raft_group.propose(data));
 
@@ -482,18 +478,13 @@ impl Peer {
 
         let pending_cmd = self.pending_cmds.remove(&uuid);
 
-        let (resp, exec_result) = self.apply_raft_command(index, &cmd).unwrap_or_else(|e| {
+        let (mut resp, exec_result) = self.apply_raft_command(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);
             (cmd_resp::message_error(e), None)
         });
 
         if let Some(mut pending_cmd) = pending_cmd {
-            let mut resp = {
-                let peer_storage = self.storage.rl();
-                let mut ctx = ResponseContext::new(&peer_storage, cmd, resp);
-                self.coprocessor_host.post_apply(&mut ctx);
-                ctx.resp
-            };
+            self.coprocessor_host.post_apply(&self.storage.rl(), &cmd, &mut resp);
             if pending_cmd.cb.is_none() {
                 warn!("pending command callback for entry {} is None", index);
             } else {

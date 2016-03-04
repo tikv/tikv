@@ -1,4 +1,7 @@
-use super::{RegionObserver, RequestContext, ResponseContext};
+use super::{RegionObserver, ObserverContext};
+
+use raftserver::store::PeerStorage;
+use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 
 struct ObserverEntry {
     priority: u32,
@@ -38,9 +41,31 @@ impl CoprocessorHost {
     }
 
     /// Call all prepose hook until bypass is set to true.
-    pub fn pre_propose(&mut self, ctx: &mut RequestContext) {
+    pub fn pre_propose(&mut self, ps: &PeerStorage, req: &mut RaftCommandRequest) {
+        let ctx = ObserverContext::new(ps);
+        if req.has_admin_request() {
+            self.execute_pre_hook(ctx, req.mut_admin_request(), |o, ctx, q| o.pre_admin(ctx, q));
+        } else {
+            self.execute_pre_hook(ctx, req.mut_requests(), |o, ctx, q| o.pre_query(ctx, q));
+        }
+    }
+    
+    fn execute_pre_hook<Q, H>(&mut self, mut ctx: ObserverContext, req: &mut Q, mut hook: H)
+    where H: FnMut(&mut RegionObserver, &mut ObserverContext, &mut Q)
+     {
         for entry in &mut self.registry.observers {
-            entry.observer.pre_propose(ctx);
+            hook(entry.observer.as_mut(), &mut ctx, req);
+            if ctx.bypass {
+                break;
+            }
+        }
+    }
+    
+    fn execute_post_hook<Q, R, H>(&mut self, mut ctx: ObserverContext, req: Q, resp: &mut R, mut hook: H)
+    where H: FnMut(&mut RegionObserver, &mut ObserverContext, &Q, &mut R)
+     {
+        for entry in &mut self.registry.observers {
+            hook(entry.observer.as_mut(), &mut ctx, &req, resp);
             if ctx.bypass {
                 break;
             }
@@ -48,12 +73,12 @@ impl CoprocessorHost {
     }
 
     /// call all apply hook until bypass is set to true.
-    pub fn post_apply(&mut self, ctx: &mut ResponseContext) {
-        for entry in &mut self.registry.observers {
-            entry.observer.post_apply(ctx);
-            if ctx.bypass {
-                break;
-            }
+    pub fn post_apply(&mut self, ps: &PeerStorage, req: &RaftCommandRequest, resp: &mut RaftCommandResponse) {
+        let ctx = ObserverContext::new(ps);
+        if req.has_admin_request() {
+            self.execute_post_hook(ctx, req.get_admin_request(), resp.mut_admin_response(), |o, ctx, q, r| o.post_admin(ctx, q, r));
+        } else {
+            self.execute_post_hook(ctx, req.get_requests(), resp.mut_responses(), |o, ctx, q, r| o.post_query(ctx, q, r));
         }
     }
 
@@ -109,12 +134,22 @@ mod test {
     }
 
     impl RegionObserver for TestCoprocessor {
-        fn pre_propose(&mut self, ctx: &mut RequestContext) {
+        fn pre_admin(&mut self, ctx: &mut ObserverContext, _: &mut AdminRequest) {
             *self.called_pre.write().unwrap() = true;
             ctx.bypass = *self.bypass_pre.read().unwrap();
         }
+        
+        fn pre_query(&mut self, ctx: &mut ObserverContext, _: &mut Request) {
+            *self.called_pre.write().unwrap() = true;
+            ctx.bypass = *self.bypass_pre.read().unwrap();
+        }
+        
+        fn post_admin(&mut self, ctx: &mut ObserverContext, _: &AdminRequest, _: &mut AdminResponse) {
+            *self.called_post.write().unwrap() = true;
+            ctx.bypass = *self.bypass_post.read().unwrap();
+        }
 
-        fn post_apply(&mut self, ctx: &mut ResponseContext) {
+        fn post_query(&mut self, ctx: &mut ObserverContext, _: &Request, _: &mut Response) {
             *self.called_post.write().unwrap() = true;
             ctx.bypass = *self.bypass_post.read().unwrap();
         }
@@ -124,23 +159,6 @@ mod test {
         let path = TempDir::new("test-raftserver").unwrap();
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
         PeerStorage::new(Arc::new(engine), &Region::new()).unwrap()
-    }
-
-    fn new_request_context(ps: &PeerStorage) -> RequestContext {
-        RequestContext {
-            snap: RegionSnapshot::new(ps),
-            req: RaftCommandRequest::new(),
-            bypass: false,
-        }
-    }
-
-    fn new_response_context(ps: &PeerStorage) -> ResponseContext {
-        ResponseContext {
-            snap: RegionSnapshot::new(ps),
-            req: RaftCommandRequest::new(),
-            resp: RaftCommandResponse::new(),
-            bypass: false,
-        }
     }
 
     fn share_bool() -> Arc<RwLock<bool>> {
@@ -170,11 +188,14 @@ mod test {
         let mut host = CoprocessorHost::default();
         host.registry.register_observer(3, Box::new(observer1));
         let ps = new_peer_storage();
-        let mut req = new_request_context(&ps);
-        let mut res = new_response_context(&ps);
+        let mut admin_req = RaftCommandRequest::new();
+        admin_req.set_admin(AdminRequest::new());
+        let mut query_req = RaftCommandRequest::new();
+        query.set_request(Request::new());
+        let mut resp = RaftCommandResponse::new();
 
         assert!(!*cpr1.read().unwrap());
-        host.pre_propose(&mut req);
+        host.pre_propose(&ps, &mut admin_req);
         assert!(*cpr1.read().unwrap());
         assert!(!req.bypass);
 
