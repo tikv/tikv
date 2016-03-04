@@ -226,7 +226,7 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use super::{Dsn, Storage, Result, Value, Callback, Mutation};
+    use super::*;
 
     fn expect_get_none() -> Callback<Option<Value>> {
         Box::new(|x: Result<Option<Value>>| assert_eq!(x.unwrap(), None))
@@ -244,6 +244,16 @@ mod tests {
         Box::new(|x: Result<()>| assert!(x.is_err()))
     }
 
+    fn expect_scan(pairs: Vec<Option<KvPair>>) -> Callback<Vec<Result<KvPair>>> {
+        Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
+            let rlt: Vec<Option<KvPair>> = rlt.unwrap()
+                                              .into_iter()
+                                              .map(Result::ok)
+                                              .collect();
+            assert_eq!(rlt, pairs);
+        })
+    }
+
     #[test]
     fn test_get_put() {
         let storage = Storage::new(Dsn::Memory).unwrap();
@@ -255,6 +265,30 @@ mod tests {
         storage.async_commit(100u64, 101u64, expect_ok()).unwrap();
         storage.async_get(vec![b'x'], 100u64, expect_get_none()).unwrap();
         storage.async_get(vec![b'x'], 101u64, expect_get_val(b"100".to_vec())).unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_scan() {
+        let storage = Storage::new(Dsn::Memory).unwrap();
+        storage.async_prewrite(vec![
+            Mutation::Put((b"a".to_vec(), b"aa".to_vec())),
+            Mutation::Put((b"b".to_vec(), b"bb".to_vec())),
+            Mutation::Put((b"c".to_vec(), b"cc".to_vec())),
+            ],
+                               1,
+                               expect_ok())
+               .unwrap();
+        storage.async_commit(1, 2, expect_ok()).unwrap();
+        storage.async_scan(b"\x00".to_vec(),
+                           1000,
+                           5,
+                           expect_scan(vec![
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+            ]))
+               .unwrap();
         storage.stop().unwrap();
     }
 
