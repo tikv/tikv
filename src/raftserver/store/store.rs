@@ -246,6 +246,33 @@ impl<T: Transport> Store<T> {
                 ExecResult::CompactLog{..} => {
                     // Nothing to do, skip to handle it.
                 }
+                ExecResult::SplitRegion{ref right, ..} => {
+                    let new_region_id = right.get_region_id();
+                    match Peer::create(self, right.clone()) {
+                        Err(e) => {
+                            error!("create new split region {:?} err {:?}", right, e);
+                        }
+                        Ok(mut new_peer) => {
+                            // If the peer for the region before split is leader,
+                            // we can force the new peer for the new split region to campaign
+                            // to become the leader too.
+                            let is_leader = self.peers.get(&region_id).unwrap().is_leader();
+                            if is_leader && right.get_peers().len() > 1 {
+                                if let Err(e) = new_peer.raft_group.campaign() {
+                                    error!("peer {:?} campaigns for region {} err {:?}",
+                                           new_peer.peer,
+                                           new_region_id,
+                                           e);
+                                }
+                            }
+
+                            // TODO: check duplicated region id.
+                            self.peers.insert(new_region_id, new_peer);
+                        }
+                    }
+
+
+                }
             }
         }
 

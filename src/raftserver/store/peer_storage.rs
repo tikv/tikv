@@ -73,6 +73,8 @@ impl PeerStorage {
     }
 
     pub fn is_initialized(&self) -> bool {
+        // TODO: if we use column family later, the maximum end key is empty,
+        // so we must think another way to check initialized.
         self.region.get_end_key().len() > 0
     }
 
