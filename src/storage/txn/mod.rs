@@ -13,6 +13,11 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        Codec(err: ::util::codec::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         Mvcc(err: ::storage::mvcc::Error) {
             from()
             cause(err)
