@@ -348,7 +348,30 @@ impl<T: Simulator> Cluster<T> {
                    AdminCommandType::ChangePeer);
 
         let region = resp.get_admin_response().get_change_peer().get_region();
-        self.pd_client.write().unwrap().update_region(self.id, region.clone()).unwrap();
+        self.pd_client.write().unwrap().change_peer(self.id, region.clone()).unwrap();
+    }
+
+    pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
+        let new_region_id = self.pd_client.write().unwrap().alloc_region_id().unwrap();
+        let region = self.pd_client.read().unwrap().get_region_by_id(self.id, region_id).unwrap();
+        let peer_count = region.get_peers().len();
+        let mut peer_ids: Vec<u64> = vec![];
+        for _ in 0..peer_count {
+            let peer_id = self.pd_client.write().unwrap().alloc_peer_id().unwrap();
+            peer_ids.push(peer_id);
+        }
+
+        let split = new_admin_request(region_id,
+                                      new_split_region_cmd(split_key, new_region_id, peer_ids));
+        let resp = self.call_command_on_leader(region_id, split, Duration::from_secs(3)).unwrap();
+
+        assert_eq!(resp.get_admin_response().get_cmd_type(),
+                   AdminCommandType::Split);
+
+        let left = resp.get_admin_response().get_split().get_left();
+        let right = resp.get_admin_response().get_split().get_right();
+
+        self.pd_client.write().unwrap().split_region(self.id, left.clone(), right.clone()).unwrap();
     }
 }
 
