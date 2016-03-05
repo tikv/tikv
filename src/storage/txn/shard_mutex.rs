@@ -31,3 +31,36 @@ impl ShardMutex {
         (s.finish() as usize) % self.size
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+    use rand;
+    use super::*;
+
+    #[test]
+    fn test_shard_mutex_deadlock() {
+        const MUTEX_SIZE: usize = 10;
+        const THREAD_NUM: usize = 10;
+        const VALUE_NUM: usize = 10;
+        const VALUE_RANGE: usize = 30;
+
+        let sm = Arc::new(ShardMutex::new(MUTEX_SIZE));
+        let mut children = vec![];
+        for _ in 0..THREAD_NUM {
+            let sm = sm.clone();
+            children.push(thread::spawn(move || {
+                let values: Vec<i32> = (0..VALUE_NUM)
+                                           .map(|_| rand::random::<i32>() % VALUE_RANGE as i32)
+                                           .collect();
+                let _guard = sm.lock(&values);
+                thread::sleep(Duration::from_millis(1));
+            }));
+        }
+        for t in children {
+            t.join().unwrap();
+        }
+    }
+}

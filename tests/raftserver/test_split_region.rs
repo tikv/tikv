@@ -34,6 +34,9 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.put(b"a3", b"vv3");
     assert_eq!(cluster.get(b"a3").unwrap(), b"vv3".to_vec());
+
+    // TODO: check a3 not in left region after we support checking command key
+    // in region key range later.
 }
 
 #[test]
