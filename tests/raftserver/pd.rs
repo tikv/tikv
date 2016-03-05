@@ -172,6 +172,10 @@ impl Cluster {
         let left_end_key = left.get_end_key().to_vec();
         let right_end_key = right.get_end_key().to_vec();
 
+        // TODO: if we use column family later, the maximum end key is empty,
+        // so we should use another way to check it.
+        assert!(right_end_key > left_end_key);
+
         // origin pre-split region's end key is the same as right end key,
         // and must exists.
         if !self.regions.contains_key(&right_end_key) {
