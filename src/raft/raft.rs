@@ -215,11 +215,11 @@ impl<T: Storage> Raft<T> {
         }
         let term = r.term;
         r.become_follower(term, INVALID_ID);
-        let nodes_str = r.nodes().iter().fold(String::new(), |b, n| b + &n.to_string());
-        info!("newRaft {:x} [peers: [{}], term: {:?}, commit: {}, applied: {}, last_index: {}, \
+        let hex_nodes: Vec<String> = r.nodes().iter().map(|n| format!("{:x}", n)).collect();
+        info!("newRaft {:x} [peers: {:?}, term: {:?}, commit: {}, applied: {}, last_index: {}, \
                last_term: {}]",
               r.id,
-              nodes_str,
+              hex_nodes,
               r.term,
               r.raft_log.committed,
               r.raft_log.get_applied(),

@@ -9,10 +9,12 @@ run:
 	cargo run
 
 test:
-	RUST_LOG=tikv=DEBUG RUST_BACKTRACE=1 cargo test -- --nocapture
+	# todo remove ulimit once issue #372 of mio is resolved.
+	ulimit -n 4096 && RUST_LOG=tikv=DEBUG RUST_BACKTRACE=1 cargo test -- --nocapture
 
 bench:
-	RUST_LOG=tikv=ERROR RUST_BACKTRACE=1 cargo bench -- --nocapture
+	# todo remove ulimit once issue #372 of mio is resolved.
+	ulimit -n 10240 && RUST_LOG=tikv=ERROR RUST_BACKTRACE=1 cargo bench -- --nocapture
 
 genprotobuf:
 	cd ./src/proto && protoc --rust_out . *.proto
