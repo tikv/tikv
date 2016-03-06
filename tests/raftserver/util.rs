@@ -119,6 +119,22 @@ pub fn new_change_peer_cmd(change_type: ConfChangeType, peer: metapb::Peer) -> A
     cmd
 }
 
+pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
+                            region_id: u64,
+                            peer_ids: Vec<u64>)
+                            -> AdminRequest {
+    let mut cmd = AdminRequest::new();
+    cmd.set_cmd_type(AdminCommandType::Split);
+    if let Some(key) = split_key {
+        cmd.mut_split().set_split_key(key);
+    }
+    cmd.mut_split().set_new_region_id(region_id);
+    cmd.mut_split().set_new_peer_ids(peer_ids);
+    cmd
+
+
+}
+
 pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::new();
     peer.set_node_id(node_id);

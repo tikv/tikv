@@ -40,6 +40,7 @@ struct Cluster {
     nodes: HashMap<u64, Node>,
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
+    region_id_keys: HashMap<u64, Key>,
 }
 
 impl Cluster {
@@ -53,6 +54,7 @@ impl Cluster {
             nodes: HashMap::new(),
             stores: HashMap::new(),
             regions: BTreeMap::new(),
+            region_id_keys: HashMap::new(),
         };
 
         let node_id = node.get_node_id();
@@ -79,6 +81,7 @@ impl Cluster {
             c.stores.insert(store_id, store);
         }
 
+        c.region_id_keys.insert(region.get_region_id(), end_key.clone());
         c.regions.insert(end_key, region);
 
         c
@@ -144,24 +147,12 @@ impl Cluster {
         Ok(region.clone())
     }
 
-    fn add_region(&mut self, region: metapb::Region) -> Result<()> {
-        let end_key = region.get_end_key().to_vec();
-        if self.regions.contains_key(&end_key) {
-            return Err(other(format!("region {:?} has already existed", region)));
-        }
-
-        for peer in region.get_peers() {
-            let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
-            // check duplicated.
-            assert!(store.region_ids.insert(region.get_region_id()));
-        }
-
-        self.regions.insert(end_key, region);
-
-        Ok(())
+    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
+        let key = self.region_id_keys.get(&region_id).unwrap();
+        self.get_region(&key)
     }
 
-    fn update_region(&mut self, region: metapb::Region) -> Result<()> {
+    fn change_peer(&mut self, region: metapb::Region) -> Result<()> {
         let end_key = region.get_end_key().to_vec();
         if !self.regions.contains_key(&end_key) {
             return Err(other(format!("region {:?} doesn't exist", region)));
@@ -172,24 +163,39 @@ impl Cluster {
             store.region_ids.insert(region.get_region_id());
         }
 
-        self.regions.insert(end_key, region);
+        assert!(self.regions.insert(end_key, region).is_some());
 
         Ok(())
     }
 
-    fn remove_region(&mut self, region: metapb::Region) -> Result<()> {
-        let end_key = region.get_end_key().to_vec();
-        if !self.regions.contains_key(&end_key) {
-            return Err(other(format!("region {:?} doesn't exist", region)));
+    fn split_region(&mut self, left: metapb::Region, right: metapb::Region) -> Result<()> {
+        let left_end_key = left.get_end_key().to_vec();
+        let right_end_key = right.get_end_key().to_vec();
+
+        // TODO: if we use column family later, the maximum end key is empty,
+        // so we should use another way to check it.
+        assert!(right_end_key > left_end_key);
+
+        // origin pre-split region's end key is the same as right end key,
+        // and must exists.
+        if !self.regions.contains_key(&right_end_key) {
+            return Err(other(format!("region {:?} doesn't exist", right)));
         }
 
-        for peer in region.get_peers() {
+        if self.regions.contains_key(&left_end_key) {
+            return Err(other(format!("region {:?} has already existed", left)));
+        }
+
+        assert!(self.region_id_keys.insert(left.get_region_id(), left_end_key.clone()).is_some());
+        assert!(self.region_id_keys.insert(right.get_region_id(), right_end_key.clone()).is_none());
+
+        for peer in right.get_peers() {
             let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
-            // check missing.
-            assert!(store.region_ids.remove(&region.get_region_id()));
+            store.region_ids.insert(right.get_region_id());
         }
 
-        self.regions.remove(&end_key);
+        assert!(self.regions.insert(left_end_key, left).is_none());
+        assert!(self.regions.insert(right_end_key, right).is_some());
 
         Ok(())
     }
@@ -235,24 +241,28 @@ impl PdClient {
         }
     }
 
-    pub fn add_region(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
+    pub fn change_peer(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
         let mut cluster = try!(self.get_mut_cluster(cluster_id));
-        cluster.add_region(region)
+        cluster.change_peer(region)
     }
 
-    pub fn update_region(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
+    pub fn split_region(&mut self,
+                        cluster_id: u64,
+                        left: metapb::Region,
+                        right: metapb::Region)
+                        -> Result<()> {
         let mut cluster = try!(self.get_mut_cluster(cluster_id));
-        cluster.update_region(region)
-    }
-
-    pub fn remove_region(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster(cluster_id));
-        cluster.remove_region(region)
+        cluster.split_region(left, right)
     }
 
     pub fn get_stores(&self, cluster_id: u64) -> Result<Vec<metapb::Store>> {
         let cluster = try!(self.get_cluster(cluster_id));
         Ok(cluster.get_stores())
+    }
+
+    pub fn get_region_by_id(&self, cluster_id: u64, region_id: u64) -> Result<metapb::Region> {
+        let cluster = try!(self.get_cluster(cluster_id));
+        cluster.get_region_by_id(region_id)
     }
 }
 
