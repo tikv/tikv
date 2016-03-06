@@ -254,7 +254,7 @@ impl<T: PdClient + Send + Sync + 'static> Server<T> {
                   token,
                   msg_id,
                   e);
-            let mut resp = cmd_resp::message_error(e);
+            let mut resp = cmd_resp::new_error(e);
             resp.mut_header().set_uuid(uuid);
             let mut resp_msg = Message::new();
             resp_msg.set_msg_type(MessageType::CommandResp);
