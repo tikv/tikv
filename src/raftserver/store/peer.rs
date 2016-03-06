@@ -489,7 +489,7 @@ impl Peer {
 
         let (resp, exec_result) = self.apply_raft_command(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);
-            (cmd_resp::message_error(e), None)
+            (cmd_resp::new_error(e), None)
         });
 
         if let Some(mut pending_cmd) = pending_cmd {
@@ -539,7 +539,7 @@ impl Peer {
 
             self.execute_raft_command(&ctx).unwrap_or_else(|e| {
                 error!("execute raft command err: {:?}", e);
-                (cmd_resp::message_error(e), None)
+                (cmd_resp::new_error(e), None)
             })
         };
 
