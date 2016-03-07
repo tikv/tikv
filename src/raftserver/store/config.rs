@@ -7,6 +7,8 @@ pub const DEFAULT_RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
 pub const DEFAULT_RAFT_MAX_INFLIGHT_MSGS: usize = 256;
 pub const DEFAULT_RAFT_LOG_GC_INTERVAL: u64 = 1000;
 pub const DEFAULT_RAFT_LOG_GC_THRESHOLD: u64 = 1;
+pub const DEFAULT_SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
+pub const DEFAULT_REGION_MAX_SIZE: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -22,6 +24,11 @@ pub struct Config {
     pub raft_log_gc_tick_interval: u64,
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
+
+    // Interval to check region whether need to be split
+    // or not (ms).
+    pub split_region_check_tick_interval: u64,
+    pub region_max_size: u64,
 }
 
 impl Default for Config {
@@ -34,6 +41,8 @@ impl Default for Config {
             raft_max_inflight_msgs: DEFAULT_RAFT_MAX_INFLIGHT_MSGS,
             raft_log_gc_tick_interval: DEFAULT_RAFT_LOG_GC_INTERVAL,
             raft_log_gc_threshold: DEFAULT_RAFT_LOG_GC_THRESHOLD,
+            split_region_check_tick_interval: DEFAULT_SPLIT_REGION_CHECK_TICK_INTERVAL,
+            region_max_size: DEFAULT_REGION_MAX_SIZE,
         }
     }
 }
