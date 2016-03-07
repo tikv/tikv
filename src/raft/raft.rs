@@ -597,13 +597,13 @@ impl<T: Storage> Raft<T> {
 
     pub fn step(&mut self, m: Message) -> Result<()> {
         if m.get_msg_type() == MessageType::MsgHup {
-            if self.state != StateRole::Leader {
+            if self.state == StateRole::Leader {
+                debug!("{:x} ignoring MsgHup because already leader", self.id);
+            } else {
                 info!("{:x} is starting a new election at term {}",
                       self.id,
                       self.term);
                 self.campaign();
-            } else {
-                debug!("{:x} ignoring MsgHup because already leader", self.id);
             }
             return Ok(());
         }
@@ -693,16 +693,16 @@ impl<T: Storage> Raft<T> {
 
     fn handle_snapshot_status(&mut self, m: &Message) {
         let pr = self.prs.get_mut(&m.get_from()).unwrap();
-        if !m.get_reject() {
+        if m.get_reject() {
+            pr.snapshot_failure();
             pr.become_probe();
-            debug!("{:x} snapshot succeeded, resumed sending replication messages to {:x} [{:?}]",
+            debug!("{:x} snapshot failed, resumed sending replication messages to {:x} [{:?}]",
                    self.id,
                    m.get_from(),
                    pr);
         } else {
-            pr.snapshot_failure();
             pr.become_probe();
-            debug!("{:x} snapshot failed, resumed sending replication messages to {:x} [{:?}]",
+            debug!("{:x} snapshot succeeded, resumed sending replication messages to {:x} [{:?}]",
                    self.id,
                    m.get_from(),
                    pr);
