@@ -15,9 +15,11 @@ mod bench;
 mod conn;
 pub mod server;
 mod transport;
+pub mod node;
 
 pub use self::config::{Config, StoreConfig};
 pub use self::server::{Server, create_event_loop};
+pub use self::node::Node;
 
 pub struct ConnData {
     msg_id: u64,

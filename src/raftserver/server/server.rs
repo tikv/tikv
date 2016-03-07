@@ -12,20 +12,21 @@ use mio::tcp::{TcpListener, TcpStream};
 use mio::util::Slab;
 
 use raftserver::{Result, other};
-use raftserver::store::{self, Store, cmd_resp};
-use proto::raft_serverpb::{Message, MessageType, StoreIdent};
+use raftserver::store::cmd_resp;
+use proto::raft_serverpb::{Message, MessageType};
 use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::config::Config;
 use super::transport::ServerTransport;
-use super::bootstrap;
+use super::node::Node;
+use pd::Client as PdClient;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const INVALID_TOKEN: Token = Token(0);
 
-pub struct Server {
+pub struct Server<T: PdClient + Send + Sync + 'static> {
     cfg: Config,
 
     listener: TcpListener,
@@ -36,25 +37,26 @@ pub struct Server {
 
     store_handles: HashMap<u64, thread::JoinHandle<()>>,
 
-    trans: Arc<RwLock<ServerTransport>>,
+    trans: Arc<RwLock<ServerTransport<T>>>,
+
+    node: Node<T, ServerTransport<T>>,
 }
 
-pub fn create_event_loop() -> Result<EventLoop<Server>> {
+pub fn create_event_loop<T: PdClient + Send + Sync + 'static>() -> Result<EventLoop<Server<T>>> {
     let event_loop = try!(EventLoop::new());
     Ok(event_loop)
 }
 
-impl Server {
+impl<T: PdClient + Send + Sync + 'static> Server<T> {
     // Create a server with already initialized engines.
     // We must bootstrap all stores before running the server.
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: Config,
-               engines: Vec<Arc<DB>>)
-               -> Result<Server> {
+               engines: Vec<Arc<DB>>,
+               pd_client: Arc<RwLock<T>>)
+               -> Result<Server<T>> {
         try!(cfg.validate());
 
-        let idents = try!(bootstrap::check_all_bootstrapped(cfg.cluster_id, &engines));
-        let node_id = idents[0].get_node_id();
 
         let addr = try!((&cfg.addr).parse());
         let listener = try!(TcpListener::bind(&addr));
@@ -67,7 +69,11 @@ impl Server {
         let sendch = SendCh::new(event_loop.channel());
 
         let max_conn_capacity = cfg.max_conn_capacity;
-        let trans = Arc::new(RwLock::new(ServerTransport::new(node_id)));
+        let trans = Arc::new(RwLock::new(ServerTransport::new(cfg.cluster_id,
+                                                              sendch.clone(),
+                                                              pd_client.clone())));
+
+        let node = Node::new(&cfg, pd_client, trans.clone());
 
         let mut svr = Server {
             cfg: cfg,
@@ -77,9 +83,10 @@ impl Server {
             peers: HashMap::new(),
             store_handles: HashMap::new(),
             trans: trans,
+            node: node,
         };
 
-        try!(svr.start_stores(engines, idents));
+        try!(svr.node.start(engines));
 
         Ok(svr)
     }
@@ -87,6 +94,10 @@ impl Server {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(event_loop.run(self));
         Ok(())
+    }
+
+    pub fn get_node_id(&self) -> u64 {
+        self.node.get_node_id()
     }
 
     pub fn get_sendch(&self) -> SendCh {
@@ -99,59 +110,6 @@ impl Server {
     pub fn listening_addr(&self) -> Result<SocketAddr> {
         let addr = try!(self.listener.local_addr());
         Ok(addr)
-    }
-
-    fn start_stores(&mut self, engines: Vec<Arc<DB>>, idents: Vec<StoreIdent>) -> Result<()> {
-        for (i, engine) in engines.iter().enumerate() {
-
-            let store_id = idents[i].get_store_id();
-
-            try!(self.start_store(store_id, engine.clone()));
-        }
-
-        Ok(())
-    }
-
-    fn start_store(&mut self, store_id: u64, engine: Arc<DB>) -> Result<()> {
-        if self.store_handles.contains_key(&store_id) {
-            return Err(other(format!("duplicated store id {}", store_id)));
-        }
-
-        let cfg = self.cfg.store_cfg.clone();
-        let mut event_loop = try!(store::create_event_loop(&cfg));
-        let mut store = try!(Store::new(&mut event_loop, cfg, engine, self.trans.clone()));
-        let ch = store.get_sendch();
-        self.trans.write().unwrap().add_sendch(store_id, ch);
-
-        let h = thread::spawn(move || {
-            if let Err(e) = store.run(&mut event_loop) {
-                error!("store {} run err {:?}", store_id, e);
-            };
-        });
-
-        self.store_handles.insert(store_id, h);
-        Ok(())
-    }
-
-    fn stop_store(&mut self, store_id: u64) -> Result<()> {
-        let ch = self.trans.write().unwrap().remove_sendch(store_id);
-
-        if ch.is_none() {
-            return Err(other(format!("stop invalid store with id {}", store_id)));
-        }
-
-        let h = self.store_handles.remove(&store_id);
-        if h.is_none() {
-            return Err(other(format!("store {} thread has already gone", store_id)));
-        }
-
-        try!(ch.unwrap().send_quit());
-
-        if let Err(e) = h.unwrap().join() {
-            return Err(other(format!("join store {} thread err {:?}", store_id, e)));
-        }
-
-        Ok(())
     }
 
     fn remove_conn(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
@@ -402,7 +360,7 @@ impl Server {
     }
 }
 
-impl Handler for Server {
+impl<T: PdClient + Send + Sync + 'static> Handler for Server<T> {
     type Timeout = Msg;
     type Message = Msg;
 
@@ -442,16 +400,5 @@ impl Handler for Server {
         // tick is called in the end of the loop, so if we notify to quit,
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let ids: Vec<u64> = self.store_handles.keys().cloned().collect();
-        for id in ids {
-            if let Err(e) = self.stop_store(id) {
-                error!("stop store {} err {:?}", id, e);
-            }
-        }
     }
 }

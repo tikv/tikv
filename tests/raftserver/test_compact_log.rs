@@ -4,18 +4,17 @@ use tikv::raftserver::store::*;
 use tikv::proto::raft_serverpb::RaftTruncatedState;
 
 use super::util::*;
-use super::store::new_store_cluster;
+use super::cluster::{Cluster, Simulator};
+use super::node::new_node_cluster;
+use super::server::new_server_cluster;
 
-#[test]
-fn test_compact_log() {
+fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
 
     // test a cluster with five nodes [1, 5], only one region (region 1).
     // every node has a store and a peer with same id as node's.
-    let count = 5;
-    let mut cluster = new_store_cluster(0, count);
-    cluster.bootstrap_single_region().expect("");
-    cluster.run_all_nodes();
+    cluster.bootstrap_region().expect("");
+    cluster.start();
 
     let mut before_states = HashMap::new();
 
@@ -48,4 +47,18 @@ fn test_compact_log() {
         assert!(after_state.get_index() > before_state.get_index());
         assert!(after_state.get_term() > before_state.get_term());
     }
+}
+
+#[test]
+fn test_node_compact_log() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_compact_log(&mut cluster);
+}
+
+#[test]
+fn test_server_compact_log() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_compact_log(&mut cluster);
 }
