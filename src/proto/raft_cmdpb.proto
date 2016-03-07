@@ -124,7 +124,8 @@ message RegionLeaderRequest {
 }
 
 message RegionLeaderResponse {
-    optional metapb.Peer leader = 1;
+    optional metapb.Peer leader 	= 1;
+    optional uint64 current_term 	= 2;
 }
 
 enum StatusCommandType {
@@ -140,6 +141,7 @@ message StatusRequest {
 message StatusResponse {
     optional StatusCommandType cmd_type           = 1;
     optional RegionLeaderResponse region_leader   = 2;
+    optional uint64 current_term		  = 3;
 }
 
 message RaftRequestHeader {
