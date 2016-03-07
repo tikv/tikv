@@ -11,7 +11,6 @@ enum CommandType {
     GetMeta        = 4;
     PutMeta        = 5;
     DeleteMeta     = 6;
-    ScanRegions    = 7;
 }
 
 message BootstrapRequest {
@@ -53,14 +52,14 @@ message GetMetaRequest {
     optional MetaType meta_type    = 1;
     optional uint64 node_id        = 2;
     optional uint64 store_id       = 3;
-    repeated string region_keys    = 4;
+    optional string region_key     = 4;
 }
 
 message GetMetaResponse {
     optional MetaType meta_type    = 1;
     optional metapb.Node node      = 2;
     optional metapb.Store store    = 3;
-    repeated metapb.Region regions = 4;
+    optional metapb.Region region  = 4;
 
 }
 
@@ -82,16 +81,6 @@ message DeleteMetaRequest {
 
 message DeleteMetaResponse {
     optional MetaType meta_type = 1;
-}
-
-message ScanRegionsRequest {
-    optional string start_key = 1;
-    optional string end_key   = 2;
-    optional uint32 limit     = 3;
-}
-
-message ScanRegionsResponse {
-    repeated metapb.Region regions = 1;
 }
 
 message RequestHeader {
@@ -116,7 +105,6 @@ message Request {
     optional GetMetaRequest get_meta               = 6;
     optional PutMetaRequest put_meta               = 7;
     optional DeleteMetaRequest delete_meta         = 8;
-    optional ScanRegionsRequest scan_regions       = 9;
 }
 
 message Response {
@@ -128,7 +116,6 @@ message Response {
     optional GetMetaResponse get_meta               = 6;
     optional PutMetaResponse put_meta               = 7;
     optional DeleteMetaResponse delete_meta         = 8;
-    optional ScanRegionsResponse scan_regions       = 9;
 }
 
 message BootstrappedError {
