@@ -434,7 +434,6 @@ impl<T: Transport> Store<T> {
             }
         }
 
-
         self.register_raft_gc_log_tick(event_loop);
     }
 
@@ -469,9 +468,8 @@ impl<T: Transport> Store<T> {
                     }
                 }
             }
-
-
         }
+
         self.register_split_region_check_tick(event_loop);
     }
 }
