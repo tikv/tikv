@@ -17,6 +17,7 @@ pub enum Msg {
     // For tick
     RaftBaseTick,
     RaftLogGcTick,
+    SplitRegionCheckTick,
 
     // For notify.
     RaftMessage(RaftMessage),
@@ -34,6 +35,7 @@ impl fmt::Debug for Msg {
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCommand{..} => write!(fmt, "Raft Command"),
             Msg::RaftLogGcTick => write!(fmt, "Raft Gc Log Tick"),
+            Msg::SplitRegionCheckTick => write!(fmt, "Split Region Check Tick"),
         }
     }
 }

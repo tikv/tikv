@@ -107,6 +107,8 @@ impl<T: Transport> Store<T> {
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
+        self.register_split_region_check_tick(event_loop);
+
         try!(event_loop.run(self));
         Ok(())
     }
@@ -435,6 +437,43 @@ impl<T: Transport> Store<T> {
 
         self.register_raft_gc_log_tick(event_loop);
     }
+
+    fn register_split_region_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Msg::SplitRegionCheckTick,
+                                       self.cfg.split_region_check_tick_interval) {
+            error!("register split region check tick err: {:?}", e);
+        };
+    }
+
+    fn handle_split_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        // TODO: we should check this in another thread asynchronously and only
+        // care leader region which applied logs before.
+        for (&region_id, peer) in &mut self.peers {
+            if !peer.is_leader() {
+                continue;
+            }
+
+            match peer.storage.rl().approximate_size() {
+                Err(e) => {
+                    error!("get approximate size for region {} err {:?}", region_id, e);
+                }
+                Ok(region_size) => {
+                    if region_size > self.cfg.region_max_size {
+                        info!("region {} size is {} > {}, need to split",
+                              region_id,
+                              region_size,
+                              self.cfg.region_max_size);
+
+                        // TODO: notify this to pd.
+                    }
+                }
+            }
+
+
+        }
+        self.register_split_region_check_tick(event_loop);
+    }
 }
 
 fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
@@ -496,6 +535,7 @@ impl<T: Transport> mio::Handler for Store<T> {
         match timeout {
             Msg::RaftBaseTick => self.handle_raft_base_tick(event_loop),
             Msg::RaftLogGcTick => self.handle_raft_gc_log_tick(event_loop),
+            Msg::SplitRegionCheckTick => self.handle_split_region_check_tick(event_loop),
             _ => panic!("invalid timeout msg type {:?}", timeout),
         }
     }
