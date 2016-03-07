@@ -546,6 +546,8 @@ impl<T: Transport> Store<T> {
         let mut resp = cmd::StatusResponse::new();
         if let Some(leader) = peer.get_peer_from_cache(peer.get_leader()) {
             resp.mut_region_leader().set_leader(leader);
+            let term = peer.get_raft_status().hs.get_term();
+            resp.mut_region_leader().set_current_term(term);
         }
 
         Ok(resp)

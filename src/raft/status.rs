@@ -8,7 +8,7 @@ use std::collections::HashMap;
 #[derive(Default)]
 pub struct Status {
     id: u64,
-    hs: HardState,
+    pub hs: HardState,
     ss: SoftState,
     applied: u64,
     progress: HashMap<u64, Progress>,

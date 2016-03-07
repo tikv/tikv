@@ -318,11 +318,11 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses().len(), 1);
         let resp = &resp.get_responses()[0];
         assert_eq!(resp.get_cmd_type(), CommandType::Seek);
-        if !resp.has_seek() {
-            None
-        } else {
+        if resp.has_seek() {
             Some((resp.get_seek().get_key().to_vec(),
                   resp.get_seek().get_value().to_vec()))
+        } else {
+            None
         }
     }
 

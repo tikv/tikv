@@ -1,6 +1,5 @@
 use std::boxed::Box;
 use std::error;
-use std::option::Option;
 
 use uuid::Uuid;
 
@@ -18,7 +17,7 @@ pub fn new_error(err: Error) -> RaftCommandResponse {
 
     error_header.set_message(error::Error::description(&err).to_owned());
 
-    let detail: Option<ErrorDetail> = match err {
+    let detail = match err {
         Error::RegionNotFound(region_id) => {
             let mut detail = ErrorDetail::new();
             detail.mut_region_not_found().set_region_id(region_id);
