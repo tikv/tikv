@@ -359,10 +359,10 @@ impl<T> RaftLog<T>
         if high > self.unstable.offset {
             let offset = self.unstable.offset;
             let unstable = self.unstable.slice(cmp::max(low, offset), high);
-            if !ents.is_empty() {
-                ents.extend_from_slice(unstable);
-            } else {
+            if ents.is_empty() {
                 ents = unstable.to_vec();
+            } else {
+                ents.extend_from_slice(unstable);
             }
         }
 

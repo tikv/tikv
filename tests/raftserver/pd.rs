@@ -6,12 +6,15 @@ use std::collections::Bound::{Included, Unbounded};
 
 use tikv::proto::metapb;
 use tikv::pd::{Client, Result, Error, Key};
+use tikv::pd::errors::other;
 
+#[derive(Default)]
 struct Store {
     store: metapb::Store,
     region_ids: HashSet<u64>,
 }
 
+#[derive(Default)]
 struct Node {
     node: metapb::Node,
     store_ids: HashSet<u64>,
@@ -37,6 +40,7 @@ struct Cluster {
     nodes: HashMap<u64, Node>,
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
+    region_id_keys: HashMap<u64, Key>,
 }
 
 impl Cluster {
@@ -50,12 +54,16 @@ impl Cluster {
             nodes: HashMap::new(),
             stores: HashMap::new(),
             regions: BTreeMap::new(),
+            region_id_keys: HashMap::new(),
         };
 
         let node_id = node.get_node_id();
         c.nodes.insert(node_id, Node::new(node, &stores));
 
-        assert_eq!(region.get_peers().len(), 1);
+        // Now, some tests use multi peers in bootstrap,
+        // disable this check.
+        // TODO: enable this check later.
+        // assert_eq!(region.get_peers().len(), 1);
         let end_key = region.get_end_key().to_vec();
         let first_store_id = region.get_peers()[0].get_store_id();
 
@@ -73,19 +81,22 @@ impl Cluster {
             c.stores.insert(store_id, store);
         }
 
+        c.region_id_keys.insert(region.get_region_id(), end_key.clone());
         c.regions.insert(end_key, region);
 
         c
     }
 
     fn put_node(&mut self, node: metapb::Node) -> Result<()> {
-        let mut n = self.nodes.get_mut(&node.get_node_id()).unwrap();
+        let mut n = self.nodes.entry(node.get_node_id()).or_insert_with(Node::default);
         n.node = node;
         Ok(())
     }
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
-        let mut s = self.stores.get_mut(&store.get_store_id()).unwrap();
+        let mut n = self.nodes.get_mut(&store.get_node_id()).unwrap();
+        let mut s = self.stores.entry(store.get_store_id()).or_insert_with(Store::default);
+        n.store_ids.insert(store.get_store_id());
         s.store = store;
         Ok(())
     }
@@ -126,35 +137,71 @@ impl Cluster {
         Ok(self.stores.get(&store_id).unwrap().store.clone())
     }
 
-    fn get_regions(&self, keys: Vec<Key>) -> Result<Vec<metapb::Region>> {
-        let mut end_keys: HashSet<Key> = HashSet::new();
-        let mut regions: Vec<metapb::Region> = vec![];
-        for key in keys {
-            // must exist a region contains this key.
-            let (end_key, region) = self.regions
-                                        .range::<Key, Key>(Included(&key), Unbounded)
-                                        .next()
-                                        .unwrap();
-            if !end_keys.insert(end_key.clone()) {
-                regions.push(region.clone());
-            }
-        }
+    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+        // must exist a region contains this key.
+        let (_, region) = self.regions
+                              .range::<Key, Key>(Included(&key.to_vec()), Unbounded)
+                              .next()
+                              .unwrap();
 
-        Ok(regions)
+        Ok(region.clone())
     }
 
+    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
+        let key = self.region_id_keys.get(&region_id).unwrap();
+        self.get_region(&key)
+    }
 
-    fn scan_regions(&self, start_key: Vec<u8>, limit: u32) -> Result<Vec<metapb::Region>> {
-        let iter = self.regions.range::<Key, Key>(Included(&start_key), Unbounded);
-
-        let mut regions: Vec<metapb::Region> = vec![];
-        for (_, region) in iter.take(limit as usize) {
-            if region.get_start_key() >= &start_key {
-                regions.push(region.clone());
-            }
+    fn change_peer(&mut self, region: metapb::Region) -> Result<()> {
+        let end_key = region.get_end_key().to_vec();
+        if !self.regions.contains_key(&end_key) {
+            return Err(other(format!("region {:?} doesn't exist", region)));
         }
 
-        Ok(regions)
+        for peer in region.get_peers() {
+            let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
+            store.region_ids.insert(region.get_region_id());
+        }
+
+        assert!(self.regions.insert(end_key, region).is_some());
+
+        Ok(())
+    }
+
+    fn split_region(&mut self, left: metapb::Region, right: metapb::Region) -> Result<()> {
+        let left_end_key = left.get_end_key().to_vec();
+        let right_end_key = right.get_end_key().to_vec();
+
+        // TODO: if we use column family later, the maximum end key is empty,
+        // so we should use another way to check it.
+        assert!(right_end_key > left_end_key);
+
+        // origin pre-split region's end key is the same as right end key,
+        // and must exists.
+        if !self.regions.contains_key(&right_end_key) {
+            return Err(other(format!("region {:?} doesn't exist", right)));
+        }
+
+        if self.regions.contains_key(&left_end_key) {
+            return Err(other(format!("region {:?} has already existed", left)));
+        }
+
+        assert!(self.region_id_keys.insert(left.get_region_id(), left_end_key.clone()).is_some());
+        assert!(self.region_id_keys.insert(right.get_region_id(), right_end_key.clone()).is_none());
+
+        for peer in right.get_peers() {
+            let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
+            store.region_ids.insert(right.get_region_id());
+        }
+
+        assert!(self.regions.insert(left_end_key, left).is_none());
+        assert!(self.regions.insert(right_end_key, right).is_some());
+
+        Ok(())
+    }
+
+    fn get_stores(&self) -> Vec<metapb::Store> {
+        self.stores.values().map(|s| s.store.clone()).collect()
     }
 }
 
@@ -171,10 +218,12 @@ impl PdClient {
     pub fn new() -> PdClient {
         PdClient {
             clusters: HashMap::new(),
-            node_id: 0,
-            store_id: 0,
-            region_id: 0,
-            peer_id: 0,
+            // We use 1 for bootstrap in some tests,
+            // so here use a larger base value to avoid conflict.
+            node_id: 1000,
+            store_id: 1000,
+            region_id: 1000,
+            peer_id: 1000,
         }
     }
 
@@ -190,6 +239,30 @@ impl PdClient {
             None => Err(Error::ClusterNotBootstrapped(cluster_id)),
             Some(cluster) => Ok(cluster),
         }
+    }
+
+    pub fn change_peer(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
+        let mut cluster = try!(self.get_mut_cluster(cluster_id));
+        cluster.change_peer(region)
+    }
+
+    pub fn split_region(&mut self,
+                        cluster_id: u64,
+                        left: metapb::Region,
+                        right: metapb::Region)
+                        -> Result<()> {
+        let mut cluster = try!(self.get_mut_cluster(cluster_id));
+        cluster.split_region(left, right)
+    }
+
+    pub fn get_stores(&self, cluster_id: u64) -> Result<Vec<metapb::Store>> {
+        let cluster = try!(self.get_cluster(cluster_id));
+        Ok(cluster.get_stores())
+    }
+
+    pub fn get_region_by_id(&self, cluster_id: u64, region_id: u64) -> Result<metapb::Region> {
+        let cluster = try!(self.get_cluster(cluster_id));
+        cluster.get_region_by_id(region_id)
     }
 }
 
@@ -264,18 +337,8 @@ impl Client for PdClient {
     }
 
 
-    fn get_regions(&self, cluster_id: u64, keys: Vec<Key>) -> Result<Vec<metapb::Region>> {
+    fn get_region(&self, cluster_id: u64, key: &[u8]) -> Result<metapb::Region> {
         let cluster = try!(self.get_cluster(cluster_id));
-        cluster.get_regions(keys)
-    }
-
-
-    fn scan_regions(&self,
-                    cluster_id: u64,
-                    start_key: Vec<u8>,
-                    limit: u32)
-                    -> Result<Vec<metapb::Region>> {
-        let cluster = try!(self.get_cluster(cluster_id));
-        cluster.scan_regions(start_key, limit)
+        cluster.get_region(key)
     }
 }

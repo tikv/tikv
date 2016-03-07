@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 use env_logger;
@@ -12,42 +11,14 @@ use uuid::Uuid;
 use protobuf;
 
 use tikv::raftserver::store::*;
-use tikv::raftserver::{Result, other};
+use tikv::raftserver::server::Config as ServerConfig;
 use tikv::proto::metapb;
-use tikv::proto::raft_serverpb;
 use tikv::proto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCommandRequest,
                               RaftCommandResponse};
 use tikv::proto::raft_cmdpb::{CommandType, StatusCommandType, AdminCommandType};
 use tikv::proto::raftpb::ConfChangeType;
 use tikv::raft::INVALID_ID;
 
-pub struct StoreTransport {
-    senders: HashMap<u64, SendCh>,
-}
-
-impl StoreTransport {
-    pub fn new() -> Arc<RwLock<StoreTransport>> {
-        Arc::new(RwLock::new(StoreTransport { senders: HashMap::new() }))
-    }
-
-    pub fn add_sender(&mut self, node_id: u64, sender: SendCh) {
-        self.senders.insert(node_id, sender);
-    }
-
-    pub fn remove_sender(&mut self, node_id: u64) {
-        self.senders.remove(&node_id);
-    }
-}
-
-impl Transport for StoreTransport {
-    fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        let to_store = msg.get_to_peer().get_node_id();
-        match self.senders.get(&to_store) {
-            None => Err(other(format!("missing sender for store {}", to_store))),
-            Some(sender) => sender.send_raft_msg(msg),
-        }
-    }
-}
 
 pub fn new_engine(path: &TempDir) -> Arc<DB> {
     let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
@@ -61,6 +32,17 @@ pub fn new_store_cfg() -> Config {
         raft_election_timeout_ticks: 20,
         raft_log_gc_tick_interval: 100,
         ..Config::default()
+    }
+}
+
+pub fn new_server_config(cluster_id: u64) -> ServerConfig {
+    let store_cfg = new_store_cfg();
+
+    ServerConfig {
+        cluster_id: cluster_id,
+        addr: "127.0.0.1:0".to_owned(),
+        store_cfg: store_cfg,
+        ..ServerConfig::default()
     }
 }
 
@@ -137,12 +119,44 @@ pub fn new_change_peer_cmd(change_type: ConfChangeType, peer: metapb::Peer) -> A
     cmd
 }
 
+pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
+                            region_id: u64,
+                            peer_ids: Vec<u64>)
+                            -> AdminRequest {
+    let mut cmd = AdminRequest::new();
+    cmd.set_cmd_type(AdminCommandType::Split);
+    if let Some(key) = split_key {
+        cmd.mut_split().set_split_key(key);
+    }
+    cmd.mut_split().set_new_region_id(region_id);
+    cmd.mut_split().set_new_peer_ids(peer_ids);
+    cmd
+
+
+}
+
 pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::new();
     peer.set_node_id(node_id);
     peer.set_store_id(store_id);
     peer.set_peer_id(peer_id);
     peer
+}
+
+pub fn new_node(node_id: u64, addr: String) -> metapb::Node {
+    let mut node = metapb::Node::new();
+    node.set_node_id(node_id);
+    node.set_address(addr);
+
+    node
+}
+
+pub fn new_store(node_id: u64, store_id: u64) -> metapb::Store {
+    let mut store = metapb::Store::new();
+    store.set_node_id(node_id);
+    store.set_store_id(store_id);
+
+    store
 }
 
 pub fn sleep_ms(ms: u64) {

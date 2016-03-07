@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use rocksdb::DB;
@@ -13,14 +13,22 @@ use super::util::*;
 use tikv::proto::raft_cmdpb::*;
 use tikv::proto::metapb;
 use tikv::proto::raftpb::ConfChangeType;
+use tikv::pd::Client;
+use super::pd::PdClient;
 
-// We simulate 3 or 5 nodes, each has a store, the node id and store id are same.
+// We simulate 3 or 5 nodes, each has a store.
+// Sometimes, we use fixed id to test, which means the id
+// isn't allocated by pd, and node id, store id are same.
 // E,g, for node 1, the node id and store id are both 1.
 
 pub trait Simulator {
-    fn run_node(&mut self, node_id: u64, engine: Arc<DB>);
+    // Pass 0 to let pd allocate a node id if db is empty.
+    // If node id > 0, the node must be created in db already,
+    // and the node id must be the same as given argument.
+    // Return the node id.
+    fn run_node(&mut self, node_id: u64, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
-    fn get_node_ids(&self) -> Vec<u64>;
+    fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self,
                     request: RaftCommandRequest,
                     timeout: Duration)
@@ -28,23 +36,29 @@ pub trait Simulator {
 }
 
 pub struct Cluster<T: Simulator> {
-    id: u64,
+    pub id: u64,
     leaders: HashMap<u64, metapb::Peer>,
-    paths: HashMap<u64, TempDir>,
+    paths: Vec<TempDir>,
+    dbs: Vec<Arc<DB>>,
+
+    // node id -> db engine.
     pub engines: HashMap<u64, Arc<DB>>,
 
     sim: T,
+    pub pd_client: Arc<RwLock<PdClient>>,
 }
 
 impl<T: Simulator> Cluster<T> {
     // Create the default Store cluster.
-    pub fn new(id: u64, count: usize, sim: T) -> Cluster<T> {
+    pub fn new(id: u64, count: usize, sim: T, pd_client: Arc<RwLock<PdClient>>) -> Cluster<T> {
         let mut c = Cluster {
             id: id,
             leaders: HashMap::new(),
-            paths: HashMap::new(),
+            paths: vec![],
+            dbs: vec![],
             engines: HashMap::new(),
             sim: sim,
+            pd_client: pd_client,
         };
 
         c.create_engines(count);
@@ -53,12 +67,19 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engines(&mut self, count: usize) {
-        for i in 0..count {
-            self.paths.insert(i as u64 + 1, TempDir::new("test_cluster").unwrap());
+        for _ in 0..count {
+            self.paths.push(TempDir::new("test_cluster").unwrap());
         }
 
-        for (i, item) in &self.paths {
-            self.engines.insert(*i, new_engine(item));
+        for item in &self.paths {
+            self.dbs.push(new_engine(item));
+        }
+    }
+
+    pub fn start(&mut self) {
+        for engine in &self.dbs {
+            let node_id = self.sim.run_node(0, engine.clone());
+            self.engines.insert(node_id, engine.clone());
         }
     }
 
@@ -67,19 +88,8 @@ impl<T: Simulator> Cluster<T> {
         self.sim.run_node(node_id, engine.clone());
     }
 
-    pub fn run_all_nodes(&mut self) {
-        let count = self.engines.len();
-        for i in 0..count {
-            self.run_node(i as u64 + 1);
-        }
-    }
-
     pub fn stop_node(&mut self, node_id: u64) {
         self.sim.stop_node(node_id);
-    }
-
-    pub fn get_engines(&self) -> &HashMap<u64, Arc<DB>> {
-        &self.engines
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
@@ -109,9 +119,18 @@ impl<T: Simulator> Cluster<T> {
         let mut leader = None;
         let mut retry_cnt = 100;
 
+        let stores = self.pd_client.read().unwrap().get_stores(self.id).unwrap();
+        let node_ids: HashSet<u64> = self.sim.get_node_ids();
         while leader.is_none() && retry_cnt > 0 {
-            for id in self.sim.get_node_ids() {
-                let peer = new_peer(id, id, id);
+            for store in &stores {
+                // For some tests, we stop the node but pd still has this information,
+                // and we must skip this.
+                if !node_ids.contains(&store.get_node_id()) {
+                    continue;
+                }
+
+                // To get region leader, we don't care real peer id, so use 0 instead.
+                let peer = new_peer(store.get_node_id(), store.get_store_id(), 0);
                 let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
                 let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
                 let region_leader = resp.get_status_response().get_region_leader();
@@ -131,7 +150,15 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.get(&region_id).cloned()
     }
 
-    pub fn bootstrap_single_region(&self) -> Result<()> {
+    // Multiple nodes with fixed node id, like node 1, 2, .. 5,
+    // First region 1 is in all stores with peer 1, 2, .. 5.
+    // Peer 1 is in node 1, store 1, etc.
+    pub fn bootstrap_region(&mut self) -> Result<()> {
+        for (id, engine) in self.dbs.iter().enumerate() {
+            let id = id as u64 + 1;
+            self.engines.insert(id, engine.clone());
+        }
+
         let mut region = metapb::Region::new();
         region.set_region_id(1);
         region.set_start_key(keys::MIN_KEY.to_vec());
@@ -146,17 +173,45 @@ impl<T: Simulator> Cluster<T> {
         for engine in self.engines.values() {
             try!(write_region(&engine, &region));
         }
+
+        self.bootstrap_cluster(region);
+
         Ok(())
     }
 
-    // 5 store, and store 1 bootstraps first region.
-    pub fn bootstrap_conf_change(&self) {
+    // Multiple nodes with fixed node id, like node 1, 2, .. 5.
+    // First region 1 is only in node 1, store 1 with peer 1.
+    pub fn bootstrap_conf_change(&mut self) {
+        for (id, engine) in self.dbs.iter().enumerate() {
+            let id = id as u64 + 1;
+            self.engines.insert(id, engine.clone());
+        }
+
         for (&id, engine) in &self.engines {
             bootstrap_store(engine.clone(), self.id, id, id).unwrap();
         }
 
         let node_id = 1;
-        bootstrap_region(self.engines.get(&node_id).unwrap().clone(), 1, 1, 1, 1).unwrap();
+        let region = bootstrap_region(self.engines.get(&node_id).unwrap().clone(), 1, 1, 1, 1)
+                         .unwrap();
+        self.bootstrap_cluster(region);
+    }
+
+    // This is only for fixed id test.
+    fn bootstrap_cluster(&mut self, region: metapb::Region) {
+        self.pd_client
+            .write()
+            .unwrap()
+            .bootstrap_cluster(self.id,
+                               new_node(1, "".to_owned()),
+                               vec![new_store(1, 1)],
+                               region)
+            .unwrap();
+
+        for &id in self.engines.keys() {
+            self.pd_client.write().unwrap().put_node(self.id, new_node(id, "".to_owned())).unwrap();
+            self.pd_client.write().unwrap().put_store(self.id, new_store(id, id)).unwrap();
+        }
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {
@@ -171,7 +226,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn shutdown(&mut self) {
-        let keys: Vec<u64> = self.sim.get_node_ids();
+        let keys: HashSet<u64> = self.sim.get_node_ids();
         for id in keys {
             self.stop_node(id);
         }
@@ -213,9 +268,22 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn get_region(&self, key: &[u8]) -> metapb::Region {
+        self.pd_client
+            .read()
+            .unwrap()
+            .get_region(self.id, key)
+            .unwrap()
+    }
+
+    pub fn get_region_id(&self, key: &[u8]) -> u64 {
+        self.get_region(key).get_region_id()
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        let get = new_request(1, vec![new_get_cmd(&keys::data_key(key))]);
-        let mut resp = self.request(1, get, Duration::from_secs(3));
+        let region_id = self.get_region_id(key);
+        let get = new_request(region_id, vec![new_get_cmd(&keys::data_key(key))]);
+        let mut resp = self.request(region_id, get, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -230,8 +298,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
-        let put = new_request(1, vec![new_put_cmd(&keys::data_key(key), value)]);
-        let resp = self.request(1, put, Duration::from_secs(3));
+        let region_id = self.get_region_id(key);
+        let put = new_request(region_id, vec![new_put_cmd(&keys::data_key(key), value)]);
+        let resp = self.request(region_id, put, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -240,25 +309,27 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-        let seek = new_request(1, vec![new_seek_cmd(&keys::data_key(key))]);
-        let resp = self.request(1, seek, Duration::from_secs(3));
+        let region_id = self.get_region_id(key);
+        let seek = new_request(region_id, vec![new_seek_cmd(&keys::data_key(key))]);
+        let resp = self.request(region_id, seek, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
         assert_eq!(resp.get_responses().len(), 1);
         let resp = &resp.get_responses()[0];
         assert_eq!(resp.get_cmd_type(), CommandType::Seek);
-        if !resp.has_seek() {
-            None
-        } else {
+        if resp.has_seek() {
             Some((resp.get_seek().get_key().to_vec(),
                   resp.get_seek().get_value().to_vec()))
+        } else {
+            None
         }
     }
 
     pub fn delete(&mut self, key: &[u8]) {
-        let delete = new_request(1, vec![new_delete_cmd(&keys::data_key(key))]);
-        let resp = self.request(1, delete, Duration::from_secs(3));
+        let region_id = self.get_region_id(key);
+        let delete = new_request(region_id, vec![new_delete_cmd(&keys::data_key(key))]);
+        let resp = self.request(region_id, delete, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -275,6 +346,32 @@ impl<T: Simulator> Cluster<T> {
                        .unwrap();
         assert_eq!(resp.get_admin_response().get_cmd_type(),
                    AdminCommandType::ChangePeer);
+
+        let region = resp.get_admin_response().get_change_peer().get_region();
+        self.pd_client.write().unwrap().change_peer(self.id, region.clone()).unwrap();
+    }
+
+    pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
+        let new_region_id = self.pd_client.write().unwrap().alloc_region_id().unwrap();
+        let region = self.pd_client.read().unwrap().get_region_by_id(self.id, region_id).unwrap();
+        let peer_count = region.get_peers().len();
+        let mut peer_ids: Vec<u64> = vec![];
+        for _ in 0..peer_count {
+            let peer_id = self.pd_client.write().unwrap().alloc_peer_id().unwrap();
+            peer_ids.push(peer_id);
+        }
+
+        let split = new_admin_request(region_id,
+                                      new_split_region_cmd(split_key, new_region_id, peer_ids));
+        let resp = self.call_command_on_leader(region_id, split, Duration::from_secs(3)).unwrap();
+
+        assert_eq!(resp.get_admin_response().get_cmd_type(),
+                   AdminCommandType::Split);
+
+        let left = resp.get_admin_response().get_split().get_left();
+        let right = resp.get_admin_response().get_split().get_right();
+
+        self.pd_client.write().unwrap().split_region(self.id, left.clone(), right.clone()).unwrap();
     }
 }
 

@@ -4,5 +4,7 @@ mod bench_store;
 mod util;
 #[path="../../tests/raftserver/cluster.rs"]
 mod cluster;
-#[path="../../tests/raftserver/store.rs"]
-mod store;
+#[path="../../tests/raftserver/node.rs"]
+mod node;
+#[path="../../tests/raftserver/pd.rs"]
+mod pd;

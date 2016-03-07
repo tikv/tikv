@@ -40,15 +40,16 @@ pub struct Config {
     /// peer is private and only used for testing right now.
     pub peers: Vec<u64>,
 
-    /// ElectionTick is the election timeout. If a follower does not
-    /// receive any message from the leader of current term during
-    /// ElectionTick, it will become candidate and start an election.
-    /// ElectionTick must be greater than HeartbeatTick. We suggest
-    /// to use ElectionTick = 10 * HeartbeatTick to avoid unnecessary
-    /// leader switching.
+    /// ElectionTick is the number of node.tick invocations that must pass between
+    /// elections. That is, if a follower does not receive any message from the
+    /// leader of current term before ElectionTick has elapsed, it will become
+    /// candidate and start an election. election_tick must be greater than
+    /// HeartbeatTick. We suggest election_tick = 10 * HeartbeatTick to avoid
+    /// unnecessary leader switching
     pub election_tick: usize,
-    /// HeartbeatTick is the heartbeat usizeerval. A leader sends heartbeat
-    /// message to mausizeain the leadership every heartbeat usizeerval.
+    /// HeartbeatTick is the number of node.tick invocations that must pass between
+    /// heartbeats. That is, a leader sends heartbeat messages to maintain its
+    /// leadership every heartbeat ticks.
     pub heartbeat_tick: usize,
 
     /// Applied is the last applied index. It should only be set when restarting
@@ -596,13 +597,13 @@ impl<T: Storage> Raft<T> {
 
     pub fn step(&mut self, m: Message) -> Result<()> {
         if m.get_msg_type() == MessageType::MsgHup {
-            if self.state != StateRole::Leader {
+            if self.state == StateRole::Leader {
+                debug!("{:x} ignoring MsgHup because already leader", self.id);
+            } else {
                 info!("{:x} is starting a new election at term {}",
                       self.id,
                       self.term);
                 self.campaign();
-            } else {
-                debug!("{:x} ignoring MsgHup because already leader", self.id);
             }
             return Ok(());
         }
@@ -692,16 +693,16 @@ impl<T: Storage> Raft<T> {
 
     fn handle_snapshot_status(&mut self, m: &Message) {
         let pr = self.prs.get_mut(&m.get_from()).unwrap();
-        if !m.get_reject() {
+        if m.get_reject() {
+            pr.snapshot_failure();
             pr.become_probe();
-            debug!("{:x} snapshot succeeded, resumed sending replication messages to {:x} [{:?}]",
+            debug!("{:x} snapshot failed, resumed sending replication messages to {:x} [{:?}]",
                    self.id,
                    m.get_from(),
                    pr);
         } else {
-            pr.snapshot_failure();
             pr.become_probe();
-            debug!("{:x} snapshot failed, resumed sending replication messages to {:x} [{:?}]",
+            debug!("{:x} snapshot succeeded, resumed sending replication messages to {:x} [{:?}]",
                    self.id,
                    m.get_from(),
                    pr);

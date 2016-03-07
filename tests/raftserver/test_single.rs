@@ -2,14 +2,14 @@ use std::time::Duration;
 
 use super::cluster::{Cluster, Simulator};
 use tikv::raftserver::store::*;
-use super::store::new_store_cluster;
+use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
 use super::util::*;
 
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_single_region().expect("");
-    cluster.run_all_nodes();
+    cluster.bootstrap_region().expect("");
+    cluster.start();
 
     sleep_ms(400);
 
@@ -39,8 +39,8 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_single_region().expect("");
-    cluster.run_all_nodes();
+    cluster.bootstrap_region().expect("");
+    cluster.start();
 
     sleep_ms(400);
 
@@ -62,8 +62,8 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_single_region().expect("");
-    cluster.run_all_nodes();
+    cluster.bootstrap_region().expect("");
+    cluster.start();
 
     sleep_ms(400);
 
@@ -102,20 +102,20 @@ fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_store_put() {
-    let mut cluster = new_store_cluster(0, 1);
+fn test_node_put() {
+    let mut cluster = new_node_cluster(0, 1);
     test_put(&mut cluster);
 }
 
 #[test]
-fn test_store_delete() {
-    let mut cluster = new_store_cluster(0, 1);
+fn test_node_delete() {
+    let mut cluster = new_node_cluster(0, 1);
     test_delete(&mut cluster);
 }
 
 #[test]
-fn test_store_seek() {
-    let mut cluster = new_store_cluster(0, 1);
+fn test_node_seek() {
+    let mut cluster = new_node_cluster(0, 1);
     test_seek(&mut cluster);
 }
 
