@@ -202,6 +202,7 @@ impl<T, Trans> Node<T, Trans>
                 try!(store::clear_region(&engine, region_id));
                 Ok(())
             }
+            // TODO: should we clean region for other errors too?
             Err(e) => Err(other(format!("bootstrap cluster {} err: {:?}", self.cluster_id, e))),
             Ok(_) => {
                 info!("bootstrap cluster {} ok", self.cluster_id);
