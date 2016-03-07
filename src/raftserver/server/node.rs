@@ -49,7 +49,10 @@ impl<T, Trans> Node<T, Trans>
                                     .unwrap()
                                     .is_cluster_bootstrapped(self.cluster_id));
         let (node_id, mut store_ids) = try!(self.check_stores(&engines));
-        if node_id != INVALID_ID {
+        if node_id == INVALID_ID {
+            self.node_id = try!(self.pd_client.write().unwrap().alloc_node_id());
+            debug!("alloc node id {:?}", self.node_id);
+        } else {
             self.node_id = node_id;
             // We have saved data before, and the cluster must be bootstrapped.
             if !bootstrapped {
@@ -58,9 +61,6 @@ impl<T, Trans> Node<T, Trans>
                                          self.node_id,
                                          self.cluster_id)));
             }
-        } else {
-            self.node_id = try!(self.pd_client.write().unwrap().alloc_node_id());
-            debug!("alloc node id {:?}", self.node_id);
         }
 
         for (index, store_id) in store_ids.iter_mut().enumerate() {
@@ -202,6 +202,7 @@ impl<T, Trans> Node<T, Trans>
                 try!(store::clear_region(&engine, region_id));
                 Ok(())
             }
+            // TODO: should we clean region for other errors too?
             Err(e) => Err(other(format!("bootstrap cluster {} err: {:?}", self.cluster_id, e))),
             Ok(_) => {
                 info!("bootstrap cluster {} ok", self.cluster_id);
