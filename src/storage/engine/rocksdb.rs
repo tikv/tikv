@@ -36,7 +36,7 @@ impl Engine for EngineRocksdb {
 
     fn seek(&self, key: RefKey) -> Result<Option<KvPair>> {
         trace!("EngineRocksdb: seek {:?}", key);
-        let mode = IteratorMode::From(key, Direction::forward);
+        let mode = IteratorMode::From(key, Direction::Forward);
         let pair = self.db.iterator(mode).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
         Ok(pair)
     }
