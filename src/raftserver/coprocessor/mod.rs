@@ -37,13 +37,21 @@ impl<'a> ObserverContext<'a> {
 pub trait RegionObserver: Coprocessor {
     /// Hook to call before execute admin request.
     fn pre_admin(&mut self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> ();
-    
+
     /// Hook to call before execute read/write request.
     fn pre_query(&mut self, ctx: &mut ObserverContext, req: &mut RepeatedField<Request>) -> ();
-    
+
     /// Hook to call after admin request being executed.
-    fn post_admin(&mut self, ctx: &mut ObserverContext, req: &AdminRequest, resp: &mut AdminResponse) -> ();
-    
+    fn post_admin(&mut self,
+                  ctx: &mut ObserverContext,
+                  req: &AdminRequest,
+                  resp: &mut AdminResponse)
+                  -> ();
+
     /// Hook to call after read/write request being executed.
-    fn post_query(&mut self, ctx: &mut ObserverContext, req: &[Request], resp: &mut RepeatedField<Response>) -> ();
+    fn post_query(&mut self,
+                  ctx: &mut ObserverContext,
+                  req: &[Request],
+                  resp: &mut RepeatedField<Response>)
+                  -> ();
 }
