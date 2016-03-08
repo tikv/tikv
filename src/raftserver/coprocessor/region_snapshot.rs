@@ -1,7 +1,8 @@
 use rocksdb::rocksdb::{DB, Snapshot, DBIterator, IteratorMode, Range};
 use raftserver::store::engine::{Iterable, Peekable, DBValue};
 use raftserver::store::{keys, PeerStorage};
-use raftserver::{Result, other};
+use raftserver::store::util;
+use raftserver::Result;
 use proto::metapb;
 
 /// Snapshot of a region.
@@ -19,21 +20,6 @@ impl<'a> RegionSnapshot<'a> {
             snap: peer.raw_snapshot(),
             db: peer.get_engine(),
             region: peer.get_region(),
-        }
-    }
-
-    /// Check whether key is in region.
-    fn check_key(&self, key: &[u8]) -> Result<()> {
-        let end_key = self.region.get_end_key();
-        let start_key = self.region.get_start_key();
-        if key < end_key && key >= start_key {
-            Ok(())
-        } else {
-            Err(other(format!("{:?} is not in range [{:?}, {:?}) of region {}",
-                              key,
-                              start_key,
-                              end_key,
-                              self.region.get_region_id())))
         }
     }
 
@@ -121,15 +107,17 @@ impl<'a> RegionSnapshot<'a> {
             return self.region.get_end_key().to_vec();
         }
         match self.snap.iterator(IteratorMode::End).next() {
-            None => self.region.get_start_key().to_vec(),
-            Some((k, _)) => keys::origin_key(k.as_ref()).to_vec(),
+            Some((ref k, _)) if keys::validate_data_key(k.as_ref()).is_ok() => {
+                keys::origin_key(k.as_ref()).to_vec()
+            }
+            _ => self.region.get_start_key().to_vec(),
         }
     }
 }
 
 impl<'a> Peekable for RegionSnapshot<'a> {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
-        try!(self.check_key(key));
+        try!(util::check_key_in_region(key, self.region));
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
@@ -142,6 +130,7 @@ mod tests {
     use raftserver::store::engine::*;
     use raftserver::store::keys::*;
     use raftserver::store::PeerStorage;
+    use raftserver::store::bootstrap;
 
     use super::*;
     use raftserver::Result;
@@ -241,5 +230,58 @@ mod tests {
             .unwrap();
 
         assert_eq!(data.len(), 1);
+    }
+
+    #[test]
+    fn test_get_key() {
+        let path = TempDir::new("test-raftserver").unwrap();
+        let engine = new_temp_engine(&path);
+
+        let mut r = Region::new();
+        r.set_region_id(10);
+        r.set_start_key(b"a2".to_vec());
+
+        let store = new_peer_storage(engine.clone(), &r);
+        let snap = RegionSnapshot::new(&store);
+        assert_eq!(&snap.get_end_key(), b"a2");
+        assert_eq!(&snap.get_start_key(), b"a2");
+
+        bootstrap::bootstrap_store(engine.clone(), 1, 1, 1).expect("");
+        assert_eq!(&snap.get_end_key(), b"a2");
+        assert_eq!(&snap.get_start_key(), b"a2");
+
+        r.set_end_key(b"a4".to_vec());
+        let store = new_peer_storage(engine.clone(), &r);
+        let snap = RegionSnapshot::new(&store);
+        assert_eq!(&snap.get_end_key(), b"a4");
+        assert_eq!(&snap.get_start_key(), b"a2");
+    }
+
+    #[test]
+    fn test_next() {
+        let path = TempDir::new("test-raftserver").unwrap();
+        let engine = new_temp_engine(&path);
+        let mut r = Region::new();
+        r.set_region_id(10);
+        r.set_start_key(b"a1".to_vec());
+        r.set_end_key(b"a5".to_vec());
+        let store = new_peer_storage(engine.clone(), &r);
+
+        let base_data = vec![
+            (b"a1".to_vec(), b"v1".to_vec()),
+            (b"a3".to_vec(), b"v3".to_vec()),
+            (b"a5".to_vec(), b"v5".to_vec()),
+        ];
+
+        for &(ref k, ref v) in &base_data {
+            engine.put(&data_key(k), v).expect("");
+        }
+
+        let snap = RegionSnapshot::new(&store);
+        assert_eq!(snap.next(b"a0").unwrap(),
+                   Some((b"a1".to_vec(), b"v1".to_vec())));
+        assert_eq!(snap.next(b"a1").unwrap(),
+                   Some((b"a3".to_vec(), b"v3".to_vec())));
+        assert_eq!(snap.next(b"a5").unwrap(), None);
     }
 }

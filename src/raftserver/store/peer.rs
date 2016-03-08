@@ -485,7 +485,7 @@ impl Peer {
 
         let (mut resp, exec_result) = self.apply_raft_command(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);
-            (cmd_resp::message_error(e), None)
+            (cmd_resp::new_error(e), None)
         });
 
         if let Some(mut pending_cmd) = pending_cmd {
@@ -530,7 +530,7 @@ impl Peer {
 
             self.execute_raft_command(&ctx).unwrap_or_else(|e| {
                 error!("execute raft command err: {:?}", e);
-                (cmd_resp::message_error(e), None)
+                (cmd_resp::new_error(e), None)
             })
         };
 
@@ -693,14 +693,7 @@ impl Peer {
 
         let split_key = request.get_split_key();
         let mut region = self.get_region();
-        if split_key < region.get_start_key() || split_key >= region.get_end_key() {
-            // TODO: if we use column family later, the maximum region end key is empty,
-            // so we must use another way to check.
-            return Err(other(format!("split key {:?} not in region range [{:?}, {:?})",
-                                     split_key,
-                                     region.get_start_key(),
-                                     region.get_end_key())));
-        }
+        try!(util::check_key_in_region(split_key, &region));
 
         // TODO: check new region id validation.
         let new_region_id = request.get_new_region_id();
@@ -793,11 +786,21 @@ impl Peer {
         Ok(resp)
     }
 
+    fn check_data_key(&self, key: &[u8]) -> Result<()> {
+        // TODO: if we use column family later, we don't need to check data prefix.
+        try!(keys::validate_data_key(key));
+
+        // region key range has no data prefix, so we must use origin key to check.
+        try!(util::check_key_in_region(keys::origin_key(key), self.storage.rl().get_region()));
+
+        Ok(())
+    }
+
     fn execute_get(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
         // TODO: the get_get looks wried, maybe we should think a better name later.
         let request = request.get_get();
         let key = request.get_key();
-        try!(keys::validate_data_key(key));
+        try!(self.check_data_key(key));
 
         let mut resp = Response::new();
         let res: Option<Vec<u8>> = try!(ctx.snap.get_value(key).map(|r| r.map(|v| v.to_vec())));
@@ -811,7 +814,7 @@ impl Peer {
     fn execute_seek(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
         let request = request.get_seek();
         let key = request.get_key();
-        try!(keys::validate_data_key(key));
+        try!(self.check_data_key(key));
 
         let mut resp = Response::new();
         let res: Option<(Vec<u8>, Vec<u8>)> = try!(ctx.snap.seek(key));
@@ -826,7 +829,7 @@ impl Peer {
     fn execute_put(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
         let request = request.get_put();
         let key = request.get_key();
-        try!(keys::validate_data_key(key));
+        try!(self.check_data_key(key));
 
         let resp = Response::new();
         try!(ctx.wb.put(key, request.get_value()));
@@ -838,7 +841,7 @@ impl Peer {
     fn execute_delete(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
         let request = request.get_delete();
         let key = request.get_key();
-        try!(keys::validate_data_key(key));
+        try!(self.check_data_key(key));
 
         let resp = Response::new();
         try!(ctx.wb.delete(key));
