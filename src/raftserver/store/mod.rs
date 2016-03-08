@@ -9,7 +9,7 @@ pub mod cmd_resp;
 mod store;
 mod peer;
 mod peer_storage;
-mod util;
+pub mod util;
 
 pub use self::msg::{Msg, SendCh, Callback, call_command};
 pub use self::store::{Store, create_event_loop};
