@@ -53,15 +53,22 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
 
     pub fn get(&self, key: RefKey) -> Result<Option<Value>> {
         let (_, meta) = try!(self.load_meta(key));
+        self.get_impl(key, &meta, self.start_ts.to_owned())
+    }
+
+    fn get_impl(&self, key: RefKey, meta: &Meta, ts: u64) -> Result<Option<Value>> {
+        // Check for locks that signal concurrent writes.
         if let Some(lock) = meta.get_lock() {
-            if lock.get_start_ts() <= self.start_ts {
+            if lock.get_start_ts() <= ts {
+                // There is a pending lock. Client should wait or clean it.
                 return Err(Error::KeyIsLocked {
                     primary: lock.get_primary_key().to_vec(),
                     ts: lock.get_start_ts(),
                 });
             }
         }
-        match meta.iter_items().find(|x| x.get_commit_ts() <= self.start_ts) {
+        // Find the latest write below our start timestamp.
+        match meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
             Some(x) => {
                 let data_key = codec::encode_key(&key, x.get_start_ts());
                 Ok(try!(self.engine.get(&data_key)))
@@ -73,15 +80,18 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
     pub fn prewrite(&mut self, mutation: Mutation, primary: RefKey) -> Result<()> {
         let key = mutation.key();
         let (meta_key, mut meta) = try!(self.load_meta(key));
+        // Abort on writes after our start timestamp ...
+        if let Some(latest) = meta.iter_items().nth(0) {
+            if latest.get_commit_ts() >= self.start_ts {
+                return Err(Error::WriteConflict);
+            }
+        }
+        // ... or locks at any timestamp.
         if let Some(lock) = meta.get_lock() {
             return Err(Error::KeyIsLocked {
                 primary: lock.get_primary_key().to_vec(),
                 ts: lock.get_start_ts(),
             });
-        }
-        match meta.iter_items().nth(0) {
-            Some(item) if item.get_commit_ts() >= self.start_ts => return Err(Error::WriteConflict),
-            _ => {}
         }
 
         let mut lock = MetaLock::new();
@@ -101,9 +111,20 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
 
     pub fn commit(&mut self, key: RefKey, commit_ts: u64) -> Result<()> {
         let (meta_key, mut meta) = try!(self.load_meta(key));
+        self.commit_impl(commit_ts, meta_key, &mut meta)
+    }
+
+    fn commit_impl(&mut self, commit_ts: u64, meta_key: Key, meta: &mut Meta) -> Result<()> {
         let lock_type = match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => lock.get_field_type(),
-            _ => return Err(Error::TxnLockNotFound),
+            _ => {
+                return match meta.get_item_by_start_ts(self.start_ts) {
+                    // Committed by concurrent transaction.
+                    Some(_) => Ok(()),
+                    // Rollbacked by concurrent transaction.
+                    None => Err(Error::TxnLockNotFound),
+                };
+            }
         };
         if lock_type == MetaLockType::ReadWrite {
             let mut item = MetaItem::new();
@@ -117,27 +138,46 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    pub fn commit_then_get(&mut self,
+                           key: RefKey,
+                           commit_ts: u64,
+                           get_ts: u64)
+                           -> Result<Option<Value>> {
+        let (meta_key, mut meta) = try!(self.load_meta(key));
+        try!(self.commit_impl(commit_ts, meta_key, &mut meta));
+        self.get_impl(key, &meta, get_ts)
+    }
+
     pub fn rollback(&mut self, key: RefKey) -> Result<()> {
         let (meta_key, mut meta) = try!(self.load_meta(key));
-        let same_lock = match meta.get_lock() {
+        self.rollback_impl(key, meta_key, &mut meta)
+    }
+
+    fn rollback_impl(&mut self, key: RefKey, meta_key: Key, meta: &mut Meta) -> Result<()> {
+        match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => {
                 let value_key = codec::encode_key(key, lock.get_start_ts());
                 self.writes.push(Modify::Delete(value_key));
-                true
             }
-            _ => false,
-        };
-        if same_lock {
-            meta.clear_lock();
-            let modify = Modify::Put((meta_key, meta.to_bytes()));
-            self.writes.push(modify);
-        } else if meta.iter_items().any(|x| x.get_start_ts() == self.start_ts) {
-            return Err(Error::AlreadyCommitted);
-        } else {
-            return Err(Error::AlreadyRollbacked);
+            _ => {
+                return match meta.get_item_by_start_ts(self.start_ts) {
+                    // Already committed by concurrent transaction.
+                    Some(_) => Err(Error::AlreadyCommitted),
+                    // Rollbacked by concurrent transaction.
+                    None => Ok(()),
+                };
+            }
         }
+        meta.clear_lock();
+        let modify = Modify::Put((meta_key, meta.to_bytes()));
+        self.writes.push(modify);
         Ok(())
+    }
+
+    pub fn rollback_then_get(&mut self, key: RefKey) -> Result<Option<Value>> {
+        let (meta_key, mut meta) = try!(self.load_meta(key));
+        try!(self.rollback_impl(key, meta_key, &mut meta));
+        self.get_impl(key, &meta, self.start_ts)
     }
 }
 
@@ -199,6 +239,8 @@ mod tests {
         let engine = engine::new_engine(Dsn::Memory).unwrap();
         must_prewrite_put(engine.as_ref(), b"x", b"x10", b"x", 10);
         must_commit(engine.as_ref(), b"x", 10, 15);
+        // commit should be idempotent
+        must_commit(engine.as_ref(), b"x", 10, 15);
     }
 
     #[test]
@@ -216,22 +258,49 @@ mod tests {
     }
 
     #[test]
+    fn test_mvcc_txn_commit_then_get() {
+        let engine = engine::new_engine(Dsn::Memory).unwrap();
+
+        must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
+        must_commit_then_get(engine.as_ref(), b"x", 5, 10, 15, b"x5");
+        must_commit_then_get(engine.as_ref(), b"x", 5, 10, 15, b"x5");
+        must_commit_then_get_err(engine.as_ref(), b"x", 25, 30, 35);
+    }
+
+    #[test]
     fn test_mvcc_txn_rollback() {
         let engine = engine::new_engine(Dsn::Memory).unwrap();
 
-        // Not prewrite yet
-        must_rollback_err(engine.as_ref(), b"x", 1);
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
-        // start_ts not match
-        must_rollback_err(engine.as_ref(), b"x", 4);
-        must_rollback_err(engine.as_ref(), b"x", 6);
-        // rollback
         must_rollback(engine.as_ref(), b"x", 5);
-        // lock is released
+        // rollback should be idempotent
+        must_rollback(engine.as_ref(), b"x", 5);
+        // lock should be released after rollback
         must_prewrite_lock(engine.as_ref(), b"x", b"x", 10);
         must_rollback(engine.as_ref(), b"x", 10);
-        // data is dropped
+        // data should be dropped after rollback
         must_get_none(engine.as_ref(), b"x", 20);
+    }
+
+    #[test]
+    fn test_mvcc_txn_rollback_err() {
+        let engine = engine::new_engine(Dsn::Memory).unwrap();
+
+        must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
+        must_commit(engine.as_ref(), b"x", 5, 10);
+        must_rollback_err(engine.as_ref(), b"x", 5);
+    }
+
+    #[test]
+    fn test_mvcc_txn_rollback_then_get() {
+        let engine = engine::new_engine(Dsn::Memory).unwrap();
+
+        must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
+        must_commit(engine.as_ref(), b"x", 5, 10);
+        must_rollback_then_get_err(engine.as_ref(), b"x", 5);
+        must_prewrite_put(engine.as_ref(), b"x", b"x15", b"x", 15);
+        must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
+        must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
     }
 
     fn must_get<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64, expect: &[u8]) {
@@ -287,6 +356,27 @@ mod tests {
         assert!(txn.commit(key, commit_ts).is_err());
     }
 
+    fn must_commit_then_get<T: Engine + ?Sized>(engine: &T,
+                                                key: &[u8],
+                                                lock_ts: u64,
+                                                commit_ts: u64,
+                                                get_ts: u64,
+                                                expect: &[u8]) {
+        let mut txn = MvccTxn::new(engine, lock_ts);
+        assert_eq!(txn.commit_then_get(key, commit_ts, get_ts).unwrap().unwrap(),
+                   expect);
+        txn.submit().unwrap();
+    }
+
+    fn must_commit_then_get_err<T: Engine + ?Sized>(engine: &T,
+                                                    key: &[u8],
+                                                    lock_ts: u64,
+                                                    commit_ts: u64,
+                                                    get_ts: u64) {
+        let mut txn = MvccTxn::new(engine, lock_ts);
+        assert!(txn.commit_then_get(key, commit_ts, get_ts).is_err());
+    }
+
     fn must_rollback<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
         let mut txn = MvccTxn::new(engine, start_ts);
         txn.rollback(key).unwrap();
@@ -296,5 +386,19 @@ mod tests {
     fn must_rollback_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
         let mut txn = MvccTxn::new(engine, start_ts);
         assert!(txn.rollback(key).is_err());
+    }
+
+    fn must_rollback_then_get<T: Engine + ?Sized>(engine: &T,
+                                                  key: &[u8],
+                                                  lock_ts: u64,
+                                                  expect: &[u8]) {
+        let mut txn = MvccTxn::new(engine, lock_ts);
+        assert_eq!(txn.rollback_then_get(key).unwrap().unwrap(), expect);
+        txn.submit().unwrap();
+    }
+
+    fn must_rollback_then_get_err<T: Engine + ?Sized>(engine: &T, key: &[u8], lock_ts: u64) {
+        let mut txn = MvccTxn::new(engine, lock_ts);
+        assert!(txn.rollback_then_get(key).is_err());
     }
 }
