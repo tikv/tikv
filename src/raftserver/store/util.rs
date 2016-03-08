@@ -1,9 +1,10 @@
 use std::option::Option;
 
-use proto::metapb;
-
-use proto::raft_cmdpb::RaftCommandRequest;
 use uuid::Uuid;
+
+use proto::metapb;
+use proto::raft_cmdpb::RaftCommandRequest;
+use raftserver::{Result, Error};
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     for peer in region.get_peers() {
@@ -36,6 +37,18 @@ pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
 
 pub fn get_uuid_from_req(cmd: &RaftCommandRequest) -> Option<Uuid> {
     Uuid::from_bytes(cmd.get_header().get_uuid())
+}
+
+pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
+    let end_key = region.get_end_key();
+    let start_key = region.get_start_key();
+    // TODO: if we use column family later, the maximum end key is empty,
+    // we should use another way to check it.
+    if key >= start_key && key < end_key {
+        Ok(())
+    } else {
+        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
 }
 
  #[cfg(test)]
