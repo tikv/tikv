@@ -44,7 +44,7 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     let start_key = region.get_start_key();
     // TODO: if we use column family later, the maximum end key is empty,
     // we should use another way to check it.
-    if key < end_key && key >= start_key {
+    if key >= start_key && key < end_key {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
