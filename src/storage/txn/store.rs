@@ -134,25 +134,35 @@ mod tests {
                    start_key: &[u8],
                    limit: usize,
                    ts: u64,
-                   expect: Vec<Option<(&'static [u8], &'static [u8])>>);
-        fn prewrite_ok(&self, mutations: Vec<Mutation>, start_ts: u64);
-        fn prewrite_err(&self, mutations: Vec<Mutation>, start_ts: u64);
+                   expect: Vec<Option<(&[u8], &[u8])>>);
+        fn prewrite_ok(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64);
+        fn prewrite_err(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64);
         fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64);
         fn commit_err(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64);
         fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: u64);
         fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: u64);
+        fn commit_then_get_ok(&self,
+                              key: &[u8],
+                              lock_ts: u64,
+                              commit_ts: u64,
+                              get_ts: u64,
+                              expect: &[u8]);
+        fn rollback_then_get_ok(&self, key: &[u8], lock_ts: u64, expect: &[u8]);
     }
 
     impl TxnStoreAssert for TxnStore {
         fn get_none(&self, key: &[u8], ts: u64) {
             assert_eq!(self.get(key, ts).unwrap(), None);
         }
+
         fn get_err(&self, key: &[u8], ts: u64) {
             assert!(self.get(key, ts).is_err());
         }
+
         fn get_ok(&self, key: &[u8], ts: u64, expect: &[u8]) {
             assert_eq!(self.get(key, ts).unwrap().unwrap(), expect);
         }
+
         fn put_ok(&self, key: &[u8], value: &[u8], start_ts: u64, commit_ts: u64) {
             self.prewrite(vec![Mutation::Put((key.to_vec(), value.to_vec()))],
                           key.to_vec(),
@@ -160,15 +170,17 @@ mod tests {
                 .unwrap();
             self.commit(vec![key.to_vec()], start_ts, commit_ts).unwrap();
         }
+
         fn delete_ok(&self, key: &[u8], start_ts: u64, commit_ts: u64) {
             self.prewrite(vec![Mutation::Delete(key.to_vec())], key.to_vec(), start_ts).unwrap();
             self.commit(vec![key.to_vec()], start_ts, commit_ts).unwrap();
         }
+
         fn scan_ok(&self,
                    start_key: &[u8],
                    limit: usize,
                    ts: u64,
-                   expect: Vec<Option<(&'static [u8], &'static [u8])>>) {
+                   expect: Vec<Option<(&[u8], &[u8])>>) {
 
             let result = self.scan(start_key, limit, ts).unwrap();
             let result: Vec<Option<KvPair>> = result.into_iter()
@@ -181,27 +193,50 @@ mod tests {
                                                     .collect();
             assert_eq!(result, expect);
         }
-        fn prewrite_ok(&self, mutations: Vec<Mutation>, start_ts: u64) {
-            self.prewrite(mutations, vec![], start_ts).unwrap();
+
+        fn prewrite_ok(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
+            self.prewrite(mutations, primary.to_vec(), start_ts).unwrap();
         }
-        fn prewrite_err(&self, mutations: Vec<Mutation>, start_ts: u64) {
-            assert!(self.prewrite(mutations, vec![], start_ts).is_err());
+
+        fn prewrite_err(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
+            assert!(self.prewrite(mutations, primary.to_vec(), start_ts).is_err());
         }
+
         fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
             let keys: Vec<Key> = keys.iter().map(|x| x.to_vec()).collect();
             self.commit(keys, start_ts, commit_ts).unwrap();
         }
+
         fn commit_err(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
             let keys: Vec<Key> = keys.iter().map(|x| x.to_vec()).collect();
             assert!(self.commit(keys, start_ts, commit_ts).is_err());
         }
+
         fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: u64) {
             let keys: Vec<Key> = keys.iter().map(|x| x.to_vec()).collect();
             self.rollback(keys, start_ts).unwrap();
         }
+
         fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: u64) {
             let keys: Vec<Key> = keys.iter().map(|x| x.to_vec()).collect();
             assert!(self.rollback(keys, start_ts).is_err());
+        }
+
+        fn commit_then_get_ok(&self,
+                              key: &[u8],
+                              lock_ts: u64,
+                              commit_ts: u64,
+                              get_ts: u64,
+                              expect: &[u8]) {
+            assert_eq!(self.commit_then_get(key.to_vec(), lock_ts, commit_ts, get_ts)
+                           .unwrap()
+                           .unwrap(),
+                       expect);
+        }
+
+        fn rollback_then_get_ok(&self, key: &[u8], lock_ts: u64, expect: &[u8]) {
+            assert_eq!(self.rollback_then_get(key.to_vec(), lock_ts).unwrap().unwrap(),
+                       expect);
         }
     }
 
@@ -232,6 +267,42 @@ mod tests {
         store.get_ok(b"x", 19, b"x5-10");
         store.get_none(b"x", 20);
         store.get_none(b"x", 21);
+    }
+
+    #[test]
+    fn test_txn_store_cleanup_rollback() {
+        let engine = engine::new_engine(Dsn::Memory).unwrap();
+        let store = TxnStore::new(engine);
+
+        store.put_ok(b"secondary", b"s-0", 0, 1);
+        store.prewrite_ok(vec![Mutation::Put((b"primary".to_vec(), b"p-5".to_vec())),
+                               Mutation::Put((b"secondary".to_vec(), b"s-5".to_vec()))],
+                          b"primary",
+                          5);
+        store.get_err(b"secondary", 10);
+        store.rollback_ok(vec![b"primary"], 5);
+        store.rollback_then_get_ok(b"secondary", 5, b"s-0");
+        store.rollback_then_get_ok(b"secondary", 5, b"s-0");
+    }
+
+    #[test]
+    fn test_txn_store_cleanup_commit() {
+        let engine = engine::new_engine(Dsn::Memory).unwrap();
+        let store = TxnStore::new(engine);
+
+        store.put_ok(b"secondary", b"s-0", 0, 1);
+        store.prewrite_ok(vec![Mutation::Put((b"primary".to_vec(), b"p-5".to_vec())),
+                               Mutation::Put((b"secondary".to_vec(), b"s-5".to_vec()))],
+                          b"primary",
+                          5);
+        store.get_err(b"secondary", 8);
+        store.get_err(b"secondary", 12);
+        store.commit_ok(vec![b"primary"], 5, 10);
+        store.rollback_err(vec![b"primary"], 5);
+        store.commit_then_get_ok(b"secondary", 5, 10, 8, b"s-0");
+        store.commit_then_get_ok(b"secondary", 5, 10, 12, b"s-5");
+        store.commit_then_get_ok(b"secondary", 5, 10, 8, b"s-0");
+        store.commit_then_get_ok(b"secondary", 5, 10, 12, b"s-5");
     }
 
     #[test]
