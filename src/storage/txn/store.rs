@@ -405,7 +405,9 @@ mod tests {
     }
 
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
     use std::thread;
+    use rand::random;
 
     struct Oracle {
         ts: Mutex<u64>,
@@ -426,22 +428,27 @@ mod tests {
     const INC_MAX_RETRY: usize = 100;
 
     fn inc(store: &TxnStore, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
-        for _ in 0..INC_MAX_RETRY {
+        for i in 0..INC_MAX_RETRY {
             let start_ts = oracle.get_ts();
             let number: i32 = match store.get(key, start_ts) {
                 Ok(Some(x)) => String::from_utf8(x).unwrap().parse().unwrap(),
                 Ok(None) => 0,
-                Err(_) => continue,
+                Err(_) => {
+                    backoff(i);
+                    continue;
+                }
             };
             let next = number + 1;
             if let Err(_) = store.prewrite(vec![Mutation::Put((key.to_vec(),
                                                                next.to_string().into_bytes()))],
                                            key.to_vec(),
                                            start_ts) {
+                backoff(i);
                 continue;
             }
             let commit_ts = oracle.get_ts();
             if let Err(_) = store.commit(vec![key.to_vec()], start_ts, commit_ts) {
+                backoff(i);
                 continue;
             }
             return Ok(number);
@@ -483,7 +490,7 @@ mod tests {
     }
 
     fn inc_multi(store: &TxnStore, oracle: &Oracle, n: usize) -> bool {
-        'retry: for _ in 0..INC_MAX_RETRY {
+        'retry: for i in 0..INC_MAX_RETRY {
             let start_ts = oracle.get_ts();
             let keys: Vec<Key> = (0..n).map(format_key).collect();
             let mut mutations = vec![];
@@ -491,21 +498,38 @@ mod tests {
                 let number = match store.get(&key, start_ts) {
                     Ok(Some(n)) => String::from_utf8(n).unwrap().parse().unwrap(),
                     Ok(None) => 0,
-                    Err(_) => continue 'retry,
+                    Err(_) => {
+                        backoff(i);
+                        continue 'retry;
+                    }
                 };
                 let next = number + 1;
                 mutations.push(Mutation::Put((key.clone(), next.to_string().into_bytes())));
             }
             if let Err(_) = store.prewrite(mutations, format_key(0), start_ts) {
+                backoff(i);
                 continue;
             }
             let commit_ts = oracle.get_ts();
             if let Err(_) = store.commit(keys, start_ts, commit_ts) {
+                backoff(i);
                 continue;
             }
             return true;
         }
         false
+    }
+
+    const BACK_OFF_CAP: u64 = 100;
+
+    // Implements exponential backoff with full jitter.
+    // See: http://www.awsarchitectureblog.com/2015/03/backoff.html.
+    fn backoff(attempts: usize) {
+        let upper_ms: u64 = match attempts {
+            0...6 => 2u64.pow(attempts as u32),
+            _ => BACK_OFF_CAP,
+        };
+        thread::sleep(Duration::from_millis(random::<u64>() % upper_ms))
     }
 
     #[test]
