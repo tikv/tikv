@@ -11,7 +11,7 @@ use uuid::Uuid;
 use proto::raft_serverpb::{RaftMessage, StoreIdent};
 use proto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
 use proto::raftpb::ConfChangeType;
-use raftserver::{Result, other};
+use raftserver::{Result, other, Error};
 use proto::metapb;
 use super::util;
 use super::{SendCh, Msg};
@@ -107,6 +107,8 @@ impl<T: Transport> Store<T> {
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
+        self.register_split_region_check_tick(event_loop);
+
         try!(event_loop.run(self));
         Ok(())
     }
@@ -299,7 +301,7 @@ impl<T: Transport> Store<T> {
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
             resp = match self.execute_status_command(msg) {
-                Err(e) => cmd_resp::message_error(format!("{:?}", e)),
+                Err(e) => cmd_resp::new_error(e),
                 Ok(resp) => resp,
             };
             bind_uuid(&mut resp, uuid);
@@ -309,7 +311,7 @@ impl<T: Transport> Store<T> {
         let region_id = msg.get_header().get_region_id();
         let mut peer = match self.peers.get_mut(&region_id) {
             None => {
-                resp = cmd_resp::region_not_found_error(region_id);
+                resp = cmd_resp::new_error(Error::RegionNotFound(region_id));
                 bind_uuid(&mut resp, uuid);
                 return cb.call_box((resp,));
             }
@@ -317,8 +319,9 @@ impl<T: Transport> Store<T> {
         };
 
         if !peer.is_leader() {
-            resp = cmd_resp::not_leader_error(region_id,
-                                              peer.get_peer_from_cache(peer.get_leader()));
+            resp =
+                cmd_resp::new_error(Error::NotLeader(region_id,
+                                                     peer.get_peer_from_cache(peer.get_leader())));
             bind_uuid(&mut resp, uuid);
             return cb.call_box((resp,));
         }
@@ -355,7 +358,7 @@ impl<T: Transport> Store<T> {
         };
 
         if let Err(e) = peer.propose_pending_cmd(&mut pending_cmd) {
-            resp = cmd_resp::message_error(format!("{:?}", e));
+            resp = cmd_resp::new_error(e);
             bind_uuid(&mut resp, uuid);
             return cb.call_box((resp,));
         };
@@ -431,8 +434,43 @@ impl<T: Transport> Store<T> {
             }
         }
 
-
         self.register_raft_gc_log_tick(event_loop);
+    }
+
+    fn register_split_region_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Msg::SplitRegionCheckTick,
+                                       self.cfg.split_region_check_tick_interval) {
+            error!("register split region check tick err: {:?}", e);
+        };
+    }
+
+    fn handle_split_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        // TODO: we should check this in another thread asynchronously and only
+        // care leader region which applied logs before.
+        for (&region_id, peer) in &mut self.peers {
+            if !peer.is_leader() {
+                continue;
+            }
+
+            match peer.storage.rl().approximate_size() {
+                Err(e) => {
+                    error!("get approximate size for region {} err {:?}", region_id, e);
+                }
+                Ok(region_size) => {
+                    if region_size > self.cfg.region_max_size {
+                        info!("region {} size is {} > {}, need to split",
+                              region_id,
+                              region_size,
+                              self.cfg.region_max_size);
+
+                        // TODO: notify this to pd.
+                    }
+                }
+            }
+        }
+
+        self.register_split_region_check_tick(event_loop);
     }
 }
 
@@ -495,6 +533,7 @@ impl<T: Transport> mio::Handler for Store<T> {
         match timeout {
             Msg::RaftBaseTick => self.handle_raft_base_tick(event_loop),
             Msg::RaftLogGcTick => self.handle_raft_gc_log_tick(event_loop),
+            Msg::SplitRegionCheckTick => self.handle_split_region_check_tick(event_loop),
             _ => panic!("invalid timeout msg type {:?}", timeout),
         }
     }
@@ -538,7 +577,7 @@ impl<T: Transport> Store<T> {
                              -> Result<cmd::StatusResponse> {
         let region_id = request.get_header().get_region_id();
         let peer = match self.peers.get_mut(&region_id) {
-            None => return Err(other(format!("region {} not found", region_id))),
+            None => return Err(Error::RegionNotFound(region_id)),
             Some(peer) => peer,
         };
 
