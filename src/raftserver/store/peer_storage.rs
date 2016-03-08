@@ -210,6 +210,21 @@ impl PeerStorage {
         self.engine.snapshot()
     }
 
+    // Return approximate size of the region.
+    pub fn approximate_size(&self) -> Result<u64> {
+        // TODO: use rocksdb approximate size function directly.
+        let mut total_size: u64 = 0;
+        let (start_key, end_key) = self.region_data_range();
+        try!(self.engine.scan(&start_key,
+                              &end_key,
+                              &mut |_, value| {
+                                  total_size += value.len() as u64;
+                                  Ok(true)
+                              }));
+
+        Ok(total_size)
+    }
+
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
         debug!("begin to generate a snapshot for region {}",
                self.get_region_id());
@@ -450,6 +465,18 @@ impl PeerStorage {
     // [region meta start, region meta end) -> saving region meta information except raft.
     // [region data start, region data end) -> saving region data.
     fn region_key_ranges(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let (data_start_key, data_end_key) = self.region_data_range();
+
+        let region_id = self.get_region_id();
+        vec![(keys::region_raft_prefix(region_id),
+              keys::region_raft_prefix(region_id + 1)),
+             (keys::region_meta_prefix(region_id),
+              keys::region_meta_prefix(region_id + 1)),
+             (data_start_key, data_end_key)]
+
+    }
+
+    fn region_data_range(&self) -> (Vec<u8>, Vec<u8>) {
         // The first range starts at MIN_KEY, but it contains unnecessary local data.
         // So we should skip this.
         let mut data_start_key = self.region.get_start_key();
@@ -457,13 +484,7 @@ impl PeerStorage {
             data_start_key = keys::LOCAL_MAX_KEY;
         }
 
-        let region_id = self.get_region_id();
-        vec![(keys::region_raft_prefix(region_id),
-              keys::region_raft_prefix(region_id + 1)),
-             (keys::region_meta_prefix(region_id),
-              keys::region_meta_prefix(region_id + 1)),
-             (data_start_key.to_vec(), self.region.get_end_key().to_vec())]
-
+        (data_start_key.to_vec(), self.region.get_end_key().to_vec())
     }
 
     pub fn scan_region<T, F>(&self, db: &T, f: &mut F) -> Result<()>
