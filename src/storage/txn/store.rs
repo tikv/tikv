@@ -84,6 +84,20 @@ impl TxnStore {
     }
 
     #[allow(dead_code)]
+    pub fn commit_then_get(&self,
+                           key: Key,
+                           lock_ts: u64,
+                           commit_ts: u64,
+                           get_ts: u64)
+                           -> Result<Option<Value>> {
+        let _guard = self.shard_mutex.lock(&[&key]);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), lock_ts);
+        let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
+        try!(txn.submit());
+        Ok(val)
+    }
+
+    #[allow(dead_code)]
     pub fn rollback(&self, keys: Vec<Key>, start_ts: u64) -> Result<()> {
         let _guard = self.shard_mutex.lock(&keys);
         let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
@@ -92,6 +106,15 @@ impl TxnStore {
         }
         try!(txn.submit());
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn rollback_then_get(&self, key: Key, lock_ts: u64) -> Result<Option<Value>> {
+        let _guard = self.shard_mutex.lock(&[&key]);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), lock_ts);
+        let val = try!(txn.rollback_then_get(&key));
+        try!(txn.submit());
+        Ok(val)
     }
 }
 
