@@ -4,7 +4,6 @@ use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util;
-use tikv::raftserver::store::keys;
 use tikv::pd::Client;
 
 fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -39,9 +38,8 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.put(b"a3", b"vv3");
     assert_eq!(cluster.get(b"a3").unwrap(), b"vv3".to_vec());
 
-    let get = util::new_request(left.get_region_id(),
-                                vec![util::new_get_cmd(&keys::data_key(b"a3"))]);
-    let resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));
+    let get = util::new_request(left.get_region_id(), vec![util::new_get_cmd(b"a3")]);
+    let mut resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().get_detail().has_key_not_in_region());
 }

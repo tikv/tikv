@@ -282,7 +282,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let region_id = self.get_region_id(key);
-        let get = new_request(region_id, vec![new_get_cmd(&keys::data_key(key))]);
+        let get = new_request(region_id, vec![new_get_cmd(key)]);
         let mut resp = self.request(region_id, get, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -299,7 +299,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
         let region_id = self.get_region_id(key);
-        let put = new_request(region_id, vec![new_put_cmd(&keys::data_key(key), value)]);
+        let put = new_request(region_id, vec![new_put_cmd(key, value)]);
         let resp = self.request(region_id, put, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -310,7 +310,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
         let region_id = self.get_region_id(key);
-        let seek = new_request(region_id, vec![new_seek_cmd(&keys::data_key(key))]);
+        let seek = new_request(region_id, vec![new_seek_cmd(key)]);
         let resp = self.request(region_id, seek, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -328,7 +328,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn delete(&mut self, key: &[u8]) {
         let region_id = self.get_region_id(key);
-        let delete = new_request(region_id, vec![new_delete_cmd(&keys::data_key(key))]);
+        let delete = new_request(region_id, vec![new_delete_cmd(key)]);
         let resp = self.request(region_id, delete, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
