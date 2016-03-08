@@ -49,13 +49,36 @@ pub enum Command {
     },
     Prewrite {
         mutations: Vec<Mutation>,
+        primary: Key,
         start_ts: u64,
         callback: Callback<()>,
     },
     Commit {
-        start_ts: u64,
+        keys: Vec<Key>,
         commit_ts: u64,
         callback: Callback<()>,
+    },
+    CommitThenGet {
+        key: Key,
+        lock_ts: u64,
+        commit_ts: u64,
+        get_ts: u64,
+        callback: Callback<Option<Value>>,
+    },
+    CleanUp {
+        key: Key,
+        start_ts: u64,
+        callback: Callback<()>,
+    },
+    Rollback {
+        keys: Vec<Key>,
+        start_ts: u64,
+        callback: Callback<()>,
+    },
+    RollbackThenGet {
+        key: Key,
+        lock_ts: u64,
+        callback: Callback<Option<Value>>,
     },
 }
 
@@ -78,8 +101,20 @@ impl fmt::Debug for Command {
                        mutations.len(),
                        start_ts)
             }
-            Command::Commit{start_ts, commit_ts, ..} => {
-                write!(f, "kv::command::commit {} -> {}", start_ts, commit_ts)
+            Command::Commit{ref keys, commit_ts, ..} => {
+                write!(f, "kv::command::commit {} -> {}", keys.len(), commit_ts)
+            }
+            Command::CommitThenGet{ref key, lock_ts, commit_ts, get_ts, ..} => {
+                write!(f, "kv::command::commit_then_get {:?} {} -> {} @ {}", key, lock_ts, commit_ts, get_ts)
+            }
+            Command::CleanUp{ref key, start_ts, ..} => {
+                write!(f, "kv::command::clean_up {:?} @ {}", key, start_ts)
+            }
+            Command::Rollback{ref keys, start_ts, ..} => {
+                write!(f, "kv::command::rollback keys({}) @ {}", keys.len(), start_ts)
+            }
+            Command::RollbackThenGet{ref key, lock_ts, ..} => {
+                write!(f, "kv::rollback_then_get {:?} @ {}", key, lock_ts)
             }
         }
     }
@@ -155,11 +190,13 @@ impl Storage {
 
     pub fn async_prewrite(&self,
                           mutations: Vec<Mutation>,
+                          primary: Key,
                           start_ts: u64,
                           callback: Callback<()>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
             mutations: mutations,
+            primary: primary,
             start_ts: start_ts,
             callback: callback,
         };
@@ -168,13 +205,55 @@ impl Storage {
     }
 
     pub fn async_commit(&self,
-                        start_ts: u64,
+                        keys: Vec<Key>,
                         commit_ts: u64,
                         callback: Callback<()>)
                         -> Result<()> {
         let cmd = Command::Commit {
-            start_ts: start_ts,
+            keys: keys,
             commit_ts: commit_ts,
+            callback: callback,
+        };
+        try!(self.tx.send(Message::Command(cmd)));
+        Ok(())
+    }
+
+    pub fn async_commit_then_get(&self, key: Key, lock_ts: u64, commit_ts: u64, get_ts: u64, callback: Callback<Option<Value>>) -> Result<()> {
+        let cmd = Command::CommitThenGet{
+            key: key,
+            lock_ts: lock_ts,
+            commit_ts: commit_ts,
+            get_ts: get_ts,
+            callback: callback,
+        };
+        try!(self.tx.send(Message::Command(cmd)));
+        Ok(())
+    }
+
+    pub fn async_clean_up(&self, key: Key, start_ts: u64, callback: Callback<()>) -> Result<()> {
+        let cmd = Command::CleanUp{
+            key: key,
+            start_ts: start_ts,
+            callback: callback,
+        };
+        try!(self.tx.send(Message::Command(cmd)));
+        Ok(())
+    }
+
+    pub fn async_rollback(&self, keys: Vec<Key>, start_ts: u64, callback: Callback<()>) -> Result<()> {
+        let cmd = Command::Rollback {
+            keys: keys,
+            start_ts: start_ts,
+            callback: callback,
+        };
+        try!(self.tx.send(Message::Command(cmd)));
+        Ok(())
+    }
+
+    pub fn async_rollback_then_get(&self, key: Key, lock_ts: u64, callback: Callback<Option<Value>>) -> Result<()> {
+        let cmd = Command::RollbackThenGet {
+            key: key,
+            lock_ts: lock_ts,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));

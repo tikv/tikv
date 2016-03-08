@@ -98,6 +98,15 @@ impl TxnStore {
     }
 
     #[allow(dead_code)]
+    pub fn clean_up(&self, key: Key, start_ts: u64) -> Result<()> {
+        let _guard = self.shard_mutex.lock(&[&key]);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        try!(txn.rollback(&key));
+        try!(txn.submit());
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     pub fn rollback(&self, keys: Vec<Key>, start_ts: u64) -> Result<()> {
         let _guard = self.shard_mutex.lock(&keys);
         let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
