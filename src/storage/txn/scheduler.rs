@@ -1,8 +1,5 @@
-use std::collections::BTreeMap;
-
 use storage::Engine;
-use storage::{Command, Key, Value, KvPair, Mutation};
-use super::{Result, Error};
+use storage::Command;
 use super::store::TxnStore;
 
 pub struct Scheduler {
@@ -11,58 +8,48 @@ pub struct Scheduler {
 
 impl Scheduler {
     pub fn new(engine: Box<Engine>) -> Scheduler {
-        Scheduler {
-            store: TxnStore::new(engine),
-        }
-    }
-
-    fn exec_get(&self, key: Key, start_ts: u64) -> Result<Option<Value>> {
-        Ok(try!(self.store.get(&key, start_ts)))
-    }
-
-    fn exec_scan(&self,
-                 start_key: Key,
-                 limit: usize,
-                 start_ts: u64)
-                 -> Result<Vec<Result<KvPair>>> {
-        Ok(try!(self.store.scan(&start_key, limit, start_ts)))
-    }
-
-    fn exec_prewrite(&mut self, mutations: Vec<Mutation>, start_ts: u64) -> Result<()> {
-        let primary = Self::primary_key(&mutations);
-        let locked_keys = try!(self.store.prewrite(mutations, primary, start_ts));
-        self.lock_keys.insert(start_ts, locked_keys);
-        Ok(())
-    }
-
-    fn exec_commit(&mut self, keys: Vec<Key>, commit_ts: u64) -> Result<()> {
-        try!(self.store.commit(keys, start_ts, commit_ts));
-        Ok(())
+        Scheduler { store: TxnStore::new(engine) }
     }
 
     pub fn handle_cmd(&mut self, cmd: Command) {
         debug!("scheduler::handle_cmd: {:?}", cmd);
         match cmd {
             Command::Get{key, start_ts, callback} => {
-                callback(
-                    self.store.get(&key, start_ts).map_err(::storage::Error::from)
-                );
+                callback(self.store.get(&key, start_ts).map_err(::storage::Error::from));
             }
             Command::Scan{start_key, limit, start_ts, callback} => {
-                callback(
-                    match self.store.scan(&start_key, limit, start_ts) {
+                callback(match self.store.scan(&start_key, limit, start_ts) {
                     Ok(mut results) => {
                         Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
                     }
                     Err(e) => Err(::storage::Error::from(e)),
                 });
             }
-            Command::Prewrite{mutations, start_ts, callback} => {
-                callback(self.exec_prewrite(mutations, start_ts)
+            Command::Prewrite{mutations, primary, start_ts, callback} => {
+                callback(self.store
+                             .prewrite(mutations, primary, start_ts)
                              .map_err(::storage::Error::from));
             }
-            Command::Commit{start_ts, commit_ts, callback} => {
-                callback(self.exec_commit(start_ts, commit_ts).map_err(::storage::Error::from));
+            Command::Commit{keys, lock_ts, commit_ts, callback} => {
+                callback(self.store
+                             .commit(keys, lock_ts, commit_ts)
+                             .map_err(::storage::Error::from));
+            }
+            Command::CommitThenGet{key, lock_ts, commit_ts, get_ts, callback} => {
+                callback(self.store
+                             .commit_then_get(key, lock_ts, commit_ts, get_ts)
+                             .map_err(::storage::Error::from));
+            }
+            Command::CleanUp{key, start_ts, callback} => {
+                callback(self.store.clean_up(key, start_ts).map_err(::storage::Error::from));
+            }
+            Command::Rollback{keys, start_ts, callback} => {
+                callback(self.store.rollback(keys, start_ts).map_err(::storage::Error::from));
+            }
+            Command::RollbackThenGet{key, lock_ts, callback} => {
+                callback(self.store
+                             .rollback_then_get(key, lock_ts)
+                             .map_err(::storage::Error::from));
             }
         }
     }

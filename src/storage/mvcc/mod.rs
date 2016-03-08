@@ -26,10 +26,13 @@ quick_error! {
             description("key is locked (backoff or cleanup)")
             display("key is locked (backoff or cleanup) {:?}@{}", primary, ts)
         }
+        AlreadyCommitted {commit_ts: u64} {
+            description("txn already committed")
+            display("txn already committed @{}", commit_ts)
+        }
         TxnLockNotFound {description("txn lock not found")}
         WriteConflict {description("write conflict")}
         KeyVersion {description("bad format key(version)")}
-        AlreadyCommitted {description("txn already committed")}
         AlreadyRollbacked {description("txn already rollbacked")}
     }
 }
