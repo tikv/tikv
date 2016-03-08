@@ -31,6 +31,14 @@ pub fn new_error(err: Error) -> RaftCommandResponse {
             detail.mut_not_leader().set_region_id(region_id);
             Some(detail)
         }
+        Error::KeyNotInRegion(key, region) => {
+            let mut detail = ErrorDetail::new();
+            detail.mut_key_not_in_region().set_key(key);
+            detail.mut_key_not_in_region().set_region_id(region.get_region_id());
+            detail.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
+            detail.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
+            Some(detail)
+        }
         _ => None,
     };
 

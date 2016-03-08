@@ -1,7 +1,8 @@
 use rocksdb::rocksdb::{Snapshot, DBIterator};
 use raftserver::store::engine::{Iterable, Peekable, DBValue};
 use raftserver::store::{keys, PeerStorage};
-use raftserver::{Result, other};
+use raftserver::store::util;
+use raftserver::Result;
 use proto::metapb;
 
 /// Snapshot of a region.
@@ -17,21 +18,6 @@ impl<'a> RegionSnapshot<'a> {
         RegionSnapshot {
             snap: peer.raw_snapshot(),
             region: peer.get_region(),
-        }
-    }
-
-    /// Check whether key is in region.
-    fn check_key(&self, key: &[u8]) -> Result<()> {
-        let end_key = self.region.get_end_key();
-        let start_key = self.region.get_start_key();
-        if key < end_key && key >= start_key {
-            Ok(())
-        } else {
-            Err(other(format!("{:?} is not in range [{:?}, {:?}) of region {}",
-                              key,
-                              start_key,
-                              end_key,
-                              self.region.get_region_id())))
         }
     }
 
@@ -83,7 +69,7 @@ impl<'a> RegionSnapshot<'a> {
 impl<'a> Peekable for RegionSnapshot<'a> {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
         let data_key = keys::data_key(key);
-        try!(self.check_key(&data_key));
+        try!(util::check_key_in_region(&data_key, self.region));
         self.snap.get_value(&data_key)
     }
 }
