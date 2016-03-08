@@ -162,7 +162,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
             _ => {
                 return match meta.get_item_by_start_ts(self.start_ts) {
                     // Already committed by concurrent transaction.
-                    Some(_) => Err(Error::AlreadyCommitted),
+                    Some(lock) => Err(Error::AlreadyCommitted{commit_ts: lock.get_commit_ts()}),
                     // Rollbacked by concurrent transaction.
                     None => Ok(()),
                 };

@@ -61,16 +61,15 @@ impl TxnStore {
         Ok(results)
     }
 
-    pub fn prewrite(&self, writes: Vec<Mutation>, primary: Key, start_ts: u64) -> Result<Vec<Key>> {
-        let locked_keys: Vec<Key> = writes.iter().map(|x| x.key().to_owned()).collect();
-
+    pub fn prewrite(&self, mutations: Vec<Mutation>, primary: Key, start_ts: u64) -> Result<()> {
+        let locked_keys: Vec<Key> = mutations.iter().map(|x| x.key().to_owned()).collect();
         let _guard = self.shard_mutex.lock(&locked_keys);
         let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
-        for w in writes {
+        for w in mutations {
             try!(txn.prewrite(w, &primary));
         }
         try!(txn.submit());
-        Ok(locked_keys)
+        Ok(())
     }
 
     pub fn commit(&self, keys: Vec<Key>, start_ts: u64, commit_ts: u64) -> Result<()> {

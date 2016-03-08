@@ -55,6 +55,7 @@ pub enum Command {
     },
     Commit {
         keys: Vec<Key>,
+        lock_ts: u64,
         commit_ts: u64,
         callback: Callback<()>,
     },
@@ -101,17 +102,25 @@ impl fmt::Debug for Command {
                        mutations.len(),
                        start_ts)
             }
-            Command::Commit{ref keys, commit_ts, ..} => {
-                write!(f, "kv::command::commit {} -> {}", keys.len(), commit_ts)
+            Command::Commit{ref keys, lock_ts, commit_ts, ..} => {
+                write!(f, "kv::command::commit {} {} -> {}", keys.len(), lock_ts, commit_ts)
             }
             Command::CommitThenGet{ref key, lock_ts, commit_ts, get_ts, ..} => {
-                write!(f, "kv::command::commit_then_get {:?} {} -> {} @ {}", key, lock_ts, commit_ts, get_ts)
+                write!(f,
+                       "kv::command::commit_then_get {:?} {} -> {} @ {}",
+                       key,
+                       lock_ts,
+                       commit_ts,
+                       get_ts)
             }
             Command::CleanUp{ref key, start_ts, ..} => {
                 write!(f, "kv::command::clean_up {:?} @ {}", key, start_ts)
             }
             Command::Rollback{ref keys, start_ts, ..} => {
-                write!(f, "kv::command::rollback keys({}) @ {}", keys.len(), start_ts)
+                write!(f,
+                       "kv::command::rollback keys({}) @ {}",
+                       keys.len(),
+                       start_ts)
             }
             Command::RollbackThenGet{ref key, lock_ts, ..} => {
                 write!(f, "kv::rollback_then_get {:?} @ {}", key, lock_ts)
@@ -206,11 +215,13 @@ impl Storage {
 
     pub fn async_commit(&self,
                         keys: Vec<Key>,
+                        lock_ts: u64,
                         commit_ts: u64,
                         callback: Callback<()>)
                         -> Result<()> {
         let cmd = Command::Commit {
             keys: keys,
+            lock_ts: lock_ts,
             commit_ts: commit_ts,
             callback: callback,
         };
@@ -218,8 +229,14 @@ impl Storage {
         Ok(())
     }
 
-    pub fn async_commit_then_get(&self, key: Key, lock_ts: u64, commit_ts: u64, get_ts: u64, callback: Callback<Option<Value>>) -> Result<()> {
-        let cmd = Command::CommitThenGet{
+    pub fn async_commit_then_get(&self,
+                                 key: Key,
+                                 lock_ts: u64,
+                                 commit_ts: u64,
+                                 get_ts: u64,
+                                 callback: Callback<Option<Value>>)
+                                 -> Result<()> {
+        let cmd = Command::CommitThenGet {
             key: key,
             lock_ts: lock_ts,
             commit_ts: commit_ts,
@@ -231,7 +248,7 @@ impl Storage {
     }
 
     pub fn async_clean_up(&self, key: Key, start_ts: u64, callback: Callback<()>) -> Result<()> {
-        let cmd = Command::CleanUp{
+        let cmd = Command::CleanUp {
             key: key,
             start_ts: start_ts,
             callback: callback,
@@ -240,7 +257,11 @@ impl Storage {
         Ok(())
     }
 
-    pub fn async_rollback(&self, keys: Vec<Key>, start_ts: u64, callback: Callback<()>) -> Result<()> {
+    pub fn async_rollback(&self,
+                          keys: Vec<Key>,
+                          start_ts: u64,
+                          callback: Callback<()>)
+                          -> Result<()> {
         let cmd = Command::Rollback {
             keys: keys,
             start_ts: start_ts,
@@ -250,7 +271,11 @@ impl Storage {
         Ok(())
     }
 
-    pub fn async_rollback_then_get(&self, key: Key, lock_ts: u64, callback: Callback<Option<Value>>) -> Result<()> {
+    pub fn async_rollback_then_get(&self,
+                                   key: Key,
+                                   lock_ts: u64,
+                                   callback: Callback<Option<Value>>)
+                                   -> Result<()> {
         let cmd = Command::RollbackThenGet {
             key: key,
             lock_ts: lock_ts,
@@ -336,14 +361,15 @@ mod tests {
     #[test]
     fn test_get_put() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_get(vec![b'x'], 100u64, expect_get_none()).unwrap();
+        storage.async_get(vec![b'x'], 100, expect_get_none()).unwrap();
         storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))],
+                               b"x".to_vec(),
                                100,
                                expect_ok())
                .unwrap();
-        storage.async_commit(100u64, 101u64, expect_ok()).unwrap();
-        storage.async_get(vec![b'x'], 100u64, expect_get_none()).unwrap();
-        storage.async_get(vec![b'x'], 101u64, expect_get_val(b"100".to_vec())).unwrap();
+        storage.async_commit(vec![b"x".to_vec()], 100, 101, expect_ok()).unwrap();
+        storage.async_get(vec![b'x'], 100, expect_get_none()).unwrap();
+        storage.async_get(vec![b'x'], 101, expect_get_val(b"100".to_vec())).unwrap();
         storage.stop().unwrap();
     }
 
@@ -354,11 +380,15 @@ mod tests {
             Mutation::Put((b"a".to_vec(), b"aa".to_vec())),
             Mutation::Put((b"b".to_vec(), b"bb".to_vec())),
             Mutation::Put((b"c".to_vec(), b"cc".to_vec())),
-            ],
+            ], b"a".to_vec(),
                                1,
                                expect_ok())
                .unwrap();
-        storage.async_commit(1, 2, expect_ok()).unwrap();
+        storage.async_commit(vec![b"a".to_vec(),b"b".to_vec(),b"c".to_vec(),],
+        1,
+                             2,
+                             expect_ok())
+               .unwrap();
         storage.async_scan(b"\x00".to_vec(),
                            1000,
                            5,
@@ -374,19 +404,19 @@ mod tests {
     #[test]
     fn test_txn() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))],
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))],b"x".to_vec(),
                                100,
                                expect_ok())
                .unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"y".to_vec(), b"101".to_vec()))],
+        storage.async_prewrite(vec![Mutation::Put((b"y".to_vec(), b"101".to_vec()))],b"y".to_vec(),
                                101,
                                expect_ok())
                .unwrap();
-        storage.async_commit(100u64, 110u64, expect_ok()).unwrap();
-        storage.async_commit(101u64, 111u64, expect_ok()).unwrap();
-        storage.async_get(vec![b'x'], 120u64, expect_get_val(b"100".to_vec())).unwrap();
-        storage.async_get(vec![b'y'], 120u64, expect_get_val(b"101".to_vec())).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"105".to_vec()))],
+        storage.async_commit(vec![b"x".to_vec()],100, 110, expect_ok()).unwrap();
+        storage.async_commit(vec![b"y".to_vec()],101, 111, expect_ok()).unwrap();
+        storage.async_get(vec![b'x'], 120, expect_get_val(b"100".to_vec())).unwrap();
+        storage.async_get(vec![b'y'], 120, expect_get_val(b"101".to_vec())).unwrap();
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"105".to_vec()))],b"x".to_vec(),
                                105,
                                expect_fail())
                .unwrap();
