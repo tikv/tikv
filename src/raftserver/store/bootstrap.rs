@@ -58,8 +58,8 @@ pub fn bootstrap_region(engine: Arc<DB>,
                         -> Result<metapb::Region> {
     let mut region = metapb::Region::new();
     region.set_region_id(region_id);
-    region.set_start_key(keys::MIN_KEY.to_vec());
-    region.set_end_key(keys::MAX_KEY.to_vec());
+    region.set_start_key(keys::EMPTY_KEY.to_vec());
+    region.set_end_key(keys::EMPTY_KEY.to_vec());
     region.set_max_peer_id(peer_id);
 
     let mut peer = metapb::Peer::new();

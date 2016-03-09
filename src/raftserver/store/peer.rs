@@ -163,6 +163,7 @@ impl Peer {
     }
 
     pub fn destroy(&mut self) -> Result<()> {
+        // TODO maybe very slow
         // Delete all data in this peer.
         let batch = WriteBatch::new();
         try!(self.storage.wl().scan_region(self.engine.as_ref(),

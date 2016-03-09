@@ -453,7 +453,7 @@ impl<T: Transport> Store<T> {
                 continue;
             }
 
-            match peer.storage.rl().approximate_size() {
+            match peer.storage.rl().approximate_region_size() {
                 Err(e) => {
                     error!("get approximate size for region {} err {:?}", region_id, e);
                 }

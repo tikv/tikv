@@ -3,7 +3,7 @@ use std::vec::Vec;
 use std::error;
 
 use rocksdb::DB;
-use rocksdb::rocksdb::Snapshot as RocksDBSnapshot;
+use rocksdb::rocksdb::{Snapshot as RocksDBSnapshot, Range};
 use protobuf::{self, Message};
 
 use proto::metapb;
@@ -11,7 +11,7 @@ use proto::raftpb::{Entry, Snapshot, HardState, ConfState};
 use proto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError};
 use raftserver::{Result, Error, other};
-use super::keys;
+use super::{keys, util};
 use super::engine::{Peekable, Iterable, Mutable};
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -73,9 +73,7 @@ impl PeerStorage {
     }
 
     pub fn is_initialized(&self) -> bool {
-        // TODO: if we use column family later, the maximum end key is empty,
-        // so we must think another way to check initialized.
-        self.region.get_end_key().len() > 0
+        !self.region.get_peers().is_empty()
     }
 
     pub fn initial_state(&mut self) -> raft::Result<RaftState> {
@@ -210,19 +208,48 @@ impl PeerStorage {
         self.engine.snapshot()
     }
 
-    // Return approximate size of the region.
-    pub fn approximate_size(&self) -> Result<u64> {
-        // TODO: use rocksdb approximate size function directly.
-        let mut total_size: u64 = 0;
-        let (start_key, end_key) = (self.region.get_start_key(), self.region.get_end_key());
-        try!(self.engine.scan(&keys::data_key(start_key),
-                              &keys::data_key(end_key),
-                              &mut |_, value| {
-                                  total_size += value.len() as u64;
-                                  Ok(true)
-                              }));
+    /// Return the approximate file system space used by keys in specified range.
+    ///
+    /// Note that the returned size measures file system space usage, so
+    /// if the user data compresses by a factor of ten, the returned
+    /// sizes will be one-tenth the size of the corresponding user data size.
+    ///
+    /// Warn: all data on disk will be taken into account rather than just this snapshot.
+    ///
+    /// If end_key is empty, it will be replace with extract data end key of region.
+    pub fn approximate_size(&self, start_key: &[u8], end_key: &[u8]) -> Result<u64> {
+        try!(util::check_key_in_region(start_key, &self.region));
+        let data_end_key = if end_key.is_empty() {
+            self.get_end_key()
+        } else {
+            if end_key != self.region.get_end_key() {
+                try!(util::check_key_in_region(end_key, &self.region));
+            }
+            keys::data_key(end_key)
+        };
+        let data_start_key = keys::data_key(start_key);
+        let r = Range::new(&data_start_key, &data_end_key);
+        Ok(self.engine.get_approximate_sizes(&[r])[0])
+    }
 
-        Ok(total_size)
+    // Return approximate size of the region.
+    pub fn approximate_region_size(&self) -> Result<u64> {
+        let (start_key, end_key) = (self.region.get_start_key(), self.region.get_end_key());
+        self.approximate_size(start_key, end_key)
+    }
+
+    /// Get the start_key of current region in encoded form.
+    pub fn get_start_key(&self) -> Vec<u8> {
+        keys::data_key(self.region.get_start_key())
+    }
+
+    /// Get the end_key of current region in encoded form.
+    pub fn get_end_key(&self) -> Vec<u8> {
+        if self.region.get_end_key().is_empty() {
+            keys::DATA_MAX_KEY.to_vec()
+        } else {
+            keys::data_key(self.region.get_end_key())
+        }
     }
 
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
@@ -469,17 +496,20 @@ impl PeerStorage {
     // [region meta start, region meta end) -> saving region meta information except raft.
     // [region data start, region data end) -> saving region data.
     fn region_key_ranges(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
-        let (start_key, end_key) = (self.region.get_start_key(), self.region.get_end_key());
+        let (start_key, end_key) = (self.get_start_key(), self.get_end_key());
 
         let region_id = self.get_region_id();
         vec![(keys::region_raft_prefix(region_id),
               keys::region_raft_prefix(region_id + 1)),
              (keys::region_meta_prefix(region_id),
               keys::region_meta_prefix(region_id + 1)),
-             (keys::data_key(start_key), keys::data_key(end_key))]
+             (start_key, end_key)]
 
     }
 
+    /// scan all region related kv
+    ///
+    /// Note: all keys will be iterated with prefix untouched.
     pub fn scan_region<T, F>(&self, db: &T, f: &mut F) -> Result<()>
         where T: Iterable,
               F: FnMut(&[u8], &[u8]) -> Result<bool>
@@ -566,12 +596,14 @@ mod test {
     use std::sync::*;
     use rocksdb::*;
     use proto::raftpb::{Entry, ConfState};
+    use proto::metapb;
     use proto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
     use raft::Storage;
     use raftserver::store::bootstrap;
+    use raftserver::store::keys;
 
     fn new_storage(path: &TempDir) -> RaftStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
@@ -752,5 +784,31 @@ mod test {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
             }
         }
+    }
+
+    #[test]
+    fn test_approximate_size() {
+        let td = TempDir::new("tikv-store-test").unwrap();
+        let store = new_storage(&td);
+        assert_eq!(store.rl().approximate_region_size().unwrap(), 0);
+        let wb = WriteBatch::new();
+        for i in 1..9999 {
+            wb.put(&keys::data_key(i.to_string().as_bytes()),
+                   i.to_string().as_bytes())
+              .expect("");
+        }
+        store.wl().engine.write(wb).expect("");
+        store.wl().engine.flush(true).expect("");
+        assert!(store.rl().approximate_region_size().unwrap() > 0);
+
+        let mut r = metapb::Region::new();
+        r.set_start_key(b"1".to_vec());
+        r.set_end_key(b"9".to_vec());
+        store.wl().region = r;
+        assert!(store.rl().approximate_size(b"1", b"9").is_ok());
+        assert_eq!(store.rl().approximate_size(b"1", b"9").unwrap(),
+                   store.rl().approximate_size(b"1", b"").unwrap());
+        // across region should not be supported.
+        assert!(store.rl().approximate_size(b"1", b"99").is_err());
     }
 }

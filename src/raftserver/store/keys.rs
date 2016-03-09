@@ -8,6 +8,8 @@ use std::mem;
 pub const MIN_KEY: &'static [u8] = &[];
 pub const MAX_KEY: &'static [u8] = &[0xFF];
 
+pub const EMPTY_KEY: &'static [u8] = &[];
+
 // local is in (0x01, 0x02);
 pub const LOCAL_PREFIX: u8 = 0x01;
 pub const LOCAL_MIN_KEY: &'static [u8] = &[LOCAL_PREFIX];
@@ -15,6 +17,8 @@ pub const LOCAL_MAX_KEY: &'static [u8] = &[LOCAL_PREFIX + 1];
 
 pub const DATA_PREFIX: u8 = b'z';
 pub const DATA_PREFIX_KEY: &'static [u8] = &[DATA_PREFIX];
+pub const DATA_MIN_KEY: &'static [u8] = &[DATA_PREFIX];
+pub const DATA_MAX_KEY: &'static [u8] = &[DATA_PREFIX + 1];
 
 // Following keys are all local keys, so the first byte must be 0x01.
 pub const STORE_IDENT_KEY: &'static [u8] = &[LOCAL_PREFIX, 0x01];
