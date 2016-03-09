@@ -1,4 +1,4 @@
-use rocksdb::rocksdb::{DB, Snapshot, DBIterator, IteratorMode, Range};
+use rocksdb::rocksdb::{Snapshot, DBIterator};
 use raftserver::store::engine::{Iterable, Peekable, DBValue};
 use raftserver::store::{keys, PeerStorage};
 use raftserver::store::util;
@@ -10,16 +10,16 @@ use proto::metapb;
 /// Only data within a region can be accessed.
 pub struct RegionSnapshot<'a> {
     snap: Snapshot<'a>,
-    db: &'a DB,
+    storage: &'a PeerStorage,
     region: &'a metapb::Region,
 }
 
 impl<'a> RegionSnapshot<'a> {
-    pub fn new(peer: &'a PeerStorage) -> RegionSnapshot<'a> {
+    pub fn new(ps: &'a PeerStorage) -> RegionSnapshot<'a> {
         RegionSnapshot {
-            snap: peer.raw_snapshot(),
-            db: peer.get_engine(),
-            region: peer.get_region(),
+            snap: ps.raw_snapshot(),
+            storage: ps,
+            region: ps.get_region(),
         }
     }
 
@@ -35,7 +35,7 @@ impl<'a> RegionSnapshot<'a> {
 
     // Seek the first key >= given key, if no found, return None.
     pub fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let region_end_key = keys::data_key(self.region.get_end_key());
+        let region_end_key = self.storage.get_end_key();
         let pair = self.new_iterator(key)
                        .take_while(|&(ref k, _)| k.as_ref() < &region_end_key)
                        .next()
@@ -52,8 +52,12 @@ impl<'a> RegionSnapshot<'a> {
     pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let region_end_key = keys::data_key(self.region.get_end_key());
-        let data_end_key = keys::data_key(end_key);
+        let region_end_key = self.storage.get_end_key();
+        let data_end_key = if end_key.is_empty() {
+            self.storage.get_end_key()
+        } else {
+            keys::data_key(end_key)
+        };
         let it = self.new_iterator(start_key);
 
         for (key, value) in it {
@@ -88,30 +92,21 @@ impl<'a> RegionSnapshot<'a> {
 
     /// Return the approximate file system space used by keys in specified range.
     ///
-    /// Note that the returned sizes measure file system space usage, so
+    /// Note that the returned size measures file system space usage, so
     /// if the user data compresses by a factor of ten, the returned
     /// sizes will be one-tenth the size of the corresponding user data size.
     ///
     /// Warn: all data on disk will be taken into account rather than just this snapshot.
-    pub fn get_approximate_size(&self, start_key: &[u8], end_key: &[u8]) -> u64 {
-        self.db.get_approximate_sizes(&[Range::new(&keys::data_key(start_key),
-                                                   &keys::data_key(end_key))])[0]
+    pub fn get_approximate_size(&self, start_key: &[u8], end_key: &[u8]) -> Result<u64> {
+        self.storage.approximate_size(start_key, end_key)
     }
 
-    pub fn get_start_key(&self) -> Vec<u8> {
-        self.region.get_start_key().to_vec()
+    pub fn get_start_key(&self) -> &[u8] {
+        self.region.get_start_key()
     }
 
-    pub fn get_end_key(&self) -> Vec<u8> {
-        if !self.region.get_end_key().is_empty() {
-            return self.region.get_end_key().to_vec();
-        }
-        match self.snap.iterator(IteratorMode::End).next() {
-            Some((ref k, _)) if keys::validate_data_key(k.as_ref()).is_ok() => {
-                keys::origin_key(k.as_ref()).to_vec()
-            }
-            _ => self.region.get_start_key().to_vec(),
-        }
+    pub fn get_end_key(&self) -> &[u8] {
+        self.region.get_end_key()
     }
 }
 
@@ -130,7 +125,6 @@ mod tests {
     use raftserver::store::engine::*;
     use raftserver::store::keys::*;
     use raftserver::store::PeerStorage;
-    use raftserver::store::bootstrap;
 
     use super::*;
     use raftserver::Result;
@@ -230,31 +224,23 @@ mod tests {
             .unwrap();
 
         assert_eq!(data.len(), 1);
-    }
 
-    #[test]
-    fn test_get_key() {
-        let path = TempDir::new("test-raftserver").unwrap();
-        let engine = new_temp_engine(&path);
-
-        let mut r = Region::new();
-        r.set_region_id(10);
-        r.set_start_key(b"a2".to_vec());
-
-        let store = new_peer_storage(engine.clone(), &r);
+        // test last region
+        let store = new_peer_storage(engine.clone(), &Region::new());
         let snap = RegionSnapshot::new(&store);
-        assert_eq!(&snap.get_end_key(), b"a2");
-        assert_eq!(&snap.get_start_key(), b"a2");
+        data.clear();
+        snap.scan(b"",
+                  &[0xFF, 0xFF],
+                  &mut |key, value| -> Result<bool> {
+                      data.push((key.to_vec(), value.to_vec()));
+                      Ok(true)
+                  })
+            .unwrap();
 
-        bootstrap::bootstrap_store(engine.clone(), 1, 1, 1).expect("");
-        assert_eq!(&snap.get_end_key(), b"a2");
-        assert_eq!(&snap.get_start_key(), b"a2");
+        assert_eq!(data.len(), 4);
+        assert_eq!(data, base_data);
 
-        r.set_end_key(b"a4".to_vec());
-        let store = new_peer_storage(engine.clone(), &r);
-        let snap = RegionSnapshot::new(&store);
-        assert_eq!(&snap.get_end_key(), b"a4");
-        assert_eq!(&snap.get_start_key(), b"a2");
+        assert!(snap.seek(b"a1").unwrap().is_some());
     }
 
     #[test]

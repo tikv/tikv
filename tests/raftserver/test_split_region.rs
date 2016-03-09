@@ -39,7 +39,7 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(b"a3").unwrap(), b"vv3".to_vec());
 
     let get = util::new_request(left.get_region_id(), vec![util::new_get_cmd(b"a3")]);
-    let mut resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));
+    let resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().get_detail().has_key_not_in_region());
 }

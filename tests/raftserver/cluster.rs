@@ -161,8 +161,8 @@ impl<T: Simulator> Cluster<T> {
 
         let mut region = metapb::Region::new();
         region.set_region_id(1);
-        region.set_start_key(keys::MIN_KEY.to_vec());
-        region.set_end_key(keys::MAX_KEY.to_vec());
+        region.set_start_key(keys::EMPTY_KEY.to_vec());
+        region.set_end_key(keys::EMPTY_KEY.to_vec());
 
         for (&id, engine) in &self.engines {
             let peer = new_peer(id, id, id);
