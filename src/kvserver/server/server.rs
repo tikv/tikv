@@ -9,14 +9,17 @@ use protobuf::RepeatedField;
 use proto::kvrpcpb;
 use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
                      CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
-                     Request, Response, MessageType};
+                     CmdCleanUpRequest, CmdCleanUpResponse, CmdRollbackThenGetRequest,
+                     CmdRollbackThenGetResponse, CmdCommitThenGetRequest,
+                     CmdPrewriteResponse_Item, CmdScanResponse_Item, CmdCommitThenGetResponse,
+                     Request, Response, MessageType, ErrorType};
 use storage;
 use storage::{Key, Storage, Value, KvPair, Mutation};
+use storage::Result as ResultStorage;
 
 use super::conn::Conn;
 
 pub type Result<T> = ::std::result::Result<T, ServerError>;
-pub type ResultStorage<T> = ::std::result::Result<T, storage::Error>;
 
 // Token(1) instead of Token(0)
 // See here: https://github.com/hjr3/mob/blob/multi-echo-blog-post/src/main.rs#L115
@@ -133,13 +136,16 @@ impl Server {
         mutations.extend(cmd_prewrite_req.get_locks()
                                          .iter()
                                          .map(|k| Mutation::Lock(k.to_owned())));
-        let received_cb = Box::new(move |r: ResultStorage<()>| {
+        let received_cb = Box::new(move |r: ResultStorage<Vec<ResultStorage<()>>>| {
             let resp: Response = Server::cmd_prewrite_done(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         });
         self.store
-            .async_prewrite(mutations, cmd_prewrite_req.get_start_version(), received_cb)
+            .async_prewrite(mutations,
+                            cmd_prewrite_req.get_primary_lock().to_vec(),
+                            cmd_prewrite_req.get_start_version(),
+                            received_cb)
             .map_err(ServerError::Storage)
     }
 
@@ -163,9 +169,90 @@ impl Server {
             let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
         });
         self.store
-            .async_commit(cmd_commit_req.get_start_version(),
+            .async_commit(cmd_commit_req.get_keys().to_vec(),
+                          cmd_commit_req.get_start_version(),
                           cmd_commit_req.get_commit_version(),
                           received_cb)
+            .map_err(ServerError::Storage)
+    }
+
+    pub fn handle_clean_up(&mut self,
+                           msg: &Request,
+                           msg_id: u64,
+                           token: Token,
+                           event_loop: &mut EventLoop<Server>)
+                           -> Result<()> {
+        if !msg.has_cmd_cleanup_req() {
+            let err_str = "Msg doesn't contain a CmdCleanupRequest";
+            error!("{}", err_str);
+            return Err(ServerError::FormatError(err_str.to_owned()));
+        }
+        let cmd_cleanup_req: &CmdCleanUpRequest = msg.get_cmd_cleanup_req();
+        let sender = event_loop.channel();
+        let received_cb = Box::new(move |r: ResultStorage<()>| {
+            let resp: Response = Server::cmd_clean_up_done(r);
+            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
+            // [TODO]: retry
+            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+        });
+        self.store
+            .async_clean_up(cmd_cleanup_req.get_key().to_vec(),
+                            cmd_cleanup_req.get_start_version(),
+                            received_cb)
+            .map_err(ServerError::Storage)
+    }
+
+    pub fn handle_commit_then_get(&mut self,
+                                  msg: &Request,
+                                  msg_id: u64,
+                                  token: Token,
+                                  event_loop: &mut EventLoop<Server>)
+                                  -> Result<()> {
+        if !msg.has_cmd_commit_get_req() {
+            let err_str = "Msg doesn't contain a CmdCommitThenGetRequest";
+            error!("{}", err_str);
+            return Err(ServerError::FormatError(err_str.to_owned()));
+        }
+        let cmd_commit_get_req: &CmdCommitThenGetRequest = msg.get_cmd_commit_get_req();
+        let sender = event_loop.channel();
+        let received_cb = Box::new(move |r: ResultStorage<Option<Value>>| {
+            let resp: Response = Server::cmd_commit_get_done(r);
+            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
+            // [TODO]: retry
+            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+        });
+        self.store
+            .async_commit_then_get(cmd_commit_get_req.get_key().to_vec(),
+                                   cmd_commit_get_req.get_lock_version(),
+                                   cmd_commit_get_req.get_commit_version(),
+                                   cmd_commit_get_req.get_get_version(),
+                                   received_cb)
+            .map_err(ServerError::Storage)
+    }
+
+    pub fn handle_rollback_then_get(&mut self,
+                                    msg: &Request,
+                                    msg_id: u64,
+                                    token: Token,
+                                    event_loop: &mut EventLoop<Server>)
+                                    -> Result<()> {
+        if !msg.has_cmd_rb_get_req() {
+            let err_str = "Msg doesn't contain a CmdRollbackThenGetRequest";
+            error!("{}", err_str);
+            return Err(ServerError::FormatError(err_str.to_owned()));
+        }
+        let cmd_rollback_get_req: &CmdRollbackThenGetRequest = msg.get_cmd_rb_get_req();
+        let sender = event_loop.channel();
+        let received_cb = Box::new(move |r: ResultStorage<Option<Value>>| {
+            let resp: Response = Server::cmd_rollback_get_done(r);
+            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
+            // [TODO]: retry
+            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+        });
+        self.store
+            .async_rollback_then_get(cmd_rollback_get_req.get_key().to_vec(),
+                                     cmd_rollback_get_req.get_lock_version(),
+                                     received_cb)
             .map_err(ServerError::Storage)
     }
 
@@ -190,18 +277,26 @@ impl Server {
         cmd_scan_resp.set_ok(kvs.is_ok());
         match kvs {
             Ok(kvs) => {
-                // convert storage::KvPair to kvrpcpb::KvPair
-                let mut new_kvs: Vec<kvrpcpb::KvPair> = Vec::new();
+                // convert storage::KvPair to kvrpcpb::CmdScanResponse_Item
+                let mut new_kvs: Vec<CmdScanResponse_Item> = Vec::new();
                 for result in kvs {
+                    let mut new_kv: CmdScanResponse_Item = CmdScanResponse_Item::new();
                     match result {
                         Ok((ref key, ref value)) => {
-                            let mut new_kv: kvrpcpb::KvPair = kvrpcpb::KvPair::new();
+                            new_kv.set_ok(true);
+                            new_kv.set_err(kvrpcpb::ErrorType::None);
                             new_kv.set_key(key.clone());
                             new_kv.set_value(value.clone());
-                            new_kvs.push(new_kv);
                         }
-                        Err(_) => {} // TODO(disksing): should send lock to client
+                        Err(storage::Error::Mvcc(e)) => {
+                            // TODO(disksing): should send lock to client
+                        }
+                        Err(_) => {
+                            new_kv.set_ok(false);
+                            new_kv.set_err(kvrpcpb::ErrorType::Retryable);
+                        }
                     }
+                    new_kvs.push(new_kv);
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
             }
@@ -214,10 +309,26 @@ impl Server {
         resp
     }
 
-    fn cmd_prewrite_done(r: ResultStorage<()>) -> Response {
+    fn cmd_prewrite_done(results: ResultStorage<Vec<ResultStorage<()>>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_prewrite_resp: CmdPrewriteResponse = CmdPrewriteResponse::new();
-        cmd_prewrite_resp.set_ok(r.is_ok());
+        cmd_prewrite_resp.set_ok(results.is_ok());
+        let mut items: Vec<CmdPrewriteResponse_Item> = Vec::new();
+        match results {
+            Ok(results) => {
+                for result in results {
+                    let mut item: CmdPrewriteResponse_Item = CmdPrewriteResponse_Item::new();
+                    if let Err(storage::Error::Mvcc(e)) = result {
+                        // [TODO]: freeze check is locked error
+                    }
+                    items.push(item);
+                }
+            }
+            Err(e) => {
+                error!("storage error: {:?}", e);
+            }
+        }
+        cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
         resp.set_field_type(MessageType::CmdPrewrite);
         resp.set_cmd_prewrite_resp(cmd_prewrite_resp);
         resp
@@ -229,6 +340,40 @@ impl Server {
         cmd_commit_resp.set_ok(r.is_ok());
         resp.set_field_type(MessageType::CmdCommit);
         resp.set_cmd_commit_resp(cmd_commit_resp);
+        resp
+    }
+
+    fn cmd_clean_up_done(r: ResultStorage<()>) -> Response {
+        let mut resp: Response = Response::new();
+        let mut cmd_cleanup_resp: CmdCleanUpResponse = CmdCleanUpResponse::new();
+        cmd_cleanup_resp.set_ok(r.is_ok());
+        resp.set_field_type(MessageType::CmdCleanUp);
+        resp.set_cmd_cleanup_resp(cmd_cleanup_resp);
+        resp
+    }
+
+    fn cmd_commit_get_done(r: ResultStorage<Option<Value>>) -> Response {
+        let mut resp: Response = Response::new();
+        let mut cmd_commit_get_resp: CmdCommitThenGetResponse = CmdCommitThenGetResponse::new();
+        cmd_commit_get_resp.set_ok(r.is_ok());
+        if let Ok(Some(val)) = r {
+            cmd_commit_get_resp.set_value(val);
+        }
+        resp.set_field_type(MessageType::CmdCommitThenGet);
+        resp.set_cmd_commit_get_resp(cmd_commit_get_resp);
+        resp
+    }
+
+    fn cmd_rollback_get_done(r: ResultStorage<Option<Value>>) -> Response {
+        let mut resp: Response = Response::new();
+        let mut cmd_rollback_get_resp: CmdRollbackThenGetResponse =
+            CmdRollbackThenGetResponse::new();
+        cmd_rollback_get_resp.set_ok(r.is_ok());
+        if let Ok(Some(val)) = r {
+            cmd_rollback_get_resp.set_value(val);
+        }
+        resp.set_field_type(MessageType::CmdRollbackThenGet);
+        resp.set_cmd_rb_get_resp(cmd_rollback_get_resp);
         resp
     }
 
@@ -319,6 +464,13 @@ impl Server {
             MessageType::CmdScan => self.handle_scan(&req, msg_id, token, event_loop),
             MessageType::CmdPrewrite => self.handle_prewrite(&req, msg_id, token, event_loop),
             MessageType::CmdCommit => self.handle_commit(&req, msg_id, token, event_loop),
+            MessageType::CmdCleanUp => self.handle_clean_up(&req, msg_id, token, event_loop),
+            MessageType::CmdCommitThenGet => {
+                self.handle_commit_then_get(&req, msg_id, token, event_loop)
+            }
+            MessageType::CmdRollbackThenGet => {
+                self.handle_rollback_then_get(&req, msg_id, token, event_loop)
+            }
         } {
             error!("Some error occur err[{:?}]", e);
         }
