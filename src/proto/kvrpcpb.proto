@@ -6,56 +6,143 @@ enum MessageType {
     CmdScan = 2;
     CmdPrewrite = 3;
     CmdCommit = 4;
+    CmdCleanUp = 5;
+    CmdRollbackThenGet = 6;
+    CmdCommitThenGet = 7;
 }
+
+enum ErrorType {
+    None = 1;
+    Retryable = 2;
+    Locked = 3;
+}
+
 message KvPair {
-    required bytes key = 1;
-    required bytes value = 2;
+    optional bytes key = 1;
+    optional bytes value = 2;
 }
 
 message CmdGetRequest {
-    required bytes key = 1;
-    required uint64 version = 2;
+    optional bytes key = 1;
+    optional uint64 version = 2;
 }
+
 message CmdGetResponse {
-    required bool ok = 1;
-    optional bytes value = 2;
+    optional bool ok = 1;
+    optional ErrorType err = 2 [default = None];
+    optional bytes value = 3;
+    optional bytes primary_lock = 4;
+    optional uint64 lock_version = 5;
 }
+
 message CmdScanRequest {
-    required bytes key = 1;
-    required uint32 limit = 2;
-    required uint64 version = 3;
+    optional bytes key = 1;
+    optional uint32 limit = 2;
+    optional uint64 version = 3;
 }
+
 message CmdScanResponse {
-    required bool ok = 1;
-    repeated KvPair results = 2;
+    // ok if !ok then retry.
+    optional bool ok = 1;
+    message Item {
+        // ok if !ok the key must be locked and need cleanup it.
+        optional bool ok = 1;
+        optional ErrorType err = 2 [default = None];
+        optional bytes key = 3;
+        optional bytes value = 4;
+        // primary_lock_key
+        optional bytes primary_lock = 5;
+        optional uint64 lock_version = 6;
+    }
+    repeated Item results = 2;
 }
+
 message CmdPrewriteRequest {
     repeated KvPair puts = 1;
     repeated bytes dels = 2;
     repeated bytes locks = 3;
-    required uint64 start_version = 4;
+    optional uint64 start_version = 4;
 }
+
 message CmdPrewriteResponse {
-    required bool ok = 1;
+    optional bool ok = 1;
+    message Item {
+        optional bool ok = 1;
+        optional ErrorType err = 2 [default = None];
+        optional bytes key = 3;
+        // primary_lock_key
+        optional bytes primary_lock = 4;
+        optional uint64 lock_version = 5;
+    }
+    repeated Item results = 2;
 }
+
 message CmdCommitRequest {
-    required uint64 start_version = 1;
-    required uint64 commit_version = 2;
+    optional uint64 start_version = 1;
+    repeated bytes keys = 2;
+    optional uint64 commit_version = 3;
 }
+
 message CmdCommitResponse {
-    required bool ok = 1;
+    optional bool ok = 1;
 }
+
+message CmdCleanUpRequest {
+    optional bytes key = 1;
+    optional uint64 start_version = 2;
+}
+
+message CmdCleanUpResponse {
+    optional bool ok = 1;
+    enum ErrorType {
+        Retryable = 1;
+        Committed = 2;
+        Rollbacked = 3;
+    }
+    optional ErrorType err = 2;
+    optional uint64 commit_version = 3;
+}
+
+message CmdRollbackThenGetRequest {
+    optional bytes key = 1;
+    optional uint64 lock_version = 2;
+}
+
+message CmdRollbackThenGetResponse {
+    optional bool ok = 1;
+    optional bytes value = 2;
+}
+
+message CmdCommitThenGetRequest {
+    optional bytes key = 1;
+    optional uint64 lock_version = 2;
+    optional uint64 commit_version = 3;
+    optional uint64 get_version = 4;
+}
+
+message CmdCommitThenGetResponse {
+    optional bool ok = 1;
+    optional bytes value = 2;
+}
+
 message Request {
-    required MessageType type = 1;
+    optional MessageType type = 1;
     optional CmdGetRequest cmd_get_req = 2;
     optional CmdScanRequest cmd_scan_req = 3;
     optional CmdPrewriteRequest cmd_prewrite_req = 4;
     optional CmdCommitRequest cmd_commit_req = 5;
+    optional CmdCleanUpRequest cmd_cleanup_req = 6;
+    optional CmdRollbackThenGetRequest cmd_rb_get_req = 7;
+    optional CmdCommitThenGetRequest cmd_commit_get_req = 8;
 }
+
 message Response {
-    required MessageType type = 1;
+    optional MessageType type = 1;
     optional CmdGetResponse cmd_get_resp = 2;
     optional CmdScanResponse cmd_scan_resp = 3;
     optional CmdPrewriteResponse cmd_prewrite_resp = 4;
     optional CmdCommitResponse cmd_commit_resp = 5;
+    optional CmdCleanUpResponse cmd_cleanup_resp = 6;
+    optional CmdRollbackThenGetResponse cmd_rb_get_resp = 7;
+    optional CmdCommitThenGetResponse cmd_commit_get_resp = 8;
 }
