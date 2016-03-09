@@ -163,6 +163,7 @@ impl Peer {
     }
 
     pub fn destroy(&mut self) -> Result<()> {
+        // TODO maybe very slow
         // Delete all data in this peer.
         let batch = WriteBatch::new();
         try!(self.storage.wl().scan_region(self.engine.as_ref(),
@@ -787,11 +788,8 @@ impl Peer {
     }
 
     fn check_data_key(&self, key: &[u8]) -> Result<()> {
-        // TODO: if we use column family later, we don't need to check data prefix.
-        try!(keys::validate_data_key(key));
-
         // region key range has no data prefix, so we must use origin key to check.
-        try!(util::check_key_in_region(keys::origin_key(key), self.storage.rl().get_region()));
+        try!(util::check_key_in_region(key, self.storage.rl().get_region()));
 
         Ok(())
     }
@@ -803,9 +801,9 @@ impl Peer {
         try!(self.check_data_key(key));
 
         let mut resp = Response::new();
-        let res: Option<Vec<u8>> = try!(ctx.snap.get_value(key).map(|r| r.map(|v| v.to_vec())));
+        let res = try!(ctx.snap.get_value(&keys::data_key(key)));
         if let Some(res) = res {
-            resp.mut_get().set_value(res)
+            resp.mut_get().set_value(res.to_vec());
         }
 
         Ok(resp)
@@ -817,10 +815,10 @@ impl Peer {
         try!(self.check_data_key(key));
 
         let mut resp = Response::new();
-        let res: Option<(Vec<u8>, Vec<u8>)> = try!(ctx.snap.seek(key));
-        if let Some(res) = res {
-            resp.mut_seek().set_key(res.0);
-            resp.mut_seek().set_value(res.1);
+        let res = try!(ctx.snap.seek(&keys::data_key(key)));
+        if let Some((k, v)) = res {
+            resp.mut_seek().set_key(keys::origin_key(&k).to_vec());
+            resp.mut_seek().set_value(v);
         }
 
         Ok(resp)
@@ -832,7 +830,7 @@ impl Peer {
         try!(self.check_data_key(key));
 
         let resp = Response::new();
-        try!(ctx.wb.put(key, request.get_value()));
+        try!(ctx.wb.put(&keys::data_key(key), request.get_value()));
 
         // Should we call mut_put() explicitly?
         Ok(resp)
@@ -844,7 +842,7 @@ impl Peer {
         try!(self.check_data_key(key));
 
         let resp = Response::new();
-        try!(ctx.wb.delete(key));
+        try!(ctx.wb.delete(&keys::data_key(key)));
 
         // Should we call mut_delete() explicitly?
         Ok(resp)

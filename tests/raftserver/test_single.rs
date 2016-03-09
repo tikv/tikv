@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use super::cluster::{Cluster, Simulator};
 use tikv::raftserver::store::*;
 use super::node::new_node_cluster;
@@ -30,12 +28,6 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
         let v = cluster.get(putk);
         assert_eq!(v, Some(putv.to_vec()));
     }
-
-    let put = new_request(1, vec![new_put_cmd(b"a2", b"v2")]);
-    let resp = cluster.call_command_on_leader(1, put, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().has_error(),
-            "invalid key should be rejected.");
-    assert!(cluster.engines[&1].get_value(b"a2").unwrap().is_none());
 }
 
 fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -78,7 +70,7 @@ fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
         let k = format!("key{:03}", i);
         let putk = k.as_bytes();
         let (k, v) = cluster.seek(putk).unwrap();
-        assert_eq!(k, keys::data_key(b"key100"));
+        assert_eq!(k, b"key100");
         assert_eq!(v, b"value100");
     }
 
@@ -87,7 +79,7 @@ fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
         let putk = k.as_bytes();
         let putv = v.as_bytes();
         let (sk, sv) = cluster.seek(putk).unwrap();
-        assert_eq!(sk, keys::data_key(putk));
+        assert_eq!(sk, putk);
         assert_eq!(sv, putv);
     }
 

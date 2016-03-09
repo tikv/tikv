@@ -7,6 +7,7 @@ use std::collections::Bound::{Included, Unbounded};
 use tikv::proto::metapb;
 use tikv::pd::{Client, Result, Error, Key};
 use tikv::pd::errors::other;
+use tikv::raftserver::store::keys;
 
 #[derive(Default)]
 struct Store {
@@ -138,13 +139,15 @@ impl Cluster {
     }
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
-        // must exist a region contains this key.
-        let (_, region) = self.regions
-                              .range::<Key, Key>(Included(&key.to_vec()), Unbounded)
-                              .next()
-                              .unwrap();
-
-        Ok(region.clone())
+        let res = self.regions
+                      .range::<Key, Key>(Included(&key.to_vec()), Unbounded)
+                      .next();
+        if let Some((_, region)) = res {
+            Ok(region.clone())
+        } else {
+            // max region must exist.
+            Ok(self.regions[keys::EMPTY_KEY].clone())
+        }
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
@@ -172,9 +175,9 @@ impl Cluster {
         let left_end_key = left.get_end_key().to_vec();
         let right_end_key = right.get_end_key().to_vec();
 
-        // TODO: if we use column family later, the maximum end key is empty,
-        // so we should use another way to check it.
-        assert!(right_end_key > left_end_key);
+        assert!(left.get_start_key() < left.get_end_key());
+        assert_eq!(left.get_end_key(), right.get_start_key());
+        assert!(right.get_end_key().is_empty() || right.get_start_key() < right.get_end_key());
 
         // origin pre-split region's end key is the same as right end key,
         // and must exists.
