@@ -61,7 +61,9 @@ message CmdPrewriteRequest {
     repeated KvPair puts = 1;
     repeated bytes dels = 2;
     repeated bytes locks = 3;
-    optional uint64 start_version = 4;
+    // primary_lock_key
+    optional bytes primary_lock = 4;
+    optional uint64 start_version = 5;
 }
 
 message CmdPrewriteResponse {
