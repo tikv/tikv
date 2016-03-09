@@ -179,7 +179,7 @@ pub fn is_invalid_peer(peer: &metapb::Peer) -> bool {
 pub fn write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
     let wb = WriteBatch::new();
     for &(ref k, ref v) in kvs {
-        wb.put(&keys::data_key(k), &v).expect("");
+        wb.put(k, &v).expect("");
     }
     db.write(wb).unwrap();
 }
