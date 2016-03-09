@@ -51,7 +51,7 @@ pub enum Command {
         mutations: Vec<Mutation>,
         primary: Key,
         start_ts: u64,
-        callback: Callback<()>,
+        callback: Callback<Vec<Result<()>>>,
     },
     Commit {
         keys: Vec<Key>,
@@ -66,7 +66,7 @@ pub enum Command {
         get_ts: u64,
         callback: Callback<Option<Value>>,
     },
-    CleanUp {
+    Cleanup {
         key: Key,
         start_ts: u64,
         callback: Callback<()>,
@@ -113,7 +113,7 @@ impl fmt::Debug for Command {
                        commit_ts,
                        get_ts)
             }
-            Command::CleanUp{ref key, start_ts, ..} => {
+            Command::Cleanup{ref key, start_ts, ..} => {
                 write!(f, "kv::command::clean_up {:?} @ {}", key, start_ts)
             }
             Command::Rollback{ref keys, start_ts, ..} => {
@@ -201,7 +201,7 @@ impl Storage {
                           mutations: Vec<Mutation>,
                           primary: Key,
                           start_ts: u64,
-                          callback: Callback<()>)
+                          callback: Callback<Vec<Result<()>>>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
             mutations: mutations,
@@ -248,7 +248,7 @@ impl Storage {
     }
 
     pub fn async_clean_up(&self, key: Key, start_ts: u64, callback: Callback<()>) -> Result<()> {
-        let cmd = Command::CleanUp {
+        let cmd = Command::Cleanup {
             key: key,
             start_ts: start_ts,
             callback: callback,
@@ -340,12 +340,12 @@ mod tests {
         Box::new(move |x: Result<Option<Value>>| assert_eq!(x.unwrap().unwrap(), v))
     }
 
-    fn expect_ok() -> Callback<()> {
-        Box::new(|x: Result<()>| assert!(x.is_ok()))
+    fn expect_ok<T>() -> Callback<T> {
+        Box::new(|x: Result<T>| assert!(x.is_ok()))
     }
 
-    fn expect_fail() -> Callback<()> {
-        Box::new(|x: Result<()>| assert!(x.is_err()))
+    fn expect_fail<T>() -> Callback<T> {
+        Box::new(|x: Result<T>| assert!(x.is_err()))
     }
 
     fn expect_scan(pairs: Vec<Option<KvPair>>) -> Callback<Vec<Result<KvPair>>> {
