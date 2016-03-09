@@ -26,9 +26,12 @@ impl Scheduler {
                 });
             }
             Command::Prewrite{mutations, primary, start_ts, callback} => {
-                callback(self.store
-                             .prewrite(mutations, primary, start_ts)
-                             .map_err(::storage::Error::from));
+                callback(match self.store.prewrite(mutations, primary, start_ts) {
+                    Ok(mut results) => {
+                        Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
+                    }
+                    Err(e) => Err(::storage::Error::from(e)),
+                });
             }
             Command::Commit{keys, lock_ts, commit_ts, callback} => {
                 callback(self.store
@@ -40,7 +43,7 @@ impl Scheduler {
                              .commit_then_get(key, lock_ts, commit_ts, get_ts)
                              .map_err(::storage::Error::from));
             }
-            Command::CleanUp{key, start_ts, callback} => {
+            Command::Cleanup{key, start_ts, callback} => {
                 callback(self.store.clean_up(key, start_ts).map_err(::storage::Error::from));
             }
             Command::Rollback{keys, start_ts, callback} => {

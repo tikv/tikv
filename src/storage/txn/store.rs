@@ -1,7 +1,7 @@
 use util::codec::bytes;
 use storage::{Key, RefKey, Value, KvPair, Mutation};
 use storage::Engine;
-use storage::mvcc::MvccTxn;
+use storage::mvcc::{MvccTxn, Error as MvccError};
 use super::shard_mutex::ShardMutex;
 use super::{Error, Result};
 
@@ -53,7 +53,8 @@ impl TxnStore {
             match txn.get(&next_key) {
                 Ok(Some(value)) => results.push(Ok((next_key.clone(), value))),
                 Ok(None) => {}
-                Err(e) => results.push(Err(Error::from(e))),
+                e @ Err(MvccError::KeyIsLocked{..}) => results.push(Err(Error::from(e.unwrap_err()))),
+                Err(e) => return Err(Error::from(e)),
             };
             next_key.push(b'\0');
             key = next_key;
@@ -61,15 +62,20 @@ impl TxnStore {
         Ok(results)
     }
 
-    pub fn prewrite(&self, mutations: Vec<Mutation>, primary: Key, start_ts: u64) -> Result<()> {
+    pub fn prewrite(&self, mutations: Vec<Mutation>, primary: Key, start_ts: u64) -> Result<Vec<Result<()>>> {
+        let mut results = vec![];
         let locked_keys: Vec<Key> = mutations.iter().map(|x| x.key().to_owned()).collect();
         let _guard = self.shard_mutex.lock(&locked_keys);
         let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
-        for w in mutations {
-            try!(txn.prewrite(w, &primary));
+        for m in mutations {
+            match txn.prewrite(m, &primary) {
+                Ok(_) => results.push(Ok(())),
+                e @ Err(MvccError::KeyIsLocked{..}) => results.push(e.map_err(Error::from)),
+                Err(e) => return Err(Error::from(e)),
+            }
         }
         try!(txn.submit());
-        Ok(())
+        Ok(results)
     }
 
     pub fn commit(&self, keys: Vec<Key>, start_ts: u64, commit_ts: u64) -> Result<()> {
