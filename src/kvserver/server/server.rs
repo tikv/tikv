@@ -6,39 +6,22 @@ use mio::{self, Token, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 use protobuf::RepeatedField;
 
-use proto::kvrpcpb;
 use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
                      CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
                      CmdCleanUpRequest, CmdCleanUpResponse, CmdRollbackThenGetRequest,
                      CmdRollbackThenGetResponse, CmdCommitThenGetRequest,
                      CmdPrewriteResponse_Item, CmdScanResponse_Item, CmdCommitThenGetResponse,
                      Request, Response, MessageType, ErrorType};
-use storage;
 use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked};
 use storage::Result as ResultStorage;
 
 use super::conn::Conn;
-
-pub type Result<T> = ::std::result::Result<T, ServerError>;
+use super::{Result, ServerError};
 
 // Token(1) instead of Token(0)
 // See here: https://github.com/hjr3/mob/blob/multi-echo-blog-post/src/main.rs#L115
 pub const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum ServerError {
-        Storage(err: storage::Error) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        FormatError(desc: String) {
-            description(desc)
-        }
-    }
-}
 
 pub struct Server {
     pub listener: TcpListener,
@@ -270,7 +253,6 @@ impl Server {
         resp
     }
 
-    #[allow(single_match)]
     fn cmd_scan_done(kvs: ResultStorage<Vec<ResultStorage<KvPair>>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_scan_resp: CmdScanResponse = CmdScanResponse::new();
@@ -325,7 +307,10 @@ impl Server {
             Ok(results) => {
                 for result in results {
                     let mut item: CmdPrewriteResponse_Item = CmdPrewriteResponse_Item::new();
-                    if let Some((key, primary, ts)) = result.get_lock() {
+                    if result.is_ok() {
+                        item.set_ok(true);
+                        item.set_err(ErrorType::None);
+                    } else if let Some((key, primary, ts)) = result.get_lock() {
                         // Actually items only contain locked item, so `ok` is always false.
                         item.set_ok(false);
                         item.set_err(ErrorType::Locked);
@@ -567,9 +552,11 @@ mod tests {
     use mio::EventLoop;
 
     use proto::kvrpcpb::*;
-    use storage::{Key, Value, Storage, Dsn};
+    use storage;
+    use storage::{Key, Value, Storage, Dsn, txn, mvcc};
     use storage::Error::Other;
     use storage::KvPair as StorageKV;
+    use storage::Result as ResultStorage;
     use super::*;
 
     #[test]
@@ -651,15 +638,43 @@ mod tests {
         assert_eq!(true, actual_cmd_resp.get_ok());
         let actual_kvs = actual_cmd_resp.get_results();
         assert_eq!(2, actual_kvs.len());
+        assert_eq!(true, actual_kvs[0].get_ok());
         assert_eq!(k0, actual_kvs[0].get_key());
         assert_eq!(v0, actual_kvs[0].get_value());
+        assert_eq!(true, actual_kvs[1].get_ok());
         assert_eq!(k1, actual_kvs[1].get_key());
         assert_eq!(v1, actual_kvs[1].get_value());
     }
 
     #[test]
+    fn test_scan_done_lock() {
+        let k0: Key = vec![0u8, 0u8];
+        let v0: Value = vec![255u8, 255u8];
+        let k1: Key = vec![0u8, 1u8];
+        let k1_primary: Key = k0.clone();
+        let k1_ts: u64 = 10000;
+        let kvs: Vec<ResultStorage<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
+                                                      make_lock_error(k1.clone(),
+                                                                      k1_primary.clone(),
+                                                                      k1_ts)];
+        let actual_resp: Response = Server::cmd_scan_done(Ok(kvs));
+        assert_eq!(MessageType::CmdScan, actual_resp.get_field_type());
+        let actual_cmd_resp: &CmdScanResponse = actual_resp.get_cmd_scan_resp();
+        assert_eq!(true, actual_cmd_resp.get_ok());
+        let actual_kvs = actual_cmd_resp.get_results();
+        assert_eq!(2, actual_kvs.len());
+        assert_eq!(true, actual_kvs[0].get_ok());
+        assert_eq!(k0, actual_kvs[0].get_key());
+        assert_eq!(v0, actual_kvs[0].get_value());
+        assert_eq!(false, actual_kvs[1].get_ok());
+        assert_eq!(k1, actual_kvs[1].get_key());
+        assert_eq!(k1_primary, actual_kvs[1].get_primary_lock());
+        assert_eq!(k1_ts, actual_kvs[1].get_lock_version());
+    }
+
+    #[test]
     fn test_prewrite_done_ok() {
-        let actual_resp: Response = Server::cmd_prewrite_done(Ok(()));
+        let actual_resp: Response = Server::cmd_prewrite_done(Ok(Vec::new()));
         assert_eq!(MessageType::CmdPrewrite, actual_resp.get_field_type());
         assert_eq!(true, actual_resp.get_cmd_prewrite_resp().get_ok());
     }
@@ -685,5 +700,30 @@ mod tests {
         let actual_resp: Response = Server::cmd_commit_done(Err(err));
         assert_eq!(MessageType::CmdCommit, actual_resp.get_field_type());
         assert_eq!(false, actual_resp.get_cmd_commit_resp().get_ok());
+    }
+
+    #[test]
+    fn test_clean_up_done_ok() {
+        let actual_resp: Response = Server::cmd_clean_up_done(Ok(()));
+        assert_eq!(MessageType::CmdCleanUp, actual_resp.get_field_type());
+        assert_eq!(true, actual_resp.get_cmd_cleanup_resp().get_ok());
+    }
+
+    #[test]
+    fn test_clean_up_done_err() {
+        let err = Other(Box::new("clean_up error"));
+        let actual_resp: Response = Server::cmd_clean_up_done(Err(err));
+        assert_eq!(MessageType::CmdCleanUp, actual_resp.get_field_type());
+        assert_eq!(false, actual_resp.get_cmd_cleanup_resp().get_ok());
+    }
+
+    fn make_lock_error<T>(key: Key, primary: Key, ts: u64) -> ResultStorage<T> {
+        Err(mvcc::Error::KeyIsLocked {
+            key: key,
+            primary: primary,
+            ts: ts,
+        })
+            .map_err(txn::Error::from)
+            .map_err(storage::Error::from)
     }
 }
