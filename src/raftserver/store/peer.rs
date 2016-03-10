@@ -187,6 +187,10 @@ impl Peer {
         // TODO: load processors.
     }
 
+    pub fn get_region_id(&self) -> u64 {
+        self.region_id
+    }
+
     pub fn update_region(&mut self, region: &metapb::Region) -> Result<()> {
         if self.region_id != region.get_region_id() {
             return Err(other(format!("invalid region id {} != {}",
