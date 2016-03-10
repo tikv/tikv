@@ -53,7 +53,9 @@ impl TxnStore {
             match txn.get(&next_key) {
                 Ok(Some(value)) => results.push(Ok((next_key.clone(), value))),
                 Ok(None) => {}
-                e @ Err(MvccError::KeyIsLocked{..}) => results.push(Err(Error::from(e.unwrap_err()))),
+                e @ Err(MvccError::KeyIsLocked{..}) => {
+                    results.push(Err(Error::from(e.unwrap_err())))
+                }
                 Err(e) => return Err(Error::from(e)),
             };
             next_key.push(b'\0');
@@ -62,7 +64,11 @@ impl TxnStore {
         Ok(results)
     }
 
-    pub fn prewrite(&self, mutations: Vec<Mutation>, primary: Key, start_ts: u64) -> Result<Vec<Result<()>>> {
+    pub fn prewrite(&self,
+                    mutations: Vec<Mutation>,
+                    primary: Key,
+                    start_ts: u64)
+                    -> Result<Vec<Result<()>>> {
         let mut results = vec![];
         let locked_keys: Vec<Key> = mutations.iter().map(|x| x.key().to_owned()).collect();
         let _guard = self.shard_mutex.lock(&locked_keys);

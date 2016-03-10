@@ -62,6 +62,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
             if lock.get_start_ts() <= ts {
                 // There is a pending lock. Client should wait or clean it.
                 return Err(Error::KeyIsLocked {
+                    key: key.to_owned(),
                     primary: lock.get_primary_key().to_vec(),
                     ts: lock.get_start_ts(),
                 });
@@ -89,6 +90,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         // ... or locks at any timestamp.
         if let Some(lock) = meta.get_lock() {
             return Err(Error::KeyIsLocked {
+                key: key.to_owned(),
                 primary: lock.get_primary_key().to_vec(),
                 ts: lock.get_start_ts(),
             });
@@ -162,7 +164,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
             _ => {
                 return match meta.get_item_by_start_ts(self.start_ts) {
                     // Already committed by concurrent transaction.
-                    Some(lock) => Err(Error::AlreadyCommitted{commit_ts: lock.get_commit_ts()}),
+                    Some(lock) => Err(Error::AlreadyCommitted { commit_ts: lock.get_commit_ts() }),
                     // Rollbacked by concurrent transaction.
                     None => Ok(()),
                 };
