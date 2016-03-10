@@ -5,8 +5,8 @@ use std::sync::mpsc::{self, Sender};
 use self::txn::Scheduler;
 
 mod engine;
-mod mvcc;
-mod txn;
+pub mod mvcc;
+pub mod txn;
 
 pub use self::engine::{Engine, Dsn};
 
@@ -339,7 +339,7 @@ impl<T> MaybeLocked for Result<T> {
             _ => false,
         }
     }
-    
+
     fn get_lock(&self) -> Option<(Key, Key, u64)> {
         match *self {
             Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked{ref key, ref primary, ts}))) => {
