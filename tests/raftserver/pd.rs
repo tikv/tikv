@@ -211,22 +211,14 @@ impl Cluster {
 pub struct PdClient {
     clusters: HashMap<u64, Cluster>,
 
-    node_id: u64,
-    store_id: u64,
-    region_id: u64,
-    peer_id: u64,
+    base_id: u64,
 }
 
 impl PdClient {
     pub fn new() -> PdClient {
         PdClient {
             clusters: HashMap::new(),
-            // We use 1 for bootstrap in some tests,
-            // so here use a larger base value to avoid conflict.
-            node_id: 1000,
-            store_id: 1000,
-            region_id: 1000,
-            peer_id: 1000,
+            base_id: 1000,
         }
     }
 
@@ -289,24 +281,9 @@ impl Client for PdClient {
         Ok(self.clusters.contains_key(&cluster_id))
     }
 
-    fn alloc_node_id(&mut self) -> Result<u64> {
-        self.node_id += 1;
-        Ok(self.node_id)
-    }
-
-    fn alloc_store_id(&mut self) -> Result<u64> {
-        self.store_id += 1;
-        Ok(self.store_id)
-    }
-
-    fn alloc_peer_id(&mut self) -> Result<u64> {
-        self.peer_id += 1;
-        Ok(self.peer_id)
-    }
-
-    fn alloc_region_id(&mut self) -> Result<u64> {
-        self.region_id += 1;
-        Ok(self.region_id)
+    fn alloc_id(&mut self) -> Result<u64> {
+        self.base_id += 1;
+        Ok(self.base_id)
     }
 
     fn put_node(&mut self, cluster_id: u64, node: metapb::Node) -> Result<()> {
