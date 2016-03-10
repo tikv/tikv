@@ -9,6 +9,7 @@ pub const DEFAULT_RAFT_LOG_GC_INTERVAL: u64 = 1000;
 pub const DEFAULT_RAFT_LOG_GC_THRESHOLD: u64 = 1;
 pub const DEFAULT_SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
 pub const DEFAULT_REGION_MAX_SIZE: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_REGION_CHECK_DIFF: u64 = 5 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -29,6 +30,9 @@ pub struct Config {
     // or not (ms).
     pub split_region_check_tick_interval: u64,
     pub region_max_size: u64,
+    /// When size change of region on disk exceed the diff since last check, it
+    /// will be check again whether it should be split.
+    pub region_check_diff: u64,
 }
 
 impl Default for Config {
@@ -43,6 +47,7 @@ impl Default for Config {
             raft_log_gc_threshold: DEFAULT_RAFT_LOG_GC_THRESHOLD,
             split_region_check_tick_interval: DEFAULT_SPLIT_REGION_CHECK_TICK_INTERVAL,
             region_max_size: DEFAULT_REGION_MAX_SIZE,
+            region_check_diff: DEFAULT_REGION_CHECK_DIFF,
         }
     }
 }
