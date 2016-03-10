@@ -22,9 +22,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        KeyIsLocked {primary: ::storage::Key, ts: u64} {
+        KeyIsLocked {key: ::storage::Key, primary: ::storage::Key, ts: u64} {
             description("key is locked (backoff or cleanup)")
-            display("key is locked (backoff or cleanup) {:?}@{}", primary, ts)
+            display("key is locked (backoff or cleanup) {:?}-{:?}@{}", key, primary, ts)
         }
         AlreadyCommitted {commit_ts: u64} {
             description("txn already committed")

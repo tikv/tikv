@@ -103,7 +103,11 @@ impl fmt::Debug for Command {
                        start_ts)
             }
             Command::Commit{ref keys, lock_ts, commit_ts, ..} => {
-                write!(f, "kv::command::commit {} {} -> {}", keys.len(), lock_ts, commit_ts)
+                write!(f,
+                       "kv::command::commit {} {} -> {}",
+                       keys.len(),
+                       lock_ts,
+                       commit_ts)
             }
             Command::CommitThenGet{ref key, lock_ts, commit_ts, get_ts, ..} => {
                 write!(f,
@@ -310,11 +314,6 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Mvcc(err: mvcc::Error) {
-            from()
-            cause(err)
-            description(err.description())
-        }
         Txn(err: txn::Error) {
             from()
             cause(err)
@@ -327,6 +326,29 @@ quick_error! {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+pub trait MaybeLocked {
+    fn is_locked(&self) -> bool;
+    fn get_lock(&self) -> Option<(Key, Key, u64)>;
+}
+
+impl<T> MaybeLocked for Result<T> {
+    fn is_locked(&self) -> bool {
+        match *self {
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked{..}))) => true,
+            _ => false,
+        }
+    }
+    
+    fn get_lock(&self) -> Option<(Key, Key, u64)> {
+        match *self {
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked{ref key, ref primary, ts}))) => {
+                Some((key.to_owned(), primary.to_owned(), ts))
+            }
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -380,12 +402,13 @@ mod tests {
             Mutation::Put((b"a".to_vec(), b"aa".to_vec())),
             Mutation::Put((b"b".to_vec(), b"bb".to_vec())),
             Mutation::Put((b"c".to_vec(), b"cc".to_vec())),
-            ], b"a".to_vec(),
+            ],
+                               b"a".to_vec(),
                                1,
                                expect_ok())
                .unwrap();
         storage.async_commit(vec![b"a".to_vec(),b"b".to_vec(),b"c".to_vec(),],
-        1,
+                             1,
                              2,
                              expect_ok())
                .unwrap();
@@ -404,19 +427,22 @@ mod tests {
     #[test]
     fn test_txn() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))],b"x".to_vec(),
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"100".to_vec()))],
+                               b"x".to_vec(),
                                100,
                                expect_ok())
                .unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"y".to_vec(), b"101".to_vec()))],b"y".to_vec(),
+        storage.async_prewrite(vec![Mutation::Put((b"y".to_vec(), b"101".to_vec()))],
+                               b"y".to_vec(),
                                101,
                                expect_ok())
                .unwrap();
-        storage.async_commit(vec![b"x".to_vec()],100, 110, expect_ok()).unwrap();
-        storage.async_commit(vec![b"y".to_vec()],101, 111, expect_ok()).unwrap();
+        storage.async_commit(vec![b"x".to_vec()], 100, 110, expect_ok()).unwrap();
+        storage.async_commit(vec![b"y".to_vec()], 101, 111, expect_ok()).unwrap();
         storage.async_get(vec![b'x'], 120, expect_get_val(b"100".to_vec())).unwrap();
         storage.async_get(vec![b'y'], 120, expect_get_val(b"101".to_vec())).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"105".to_vec()))],b"x".to_vec(),
+        storage.async_prewrite(vec![Mutation::Put((b"x".to_vec(), b"105".to_vec()))],
+                               b"x".to_vec(),
                                105,
                                expect_fail())
                .unwrap();
