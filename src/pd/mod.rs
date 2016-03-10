@@ -32,17 +32,8 @@ pub trait Client {
     // and panic if not bootstrapped.
     fn is_cluster_bootstrapped(&self, cluster_id: u64) -> Result<bool>;
 
-    // Allocate a unique positive node id.
-    fn alloc_node_id(&mut self) -> Result<u64>;
-
-    // Allocate a unique positive store id.
-    fn alloc_store_id(&mut self) -> Result<u64>;
-
-    // Allocate a unique positive peer id.
-    fn alloc_peer_id(&mut self) -> Result<u64>;
-
-    // Allocate a unique positive region id.
-    fn alloc_region_id(&mut self) -> Result<u64>;
+    // Allocate a unique positive id.
+    fn alloc_id(&mut self) -> Result<u64>;
 
     // When the node starts, or some node information changed, it
     // uses put_node to inform pd.
