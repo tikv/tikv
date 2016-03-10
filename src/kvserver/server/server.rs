@@ -14,7 +14,7 @@ use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRespo
                      CmdPrewriteResponse_Item, CmdScanResponse_Item, CmdCommitThenGetResponse,
                      Request, Response, MessageType, ErrorType};
 use storage;
-use storage::{Key, Storage, Value, KvPair, Mutation};
+use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked};
 use storage::Result as ResultStorage;
 
 use super::conn::Conn;
@@ -284,16 +284,23 @@ impl Server {
                     match result {
                         Ok((ref key, ref value)) => {
                             new_kv.set_ok(true);
-                            new_kv.set_err(kvrpcpb::ErrorType::None);
+                            new_kv.set_err(ErrorType::None);
                             new_kv.set_key(key.clone());
                             new_kv.set_value(value.clone());
                         }
-                        Err(storage::Error::Mvcc(e)) => {
-                            // TODO(disksing): should send lock to client
-                        }
-                        Err(_) => {
-                            new_kv.set_ok(false);
-                            new_kv.set_err(kvrpcpb::ErrorType::Retryable);
+                        Err(..) => {
+                            if result.is_locked() {
+                                if let Some((key, primary, ts)) = result.get_lock() {
+                                    new_kv.set_ok(false);
+                                    new_kv.set_err(ErrorType::Locked);
+                                    new_kv.set_key(key);
+                                    new_kv.set_primary_lock(primary);
+                                    new_kv.set_lock_version(ts);
+                                }
+                            } else {
+                                new_kv.set_ok(false);
+                                new_kv.set_err(ErrorType::Retryable);
+                            }
                         }
                     }
                     new_kvs.push(new_kv);
@@ -318,8 +325,16 @@ impl Server {
             Ok(results) => {
                 for result in results {
                     let mut item: CmdPrewriteResponse_Item = CmdPrewriteResponse_Item::new();
-                    if let Err(storage::Error::Mvcc(e)) = result {
-                        // [TODO]: freeze check is locked error
+                    if let Some((key, primary, ts)) = result.get_lock() {
+                        // Actually items only contain locked item, so `ok` is always false.
+                        item.set_ok(false);
+                        item.set_err(ErrorType::Locked);
+                        item.set_key(key);
+                        item.set_primary_lock(primary);
+                        item.set_lock_version(ts);
+                    } else {
+                        item.set_ok(false);
+                        item.set_err(ErrorType::Retryable);
                     }
                     items.push(item);
                 }
