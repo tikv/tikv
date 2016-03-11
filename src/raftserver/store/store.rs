@@ -99,6 +99,7 @@ impl<T: Transport> Store<T> {
                              let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
                              let peer = try!(Peer::create(self, region));
 
+                             self.region_ranges.insert(peer.get_region().get_start_key().to_vec(), region_id);
         // No need to check duplicated here, because we use region id as the key
         // in DB.
                              self.region_peers.insert(region_id, peer);
@@ -189,6 +190,8 @@ impl<T: Transport> Store<T> {
 
         if !self.region_peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self, region_id, to_peer.get_peer_id()));
+            // We don't have start_key of the region, so there is no need to insert into
+            // region_ranges
             self.region_peers.insert(region_id, peer);
         }
 
@@ -196,7 +199,7 @@ impl<T: Transport> Store<T> {
 
         try!(peer.raft_group.step(msg.get_message().clone()));
 
-        // Add in pending raft group for later handing ready.
+        // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
 
         Ok(())
@@ -210,7 +213,7 @@ impl<T: Transport> Store<T> {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 match peer.handle_raft_ready(&self.trans) {
                     Err(e) => {
-                        // TODO: should we panic here or shutdown the store?
+                        // TODO: should we panic or shutdown the store?
                         error!("handle raft ready at region {} err: {:?}", region_id, e);
                         return Err(e);
                     }
@@ -244,12 +247,15 @@ impl<T: Transport> Store<T> {
                         // TODO: should we check None here?
                         // Can we destroy it in another thread later?
                         let mut p = self.region_peers.remove(&region_id).unwrap();
+                        let start_key = p.get_region().get_start_key().to_vec();
                         if let Err(e) = p.destroy() {
                             error!("destroy peer {:?} for region {} in store {} err {:?}",
                                    peer,
                                    region_id,
                                    self.get_store_id(),
                                    e);
+                        } else {
+                            self.region_ranges.remove(&start_key);
                         }
                     }
                 }
@@ -284,6 +290,9 @@ impl<T: Transport> Store<T> {
                                 }
                             }
 
+                            self.region_ranges
+                                .insert(new_peer.get_region().get_start_key().to_vec(),
+                                        new_region_id);
                             self.region_peers.insert(new_region_id, new_peer);
                         }
                     }
