@@ -122,7 +122,9 @@ impl Server {
         let received_cb = Box::new(move |r: ResultStorage<Vec<ResultStorage<()>>>| {
             let resp: Response = Server::cmd_prewrite_done(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+            if let Err(e) = sender.send(queue_msg) {
+                error!("{:?}", e);
+            }
         });
         self.store
             .async_prewrite(mutations,
@@ -149,7 +151,9 @@ impl Server {
             let resp: Response = Server::cmd_commit_done(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             // [TODO]: retry
-            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+            if let Err(e) = sender.send(queue_msg) {
+                error!("{:?}", e);
+            }
         });
         self.store
             .async_commit(cmd_commit_req.get_keys().to_vec(),
@@ -176,7 +180,9 @@ impl Server {
             let resp: Response = Server::cmd_clean_up_done(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             // [TODO]: retry
-            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+            if let Err(e) = sender.send(queue_msg) {
+                error!("{:?}", e);
+            }
         });
         self.store
             .async_clean_up(cmd_cleanup_req.get_key().to_vec(),
@@ -202,7 +208,9 @@ impl Server {
             let resp: Response = Server::cmd_commit_get_done(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             // [TODO]: retry
-            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+            if let Err(e) = sender.send(queue_msg) {
+                error!("{:?}", e);
+            }
         });
         self.store
             .async_commit_then_get(cmd_commit_get_req.get_key().to_vec(),
@@ -230,7 +238,9 @@ impl Server {
             let resp: Response = Server::cmd_rollback_get_done(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             // [TODO]: retry
-            let _ = sender.send(queue_msg).map_err(|e| error!("{:?}", e));
+            if let Err(e) = sender.send(queue_msg) {
+                error!("{:?}", e);
+            }
         });
         self.store
             .async_rollback_then_get(cmd_rollback_get_req.get_key().to_vec(),
@@ -279,7 +289,6 @@ impl Server {
                     new_kv.set_ok(result.is_ok());
                     match result {
                         Ok((ref key, ref value)) => {
-                            new_kv.set_err(ErrorType::None);
                             new_kv.set_key(key.clone());
                             new_kv.set_value(value.clone());
                         }
@@ -320,7 +329,6 @@ impl Server {
                     let mut item: CmdPrewriteResponse_Item = CmdPrewriteResponse_Item::new();
                     if result.is_ok() {
                         item.set_ok(true);
-                        item.set_err(ErrorType::None);
                     } else if let Some((key, primary, ts)) = result.get_lock() {
                         // Actually items only contain locked item, so `ok` is always false.
                         item.set_ok(false);
@@ -618,6 +626,7 @@ mod tests {
         let mut exp_resp: Response = Response::new();
         let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
         exp_cmd_resp.set_ok(false);
+        exp_cmd_resp.set_err(ErrorType::Retryable);
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
         assert_eq!(exp_resp, actual_resp);

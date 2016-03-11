@@ -350,6 +350,42 @@ impl<T> MaybeLocked for Result<T> {
     }
 }
 
+pub trait MaybeComitted {
+    fn is_committed(&self) -> bool;
+    fn get_commit(&self) -> Option<u64>;
+}
+
+impl<T> MaybeComitted for Result<T> {
+    fn is_committed(&self) -> bool {
+        match *self {
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted{..}))) => true,
+            _ => false,
+        }
+    }
+
+    fn get_commit(&self) -> Option<u64> {
+        match *self {
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted{commit_ts}))) => {
+                Some(commit_ts)
+            }
+            _ => None,
+        }
+    }
+}
+
+pub trait MaybeRollbacked {
+    fn is_rollbacked(&self) -> bool;
+}
+
+impl<T> MaybeRollbacked for Result<T> {
+    fn is_rollbacked(&self) -> bool {
+        match *self {
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyRollbacked))) => true,
+            _ => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
