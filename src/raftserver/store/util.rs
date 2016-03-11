@@ -2,8 +2,8 @@ use std::option::Option;
 
 use uuid::Uuid;
 
-use proto::metapb;
-use proto::raft_cmdpb::RaftCommandRequest;
+use kvproto::metapb;
+use kvproto::raft_cmdpb::RaftCommandRequest;
 use raftserver::{Result, Error};
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -51,7 +51,7 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
 
  #[cfg(test)]
 mod tests {
-    use proto::metapb;
+    use kvproto::metapb;
 
     use super::*;
 

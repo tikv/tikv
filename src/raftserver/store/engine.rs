@@ -163,7 +163,7 @@ mod tests {
 
     use super::*;
     use raftserver::Result;
-    use proto::metapb::Region;
+    use kvproto::metapb::Region;
 
     #[test]
     fn test_base() {

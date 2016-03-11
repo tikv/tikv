@@ -1,7 +1,7 @@
 use super::{RegionObserver, ObserverContext};
 
 use raftserver::store::PeerStorage;
-use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 
 struct ObserverEntry {
     priority: u32,
@@ -120,9 +120,9 @@ mod test {
     use std::fmt::Debug;
     use protobuf::RepeatedField;
 
-    use proto::metapb::Region;
-    use proto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response, RaftCommandRequest,
-                            RaftCommandResponse};
+    use kvproto::metapb::Region;
+    use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response, RaftCommandRequest,
+                              RaftCommandResponse};
 
     struct TestCoprocessor {
         bypass_pre: Arc<RwLock<bool>>,

@@ -6,9 +6,9 @@ use rocksdb::DB;
 use rocksdb::rocksdb::{Snapshot as RocksDBSnapshot, Range};
 use protobuf::{self, Message};
 
-use proto::metapb;
-use proto::raftpb::{Entry, Snapshot, HardState, ConfState};
-use proto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
+use kvproto::metapb;
+use kvproto::raftpb::{Entry, Snapshot, HardState, ConfState};
+use kvproto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError};
 use raftserver::{Result, Error, other};
 use super::{keys, util};
@@ -595,9 +595,9 @@ mod test {
     use super::*;
     use std::sync::*;
     use rocksdb::*;
-    use proto::raftpb::{Entry, ConfState};
-    use proto::metapb;
-    use proto::raft_serverpb::RaftSnapshotData;
+    use kvproto::raftpb::{Entry, ConfState};
+    use kvproto::metapb;
+    use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;

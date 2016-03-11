@@ -3,8 +3,8 @@ use std::error;
 
 use uuid::Uuid;
 
-use proto::raft_cmdpb::RaftCommandResponse;
-use proto::errorpb::{self, ErrorDetail};
+use kvproto::raft_cmdpb::RaftCommandResponse;
+use kvproto::errorpb::{self, ErrorDetail};
 use raftserver::Error;
 
 pub fn bind_uuid(resp: &mut RaftCommandResponse, uuid: Uuid) {

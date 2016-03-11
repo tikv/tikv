@@ -3,7 +3,7 @@ use raftserver::store::engine::{Iterable, Peekable, DBValue};
 use raftserver::store::{keys, PeerStorage};
 use raftserver::store::util;
 use raftserver::Result;
-use proto::metapb;
+use kvproto::metapb;
 
 /// Snapshot of a region.
 ///
@@ -129,7 +129,7 @@ mod tests {
     use super::*;
     use raftserver::Result;
     use std::sync::Arc;
-    use proto::metapb::Region;
+    use kvproto::metapb::Region;
 
     fn new_temp_engine(path: &TempDir) -> Arc<DB> {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();

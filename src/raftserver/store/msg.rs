@@ -6,8 +6,8 @@ use std::time::Duration;
 use mio;
 
 use raftserver::{Result, send_msg};
-use proto::raft_serverpb::RaftMessage;
-use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 
 pub type Callback = Box<FnBox(RaftCommandResponse) -> Result<()> + Send>;
 
@@ -122,7 +122,7 @@ mod tests {
     use mio::{EventLoop, Handler};
 
     use super::*;
-    use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+    use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
     use raftserver::Result;
 
     struct TestHandler;

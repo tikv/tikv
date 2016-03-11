@@ -1,4 +1,4 @@
-use tikv::proto::raftpb::*;
+use kvproto::raftpb::*;
 use protobuf::{self, ProtobufEnum};
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;

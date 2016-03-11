@@ -7,7 +7,7 @@ use protobuf::Message;
 use raftserver::{Result, send_msg};
 use util::codec::rpc;
 
-use proto::raft_serverpb;
+use kvproto::raft_serverpb;
 
 pub mod bootstrap;
 pub mod config;

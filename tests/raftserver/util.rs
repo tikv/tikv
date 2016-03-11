@@ -12,11 +12,11 @@ use protobuf;
 
 use tikv::raftserver::store::*;
 use tikv::raftserver::server::Config as ServerConfig;
-use tikv::proto::metapb;
-use tikv::proto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCommandRequest,
-                              RaftCommandResponse};
-use tikv::proto::raft_cmdpb::{CommandType, StatusCommandType, AdminCommandType};
-use tikv::proto::raftpb::ConfChangeType;
+use kvproto::metapb;
+use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCommandRequest,
+                          RaftCommandResponse};
+use kvproto::raft_cmdpb::{CommandType, StatusCommandType, AdminCommandType};
+use kvproto::raftpb::ConfChangeType;
 use tikv::raft::INVALID_ID;
 
 
