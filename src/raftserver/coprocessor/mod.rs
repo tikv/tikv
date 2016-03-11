@@ -5,7 +5,7 @@ pub mod split_observer;
 pub use self::region_snapshot::RegionSnapshot;
 pub use self::dispatcher::{CoprocessorHost, Registry};
 
-use proto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
+use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
 use protobuf::RepeatedField;
 use raftserver::store::PeerStorage;
 

@@ -7,8 +7,8 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::panic;
 use std::cmp;
-use tikv::proto::raftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
-                          ConfChange, ConfChangeType};
+use kvproto::raftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
+                      ConfChange, ConfChangeType};
 use rand;
 
 pub fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {

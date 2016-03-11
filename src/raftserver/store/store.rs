@@ -8,11 +8,11 @@ use mio::{self, EventLoop, EventLoopConfig};
 use protobuf;
 use uuid::Uuid;
 
-use proto::raft_serverpb::{RaftMessage, StoreIdent};
-use proto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
-use proto::raftpb::ConfChangeType;
+use kvproto::raft_serverpb::{RaftMessage, StoreIdent};
+use kvproto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
+use kvproto::raftpb::ConfChangeType;
 use raftserver::{Result, other, Error};
-use proto::metapb;
+use kvproto::metapb;
 use super::util;
 use super::{SendCh, Msg};
 use super::keys;

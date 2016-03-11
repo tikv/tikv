@@ -5,8 +5,8 @@ use std::sync::{Arc, RwLock};
 use rocksdb::DB;
 
 use pd::{INVALID_ID, Client as PdClient, Error as PdError};
-use proto::raft_serverpb::StoreIdent;
-use proto::metapb;
+use kvproto::raft_serverpb::StoreIdent;
+use kvproto::metapb;
 use raftserver::store::{self, Store, Config as StoreConfig, keys, Peekable, Transport};
 use raftserver::{Result, other};
 use super::config::Config;
