@@ -2,8 +2,8 @@ use std::time::Duration;
 use std::sync::{Arc, RwLock};
 
 use tikv::raftserver::store::*;
-use tikv::proto::raftpb::ConfChangeType;
-use tikv::proto::metapb;
+use kvproto::raftpb::ConfChangeType;
+use kvproto::metapb;
 use tikv::pd::Client;
 
 use super::cluster::{Cluster, Simulator};

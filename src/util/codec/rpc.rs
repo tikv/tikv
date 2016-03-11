@@ -111,7 +111,7 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
-    use proto::raftpb::{Message, MessageType};
+    use kvproto::raftpb::{Message, MessageType};
 
     #[test]
     fn test_msg_codec() {

@@ -1,5 +1,5 @@
 use test_raft::*;
-use tikv::proto::raftpb::*;
+use kvproto::raftpb::*;
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
 use protobuf::RepeatedField;

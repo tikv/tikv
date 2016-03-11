@@ -4,8 +4,8 @@ use std::sync::{Arc, RwLock, Mutex};
 
 use raftserver::store::{Transport, SendCh as StoreSendCh, Callback};
 use raftserver::{Result, other};
-use proto::raft_serverpb::{Message, MessageType, RaftMessage};
-use proto::raft_cmdpb::RaftCommandRequest;
+use kvproto::raft_serverpb::{Message, MessageType, RaftMessage};
+use kvproto::raft_cmdpb::RaftCommandRequest;
 use pd::Client as PdClient;
 use super::{SendCh, ConnData};
 

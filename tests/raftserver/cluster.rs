@@ -10,9 +10,9 @@ use tempdir::TempDir;
 use tikv::raftserver::Result;
 use tikv::raftserver::store::*;
 use super::util::*;
-use tikv::proto::raft_cmdpb::*;
-use tikv::proto::metapb;
-use tikv::proto::raftpb::ConfChangeType;
+use kvproto::raft_cmdpb::*;
+use kvproto::metapb;
+use kvproto::raftpb::ConfChangeType;
 use tikv::pd::Client;
 use super::pd::PdClient;
 

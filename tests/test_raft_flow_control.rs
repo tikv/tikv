@@ -1,5 +1,5 @@
 use test_raft::*;
-use tikv::proto::raftpb::*;
+use kvproto::raftpb::*;
 
 // test_msg_app_flow_control_full ensures:
 // 1. msgApp can fill the sending window until full

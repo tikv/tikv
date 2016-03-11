@@ -9,11 +9,11 @@ use rocksdb::rocksdb::Snapshot;
 use protobuf::{self, Message};
 use uuid::Uuid;
 
-use proto::metapb;
-use proto::raftpb::{self, ConfChangeType};
-use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse, ChangePeerRequest};
-use proto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminResponse};
-use proto::raft_serverpb::{RaftMessage, RaftTruncatedState};
+use kvproto::metapb;
+use kvproto::raftpb::{self, ConfChangeType};
+use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse, ChangePeerRequest};
+use kvproto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminResponse};
+use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other};
 use raftserver::coprocessor::CoprocessorHost;

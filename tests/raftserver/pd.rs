@@ -4,7 +4,7 @@ use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
 use std::collections::Bound::{Included, Unbounded};
 
-use tikv::proto::metapb;
+use kvproto::metapb;
 use tikv::pd::{Client, Result, Error, Key};
 use tikv::pd::errors::other;
 use tikv::raftserver::store::keys;
