@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use proto::raftpb::HardState;
+use kvproto::raftpb::HardState;
 use raft::raft::{Raft, SoftState, StateRole};
 use raft::storage::Storage;
 use raft::progress::Progress;

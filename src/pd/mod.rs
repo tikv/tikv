@@ -3,7 +3,7 @@ use std::vec::Vec;
 pub mod errors;
 pub use self::errors::{Result, Error};
 
-use proto::metapb;
+use kvproto::metapb;
 
 pub type Key = Vec<u8>;
 

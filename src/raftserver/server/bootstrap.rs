@@ -3,7 +3,7 @@ use std::vec::Vec;
 
 use rocksdb::DB;
 
-use proto::raft_serverpb::StoreIdent;
+use kvproto::raft_serverpb::StoreIdent;
 use raftserver::{Result, other};
 use raftserver::store::{keys, Peekable};
 

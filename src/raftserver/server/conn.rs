@@ -8,7 +8,7 @@ use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 
 use raftserver::Result;
-use proto::raft_serverpb::Message;
+use kvproto::raft_serverpb::Message;
 use super::ConnData;
 use super::server::Server;
 use util::codec::rpc;

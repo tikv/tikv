@@ -34,6 +34,9 @@ git = "https://github.com/stepancheg/rust-protobuf.git"
 [dependencies.bytes]
 git = "https://github.com/carllerche/bytes"
 
+[dependencies.kvproto]
+git = "https://github.com/pingcap/kvproto"
+
 [dev-dependencies]
 env_logger = "0.3"
 

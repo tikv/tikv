@@ -1,7 +1,7 @@
 
 #![allow(dead_code)]
 #![allow(deprecated)]
-use proto::raftpb::{HardState, ConfState, Entry, Snapshot};
+use kvproto::raftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use util;
