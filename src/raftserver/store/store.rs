@@ -99,7 +99,7 @@ impl<T: Transport> Store<T> {
                              let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
                              let peer = try!(Peer::create(self, region));
 
-                             self.region_ranges.insert(peer.get_region().get_start_key().to_vec(), region_id);
+                             self.region_ranges.insert(peer.region().get_start_key().to_vec(), region_id);
         // No need to check duplicated here, because we use region id as the key
         // in DB.
                              self.region_peers.insert(region_id, peer);
@@ -173,23 +173,23 @@ impl<T: Transport> Store<T> {
     #[allow(map_entry)]
     fn handle_raft_message(&mut self, msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-        let from_peer = msg.get_from_peer();
-        let to_peer = msg.get_to_peer();
+        let from = msg.get_from_peer();
+        let to = msg.get_to_peer();
         debug!("handle raft message for region {}, from {} to {}",
                region_id,
-               from_peer.get_peer_id(),
-               to_peer.get_peer_id());
+               from.get_peer_id(),
+               to.get_peer_id());
 
         // TODO: We may receive a message which is not in region, and
         // if the message peer id is <= region max_peer_id, we can think
         // this is a stale message and can ignore it directly.
         // Should we only handle this in heartbeat message?
 
-        self.peer_cache.write().unwrap().insert(from_peer.get_peer_id(), from_peer.clone());
-        self.peer_cache.write().unwrap().insert(to_peer.get_peer_id(), to_peer.clone());
+        self.peer_cache.write().unwrap().insert(from.get_peer_id(), from.clone());
+        self.peer_cache.write().unwrap().insert(to.get_peer_id(), to.clone());
 
         if !self.region_peers.contains_key(&region_id) {
-            let peer = try!(Peer::replicate(self, region_id, to_peer.get_peer_id()));
+            let peer = try!(Peer::replicate(self, region_id, to.get_peer_id()));
             // We don't have start_key of the region, so there is no need to insert into
             // region_ranges
             self.region_peers.insert(region_id, peer);
@@ -247,7 +247,7 @@ impl<T: Transport> Store<T> {
                         // TODO: should we check None here?
                         // Can we destroy it in another thread later?
                         let mut p = self.region_peers.remove(&region_id).unwrap();
-                        let start_key = p.get_region().get_start_key().to_vec();
+                        let start_key = p.region().get_start_key().to_vec();
                         if let Err(e) = p.destroy() {
                             error!("destroy peer {:?} for region {} in store {} err {:?}",
                                    peer,
@@ -291,8 +291,7 @@ impl<T: Transport> Store<T> {
                             }
 
                             self.region_ranges
-                                .insert(new_peer.get_region().get_start_key().to_vec(),
-                                        new_region_id);
+                                .insert(new_peer.region().get_start_key().to_vec(), new_region_id);
                             self.region_peers.insert(new_region_id, new_peer);
                         }
                     }
@@ -336,15 +335,15 @@ impl<T: Transport> Store<T> {
         if !peer.is_leader() {
             resp =
                 cmd_resp::new_error(Error::NotLeader(region_id,
-                                                     peer.get_peer_from_cache(peer.get_leader())));
+                                                     peer.get_peer_from_cache(peer.leader_id())));
             bind_uuid(&mut resp, uuid);
             return cb.call_box((resp,));
         }
 
         let peer_id = msg.get_header().get_peer().get_peer_id();
-        if peer.get_peer_id() != peer_id {
+        if peer.peer_id() != peer_id {
             resp = cmd_resp::message_error(format!("mismatch peer id {} != {}",
-                                                   peer.get_peer_id(),
+                                                   peer.peer_id(),
                                                    peer_id));
             bind_uuid(&mut resp, uuid);
             return cb.call_box((resp,));
@@ -597,7 +596,7 @@ impl<T: Transport> Store<T> {
         };
 
         let mut resp = cmd::StatusResponse::new();
-        if let Some(leader) = peer.get_peer_from_cache(peer.get_leader()) {
+        if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
             resp.mut_region_leader().set_leader(leader);
             let term = peer.get_raft_status().hs.get_term();
             resp.mut_region_leader().set_current_term(term);
