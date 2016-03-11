@@ -174,7 +174,7 @@ impl Peer {
 
         // set the tombstone key here.
         try!(batch.put_u64(&keys::region_tombstone_key(self.region_id),
-                           self.get_region().get_max_peer_id()));
+                           self.region().get_max_peer_id()));
 
         try!(self.engine.write(batch));
 
@@ -198,11 +198,11 @@ impl Peer {
         Ok(())
     }
 
-    pub fn get_region(&self) -> metapb::Region {
+    pub fn region(&self) -> metapb::Region {
         self.storage.rl().get_region().clone()
     }
 
-    pub fn get_peer_id(&self) -> u64 {
+    pub fn peer_id(&self) -> u64 {
         self.peer.get_peer_id()
     }
 
@@ -210,12 +210,12 @@ impl Peer {
         self.raft_group.status()
     }
 
-    pub fn get_leader(&self) -> u64 {
+    pub fn leader_id(&self) -> u64 {
         self.leader_id
     }
 
     pub fn is_leader(&self) -> bool {
-        self.leader_id == self.get_peer_id()
+        self.leader_id == self.peer_id()
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self,
@@ -628,7 +628,7 @@ impl Peer {
                            -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
-        let mut region = self.get_region();
+        let mut region = self.region();
         let store_id = peer.get_store_id();
         // TODO: we should need more check, like peer validation, duplicated id, etc.
         let exists = util::find_peer(&region, store_id).is_some();
@@ -693,7 +693,7 @@ impl Peer {
         }
 
         let split_key = request.get_split_key();
-        let mut region = self.get_region();
+        let mut region = self.region();
         try!(util::check_key_in_region(split_key, &region));
 
         // TODO: check new region id validation.
