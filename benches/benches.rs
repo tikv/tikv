@@ -14,5 +14,6 @@ extern crate rocksdb;
 extern crate tempdir;
 extern crate uuid;
 extern crate test;
+extern crate kvproto;
 
 mod raftserver;
