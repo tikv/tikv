@@ -76,7 +76,7 @@ impl Peer {
     // use this function to create the peer. The region must contain the peer info
     // for this store.
     pub fn create<T: Transport>(store: &mut Store<T>, region: metapb::Region) -> Result<Peer> {
-        let store_id = store.get_store_id();
+        let store_id = store.store_id();
         let peer_id = match util::find_peer(&region, store_id) {
             None => {
                 return Err(other(format!("find no peer for store {} in region {:?}",
@@ -97,7 +97,7 @@ impl Peer {
                                    peer_id: u64)
                                    -> Result<Peer> {
         // we must first check the peer id validation.
-        let last_max_id = try!(store.get_engine().get_u64(&keys::region_tombstone_key(region_id)));
+        let last_max_id = try!(store.engine().get_u64(&keys::region_tombstone_key(region_id)));
         if let Some(last_max_id) = last_max_id {
             if peer_id <= last_max_id {
                 // We receive a stale message and we can't re-create the peer with the peer id.
@@ -118,14 +118,14 @@ impl Peer {
             return Err(other("invalid peer id"));
         }
 
-        let store_id = store.get_store_id();
+        let store_id = store.store_id();
 
-        let ps = try!(PeerStorage::new(store.get_engine(), &region));
+        let ps = try!(PeerStorage::new(store.engine(), &region));
 
         let applied_index = ps.applied_index();
         let storage = Arc::new(RaftStorage::new(ps));
 
-        let cfg = store.get_config();
+        let cfg = store.config();
         let raft_cfg = raft::Config {
             id: peer_id,
             peers: vec![],
@@ -139,16 +139,16 @@ impl Peer {
 
         let raft_group = try!(RawNode::new(&raft_cfg, storage.clone(), &[]));
 
-        let node_id = store.get_node_id();
+        let node_id = store.node_id();
         let mut peer = Peer {
-            engine: store.get_engine(),
+            engine: store.engine(),
             peer: util::new_peer(node_id, store_id, peer_id),
             region_id: region.get_region_id(),
             leader_id: raft::INVALID_ID,
             storage: storage,
             raft_group: raft_group,
             pending_cmds: HashMap::new(),
-            peer_cache: store.get_peer_cache(),
+            peer_cache: store.peer_cache(),
             coprocessor_host: CoprocessorHost::new(),
         };
 

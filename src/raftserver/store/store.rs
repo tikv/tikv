@@ -124,27 +124,27 @@ impl<T: Transport> Store<T> {
         self.sendch.clone()
     }
 
-    pub fn get_engine(&self) -> Arc<DB> {
+    pub fn engine(&self) -> Arc<DB> {
         self.engine.clone()
     }
 
-    pub fn get_ident(&self) -> &StoreIdent {
+    pub fn ident(&self) -> &StoreIdent {
         &self.ident
     }
 
-    pub fn get_node_id(&self) -> u64 {
+    pub fn node_id(&self) -> u64 {
         self.ident.get_node_id()
     }
 
-    pub fn get_store_id(&self) -> u64 {
+    pub fn store_id(&self) -> u64 {
         self.ident.get_store_id()
     }
 
-    pub fn get_config(&self) -> &Config {
+    pub fn config(&self) -> &Config {
         &self.cfg
     }
 
-    pub fn get_peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
+    pub fn peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
         self.peer_cache.clone()
     }
 
@@ -241,7 +241,7 @@ impl<T: Transport> Store<T> {
                 ExecResult::ChangePeer{ref change_type, ref peer, ..} => {
                     // We only care remove itself now.
                     if *change_type == ConfChangeType::RemoveNode &&
-                       peer.get_store_id() == self.get_store_id() {
+                       peer.get_store_id() == self.store_id() {
                         info!("destory peer {:?} for region {}", peer, region_id);
                         // The remove peer is in the same store.
                         // TODO: should we check None here?
@@ -252,7 +252,7 @@ impl<T: Transport> Store<T> {
                             error!("destroy peer {:?} for region {} in store {} err {:?}",
                                    peer,
                                    region_id,
-                                   self.get_store_id(),
+                                   self.store_id(),
                                    e);
                         } else {
                             self.region_ranges.remove(&start_key);
