@@ -30,7 +30,6 @@ pub enum Msg {
     SplitCheckResult {
         region_id: u64,
         split_key: Vec<u8>,
-        region_size: u64,
     },
 }
 
