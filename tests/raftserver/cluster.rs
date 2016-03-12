@@ -241,7 +241,7 @@ impl<T: Simulator> Cluster<T> {
             return false;
         }
 
-        let err = resp.get_header().get_error().get_detail();
+        let err = resp.get_header().get_error();
         if !err.has_not_leader() {
             return false;
         }
