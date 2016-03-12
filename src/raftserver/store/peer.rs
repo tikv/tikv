@@ -69,6 +69,8 @@ pub struct Peer {
     pub pending_cmds: HashMap<Uuid, PendingCmd>,
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
     coprocessor_host: CoprocessorHost,
+    /// an inaccurate difference in region size since last reset.
+    pub size_diff_hint: u64,
 }
 
 impl Peer {
@@ -150,6 +152,7 @@ impl Peer {
             pending_cmds: HashMap::new(),
             peer_cache: store.get_peer_cache(),
             coprocessor_host: CoprocessorHost::new(),
+            size_diff_hint: 0,
         };
 
         peer.load_all_coprocessors();
@@ -185,10 +188,6 @@ impl Peer {
 
     pub fn load_all_coprocessors(&mut self) {
         // TODO: load processors.
-    }
-
-    pub fn get_region_id(&self) -> u64 {
-        self.region_id
     }
 
     pub fn update_region(&mut self, region: &metapb::Region) -> Result<()> {
@@ -739,6 +738,8 @@ impl Peer {
         resp.mut_split().set_left(region.clone());
         resp.mut_split().set_right(new_region.clone());
 
+        self.size_diff_hint = 0;
+
         Ok((resp,
             Some(ExecResult::SplitRegion {
             left: region,
@@ -834,7 +835,11 @@ impl Peer {
         try!(self.check_data_key(key));
 
         let resp = Response::new();
-        try!(ctx.wb.put(&keys::data_key(key), request.get_value()));
+        let key = keys::data_key(key);
+        let value = request.get_value();
+        self.size_diff_hint += key.len() as u64;
+        self.size_diff_hint += value.len() as u64;
+        try!(ctx.wb.put(&key, value));
 
         // Should we call mut_put() explicitly?
         Ok(resp)
@@ -845,8 +850,11 @@ impl Peer {
         let key = request.get_key();
         try!(self.check_data_key(key));
 
+        let key = keys::data_key(key);
+        // since size_diff_hint is not accurate, so we just skip calculate the value size.
+        self.size_diff_hint -= key.len() as u64;
         let resp = Response::new();
-        try!(ctx.wb.delete(&keys::data_key(key)));
+        try!(ctx.wb.delete(&key));
 
         // Should we call mut_delete() explicitly?
         Ok(resp)
