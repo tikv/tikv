@@ -1,4 +1,4 @@
-use proto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::RaftMessage;
 use raftserver::Result;
 use super::msg::SendCh;
 

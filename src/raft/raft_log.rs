@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use raft::storage::Storage;
 use raft::log_unstable::Unstable;
-use proto::raftpb::{Entry, Snapshot};
+use kvproto::raftpb::{Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
 use std::{cmp, u64};
 use std::sync::Arc;
@@ -385,7 +385,7 @@ mod test {
     use raft::raft_log::{self, RaftLog};
     use raft::storage::{MemStorage, Storage};
     use std::sync::Arc;
-    use proto::raftpb;
+    use kvproto::raftpb;
     use raft::errors::{Error, StorageError};
     use protobuf;
     use std::panic;

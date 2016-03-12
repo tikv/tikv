@@ -10,7 +10,7 @@ use protobuf::ProtobufError;
 use util::codec;
 use pd;
 use raft;
-use proto::metapb;
+use kvproto::metapb;
 
 quick_error!{
     #[derive(Debug)]

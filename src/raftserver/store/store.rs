@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use std::option::Option;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque, BTreeMap};
 use std::boxed::{Box, FnBox};
 use std::thread;
 use std::time::Duration;
@@ -10,11 +10,11 @@ use mio::{self, EventLoop, EventLoopConfig};
 use protobuf;
 use uuid::Uuid;
 
-use proto::raft_serverpb::{RaftMessage, StoreIdent};
-use proto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
-use proto::raftpb::ConfChangeType;
+use kvproto::raft_serverpb::{RaftMessage, StoreIdent};
+use kvproto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
+use kvproto::raftpb::ConfChangeType;
 use raftserver::{Result, other, Error};
-use proto::metapb;
+use kvproto::metapb;
 use super::util;
 use super::{SendCh, Msg};
 use super::keys;
@@ -26,14 +26,19 @@ use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
 
+type Key = Vec<u8>;
+
 pub struct Store<T: Transport> {
     cfg: Config,
     ident: StoreIdent,
     engine: Arc<DB>,
     sendch: SendCh,
 
-    peers: HashMap<u64, Peer>,
+    // region_id -> peers
+    region_peers: HashMap<u64, Peer>,
     pending_raft_groups: HashSet<u64>,
+    // region start key -> region id
+    region_ranges: BTreeMap<Key, u64>,
 
     split_checking_queue: Arc<RwLock<VecDeque<SplitCheckTask>>>,
     last_region_sizes: HashMap<u64, u64>,
@@ -75,10 +80,11 @@ impl<T: Transport> Store<T> {
             ident: ident,
             engine: engine,
             sendch: sendch,
-            peers: HashMap::new(),
+            region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             split_checking_queue: Arc::new(RwLock::new(VecDeque::new())),
             last_region_sizes: HashMap::new(),
+            region_ranges: BTreeMap::new(),
             trans: trans,
             peer_cache: Arc::new(RwLock::new(peer_cache)),
         })
@@ -103,7 +109,7 @@ impl<T: Transport> Store<T> {
 
         // No need to check duplicated here, because we use region id as the key
         // in DB.
-                             self.peers.insert(region_id, peer);
+                             self.region_peers.insert(region_id, peer);
                              Ok(true)
                          }));
 
@@ -164,7 +170,7 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (region_id, peer) in &mut self.peers {
+        for (region_id, peer) in &mut self.region_peers {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(*region_id);
         }
@@ -193,12 +199,12 @@ impl<T: Transport> Store<T> {
         self.peer_cache.write().unwrap().insert(from_peer.get_peer_id(), from_peer.clone());
         self.peer_cache.write().unwrap().insert(to_peer.get_peer_id(), to_peer.clone());
 
-        if !self.peers.contains_key(&region_id) {
+        if !self.region_peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self, region_id, to_peer.get_peer_id()));
-            self.peers.insert(region_id, peer);
+            self.region_peers.insert(region_id, peer);
         }
 
-        let mut peer = self.peers.get_mut(&region_id).unwrap();
+        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
 
         try!(peer.raft_group.step(msg.get_message().clone()));
 
@@ -213,7 +219,7 @@ impl<T: Transport> Store<T> {
 
         for region_id in ids {
             let mut ready_result = None;
-            if let Some(peer) = self.peers.get_mut(&region_id) {
+            if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 match peer.handle_raft_ready(&self.trans) {
                     Err(e) => {
                         // TODO: should we panic here or shutdown the store?
@@ -249,7 +255,7 @@ impl<T: Transport> Store<T> {
                         // The remove peer is in the same store.
                         // TODO: should we check None here?
                         // Can we destroy it in another thread later?
-                        let mut p = self.peers.remove(&region_id).unwrap();
+                        let mut p = self.region_peers.remove(&region_id).unwrap();
                         if let Err(e) = p.destroy() {
                             error!("destroy peer {:?} for region {} in store {} err {:?}",
                                    peer,
@@ -269,7 +275,7 @@ impl<T: Transport> Store<T> {
                             error!("create new split region {:?} err {:?}", right, e);
                         }
                         Ok(mut new_peer) => {
-                            if self.peers.contains_key(&new_region_id) {
+                            if self.region_peers.contains_key(&new_region_id) {
                                 // This is a very serious error, should we close the store here?
                                 // because the raft group can not run correctly
                                 // for this split region.
@@ -280,7 +286,7 @@ impl<T: Transport> Store<T> {
                             // If the peer for the region before split is leader,
                             // we can force the new peer for the new split region to campaign
                             // to become the leader too.
-                            let is_leader = self.peers.get(&region_id).unwrap().is_leader();
+                            let is_leader = self.region_peers.get(&region_id).unwrap().is_leader();
                             if is_leader && right.get_peers().len() > 1 {
                                 if let Err(e) = new_peer.raft_group.campaign() {
                                     error!("peer {:?} campaigns for region {} err {:?}",
@@ -290,7 +296,7 @@ impl<T: Transport> Store<T> {
                                 }
                             }
 
-                            self.peers.insert(new_region_id, new_peer);
+                            self.region_peers.insert(new_region_id, new_peer);
                         }
                     }
                 }
@@ -321,7 +327,7 @@ impl<T: Transport> Store<T> {
         }
 
         let region_id = msg.get_header().get_region_id();
-        let mut peer = match self.peers.get_mut(&region_id) {
+        let mut peer = match self.region_peers.get_mut(&region_id) {
             None => {
                 resp = cmd_resp::new_error(Error::RegionNotFound(region_id));
                 bind_uuid(&mut resp, uuid);
@@ -400,7 +406,7 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (&region_id, peer) in &mut self.peers {
+        for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
             }
@@ -465,7 +471,7 @@ impl<T: Transport> Store<T> {
             return;
         }
         let mut tasks = VecDeque::new();
-        for (&region_id, peer) in &mut self.peers {
+        for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
             }
@@ -501,7 +507,7 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_split_check_result(&mut self, region_id: u64, region_size: u64, split_key: Vec<u8>) {
-        let p = self.peers.values().find(|p| p.get_region_id() == region_id);
+        let p = self.region_peers.values().find(|p| p.get_region_id() == region_id);
         if p.is_none() || !p.unwrap().is_leader() {
             // region on this store is no longer leader, skipped.
             self.last_region_sizes.remove(&region_id);
@@ -621,7 +627,7 @@ impl<T: Transport> Store<T> {
                              request: RaftCommandRequest)
                              -> Result<cmd::StatusResponse> {
         let region_id = request.get_header().get_region_id();
-        let peer = match self.peers.get_mut(&region_id) {
+        let peer = match self.region_peers.get_mut(&region_id) {
             None => return Err(Error::RegionNotFound(region_id)),
             Some(peer) => peer,
         };

@@ -10,9 +10,9 @@ use tempdir::TempDir;
 use tikv::raftserver::Result;
 use tikv::raftserver::store::*;
 use super::util::*;
-use tikv::proto::raft_cmdpb::*;
-use tikv::proto::metapb;
-use tikv::proto::raftpb::ConfChangeType;
+use kvproto::raft_cmdpb::*;
+use kvproto::metapb;
+use kvproto::raftpb::ConfChangeType;
 use tikv::pd::Client;
 use super::pd::PdClient;
 
@@ -241,7 +241,7 @@ impl<T: Simulator> Cluster<T> {
             return false;
         }
 
-        let err = resp.get_header().get_error().get_detail();
+        let err = resp.get_header().get_error();
         if !err.has_not_leader() {
             return false;
         }
@@ -352,12 +352,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
-        let new_region_id = self.pd_client.write().unwrap().alloc_region_id().unwrap();
+        let new_region_id = self.pd_client.write().unwrap().alloc_id().unwrap();
         let region = self.pd_client.read().unwrap().get_region_by_id(self.id, region_id).unwrap();
         let peer_count = region.get_peers().len();
         let mut peer_ids: Vec<u64> = vec![];
         for _ in 0..peer_count {
-            let peer_id = self.pd_client.write().unwrap().alloc_peer_id().unwrap();
+            let peer_id = self.pd_client.write().unwrap().alloc_id().unwrap();
             peer_ids.push(peer_id);
         }
 

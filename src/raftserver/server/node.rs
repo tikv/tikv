@@ -5,8 +5,8 @@ use std::sync::{Arc, RwLock};
 use rocksdb::DB;
 
 use pd::{INVALID_ID, Client as PdClient, Error as PdError};
-use proto::raft_serverpb::StoreIdent;
-use proto::metapb;
+use kvproto::raft_serverpb::StoreIdent;
+use kvproto::metapb;
 use raftserver::store::{self, Store, Config as StoreConfig, keys, Peekable, Transport};
 use raftserver::{Result, other};
 use super::config::Config;
@@ -50,7 +50,7 @@ impl<T, Trans> Node<T, Trans>
                                     .is_cluster_bootstrapped(self.cluster_id));
         let (node_id, mut store_ids) = try!(self.check_stores(&engines));
         if node_id == INVALID_ID {
-            self.node_id = try!(self.pd_client.write().unwrap().alloc_node_id());
+            self.node_id = try!(self.pd_client.write().unwrap().alloc_id());
             debug!("alloc node id {:?}", self.node_id);
         } else {
             self.node_id = node_id;
@@ -136,7 +136,7 @@ impl<T, Trans> Node<T, Trans>
     }
 
     fn bootstrap_store(&self, engine: Arc<DB>) -> Result<u64> {
-        let store_id = try!(self.pd_client.write().unwrap().alloc_store_id());
+        let store_id = try!(self.pd_client.write().unwrap().alloc_id());
         debug!("alloc store id {} for node {}", store_id, self.node_id);
 
         try!(store::bootstrap_store(engine, self.cluster_id, self.node_id, store_id));
@@ -145,13 +145,13 @@ impl<T, Trans> Node<T, Trans>
     }
 
     fn bootstrap_first_region(&self, engine: Arc<DB>, store_id: u64) -> Result<metapb::Region> {
-        let region_id = try!(self.pd_client.write().unwrap().alloc_region_id());
+        let region_id = try!(self.pd_client.write().unwrap().alloc_id());
         debug!("alloc first region id {} for cluster {}, node {}, store {}",
                region_id,
                self.cluster_id,
                self.node_id,
                store_id);
-        let peer_id = try!(self.pd_client.write().unwrap().alloc_peer_id());
+        let peer_id = try!(self.pd_client.write().unwrap().alloc_id());
         debug!("alloc first peer id {} for first region {}",
                peer_id,
                region_id);
