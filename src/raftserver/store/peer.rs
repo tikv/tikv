@@ -57,6 +57,8 @@ pub struct ReadyResult {
     // We can execute multi commands like 1, conf change, 2 split region, ...
     // in one ready, and outer store should handle these results sequentially too.
     pub exec_results: Vec<ExecResult>,
+    // snap_applied_region should be set when we apply snapshot
+    pub snap_applied_region: Option<metapb::Region>,
 }
 
 pub struct Peer {
@@ -235,7 +237,7 @@ impl Peer {
             self.leader_id = ss.lead;
         }
 
-        try!(self.handle_raft_ready_in_storage(&ready));
+        let applied_region = try!(self.handle_raft_ready_in_storage(&ready));
 
         for msg in &ready.messages {
             try!(self.send_raft_message(&msg, trans));
@@ -244,7 +246,10 @@ impl Peer {
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
 
         self.raft_group.advance(ready);
-        Ok(Some(ReadyResult { exec_results: exec_results }))
+        Ok(Some(ReadyResult {
+            snap_applied_region: applied_region,
+            exec_results: exec_results,
+        }))
     }
 
     pub fn propose_pending_cmd(&mut self, pending_cmd: &mut PendingCmd) -> Result<()> {
@@ -283,7 +288,7 @@ impl Peer {
         Ok(())
     }
 
-    fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<()> {
+    fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<Option<metapb::Region>> {
         let batch = WriteBatch::new();
         let mut storage = self.storage.wl();
         let mut last_index = storage.last_index();
@@ -310,9 +315,10 @@ impl Peer {
         if let Some(res) = apply_snap_res {
             storage.set_applied_index(res.applied_index);
             storage.set_region(&res.region);
+            return Ok(Some(res.region.clone()));
         }
 
-        Ok(())
+        Ok(None)
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {

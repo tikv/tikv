@@ -235,6 +235,10 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
+        if let Some(region) = ready_result.snap_applied_region {
+            self.region_ranges.insert(region.get_start_key().to_vec(), region.get_region_id());
+        }
+
         // handle executing committed log results
         for result in &ready_result.exec_results {
             match *result {
