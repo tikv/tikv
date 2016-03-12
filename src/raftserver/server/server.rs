@@ -13,8 +13,8 @@ use mio::util::Slab;
 
 use raftserver::{Result, other};
 use raftserver::store::cmd_resp;
-use proto::raft_serverpb::{Message, MessageType};
-use proto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use kvproto::raft_serverpb::{Message, MessageType};
+use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::config::Config;

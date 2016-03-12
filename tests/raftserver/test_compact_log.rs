@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use tikv::raftserver::store::*;
-use tikv::proto::raft_serverpb::RaftTruncatedState;
+use kvproto::raft_serverpb::RaftTruncatedState;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};

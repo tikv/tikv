@@ -2,8 +2,8 @@
 use std::sync::Arc;
 
 use rocksdb::{DB, Writable};
-use proto::raft_serverpb::StoreIdent;
-use proto::metapb;
+use kvproto::raft_serverpb::StoreIdent;
+use kvproto::metapb;
 use raftserver::{Result, other};
 use super::keys;
 use super::engine::{Iterable, Mutable};

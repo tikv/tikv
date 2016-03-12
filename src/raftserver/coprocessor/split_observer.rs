@@ -1,7 +1,7 @@
 use super::{Coprocessor, RegionObserver, ObserverContext};
 
-use proto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
-                        AdminCommandType};
+use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
+                          AdminCommandType};
 use protobuf::RepeatedField;
 
 /// SplitObserver assign a split key to SplitRequest if it doesn't have one.

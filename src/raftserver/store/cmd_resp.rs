@@ -3,8 +3,8 @@ use std::error;
 
 use uuid::Uuid;
 
-use proto::raft_cmdpb::RaftCommandResponse;
-use proto::errorpb::{self, ErrorDetail};
+use kvproto::raft_cmdpb::RaftCommandResponse;
+use kvproto::errorpb;
 use raftserver::Error;
 
 pub fn bind_uuid(resp: &mut RaftCommandResponse, uuid: Uuid) {
@@ -17,34 +17,24 @@ pub fn new_error(err: Error) -> RaftCommandResponse {
 
     error_header.set_message(error::Error::description(&err).to_owned());
 
-    let detail = match err {
+    match err {
         Error::RegionNotFound(region_id) => {
-            let mut detail = ErrorDetail::new();
-            detail.mut_region_not_found().set_region_id(region_id);
-            Some(detail)
+            error_header.mut_region_not_found().set_region_id(region_id);
         }
         Error::NotLeader(region_id, leader) => {
-            let mut detail = ErrorDetail::new();
             if let Some(leader) = leader {
-                detail.mut_not_leader().set_leader(leader);
+                error_header.mut_not_leader().set_leader(leader);
             }
-            detail.mut_not_leader().set_region_id(region_id);
-            Some(detail)
+            error_header.mut_not_leader().set_region_id(region_id);
         }
         Error::KeyNotInRegion(key, region) => {
-            let mut detail = ErrorDetail::new();
-            detail.mut_key_not_in_region().set_key(key);
-            detail.mut_key_not_in_region().set_region_id(region.get_region_id());
-            detail.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
-            detail.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
-            Some(detail)
+            error_header.mut_key_not_in_region().set_key(key);
+            error_header.mut_key_not_in_region().set_region_id(region.get_region_id());
+            error_header.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
+            error_header.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
         }
-        _ => None,
+        _ => {}
     };
-
-    if let Some(detail) = detail {
-        error_header.set_detail(detail);
-    }
 
     msg.mut_header().set_error(error_header);
 

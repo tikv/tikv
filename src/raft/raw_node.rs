@@ -2,8 +2,8 @@
 use raft::errors::{Result, Error};
 use raft::Storage;
 use protobuf::{self, RepeatedField};
-use proto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType, ConfChange,
-                    ConfChangeType, ConfState};
+use kvproto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType, ConfChange,
+                      ConfChangeType, ConfState};
 use raft::raft::{Config, Raft, SoftState, INVALID_ID};
 use raft::Status;
 use std::sync::Arc;

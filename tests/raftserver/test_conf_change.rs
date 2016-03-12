@@ -2,8 +2,8 @@ use std::time::Duration;
 use std::sync::{Arc, RwLock};
 
 use tikv::raftserver::store::*;
-use tikv::proto::raftpb::ConfChangeType;
-use tikv::proto::metapb;
+use kvproto::raftpb::ConfChangeType;
+use kvproto::metapb;
 use tikv::pd::Client;
 
 use super::cluster::{Cluster, Simulator};
@@ -93,7 +93,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<RwLock<PdClient>>) -> metapb::Peer {
-    let peer_id = pd_client.write().unwrap().alloc_peer_id().unwrap();
+    let peer_id = pd_client.write().unwrap().alloc_id().unwrap();
     new_peer(store.get_node_id(), store.get_store_id(), peer_id)
 }
 
