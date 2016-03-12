@@ -99,6 +99,7 @@ impl<T: Transport> Store<T> {
                              let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
                              let peer = try!(Peer::create(self, region));
 
+                             self.region_ranges.insert(peer.region().get_start_key().to_vec(), region_id);
         // No need to check duplicated here, because we use region id as the key
         // in DB.
                              self.region_peers.insert(region_id, peer);
@@ -123,27 +124,27 @@ impl<T: Transport> Store<T> {
         self.sendch.clone()
     }
 
-    pub fn get_engine(&self) -> Arc<DB> {
+    pub fn engine(&self) -> Arc<DB> {
         self.engine.clone()
     }
 
-    pub fn get_ident(&self) -> &StoreIdent {
+    pub fn ident(&self) -> &StoreIdent {
         &self.ident
     }
 
-    pub fn get_node_id(&self) -> u64 {
+    pub fn node_id(&self) -> u64 {
         self.ident.get_node_id()
     }
 
-    pub fn get_store_id(&self) -> u64 {
+    pub fn store_id(&self) -> u64 {
         self.ident.get_store_id()
     }
 
-    pub fn get_config(&self) -> &Config {
+    pub fn config(&self) -> &Config {
         &self.cfg
     }
 
-    pub fn get_peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
+    pub fn peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
         self.peer_cache.clone()
     }
 
@@ -172,23 +173,25 @@ impl<T: Transport> Store<T> {
     #[allow(map_entry)]
     fn handle_raft_message(&mut self, msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-        let from_peer = msg.get_from_peer();
-        let to_peer = msg.get_to_peer();
+        let from = msg.get_from_peer();
+        let to = msg.get_to_peer();
         debug!("handle raft message for region {}, from {} to {}",
                region_id,
-               from_peer.get_peer_id(),
-               to_peer.get_peer_id());
+               from.get_peer_id(),
+               to.get_peer_id());
 
         // TODO: We may receive a message which is not in region, and
         // if the message peer id is <= region max_peer_id, we can think
         // this is a stale message and can ignore it directly.
         // Should we only handle this in heartbeat message?
 
-        self.peer_cache.write().unwrap().insert(from_peer.get_peer_id(), from_peer.clone());
-        self.peer_cache.write().unwrap().insert(to_peer.get_peer_id(), to_peer.clone());
+        self.peer_cache.write().unwrap().insert(from.get_peer_id(), from.clone());
+        self.peer_cache.write().unwrap().insert(to.get_peer_id(), to.clone());
 
         if !self.region_peers.contains_key(&region_id) {
-            let peer = try!(Peer::replicate(self, region_id, to_peer.get_peer_id()));
+            let peer = try!(Peer::replicate(self, region_id, to.get_peer_id()));
+            // We don't have start_key of the region, so there is no need to insert into
+            // region_ranges
             self.region_peers.insert(region_id, peer);
         }
 
@@ -196,7 +199,7 @@ impl<T: Transport> Store<T> {
 
         try!(peer.raft_group.step(msg.get_message().clone()));
 
-        // Add in pending raft group for later handing ready.
+        // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
 
         Ok(())
@@ -210,7 +213,7 @@ impl<T: Transport> Store<T> {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 match peer.handle_raft_ready(&self.trans) {
                     Err(e) => {
-                        // TODO: should we panic here or shutdown the store?
+                        // TODO: should we panic or shutdown the store?
                         error!("handle raft ready at region {} err: {:?}", region_id, e);
                         return Err(e);
                     }
@@ -232,24 +235,31 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
+        if let Some(region) = ready_result.snap_applied_region {
+            self.region_ranges.insert(region.get_start_key().to_vec(), region.get_region_id());
+        }
+
         // handle executing committed log results
         for result in &ready_result.exec_results {
             match *result {
                 ExecResult::ChangePeer{ref change_type, ref peer, ..} => {
                     // We only care remove itself now.
                     if *change_type == ConfChangeType::RemoveNode &&
-                       peer.get_store_id() == self.get_store_id() {
+                       peer.get_store_id() == self.store_id() {
                         info!("destory peer {:?} for region {}", peer, region_id);
                         // The remove peer is in the same store.
                         // TODO: should we check None here?
                         // Can we destroy it in another thread later?
                         let mut p = self.region_peers.remove(&region_id).unwrap();
+                        let start_key = p.region().get_start_key().to_vec();
                         if let Err(e) = p.destroy() {
                             error!("destroy peer {:?} for region {} in store {} err {:?}",
                                    peer,
                                    region_id,
-                                   self.get_store_id(),
+                                   self.store_id(),
                                    e);
+                        } else {
+                            self.region_ranges.remove(&start_key);
                         }
                     }
                 }
@@ -284,6 +294,8 @@ impl<T: Transport> Store<T> {
                                 }
                             }
 
+                            self.region_ranges
+                                .insert(new_peer.region().get_start_key().to_vec(), new_region_id);
                             self.region_peers.insert(new_region_id, new_peer);
                         }
                     }
@@ -327,15 +339,15 @@ impl<T: Transport> Store<T> {
         if !peer.is_leader() {
             resp =
                 cmd_resp::new_error(Error::NotLeader(region_id,
-                                                     peer.get_peer_from_cache(peer.get_leader())));
+                                                     peer.get_peer_from_cache(peer.leader_id())));
             bind_uuid(&mut resp, uuid);
             return cb.call_box((resp,));
         }
 
         let peer_id = msg.get_header().get_peer().get_peer_id();
-        if peer.get_peer_id() != peer_id {
+        if peer.peer_id() != peer_id {
             resp = cmd_resp::message_error(format!("mismatch peer id {} != {}",
-                                                   peer.get_peer_id(),
+                                                   peer.peer_id(),
                                                    peer_id));
             bind_uuid(&mut resp, uuid);
             return cb.call_box((resp,));
@@ -588,7 +600,7 @@ impl<T: Transport> Store<T> {
         };
 
         let mut resp = cmd::StatusResponse::new();
-        if let Some(leader) = peer.get_peer_from_cache(peer.get_leader()) {
+        if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
             resp.mut_region_leader().set_leader(leader);
             let term = peer.get_raft_status().hs.get_term();
             resp.mut_region_leader().set_current_term(term);

@@ -57,6 +57,8 @@ pub struct ReadyResult {
     // We can execute multi commands like 1, conf change, 2 split region, ...
     // in one ready, and outer store should handle these results sequentially too.
     pub exec_results: Vec<ExecResult>,
+    // snap_applied_region should be set when we apply snapshot
+    pub snap_applied_region: Option<metapb::Region>,
 }
 
 pub struct Peer {
@@ -76,7 +78,7 @@ impl Peer {
     // use this function to create the peer. The region must contain the peer info
     // for this store.
     pub fn create<T: Transport>(store: &mut Store<T>, region: metapb::Region) -> Result<Peer> {
-        let store_id = store.get_store_id();
+        let store_id = store.store_id();
         let peer_id = match util::find_peer(&region, store_id) {
             None => {
                 return Err(other(format!("find no peer for store {} in region {:?}",
@@ -97,7 +99,7 @@ impl Peer {
                                    peer_id: u64)
                                    -> Result<Peer> {
         // we must first check the peer id validation.
-        let last_max_id = try!(store.get_engine().get_u64(&keys::region_tombstone_key(region_id)));
+        let last_max_id = try!(store.engine().get_u64(&keys::region_tombstone_key(region_id)));
         if let Some(last_max_id) = last_max_id {
             if peer_id <= last_max_id {
                 // We receive a stale message and we can't re-create the peer with the peer id.
@@ -118,14 +120,14 @@ impl Peer {
             return Err(other("invalid peer id"));
         }
 
-        let store_id = store.get_store_id();
+        let store_id = store.store_id();
 
-        let ps = try!(PeerStorage::new(store.get_engine(), &region));
+        let ps = try!(PeerStorage::new(store.engine(), &region));
 
         let applied_index = ps.applied_index();
         let storage = Arc::new(RaftStorage::new(ps));
 
-        let cfg = store.get_config();
+        let cfg = store.config();
         let raft_cfg = raft::Config {
             id: peer_id,
             peers: vec![],
@@ -139,16 +141,16 @@ impl Peer {
 
         let raft_group = try!(RawNode::new(&raft_cfg, storage.clone(), &[]));
 
-        let node_id = store.get_node_id();
+        let node_id = store.node_id();
         let mut peer = Peer {
-            engine: store.get_engine(),
+            engine: store.engine(),
             peer: util::new_peer(node_id, store_id, peer_id),
             region_id: region.get_region_id(),
             leader_id: raft::INVALID_ID,
             storage: storage,
             raft_group: raft_group,
             pending_cmds: HashMap::new(),
-            peer_cache: store.get_peer_cache(),
+            peer_cache: store.peer_cache(),
             coprocessor_host: CoprocessorHost::new(),
         };
 
@@ -174,7 +176,7 @@ impl Peer {
 
         // set the tombstone key here.
         try!(batch.put_u64(&keys::region_tombstone_key(self.region_id),
-                           self.get_region().get_max_peer_id()));
+                           self.region().get_max_peer_id()));
 
         try!(self.engine.write(batch));
 
@@ -198,11 +200,11 @@ impl Peer {
         Ok(())
     }
 
-    pub fn get_region(&self) -> metapb::Region {
+    pub fn region(&self) -> metapb::Region {
         self.storage.rl().get_region().clone()
     }
 
-    pub fn get_peer_id(&self) -> u64 {
+    pub fn peer_id(&self) -> u64 {
         self.peer.get_peer_id()
     }
 
@@ -210,12 +212,12 @@ impl Peer {
         self.raft_group.status()
     }
 
-    pub fn get_leader(&self) -> u64 {
+    pub fn leader_id(&self) -> u64 {
         self.leader_id
     }
 
     pub fn is_leader(&self) -> bool {
-        self.leader_id == self.get_peer_id()
+        self.leader_id == self.peer_id()
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self,
@@ -235,7 +237,7 @@ impl Peer {
             self.leader_id = ss.lead;
         }
 
-        try!(self.handle_raft_ready_in_storage(&ready));
+        let applied_region = try!(self.handle_raft_ready_in_storage(&ready));
 
         for msg in &ready.messages {
             try!(self.send_raft_message(&msg, trans));
@@ -244,7 +246,10 @@ impl Peer {
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
 
         self.raft_group.advance(ready);
-        Ok(Some(ReadyResult { exec_results: exec_results }))
+        Ok(Some(ReadyResult {
+            snap_applied_region: applied_region,
+            exec_results: exec_results,
+        }))
     }
 
     pub fn propose_pending_cmd(&mut self, pending_cmd: &mut PendingCmd) -> Result<()> {
@@ -283,7 +288,7 @@ impl Peer {
         Ok(())
     }
 
-    fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<()> {
+    fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<Option<metapb::Region>> {
         let batch = WriteBatch::new();
         let mut storage = self.storage.wl();
         let mut last_index = storage.last_index();
@@ -310,9 +315,10 @@ impl Peer {
         if let Some(res) = apply_snap_res {
             storage.set_applied_index(res.applied_index);
             storage.set_region(&res.region);
+            return Ok(Some(res.region.clone()));
         }
 
-        Ok(())
+        Ok(None)
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
@@ -628,7 +634,7 @@ impl Peer {
                            -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
-        let mut region = self.get_region();
+        let mut region = self.region();
         let store_id = peer.get_store_id();
         // TODO: we should need more check, like peer validation, duplicated id, etc.
         let exists = util::find_peer(&region, store_id).is_some();
@@ -693,7 +699,7 @@ impl Peer {
         }
 
         let split_key = request.get_split_key();
-        let mut region = self.get_region();
+        let mut region = self.region();
         try!(util::check_key_in_region(split_key, &region));
 
         // TODO: check new region id validation.
