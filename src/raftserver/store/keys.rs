@@ -162,6 +162,7 @@ pub fn origin_key(key: &[u8]) -> &[u8] {
     &key[DATA_PREFIX_KEY.len()..]
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
