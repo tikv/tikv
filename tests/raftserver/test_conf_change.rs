@@ -5,6 +5,7 @@ use tikv::raftserver::store::*;
 use kvproto::raftpb::ConfChangeType;
 use kvproto::metapb;
 use tikv::pd::Client;
+use tikv::util::HandyRwLock;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -93,7 +94,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<RwLock<PdClient>>) -> metapb::Peer {
-    let peer_id = pd_client.write().unwrap().alloc_id().unwrap();
+    let peer_id = pd_client.wl().alloc_id().unwrap();
     new_peer(store.get_node_id(), store.get_store_id(), peer_id)
 }
 
@@ -103,10 +104,10 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let cluster_id = cluster.id;
     let pd_client = cluster.pd_client.clone();
-    let region = pd_client.read().unwrap().get_region(cluster_id, b"").unwrap();
+    let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
     let region_id = region.get_region_id();
 
-    let mut stores = pd_client.read().unwrap().get_stores(cluster_id).unwrap();
+    let mut stores = pd_client.rl().get_stores(cluster_id).unwrap();
 
     // Must have only one peer
     assert_eq!(region.get_peers().len(), 1);

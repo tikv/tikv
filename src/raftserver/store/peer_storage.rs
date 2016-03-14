@@ -9,6 +9,7 @@ use protobuf::{self, Message};
 use kvproto::metapb;
 use kvproto::raftpb::{Entry, Snapshot, HardState, ConfState};
 use kvproto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
+use util::HandyRwLock;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError};
 use raftserver::{Result, Error, other};
 use super::{keys, util};
@@ -556,11 +557,11 @@ impl RaftStorage {
     }
 
     pub fn rl(&self) -> RwLockReadGuard<PeerStorage> {
-        self.store.read().unwrap()
+        self.store.rl()
     }
 
     pub fn wl(&self) -> RwLockWriteGuard<PeerStorage> {
-        self.store.write().unwrap()
+        self.store.wl()
     }
 }
 

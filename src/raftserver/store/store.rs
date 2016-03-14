@@ -208,8 +208,8 @@ impl<T: Transport> Store<T> {
         // this is a stale message and can ignore it directly.
         // Should we only handle this in heartbeat message?
 
-        self.peer_cache.write().unwrap().insert(from.get_peer_id(), from.clone());
-        self.peer_cache.write().unwrap().insert(to.get_peer_id(), to.clone());
+        self.peer_cache.wl().insert(from.get_peer_id(), from.clone());
+        self.peer_cache.wl().insert(to.get_peer_id(), to.clone());
 
         if !self.region_peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self, region_id, to.get_peer_id()));
@@ -490,7 +490,7 @@ impl<T: Transport> Store<T> {
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         // TODO: check whether a gc progress has been started.
-        if !self.split_checking_queue.read().unwrap().is_empty() {
+        if !self.split_checking_queue.rl().is_empty() {
             self.register_split_region_check_tick(event_loop);
             return;
         }
@@ -512,7 +512,7 @@ impl<T: Transport> Store<T> {
         }
 
         if !tasks.is_empty() {
-            self.split_checking_queue.write().unwrap().append(&mut tasks);
+            self.split_checking_queue.wl().append(&mut tasks);
         }
 
         self.register_split_region_check_tick(event_loop);
@@ -697,7 +697,7 @@ fn start_split_check(tasks: Arc<RwLock<VecDeque<SplitCheckTask>>>,
         .name("split-check".to_owned())
         .spawn(move || {
             loop {
-                let t = tasks.write().unwrap().pop_front();
+                let t = tasks.wl().pop_front();
                 if t.is_none() {
                     // TODO find or implement a concurrent deque instead.
                     thread::sleep(Duration::from_secs(SPLIT_TASK_PEEK_INTERVAL_SECS));
