@@ -246,7 +246,20 @@ impl Server {
         match r {
             Ok(Some(val)) => cmd_get_resp.set_value(val),
             Ok(None) => cmd_get_resp.set_value(Vec::new()),
-            Err(e) => error!("storage error: {:?}", e),
+            Err(ref e) => {
+                if r.is_locked() {
+                    cmd_get_resp.set_err(ErrorType::Locked);
+                    if let Some((_, primary, ts)) = r.get_lock() {
+                        cmd_get_resp.set_primary_lock(primary);
+                        cmd_get_resp.set_lock_version(ts);
+                    } else {
+                        error!("key is locked but primary info not found");
+                    }
+                } else {
+                    error!("storage error: {:?}", e);
+                    cmd_get_resp.set_err(ErrorType::Retryable);
+                }
+            }
         }
         resp.set_field_type(MessageType::CmdGet);
         resp.set_cmd_get_resp(cmd_get_resp);
@@ -263,9 +276,9 @@ impl Server {
                 let mut new_kvs: Vec<CmdScanResponse_Item> = Vec::new();
                 for result in kvs {
                     let mut new_kv: CmdScanResponse_Item = CmdScanResponse_Item::new();
+                    new_kv.set_ok(result.is_ok());
                     match result {
                         Ok((ref key, ref value)) => {
-                            new_kv.set_ok(true);
                             new_kv.set_err(ErrorType::None);
                             new_kv.set_key(key.clone());
                             new_kv.set_value(value.clone());
@@ -273,14 +286,12 @@ impl Server {
                         Err(..) => {
                             if result.is_locked() {
                                 if let Some((key, primary, ts)) = result.get_lock() {
-                                    new_kv.set_ok(false);
                                     new_kv.set_err(ErrorType::Locked);
                                     new_kv.set_key(key);
                                     new_kv.set_primary_lock(primary);
                                     new_kv.set_lock_version(ts);
                                 }
                             } else {
-                                new_kv.set_ok(false);
                                 new_kv.set_err(ErrorType::Retryable);
                             }
                         }
@@ -552,8 +563,7 @@ mod tests {
     use mio::EventLoop;
 
     use proto::kvrpcpb::*;
-    use storage;
-    use storage::{Key, Value, Storage, Dsn, txn, mvcc};
+    use storage::{self, Key, Value, Storage, Dsn, txn, mvcc};
     use storage::Error::Other;
     use storage::KvPair as StorageKV;
     use storage::Result as ResultStorage;
