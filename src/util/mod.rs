@@ -1,5 +1,6 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rand::{self, ThreadRng};
 use protobuf::Message;
 
@@ -77,5 +78,23 @@ impl Deref for DefaultRng {
 impl DerefMut for DefaultRng {
     fn deref_mut(&mut self) -> &mut ThreadRng {
         &mut self.rng
+    }
+}
+
+/// A handy shortcut to replace RwLock write/read().unwrap() pattern to
+/// shortcut wl and rl.
+/// TODO: replace all same pattern in our code.
+pub trait HandyRwLock<T> {
+    fn wl(&self) -> RwLockWriteGuard<T>;
+    fn rl(&self) -> RwLockReadGuard<T>;
+}
+
+impl<T> HandyRwLock<T> for RwLock<T> {
+    fn wl(&self) -> RwLockWriteGuard<T> {
+        self.write().unwrap()
+    }
+
+    fn rl(&self) -> RwLockReadGuard<T> {
+        self.read().unwrap()
     }
 }

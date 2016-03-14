@@ -25,6 +25,12 @@ pub enum Msg {
         request: RaftCommandRequest,
         callback: Callback,
     },
+
+    // For split check
+    SplitCheckResult {
+        region_id: u64,
+        split_key: Vec<u8>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -36,6 +42,7 @@ impl fmt::Debug for Msg {
             Msg::RaftCommand{..} => write!(fmt, "Raft Command"),
             Msg::RaftLogGcTick => write!(fmt, "Raft Gc Log Tick"),
             Msg::SplitRegionCheckTick => write!(fmt, "Split Region Check Tick"),
+            Msg::SplitCheckResult{..} => write!(fmt, "Split Check Result"),
         }
     }
 }
@@ -92,7 +99,7 @@ impl SendCh {
         SendCh { ch: ch }
     }
 
-    fn send(&self, msg: Msg) -> Result<()> {
+    pub fn send(&self, msg: Msg) -> Result<()> {
         try!(send_msg(&self.ch, msg));
         Ok(())
     }

@@ -461,8 +461,8 @@ impl PeerStorage {
         Ok(n.unwrap_or(self.truncated_state.get_index()))
     }
 
-    pub fn get_engine(&self) -> &DB {
-        &self.engine
+    pub fn get_engine(&self) -> Arc<DB> {
+        self.engine.clone()
     }
 
     pub fn set_last_index(&mut self, last_index: u64) {

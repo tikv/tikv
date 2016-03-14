@@ -1,7 +1,9 @@
 use std::sync::{Arc, RwLock};
 use std::option::Option;
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::{HashMap, HashSet, VecDeque, BTreeMap};
 use std::boxed::{Box, FnBox};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopConfig};
@@ -11,6 +13,7 @@ use uuid::Uuid;
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent};
 use kvproto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
 use kvproto::raftpb::ConfChangeType;
+use util::HandyRwLock;
 use raftserver::{Result, other, Error};
 use kvproto::metapb;
 use super::util;
@@ -19,11 +22,14 @@ use super::keys;
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
+use super::peer_storage::PeerStorage;
 use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
 
 type Key = Vec<u8>;
+
+const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
 
 pub struct Store<T: Transport> {
     cfg: Config,
@@ -36,6 +42,13 @@ pub struct Store<T: Transport> {
     pending_raft_groups: HashSet<u64>,
     // region start key -> region id
     region_ranges: BTreeMap<Key, u64>,
+
+    split_checking_queue: Arc<RwLock<VecDeque<SplitCheckTask>>>,
+    /// A join handle to split scan thread, currently only for test purpose.
+    split_handle: Option<JoinHandle<()>>,
+
+    /// A flag indicates whether store has been shutdown.
+    stopped: Arc<RwLock<bool>>,
 
     trans: Arc<RwLock<T>>,
 
@@ -76,7 +89,10 @@ impl<T: Transport> Store<T> {
             sendch: sendch,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
+            split_checking_queue: Arc::new(RwLock::new(VecDeque::new())),
             region_ranges: BTreeMap::new(),
+            stopped: Arc::new(RwLock::new(false)),
+            split_handle: None,
             trans: trans,
             peer_cache: Arc::new(RwLock::new(peer_cache)),
         })
@@ -115,6 +131,13 @@ impl<T: Transport> Store<T> {
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
+
+        let handle = try!(start_split_check(self.split_checking_queue.clone(),
+                                            self.stopped.clone(),
+                                            self.sendch.clone(),
+                                            self.cfg.region_max_size,
+                                            self.cfg.region_split_size));
+        self.split_handle = Some(handle);
 
         try!(event_loop.run(self));
         Ok(())
@@ -464,31 +487,49 @@ impl<T: Transport> Store<T> {
     }
 
     fn handle_split_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        // TODO: we should check this in another thread asynchronously and only
-        // care leader region which applied logs before.
-        for (&region_id, peer) in &mut self.region_peers {
+        // To avoid frequent scan, we only add new scan tasks if all previous tasks
+        // have finished.
+        // TODO: check whether a gc progress has been started.
+        if !self.split_checking_queue.read().unwrap().is_empty() {
+            self.register_split_region_check_tick(event_loop);
+            return;
+        }
+        let mut tasks = VecDeque::new();
+        for (id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
             }
 
-            match peer.storage.rl().approximate_region_size() {
-                Err(e) => {
-                    error!("get approximate size for region {} err {:?}", region_id, e);
-                }
-                Ok(region_size) => {
-                    if region_size > self.cfg.region_max_size {
-                        info!("region {} size is {} > {}, need to split",
-                              region_id,
-                              region_size,
-                              self.cfg.region_max_size);
-
-                        // TODO: notify this to pd.
-                    }
-                }
+            if peer.size_diff_hint < self.cfg.region_check_size_diff {
+                continue;
             }
+            info!("region {}'s size diff {} >= {}, need to check whether should split",
+                  id,
+                  peer.size_diff_hint,
+                  self.cfg.region_check_size_diff);
+            tasks.push_back(SplitCheckTask::new(&peer.storage.rl()));
+            peer.size_diff_hint = 0;
+        }
+
+        if !tasks.is_empty() {
+            self.split_checking_queue.write().unwrap().append(&mut tasks);
         }
 
         self.register_split_region_check_tick(event_loop);
+    }
+
+    fn handle_split_check_result(&mut self, region_id: u64, split_key: Vec<u8>) {
+        if split_key.is_empty() {
+            error!("split key should not be empty!!!");
+            return;
+        }
+        let p = self.region_peers.get(&region_id);
+        if p.is_none() || !p.unwrap().is_leader() {
+            // region on this store is no longer leader, skipped.
+            return;
+        }
+        let _ = keys::origin_key(&split_key);
+        // TODO notify pd.
     }
 }
 
@@ -543,6 +584,10 @@ impl<T: Transport> mio::Handler for Store<T> {
                 info!("receive quit message");
                 event_loop.shutdown();
             }
+            Msg::SplitCheckResult {region_id, split_key} => {
+                info!("split check of {} complete.", region_id);
+                self.handle_split_check_result(region_id, split_key);
+            }
             _ => panic!("invalid notify msg type {:?}", msg),
         }
     }
@@ -558,7 +603,14 @@ impl<T: Transport> mio::Handler for Store<T> {
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
+            *self.stopped.wl() = true;
             // TODO: do some close here.
+
+            if let Some(handle) = self.split_handle.take() {
+                if handle.join().is_err() {
+                    error!("failed stop split scan thread!!!");
+                }
+            }
             return;
         }
 
@@ -607,5 +659,83 @@ impl<T: Transport> Store<T> {
         }
 
         Ok(resp)
+    }
+}
+
+struct SplitCheckTask {
+    region_id: u64,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    engine: Arc<DB>,
+}
+
+impl SplitCheckTask {
+    fn new(ps: &PeerStorage) -> SplitCheckTask {
+        SplitCheckTask {
+            region_id: ps.get_region_id(),
+            start_key: ps.get_start_key(),
+            end_key: ps.get_end_key(),
+            engine: ps.get_engine().clone(),
+        }
+    }
+}
+
+fn new_split_check_result(region_id: u64, split_key: Vec<u8>) -> Msg {
+    Msg::SplitCheckResult {
+        region_id: region_id,
+        split_key: split_key,
+    }
+}
+
+fn start_split_check(tasks: Arc<RwLock<VecDeque<SplitCheckTask>>>,
+                     stopped: Arc<RwLock<bool>>,
+                     ch: SendCh,
+                     region_max_size: u64,
+                     split_size: u64)
+                     -> Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("split-check".to_owned())
+        .spawn(move || {
+            loop {
+                let t = tasks.write().unwrap().pop_front();
+                if t.is_none() {
+                    // TODO find or implement a concurrent deque instead.
+                    thread::sleep(Duration::from_secs(SPLIT_TASK_PEEK_INTERVAL_SECS));
+                    if *stopped.rl() {
+                        break;
+                    }
+                    continue;
+                }
+                execute_task(t.unwrap(), &ch, region_max_size, split_size);
+            }
+        })
+        .map_err(|e| e.into())
+}
+
+fn execute_task(task: SplitCheckTask, ch: &SendCh, region_max_size: u64, split_size: u64) {
+    let mut size = 0;
+    let mut split_key = vec![];
+    let res = task.engine.scan(&task.start_key,
+                               &task.end_key,
+                               &mut |k, v| {
+                                   size += k.len() as u64;
+                                   size += v.len() as u64;
+                                   if split_key.is_empty() && size >= split_size {
+                                       split_key = k.to_vec();
+                                   }
+                                   Ok(size >= region_max_size)
+                               });
+    if let Err(e) = res {
+        error!("failed to scan split key of region {}: {:?}",
+               task.region_id,
+               e);
+        return;
+    }
+    if size < region_max_size {
+        return;
+    }
+    let res = ch.send(new_split_check_result(task.region_id, split_key));
+    if let Err(e) = res {
+        warn!("failed to send check result of {}: {}", task.region_id, e);
     }
 }
