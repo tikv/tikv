@@ -21,6 +21,7 @@ use super::config::Config;
 use super::transport::ServerTransport;
 use super::node::Node;
 use pd::Client as PdClient;
+use util::HandyRwLock;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
@@ -201,7 +202,7 @@ impl<T: PdClient + Send + Sync + 'static> Server<T> {
         let msg_type = msg.get_msg_type();
         let res = try!(match msg_type {
             MessageType::Raft => {
-                if let Err(e) = self.trans.read().unwrap().send_raft_msg(msg.take_raft()) {
+                if let Err(e) = self.trans.rl().send_raft_msg(msg.take_raft()) {
                     // Should we return error to let outer close this connection later?
                     error!("send raft message for token {:?} with msg id {} err {:?}",
                            token,
@@ -248,7 +249,7 @@ impl<T: PdClient + Send + Sync + 'static> Server<T> {
         });
 
         let uuid = msg.get_header().get_uuid().to_vec();
-        if let Err(e) = self.trans.read().unwrap().send_command(msg, cb) {
+        if let Err(e) = self.trans.rl().send_command(msg, cb) {
             // send error, reply an error response.
             warn!("send command for token {:?} with msg id {} err {:?}",
                   token,

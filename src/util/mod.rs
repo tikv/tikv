@@ -83,7 +83,6 @@ impl DerefMut for DefaultRng {
 
 /// A handy shortcut to replace RwLock write/read().unwrap() pattern to
 /// shortcut wl and rl.
-/// TODO: replace all same pattern in our code.
 pub trait HandyRwLock<T> {
     fn wl(&self) -> RwLockWriteGuard<T>;
     fn rl(&self) -> RwLockReadGuard<T>;

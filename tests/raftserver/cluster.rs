@@ -14,6 +14,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::metapb;
 use kvproto::raftpb::ConfChangeType;
 use tikv::pd::Client;
+use tikv::util::HandyRwLock;
 use super::pd::PdClient;
 
 // We simulate 3 or 5 nodes, each has a store.
@@ -119,7 +120,7 @@ impl<T: Simulator> Cluster<T> {
         let mut leader = None;
         let mut retry_cnt = 100;
 
-        let stores = self.pd_client.read().unwrap().get_stores(self.id).unwrap();
+        let stores = self.pd_client.rl().get_stores(self.id).unwrap();
         let node_ids: HashSet<u64> = self.sim.get_node_ids();
         while leader.is_none() && retry_cnt > 0 {
             for store in &stores {
@@ -209,8 +210,8 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
 
         for &id in self.engines.keys() {
-            self.pd_client.write().unwrap().put_node(self.id, new_node(id, "".to_owned())).unwrap();
-            self.pd_client.write().unwrap().put_store(self.id, new_store(id, id)).unwrap();
+            self.pd_client.wl().put_node(self.id, new_node(id, "".to_owned())).unwrap();
+            self.pd_client.wl().put_store(self.id, new_store(id, id)).unwrap();
         }
     }
 
@@ -348,16 +349,16 @@ impl<T: Simulator> Cluster<T> {
                    AdminCommandType::ChangePeer);
 
         let region = resp.get_admin_response().get_change_peer().get_region();
-        self.pd_client.write().unwrap().change_peer(self.id, region.clone()).unwrap();
+        self.pd_client.wl().change_peer(self.id, region.clone()).unwrap();
     }
 
     pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
-        let new_region_id = self.pd_client.write().unwrap().alloc_id().unwrap();
-        let region = self.pd_client.read().unwrap().get_region_by_id(self.id, region_id).unwrap();
+        let new_region_id = self.pd_client.wl().alloc_id().unwrap();
+        let region = self.pd_client.rl().get_region_by_id(self.id, region_id).unwrap();
         let peer_count = region.get_peers().len();
         let mut peer_ids: Vec<u64> = vec![];
         for _ in 0..peer_count {
-            let peer_id = self.pd_client.write().unwrap().alloc_id().unwrap();
+            let peer_id = self.pd_client.wl().alloc_id().unwrap();
             peer_ids.push(peer_id);
         }
 
@@ -371,7 +372,7 @@ impl<T: Simulator> Cluster<T> {
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
 
-        self.pd_client.write().unwrap().split_region(self.id, left.clone(), right.clone()).unwrap();
+        self.pd_client.wl().split_region(self.id, left.clone(), right.clone()).unwrap();
     }
 }
 

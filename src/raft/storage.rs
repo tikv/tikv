@@ -4,7 +4,7 @@
 use kvproto::raftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use util;
+use util::{self, HandyRwLock};
 
 #[derive(Debug, Clone)]
 pub struct RaftState {
@@ -144,11 +144,11 @@ impl MemStorage {
     }
 
     pub fn rl(&self) -> RwLockReadGuard<MemStorageCore> {
-        self.core.read().unwrap()
+        self.core.rl()
     }
 
     pub fn wl(&self) -> RwLockWriteGuard<MemStorageCore> {
-        self.core.write().unwrap()
+        self.core.wl()
     }
 }
 

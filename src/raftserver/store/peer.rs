@@ -17,6 +17,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other};
 use raftserver::coprocessor::CoprocessorHost;
+use util::HandyRwLock;
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
@@ -325,14 +326,14 @@ impl Peer {
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
-        if let Some(peer) = self.peer_cache.read().unwrap().get(&peer_id).cloned() {
+        if let Some(peer) = self.peer_cache.rl().get(&peer_id).cloned() {
             return Some(peer);
         }
 
         // Try to find in region, if found, set in cache.
         for peer in self.storage.rl().get_region().get_peers() {
             if peer.get_peer_id() == peer_id {
-                self.peer_cache.write().unwrap().insert(peer_id, peer.clone());
+                self.peer_cache.wl().insert(peer_id, peer.clone());
                 return Some(peer.clone());
             }
         }
@@ -353,7 +354,7 @@ impl Peer {
         let mut snap_status = SnapshotStatus::Finish;
         let mut unreachable = false;
 
-        let trans = trans.read().unwrap();
+        let trans = trans.rl();
         let from_peer = try!(self.get_peer_from_cache(msg.get_from()).ok_or_else(|| {
             other(format!("failed to lookup sender peer {} in region {}",
                           msg.get_from(),
@@ -661,7 +662,7 @@ impl Peer {
                 // TODO: Do we allow adding peer in same node?
 
                 // Add this peer to cache.
-                self.peer_cache.write().unwrap().insert(peer.get_peer_id(), peer.clone());
+                self.peer_cache.wl().insert(peer.get_peer_id(), peer.clone());
 
                 region.mut_peers().push(peer.clone());
             }
@@ -673,7 +674,7 @@ impl Peer {
                 }
 
                 // Remove this peer from cache.
-                self.peer_cache.write().unwrap().remove(&peer.get_peer_id());
+                self.peer_cache.wl().remove(&peer.get_peer_id());
 
                 util::remove_peer(&mut region, store_id).unwrap();
             }
@@ -731,7 +732,7 @@ impl Peer {
             max_peer_id = cmp::max(max_peer_id, peer_id);
 
             // Add this peer to cache.
-            self.peer_cache.write().unwrap().insert(peer_id, peer.clone());
+            self.peer_cache.wl().insert(peer_id, peer.clone());
         }
 
         new_region.set_max_peer_id(max_peer_id);
