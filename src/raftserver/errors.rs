@@ -19,6 +19,10 @@ quick_error!{
             description("region is not found")
             display("region {} not found", region_id)
         }
+        RegionNotInitialized(region_id: u64) {
+            description("region has not been initialized yet.")
+            display("region {} not initialized yet", region_id)
+        }
         NotLeader(region_id: u64, leader:Option<metapb::Peer>) {
             description("peer is not leader")
             display("peer is not leader for region {}, leader may {:?}", region_id, leader)

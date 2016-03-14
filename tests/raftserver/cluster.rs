@@ -164,6 +164,7 @@ impl<T: Simulator> Cluster<T> {
         region.set_region_id(1);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());
+        region.set_max_peer_id(*self.engines.keys().max().unwrap());
 
         for (&id, engine) in &self.engines {
             let peer = new_peer(id, id, id);
@@ -373,6 +374,21 @@ impl<T: Simulator> Cluster<T> {
         let right = resp.get_admin_response().get_split().get_right();
 
         self.pd_client.wl().split_region(self.id, left.clone(), right.clone()).unwrap();
+    }
+
+    pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {
+        let status_cmd = new_region_detail_cmd();
+        let peer = new_peer(peer_id, peer_id, peer_id);
+        let req = new_status_request(region_id, &peer, status_cmd);
+        let res = self.call_command(req, Duration::from_secs(3));
+        assert!(res.is_some());
+
+        let mut resp = res.unwrap();
+        assert!(resp.has_status_response());
+        let mut status_resp = resp.take_status_response();
+        assert_eq!(status_resp.get_cmd_type(), StatusCommandType::RegionDetail);
+        assert!(status_resp.has_region_detail());
+        status_resp.take_region_detail()
     }
 }
 

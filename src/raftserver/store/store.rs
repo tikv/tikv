@@ -623,6 +623,15 @@ impl<T: Transport> mio::Handler for Store<T> {
 }
 
 impl<T: Transport> Store<T> {
+    /// load the target peer of request as mutable borrow.
+    fn mut_target_peer(&mut self, request: &RaftCommandRequest) -> Result<&mut Peer> {
+        let region_id = request.get_header().get_region_id();
+        match self.region_peers.get_mut(&region_id) {
+            None => Err(Error::RegionNotFound(region_id)),
+            Some(peer) => Ok(peer),
+        }
+    }
+
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current
@@ -633,7 +642,8 @@ impl<T: Transport> Store<T> {
         let cmd_type = request.get_status_request().get_cmd_type();
         let mut response = try!(match cmd_type {
             cmd::StatusCommandType::RegionLeader => self.execute_region_leader(request),
-            e => Err(other(format!("unsupported status command type {:?}", e))),
+            cmd::StatusCommandType::RegionDetail => self.execute_region_detail(request),
+            cmd::StatusCommandType::InvalidStatus => Err(other("invalid status command!")),
         });
         response.set_cmd_type(cmd_type);
 
@@ -645,17 +655,30 @@ impl<T: Transport> Store<T> {
     fn execute_region_leader(&mut self,
                              request: RaftCommandRequest)
                              -> Result<cmd::StatusResponse> {
-        let region_id = request.get_header().get_region_id();
-        let peer = match self.region_peers.get_mut(&region_id) {
-            None => return Err(Error::RegionNotFound(region_id)),
-            Some(peer) => peer,
-        };
+        let peer = try!(self.mut_target_peer(&request));
 
         let mut resp = cmd::StatusResponse::new();
         if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
             resp.mut_region_leader().set_leader(leader);
             let term = peer.get_raft_status().hs.get_term();
             resp.mut_region_leader().set_current_term(term);
+        }
+
+        Ok(resp)
+    }
+
+    fn execute_region_detail(&mut self,
+                             request: RaftCommandRequest)
+                             -> Result<cmd::StatusResponse> {
+        let peer = try!(self.mut_target_peer(&request));
+        if !peer.storage.rl().is_initialized() {
+            let region_id = request.get_header().get_region_id();
+            return Err(Error::RegionNotInitialized(region_id));
+        }
+        let mut resp = cmd::StatusResponse::new();
+        resp.mut_region_detail().set_region(peer.region());
+        if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
+            resp.mut_region_detail().set_leader(leader);
         }
 
         Ok(resp)
