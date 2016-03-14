@@ -31,6 +31,20 @@ pub struct PeerStorage {
     pub truncated_state: RaftTruncatedState,
 }
 
+/// Get the start_key of current region in encoded form.
+pub fn enc_start_key(region: &metapb::Region) -> Vec<u8> {
+    keys::data_key(region.get_start_key())
+}
+
+/// Get the end_key of current region in encoded form.
+pub fn enc_end_key(region: &metapb::Region) -> Vec<u8> {
+    if region.get_end_key().is_empty() {
+        keys::DATA_MAX_KEY.to_vec()
+    } else {
+        keys::data_key(region.get_end_key())
+    }
+}
+
 fn storage_error<E>(error: E) -> raft::Error
     where E: Into<Box<error::Error + Send + Sync>>
 {
@@ -220,7 +234,7 @@ impl PeerStorage {
     pub fn approximate_size(&self, start_key: &[u8], end_key: &[u8]) -> Result<u64> {
         try!(util::check_key_in_region(start_key, &self.region));
         let data_end_key = if end_key.is_empty() {
-            self.get_end_key()
+            enc_end_key(self.get_region())
         } else {
             if end_key != self.region.get_end_key() {
                 try!(util::check_key_in_region(end_key, &self.region));
@@ -238,19 +252,7 @@ impl PeerStorage {
         self.approximate_size(start_key, end_key)
     }
 
-    /// Get the start_key of current region in encoded form.
-    pub fn get_start_key(&self) -> Vec<u8> {
-        keys::data_key(self.region.get_start_key())
-    }
 
-    /// Get the end_key of current region in encoded form.
-    pub fn get_end_key(&self) -> Vec<u8> {
-        if self.region.get_end_key().is_empty() {
-            keys::DATA_MAX_KEY.to_vec()
-        } else {
-            keys::data_key(self.region.get_end_key())
-        }
-    }
 
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
         debug!("begin to generate a snapshot for region {}",
@@ -496,7 +498,8 @@ impl PeerStorage {
     // [region meta start, region meta end) -> saving region meta information except raft.
     // [region data start, region data end) -> saving region data.
     fn region_key_ranges(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
-        let (start_key, end_key) = (self.get_start_key(), self.get_end_key());
+        let (start_key, end_key) = (enc_start_key(self.get_region()),
+                                    enc_end_key(self.get_region()));
 
         let region_id = self.get_region_id();
         vec![(keys::region_raft_prefix(region_id),
