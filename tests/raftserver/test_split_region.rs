@@ -5,6 +5,7 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util;
 use tikv::pd::Client;
+use tikv::util::HandyRwLock;
 
 fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
@@ -15,7 +16,7 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     let cluster_id = cluster.id;
 
-    let region = pd_client.read().unwrap().get_region(cluster_id, b"").unwrap();
+    let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
 
     cluster.put(b"a1", b"v1");
 
@@ -24,8 +25,8 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // Split with a2, so a1 must in left, and a3 in right.
     cluster.split_region(region.get_region_id(), Some(b"a2".to_vec()));
 
-    let left = pd_client.read().unwrap().get_region(cluster_id, b"a1").unwrap();
-    let right = pd_client.read().unwrap().get_region(cluster_id, b"a3").unwrap();
+    let left = pd_client.rl().get_region(cluster_id, b"a1").unwrap();
+    let right = pd_client.rl().get_region(cluster_id, b"a3").unwrap();
 
     assert_eq!(region.get_region_id(), left.get_region_id());
     assert_eq!(region.get_start_key(), left.get_start_key());

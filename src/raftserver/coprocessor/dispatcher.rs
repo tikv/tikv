@@ -116,6 +116,7 @@ mod test {
     use tempdir::TempDir;
     use raftserver::store::engine::*;
     use raftserver::store::PeerStorage;
+    use util::HandyRwLock;
     use std::sync::*;
     use std::fmt::Debug;
     use protobuf::RepeatedField;
@@ -153,29 +154,29 @@ mod test {
 
     impl RegionObserver for TestCoprocessor {
         fn pre_admin(&mut self, ctx: &mut ObserverContext, _: &mut AdminRequest) {
-            *self.called_pre.write().unwrap() += 1;
-            ctx.bypass = *self.bypass_pre.read().unwrap();
+            *self.called_pre.wl() += 1;
+            ctx.bypass = *self.bypass_pre.rl();
         }
 
         fn pre_query(&mut self, ctx: &mut ObserverContext, _: &mut RepeatedField<Request>) {
-            *self.called_pre.write().unwrap() += 2;
-            ctx.bypass = *self.bypass_pre.read().unwrap();
+            *self.called_pre.wl() += 2;
+            ctx.bypass = *self.bypass_pre.rl();
         }
 
         fn post_admin(&mut self,
                       ctx: &mut ObserverContext,
                       _: &AdminRequest,
                       _: &mut AdminResponse) {
-            *self.called_post.write().unwrap() += 1;
-            ctx.bypass = *self.bypass_post.read().unwrap();
+            *self.called_post.wl() += 1;
+            ctx.bypass = *self.bypass_post.rl();
         }
 
         fn post_query(&mut self,
                       ctx: &mut ObserverContext,
                       _: &[Request],
                       _: &mut RepeatedField<Response>) {
-            *self.called_post.write().unwrap() += 2;
-            ctx.bypass = *self.bypass_post.read().unwrap();
+            *self.called_post.wl() += 2;
+            ctx.bypass = *self.bypass_post.rl();
         }
     }
 
@@ -190,13 +191,13 @@ mod test {
 
     fn assert_all<T: PartialEq + Debug>(ts: &[&Arc<RwLock<T>>], expect: &[T]) {
         for (c, e) in ts.iter().zip(expect) {
-            assert_eq!(*c.write().unwrap(), *e);
+            assert_eq!(*c.wl(), *e);
         }
     }
 
     fn set_all<T: Copy>(ts: &[&Arc<RwLock<T>>], b: T) {
         for c in ts {
-            *c.write().unwrap() = b;
+            *c.wl() = b;
         }
     }
 
@@ -221,13 +222,13 @@ mod test {
         let mut query_resp = RaftCommandResponse::new();
         query_resp.set_responses(RepeatedField::from_vec(vec![Response::new()]));
 
-        assert_eq!(*cpr1.read().unwrap(), 0);
+        assert_eq!(*cpr1.rl(), 0);
         host.pre_propose(&ps, &mut admin_req);
-        assert_eq!(*cpr1.read().unwrap(), 1);
+        assert_eq!(*cpr1.rl(), 1);
 
-        assert_eq!(*cpt1.read().unwrap(), 0);
+        assert_eq!(*cpt1.rl(), 0);
         host.post_apply(&ps, &admin_req, &mut admin_resp);
-        assert_eq!(*cpt1.read().unwrap(), 1);
+        assert_eq!(*cpt1.rl(), 1);
 
         // reset
         set_all(&[&cpt1, &cpr1], 0);
