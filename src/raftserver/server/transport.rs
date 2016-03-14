@@ -7,6 +7,7 @@ use raftserver::{Result, other};
 use kvproto::raft_serverpb::{Message, MessageType, RaftMessage};
 use kvproto::raft_cmdpb::RaftCommandRequest;
 use pd::Client as PdClient;
+use util::HandyRwLock;
 use super::{SendCh, ConnData};
 
 pub struct ServerTransport<T: PdClient> {
@@ -77,7 +78,7 @@ impl<T: PdClient> Transport for ServerTransport<T> {
         }
 
         let to_node_id = msg.get_to_peer().get_node_id();
-        let node_meta = try!(self.pd_client.read().unwrap().get_node(self.cluster_id, to_node_id));
+        let node_meta = try!(self.pd_client.rl().get_node(self.cluster_id, to_node_id));
 
         let mut req = Message::new();
         req.set_msg_type(MessageType::Raft);

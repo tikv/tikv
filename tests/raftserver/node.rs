@@ -12,6 +12,7 @@ use tikv::raftserver::store::{SendCh, Transport, msg};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tikv::raftserver::{Result, other};
+use tikv::util::HandyRwLock;
 use super::util;
 use super::pd::PdClient;
 
@@ -97,7 +98,7 @@ impl Simulator for NodeCluster {
                     timeout: Duration)
                     -> Option<RaftCommandResponse> {
         let store_id = request.get_header().get_peer().get_store_id();
-        let sender = self.trans.read().unwrap().get_sendch(store_id).unwrap();
+        let sender = self.trans.rl().get_sendch(store_id).unwrap();
         msg::call_command(&sender, request, timeout).unwrap()
     }
 }

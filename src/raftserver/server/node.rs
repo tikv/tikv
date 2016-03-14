@@ -9,6 +9,7 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use raftserver::store::{self, Store, Config as StoreConfig, keys, Peekable, Transport};
 use raftserver::{Result, other};
+use util::HandyRwLock;
 use super::config::Config;
 
 pub struct Node<T: PdClient, Trans: Transport + Send + Sync + 'static> {
@@ -50,7 +51,7 @@ impl<T, Trans> Node<T, Trans>
                                     .is_cluster_bootstrapped(self.cluster_id));
         let (node_id, mut store_ids) = try!(self.check_stores(&engines));
         if node_id == INVALID_ID {
-            self.node_id = try!(self.pd_client.write().unwrap().alloc_id());
+            self.node_id = try!(self.pd_client.wl().alloc_id());
             debug!("alloc node id {:?}", self.node_id);
         } else {
             self.node_id = node_id;
@@ -78,7 +79,7 @@ impl<T, Trans> Node<T, Trans>
         }
 
         // inform pd.
-        try!(self.pd_client.write().unwrap().put_node(self.cluster_id, self.new_node_meta()));
+        try!(self.pd_client.wl().put_node(self.cluster_id, self.new_node_meta()));
 
         for (index, store_id) in store_ids.iter().enumerate() {
             try!(self.start_store(*store_id, engines[index].clone()));
@@ -136,7 +137,7 @@ impl<T, Trans> Node<T, Trans>
     }
 
     fn bootstrap_store(&self, engine: Arc<DB>) -> Result<u64> {
-        let store_id = try!(self.pd_client.write().unwrap().alloc_id());
+        let store_id = try!(self.pd_client.wl().alloc_id());
         debug!("alloc store id {} for node {}", store_id, self.node_id);
 
         try!(store::bootstrap_store(engine, self.cluster_id, self.node_id, store_id));
@@ -145,13 +146,13 @@ impl<T, Trans> Node<T, Trans>
     }
 
     fn bootstrap_first_region(&self, engine: Arc<DB>, store_id: u64) -> Result<metapb::Region> {
-        let region_id = try!(self.pd_client.write().unwrap().alloc_id());
+        let region_id = try!(self.pd_client.wl().alloc_id());
         debug!("alloc first region id {} for cluster {}, node {}, store {}",
                region_id,
                self.cluster_id,
                self.node_id,
                store_id);
-        let peer_id = try!(self.pd_client.write().unwrap().alloc_id());
+        let peer_id = try!(self.pd_client.wl().alloc_id());
         debug!("alloc first peer id {} for first region {}",
                peer_id,
                region_id);
@@ -193,10 +194,10 @@ impl<T, Trans> Node<T, Trans>
                          region: metapb::Region)
                          -> Result<()> {
         let region_id = region.get_region_id();
-        match self.pd_client.write().unwrap().bootstrap_cluster(self.cluster_id,
-                                                                self.new_node_meta(),
-                                                                self.new_store_metas(store_ids),
-                                                                region) {
+        match self.pd_client.wl().bootstrap_cluster(self.cluster_id,
+                                                    self.new_node_meta(),
+                                                    self.new_store_metas(store_ids),
+                                                    region) {
             Err(PdError::ClusterBootstrapped(_)) => {
                 error!("cluster {} is already bootstrapped", self.cluster_id);
                 try!(store::clear_region(&engine, region_id));
@@ -220,7 +221,7 @@ impl<T, Trans> Node<T, Trans>
         let mut event_loop = try!(store::create_event_loop(&cfg));
         let mut store = try!(Store::new(&mut event_loop, cfg, engine, self.trans.clone()));
         let ch = store.get_sendch();
-        self.trans.write().unwrap().add_sendch(store_id, ch);
+        self.trans.wl().add_sendch(store_id, ch);
 
         let h = thread::spawn(move || {
             if let Err(e) = store.run(&mut event_loop) {
@@ -233,7 +234,7 @@ impl<T, Trans> Node<T, Trans>
     }
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
-        let ch = self.trans.write().unwrap().remove_sendch(store_id);
+        let ch = self.trans.wl().remove_sendch(store_id);
 
         if ch.is_none() {
             return Err(other(format!("stop invalid store with id {}", store_id)));
