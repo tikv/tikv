@@ -99,6 +99,12 @@ pub fn new_status_request(region_id: u64,
     req
 }
 
+pub fn new_region_detail_cmd() -> StatusRequest {
+    let mut cmd = StatusRequest::new();
+    cmd.set_cmd_type(StatusCommandType::RegionDetail);
+    cmd
+}
+
 pub fn new_region_leader_cmd() -> StatusRequest {
     let mut cmd = StatusRequest::new();
     cmd.set_cmd_type(StatusCommandType::RegionLeader);
