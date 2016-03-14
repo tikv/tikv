@@ -4,16 +4,19 @@ use std::collections::{HashMap, HashSet, VecDeque, BTreeMap};
 use std::boxed::{Box, FnBox};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use std::collections::Bound::{Excluded, Unbounded};
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopConfig};
 use protobuf;
 use uuid::Uuid;
 
-use kvproto::raft_serverpb::{RaftMessage, StoreIdent};
-use kvproto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
+use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData};
 use kvproto::raftpb::ConfChangeType;
 use util::HandyRwLock;
+use kvproto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
+use protobuf::Message;
+
 use raftserver::{Result, other, Error};
 use kvproto::metapb;
 use super::util;
@@ -22,7 +25,7 @@ use super::keys;
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::PeerStorage;
+use super::peer_storage::{PeerStorage, enc_start_key, enc_end_key};
 use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid};
 use super::transport::Transport;
@@ -40,7 +43,7 @@ pub struct Store<T: Transport> {
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
     pending_raft_groups: HashSet<u64>,
-    // region start key -> region id
+    // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
 
     split_checking_queue: Arc<RwLock<VecDeque<SplitCheckTask>>>,
@@ -115,7 +118,7 @@ impl<T: Transport> Store<T> {
                              let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
                              let peer = try!(Peer::create(self, region));
 
-                             self.region_ranges.insert(peer.region().get_start_key().to_vec(), region_id);
+                             self.region_ranges.insert(enc_end_key(&region), region_id);
         // No need to check duplicated here, because we use region id as the key
         // in DB.
                              self.region_peers.insert(region_id, peer);
@@ -219,6 +222,29 @@ impl<T: Transport> Store<T> {
         }
 
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+        if !peer.storage.rl().is_initialized() {
+            // Check if we can accept the snapshot
+            // TODO: we need to inject failure or re-order network packet to test the situtain
+            if msg.get_message().has_snapshot() {
+                let snap = msg.get_message().get_snapshot();
+                let mut snap_data = RaftSnapshotData::new();
+                try!(snap_data.merge_from_bytes(snap.get_data()));
+                let snap_region = snap_data.get_region();
+                if let Some((_, &region_id)) = self.region_ranges
+                                                   .range(Excluded(&enc_start_key(snap_region)),
+                                                          Unbounded::<&Key>)
+                                                   .next() {
+                    let exist_region = self.region_peers
+                                           .get(&region_id)
+                                           .unwrap()
+                                           .region();
+                    if enc_start_key(&exist_region) < enc_end_key(snap_region) {
+                        warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
+                        return Ok(());
+                    }
+                }
+            }
+        }
 
         try!(peer.raft_group.step(msg.get_message().clone()));
 
@@ -259,7 +285,7 @@ impl<T: Transport> Store<T> {
 
     fn handle_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
         if let Some(region) = ready_result.snap_applied_region {
-            self.region_ranges.insert(region.get_start_key().to_vec(), region.get_region_id());
+            self.region_ranges.insert(enc_end_key(&region), region.get_region_id());
         }
 
         // handle executing committed log results
@@ -274,7 +300,7 @@ impl<T: Transport> Store<T> {
                         // TODO: should we check None here?
                         // Can we destroy it in another thread later?
                         let mut p = self.region_peers.remove(&region_id).unwrap();
-                        let start_key = p.region().get_start_key().to_vec();
+                        let end_key = enc_end_key(&p.region());
                         if let Err(e) = p.destroy() {
                             error!("destroy peer {:?} for region {} in store {} err {:?}",
                                    peer,
@@ -282,14 +308,20 @@ impl<T: Transport> Store<T> {
                                    self.store_id(),
                                    e);
                         } else {
-                            self.region_ranges.remove(&start_key);
+                            if self.region_ranges.remove(&end_key).is_none() {
+                                panic!("Remove region, peer {:?}, region {} in store {}",
+                                       peer,
+                                       region_id,
+                                       self.store_id());
+
+                            }
                         }
                     }
                 }
                 ExecResult::CompactLog{..} => {
                     // Nothing to do, skip to handle it.
                 }
-                ExecResult::SplitRegion{ref right, ..} => {
+                ExecResult::SplitRegion{ref left, ref right} => {
                     let new_region_id = right.get_region_id();
                     match Peer::create(self, right.clone()) {
                         Err(e) => {
@@ -317,8 +349,17 @@ impl<T: Transport> Store<T> {
                                 }
                             }
 
-                            self.region_ranges
-                                .insert(new_peer.region().get_start_key().to_vec(), new_region_id);
+                            // Insert new regions and validation
+                            if self.region_ranges
+                                   .insert(enc_end_key(left), left.get_region_id())
+                                   .is_some() {
+                                panic!("region should not exist, {:?}", left);
+                            }
+                            if self.region_ranges
+                                   .insert(enc_end_key(right), new_region_id)
+                                   .is_none() {
+                                panic!("region should exist, {:?}", right);
+                            }
                             self.region_peers.insert(new_region_id, new_peer);
                         }
                     }
@@ -673,8 +714,8 @@ impl SplitCheckTask {
     fn new(ps: &PeerStorage) -> SplitCheckTask {
         SplitCheckTask {
             region_id: ps.get_region_id(),
-            start_key: ps.get_start_key(),
-            end_key: ps.get_end_key(),
+            start_key: enc_start_key(&ps.region),
+            end_key: enc_end_key(&ps.region),
             engine: ps.get_engine().clone(),
         }
     }

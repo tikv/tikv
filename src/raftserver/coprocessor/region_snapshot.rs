@@ -1,6 +1,6 @@
 use rocksdb::rocksdb::{Snapshot, DBIterator};
 use raftserver::store::engine::{Iterable, Peekable, DBValue};
-use raftserver::store::{keys, PeerStorage};
+use raftserver::store::{keys, PeerStorage, enc_start_key, enc_end_key};
 use raftserver::store::util;
 use raftserver::Result;
 use kvproto::metapb;
@@ -35,7 +35,7 @@ impl<'a> RegionSnapshot<'a> {
 
     // Seek the first key >= given key, if no found, return None.
     pub fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let region_end_key = self.storage.get_end_key();
+        let region_end_key = enc_end_key(self.storage.get_region());
         let pair = self.new_iterator(key)
                        .take_while(|&(ref k, _)| k.as_ref() < &region_end_key)
                        .next()
@@ -52,9 +52,9 @@ impl<'a> RegionSnapshot<'a> {
     pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let region_end_key = self.storage.get_end_key();
+        let region_end_key = enc_end_key(self.storage.get_region());
         let data_end_key = if end_key.is_empty() {
-            self.storage.get_end_key()
+            region_end_key.clone()
         } else {
             keys::data_key(end_key)
         };
