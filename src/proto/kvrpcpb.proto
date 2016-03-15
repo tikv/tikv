@@ -7,6 +7,10 @@ enum MessageType {
     CmdPrewrite = 3;
     CmdCommit = 4;
     CmdCleanUp = 5;
+    // Below types both use for Get failed. If Get failed, it may be locked.
+    // So it tries to clean primary lock(CmdCleanUp), and then server will return
+    // either committed or rollbacked. Finally, client will commit/rollback
+    // primary lock and THEN Get again.
     CmdRollbackThenGet = 6;
     CmdCommitThenGet = 7;
 }
