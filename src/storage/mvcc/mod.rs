@@ -30,10 +30,6 @@ quick_error! {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }
-        AlreadyCommitted {commit_ts: u64} {
-            description("txn already committed")
-            display("txn already committed @{}", commit_ts)
-        }
         TxnLockNotFound {description("txn lock not found")}
         WriteConflict {description("write conflict")}
         KeyVersion {description("bad format key(version)")}

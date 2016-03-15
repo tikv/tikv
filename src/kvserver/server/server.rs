@@ -2,17 +2,18 @@ use std::collections::HashMap;
 use std::boxed::Box;
 use std::io::{Read, Write};
 
-use mio::{self, Token, EventLoop, EventSet, PollOpt};
+use mio::{self, Token, EventLoop, EventSet, PollOpt, Sender};
 use mio::tcp::{TcpListener, TcpStream};
 use protobuf::RepeatedField;
 
 use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
                      CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
-                     CmdCleanUpRequest, CmdCleanUpResponse, CmdRollbackThenGetRequest,
-                     CmdRollbackThenGetResponse, CmdCommitThenGetRequest,
-                     CmdPrewriteResponse_Item, CmdScanResponse_Item, CmdCommitThenGetResponse,
-                     Request, Response, MessageType, ErrorType};
-use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked};
+                     CmdCleanUpRequest, CmdCleanUpResponse, CmdCleanUpResponse_ErrorType,
+                     CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
+                     CmdCommitThenGetRequest, CmdPrewriteResponse_Item, CmdScanResponse_Item,
+                     CmdCommitThenGetResponse, Request, Response, MessageType, ErrorType};
+use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRollbacked,
+              Callback};
 use storage::Result as ResultStorage;
 
 use super::conn::Conn;
@@ -47,21 +48,14 @@ impl Server {
                       event_loop: &mut EventLoop<Server>)
                       -> Result<()> {
         if !msg.has_cmd_get_req() {
-            error!("Msg doesn't contain a CmdGetRequest");
-            return Err(ServerError::FormatError("Msg doesn't contain a CmdGetRequest".to_owned()));
+            format_err!("Msg doesn't contain a CmdGetRequest");
         }
         let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
         let key = cmd_get_req.get_key().to_vec();
         let sender = event_loop.channel();
-        let received_cb = Box::new(move |v: ResultStorage<Option<Value>>| {
-            let resp: Response = Server::cmd_get_done(v);
-            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            if let Err(e) = sender.send(queue_msg) {
-                error!("{:?}", e);
-            }
-        });
+        let cb = Server::make_cb::<Option<Value>>(Server::cmd_get_done, sender, token, msg_id);
         self.store
-            .async_get(key, cmd_get_req.get_version(), received_cb)
+            .async_get(key, cmd_get_req.get_version(), cb)
             .map_err(ServerError::Storage)
     }
 
@@ -72,27 +66,22 @@ impl Server {
                        event_loop: &mut EventLoop<Server>)
                        -> Result<()> {
         if !msg.has_cmd_scan_req() {
-            error!("Msg doesn't containe a CmdScanRequest");
-            return Err(ServerError::FormatError("Msg doesn't containe a CmdScanRequest"
-                                                    .to_owned()));
+            format_err!("Msg doesn't contain a CmdScanRequest");
         }
         let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
         let sender = event_loop.channel();
         // convert [u8] to Vec[u8]
         let start_key: Key = cmd_scan_req.get_key().to_vec();
         debug!("start_key [{:?}]", start_key);
-        let received_cb = Box::new(move |kvs: ResultStorage<Vec<ResultStorage<KvPair>>>| {
-            let resp: Response = Server::cmd_scan_done(kvs);
-            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            if let Err(e) = sender.send(queue_msg) {
-                error!("{:?}", e);
-            }
-        });
+        let cb = Server::make_cb::<Vec<ResultStorage<KvPair>>>(Server::cmd_scan_done,
+                                                               sender,
+                                                               token,
+                                                               msg_id);
         self.store
             .async_scan(start_key,
                         cmd_scan_req.get_limit() as usize,
                         cmd_scan_req.get_version(),
-                        received_cb)
+                        cb)
             .map_err(ServerError::Storage)
     }
 
@@ -103,9 +92,7 @@ impl Server {
                            event_loop: &mut EventLoop<Server>)
                            -> Result<()> {
         if !msg.has_cmd_prewrite_req() {
-            error!("Msg doesn't containe a CmdPrewriteRequest");
-            return Err(ServerError::FormatError("Msg doesn't containe a CmdPrewriteRequest"
-                                                    .to_owned()));
+            format_err!("Msg doesn't contain a CmdPrewriteRequest");
         }
         let cmd_prewrite_req: &CmdPrewriteRequest = msg.get_cmd_prewrite_req();
         let sender = event_loop.channel();
@@ -119,18 +106,15 @@ impl Server {
         mutations.extend(cmd_prewrite_req.get_locks()
                                          .iter()
                                          .map(|k| Mutation::Lock(k.to_owned())));
-        let received_cb = Box::new(move |r: ResultStorage<Vec<ResultStorage<()>>>| {
-            let resp: Response = Server::cmd_prewrite_done(r);
-            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            if let Err(e) = sender.send(queue_msg) {
-                error!("{:?}", e);
-            }
-        });
+        let cb = Server::make_cb::<Vec<ResultStorage<()>>>(Server::cmd_prewrite_done,
+                                                           sender,
+                                                           token,
+                                                           msg_id);
         self.store
             .async_prewrite(mutations,
                             cmd_prewrite_req.get_primary_lock().to_vec(),
                             cmd_prewrite_req.get_start_version(),
-                            received_cb)
+                            cb)
             .map_err(ServerError::Storage)
     }
 
@@ -141,25 +125,16 @@ impl Server {
                          event_loop: &mut EventLoop<Server>)
                          -> Result<()> {
         if !msg.has_cmd_commit_req() {
-            error!("Msg doesn't contain a CmdCommitRequest");
-            return Err(ServerError::FormatError("Msg doesn't contain a CmdCommitRequest"
-                                                    .to_owned()));
+            format_err!("Msg doesn't contain a CmdCommitRequest");
         }
         let cmd_commit_req: &CmdCommitRequest = msg.get_cmd_commit_req();
         let sender = event_loop.channel();
-        let received_cb = Box::new(move |r: ResultStorage<()>| {
-            let resp: Response = Server::cmd_commit_done(r);
-            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            // [TODO]: retry
-            if let Err(e) = sender.send(queue_msg) {
-                error!("{:?}", e);
-            }
-        });
+        let cb = Server::make_cb::<()>(Server::cmd_commit_done, sender, token, msg_id);
         self.store
             .async_commit(cmd_commit_req.get_keys().to_vec(),
                           cmd_commit_req.get_start_version(),
                           cmd_commit_req.get_commit_version(),
-                          received_cb)
+                          cb)
             .map_err(ServerError::Storage)
     }
 
@@ -170,24 +145,15 @@ impl Server {
                            event_loop: &mut EventLoop<Server>)
                            -> Result<()> {
         if !msg.has_cmd_cleanup_req() {
-            let err_str = "Msg doesn't contain a CmdCleanupRequest";
-            error!("{}", err_str);
-            return Err(ServerError::FormatError(err_str.to_owned()));
+            format_err!("Msg doesn't contain a CmdCleanupRequest");
         }
         let cmd_cleanup_req: &CmdCleanUpRequest = msg.get_cmd_cleanup_req();
         let sender = event_loop.channel();
-        let received_cb = Box::new(move |r: ResultStorage<()>| {
-            let resp: Response = Server::cmd_clean_up_done(r);
-            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            // [TODO]: retry
-            if let Err(e) = sender.send(queue_msg) {
-                error!("{:?}", e);
-            }
-        });
+        let cb = Server::make_cb::<()>(Server::cmd_clean_up_done, sender, token, msg_id);
         self.store
             .async_clean_up(cmd_cleanup_req.get_key().to_vec(),
                             cmd_cleanup_req.get_start_version(),
-                            received_cb)
+                            cb)
             .map_err(ServerError::Storage)
     }
 
@@ -198,26 +164,20 @@ impl Server {
                                   event_loop: &mut EventLoop<Server>)
                                   -> Result<()> {
         if !msg.has_cmd_commit_get_req() {
-            let err_str = "Msg doesn't contain a CmdCommitThenGetRequest";
-            error!("{}", err_str);
-            return Err(ServerError::FormatError(err_str.to_owned()));
+            format_err!("Msg doesn't contain a CmdCommitThenGetRequest");
         }
         let cmd_commit_get_req: &CmdCommitThenGetRequest = msg.get_cmd_commit_get_req();
         let sender = event_loop.channel();
-        let received_cb = Box::new(move |r: ResultStorage<Option<Value>>| {
-            let resp: Response = Server::cmd_commit_get_done(r);
-            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            // [TODO]: retry
-            if let Err(e) = sender.send(queue_msg) {
-                error!("{:?}", e);
-            }
-        });
+        let cb = Server::make_cb::<Option<Value>>(Server::cmd_commit_get_done,
+                                                  sender,
+                                                  token,
+                                                  msg_id);
         self.store
             .async_commit_then_get(cmd_commit_get_req.get_key().to_vec(),
                                    cmd_commit_get_req.get_lock_version(),
                                    cmd_commit_get_req.get_commit_version(),
                                    cmd_commit_get_req.get_get_version(),
-                                   received_cb)
+                                   cb)
             .map_err(ServerError::Storage)
     }
 
@@ -228,24 +188,18 @@ impl Server {
                                     event_loop: &mut EventLoop<Server>)
                                     -> Result<()> {
         if !msg.has_cmd_rb_get_req() {
-            let err_str = "Msg doesn't contain a CmdRollbackThenGetRequest";
-            error!("{}", err_str);
-            return Err(ServerError::FormatError(err_str.to_owned()));
+            format_err!("Msg doesn't contain a CmdRollbackThenGetRequest");
         }
         let cmd_rollback_get_req: &CmdRollbackThenGetRequest = msg.get_cmd_rb_get_req();
         let sender = event_loop.channel();
-        let received_cb = Box::new(move |r: ResultStorage<Option<Value>>| {
-            let resp: Response = Server::cmd_rollback_get_done(r);
-            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
-            // [TODO]: retry
-            if let Err(e) = sender.send(queue_msg) {
-                error!("{:?}", e);
-            }
-        });
+        let cb = Server::make_cb::<Option<Value>>(Server::cmd_rollback_get_done,
+                                                  sender,
+                                                  token,
+                                                  msg_id);
         self.store
             .async_rollback_then_get(cmd_rollback_get_req.get_key().to_vec(),
                                      cmd_rollback_get_req.get_lock_version(),
-                                     received_cb)
+                                     cb)
             .map_err(ServerError::Storage)
     }
 
@@ -326,7 +280,7 @@ impl Server {
         match results {
             Ok(results) => {
                 for result in results {
-                    let mut item: CmdPrewriteResponse_Item = CmdPrewriteResponse_Item::new();
+                    let mut item = CmdPrewriteResponse_Item::new();
                     if result.is_ok() {
                         item.set_ok(true);
                     } else if let Some((key, primary, ts)) = result.get_lock() {
@@ -366,6 +320,19 @@ impl Server {
         let mut resp: Response = Response::new();
         let mut cmd_cleanup_resp: CmdCleanUpResponse = CmdCleanUpResponse::new();
         cmd_cleanup_resp.set_ok(r.is_ok());
+        if r.is_committed() {
+            cmd_cleanup_resp.set_err(CmdCleanUpResponse_ErrorType::Committed);
+            if let Some(commit_ts) = r.get_commit() {
+                cmd_cleanup_resp.set_commit_version(commit_ts);
+            } else {
+                warn!("commit_ts not found when is_committed.");
+            }
+        } else if r.is_rollbacked() {
+            cmd_cleanup_resp.set_err(CmdCleanUpResponse_ErrorType::Rollbacked);
+        } else {
+            warn!("Cleanup other error {:?}", r.err());
+            cmd_cleanup_resp.set_err(CmdCleanUpResponse_ErrorType::Retryable);
+        }
         resp.set_field_type(MessageType::CmdCleanUp);
         resp.set_cmd_cleanup_resp(cmd_cleanup_resp);
         resp
@@ -388,12 +355,29 @@ impl Server {
         let mut cmd_rollback_get_resp: CmdRollbackThenGetResponse =
             CmdRollbackThenGetResponse::new();
         cmd_rollback_get_resp.set_ok(r.is_ok());
+        if let Err(ref e) = r {
+            error!("rb & get error: {}", e);
+        }
         if let Ok(Some(val)) = r {
             cmd_rollback_get_resp.set_value(val);
         }
         resp.set_field_type(MessageType::CmdRollbackThenGet);
         resp.set_cmd_rb_get_resp(cmd_rollback_get_resp);
         resp
+    }
+
+    fn make_cb<T: 'static>(f: fn(ResultStorage<T>) -> Response,
+                           sender: Sender<QueueMessage>,
+                           token: Token,
+                           msg_id: u64)
+                           -> Callback<T> {
+        Box::new(move |r: ResultStorage<T>| {
+            let resp: Response = f(r);
+            let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
+            if let Err(e) = sender.send(queue_msg) {
+                error!("{:?}", e);
+            }
+        })
     }
 
     fn add_new_conn(&mut self,
