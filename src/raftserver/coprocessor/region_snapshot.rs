@@ -1,6 +1,6 @@
 use rocksdb::rocksdb::{Snapshot, DBIterator};
 use raftserver::store::engine::{Iterable, Peekable, DBValue};
-use raftserver::store::{keys, PeerStorage, enc_start_key, enc_end_key};
+use raftserver::store::{keys, PeerStorage, enc_end_key};
 use raftserver::store::util;
 use raftserver::Result;
 use kvproto::metapb;
@@ -88,17 +88,6 @@ impl<'a> RegionSnapshot<'a> {
                            }
                        }));
         Ok(next)
-    }
-
-    /// Return the approximate file system space used by keys in specified range.
-    ///
-    /// Note that the returned size measures file system space usage, so
-    /// if the user data compresses by a factor of ten, the returned
-    /// sizes will be one-tenth the size of the corresponding user data size.
-    ///
-    /// Warn: all data on disk will be taken into account rather than just this snapshot.
-    pub fn get_approximate_size(&self, start_key: &[u8], end_key: &[u8]) -> Result<u64> {
-        self.storage.approximate_size(start_key, end_key)
     }
 
     pub fn get_start_key(&self) -> &[u8] {
