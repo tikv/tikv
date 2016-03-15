@@ -12,7 +12,7 @@ use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRespo
                      CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
                      CmdCommitThenGetRequest, CmdPrewriteResponse_Item, CmdScanResponse_Item,
                      CmdCommitThenGetResponse, Request, Response, MessageType, ErrorType};
-use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRollbacked,
+use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
               Callback};
 use storage::Result as ResultStorage;
 
@@ -327,7 +327,7 @@ impl Server {
             } else {
                 warn!("commit_ts not found when is_committed.");
             }
-        } else if r.is_rollbacked() {
+        } else if r.is_rolledback() {
             cmd_cleanup_resp.set_err(CmdCleanUpResponse_ErrorType::Rollbacked);
         } else {
             warn!("Cleanup other error {:?}", r.err());
