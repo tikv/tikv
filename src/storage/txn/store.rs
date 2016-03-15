@@ -56,7 +56,7 @@ impl TxnStore {
                 e @ Err(MvccError::KeyIsLocked{..}) => {
                     results.push(Err(Error::from(e.unwrap_err())))
                 }
-                Err(e) => return Err(Error::from(e)),
+                Err(e) => return Err(e.into()),
             };
             next_key.push(b'\0');
             key = next_key;

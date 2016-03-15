@@ -22,7 +22,7 @@ impl Scheduler {
                     Ok(mut results) => {
                         Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
                     }
-                    Err(e) => Err(::storage::Error::from(e)),
+                    Err(e) => Err(e.into()),
                 });
             }
             Command::Prewrite{mutations, primary, start_ts, callback} => {
@@ -30,7 +30,7 @@ impl Scheduler {
                     Ok(mut results) => {
                         Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
                     }
-                    Err(e) => Err(::storage::Error::from(e)),
+                    Err(e) => Err(e.into()),
                 });
             }
             Command::Commit{keys, lock_ts, commit_ts, callback} => {
