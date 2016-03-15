@@ -116,7 +116,7 @@ impl<T: Transport> Store<T> {
                              }
 
                              let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
-                             let peer = try!(Peer::create(self, region));
+                             let peer = try!(Peer::create(self, &region));
 
                              self.region_ranges.insert(enc_end_key(&region), region_id);
         // No need to check duplicated here, because we use region id as the key
@@ -221,31 +221,27 @@ impl<T: Transport> Store<T> {
             self.region_peers.insert(region_id, peer);
         }
 
-        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
-        if !peer.storage.rl().is_initialized() {
-            // Check if we can accept the snapshot
-            // TODO: we need to inject failure or re-order network packet to test the situtain
-            if msg.get_message().has_snapshot() {
-                let snap = msg.get_message().get_snapshot();
-                let mut snap_data = RaftSnapshotData::new();
-                try!(snap_data.merge_from_bytes(snap.get_data()));
-                let snap_region = snap_data.get_region();
-                if let Some((_, &region_id)) = self.region_ranges
-                                                   .range(Excluded(&enc_start_key(snap_region)),
-                                                          Unbounded::<&Key>)
-                                                   .next() {
-                    let exist_region = self.region_peers
-                                           .get(&region_id)
-                                           .unwrap()
-                                           .region();
-                    if enc_start_key(&exist_region) < enc_end_key(snap_region) {
-                        warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
-                        return Ok(());
-                    }
+        // Check if we can accept the snapshot
+        // TODO: we need to inject failure or re-order network packet to test the situtain
+        if !self.region_peers[&region_id].storage.rl().is_initialized() &&
+           msg.get_message().has_snapshot() {
+            let snap = msg.get_message().get_snapshot();
+            let mut snap_data = RaftSnapshotData::new();
+            try!(snap_data.merge_from_bytes(snap.get_data()));
+            let snap_region = snap_data.get_region();
+            if let Some((_, &region_id)) = self.region_ranges
+                                               .range(Excluded(&enc_start_key(snap_region)),
+                                                      Unbounded::<&Key>)
+                                               .next() {
+                let exist_region = self.region_peers[&region_id].region();
+                if enc_start_key(&exist_region) < enc_end_key(snap_region) {
+                    warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
+                    return Ok(());
                 }
             }
         }
 
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
         try!(peer.raft_group.step(msg.get_message().clone()));
 
         // Add into pending raft groups for later handling ready.
@@ -323,7 +319,7 @@ impl<T: Transport> Store<T> {
                 }
                 ExecResult::SplitRegion{ref left, ref right} => {
                     let new_region_id = right.get_region_id();
-                    match Peer::create(self, right.clone()) {
+                    match Peer::create(self, &right) {
                         Err(e) => {
                             error!("create new split region {:?} err {:?}", right, e);
                         }

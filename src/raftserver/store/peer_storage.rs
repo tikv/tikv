@@ -3,7 +3,7 @@ use std::vec::Vec;
 use std::error;
 
 use rocksdb::DB;
-use rocksdb::rocksdb::{Snapshot as RocksDBSnapshot, Range};
+use rocksdb::rocksdb::Snapshot as RocksDBSnapshot;
 use protobuf::{self, Message};
 
 use kvproto::metapb;
@@ -12,7 +12,7 @@ use kvproto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
 use util::HandyRwLock;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError};
 use raftserver::{Result, Error, other};
-use super::{keys, util};
+use super::keys;
 use super::engine::{Peekable, Iterable, Mutable};
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -222,38 +222,6 @@ impl PeerStorage {
     pub fn raw_snapshot(&self) -> RocksDBSnapshot {
         self.engine.snapshot()
     }
-
-    /// Return the approximate file system space used by keys in specified range.
-    ///
-    /// Note that the returned size measures file system space usage, so
-    /// if the user data compresses by a factor of ten, the returned
-    /// sizes will be one-tenth the size of the corresponding user data size.
-    ///
-    /// Warn: all data on disk will be taken into account rather than just this snapshot.
-    ///
-    /// If end_key is empty, it will be replace with extract data end key of region.
-    pub fn approximate_size(&self, start_key: &[u8], end_key: &[u8]) -> Result<u64> {
-        try!(util::check_key_in_region(start_key, &self.region));
-        let data_end_key = if end_key.is_empty() {
-            enc_end_key(self.get_region())
-        } else {
-            if end_key != self.region.get_end_key() {
-                try!(util::check_key_in_region(end_key, &self.region));
-            }
-            keys::data_key(end_key)
-        };
-        let data_start_key = keys::data_key(start_key);
-        let r = Range::new(&data_start_key, &data_end_key);
-        Ok(self.engine.get_approximate_sizes(&[r])[0])
-    }
-
-    // Return approximate size of the region.
-    pub fn approximate_region_size(&self) -> Result<u64> {
-        let (start_key, end_key) = (self.region.get_start_key(), self.region.get_end_key());
-        self.approximate_size(start_key, end_key)
-    }
-
-
 
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
         debug!("begin to generate a snapshot for region {}",
@@ -600,14 +568,12 @@ mod test {
     use std::sync::*;
     use rocksdb::*;
     use kvproto::raftpb::{Entry, ConfState};
-    use kvproto::metapb;
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
     use raft::Storage;
     use raftserver::store::bootstrap;
-    use raftserver::store::keys;
 
     fn new_storage(path: &TempDir) -> RaftStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
@@ -788,31 +754,5 @@ mod test {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
             }
         }
-    }
-
-    #[test]
-    fn test_approximate_size() {
-        let td = TempDir::new("tikv-store-test").unwrap();
-        let store = new_storage(&td);
-        assert_eq!(store.rl().approximate_region_size().unwrap(), 0);
-        let wb = WriteBatch::new();
-        for i in 1..9999 {
-            wb.put(&keys::data_key(i.to_string().as_bytes()),
-                   i.to_string().as_bytes())
-              .expect("");
-        }
-        store.wl().engine.write(wb).expect("");
-        store.wl().engine.flush(true).expect("");
-        assert!(store.rl().approximate_region_size().unwrap() > 0);
-
-        let mut r = metapb::Region::new();
-        r.set_start_key(b"1".to_vec());
-        r.set_end_key(b"9".to_vec());
-        store.wl().region = r;
-        assert!(store.rl().approximate_size(b"1", b"9").is_ok());
-        assert_eq!(store.rl().approximate_size(b"1", b"9").unwrap(),
-                   store.rl().approximate_size(b"1", b"").unwrap());
-        // across region should not be supported.
-        assert!(store.rl().approximate_size(b"1", b"99").is_err());
     }
 }

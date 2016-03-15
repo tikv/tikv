@@ -80,7 +80,7 @@ impl Peer {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
-    pub fn create<T: Transport>(store: &mut Store<T>, region: metapb::Region) -> Result<Peer> {
+    pub fn create<T: Transport>(store: &mut Store<T>, region: &metapb::Region) -> Result<Peer> {
         let store_id = store.store_id();
         let peer_id = match util::find_peer(&region, store_id) {
             None => {
@@ -112,11 +112,11 @@ impl Peer {
 
         let mut region = metapb::Region::new();
         region.set_region_id(region_id);
-        Peer::new(store, region, peer_id)
+        Peer::new(store, &region, peer_id)
     }
 
     fn new<T: Transport>(store: &mut Store<T>,
-                         region: metapb::Region,
+                         region: &metapb::Region,
                          peer_id: u64)
                          -> Result<Peer> {
         if peer_id == raft::INVALID_ID {
