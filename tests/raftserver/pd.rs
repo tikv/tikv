@@ -3,8 +3,10 @@
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
 use std::collections::Bound::{Included, Unbounded};
+use std::sync::{Mutex, mpsc};
 
 use kvproto::metapb;
+use kvproto::pdpb;
 use tikv::pd::{Client, Result, Error, Key};
 use tikv::pd::errors::other;
 use tikv::raftserver::store::keys;
@@ -37,7 +39,7 @@ impl Node {
 }
 
 struct Cluster {
-    cluster_id: u64,
+    meta: metapb::Cluster,
     nodes: HashMap<u64, Node>,
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
@@ -50,8 +52,12 @@ impl Cluster {
                stores: Vec<metapb::Store>,
                region: metapb::Region)
                -> Cluster {
+        let mut meta = metapb::Cluster::new();
+        meta.set_cluster_id(cluster_id);
+        meta.set_max_peer_number(5);
+
         let mut c = Cluster {
-            cluster_id: cluster_id,
+            meta: meta,
             nodes: HashMap::new(),
             stores: HashMap::new(),
             regions: BTreeMap::new(),
@@ -212,13 +218,16 @@ pub struct PdClient {
     clusters: HashMap<u64, Cluster>,
 
     base_id: u64,
+
+    ask_tx: Mutex<mpsc::Sender<pdpb::Request>>,
 }
 
 impl PdClient {
-    pub fn new() -> PdClient {
+    pub fn new(tx: mpsc::Sender<pdpb::Request>) -> PdClient {
         PdClient {
             clusters: HashMap::new(),
             base_id: 1000,
+            ask_tx: Mutex::new(tx),
         }
     }
 
@@ -320,5 +329,46 @@ impl Client for PdClient {
     fn get_region(&self, cluster_id: u64, key: &[u8]) -> Result<metapb::Region> {
         let cluster = try!(self.get_cluster(cluster_id));
         cluster.get_region(key)
+    }
+
+    fn get_cluster_meta(&self, cluster_id: u64) -> Result<metapb::Cluster> {
+        let cluster = try!(self.get_cluster(cluster_id));
+        Ok(cluster.meta.clone())
+    }
+
+    fn ask_change_peer(&self,
+                       cluster_id: u64,
+                       region: metapb::Region,
+                       leader: metapb::Peer)
+                       -> Result<()> {
+        try!(self.get_cluster(cluster_id));
+        let mut req = pdpb::Request::new();
+        req.mut_header().set_cluster_id(cluster_id);
+        req.set_cmd_type(pdpb::CommandType::AskChangePeer);
+        req.mut_ask_change_peer().set_region(region);
+        req.mut_ask_change_peer().set_leader(leader);
+
+        self.ask_tx.lock().unwrap().send(req).unwrap();
+
+        Ok(())
+    }
+
+    fn ask_split(&self,
+                 cluster_id: u64,
+                 region: metapb::Region,
+                 split_key: &[u8],
+                 leader: metapb::Peer)
+                 -> Result<()> {
+        try!(self.get_cluster(cluster_id));
+        let mut req = pdpb::Request::new();
+        req.mut_header().set_cluster_id(cluster_id);
+        req.set_cmd_type(pdpb::CommandType::AskSplit);
+        req.mut_ask_split().set_region(region);
+        req.mut_ask_split().set_leader(leader);
+        req.mut_ask_split().set_split_key(split_key.to_vec());
+
+        self.ask_tx.lock().unwrap().send(req).unwrap();
+
+        Ok(())
     }
 }
