@@ -28,9 +28,9 @@ fn conf_change(t: ConfChangeType, node_id: u64) -> ConfChange {
     cc
 }
 
-fn soft_state(lead: u64, state: StateRole) -> SoftState {
+fn soft_state(leader_id: u64, state: StateRole) -> SoftState {
     SoftState {
-        lead: lead,
+        leader_id: leader_id,
         raft_state: state,
     }
 }
@@ -93,7 +93,7 @@ fn test_raw_node_propose_and_conf_change() {
         let rd = raw_node.ready();
         s.wl().append(&rd.entries).expect("");
         // Once we are the leader, propose a command and a ConfChange.
-        if !proposed && rd.ss.is_some() && rd.ss.as_ref().unwrap().lead == raw_node.raft.id {
+        if !proposed && rd.ss.is_some() && rd.ss.as_ref().unwrap().leader_id == raw_node.raft.id {
             raw_node.propose(b"somedata".to_vec()).expect("");
 
             let cc = conf_change(ConfChangeType::AddNode, 1);
