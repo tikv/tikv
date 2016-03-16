@@ -1221,8 +1221,8 @@ fn test_state_transition() {
         if sm.term != wterm {
             panic!("#{}: term = {}, want {}", i, sm.term, wterm);
         }
-        if sm.lead != wlead {
-            panic!("#{}: lead = {}, want {}", i, sm.lead, wlead);
+        if sm.leader_id != wlead {
+            panic!("#{}: lead = {}, want {}", i, sm.leader_id, wlead);
         }
     }
 }
@@ -1277,8 +1277,8 @@ fn test_all_server_stepdown() {
             } else {
                 2
             };
-            if sm.lead != wlead {
-                panic!("{}, sm.lead = {}, want {}", i, sm.lead, INVALID_ID);
+            if sm.leader_id != wlead {
+                panic!("{}, sm.lead = {}, want {}", i, sm.leader_id, INVALID_ID);
             }
         }
     }
