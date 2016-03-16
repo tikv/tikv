@@ -238,7 +238,7 @@ impl Peer {
         let ready = self.raft_group.ready();
 
         if let Some(ref ss) = ready.ss {
-            self.leader_id = ss.lead;
+            self.leader_id = ss.leader_id;
         }
 
         let applied_region = try!(self.handle_raft_ready_in_storage(&ready));

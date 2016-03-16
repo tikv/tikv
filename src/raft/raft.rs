@@ -102,7 +102,7 @@ impl Config {
 // The state is volatile and does not need to be persisted to the WAL.
 #[derive(Default, PartialEq, Debug)]
 pub struct SoftState {
-    pub lead: u64,
+    pub leader_id: u64,
     pub raft_state: StateRole,
 }
 
@@ -127,7 +127,7 @@ pub struct Raft<T: Storage> {
     pub msgs: Vec<Message>,
 
     /// the leader id
-    pub lead: u64,
+    pub leader_id: u64,
 
     /// New configuration is ignored if there exists unapplied configuration.
     pub pending_conf: bool,
@@ -196,7 +196,7 @@ impl<T: Storage> Raft<T> {
             election_timeout: c.election_tick,
             votes: Default::default(),
             msgs: Default::default(),
-            lead: Default::default(),
+            leader_id: Default::default(),
             term: Default::default(),
             election_elapsed: Default::default(),
             pending_conf: Default::default(),
@@ -233,12 +233,12 @@ impl<T: Storage> Raft<T> {
     }
 
     fn has_leader(&self) -> bool {
-        self.lead != INVALID_ID
+        self.leader_id != INVALID_ID
     }
 
     pub fn soft_state(&self) -> SoftState {
         SoftState {
-            lead: self.lead,
+            leader_id: self.leader_id,
             raft_state: self.state,
         }
     }
@@ -436,7 +436,7 @@ impl<T: Storage> Raft<T> {
             self.term = term;
             self.vote = INVALID_ID;
         }
-        self.lead = INVALID_ID;
+        self.leader_id = INVALID_ID;
         self.election_elapsed = 0;
         self.heartbeat_elapsed = 0;
 
@@ -510,9 +510,9 @@ impl<T: Storage> Raft<T> {
         }
     }
 
-    pub fn become_follower(&mut self, term: u64, lead: u64) {
+    pub fn become_follower(&mut self, term: u64, leader_id: u64) {
         self.reset(term);
-        self.lead = lead;
+        self.leader_id = leader_id;
         self.state = StateRole::Follower;
         info!("{:x} became follower at term {}", self.id, self.term);
     }
@@ -535,7 +535,7 @@ impl<T: Storage> Raft<T> {
                 "invalid transition [follower -> leader]");
         let term = self.term;
         self.reset(term);
-        self.lead = self.id;
+        self.leader_id = self.id;
         self.state = StateRole::Leader;
         let begin = self.raft_log.committed + 1;
         let ents = self.raft_log
@@ -611,9 +611,9 @@ impl<T: Storage> Raft<T> {
         if m.get_term() == 0 {
             // local message
         } else if m.get_term() > self.term {
-            let mut lead = m.get_from();
+            let mut leader_id = m.get_from();
             if m.get_msg_type() == MessageType::MsgRequestVote {
-                lead = INVALID_ID;
+                leader_id = INVALID_ID;
             }
             info!("{:x} [term: {}] received a {:?} message with higher term from {:x} [term: {}]",
                   self.id,
@@ -621,7 +621,7 @@ impl<T: Storage> Raft<T> {
                   m.get_msg_type(),
                   m.get_from(),
                   m.get_term());
-            self.become_follower(m.get_term(), lead);
+            self.become_follower(m.get_term(), leader_id);
         } else if m.get_term() < self.term {
             // ignore
             info!("{:x} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
@@ -907,23 +907,23 @@ impl<T: Storage> Raft<T> {
         let term = self.term;
         match m.get_msg_type() {
             MessageType::MsgPropose => {
-                if self.lead == INVALID_ID {
+                if self.leader_id == INVALID_ID {
                     info!("{:x} no leader at term {}; dropping proposal",
                           self.id,
                           term);
                     return;
                 }
-                m.set_to(self.lead);
+                m.set_to(self.leader_id);
                 self.send(m);
             }
             MessageType::MsgAppend => {
                 self.election_elapsed = 0;
-                self.lead = m.get_from();
+                self.leader_id = m.get_from();
                 self.handle_append_entries(m);
             }
             MessageType::MsgHeartbeat => {
                 self.election_elapsed = 0;
-                self.lead = m.get_from();
+                self.leader_id = m.get_from();
                 self.handle_heartbeat(m);
             }
             MessageType::MsgSnapshot => {
