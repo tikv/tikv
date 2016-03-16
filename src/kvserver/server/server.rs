@@ -52,7 +52,7 @@ impl Server {
             format_err!("Msg doesn't contain a CmdGetRequest");
         }
         let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
-        let key = cmd_get_req.get_key().to_vec();
+        let key = cmd_get_req.get_key_address().get_key().to_vec();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_get_done, sender, token, msg_id);
         self.store
@@ -72,7 +72,7 @@ impl Server {
         let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
         let sender = event_loop.channel();
         // convert [u8] to Vec[u8]
-        let start_key: Key = cmd_scan_req.get_key().to_vec();
+        let start_key: Key = cmd_scan_req.get_key_address().get_key().to_vec();
         debug!("start_key [{:?}]", start_key);
         let cb = Server::make_cb::<Vec<ResultStorage<KvPair>>>(Server::cmd_scan_done,
                                                                sender,
@@ -99,21 +99,22 @@ impl Server {
         let sender = event_loop.channel();
         let mut mutations = vec![];
         mutations.extend(cmd_prewrite_req.get_puts().iter().map(|kv| {
-            Mutation::Put((kv.get_key().to_vec(), kv.get_value().to_vec()))
+            Mutation::Put((kv.get_key_address().get_key().to_vec(),
+                           kv.get_value().to_vec()))
         }));
         mutations.extend(cmd_prewrite_req.get_dels()
                                          .iter()
-                                         .map(|k| Mutation::Delete(k.to_owned())));
+                                         .map(|k| Mutation::Delete(k.get_key().to_owned())));
         mutations.extend(cmd_prewrite_req.get_locks()
                                          .iter()
-                                         .map(|k| Mutation::Lock(k.to_owned())));
+                                         .map(|k| Mutation::Lock(k.get_key().to_owned())));
         let cb = Server::make_cb::<Vec<ResultStorage<()>>>(Server::cmd_prewrite_done,
                                                            sender,
                                                            token,
                                                            msg_id);
         self.store
             .async_prewrite(mutations,
-                            cmd_prewrite_req.get_primary_lock().to_vec(),
+                            cmd_prewrite_req.get_primary_address().get_key().to_vec(),
                             cmd_prewrite_req.get_start_version(),
                             cb)
             .map_err(ServerError::Storage)
@@ -132,7 +133,10 @@ impl Server {
         let sender = event_loop.channel();
         let cb = Server::make_cb::<()>(Server::cmd_commit_done, sender, token, msg_id);
         self.store
-            .async_commit(cmd_commit_req.get_keys().to_vec(),
+            .async_commit(cmd_commit_req.get_keys_address()
+                                        .iter()
+                                        .map(|k| k.get_key().to_owned())
+                                        .collect(),
                           cmd_commit_req.get_start_version(),
                           cmd_commit_req.get_commit_version(),
                           cb)
@@ -152,7 +156,7 @@ impl Server {
         let sender = event_loop.channel();
         let cb = Server::make_cb::<()>(Server::cmd_cleanup_done, sender, token, msg_id);
         self.store
-            .async_cleanup(cmd_cleanup_req.get_key().to_vec(),
+            .async_cleanup(cmd_cleanup_req.get_key_address().get_key().to_vec(),
                            cmd_cleanup_req.get_start_version(),
                            cb)
             .map_err(ServerError::Storage)
@@ -174,7 +178,7 @@ impl Server {
                                                   token,
                                                   msg_id);
         self.store
-            .async_commit_then_get(cmd_commit_get_req.get_key().to_vec(),
+            .async_commit_then_get(cmd_commit_get_req.get_key_address().get_key().to_vec(),
                                    cmd_commit_get_req.get_lock_version(),
                                    cmd_commit_get_req.get_commit_version(),
                                    cmd_commit_get_req.get_get_version(),
@@ -198,7 +202,7 @@ impl Server {
                                                   token,
                                                   msg_id);
         self.store
-            .async_rollback_then_get(cmd_rollback_get_req.get_key().to_vec(),
+            .async_rollback_then_get(cmd_rollback_get_req.get_key_address().get_key().to_vec(),
                                      cmd_rollback_get_req.get_lock_version(),
                                      cb)
             .map_err(ServerError::Storage)
