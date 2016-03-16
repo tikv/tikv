@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 
 use rocksdb::DB;
@@ -15,6 +15,7 @@ use tikv::raftserver::{Result, other};
 use tikv::util::HandyRwLock;
 use super::util;
 use super::pd::PdClient;
+use super::pd_ask::run_ask_loop;
 
 pub struct ChannelTransport {
     senders: HashMap<u64, SendCh>,
@@ -104,9 +105,9 @@ impl Simulator for NodeCluster {
 }
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
-    let pd_client = Arc::new(RwLock::new(PdClient::new()));
-    Cluster::new(id,
-                 count,
-                 NodeCluster::new(id, pd_client.clone()),
-                 pd_client)
+    let (tx, rx) = mpsc::channel();
+    let pd_client = Arc::new(RwLock::new(PdClient::new(tx)));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(id, pd_client.clone())));
+    run_ask_loop(pd_client.clone(), sim.clone(), rx);
+    Cluster::new(id, count, sim, pd_client)
 }

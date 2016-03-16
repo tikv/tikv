@@ -45,13 +45,17 @@ pub struct Cluster<T: Simulator> {
     // node id -> db engine.
     pub engines: HashMap<u64, Arc<DB>>,
 
-    sim: T,
+    sim: Arc<RwLock<T>>,
     pub pd_client: Arc<RwLock<PdClient>>,
 }
 
 impl<T: Simulator> Cluster<T> {
     // Create the default Store cluster.
-    pub fn new(id: u64, count: usize, sim: T, pd_client: Arc<RwLock<PdClient>>) -> Cluster<T> {
+    pub fn new(id: u64,
+               count: usize,
+               sim: Arc<RwLock<T>>,
+               pd_client: Arc<RwLock<PdClient>>)
+               -> Cluster<T> {
         let mut c = Cluster {
             id: id,
             leaders: HashMap::new(),
@@ -79,18 +83,18 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn start(&mut self) {
         for engine in &self.dbs {
-            let node_id = self.sim.run_node(0, engine.clone());
+            let node_id = self.sim.wl().run_node(0, engine.clone());
             self.engines.insert(node_id, engine.clone());
         }
     }
 
     pub fn run_node(&mut self, node_id: u64) {
         let engine = self.engines.get(&node_id).unwrap();
-        self.sim.run_node(node_id, engine.clone());
+        self.sim.wl().run_node(node_id, engine.clone());
     }
 
     pub fn stop_node(&mut self, node_id: u64) {
-        self.sim.stop_node(node_id);
+        self.sim.wl().stop_node(node_id);
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
@@ -101,7 +105,7 @@ impl<T: Simulator> Cluster<T> {
                         request: RaftCommandRequest,
                         timeout: Duration)
                         -> Option<RaftCommandResponse> {
-        self.sim.call_command(request, timeout)
+        self.sim.rl().call_command(request, timeout)
     }
 
     pub fn call_command_on_leader(&mut self,
@@ -121,7 +125,7 @@ impl<T: Simulator> Cluster<T> {
         let mut retry_cnt = 100;
 
         let stores = self.pd_client.rl().get_stores(self.id).unwrap();
-        let node_ids: HashSet<u64> = self.sim.get_node_ids();
+        let node_ids: HashSet<u64> = self.sim.rl().get_node_ids();
         while leader.is_none() && retry_cnt > 0 {
             for store in &stores {
                 // For some tests, we stop the node but pd still has this information,
@@ -228,7 +232,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn shutdown(&mut self) {
-        let keys: HashSet<u64> = self.sim.get_node_ids();
+        let keys: HashSet<u64> = self.sim.rl().get_node_ids();
         for id in keys {
             self.stop_node(id);
         }
