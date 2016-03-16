@@ -3,7 +3,7 @@ use std::thread;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::io::ErrorKind;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::time::Duration;
 
 use rocksdb::DB;
@@ -16,7 +16,7 @@ use kvproto::raft_cmdpb::*;
 use tikv::pd::Client;
 use super::util;
 use super::pd::PdClient;
-
+use super::pd_ask::run_ask_loop;
 
 pub struct ServerCluster {
     cluster_id: u64,
@@ -133,9 +133,9 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    let pd_client = Arc::new(RwLock::new(PdClient::new()));
-    Cluster::new(id,
-                 count,
-                 ServerCluster::new(id, pd_client.clone()),
-                 pd_client)
+    let (tx, rx) = mpsc::channel();
+    let pd_client = Arc::new(RwLock::new(PdClient::new(tx)));
+    let sim = Arc::new(RwLock::new(ServerCluster::new(id, pd_client.clone())));
+    run_ask_loop(pd_client.clone(), sim.clone(), rx);
+    Cluster::new(id, count, sim, pd_client)
 }

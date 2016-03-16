@@ -75,7 +75,27 @@ pub trait Client {
     // Get store information.
     fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store>;
 
+    // Get cluster meta information.
+    fn get_cluster_meta(&self, cluster_id: u64) -> Result<metapb::Cluster>;
+
     // For route.
     // Get region which the key belong to.
     fn get_region(&self, cluster_id: u64, key: &[u8]) -> Result<metapb::Region>;
+
+    // Ask pd to change peer for the region.
+    // Pd will handle this request asynchronously.
+    fn ask_change_peer(&self,
+                       cluster_id: u64,
+                       region: metapb::Region,
+                       leader: metapb::Peer)
+                       -> Result<()>;
+
+    // Ask pd to split with given split_key for the region.
+    // Pd will handle this request asynchronously.
+    fn ask_split(&self,
+                 cluster_id: u64,
+                 region: metapb::Region,
+                 split_key: &[u8],
+                 leader: metapb::Peer)
+                 -> Result<()>;
 }
