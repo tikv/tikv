@@ -52,6 +52,7 @@ impl<T: Simulator> AskHandler<T> {
         let cluster_id = req.get_header().get_cluster_id();
         let region = req.get_ask_change_peer().get_region();
         let leader = req.get_ask_change_peer().get_leader();
+        let current_term = req.get_ask_change_peer().get_current_term();
 
         let meta = self.pd_client.rl().get_cluster_meta(cluster_id).unwrap();
         let max_peer_number = meta.get_max_peer_number() as usize;
@@ -88,6 +89,7 @@ impl<T: Simulator> AskHandler<T> {
 
         let mut change_peer = new_admin_request(region.get_region_id(),
                                                 new_change_peer_cmd(conf_change_type, peer));
+        change_peer.mut_admin_request().mut_change_peer().set_current_term(current_term);
         change_peer.mut_header().set_peer(leader.clone());
         let resp = self.sim.wl().call_command(change_peer, Duration::from_secs(3)).unwrap();
         assert_eq!(resp.get_admin_response().get_cmd_type(),
@@ -102,6 +104,7 @@ impl<T: Simulator> AskHandler<T> {
         let region = req.get_ask_split().get_region();
         let leader = req.get_ask_split().get_leader();
         let split_key = req.get_ask_split().get_split_key().to_vec();
+        let current_term = req.get_ask_split().get_current_term();
 
         let new_region_id = self.pd_client.wl().alloc_id().unwrap();
         let mut peer_ids: Vec<u64> = vec![];
@@ -114,6 +117,7 @@ impl<T: Simulator> AskHandler<T> {
                                           new_split_region_cmd(Some(split_key),
                                                                new_region_id,
                                                                peer_ids));
+        split.mut_admin_request().mut_split().set_current_term(current_term);
         split.mut_header().set_peer(leader.clone());
         let resp = self.sim.wl().call_command(split, Duration::from_secs(3)).unwrap();
 

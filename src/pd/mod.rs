@@ -84,18 +84,22 @@ pub trait Client {
 
     // Ask pd to change peer for the region.
     // Pd will handle this request asynchronously.
+    // TODO: if we have more arguments, we may use pdpb.Request directly.
     fn ask_change_peer(&self,
                        cluster_id: u64,
                        region: metapb::Region,
-                       leader: metapb::Peer)
+                       leader: metapb::Peer,
+                       current_term: u64)
                        -> Result<()>;
 
     // Ask pd to split with given split_key for the region.
     // Pd will handle this request asynchronously.
+    // TODO: if we have more arguments, we may use pdpb.Request directly.
     fn ask_split(&self,
                  cluster_id: u64,
                  region: metapb::Region,
                  split_key: &[u8],
-                 leader: metapb::Peer)
+                 leader: metapb::Peer,
+                 current_term: u64)
                  -> Result<()>;
 }
