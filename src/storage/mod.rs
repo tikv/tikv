@@ -342,9 +342,10 @@ impl<T> MaybeLocked for Result<T> {
 
     fn get_lock(&self) -> Option<(Key, Key, u64)> {
         match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked{ref key, ref primary, ts}))) => {
-                Some((key.to_owned(), primary.to_owned(), ts))
-            }
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked{
+                ref key,
+                ref primary,
+                ts}))) => Some((key.to_owned(), primary.to_owned(), ts)),
             _ => None,
         }
     }
@@ -373,14 +374,14 @@ impl<T> MaybeComitted for Result<T> {
     }
 }
 
-pub trait MaybeRollbacked {
-    fn is_rollbacked(&self) -> bool;
+pub trait MaybeRolledback {
+    fn is_rolledback(&self) -> bool;
 }
 
-impl<T> MaybeRollbacked for Result<T> {
-    fn is_rollbacked(&self) -> bool {
+impl<T> MaybeRolledback for Result<T> {
+    fn is_rolledback(&self) -> bool {
         match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyRollbacked))) => true,
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyRolledback))) => true,
             _ => false,
         }
     }
