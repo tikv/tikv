@@ -6,12 +6,13 @@ use mio::{self, Token, EventLoop, EventSet, PollOpt, Sender};
 use mio::tcp::{TcpListener, TcpStream};
 use protobuf::RepeatedField;
 
-use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
-                     CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
-                     CmdCleanupRequest, CmdCleanupResponse, CmdCleanupResponse_ResultType,
-                     CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
-                     CmdCommitThenGetRequest, CmdPrewriteResponse_Item, CmdScanResponse_Item,
-                     CmdCommitThenGetResponse, Request, Response, MessageType, ResultType};
+use kvproto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
+                       CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest,
+                       CmdCommitResponse, CmdCleanupRequest, CmdCleanupResponse,
+                       CmdCleanupResponse_ResultType, CmdRollbackThenGetRequest,
+                       CmdRollbackThenGetResponse, CmdCommitThenGetRequest,
+                       CmdPrewriteResponse_Item, CmdScanResponse_Item, CmdCommitThenGetResponse,
+                       Request, Response, MessageType, ResultType};
 use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
               Callback};
 use storage::Result as ResultStorage;
@@ -557,7 +558,7 @@ mod tests {
 
     use mio::EventLoop;
 
-    use proto::kvrpcpb::*;
+    use kvproto::kvrpcpb::*;
     use storage::{self, Key, Value, Storage, Dsn, txn, mvcc};
     use storage::Error::Other;
     use storage::KvPair as StorageKV;
@@ -586,7 +587,7 @@ mod tests {
         let actual_resp: Response = Server::cmd_get_done(Ok(None));
         let mut exp_resp: Response = Response::new();
         let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
-        exp_cmd_resp.set_ok(true);
+        exp_cmd_resp.set_res_type(ResultType::Ok);
         exp_cmd_resp.set_value(Vec::new());
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
@@ -599,7 +600,7 @@ mod tests {
         let actual_resp: Response = Server::cmd_get_done(Ok(Some(storage_val)));
         let mut exp_resp: Response = Response::new();
         let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
-        exp_cmd_resp.set_ok(true);
+        exp_cmd_resp.set_res_type(ResultType::Ok);
         exp_cmd_resp.set_value(vec![0u8; 8]);
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
@@ -612,7 +613,6 @@ mod tests {
         let actual_resp: Response = Server::cmd_get_done(Err(Other(Box::new("error"))));
         let mut exp_resp: Response = Response::new();
         let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
-        exp_cmd_resp.set_ok(false);
         exp_cmd_resp.set_res_type(ResultType::Retryable);
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
@@ -644,10 +644,10 @@ mod tests {
         assert_eq!(true, actual_cmd_resp.get_ok());
         let actual_kvs = actual_cmd_resp.get_results();
         assert_eq!(2, actual_kvs.len());
-        assert_eq!(true, actual_kvs[0].get_ok());
+        assert_eq!(ResultType::Ok, actual_kvs[0].get_res_type());
         assert_eq!(k0, actual_kvs[0].get_key());
         assert_eq!(v0, actual_kvs[0].get_value());
-        assert_eq!(true, actual_kvs[1].get_ok());
+        assert_eq!(ResultType::Ok, actual_kvs[1].get_res_type());
         assert_eq!(k1, actual_kvs[1].get_key());
         assert_eq!(v1, actual_kvs[1].get_value());
     }
@@ -669,10 +669,10 @@ mod tests {
         assert_eq!(true, actual_cmd_resp.get_ok());
         let actual_kvs = actual_cmd_resp.get_results();
         assert_eq!(2, actual_kvs.len());
-        assert_eq!(true, actual_kvs[0].get_ok());
+        assert_eq!(ResultType::Ok, actual_kvs[0].get_res_type());
         assert_eq!(k0, actual_kvs[0].get_key());
         assert_eq!(v0, actual_kvs[0].get_value());
-        assert_eq!(false, actual_kvs[1].get_ok());
+        assert_eq!(ResultType::Locked, actual_kvs[1].get_res_type());
         assert_eq!(k1, actual_kvs[1].get_key());
         assert_eq!(k1_primary, actual_kvs[1].get_primary_lock());
         assert_eq!(k1_ts, actual_kvs[1].get_lock_version());
@@ -712,7 +712,8 @@ mod tests {
     fn test_cleanup_done_ok() {
         let actual_resp: Response = Server::cmd_cleanup_done(Ok(()));
         assert_eq!(MessageType::CmdCleanup, actual_resp.get_field_type());
-        assert_eq!(true, actual_resp.get_cmd_cleanup_resp().get_ok());
+        assert_eq!(CmdCleanupResponse_ResultType::Ok,
+                   actual_resp.get_cmd_cleanup_resp().get_res_type());
     }
 
     #[test]
@@ -720,7 +721,8 @@ mod tests {
         let err = Other(Box::new("cleanup error"));
         let actual_resp: Response = Server::cmd_cleanup_done(Err(err));
         assert_eq!(MessageType::CmdCleanup, actual_resp.get_field_type());
-        assert_eq!(false, actual_resp.get_cmd_cleanup_resp().get_ok());
+        assert_eq!(CmdCleanupResponse_ResultType::Retryable,
+                   actual_resp.get_cmd_cleanup_resp().get_res_type());
     }
 
     fn make_lock_error<T>(key: Key, primary: Key, ts: u64) -> ResultStorage<T> {
