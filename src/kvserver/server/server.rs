@@ -11,8 +11,7 @@ use kvproto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRes
                        CmdCommitResponse, CmdCleanupRequest, CmdCleanupResponse,
                        CmdCleanupResponse_ResultType, CmdRollbackThenGetRequest,
                        CmdRollbackThenGetResponse, CmdCommitThenGetRequest,
-                       CmdPrewriteResponse_Item, CmdScanResponse_Item, CmdCommitThenGetResponse,
-                       Request, Response, MessageType, ResultType};
+                       CmdCommitThenGetResponse, Request, Response, MessageType, Item, ResultType};
 use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
               Callback};
 use storage::Result as ResultStorage;
@@ -245,10 +244,10 @@ impl Server {
         cmd_scan_resp.set_ok(kvs.is_ok());
         match kvs {
             Ok(kvs) => {
-                // convert storage::KvPair to kvrpcpb::CmdScanResponse_Item
-                let mut new_kvs: Vec<CmdScanResponse_Item> = Vec::new();
+                // convert storage::KvPair to kvrpcpb::Item
+                let mut new_kvs: Vec<Item> = Vec::new();
                 for result in kvs {
-                    let mut new_kv: CmdScanResponse_Item = CmdScanResponse_Item::new();
+                    let mut new_kv: Item = Item::new();
                     match result {
                         Ok((ref key, ref value)) => {
                             new_kv.set_res_type(ResultType::Ok);
@@ -285,11 +284,11 @@ impl Server {
         let mut resp: Response = Response::new();
         let mut cmd_prewrite_resp: CmdPrewriteResponse = CmdPrewriteResponse::new();
         cmd_prewrite_resp.set_ok(results.is_ok());
-        let mut items: Vec<CmdPrewriteResponse_Item> = Vec::new();
+        let mut items: Vec<Item> = Vec::new();
         match results {
             Ok(results) => {
                 for result in results {
-                    let mut item = CmdPrewriteResponse_Item::new();
+                    let mut item = Item::new();
                     if result.is_ok() {
                         item.set_res_type(ResultType::Ok);
                     } else if let Some((key, primary, ts)) = result.get_lock() {
@@ -336,7 +335,7 @@ impl Server {
                 warn!("commit_ts not found when is_committed.");
             }
         } else if r.is_rolledback() {
-            cmd_cleanup_resp.set_res_type(CmdCleanupResponse_ResultType::Rollbacked);
+            cmd_cleanup_resp.set_res_type(CmdCleanupResponse_ResultType::Rolledback);
         } else {
             warn!("Cleanup other error {:?}", r.err());
             cmd_cleanup_resp.set_res_type(CmdCleanupResponse_ResultType::Retryable);
