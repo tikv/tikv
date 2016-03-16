@@ -11,7 +11,8 @@ use kvproto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRes
                        CmdCommitResponse, CmdCleanupRequest, CmdCleanupResponse,
                        CmdCleanupResponse_ResultType, CmdRollbackThenGetRequest,
                        CmdRollbackThenGetResponse, CmdCommitThenGetRequest,
-                       CmdCommitThenGetResponse, Request, Response, MessageType, Item, ResultType};
+                       CmdCommitThenGetResponse, Request, Response, MessageType, Item, ResultType,
+                       ResultType_Type};
 use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
               Callback};
 use storage::Result as ResultStorage;
@@ -210,9 +211,10 @@ impl Server {
     fn cmd_get_done(r: ResultStorage<Option<Value>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_get_resp: CmdGetResponse = CmdGetResponse::new();
+        let mut res_type: ResultType = ResultType::new();
         match r {
             Ok(opt) => {
-                cmd_get_resp.set_res_type(ResultType::Ok);
+                res_type.set_field_type(ResultType_Type::Ok);
                 match opt {
                     Some(val) => cmd_get_resp.set_value(val),
                     None => cmd_get_resp.set_value(Vec::new()),
@@ -220,19 +222,25 @@ impl Server {
             }
             Err(ref e) => {
                 if r.is_locked() {
-                    cmd_get_resp.set_res_type(ResultType::Locked);
                     if let Some((_, primary, ts)) = r.get_lock() {
+                        res_type.set_field_type(ResultType_Type::Locked);
                         cmd_get_resp.set_primary_lock(primary);
                         cmd_get_resp.set_lock_version(ts);
                     } else {
-                        error!("key is locked but primary info not found");
+                        let err_str = "key is locked but primary info not found".to_owned();
+                        error!("{}", err_str);
+                        res_type.set_field_type(ResultType_Type::Other);
+                        res_type.set_msg(err_str);
                     }
                 } else {
-                    cmd_get_resp.set_res_type(ResultType::Retryable);
-                    error!("storage error: {:?}", e);
+                    let err_str = format!("storage error: {:?}", e);
+                    error!("{}", err_str);
+                    res_type.set_field_type(ResultType_Type::Retryable);
+                    res_type.set_msg(err_str);
                 }
             }
         }
+        cmd_get_resp.set_res_type(res_type);
         resp.set_field_type(MessageType::CmdGet);
         resp.set_cmd_get_resp(cmd_get_resp);
         resp
@@ -248,25 +256,27 @@ impl Server {
                 let mut new_kvs: Vec<Item> = Vec::new();
                 for result in kvs {
                     let mut new_kv: Item = Item::new();
+                    let mut res_type: ResultType = ResultType::new();
                     match result {
                         Ok((ref key, ref value)) => {
-                            new_kv.set_res_type(ResultType::Ok);
+                            res_type.set_field_type(ResultType_Type::Ok);
                             new_kv.set_key(key.clone());
                             new_kv.set_value(value.clone());
                         }
                         Err(..) => {
                             if result.is_locked() {
                                 if let Some((key, primary, ts)) = result.get_lock() {
-                                    new_kv.set_res_type(ResultType::Locked);
+                                    res_type.set_field_type(ResultType_Type::Locked);
                                     new_kv.set_key(key);
                                     new_kv.set_primary_lock(primary);
                                     new_kv.set_lock_version(ts);
                                 }
                             } else {
-                                new_kv.set_res_type(ResultType::Retryable);
+                                res_type.set_field_type(ResultType_Type::Retryable);
                             }
                         }
                     }
+                    new_kv.set_res_type(res_type);
                     new_kvs.push(new_kv);
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
@@ -289,17 +299,19 @@ impl Server {
             Ok(results) => {
                 for result in results {
                     let mut item = Item::new();
+                    let mut res_type: ResultType = ResultType::new();
                     if result.is_ok() {
-                        item.set_res_type(ResultType::Ok);
+                        res_type.set_field_type(ResultType_Type::Ok);
                     } else if let Some((key, primary, ts)) = result.get_lock() {
                         // Actually items only contain locked item, so `ok` is always false.
-                        item.set_res_type(ResultType::Locked);
+                        res_type.set_field_type(ResultType_Type::Locked);
                         item.set_key(key);
                         item.set_primary_lock(primary);
                         item.set_lock_version(ts);
                     } else {
-                        item.set_res_type(ResultType::Retryable);
+                        res_type.set_field_type(ResultType_Type::Retryable);
                     }
+                    item.set_res_type(res_type);
                     items.push(item);
                 }
             }
