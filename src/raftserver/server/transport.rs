@@ -6,7 +6,7 @@ use raftserver::store::{Transport, SendCh as StoreSendCh, Callback};
 use raftserver::{Result, other};
 use kvproto::raft_serverpb::{Message, MessageType, RaftMessage};
 use kvproto::raft_cmdpb::RaftCommandRequest;
-use pd::Client as PdClient;
+use pd::PdClient;
 use util::HandyRwLock;
 use super::{SendCh, ConnData};
 

@@ -4,14 +4,14 @@ use std::sync::{Arc, RwLock};
 use tikv::raftserver::store::*;
 use kvproto::raftpb::ConfChangeType;
 use kvproto::metapb;
-use tikv::pd::Client;
+use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::*;
-use super::pd::PdClient;
+use super::pd::TestPdClient;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
@@ -93,7 +93,9 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // TODO: add more tests.
 }
 
-fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<RwLock<PdClient>>) -> metapb::Peer {
+fn new_conf_change_peer(store: &metapb::Store,
+                        pd_client: &Arc<RwLock<TestPdClient>>)
+                        -> metapb::Peer {
     let peer_id = pd_client.wl().alloc_id().unwrap();
     new_peer(store.get_node_id(), store.get_store_id(), peer_id)
 }

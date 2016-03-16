@@ -14,7 +14,7 @@ use kvproto::raft_serverpb;
 use tikv::raftserver::{Result, other};
 use tikv::util::HandyRwLock;
 use super::util;
-use super::pd::PdClient;
+use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
 
 pub struct ChannelTransport {
@@ -53,12 +53,12 @@ impl Transport for ChannelTransport {
 pub struct NodeCluster {
     cluster_id: u64,
     trans: Arc<RwLock<ChannelTransport>>,
-    pd_client: Arc<RwLock<PdClient>>,
-    nodes: HashMap<u64, Node<PdClient, ChannelTransport>>,
+    pd_client: Arc<RwLock<TestPdClient>>,
+    nodes: HashMap<u64, Node<TestPdClient, ChannelTransport>>,
 }
 
 impl NodeCluster {
-    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<PdClient>>) -> NodeCluster {
+    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<TestPdClient>>) -> NodeCluster {
         NodeCluster {
             cluster_id: cluster_id,
             trans: ChannelTransport::new(),
@@ -106,7 +106,7 @@ impl Simulator for NodeCluster {
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(RwLock::new(PdClient::new(tx)));
+    let pd_client = Arc::new(RwLock::new(TestPdClient::new(tx)));
     let sim = Arc::new(RwLock::new(NodeCluster::new(id, pd_client.clone())));
     run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)

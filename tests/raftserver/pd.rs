@@ -2,12 +2,12 @@
 
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
-use std::collections::Bound::{Included, Unbounded};
+use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::{Mutex, mpsc};
 
 use kvproto::metapb;
 use kvproto::pdpb;
-use tikv::pd::{Client, Result, Error, Key};
+use tikv::pd::{PdClient, Result, Error, Key};
 use tikv::pd::errors::other;
 use tikv::raftserver::store::keys::{enc_end_key, data_key};
 
@@ -145,7 +145,7 @@ impl Cluster {
 
     fn get_region(&self, key: Vec<u8>) -> Result<metapb::Region> {
         let (_, region) = self.regions
-                              .range::<Key, Key>(Included(&key), Unbounded)
+                              .range::<Key, Key>(Excluded(&key), Unbounded)
                               .next()
                               .unwrap();
         Ok(region.clone())
@@ -153,7 +153,11 @@ impl Cluster {
 
     fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
         let key = self.region_id_keys.get(&region_id).unwrap();
-        self.get_region(key.clone())
+        if self.regions.contains_key(key) {
+            Ok(self.regions[key].clone())
+        } else {
+            Err(other(format!("region of {} not exist!!!", region_id)))
+        }
     }
 
     fn change_peer(&mut self, region: metapb::Region) -> Result<()> {
@@ -210,7 +214,7 @@ impl Cluster {
     }
 }
 
-pub struct PdClient {
+pub struct TestPdClient {
     clusters: HashMap<u64, Cluster>,
 
     base_id: u64,
@@ -218,9 +222,9 @@ pub struct PdClient {
     ask_tx: Mutex<mpsc::Sender<pdpb::Request>>,
 }
 
-impl PdClient {
-    pub fn new(tx: mpsc::Sender<pdpb::Request>) -> PdClient {
-        PdClient {
+impl TestPdClient {
+    pub fn new(tx: mpsc::Sender<pdpb::Request>) -> TestPdClient {
+        TestPdClient {
             clusters: HashMap::new(),
             base_id: 1000,
             ask_tx: Mutex::new(tx),
@@ -266,7 +270,7 @@ impl PdClient {
     }
 }
 
-impl Client for PdClient {
+impl PdClient for TestPdClient {
     fn bootstrap_cluster(&mut self,
                          cluster_id: u64,
                          node: metapb::Node,
