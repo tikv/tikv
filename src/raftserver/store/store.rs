@@ -14,7 +14,7 @@ use uuid::Uuid;
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData};
 use kvproto::raftpb::ConfChangeType;
 use util::HandyRwLock;
-use pd::Client;
+use pd::PdClient;
 use kvproto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
 use protobuf::Message;
 
@@ -35,7 +35,7 @@ type Key = Vec<u8>;
 
 const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
 
-pub struct Store<T: Transport, C: Client> {
+pub struct Store<T: Transport, C: PdClient> {
     cluster_id: u64,
     cfg: Config,
     ident: StoreIdent,
@@ -61,7 +61,7 @@ pub struct Store<T: Transport, C: Client> {
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
 }
 
-pub fn create_event_loop<T: Transport, C: Client>(cfg: &Config) -> Result<EventLoop<Store<T, C>>> {
+pub fn create_event_loop<T: Transport, C: PdClient>(cfg: &Config) -> Result<EventLoop<Store<T, C>>> {
     // We use base raft tick as the event loop timer tick.
     let mut event_cfg = EventLoopConfig::new();
     event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
@@ -69,7 +69,7 @@ pub fn create_event_loop<T: Transport, C: Client>(cfg: &Config) -> Result<EventL
     Ok(event_loop)
 }
 
-impl<T: Transport, C: Client> Store<T, C> {
+impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn new(event_loop: &mut EventLoop<Self>,
                cluster_id: u64,
                cfg: Config,
@@ -591,10 +591,10 @@ fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
     Ok(ident)
 }
 
-fn register_timer<T: Transport, C: Client>(event_loop: &mut EventLoop<Store<T, C>>,
-                                           msg: Msg,
-                                           delay: u64)
-                                           -> Result<mio::Timeout> {
+fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
+                                             msg: Msg,
+                                             delay: u64)
+                                             -> Result<mio::Timeout> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
     event_loop.timeout_ms(msg, delay).map_err(|e| other(format!("register timer err: {:?}", e)))
@@ -616,7 +616,7 @@ fn new_compact_log_request(region_id: u64,
     request
 }
 
-impl<T: Transport, C: Client> mio::Handler for Store<T, C> {
+impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Timeout = Msg;
     type Message = Msg;
 
@@ -674,7 +674,7 @@ impl<T: Transport, C: Client> mio::Handler for Store<T, C> {
     }
 }
 
-impl<T: Transport, C: Client> Store<T, C> {
+impl<T: Transport, C: PdClient> Store<T, C> {
     /// load the target peer of request as mutable borrow.
     fn mut_target_peer(&mut self, request: &RaftCommandRequest) -> Result<&mut Peer> {
         let region_id = request.get_header().get_region_id();
@@ -796,7 +796,7 @@ fn execute_task(task: SplitCheckTask, ch: &SendCh, region_max_size: u64, split_s
                                &mut |k, v| {
                                    size += k.len() as u64;
                                    size += v.len() as u64;
-                                   if split_key.is_empty() && size >= split_size {
+                                   if split_key.is_empty() && size > split_size {
                                        split_key = k.to_vec();
                                    }
                                    Ok(size < region_max_size)

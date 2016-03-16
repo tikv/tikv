@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use rocksdb::DB;
 
-use pd::{INVALID_ID, Client as PdClient, Error as PdError};
+use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use raftserver::store::{self, Store, Config as StoreConfig, keys, Peekable, Transport};

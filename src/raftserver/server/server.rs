@@ -20,7 +20,7 @@ use super::conn::Conn;
 use super::config::Config;
 use super::transport::ServerTransport;
 use super::node::Node;
-use pd::Client as PdClient;
+use pd::PdClient;
 use util::HandyRwLock;
 
 const SERVER_TOKEN: Token = Token(1);

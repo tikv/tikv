@@ -12,7 +12,7 @@ use kvproto::raft_serverpb::Message;
 use super::ConnData;
 use super::server::Server;
 use util::codec::rpc;
-use pd::Client as PdClient;
+use pd::PdClient;
 
 pub struct Conn {
     pub sock: TcpStream,
