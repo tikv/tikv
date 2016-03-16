@@ -1,7 +1,7 @@
 use rocksdb::rocksdb::{Snapshot, DBIterator};
 use raftserver::store::engine::{Iterable, Peekable, DBValue};
-use raftserver::store::{keys, PeerStorage, enc_end_key};
-use raftserver::store::util;
+use raftserver::store::keys::{self, enc_end_key};
+use raftserver::store::{util, PeerStorage};
 use raftserver::Result;
 use kvproto::metapb;
 

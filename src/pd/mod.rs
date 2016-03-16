@@ -10,7 +10,7 @@ pub type Key = Vec<u8>;
 pub const INVALID_ID: u64 = 0;
 
 // Client to communicate with placement driver (pd).
-pub trait Client {
+pub trait Client: Send + Sync {
     // Create the cluster with cluster ID, node, stores and first region.
     // If the cluster is already bootstrapped, return ClusterBootstrapped error.
     // When a node starts, if it finds nothing in the node and

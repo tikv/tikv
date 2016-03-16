@@ -31,6 +31,10 @@ pub fn new_store_cfg() -> Config {
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 20,
         raft_log_gc_tick_interval: 100,
+        split_region_check_tick_interval: 100,
+        region_max_size: 50000,
+        region_split_size: 30000,
+        region_check_size_diff: 10000,
         ..Config::default()
     }
 }
