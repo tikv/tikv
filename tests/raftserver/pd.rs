@@ -9,7 +9,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use tikv::pd::{Client, Result, Error, Key};
 use tikv::pd::errors::other;
-use tikv::raftserver::store::keys;
+use tikv::raftserver::store::keys::{enc_end_key, data_key};
 
 #[derive(Default)]
 struct Store {
@@ -71,7 +71,6 @@ impl Cluster {
         // disable this check.
         // TODO: enable this check later.
         // assert_eq!(region.get_peers().len(), 1);
-        let end_key = region.get_end_key().to_vec();
         let first_store_id = region.get_peers()[0].get_store_id();
 
         for v in stores {
@@ -88,8 +87,8 @@ impl Cluster {
             c.stores.insert(store_id, store);
         }
 
-        c.region_id_keys.insert(region.get_region_id(), end_key.clone());
-        c.regions.insert(end_key, region);
+        c.region_id_keys.insert(region.get_region_id(), enc_end_key(&region));
+        c.regions.insert(enc_end_key(&region), region);
 
         c
     }
@@ -144,25 +143,21 @@ impl Cluster {
         Ok(self.stores.get(&store_id).unwrap().store.clone())
     }
 
-    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
-        let res = self.regions
-                      .range::<Key, Key>(Included(&key.to_vec()), Unbounded)
-                      .next();
-        if let Some((_, region)) = res {
-            Ok(region.clone())
-        } else {
-            // max region must exist.
-            Ok(self.regions[keys::EMPTY_KEY].clone())
-        }
+    fn get_region(&self, key: Vec<u8>) -> Result<metapb::Region> {
+        let (_, region) = self.regions
+                              .range::<Key, Key>(Included(&key), Unbounded)
+                              .next()
+                              .unwrap();
+        Ok(region.clone())
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
         let key = self.region_id_keys.get(&region_id).unwrap();
-        self.get_region(&key)
+        self.get_region(key.clone())
     }
 
     fn change_peer(&mut self, region: metapb::Region) -> Result<()> {
-        let end_key = region.get_end_key().to_vec();
+        let end_key = enc_end_key(&region);
         if !self.regions.contains_key(&end_key) {
             return Err(other(format!("region {:?} doesn't exist", region)));
         }
@@ -178,8 +173,8 @@ impl Cluster {
     }
 
     fn split_region(&mut self, left: metapb::Region, right: metapb::Region) -> Result<()> {
-        let left_end_key = left.get_end_key().to_vec();
-        let right_end_key = right.get_end_key().to_vec();
+        let left_end_key = enc_end_key(&left);
+        let right_end_key = enc_end_key(&right);
 
         assert!(left.get_start_key() < left.get_end_key());
         assert_eq!(left.get_end_key(), right.get_start_key());
@@ -205,6 +200,7 @@ impl Cluster {
 
         assert!(self.regions.insert(left_end_key, left).is_none());
         assert!(self.regions.insert(right_end_key, right).is_some());
+        debug!("cluster.regions: {:?}", self.regions);
 
         Ok(())
     }
@@ -328,7 +324,7 @@ impl Client for PdClient {
 
     fn get_region(&self, cluster_id: u64, key: &[u8]) -> Result<metapb::Region> {
         let cluster = try!(self.get_cluster(cluster_id));
-        cluster.get_region(key)
+        cluster.get_region(data_key(key))
     }
 
     fn get_cluster_meta(&self, cluster_id: u64) -> Result<metapb::Cluster> {

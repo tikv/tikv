@@ -12,7 +12,7 @@ use kvproto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
 use util::HandyRwLock;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError};
 use raftserver::{Result, Error, other};
-use super::keys;
+use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable, Mutable};
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -30,20 +30,6 @@ pub struct PeerStorage {
     // 1, a truncated state preceded the first log entry.
     // 2, a dummy entry for the start point of the empty log.
     pub truncated_state: RaftTruncatedState,
-}
-
-/// Get the start_key of current region in encoded form.
-pub fn enc_start_key(region: &metapb::Region) -> Vec<u8> {
-    keys::data_key(region.get_start_key())
-}
-
-/// Get the end_key of current region in encoded form.
-pub fn enc_end_key(region: &metapb::Region) -> Vec<u8> {
-    if region.get_end_key().is_empty() {
-        keys::DATA_MAX_KEY.to_vec()
-    } else {
-        keys::data_key(region.get_end_key())
-    }
 }
 
 fn storage_error<E>(error: E) -> raft::Error
