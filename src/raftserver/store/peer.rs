@@ -18,6 +18,7 @@ use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other};
 use raftserver::coprocessor::CoprocessorHost;
 use util::HandyRwLock;
+use pd::PdClient;
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
@@ -80,7 +81,9 @@ impl Peer {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
-    pub fn create<T: Transport>(store: &mut Store<T>, region: &metapb::Region) -> Result<Peer> {
+    pub fn create<T: Transport, C: PdClient>(store: &mut Store<T, C>,
+                                             region: &metapb::Region)
+                                             -> Result<Peer> {
         let store_id = store.store_id();
         let peer_id = match util::find_peer(&region, store_id) {
             None => {
@@ -97,10 +100,10 @@ impl Peer {
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after appling snapshot.
-    pub fn replicate<T: Transport>(store: &mut Store<T>,
-                                   region_id: u64,
-                                   peer_id: u64)
-                                   -> Result<Peer> {
+    pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
+                                                region_id: u64,
+                                                peer_id: u64)
+                                                -> Result<Peer> {
         // we must first check the peer id validation.
         let last_max_id = try!(store.engine().get_u64(&keys::region_tombstone_key(region_id)));
         if let Some(last_max_id) = last_max_id {
@@ -115,10 +118,10 @@ impl Peer {
         Peer::new(store, &region, peer_id)
     }
 
-    fn new<T: Transport>(store: &mut Store<T>,
-                         region: &metapb::Region,
-                         peer_id: u64)
-                         -> Result<Peer> {
+    fn new<T: Transport, C: PdClient>(store: &mut Store<T, C>,
+                                      region: &metapb::Region,
+                                      peer_id: u64)
+                                      -> Result<Peer> {
         if peer_id == raft::INVALID_ID {
             return Err(other("invalid peer id"));
         }
@@ -859,7 +862,12 @@ impl Peer {
 
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
-        self.size_diff_hint -= key.len() as u64;
+        let klen = key.len() as u64;
+        if self.size_diff_hint > klen {
+            self.size_diff_hint -= klen;
+        } else {
+            self.size_diff_hint = 0;
+        }
         let resp = Response::new();
         try!(ctx.wb.delete(&key));
 

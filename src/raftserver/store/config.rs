@@ -32,7 +32,7 @@ pub struct Config {
     pub split_region_check_tick_interval: u64,
     /// When region [a, b) size meets region_max_size, it will be split
     /// into two region into [a, c), [c, b). And the size of [a, c) will
-    /// be region_split_size (or a little bit larger).
+    /// be region_split_size (or a little bit smaller).
     pub region_max_size: u64,
     pub region_split_size: u64,
     /// When size change of region exceed the diff since last check, it

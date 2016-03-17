@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use rocksdb::DB;
 
-use pd::{INVALID_ID, Client as PdClient, Error as PdError};
+use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use raftserver::store::{self, Store, Config as StoreConfig, keys, Peekable, Transport};
@@ -12,7 +12,7 @@ use raftserver::{Result, other};
 use util::HandyRwLock;
 use super::config::Config;
 
-pub struct Node<T: PdClient, Trans: Transport + Send + Sync + 'static> {
+pub struct Node<T: PdClient + 'static, Trans: Transport + Send + Sync + 'static> {
     cluster_id: u64,
     node_id: u64,
     addr: String,
@@ -37,7 +37,7 @@ impl<T, Trans> Node<T, Trans>
             addr: cfg.addr.clone(),
             store_cfg: cfg.store_cfg.clone(),
             store_handles: HashMap::new(),
-            pd_client: pd_client.clone(),
+            pd_client: pd_client,
             trans: trans.clone(),
         }
     }
@@ -218,8 +218,14 @@ impl<T, Trans> Node<T, Trans>
         }
 
         let cfg = self.store_cfg.clone();
+        let pd_client = self.pd_client.clone();
         let mut event_loop = try!(store::create_event_loop(&cfg));
-        let mut store = try!(Store::new(&mut event_loop, cfg, engine, self.trans.clone()));
+        let mut store = try!(Store::new(&mut event_loop,
+                                        self.cluster_id,
+                                        cfg,
+                                        engine,
+                                        self.trans.clone(),
+                                        pd_client));
         let ch = store.get_sendch();
         self.trans.wl().add_sendch(store_id, ch);
 

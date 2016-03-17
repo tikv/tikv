@@ -1,11 +1,16 @@
 use std::time::Duration;
+use std::thread;
+use std::cmp;
+use rand::{self, Rng};
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util;
-use tikv::pd::Client;
+use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
+use tikv::raftserver::store::keys::data_key;
+use tikv::raftserver::store::engine::Iterable;
 
 fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
@@ -57,4 +62,97 @@ fn test_server_base_split_region() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_base_split_region(&mut cluster);
+}
+
+/// Keep puting random kvs until specified size limit is reached.
+fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>, limit: u64) -> Vec<u8> {
+    let mut len = 0;
+    let mut rng = rand::thread_rng();
+    let mut max_key = vec![];
+    while len < limit {
+        let mut key = vec![0; 64];
+        let mut value = vec![0; 32];
+        rng.fill_bytes(&mut key);
+        rng.fill_bytes(&mut value);
+        cluster.put(&key, &value);
+        // plus 1 for the extra encoding prefix
+        len += key.len() as u64 + 1;
+        len += value.len() as u64;
+        if max_key < key {
+            max_key = key;
+        }
+    }
+    max_key
+}
+
+fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+
+    let pd_client = cluster.pd_client.clone();
+    let cluster_id = cluster.id;
+
+    let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
+
+    let last_key = put_till_size(cluster, util::REGION_SPLIT_SIZE);
+
+    // it should be finished in millis if split.
+    thread::sleep(Duration::from_secs(1));
+
+    let target = pd_client.rl().get_region(cluster_id, &last_key).unwrap();
+
+    assert_eq!(region, target);
+
+    let final_key = put_till_size(cluster, util::REGION_MAX_SIZE - util::REGION_SPLIT_SIZE + 1);
+    let max_key = cmp::max(last_key, final_key);
+
+    thread::sleep(Duration::from_secs(1));
+
+    let left = pd_client.rl().get_region(cluster_id, b"").unwrap();
+    let right = pd_client.rl().get_region(cluster_id, &max_key).unwrap();
+
+    assert_eq!(region.get_start_key(), left.get_start_key());
+    assert_eq!(right.get_start_key(), left.get_end_key());
+    assert_eq!(region.get_end_key(), right.get_end_key());
+    assert_eq!(pd_client.rl().get_region(cluster_id, &max_key).unwrap(),
+               right);
+    assert_eq!(pd_client.rl().get_region(cluster_id, left.get_end_key()).unwrap(),
+               right);
+
+    let middle_key = left.get_end_key();
+    let leader = cluster.leader_of_region(left.get_region_id()).unwrap();
+    let node_id = leader.get_node_id();
+    let mut size = 0;
+    cluster.engines[&node_id]
+        .scan(&data_key(b""),
+              &data_key(middle_key),
+              &mut |k, v| {
+                  size += k.len() as u64;
+                  size += v.len() as u64;
+                  Ok(true)
+              })
+        .expect("");
+    assert!(size <= util::REGION_SPLIT_SIZE);
+    // although size may be smaller than util::REGION_SPLIT_SIZE, but the diff should
+    // be small.
+    assert!(size > util::REGION_SPLIT_SIZE - 1000);
+
+    let get = util::new_request(left.get_region_id(), vec![util::new_get_cmd(&max_key)]);
+    let resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));
+    assert!(resp.get_header().has_error());
+    assert!(resp.get_header().get_error().has_key_not_in_region());
+}
+
+#[test]
+fn test_node_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
 }

@@ -13,9 +13,9 @@ use tikv::raftserver::server::*;
 use tikv::util::codec::{self, rpc};
 use kvproto::raft_serverpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
-use tikv::pd::Client;
+use tikv::pd::PdClient;
 use super::util;
-use super::pd::PdClient;
+use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
 
 pub struct ServerCluster {
@@ -25,11 +25,11 @@ pub struct ServerCluster {
     addrs: HashMap<u64, SocketAddr>,
 
     msg_id: Mutex<u64>,
-    pd_client: Arc<RwLock<PdClient>>,
+    pd_client: Arc<RwLock<TestPdClient>>,
 }
 
 impl ServerCluster {
-    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<PdClient>>) -> ServerCluster {
+    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<TestPdClient>>) -> ServerCluster {
         ServerCluster {
             cluster_id: cluster_id,
             senders: HashMap::new(),
@@ -134,7 +134,7 @@ impl Simulator for ServerCluster {
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(RwLock::new(PdClient::new(tx)));
+    let pd_client = Arc::new(RwLock::new(TestPdClient::new(tx)));
     let sim = Arc::new(RwLock::new(ServerCluster::new(id, pd_client.clone())));
     run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)

@@ -20,14 +20,14 @@ use super::conn::Conn;
 use super::config::Config;
 use super::transport::ServerTransport;
 use super::node::Node;
-use pd::Client as PdClient;
+use pd::PdClient;
 use util::HandyRwLock;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const INVALID_TOKEN: Token = Token(0);
 
-pub struct Server<T: PdClient + Send + Sync + 'static> {
+pub struct Server<T: PdClient + 'static> {
     cfg: Config,
 
     listener: TcpListener,
@@ -43,12 +43,12 @@ pub struct Server<T: PdClient + Send + Sync + 'static> {
     node: Node<T, ServerTransport<T>>,
 }
 
-pub fn create_event_loop<T: PdClient + Send + Sync + 'static>() -> Result<EventLoop<Server<T>>> {
+pub fn create_event_loop<T: PdClient + 'static>() -> Result<EventLoop<Server<T>>> {
     let event_loop = try!(EventLoop::new());
     Ok(event_loop)
 }
 
-impl<T: PdClient + Send + Sync + 'static> Server<T> {
+impl<T: PdClient + 'static> Server<T> {
     // Create a server with already initialized engines.
     // We must bootstrap all stores before running the server.
     pub fn new(event_loop: &mut EventLoop<Self>,
@@ -361,7 +361,7 @@ impl<T: PdClient + Send + Sync + 'static> Server<T> {
     }
 }
 
-impl<T: PdClient + Send + Sync + 'static> Handler for Server<T> {
+impl<T: PdClient + 'static> Handler for Server<T> {
     type Timeout = Msg;
     type Message = Msg;
 

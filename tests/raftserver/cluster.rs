@@ -13,9 +13,9 @@ use super::util::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb;
 use kvproto::raftpb::ConfChangeType;
-use tikv::pd::Client;
+use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
-use super::pd::PdClient;
+use super::pd::TestPdClient;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -46,7 +46,7 @@ pub struct Cluster<T: Simulator> {
     pub engines: HashMap<u64, Arc<DB>>,
 
     sim: Arc<RwLock<T>>,
-    pub pd_client: Arc<RwLock<PdClient>>,
+    pub pd_client: Arc<RwLock<TestPdClient>>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -54,7 +54,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn new(id: u64,
                count: usize,
                sim: Arc<RwLock<T>>,
-               pd_client: Arc<RwLock<PdClient>>)
+               pd_client: Arc<RwLock<TestPdClient>>)
                -> Cluster<T> {
         let mut c = Cluster {
             id: id,
