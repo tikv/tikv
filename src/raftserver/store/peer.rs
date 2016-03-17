@@ -633,7 +633,7 @@ impl Peer {
             cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
             cmd::AdminCommandType::Split => self.execute_split(ctx, request),
             cmd::AdminCommandType::CompactLog => self.execute_compact_log(ctx, request),
-            e => Err(other(format!("unsupported admin command type {:?}", e))),
+            cmd::AdminCommandType::InvalidAdmin => Err(other("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
 

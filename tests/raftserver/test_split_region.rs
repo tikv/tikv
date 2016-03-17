@@ -12,6 +12,9 @@ use tikv::util::HandyRwLock;
 use tikv::raftserver::store::keys::data_key;
 use tikv::raftserver::store::engine::Iterable;
 
+pub const REGION_MAX_SIZE: u64 = 50000;
+pub const REGION_SPLIT_SIZE: u64 = 30000;
+
 fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
 
@@ -19,7 +22,7 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();
-    let cluster_id = cluster.id;
+    let cluster_id = cluster.id();
 
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
 
@@ -86,15 +89,19 @@ fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>, limit: u64) -> Vec<u8> 
 }
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.store_cfg.tick_interval_split_region_check = 100;
+    cluster.cfg.store_cfg.region_max_size = REGION_MAX_SIZE;
+    cluster.cfg.store_cfg.region_split_size = REGION_SPLIT_SIZE;
+
     cluster.bootstrap_region().expect("");
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();
-    let cluster_id = cluster.id;
+    let cluster_id = cluster.id();
 
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
 
-    let last_key = put_till_size(cluster, util::REGION_SPLIT_SIZE);
+    let last_key = put_till_size(cluster, REGION_SPLIT_SIZE);
 
     // it should be finished in millis if split.
     thread::sleep(Duration::from_secs(1));
@@ -103,7 +110,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     assert_eq!(region, target);
 
-    let final_key = put_till_size(cluster, util::REGION_MAX_SIZE - util::REGION_SPLIT_SIZE + 1);
+    let final_key = put_till_size(cluster, REGION_MAX_SIZE - REGION_SPLIT_SIZE + 1);
     let max_key = cmp::max(last_key, final_key);
 
     thread::sleep(Duration::from_secs(1));
@@ -132,10 +139,10 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
                   Ok(true)
               })
         .expect("");
-    assert!(size <= util::REGION_SPLIT_SIZE);
+    assert!(size <= REGION_SPLIT_SIZE);
     // although size may be smaller than util::REGION_SPLIT_SIZE, but the diff should
     // be small.
-    assert!(size > util::REGION_SPLIT_SIZE - 1000);
+    assert!(size > REGION_SPLIT_SIZE - 1000);
 
     let get = util::new_request(left.get_region_id(), vec![util::new_get_cmd(&max_key)]);
     let resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));

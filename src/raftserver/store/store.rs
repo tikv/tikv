@@ -36,7 +36,7 @@ type Key = Vec<u8>;
 const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
 
 pub struct Store<T: Transport, C: PdClient> {
-    cluster_id: u64,
+    cluster_meta: metapb::Cluster,
     cfg: Config,
     ident: StoreIdent,
     engine: Arc<DB>,
@@ -71,7 +71,7 @@ pub fn create_event_loop<T: Transport, C: PdClient>(cfg: &Config) -> Result<Even
 
 impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn new(event_loop: &mut EventLoop<Self>,
-               cluster_id: u64,
+               cluster_meta: metapb::Cluster,
                cfg: Config,
                engine: Arc<DB>,
                trans: Arc<RwLock<T>>,
@@ -91,7 +91,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer_cache = HashMap::new();
 
         Ok(Store {
-            cluster_id: cluster_id,
+            cluster_meta: cluster_meta,
             cfg: cfg,
             ident: ident,
             engine: engine,
@@ -141,6 +141,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
+        self.register_replica_check_tick(event_loop);
 
         let handle = try!(start_split_check(self.split_checking_queue.clone(),
                                             self.stopped.clone(),
@@ -530,7 +531,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_split_region_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::SplitRegionCheck,
-                                       self.cfg.split_region_check_tick_interval) {
+                                       self.cfg.tick_interval_split_region_check) {
             error!("register split region check tick err: {:?}", e);
         };
     }
@@ -581,12 +582,49 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = p.unwrap();
         if let Err(e) = self.pd_client
                             .rl()
-                            .ask_split(self.cluster_id, peer.region(), key, peer.peer.clone()) {
+                            .ask_split(self.cluster_meta.get_cluster_id(),
+                                       peer.region(),
+                                       key,
+                                       peer.peer.clone()) {
             error!("failed to notify pd to split region {} at {:?}: {}",
                    region_id,
                    split_key,
                    e);
         }
+    }
+
+    fn register_replica_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::ReplicaCheck,
+                                       self.cfg.tick_interval_replica_check) {
+            error!("register replica check tick err: {:?}", e);
+        };
+    }
+
+    fn handle_replica_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        for peer in self.region_peers.values() {
+            if !peer.is_leader() {
+                continue;
+            }
+
+            let peer_count = peer.region().get_peers().len();
+            let max_count = self.cluster_meta.get_max_peer_number() as usize;
+            if peer_count == max_count {
+                continue;
+            }
+            info!("peer count {} != max_peer_number {}, notifying pd",
+                  peer_count,
+                  max_count);
+            if let Err(e) = self.pd_client
+                                .rl()
+                                .ask_change_peer(self.cluster_meta.get_cluster_id(),
+                                                 peer.region(),
+                                                 peer.peer.clone()) {
+                error!("failed to notify pd: {}", e);
+            }
+        }
+
+        self.register_replica_check_tick(event_loop);
     }
 }
 
@@ -653,6 +691,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::Raft => self.handle_raft_base_tick(event_loop),
             Tick::RaftLogGc => self.handle_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.handle_split_region_check_tick(event_loop),
+            Tick::ReplicaCheck => self.handle_replica_check_tick(event_loop),
         }
     }
 

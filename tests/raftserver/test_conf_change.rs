@@ -1,5 +1,6 @@
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
+use std::thread;
 
 use tikv::raftserver::store::*;
 use kvproto::raftpb::ConfChangeType;
@@ -104,7 +105,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
     cluster.start();
 
-    let cluster_id = cluster.id;
+    let cluster_id = cluster.id();
     let pd_client = cluster.pd_client.clone();
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
     let region_id = region.get_region_id();
@@ -222,4 +223,74 @@ fn test_server_pd_conf_change() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_pd_conf_change(&mut cluster);
+}
+
+fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.store_cfg.tick_interval_replica_check = 200;
+    cluster.start();
+
+    let cluster_id = cluster.id();
+    let pd_client = cluster.pd_client.clone();
+    let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
+    let region_id = region.get_region_id();
+
+    let stores = pd_client.rl().get_stores(cluster_id).unwrap();
+
+    // Must have only one peer
+    assert_eq!(region.get_peers().len(), 1);
+
+    thread::sleep(Duration::from_secs(1));
+
+    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
+    // default replica is 5.
+    assert_eq!(region.get_peers().len(), 5);
+
+    let (key, value) = (b"a1", b"v1");
+    cluster.put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+    let i = stores.iter()
+                  .position(|s| {
+                      region.get_peers().iter().all(|p| s.get_store_id() != p.get_store_id())
+                  })
+                  .unwrap();
+
+    let peer = new_conf_change_peer(&stores[i], &pd_client);
+    let engine = cluster.get_engine(peer.get_node_id());
+    assert!(engine.get_value(&keys::data_key(b"a1")).unwrap().is_none());
+
+    cluster.change_peer(region_id, ConfChangeType::AddNode, peer.clone());
+
+    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
+    assert_eq!(region.get_peers().len(), 6);
+
+    thread::sleep(Duration::from_millis(300));
+
+    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
+    assert_eq!(region.get_peers().len(), 5);
+
+    let peer = region.get_peers().get(1).unwrap().clone();
+
+    cluster.change_peer(region_id, ConfChangeType::RemoveNode, peer);
+    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
+    assert_eq!(region.get_peers().len(), 4);
+
+    thread::sleep(Duration::from_millis(300));
+
+    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
+    assert_eq!(region.get_peers().len(), 5);
+}
+
+#[test]
+fn test_node_auto_adjust_replica() {
+    let count = 7;
+    let mut cluster = new_node_cluster(0, count);
+    test_auto_adjust_replica(&mut cluster);
+}
+
+#[test]
+fn test_server_auto_adjust_replica() {
+    let count = 7;
+    let mut cluster = new_server_cluster(0, count);
+    test_auto_adjust_replica(&mut cluster);
 }
