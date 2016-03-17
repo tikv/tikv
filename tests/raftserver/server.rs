@@ -43,11 +43,10 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, engine: Arc<DB>) -> u64 {
+    fn run_node(&mut self, node_id: u64, cfg: Config, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.handles.contains_key(&node_id));
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
-        let cfg = util::new_server_config(self.cluster_id);
         let mut event_loop = create_event_loop().unwrap();
         let mut server = Server::new(&mut event_loop, cfg, vec![engine], self.pd_client.clone())
                              .unwrap();

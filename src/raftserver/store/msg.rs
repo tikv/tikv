@@ -16,6 +16,7 @@ pub enum Tick {
     Raft,
     RaftLogGc,
     SplitRegionCheck,
+    ReplicaCheck,
 }
 
 pub enum Msg {

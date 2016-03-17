@@ -19,9 +19,6 @@ use kvproto::raft_cmdpb::{CommandType, StatusCommandType, AdminCommandType};
 use kvproto::raftpb::ConfChangeType;
 use tikv::raft::INVALID_ID;
 
-pub const REGION_MAX_SIZE: u64 = 50000;
-pub const REGION_SPLIT_SIZE: u64 = 30000;
-
 pub fn new_engine(path: &TempDir) -> Arc<DB> {
     let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
     Arc::new(db)
@@ -33,9 +30,6 @@ pub fn new_store_cfg() -> Config {
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 20,
         raft_log_gc_tick_interval: 100,
-        split_region_check_tick_interval: 100,
-        region_max_size: REGION_MAX_SIZE,
-        region_split_size: REGION_SPLIT_SIZE,
         region_check_size_diff: 10000,
         ..Config::default()
     }

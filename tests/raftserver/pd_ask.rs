@@ -52,6 +52,12 @@ impl<T: Simulator> AskHandler<T> {
         let cluster_id = req.get_header().get_cluster_id();
         let region = req.get_ask_change_peer().get_region();
         let leader = req.get_ask_change_peer().get_leader();
+        // because region may change at this point, we should use
+        // latest region info instead. TODO: update leader too.
+        let region = self.pd_client
+                         .rl()
+                         .get_region_by_id(cluster_id, region.get_region_id())
+                         .unwrap();
 
         let meta = self.pd_client.rl().get_cluster_meta(cluster_id).unwrap();
         let max_peer_number = meta.get_max_peer_number() as usize;
@@ -90,6 +96,7 @@ impl<T: Simulator> AskHandler<T> {
                                                 new_change_peer_cmd(conf_change_type, peer));
         change_peer.mut_header().set_peer(leader.clone());
         let resp = self.sim.wl().call_command(change_peer, Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
         assert_eq!(resp.get_admin_response().get_cmd_type(),
                    AdminCommandType::ChangePeer);
 
