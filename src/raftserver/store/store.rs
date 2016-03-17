@@ -28,7 +28,7 @@ use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::peer_storage::PeerStorage;
 use super::msg::Callback;
-use super::cmd_resp::{self, bind_uuid};
+use super::cmd_resp::{self, bind_uuid, bind_term};
 use super::transport::Transport;
 
 type Key = Vec<u8>;
@@ -374,6 +374,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn propose_raft_command(&mut self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
+        // TODO: simplify bind error, uuid, current term and callback for response.
         let mut resp: RaftCommandResponse;
         let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {
@@ -403,11 +404,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(peer) => peer,
         };
 
+        let current_term = peer.current_term;
+
         if !peer.is_leader() {
             resp =
                 cmd_resp::new_error(Error::NotLeader(region_id,
                                                      peer.get_peer_from_cache(peer.leader_id())));
             bind_uuid(&mut resp, uuid);
+            bind_term(&mut resp, current_term);
             return cb.call_box((resp,));
         }
 
@@ -417,12 +421,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                    peer.peer_id(),
                                                    peer_id));
             bind_uuid(&mut resp, uuid);
+            bind_term(&mut resp, current_term);
             return cb.call_box((resp,));
         }
 
         if peer.pending_cmds.contains_key(&uuid) {
             resp = cmd_resp::message_error(format!("duplicated uuid {:?}", uuid));
             bind_uuid(&mut resp, uuid);
+            bind_term(&mut resp, current_term);
             return cb.call_box((resp,));
         }
 
@@ -445,6 +451,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Err(e) = peer.propose_pending_cmd(&mut pending_cmd) {
             resp = cmd_resp::new_error(e);
             bind_uuid(&mut resp, uuid);
+            bind_term(&mut resp, current_term);
             return cb.call_box((resp,));
         };
 
@@ -692,6 +699,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                               request: RaftCommandRequest)
                               -> Result<RaftCommandResponse> {
         let cmd_type = request.get_status_request().get_cmd_type();
+        let region_id = request.get_header().get_region_id();
+
         let mut response = try!(match cmd_type {
             cmd::StatusCommandType::RegionLeader => self.execute_region_leader(request),
             cmd::StatusCommandType::RegionDetail => self.execute_region_detail(request),
@@ -701,6 +710,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut resp = RaftCommandResponse::new();
         resp.set_status_response(response);
+        // Bind peer current term here.
+        if let Some(peer) = self.region_peers.get(&region_id) {
+            bind_term(&mut resp, peer.current_term);
+        }
         Ok(resp)
     }
 
@@ -712,8 +725,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut resp = cmd::StatusResponse::new();
         if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
             resp.mut_region_leader().set_leader(leader);
-            let term = peer.get_raft_status().hs.get_term();
-            resp.mut_region_leader().set_current_term(term);
         }
 
         Ok(resp)
