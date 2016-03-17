@@ -11,6 +11,14 @@ pub fn bind_uuid(resp: &mut RaftCommandResponse, uuid: Uuid) {
     resp.mut_header().set_uuid(uuid.as_bytes().to_vec());
 }
 
+pub fn bind_term(resp: &mut RaftCommandResponse, term: u64) {
+    if term == 0 {
+        return;
+    }
+
+    resp.mut_header().set_current_term(term);
+}
+
 pub fn new_error(err: Error) -> RaftCommandResponse {
     let mut msg = RaftCommandResponse::new();
     let mut error_header = errorpb::Error::new();

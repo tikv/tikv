@@ -75,6 +75,7 @@ pub struct Peer {
     coprocessor_host: CoprocessorHost,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
+    pub current_term: u64,
 }
 
 impl Peer {
@@ -159,6 +160,7 @@ impl Peer {
             peer_cache: store.peer_cache(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
+            current_term: 0,
         };
 
         peer.load_all_coprocessors();
@@ -242,6 +244,10 @@ impl Peer {
 
         if let Some(ref ss) = ready.ss {
             self.leader_id = ss.leader_id;
+        }
+
+        if let Some(ref hs) = ready.hs {
+            self.current_term = hs.get_term();
         }
 
         let applied_region = try!(self.handle_raft_ready_in_storage(&ready));
@@ -512,6 +518,7 @@ impl Peer {
                 let cb = pending_cmd.cb.take().unwrap();
                 // Bind uuid here.
                 cmd_resp::bind_uuid(&mut resp, uuid);
+                cmd_resp::bind_term(&mut resp, self.current_term);
                 if let Err(e) = cb.call_box((resp,)) {
                     error!("callback err {:?}", e);
                 }
