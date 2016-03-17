@@ -3,6 +3,7 @@ use std::vec::Vec;
 use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
 
 use raftserver::{Result, other};
+use kvproto::metapb::Region;
 use std::mem;
 
 pub const MIN_KEY: &'static [u8] = &[];
@@ -162,6 +163,19 @@ pub fn origin_key(key: &[u8]) -> &[u8] {
     &key[DATA_PREFIX_KEY.len()..]
 }
 
+/// Get the start_key of current region in encoded form.
+pub fn enc_start_key(region: &Region) -> Vec<u8> {
+    data_key(region.get_start_key())
+}
+
+/// Get the end_key of current region in encoded form.
+pub fn enc_end_key(region: &Region) -> Vec<u8> {
+    if region.get_end_key().is_empty() {
+        DATA_MAX_KEY.to_vec()
+    } else {
+        data_key(region.get_end_key())
+    }
+}
 
 #[cfg(test)]
 mod tests {

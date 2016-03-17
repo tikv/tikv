@@ -6,14 +6,14 @@ use kvproto::raft_cmdpb::AdminCommandType;
 use kvproto::pdpb::{self, CommandType};
 use kvproto::raftpb::ConfChangeType;
 
-use tikv::pd::Client;
+use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 
-use super::pd::PdClient;
+use super::pd::TestPdClient;
 use super::cluster::Simulator;
 use super::util::*;
 
-pub fn run_ask_loop<T>(pd_client: Arc<RwLock<PdClient>>,
+pub fn run_ask_loop<T>(pd_client: Arc<RwLock<TestPdClient>>,
                        sim: Arc<RwLock<T>>,
                        rx: mpsc::Receiver<pdpb::Request>)
     where T: Simulator + Send + Sync + 'static
@@ -43,7 +43,7 @@ pub fn run_ask_loop<T>(pd_client: Arc<RwLock<PdClient>>,
 }
 
 struct AskHandler<T: Simulator> {
-    pd_client: Arc<RwLock<PdClient>>,
+    pd_client: Arc<RwLock<TestPdClient>>,
     sim: Arc<RwLock<T>>,
 }
 

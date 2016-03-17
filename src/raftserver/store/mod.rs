@@ -18,4 +18,4 @@ pub use self::transport::Transport;
 pub use self::peer::Peer;
 pub use self::bootstrap::{bootstrap_store, bootstrap_region, write_region, clear_region};
 pub use self::engine::{Peekable, Iterable, Mutable};
-pub use self::peer_storage::{PeerStorage, enc_start_key, enc_end_key};
+pub use self::peer_storage::PeerStorage;
