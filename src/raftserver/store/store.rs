@@ -21,7 +21,7 @@ use protobuf::Message;
 use raftserver::{Result, other, Error};
 use kvproto::metapb;
 use super::util;
-use super::{SendCh, Msg};
+use super::{SendCh, Msg, Tick};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
@@ -184,9 +184,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        if let Err(e) = register_timer(event_loop,
-                                       Msg::RaftBaseTick,
-                                       self.cfg.raft_base_tick_interval) {
+        if let Err(e) = register_timer(event_loop, Tick::Raft, self.cfg.raft_base_tick_interval) {
             error!("register raft base tick err: {:?}", e);
         };
     }
@@ -470,7 +468,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
-                                       Msg::RaftLogGcTick,
+                                       Tick::RaftLogGc,
                                        self.cfg.raft_log_gc_tick_interval) {
             // If failed, we can't cleanup the raft log regularly.
             // Although the log size will grow larger and larger, it doesn't affect
@@ -531,7 +529,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn register_split_region_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
-                                       Msg::SplitRegionCheckTick,
+                                       Tick::SplitRegionCheck,
                                        self.cfg.split_region_check_tick_interval) {
             error!("register split region check tick err: {:?}", e);
         };
@@ -599,12 +597,12 @@ fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
 }
 
 fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
-                                             msg: Msg,
+                                             tick: Tick,
                                              delay: u64)
                                              -> Result<mio::Timeout> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
-    event_loop.timeout_ms(msg, delay).map_err(|e| other(format!("register timer err: {:?}", e)))
+    event_loop.timeout_ms(tick, delay).map_err(|e| other(format!("register timer err: {:?}", e)))
 }
 
 fn new_compact_log_request(region_id: u64,
@@ -624,7 +622,7 @@ fn new_compact_log_request(region_id: u64,
 }
 
 impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
-    type Timeout = Msg;
+    type Timeout = Tick;
     type Message = Msg;
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
@@ -647,16 +645,14 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("split check of {} complete.", region_id);
                 self.handle_split_check_result(region_id, split_key);
             }
-            _ => panic!("invalid notify msg type {:?}", msg),
         }
     }
 
-    fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Msg) {
+    fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
         match timeout {
-            Msg::RaftBaseTick => self.handle_raft_base_tick(event_loop),
-            Msg::RaftLogGcTick => self.handle_raft_gc_log_tick(event_loop),
-            Msg::SplitRegionCheckTick => self.handle_split_region_check_tick(event_loop),
-            _ => panic!("invalid timeout msg type {:?}", timeout),
+            Tick::Raft => self.handle_raft_base_tick(event_loop),
+            Tick::RaftLogGc => self.handle_raft_gc_log_tick(event_loop),
+            Tick::SplitRegionCheck => self.handle_split_region_check_tick(event_loop),
         }
     }
 

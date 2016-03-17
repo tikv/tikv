@@ -11,13 +11,15 @@ use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 
 pub type Callback = Box<FnBox(RaftCommandResponse) -> Result<()> + Send>;
 
+#[derive(Debug)]
+pub enum Tick {
+    Raft,
+    RaftLogGc,
+    SplitRegionCheck,
+}
+
 pub enum Msg {
     Quit,
-
-    // For tick
-    RaftBaseTick,
-    RaftLogGcTick,
-    SplitRegionCheckTick,
 
     // For notify.
     RaftMessage(RaftMessage),
@@ -37,11 +39,8 @@ impl fmt::Debug for Msg {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Msg::Quit => write!(fmt, "Quit"),
-            Msg::RaftBaseTick => write!(fmt, "Raft Base Tick"),
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCommand{..} => write!(fmt, "Raft Command"),
-            Msg::RaftLogGcTick => write!(fmt, "Raft Gc Log Tick"),
-            Msg::SplitRegionCheckTick => write!(fmt, "Split Region Check Tick"),
             Msg::SplitCheckResult{..} => write!(fmt, "Split Check Result"),
         }
     }
