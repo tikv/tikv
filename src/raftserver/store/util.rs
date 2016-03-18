@@ -49,7 +49,7 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     }
 }
 
- #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use kvproto::metapb;
 

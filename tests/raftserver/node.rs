@@ -95,10 +95,10 @@ impl Simulator for NodeCluster {
     fn call_command(&self,
                     request: RaftCommandRequest,
                     timeout: Duration)
-                    -> Option<RaftCommandResponse> {
+                    -> Result<RaftCommandResponse> {
         let store_id = request.get_header().get_peer().get_store_id();
         let sender = self.trans.rl().get_sendch(store_id).unwrap();
-        msg::call_command(&sender, request, timeout).unwrap()
+        msg::call_command(&sender, request, timeout)
     }
 }
 

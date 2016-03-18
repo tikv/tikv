@@ -531,7 +531,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_split_region_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::SplitRegionCheck,
-                                       self.cfg.tick_interval_split_region_check) {
+                                       self.cfg.split_region_check_tick_interval) {
             error!("register split region check tick err: {:?}", e);
         };
     }
@@ -596,7 +596,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_replica_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::ReplicaCheck,
-                                       self.cfg.tick_interval_replica_check) {
+                                       self.cfg.replica_check_tick_interval) {
             error!("register replica check tick err: {:?}", e);
         };
     }
