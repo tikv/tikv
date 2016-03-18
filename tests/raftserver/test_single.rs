@@ -3,13 +3,9 @@ use tikv::raftserver::store::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
-use super::util::*;
-
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
     cluster.start();
-
-    sleep_ms(400);
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
@@ -34,8 +30,6 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
     cluster.start();
 
-    sleep_ms(400);
-
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
         let putk = k.as_bytes();
@@ -56,8 +50,6 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
     cluster.start();
-
-    sleep_ms(400);
 
     for i in 100..200 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
