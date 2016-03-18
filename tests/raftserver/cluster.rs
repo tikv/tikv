@@ -34,7 +34,7 @@ pub trait Simulator {
     fn call_command(&self,
                     request: RaftCommandRequest,
                     timeout: Duration)
-                    -> Option<RaftCommandResponse>;
+                    -> Result<RaftCommandResponse>;
 }
 
 pub struct Cluster<T: Simulator> {
@@ -109,7 +109,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn call_command(&self,
                         request: RaftCommandRequest,
                         timeout: Duration)
-                        -> Option<RaftCommandResponse> {
+                        -> Result<RaftCommandResponse> {
         self.sim.rl().call_command(request, timeout)
     }
 
@@ -117,7 +117,7 @@ impl<T: Simulator> Cluster<T> {
                                   region_id: u64,
                                   mut request: RaftCommandRequest,
                                   timeout: Duration)
-                                  -> Option<RaftCommandResponse> {
+                                  -> Result<RaftCommandResponse> {
         request.mut_header().set_peer(self.leader_of_region(region_id).clone().unwrap());
         self.call_command(request, timeout)
     }
@@ -390,7 +390,7 @@ impl<T: Simulator> Cluster<T> {
         let peer = new_peer(peer_id, peer_id, peer_id);
         let req = new_status_request(region_id, &peer, status_cmd);
         let res = self.call_command(req, Duration::from_secs(3));
-        assert!(res.is_some());
+        assert!(res.is_ok(), format!("{:?}", res));
 
         let mut resp = res.unwrap();
         assert!(resp.has_status_response());

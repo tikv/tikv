@@ -89,7 +89,7 @@ fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>, limit: u64) -> Vec<u8> 
 }
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.store_cfg.tick_interval_split_region_check = 100;
+    cluster.cfg.store_cfg.split_region_check_tick_interval = 100;
     cluster.cfg.store_cfg.region_max_size = REGION_MAX_SIZE;
     cluster.cfg.store_cfg.region_split_size = REGION_SPLIT_SIZE;
 

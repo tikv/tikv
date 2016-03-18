@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::thread;
 use std::net::SocketAddr;
 use std::net::TcpStream;
-use std::io::ErrorKind;
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::time::Duration;
 
@@ -10,7 +9,8 @@ use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::raftserver::server::*;
-use tikv::util::codec::{self, rpc};
+use tikv::raftserver::Result;
+use tikv::util::codec::rpc;
 use kvproto::raft_serverpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use tikv::pd::PdClient;
@@ -91,7 +91,7 @@ impl Simulator for ServerCluster {
     fn call_command(&self,
                     request: RaftCommandRequest,
                     timeout: Duration)
-                    -> Option<RaftCommandResponse> {
+                    -> Result<RaftCommandResponse> {
         let node_id = request.get_header().get_peer().get_node_id();
         let addr = self.addrs.get(&node_id).unwrap();
         let mut conn = TcpStream::connect(addr).unwrap();
@@ -104,30 +104,17 @@ impl Simulator for ServerCluster {
 
         let mut msg_id = self.msg_id.lock().unwrap();
         *msg_id += 1;
-        let res = rpc::encode_msg(&mut conn, *msg_id, &msg);
-        if let Err(codec::Error::Io(ref e)) = res {
-            if e.kind() == ErrorKind::TimedOut {
-                return None;
-            }
-        }
-        res.unwrap();
+        try!(rpc::encode_msg(&mut conn, *msg_id, &msg));
 
         conn.set_read_timeout(Some(timeout)).unwrap();
 
         let mut resp_msg = Message::new();
-        let res = rpc::decode_msg(&mut conn, &mut resp_msg);
-        if let Err(codec::Error::Io(ref e)) = res {
-            if e.kind() == ErrorKind::TimedOut {
-                return None;
-            }
-        }
-
-        let get_msg_id = res.unwrap();
+        let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg));
 
         assert_eq!(resp_msg.get_msg_type(), MessageType::CommandResp);
         assert_eq!(*msg_id, get_msg_id);
 
-        Some(resp_msg.take_cmd_resp())
+        Ok(resp_msg.take_cmd_resp())
     }
 }
 

@@ -41,6 +41,13 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(&*engine_2.get_value(&keys::data_key(b"a2")).unwrap().unwrap(),
                b"v2");
 
+    let change_peer = new_admin_request(1,
+                                        new_change_peer_cmd(ConfChangeType::AddNode,
+                                                            new_peer(2, 2, 2)));
+    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    assert!(resp.get_header().has_error(),
+            "we can't add same peer twice");
+
     // add peer (3, 3, 3) to region 1.
     cluster.change_peer(1, ConfChangeType::AddNode, new_peer(3, 3, 3));
     // Remove peer (2, 2, 2) from region 1.
@@ -61,6 +68,13 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // peer 2 has nothing
     assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
     assert!(engine_2.get_value(&keys::data_key(b"a2")).unwrap().is_none());
+
+    let change_peer = new_admin_request(1,
+                                        new_change_peer_cmd(ConfChangeType::RemoveNode,
+                                                            new_peer(2, 2, 2)));
+    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    assert!(resp.get_header().has_error(),
+            "we can't remove same peer twice");
 
     // add peer 2 again, we can't add it.
     let change_peer = new_admin_request(1,
@@ -226,7 +240,7 @@ fn test_server_pd_conf_change() {
 }
 
 fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.store_cfg.tick_interval_replica_check = 200;
+    cluster.cfg.store_cfg.replica_check_tick_interval = 200;
     cluster.start();
 
     let cluster_id = cluster.id();

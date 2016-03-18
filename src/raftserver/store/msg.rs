@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use mio;
 
-use raftserver::{Result, send_msg};
+use raftserver::{Result, send_msg, Error};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
 
@@ -54,7 +54,7 @@ impl fmt::Debug for Msg {
 pub fn call_command(sendch: &SendCh,
                     request: RaftCommandRequest,
                     timeout: Duration)
-                    -> Result<Option<RaftCommandResponse>> {
+                    -> Result<RaftCommandResponse> {
     let resp: Option<RaftCommandResponse> = None;
     let pair = Arc::new((Mutex::new(resp), Condvar::new()));
     let pair2 = pair.clone();
@@ -73,13 +73,13 @@ pub fn call_command(sendch: &SendCh,
     while v.is_none() {
         let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
         if timeout_res.timed_out() {
-            return Ok(None);
+            return Err(Error::Timeout(format!("request timeout for {:?}", timeout)));
         }
 
         v = resp
     }
 
-    Ok(Some(v.take().unwrap()))
+    Ok(v.take().unwrap())
 }
 
 
@@ -130,7 +130,7 @@ mod tests {
 
     use super::*;
     use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
-    use raftserver::Result;
+    use raftserver::{Result, Error};
 
     struct TestHandler;
 
@@ -175,12 +175,11 @@ mod tests {
 
         let mut request = RaftCommandRequest::new();
         request.mut_header().set_region_id(u64::max_value());
-        assert!(call_command(sendch, request.clone(), Duration::from_millis(500))
-                    .unwrap()
-                    .is_some());
-        assert!(call_command(sendch, request.clone(), Duration::from_millis(10))
-                    .unwrap()
-                    .is_none());
+        assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
+        match call_command(sendch, request.clone(), Duration::from_millis(10)) {
+            Err(Error::Timeout(_)) => {}
+            _ => panic!("should failed with timeout"),
+        }
 
         sendch.send_quit().unwrap();
 
