@@ -1,6 +1,6 @@
 use std::slice::Iter;
 use protobuf::core::Message;
-use proto::mvccpb::{Meta as PbMeta, MetaItem, MetaLock};
+use kvproto::mvccpb::{Meta as PbMeta, MetaItem, MetaLock};
 use super::Result;
 
 #[derive(Debug)]
@@ -61,7 +61,7 @@ impl Meta {
 #[cfg(test)]
 mod tests {
     use super::Meta;
-    use proto::mvccpb::{MetaLock, MetaLockType, MetaItem};
+    use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 
     #[test]
     fn test_meta() {
