@@ -118,7 +118,7 @@ impl fmt::Debug for Command {
                        get_ts)
             }
             Command::Cleanup{ref key, start_ts, ..} => {
-                write!(f, "kv::command::cleanup {:?} @ {}", key, start_ts)
+                write!(f, "kv::command::clean_up {:?} @ {}", key, start_ts)
             }
             Command::Rollback{ref keys, start_ts, ..} => {
                 write!(f,
@@ -251,7 +251,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn async_cleanup(&self, key: Key, start_ts: u64, callback: Callback<()>) -> Result<()> {
+    pub fn async_clean_up(&self, key: Key, start_ts: u64, callback: Callback<()>) -> Result<()> {
         let cmd = Command::Cleanup {
             key: key,
             start_ts: start_ts,

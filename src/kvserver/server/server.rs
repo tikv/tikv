@@ -6,12 +6,12 @@ use mio::{self, Token, EventLoop, EventSet, PollOpt, Sender};
 use mio::tcp::{TcpListener, TcpStream};
 use protobuf::RepeatedField;
 
-use kvproto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
-                       CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest,
-                       CmdCommitResponse, CmdCleanupRequest, CmdCleanupResponse,
-                       CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
-                       CmdCommitThenGetRequest, CmdCommitThenGetResponse, Request, Response,
-                       MessageType, Item, ResultType, ResultType_Type};
+use proto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
+                     CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest, CmdCommitResponse,
+                     CmdCleanUpRequest, CmdCleanUpResponse, CmdCleanUpResponse_ErrorType,
+                     CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
+                     CmdCommitThenGetRequest, CmdPrewriteResponse_Item, CmdScanResponse_Item,
+                     CmdCommitThenGetResponse, Request, Response, MessageType, ErrorType};
 use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
               Callback};
 use storage::Result as ResultStorage;
@@ -51,7 +51,7 @@ impl Server {
             format_err!("Msg doesn't contain a CmdGetRequest");
         }
         let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
-        let key = cmd_get_req.get_key_address().get_key().to_vec();
+        let key = cmd_get_req.get_key().to_vec();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_get_done, sender, token, msg_id);
         self.store
@@ -71,7 +71,7 @@ impl Server {
         let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
         let sender = event_loop.channel();
         // convert [u8] to Vec[u8]
-        let start_key: Key = cmd_scan_req.get_key_address().get_key().to_vec();
+        let start_key: Key = cmd_scan_req.get_key().to_vec();
         debug!("start_key [{:?}]", start_key);
         let cb = Server::make_cb::<Vec<ResultStorage<KvPair>>>(Server::cmd_scan_done,
                                                                sender,
@@ -98,15 +98,14 @@ impl Server {
         let sender = event_loop.channel();
         let mut mutations = vec![];
         mutations.extend(cmd_prewrite_req.get_puts().iter().map(|kv| {
-            Mutation::Put((kv.get_key_address().get_key().to_vec(),
-                           kv.get_value().to_vec()))
+            Mutation::Put((kv.get_key().to_vec(), kv.get_value().to_vec()))
         }));
         mutations.extend(cmd_prewrite_req.get_dels()
                                          .iter()
-                                         .map(|k| Mutation::Delete(k.get_key().to_owned())));
+                                         .map(|k| Mutation::Delete(k.to_owned())));
         mutations.extend(cmd_prewrite_req.get_locks()
                                          .iter()
-                                         .map(|k| Mutation::Lock(k.get_key().to_owned())));
+                                         .map(|k| Mutation::Lock(k.to_owned())));
         let cb = Server::make_cb::<Vec<ResultStorage<()>>>(Server::cmd_prewrite_done,
                                                            sender,
                                                            token,
@@ -132,32 +131,29 @@ impl Server {
         let sender = event_loop.channel();
         let cb = Server::make_cb::<()>(Server::cmd_commit_done, sender, token, msg_id);
         self.store
-            .async_commit(cmd_commit_req.get_keys_address()
-                                        .iter()
-                                        .map(|k| k.get_key().to_owned())
-                                        .collect(),
+            .async_commit(cmd_commit_req.get_keys().to_vec(),
                           cmd_commit_req.get_start_version(),
                           cmd_commit_req.get_commit_version(),
                           cb)
             .map_err(ServerError::Storage)
     }
 
-    pub fn handle_cleanup(&mut self,
-                          msg: &Request,
-                          msg_id: u64,
-                          token: Token,
-                          event_loop: &mut EventLoop<Server>)
-                          -> Result<()> {
+    pub fn handle_clean_up(&mut self,
+                           msg: &Request,
+                           msg_id: u64,
+                           token: Token,
+                           event_loop: &mut EventLoop<Server>)
+                           -> Result<()> {
         if !msg.has_cmd_cleanup_req() {
             format_err!("Msg doesn't contain a CmdCleanupRequest");
         }
-        let cmd_cleanup_req: &CmdCleanupRequest = msg.get_cmd_cleanup_req();
+        let cmd_cleanup_req: &CmdCleanUpRequest = msg.get_cmd_cleanup_req();
         let sender = event_loop.channel();
-        let cb = Server::make_cb::<()>(Server::cmd_cleanup_done, sender, token, msg_id);
+        let cb = Server::make_cb::<()>(Server::cmd_clean_up_done, sender, token, msg_id);
         self.store
-            .async_cleanup(cmd_cleanup_req.get_key_address().get_key().to_vec(),
-                           cmd_cleanup_req.get_start_version(),
-                           cb)
+            .async_clean_up(cmd_cleanup_req.get_key().to_vec(),
+                            cmd_cleanup_req.get_start_version(),
+                            cb)
             .map_err(ServerError::Storage)
     }
 
@@ -177,7 +173,7 @@ impl Server {
                                                   token,
                                                   msg_id);
         self.store
-            .async_commit_then_get(cmd_commit_get_req.get_key_address().get_key().to_vec(),
+            .async_commit_then_get(cmd_commit_get_req.get_key().to_vec(),
                                    cmd_commit_get_req.get_lock_version(),
                                    cmd_commit_get_req.get_commit_version(),
                                    cmd_commit_get_req.get_get_version(),
@@ -201,7 +197,7 @@ impl Server {
                                                   token,
                                                   msg_id);
         self.store
-            .async_rollback_then_get(cmd_rollback_get_req.get_key_address().get_key().to_vec(),
+            .async_rollback_then_get(cmd_rollback_get_req.get_key().to_vec(),
                                      cmd_rollback_get_req.get_lock_version(),
                                      cb)
             .map_err(ServerError::Storage)
@@ -210,36 +206,25 @@ impl Server {
     fn cmd_get_done(r: ResultStorage<Option<Value>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_get_resp: CmdGetResponse = CmdGetResponse::new();
-        let mut res_type: ResultType = ResultType::new();
+        cmd_get_resp.set_ok(r.is_ok());
         match r {
-            Ok(opt) => {
-                res_type.set_field_type(ResultType_Type::Ok);
-                match opt {
-                    Some(val) => cmd_get_resp.set_value(val),
-                    None => cmd_get_resp.set_value(Vec::new()),
-                }
-            }
+            Ok(Some(val)) => cmd_get_resp.set_value(val),
+            Ok(None) => cmd_get_resp.set_value(Vec::new()),
             Err(ref e) => {
                 if r.is_locked() {
+                    cmd_get_resp.set_err(ErrorType::Locked);
                     if let Some((_, primary, ts)) = r.get_lock() {
-                        res_type.set_field_type(ResultType_Type::Locked);
                         cmd_get_resp.set_primary_lock(primary);
                         cmd_get_resp.set_lock_version(ts);
                     } else {
-                        let err_str = "key is locked but primary info not found".to_owned();
-                        error!("{}", err_str);
-                        res_type.set_field_type(ResultType_Type::Other);
-                        res_type.set_msg(err_str);
+                        error!("key is locked but primary info not found");
                     }
                 } else {
-                    let err_str = format!("storage error: {:?}", e);
-                    error!("{}", err_str);
-                    res_type.set_field_type(ResultType_Type::Retryable);
-                    res_type.set_msg(err_str);
+                    error!("storage error: {:?}", e);
+                    cmd_get_resp.set_err(ErrorType::Retryable);
                 }
             }
         }
-        cmd_get_resp.set_res_type(res_type);
         resp.set_field_type(MessageType::CmdGet);
         resp.set_cmd_get_resp(cmd_get_resp);
         resp
@@ -251,31 +236,29 @@ impl Server {
         cmd_scan_resp.set_ok(kvs.is_ok());
         match kvs {
             Ok(kvs) => {
-                // convert storage::KvPair to kvrpcpb::Item
-                let mut new_kvs: Vec<Item> = Vec::new();
+                // convert storage::KvPair to kvrpcpb::CmdScanResponse_Item
+                let mut new_kvs: Vec<CmdScanResponse_Item> = Vec::new();
                 for result in kvs {
-                    let mut new_kv: Item = Item::new();
-                    let mut res_type: ResultType = ResultType::new();
+                    let mut new_kv: CmdScanResponse_Item = CmdScanResponse_Item::new();
+                    new_kv.set_ok(result.is_ok());
                     match result {
                         Ok((ref key, ref value)) => {
-                            res_type.set_field_type(ResultType_Type::Ok);
                             new_kv.set_key(key.clone());
                             new_kv.set_value(value.clone());
                         }
                         Err(..) => {
                             if result.is_locked() {
                                 if let Some((key, primary, ts)) = result.get_lock() {
-                                    res_type.set_field_type(ResultType_Type::Locked);
+                                    new_kv.set_err(ErrorType::Locked);
                                     new_kv.set_key(key);
                                     new_kv.set_primary_lock(primary);
                                     new_kv.set_lock_version(ts);
                                 }
                             } else {
-                                res_type.set_field_type(ResultType_Type::Retryable);
+                                new_kv.set_err(ErrorType::Retryable);
                             }
                         }
                     }
-                    new_kv.set_res_type(res_type);
                     new_kvs.push(new_kv);
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
@@ -293,24 +276,24 @@ impl Server {
         let mut resp: Response = Response::new();
         let mut cmd_prewrite_resp: CmdPrewriteResponse = CmdPrewriteResponse::new();
         cmd_prewrite_resp.set_ok(results.is_ok());
-        let mut items: Vec<Item> = Vec::new();
+        let mut items: Vec<CmdPrewriteResponse_Item> = Vec::new();
         match results {
             Ok(results) => {
                 for result in results {
-                    let mut item = Item::new();
-                    let mut res_type: ResultType = ResultType::new();
+                    let mut item = CmdPrewriteResponse_Item::new();
                     if result.is_ok() {
-                        res_type.set_field_type(ResultType_Type::Ok);
+                        item.set_ok(true);
                     } else if let Some((key, primary, ts)) = result.get_lock() {
                         // Actually items only contain locked item, so `ok` is always false.
-                        res_type.set_field_type(ResultType_Type::Locked);
+                        item.set_ok(false);
+                        item.set_err(ErrorType::Locked);
                         item.set_key(key);
                         item.set_primary_lock(primary);
                         item.set_lock_version(ts);
                     } else {
-                        res_type.set_field_type(ResultType_Type::Retryable);
+                        item.set_ok(false);
+                        item.set_err(ErrorType::Retryable);
                     }
-                    item.set_res_type(res_type);
                     items.push(item);
                 }
             }
@@ -333,27 +316,24 @@ impl Server {
         resp
     }
 
-    fn cmd_cleanup_done(r: ResultStorage<()>) -> Response {
+    fn cmd_clean_up_done(r: ResultStorage<()>) -> Response {
         let mut resp: Response = Response::new();
-        let mut cmd_cleanup_resp: CmdCleanupResponse = CmdCleanupResponse::new();
-        let mut res_type: ResultType = ResultType::new();
-        if r.is_ok() {
-            res_type.set_field_type(ResultType_Type::Ok);
-        } else if r.is_committed() {
-            res_type.set_field_type(ResultType_Type::Committed);
+        let mut cmd_cleanup_resp: CmdCleanUpResponse = CmdCleanUpResponse::new();
+        cmd_cleanup_resp.set_ok(r.is_ok());
+        if r.is_committed() {
+            cmd_cleanup_resp.set_err(CmdCleanUpResponse_ErrorType::Committed);
             if let Some(commit_ts) = r.get_commit() {
                 cmd_cleanup_resp.set_commit_version(commit_ts);
             } else {
                 warn!("commit_ts not found when is_committed.");
             }
         } else if r.is_rolledback() {
-            res_type.set_field_type(ResultType_Type::Rolledback);
+            cmd_cleanup_resp.set_err(CmdCleanUpResponse_ErrorType::Rollbacked);
         } else {
             warn!("Cleanup other error {:?}", r.err());
-            res_type.set_field_type(ResultType_Type::Retryable);
+            cmd_cleanup_resp.set_err(CmdCleanUpResponse_ErrorType::Retryable);
         }
-        cmd_cleanup_resp.set_res_type(res_type);
-        resp.set_field_type(MessageType::CmdCleanup);
+        resp.set_field_type(MessageType::CmdCleanUp);
         resp.set_cmd_cleanup_resp(cmd_cleanup_resp);
         resp
     }
@@ -487,7 +467,7 @@ impl Server {
             MessageType::CmdScan => self.handle_scan(&req, msg_id, token, event_loop),
             MessageType::CmdPrewrite => self.handle_prewrite(&req, msg_id, token, event_loop),
             MessageType::CmdCommit => self.handle_commit(&req, msg_id, token, event_loop),
-            MessageType::CmdCleanup => self.handle_cleanup(&req, msg_id, token, event_loop),
+            MessageType::CmdCleanUp => self.handle_clean_up(&req, msg_id, token, event_loop),
             MessageType::CmdCommitThenGet => {
                 self.handle_commit_then_get(&req, msg_id, token, event_loop)
             }
@@ -574,7 +554,7 @@ mod tests {
 
     use mio::EventLoop;
 
-    use kvproto::kvrpcpb::*;
+    use proto::kvrpcpb::*;
     use storage::{self, Key, Value, Storage, Dsn, txn, mvcc};
     use storage::Error::Other;
     use storage::KvPair as StorageKV;
@@ -603,7 +583,7 @@ mod tests {
         let actual_resp: Response = Server::cmd_get_done(Ok(None));
         let mut exp_resp: Response = Response::new();
         let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
-        exp_cmd_resp.set_res_type(make_res_type(ResultType_Type::Ok));
+        exp_cmd_resp.set_ok(true);
         exp_cmd_resp.set_value(Vec::new());
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
@@ -616,7 +596,7 @@ mod tests {
         let actual_resp: Response = Server::cmd_get_done(Ok(Some(storage_val)));
         let mut exp_resp: Response = Response::new();
         let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
-        exp_cmd_resp.set_res_type(make_res_type(ResultType_Type::Ok));
+        exp_cmd_resp.set_ok(true);
         exp_cmd_resp.set_value(vec![0u8; 8]);
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
@@ -629,9 +609,8 @@ mod tests {
         let actual_resp: Response = Server::cmd_get_done(Err(Other(Box::new("error"))));
         let mut exp_resp: Response = Response::new();
         let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
-        let mut res_type = make_res_type(ResultType_Type::Retryable);
-        res_type.set_msg("storage error: Other(Any)".to_owned());
-        exp_cmd_resp.set_res_type(res_type);
+        exp_cmd_resp.set_ok(false);
+        exp_cmd_resp.set_err(ErrorType::Retryable);
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
         assert_eq!(exp_resp, actual_resp);
@@ -662,12 +641,10 @@ mod tests {
         assert_eq!(true, actual_cmd_resp.get_ok());
         let actual_kvs = actual_cmd_resp.get_results();
         assert_eq!(2, actual_kvs.len());
-        assert_eq!(make_res_type(ResultType_Type::Ok),
-                   *actual_kvs[0].get_res_type());
+        assert_eq!(true, actual_kvs[0].get_ok());
         assert_eq!(k0, actual_kvs[0].get_key());
         assert_eq!(v0, actual_kvs[0].get_value());
-        assert_eq!(make_res_type(ResultType_Type::Ok),
-                   *actual_kvs[1].get_res_type());
+        assert_eq!(true, actual_kvs[1].get_ok());
         assert_eq!(k1, actual_kvs[1].get_key());
         assert_eq!(v1, actual_kvs[1].get_value());
     }
@@ -689,12 +666,10 @@ mod tests {
         assert_eq!(true, actual_cmd_resp.get_ok());
         let actual_kvs = actual_cmd_resp.get_results();
         assert_eq!(2, actual_kvs.len());
-        assert_eq!(make_res_type(ResultType_Type::Ok),
-                   *actual_kvs[0].get_res_type());
+        assert_eq!(true, actual_kvs[0].get_ok());
         assert_eq!(k0, actual_kvs[0].get_key());
         assert_eq!(v0, actual_kvs[0].get_value());
-        assert_eq!(make_res_type(ResultType_Type::Locked),
-                   *actual_kvs[1].get_res_type());
+        assert_eq!(false, actual_kvs[1].get_ok());
         assert_eq!(k1, actual_kvs[1].get_key());
         assert_eq!(k1_primary, actual_kvs[1].get_primary_lock());
         assert_eq!(k1_ts, actual_kvs[1].get_lock_version());
@@ -731,20 +706,18 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_done_ok() {
-        let actual_resp: Response = Server::cmd_cleanup_done(Ok(()));
-        assert_eq!(MessageType::CmdCleanup, actual_resp.get_field_type());
-        assert_eq!(make_res_type(ResultType_Type::Ok),
-                   *actual_resp.get_cmd_cleanup_resp().get_res_type());
+    fn test_clean_up_done_ok() {
+        let actual_resp: Response = Server::cmd_clean_up_done(Ok(()));
+        assert_eq!(MessageType::CmdCleanUp, actual_resp.get_field_type());
+        assert_eq!(true, actual_resp.get_cmd_cleanup_resp().get_ok());
     }
 
     #[test]
-    fn test_cleanup_done_err() {
-        let err = Other(Box::new("cleanup error"));
-        let actual_resp: Response = Server::cmd_cleanup_done(Err(err));
-        assert_eq!(MessageType::CmdCleanup, actual_resp.get_field_type());
-        assert_eq!(make_res_type(ResultType_Type::Retryable),
-                   *actual_resp.get_cmd_cleanup_resp().get_res_type());
+    fn test_clean_up_done_err() {
+        let err = Other(Box::new("clean_up error"));
+        let actual_resp: Response = Server::cmd_clean_up_done(Err(err));
+        assert_eq!(MessageType::CmdCleanUp, actual_resp.get_field_type());
+        assert_eq!(false, actual_resp.get_cmd_cleanup_resp().get_ok());
     }
 
     fn make_lock_error<T>(key: Key, primary: Key, ts: u64) -> ResultStorage<T> {
@@ -755,11 +728,5 @@ mod tests {
         })
             .map_err(txn::Error::from)
             .map_err(storage::Error::from)
-    }
-
-    fn make_res_type(tp: ResultType_Type) -> ResultType {
-        let mut res_type = ResultType::new();
-        res_type.set_field_type(tp);
-        res_type
     }
 }
