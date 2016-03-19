@@ -211,14 +211,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                from.get_peer_id(),
                to.get_peer_id());
 
-        // TODO: We may receive a message which is not in region, and
-        // if the message peer id is <= region max_peer_id, we can think
-        // this is a stale message and can ignore it directly.
-        // Should we only handle this in heartbeat message?
-
-
         self.peer_cache.wl().insert(from.get_peer_id(), from.clone());
         self.peer_cache.wl().insert(to.get_peer_id(), to.clone());
+
+        // TODO(liuqi): Check region epoch to detect staled message
 
         if !self.region_peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self, region_id, to.get_peer_id()));

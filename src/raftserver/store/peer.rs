@@ -669,12 +669,12 @@ impl Peer {
                                      region.get_region_epoch())));
         }
 
-        println!("conf change msg from peer {}, my peer id: {}, from region: {:?},  mine: \
+        info!("conf change msg from peer {}, my peer id: {}, from region: {:?},  mine: \
                   {:?}\n",
-                 peer.get_peer_id(),
-                 self.peer.get_peer_id(),
-                 from_epoch,
-                 region.get_region_epoch());
+              peer.get_peer_id(),
+              self.peer.get_peer_id(),
+              from_epoch,
+              region.get_region_epoch());
 
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
@@ -699,7 +699,7 @@ impl Peer {
                 region.mut_region_epoch().set_conf_ver(conf_ver);
                 try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
                 self.set_region(&region);
-                println!("add {}, region:{:?}", peer.get_peer_id(), self.region());
+                info!("add {}, region:{:?}", peer.get_peer_id(), self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
                 if !exists {
@@ -714,15 +714,15 @@ impl Peer {
 
                 // I've been removed. Set to MIN_CONF_VER, so we can't be re-add again
                 if self.peer.get_peer_id() == peer.get_peer_id() {
-                    println!("Remove self, my peer id {}", self.peer.get_peer_id());
+                    info!("Remove self, my peer id {}", self.peer.get_peer_id());
                     region.mut_region_epoch().set_conf_ver(MIN_CONF_VER);
                 }
                 // TODO: use region epoch
                 try!(ctx.wb.put_msg(&keys::region_tombstone_key(region.get_region_id()), &region));
                 self.set_region(&region);
-                println!("drop {:?}, set to MIN_CONF_VER, new {:?}",
-                         peer.get_peer_id(),
-                         self.region());
+                info!("drop {:?}, set to MIN_CONF_VER, new {:?}",
+                      peer.get_peer_id(),
+                      self.region());
             }
         }
 
@@ -781,10 +781,10 @@ impl Peer {
 
         let from_epoch = request.get_region_epoch();
 
-        println!("split msg from region epoch: {:#?}, \
+        info!("split msg from region epoch: {:#?}, \
                   mine: {:#?}",
-                 from_epoch,
-                 region.get_region_epoch());
+              from_epoch,
+              region.get_region_epoch());
 
         if from_epoch.get_version() < region.get_region_epoch().get_version() {
             return Err(other(format!("split msg from staled peer, from region epoch: \
