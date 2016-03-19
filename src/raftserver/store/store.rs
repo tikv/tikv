@@ -216,6 +216,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // this is a stale message and can ignore it directly.
         // Should we only handle this in heartbeat message?
 
+
         self.peer_cache.wl().insert(from.get_peer_id(), from.clone());
         self.peer_cache.wl().insert(to.get_peer_id(), to.clone());
 

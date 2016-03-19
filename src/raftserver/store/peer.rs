@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::vec::Vec;
+use std::u64;
 use std::default::Default;
-use std::cmp;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use rocksdb::rocksdb::Snapshot;
@@ -27,6 +27,8 @@ use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
 use super::engine::{Peekable, Iterable, Mutable};
+
+const MIN_CONF_VER: u64 = 0;
 
 #[derive(Default)]
 pub struct PendingCmd {
@@ -106,13 +108,18 @@ impl Peer {
                                                 peer_id: u64)
                                                 -> Result<Peer> {
         // we must first check the peer id validation.
-        let last_max_id = try!(store.engine().get_u64(&keys::region_tombstone_key(region_id)));
-        if let Some(last_max_id) = last_max_id {
-            if peer_id <= last_max_id {
+        if let Some(region) = try!(store.engine()
+                         .get_msg::<metapb::Region>(&keys::region_tombstone_key(region_id))) {
+            // The region in this peer already destroyed
+            if region.get_region_epoch().get_version() == u64::MAX {
                 // We receive a stale message and we can't re-create the peer with the peer id.
-                return Err(other(format!("peer id {} <= tombstone id {}", peer_id, last_max_id)));
+                return Err(other(format!("peer already destroyed {}", peer_id)));
             }
         }
+
+        info!("replicate peer, peer id {}, region_id {} \n",
+              peer_id,
+              region_id);
 
         let mut region = metapb::Region::new();
         region.set_region_id(region_id);
@@ -176,18 +183,15 @@ impl Peer {
     pub fn destroy(&mut self) -> Result<()> {
         // TODO maybe very slow
         // Delete all data in this peer.
-        let batch = WriteBatch::new();
+        let wb = WriteBatch::new();
         try!(self.storage.wl().scan_region(self.engine.as_ref(),
                                            &mut |key, _| -> Result<bool> {
-                                               try!(batch.delete(key));
+                                               try!(wb.delete(key));
                                                Ok(true)
                                            }));
 
-        // set the tombstone key here.
-        try!(batch.put_u64(&keys::region_tombstone_key(self.region_id),
-                           self.region().get_max_peer_id()));
-
-        try!(self.engine.write(batch));
+        try!(wb.put_msg(&keys::region_tombstone_key(self.region_id), &self.region()));
+        try!(self.engine.write(wb));
 
         self.coprocessor_host.shutdown();
 
@@ -211,6 +215,10 @@ impl Peer {
 
     pub fn region(&self) -> metapb::Region {
         self.storage.rl().get_region().clone()
+    }
+
+    pub fn set_region(&mut self, region: &metapb::Region) {
+        self.storage.wl().set_region(region)
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -648,11 +656,33 @@ impl Peer {
                            -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
+        let from_epoch = request.get_region_epoch();
         let mut region = self.region();
         let store_id = peer.get_store_id();
+
+        if from_epoch.get_conf_ver() == MIN_CONF_VER ||
+           from_epoch.get_conf_ver() < region.get_region_epoch().get_conf_ver() {
+            return Err(other(format!("conf msg from staled peer {}, peer's conf version \
+                                      version: {:#?}, mine: {:#?}",
+                                     peer.get_peer_id(),
+                                     from_epoch,
+                                     region.get_region_epoch())));
+        }
+
+        println!("conf change msg from peer {}, my peer id: {}, from region: {:?},  mine: \
+                  {:?}\n",
+                 peer.get_peer_id(),
+                 self.peer.get_peer_id(),
+                 from_epoch,
+                 region.get_region_epoch());
+
+
         // TODO: we should need more check, like peer validation, duplicated id, etc.
         let exists = util::find_peer(&region, store_id).is_some();
         let change_type = request.get_change_type();
+        // TODO: Should be done by sender.
+
+        let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
         match change_type {
             raftpb::ConfChangeType::AddNode => {
                 if exists {
@@ -660,21 +690,16 @@ impl Peer {
                                              peer,
                                              store_id)));
                 }
-
-                if peer.get_peer_id() <= region.get_max_peer_id() {
-                    return Err(other(format!("add peer id {} <= max region peer id {}",
-                                             peer.get_peer_id(),
-                                             region.get_max_peer_id())));
-                }
-
-                region.set_max_peer_id(peer.get_peer_id());
-
                 // TODO: Do we allow adding peer in same node?
 
                 // Add this peer to cache.
                 self.peer_cache.wl().insert(peer.get_peer_id(), peer.clone());
-
                 region.mut_peers().push(peer.clone());
+
+                region.mut_region_epoch().set_conf_ver(conf_ver);
+                try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
+                self.set_region(&region);
+                println!("add {}, region:{:?}", peer.get_peer_id(), self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
                 if !exists {
@@ -685,12 +710,22 @@ impl Peer {
 
                 // Remove this peer from cache.
                 self.peer_cache.wl().remove(&peer.get_peer_id());
-
                 util::remove_peer(&mut region, store_id).unwrap();
+
+                // I've been removed. Set to MIN_CONF_VER, so we can't be re-add again
+                if self.peer.get_peer_id() == peer.get_peer_id() {
+                    println!("Remove self, my peer id {}", self.peer.get_peer_id());
+                    region.mut_region_epoch().set_conf_ver(MIN_CONF_VER);
+                }
+                // TODO: use region epoch
+                try!(ctx.wb.put_msg(&keys::region_tombstone_key(region.get_region_id()), &region));
+                self.set_region(&region);
+                println!("drop {:?}, set to MIN_CONF_VER, new {:?}",
+                         peer.get_peer_id(),
+                         self.region());
             }
         }
 
-        try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
@@ -735,18 +770,33 @@ impl Peer {
                                      new_peer_ids.len())));
         }
 
-        let mut max_peer_id: u64 = 0;
         for (index, peer) in new_region.mut_peers().iter_mut().enumerate() {
             let peer_id = new_peer_ids[index];
             peer.set_peer_id(peer_id);
-            max_peer_id = cmp::max(max_peer_id, peer_id);
 
             // Add this peer to cache.
             self.peer_cache.wl().insert(peer_id, peer.clone());
         }
 
-        new_region.set_max_peer_id(max_peer_id);
 
+        let from_epoch = request.get_region_epoch();
+
+        println!("split msg from region epoch: {:#?}, \
+                  mine: {:#?}",
+                 from_epoch,
+                 region.get_region_epoch());
+
+        if from_epoch.get_version() < region.get_region_epoch().get_version() {
+            return Err(other(format!("split msg from staled peer, from region epoch: \
+                                      {:#?}, mine: {:#?}",
+                                     from_epoch,
+                                     region.get_region_epoch())));
+        }
+
+        // update region version
+        let region_ver = region.get_region_epoch().get_version() + 1;
+        region.mut_region_epoch().set_version(region_ver);
+        new_region.mut_region_epoch().set_version(region_ver);
         try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
         try!(ctx.wb.put_msg(&keys::region_info_key(new_region.get_region_id()),
                             &new_region));
