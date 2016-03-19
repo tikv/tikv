@@ -2,7 +2,7 @@ use std::fmt;
 
 use storage::{Key, RefKey, Value, Mutation};
 use storage::engine::{Engine, Modify};
-use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
+use proto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 use util::codec::bytes;
 use super::meta::Meta;
 use super::codec;

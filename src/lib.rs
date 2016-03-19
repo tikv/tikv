@@ -28,6 +28,7 @@ extern crate env_logger;
 pub mod util;
 pub mod raft;
 #[allow(clippy)]
+pub mod proto;
 pub mod storage;
 pub mod kvserver;
 

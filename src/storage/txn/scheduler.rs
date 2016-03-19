@@ -44,7 +44,7 @@ impl Scheduler {
                              .map_err(::storage::Error::from));
             }
             Command::Cleanup{key, start_ts, callback} => {
-                callback(self.store.cleanup(key, start_ts).map_err(::storage::Error::from));
+                callback(self.store.clean_up(key, start_ts).map_err(::storage::Error::from));
             }
             Command::Rollback{keys, start_ts, callback} => {
                 callback(self.store.rollback(keys, start_ts).map_err(::storage::Error::from));
