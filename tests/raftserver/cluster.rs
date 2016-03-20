@@ -350,7 +350,12 @@ impl<T: Simulator> Cluster<T> {
                        region_id: u64,
                        change_type: ConfChangeType,
                        peer: metapb::Peer) {
-        let epoch = self.get_region_by_id(region_id).get_region_epoch().clone();
+        let epoch = self.pd_client
+                        .rl()
+                        .get_region_by_id(self.id, region_id)
+                        .unwrap()
+                        .get_region_epoch()
+                        .clone();
         let change_peer = new_admin_request(region_id,
                                             new_change_peer_cmd(change_type, peer, &epoch));
         let resp = self.call_command_on_leader(region_id, change_peer, Duration::from_secs(3))
@@ -360,11 +365,6 @@ impl<T: Simulator> Cluster<T> {
 
         let region = resp.get_admin_response().get_change_peer().get_region();
         self.pd_client.wl().change_peer(self.id, region.clone()).unwrap();
-    }
-
-    pub fn get_region_by_id(&self, region_id: u64) -> metapb::Region {
-        let region = self.pd_client.rl().get_region_by_id(self.id, region_id).unwrap();
-        region.clone()
     }
 
     pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {

@@ -211,17 +211,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                from.get_peer_id(),
                to.get_peer_id());
 
-        self.peer_cache.wl().insert(from.get_peer_id(), from.clone());
-        self.peer_cache.wl().insert(to.get_peer_id(), to.clone());
-
-        // TODO(liuqi): Check region epoch to detect staled message
-
         if !self.region_peers.contains_key(&region_id) {
-            let peer = try!(Peer::replicate(self, region_id, to.get_peer_id()));
+            let peer = try!(Peer::replicate(self,
+                                            region_id,
+                                            msg.get_region_epoch(),
+                                            to.get_peer_id()));
             // We don't have start_key of the region, so there is no need to insert into
             // region_ranges
             self.region_peers.insert(region_id, peer);
         }
+
+        self.peer_cache.wl().insert(from.get_peer_id(), from.clone());
+        self.peer_cache.wl().insert(to.get_peer_id(), to.clone());
 
         // Check if we can accept the snapshot
         // TODO: we need to inject failure or re-order network packet to test the situtain
