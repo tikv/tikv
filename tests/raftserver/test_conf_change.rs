@@ -1,4 +1,3 @@
-use std::time::Duration;
 use std::sync::{Arc, RwLock};
 
 use tikv::raftserver::store::*;

@@ -1,7 +1,6 @@
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::vec::Vec;
-use std::u64;
 use std::default::Default;
 
 use rocksdb::{DB, WriteBatch, Writable};
@@ -27,8 +26,6 @@ use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
 use super::engine::{Peekable, Iterable, Mutable};
-
-const MIN_CONF_VER: u64 = 0;
 
 #[derive(Default)]
 pub struct PendingCmd {
@@ -105,17 +102,21 @@ impl Peer {
     // will be retrieved later after appling snapshot.
     pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                                 region_id: u64,
+                                                from_epoch: &metapb::RegionEpoch,
                                                 peer_id: u64)
                                                 -> Result<Peer> {
-        // we must first check the peer id validation.
         if let Some(region) = try!(store.engine()
                          .get_msg::<metapb::Region>(&keys::region_tombstone_key(region_id))) {
             // The region in this peer already destroyed
-            if region.get_region_epoch().get_version() == u64::MAX {
+            if from_epoch.get_version() > region.get_region_epoch().get_version() &&
+               from_epoch.get_conf_ver() >= region.get_region_epoch().get_conf_ver() {
                 // We receive a stale message and we can't re-create the peer with the peer id.
                 return Err(other(format!("peer already destroyed {}", peer_id)));
             }
         }
+
+        // We can accept the region by cleaning up region tombstone key
+        try!(store.engine().del(&keys::region_tombstone_key(region_id)));
 
         info!("replicate peer, peer id {}, region_id {} \n",
               peer_id,
@@ -215,10 +216,6 @@ impl Peer {
 
     pub fn region(&self) -> metapb::Region {
         self.storage.rl().get_region().clone()
-    }
-
-    pub fn set_region(&mut self, region: &metapb::Region) {
-        self.storage.wl().set_region(region)
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -660,8 +657,7 @@ impl Peer {
         let mut region = self.region();
         let store_id = peer.get_store_id();
 
-        if from_epoch.get_conf_ver() == MIN_CONF_VER ||
-           from_epoch.get_conf_ver() < region.get_region_epoch().get_conf_ver() {
+        if from_epoch.get_conf_ver() < region.get_region_epoch().get_conf_ver() {
             return Err(other(format!("conf msg from staled peer {}, peer's conf version \
                                       version: {:#?}, mine: {:#?}",
                                      peer.get_peer_id(),
@@ -698,7 +694,6 @@ impl Peer {
 
                 region.mut_region_epoch().set_conf_ver(conf_ver);
                 try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
-                self.set_region(&region);
                 info!("add {}, region:{:?}", peer.get_peer_id(), self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
@@ -712,17 +707,8 @@ impl Peer {
                 self.peer_cache.wl().remove(&peer.get_peer_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
-                // I've been removed. Set to MIN_CONF_VER, so we can't be re-add again
-                if self.peer.get_peer_id() == peer.get_peer_id() {
-                    info!("Remove self, my peer id {}", self.peer.get_peer_id());
-                    region.mut_region_epoch().set_conf_ver(MIN_CONF_VER);
-                }
                 // TODO: use region epoch
                 try!(ctx.wb.put_msg(&keys::region_tombstone_key(region.get_region_id()), &region));
-                self.set_region(&region);
-                info!("drop {:?}, set to MIN_CONF_VER, new {:?}",
-                      peer.get_peer_id(),
-                      self.region());
             }
         }
 
@@ -751,6 +737,19 @@ impl Peer {
         let mut region = self.region();
         try!(util::check_key_in_region(split_key, &region));
 
+        let from_epoch = request.get_region_epoch();
+        info!("split msg from region epoch: {:#?}, \
+                  mine: {:#?}",
+              from_epoch,
+              region.get_region_epoch());
+
+        if from_epoch.get_version() < region.get_region_epoch().get_version() {
+            return Err(other(format!("split msg from staled peer, from region epoch: \
+                                      {:#?}, mine: {:#?}",
+                                     from_epoch,
+                                     region.get_region_epoch())));
+        }
+
         // TODO: check new region id validation.
         let new_region_id = request.get_new_region_id();
 
@@ -776,21 +775,6 @@ impl Peer {
 
             // Add this peer to cache.
             self.peer_cache.wl().insert(peer_id, peer.clone());
-        }
-
-
-        let from_epoch = request.get_region_epoch();
-
-        info!("split msg from region epoch: {:#?}, \
-                  mine: {:#?}",
-              from_epoch,
-              region.get_region_epoch());
-
-        if from_epoch.get_version() < region.get_region_epoch().get_version() {
-            return Err(other(format!("split msg from staled peer, from region epoch: \
-                                      {:#?}, mine: {:#?}",
-                                     from_epoch,
-                                     region.get_region_epoch())));
         }
 
         // update region version
