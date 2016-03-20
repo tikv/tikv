@@ -60,6 +60,18 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
     assert!(engine_2.get_value(&keys::data_key(b"a2")).unwrap().is_none());
 
+    // TODO: re-enable the test
+    // add peer 2 again
+    //    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2, 2));
+    //
+    //    let new_engine_2 = cluster.get_engine(2);
+    //    assert_eq!(&*new_engine_2.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
+    //               b"v1");
+    //    assert_eq!(&*new_engine_2.get_value(&keys::data_key(b"a2")).unwrap().unwrap(),
+    //               b"v2");
+    //    assert_eq!(&*new_engine_2.get_value(&keys::data_key(b"a3")).unwrap().unwrap(),
+    //               b"v3");
+
     // add peer (2, 2, 4) to region 1.
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2, 4));
     // Remove peer (3, 3, 3) from region 1.

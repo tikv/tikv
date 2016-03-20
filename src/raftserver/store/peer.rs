@@ -108,8 +108,11 @@ impl Peer {
         if let Some(region) = try!(store.engine()
                          .get_msg::<metapb::Region>(&keys::region_tombstone_key(region_id))) {
             // The region in this peer already destroyed
-            if from_epoch.get_version() > region.get_region_epoch().get_version() &&
-               from_epoch.get_conf_ver() >= region.get_region_epoch().get_conf_ver() {
+            if !(from_epoch.get_version() >= region.get_region_epoch().get_version() &&
+                 from_epoch.get_conf_ver() > region.get_region_epoch().get_conf_ver()) {
+                error!("from epoch {:?}, tombstone epoch {:?}",
+                       from_epoch,
+                       region.get_region_epoch());
                 // We receive a stale message and we can't re-create the peer with the peer id.
                 return Err(other(format!("peer already destroyed {}", peer_id)));
             }
@@ -364,7 +367,8 @@ impl Peer {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         send_msg.set_message(msg.clone());
-
+        // set current epoch
+        send_msg.set_region_epoch(self.region().get_region_epoch().clone());
         let mut snap_status = SnapshotStatus::Finish;
         let mut unreachable = false;
 
@@ -656,6 +660,7 @@ impl Peer {
         let from_epoch = request.get_region_epoch();
         let mut region = self.region();
         let store_id = peer.get_store_id();
+        let change_type = request.get_change_type();
 
         if from_epoch.get_conf_ver() < region.get_region_epoch().get_conf_ver() {
             return Err(other(format!("conf msg from staled peer {}, peer's conf version \
@@ -665,9 +670,10 @@ impl Peer {
                                      region.get_region_epoch())));
         }
 
-        info!("conf change msg from peer {}, my peer id: {}, from region: {:?},  mine: \
+        warn!("my peer id {}, conf change {:?} from peer {}, from region: {:?},  mine: \
                   {:?}\n",
               peer.get_peer_id(),
+              util::conf_change_type_str(&change_type),
               self.peer.get_peer_id(),
               from_epoch,
               region.get_region_epoch());
@@ -675,13 +681,15 @@ impl Peer {
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
         let exists = util::find_peer(&region, store_id).is_some();
-        let change_type = request.get_change_type();
-        // TODO: Should be done by sender.
-
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
         match change_type {
             raftpb::ConfChangeType::AddNode => {
                 if exists {
+                    error!("my peer id {}, add duplicated peer {:?} to store {}, region {:?}",
+                           self.peer_id(),
+                           peer,
+                           store_id,
+                           region);
                     return Err(other(format!("add duplicated peer {:?} to store {}",
                                              peer,
                                              store_id)));
@@ -694,10 +702,14 @@ impl Peer {
 
                 region.mut_region_epoch().set_conf_ver(conf_ver);
                 try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
-                info!("add {}, region:{:?}", peer.get_peer_id(), self.region());
+                warn!("my peer id {}, add {}, region:{:?}",
+                      self.peer_id(),
+                      peer.get_peer_id(),
+                      self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
                 if !exists {
+                    error!("remove missing peer {:?} from store {}", peer, store_id);
                     return Err(other(format!("remove missing peer {:?} from store {}",
                                              peer,
                                              store_id)));
@@ -708,7 +720,14 @@ impl Peer {
                 util::remove_peer(&mut region, store_id).unwrap();
 
                 // TODO: use region epoch
-                try!(ctx.wb.put_msg(&keys::region_tombstone_key(region.get_region_id()), &region));
+                if peer.get_peer_id() == self.peer_id() {
+                    try!(ctx.wb
+                            .put_msg(&keys::region_tombstone_key(region.get_region_id()), &region));
+                }
+                warn!("my peer_id {}, remove {}, region:{:?}",
+                      self.peer_id(),
+                      peer.get_peer_id(),
+                      self.region());
             }
         }
 

@@ -211,6 +211,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                from.get_peer_id(),
                to.get_peer_id());
 
+        if !msg.has_region_epoch() {
+            panic!("missing epoch in raft message");
+        }
+
         if !self.region_peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self,
                                             region_id,
