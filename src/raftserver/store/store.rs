@@ -61,7 +61,10 @@ pub struct Store<T: Transport, C: PdClient> {
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
 }
 
-pub fn create_event_loop<T: Transport, C: PdClient>(cfg: &Config) -> Result<EventLoop<Store<T, C>>> {
+pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
+    where T: Transport,
+          C: PdClient
+{
     // We use base raft tick as the event loop timer tick.
     let mut event_cfg = EventLoopConfig::new();
     event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
@@ -212,7 +215,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                to.get_peer_id());
 
         if !msg.has_region_epoch() {
-            panic!("missing epoch in raft message");
+            error!("missing epoch in raft message, ignore it");
+            return Ok(());
         }
 
         if !self.region_peers.contains_key(&region_id) {
