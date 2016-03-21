@@ -80,9 +80,10 @@ impl<T, Trans> Node<T, Trans>
 
         // inform pd.
         try!(self.pd_client.wl().put_node(self.cluster_id, self.new_node_meta()));
+        let cluster_meta = try!(self.pd_client.rl().get_cluster_meta(self.cluster_id));
 
         for (index, store_id) in store_ids.iter().enumerate() {
-            try!(self.start_store(*store_id, engines[index].clone()));
+            try!(self.start_store(cluster_meta.clone(), *store_id, engines[index].clone()));
             try!(self.pd_client
                      .write()
                      .unwrap()
@@ -212,7 +213,7 @@ impl<T, Trans> Node<T, Trans>
         }
     }
 
-    fn start_store(&mut self, store_id: u64, engine: Arc<DB>) -> Result<()> {
+    fn start_store(&mut self, meta: metapb::Cluster, store_id: u64, engine: Arc<DB>) -> Result<()> {
         if self.store_handles.contains_key(&store_id) {
             return Err(other(format!("duplicated store id {}", store_id)));
         }
@@ -221,7 +222,7 @@ impl<T, Trans> Node<T, Trans>
         let pd_client = self.pd_client.clone();
         let mut event_loop = try!(store::create_event_loop(&cfg));
         let mut store = try!(Store::new(&mut event_loop,
-                                        self.cluster_id,
+                                        meta,
                                         cfg,
                                         engine,
                                         self.trans.clone(),

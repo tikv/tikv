@@ -13,7 +13,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tikv::raftserver::{Result, other};
 use tikv::util::HandyRwLock;
-use super::util;
+use tikv::raftserver::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
 
@@ -69,10 +69,8 @@ impl NodeCluster {
 }
 
 impl Simulator for NodeCluster {
-    fn run_node(&mut self, node_id: u64, engine: Arc<DB>) -> u64 {
+    fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
-
-        let cfg = util::new_server_config(self.cluster_id);
 
         let mut node = Node::new(&cfg, self.pd_client.clone(), self.trans.clone());
 
@@ -97,10 +95,10 @@ impl Simulator for NodeCluster {
     fn call_command(&self,
                     request: RaftCommandRequest,
                     timeout: Duration)
-                    -> Option<RaftCommandResponse> {
+                    -> Result<RaftCommandResponse> {
         let store_id = request.get_header().get_peer().get_store_id();
         let sender = self.trans.rl().get_sendch(store_id).unwrap();
-        msg::call_command(&sender, request, timeout).unwrap()
+        msg::call_command(&sender, request, timeout)
     }
 }
 

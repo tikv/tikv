@@ -76,6 +76,10 @@ quick_error!{
             cause(err)
             description(err.description())
         }
+        Timeout(msg: String) {
+            description("request timeout")
+            display("{}", msg)
+        }
     }
 }
 

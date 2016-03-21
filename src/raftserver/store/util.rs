@@ -57,7 +57,7 @@ pub fn conf_change_type_str(conf_type: &raftpb::ConfChangeType) -> String {
     }
 }
 
- #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use kvproto::metapb;
 
