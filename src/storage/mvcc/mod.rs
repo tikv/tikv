@@ -22,7 +22,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        KeyIsLocked {key: ::storage::Key, primary: ::storage::Key, ts: u64} {
+        KeyIsLocked {key: Vec<u8>, primary: Vec<u8>, ts: u64} {
             description("key is locked (backoff or cleanup)")
             display("key is locked (backoff or cleanup) {:?}-{:?}@{}", key, primary, ts)
         }
