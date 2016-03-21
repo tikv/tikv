@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRes
                        CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
                        CmdCommitThenGetRequest, CmdCommitThenGetResponse, Request, Response,
                        MessageType, Item, ResultType, ResultType_Type};
-use storage::{Key, Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
+use storage::{Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
               Callback};
 use storage::Result as ResultStorage;
 
@@ -51,11 +51,11 @@ impl Server {
             format_err!("Msg doesn't contain a CmdGetRequest");
         }
         let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
-        let key = cmd_get_req.get_key_address().get_key().to_vec();
+        let key = cmd_get_req.get_key_address().clone();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_get_done, sender, token, msg_id);
         self.store
-            .async_get(key, cmd_get_req.get_version(), cb)
+            .async_get(key.into(), cmd_get_req.get_version(), cb)
             .map_err(ServerError::Storage)
     }
 
@@ -70,15 +70,14 @@ impl Server {
         }
         let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
         let sender = event_loop.channel();
-        // convert [u8] to Vec[u8]
-        let start_key: Key = cmd_scan_req.get_key_address().get_key().to_vec();
+        let start_key = cmd_scan_req.get_key_address().clone();
         debug!("start_key [{:?}]", start_key);
         let cb = Server::make_cb::<Vec<ResultStorage<KvPair>>>(Server::cmd_scan_done,
                                                                sender,
                                                                token,
                                                                msg_id);
         self.store
-            .async_scan(start_key,
+            .async_scan(start_key.into(),
                         cmd_scan_req.get_limit() as usize,
                         cmd_scan_req.get_version(),
                         cb)
@@ -98,15 +97,14 @@ impl Server {
         let sender = event_loop.channel();
         let mut mutations = vec![];
         mutations.extend(cmd_prewrite_req.get_puts().iter().map(|kv| {
-            Mutation::Put((kv.get_key_address().get_key().to_vec(),
-                           kv.get_value().to_vec()))
+            Mutation::Put((kv.get_key_address().clone().into(), kv.get_value().to_vec()))
         }));
         mutations.extend(cmd_prewrite_req.get_dels()
                                          .iter()
-                                         .map(|k| Mutation::Delete(k.get_key().to_owned())));
+                                         .map(|k| Mutation::Delete(k.clone().into())));
         mutations.extend(cmd_prewrite_req.get_locks()
                                          .iter()
-                                         .map(|k| Mutation::Lock(k.get_key().to_owned())));
+                                         .map(|k| Mutation::Lock(k.clone().into())));
         let cb = Server::make_cb::<Vec<ResultStorage<()>>>(Server::cmd_prewrite_done,
                                                            sender,
                                                            token,
@@ -134,7 +132,7 @@ impl Server {
         self.store
             .async_commit(cmd_commit_req.get_keys_address()
                                         .iter()
-                                        .map(|k| k.get_key().to_owned())
+                                        .map(|x| x.clone().into())
                                         .collect(),
                           cmd_commit_req.get_start_version(),
                           cmd_commit_req.get_commit_version(),
@@ -155,7 +153,7 @@ impl Server {
         let sender = event_loop.channel();
         let cb = Server::make_cb::<()>(Server::cmd_cleanup_done, sender, token, msg_id);
         self.store
-            .async_cleanup(cmd_cleanup_req.get_key_address().get_key().to_vec(),
+            .async_cleanup(cmd_cleanup_req.get_key_address().clone().into(),
                            cmd_cleanup_req.get_start_version(),
                            cb)
             .map_err(ServerError::Storage)
@@ -177,7 +175,7 @@ impl Server {
                                                   token,
                                                   msg_id);
         self.store
-            .async_commit_then_get(cmd_commit_get_req.get_key_address().get_key().to_vec(),
+            .async_commit_then_get(cmd_commit_get_req.get_key_address().clone().into(),
                                    cmd_commit_get_req.get_lock_version(),
                                    cmd_commit_get_req.get_commit_version(),
                                    cmd_commit_get_req.get_get_version(),
@@ -201,7 +199,7 @@ impl Server {
                                                   token,
                                                   msg_id);
         self.store
-            .async_rollback_then_get(cmd_rollback_get_req.get_key_address().get_key().to_vec(),
+            .async_rollback_then_get(cmd_rollback_get_req.get_key_address().clone().into(),
                                      cmd_rollback_get_req.get_lock_version(),
                                      cb)
             .map_err(ServerError::Storage)
@@ -575,7 +573,7 @@ mod tests {
     use mio::EventLoop;
 
     use kvproto::kvrpcpb::*;
-    use storage::{self, Key, Value, Storage, Dsn, txn, mvcc};
+    use storage::{self, Value, Storage, Dsn, txn, mvcc};
     use storage::Error::Other;
     use storage::KvPair as StorageKV;
     use storage::Result as ResultStorage;
@@ -650,9 +648,9 @@ mod tests {
 
     #[test]
     fn test_scan_done_some() {
-        let k0: Key = vec![0u8, 0u8];
+        let k0 = vec![0u8, 0u8];
         let v0: Value = vec![255u8, 255u8];
-        let k1: Key = vec![0u8, 1u8];
+        let k1 = vec![0u8, 1u8];
         let v1: Value = vec![255u8, 254u8];
         let kvs: Vec<ResultStorage<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
                                                       Ok((k1.clone(), v1.clone()))];
@@ -674,10 +672,10 @@ mod tests {
 
     #[test]
     fn test_scan_done_lock() {
-        let k0: Key = vec![0u8, 0u8];
+        let k0 = vec![0u8, 0u8];
         let v0: Value = vec![255u8, 255u8];
-        let k1: Key = vec![0u8, 1u8];
-        let k1_primary: Key = k0.clone();
+        let k1 = vec![0u8, 1u8];
+        let k1_primary = k0.clone();
         let k1_ts: u64 = 10000;
         let kvs: Vec<ResultStorage<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
                                                       make_lock_error(k1.clone(),
@@ -747,7 +745,7 @@ mod tests {
                    *actual_resp.get_cmd_cleanup_resp().get_res_type());
     }
 
-    fn make_lock_error<T>(key: Key, primary: Key, ts: u64) -> ResultStorage<T> {
+    fn make_lock_error<T>(key: Vec<u8>, primary: Vec<u8>, ts: u64) -> ResultStorage<T> {
         Err(mvcc::Error::KeyIsLocked {
             key: key,
             primary: primary,

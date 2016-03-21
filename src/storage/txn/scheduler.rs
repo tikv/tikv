@@ -18,7 +18,7 @@ impl Scheduler {
                 callback(self.store.get(&key, start_ts).map_err(::storage::Error::from));
             }
             Command::Scan{start_key, limit, start_ts, callback} => {
-                callback(match self.store.scan(&start_key, limit, start_ts) {
+                callback(match self.store.scan(start_key, limit, start_ts) {
                     Ok(mut results) => {
                         Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
                     }

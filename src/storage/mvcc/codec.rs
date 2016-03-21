@@ -3,6 +3,7 @@ use super::{Result, Error};
 
 use util::codec::bytes;
 
+#[allow(dead_code)]
 pub fn encode_key(key: &[u8], ts: u64) -> Vec<u8> {
     let mut v = bytes::encode_bytes(key);
     v.write_u64::<BigEndian>(ts).unwrap();
