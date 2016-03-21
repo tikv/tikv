@@ -3,7 +3,7 @@ use std::error::Error;
 
 use rocksdb::{DB, Writable, WriteBatch, IteratorMode, Direction};
 
-use storage::{RefKey, Value, KvPair};
+use storage::{Key, Value, KvPair};
 use super::{Engine, Modify, Result};
 
 pub struct EngineRocksdb {
@@ -26,17 +26,17 @@ impl Debug for EngineRocksdb {
 }
 
 impl Engine for EngineRocksdb {
-    fn get(&self, key: RefKey) -> Result<Option<Value>> {
+    fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("EngineRocksdb: get {:?}", key);
         self.db
-            .get(key)
+            .get(key.get_rawkey())
             .map(|r| r.map(|v| v.to_vec()))
             .map_err(|e| RocksDBError::new(e).to_engine_error())
     }
 
-    fn seek(&self, key: RefKey) -> Result<Option<KvPair>> {
+    fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
         trace!("EngineRocksdb: seek {:?}", key);
-        let mode = IteratorMode::From(key, Direction::Forward);
+        let mode = IteratorMode::From(key.get_rawkey(), Direction::Forward);
         let pair = self.db.iterator(mode).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
         Ok(pair)
     }
@@ -47,13 +47,13 @@ impl Engine for EngineRocksdb {
             match rev {
                 Modify::Delete(k) => {
                     trace!("EngineRocksdb: delete {:?}", k);
-                    if let Err(msg) = wb.delete(&k) {
+                    if let Err(msg) = wb.delete(k.get_rawkey()) {
                         return Err(RocksDBError::new(msg).to_engine_error());
                     }
                 }
                 Modify::Put((k, v)) => {
                     trace!("EngineRocksdb: put {:?},{:?}", k, v);
-                    if let Err(msg) = wb.put(&k, &v) {
+                    if let Err(msg) = wb.put(k.get_rawkey(), &v) {
                         return Err(RocksDBError::new(msg).to_engine_error());
                     }
                 }
