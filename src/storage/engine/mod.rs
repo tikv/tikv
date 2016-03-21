@@ -59,16 +59,7 @@ pub type Result<T> = result::Result<T, Error>;
 mod tests {
     use super::*;
     use tempdir::TempDir;
-    use storage::Key;
-    use kvproto::kvrpcpb::KeyAddress;
-
-    macro_rules! key {
-        ($x:expr) => {{
-            let mut k = Key::new(KeyAddress::default());
-            k.set_rawkey($x.to_vec());
-            k
-        }}
-    }
+    use storage::make_key;
 
     #[test]
     fn memory() {
@@ -89,23 +80,23 @@ mod tests {
     }
 
     fn must_put<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
-        engine.put(key!(key), value.to_vec()).unwrap();
+        engine.put(make_key(key), value.to_vec()).unwrap();
     }
 
     fn must_delete<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
-        engine.delete(key!(key)).unwrap();
+        engine.delete(make_key(key)).unwrap();
     }
 
     fn assert_has<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
-        assert_eq!(engine.get(&key!(key)).unwrap().unwrap(), value);
+        assert_eq!(engine.get(&make_key(key)).unwrap().unwrap(), value);
     }
 
     fn assert_none<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
-        assert_eq!(engine.get(&key!(key)).unwrap(), None);
+        assert_eq!(engine.get(&make_key(key)).unwrap(), None);
     }
 
     fn assert_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
-        let (k, v) = engine.seek(&key!(key)).unwrap().unwrap();
+        let (k, v) = engine.seek(&make_key(key)).unwrap().unwrap();
         assert_eq!((&k as &[u8], &v as &[u8]), pair);
     }
 
@@ -118,13 +109,13 @@ mod tests {
     }
 
     fn batch<T: Engine + ?Sized>(engine: &T) {
-        engine.write(vec![Modify::Put((key!(b"x"), b"1".to_vec())),
-                          Modify::Put((key!(b"y"), b"2".to_vec()))])
+        engine.write(vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
+                          Modify::Put((make_key(b"y"), b"2".to_vec()))])
               .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
-        engine.write(vec![Modify::Delete(key!(b"x")), Modify::Delete(key!(b"y"))])
+        engine.write(vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
               .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
@@ -137,7 +128,7 @@ mod tests {
         must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
-        assert_eq!(engine.seek(&key!(b"z\x00")).unwrap(), None);
+        assert_eq!(engine.seek(&make_key(b"z\x00")).unwrap(), None);
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }

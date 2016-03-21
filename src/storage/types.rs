@@ -63,3 +63,10 @@ impl Hash for Key {
         self.get_rawkey().hash(state)
     }
 }
+
+#[cfg(test)]
+pub fn make_key(k: &[u8]) -> Key {
+    let mut key = Key::new(KeyAddress::default());
+    key.set_rawkey(k.to_vec());
+    key
+}
