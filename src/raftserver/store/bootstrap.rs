@@ -8,6 +8,9 @@ use raftserver::{Result, other};
 use super::keys;
 use super::engine::{Iterable, Mutable};
 
+const INIT_EPOCH_VER: u64 = 1;
+const INIT_EPOCH_CONF_VER: u64 = 1;
+
 // Bootstrap the store, the DB for this store must be empty and has no data.
 pub fn bootstrap_store(engine: Arc<DB>,
                        cluster_id: u64,
@@ -60,7 +63,8 @@ pub fn bootstrap_region(engine: Arc<DB>,
     region.set_region_id(region_id);
     region.set_start_key(keys::EMPTY_KEY.to_vec());
     region.set_end_key(keys::EMPTY_KEY.to_vec());
-    region.set_max_peer_id(peer_id);
+    region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+    region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
     let mut peer = metapb::Peer::new();
     peer.set_node_id(node_id);

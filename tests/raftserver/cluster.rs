@@ -173,7 +173,8 @@ impl<T: Simulator> Cluster<T> {
         region.set_region_id(1);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.set_max_peer_id(*self.engines.keys().max().unwrap());
+        region.mut_region_epoch().set_version(1);
+        region.mut_region_epoch().set_conf_ver(1);
 
         for (&id, engine) in &self.engines {
             let peer = new_peer(id, id, id);
@@ -190,9 +191,8 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
-    // Multiple nodes with fixed node id, like node 1, 2, .. 5.
-    // First region 1 is only in node 1, store 1 with peer 1.
-    pub fn bootstrap_conf_change(&mut self) {
+    // Return first region id.
+    pub fn bootstrap_conf_change(&mut self) -> u64 {
         for (id, engine) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engine.clone());
@@ -205,8 +205,11 @@ impl<T: Simulator> Cluster<T> {
         let node_id = 1;
         let region = bootstrap_region(self.engines.get(&node_id).unwrap().clone(), 1, 1, 1, 1)
                          .unwrap();
+        let rid = region.get_region_id();
         self.bootstrap_cluster(region);
+        rid
     }
+
 
     // This is only for fixed id test.
     fn bootstrap_cluster(&mut self, region: metapb::Region) {
@@ -352,7 +355,14 @@ impl<T: Simulator> Cluster<T> {
                        region_id: u64,
                        change_type: ConfChangeType,
                        peer: metapb::Peer) {
-        let change_peer = new_admin_request(region_id, new_change_peer_cmd(change_type, peer));
+        let epoch = self.pd_client
+                        .rl()
+                        .get_region_by_id(self.id(), region_id)
+                        .unwrap()
+                        .get_region_epoch()
+                        .clone();
+        let change_peer = new_admin_request(region_id,
+                                            new_change_peer_cmd(change_type, peer, &epoch));
         let resp = self.call_command_on_leader(region_id, change_peer, Duration::from_secs(3))
                        .unwrap();
         assert_eq!(resp.get_admin_response().get_cmd_type(),
@@ -372,8 +382,12 @@ impl<T: Simulator> Cluster<T> {
             peer_ids.push(peer_id);
         }
 
+        // TODO: use region instead of region_id
         let split = new_admin_request(region_id,
-                                      new_split_region_cmd(split_key, new_region_id, peer_ids));
+                                      new_split_region_cmd(split_key,
+                                                           new_region_id,
+                                                           region.get_region_epoch(),
+                                                           peer_ids));
         let resp = self.call_command_on_leader(region_id, split, Duration::from_secs(3)).unwrap();
 
         assert_eq!(resp.get_admin_response().get_cmd_type(),

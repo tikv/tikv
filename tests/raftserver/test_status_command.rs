@@ -17,7 +17,10 @@ fn test_region_detail() {
     assert!(region.has_end_key());
     assert!(region.get_end_key().is_empty());
     assert_eq!(region.get_peers().len(), 5);
-    assert!(region.get_max_peer_id() >= 5);
+    let epoch = region.get_region_epoch();
+    assert_eq!(epoch.get_conf_ver(), 1);
+    assert_eq!(epoch.get_version(), 1);
+
 
     assert!(region_detail.has_leader());
     assert_eq!(region_detail.get_leader(), &leader);

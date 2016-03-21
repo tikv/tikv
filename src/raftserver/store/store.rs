@@ -61,7 +61,10 @@ pub struct Store<T: Transport, C: PdClient> {
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
 }
 
-pub fn create_event_loop<T: Transport, C: PdClient>(cfg: &Config) -> Result<EventLoop<Store<T, C>>> {
+pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
+    where T: Transport,
+          C: PdClient
+{
     // We use base raft tick as the event loop timer tick.
     let mut event_cfg = EventLoopConfig::new();
     event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
@@ -212,20 +215,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                from.get_peer_id(),
                to.get_peer_id());
 
-        // TODO: We may receive a message which is not in region, and
-        // if the message peer id is <= region max_peer_id, we can think
-        // this is a stale message and can ignore it directly.
-        // Should we only handle this in heartbeat message?
-
-        self.peer_cache.wl().insert(from.get_peer_id(), from.clone());
-        self.peer_cache.wl().insert(to.get_peer_id(), to.clone());
+        if !msg.has_region_epoch() {
+            error!("missing epoch in raft message, ignore it");
+            return Ok(());
+        }
 
         if !self.region_peers.contains_key(&region_id) {
-            let peer = try!(Peer::replicate(self, region_id, to.get_peer_id()));
+            let peer = try!(Peer::replicate(self,
+                                            region_id,
+                                            msg.get_region_epoch(),
+                                            to.get_peer_id()));
             // We don't have start_key of the region, so there is no need to insert into
             // region_ranges
             self.region_peers.insert(region_id, peer);
         }
+
+        self.peer_cache.wl().insert(from.get_peer_id(), from.clone());
+        self.peer_cache.wl().insert(to.get_peer_id(), to.clone());
 
         // Check if we can accept the snapshot
         // TODO: we need to inject failure or re-order network packet to test the situtain
