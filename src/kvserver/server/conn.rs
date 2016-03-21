@@ -5,7 +5,7 @@ use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 use protobuf::core::Message;
 
-use proto::kvrpcpb::{Request, Response};
+use kvproto::kvrpcpb::{Request, Response};
 use util::codec::rpc;
 use kvserver::Result;
 use super::server::{Server, QueueMessage};

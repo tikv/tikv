@@ -150,6 +150,11 @@ pub trait Mutable : Writable{
     fn put_i64(&self, key: &[u8], n: i64) -> Result<()> {
         self.put_u64(key, n as u64)
     }
+
+    fn del(&self, key: &[u8]) -> Result<()> {
+        try!(self.delete(key));
+        Ok(())
+    }
 }
 
 impl Mutable for DB {}
