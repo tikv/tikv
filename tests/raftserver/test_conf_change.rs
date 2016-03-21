@@ -1,6 +1,7 @@
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
-use std::thread;
+use std::{thread, time};
+use rocksdb::DB;
 
 use tikv::raftserver::store::*;
 use kvproto::raftpb::ConfChangeType;
@@ -13,6 +14,19 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::*;
 use super::pd::TestPdClient;
+
+fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
+    for _ in 1..100 {
+        if let Ok(res) = engine.get_value(&keys::data_key(key)) {
+            if let Some(val) = res {
+                assert_eq!(&*val, value);
+                return;
+            }
+            thread::sleep(time::Duration::from_millis(10));
+        }
+    }
+    assert!(false);
+}
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
@@ -36,8 +50,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     // now peer 2 must have v1 and v2;
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
-               b"v1");
+    must_get_equal(&engine_2, b"a1", b"v1");
     assert_eq!(&*engine_2.get_value(&keys::data_key(b"a2")).unwrap().unwrap(),
                b"v2");
 
@@ -65,12 +78,9 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     // now peer 3 must have v1, v2 and v3
     let engine_3 = cluster.get_engine(3);
-    assert_eq!(&*engine_3.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
-               b"v1");
-    assert_eq!(&*engine_3.get_value(&keys::data_key(b"a2")).unwrap().unwrap(),
-               b"v2");
-    assert_eq!(&*engine_3.get_value(&keys::data_key(b"a3")).unwrap().unwrap(),
-               b"v3");
+    must_get_equal(&engine_3, b"a1", b"v1");
+    must_get_equal(&engine_3, b"a2", b"v2");
+    must_get_equal(&engine_3, b"a3", b"v3");
 
     // peer 2 has nothing
     assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
@@ -99,12 +109,10 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
-               b"v1");
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a2")).unwrap().unwrap(),
-               b"v2");
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a3")).unwrap().unwrap(),
-               b"v3");
+
+    must_get_equal(&engine_2, b"a1", b"v1");
+    must_get_equal(&engine_2, b"a2", b"v2");
+    must_get_equal(&engine_2, b"a3", b"v3");
 
     // Remove peer (2, 2, 2) from region 1.
     cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2, 2));
@@ -120,10 +128,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // now peer 4 in store 2 must have v1, v2, v3, v4, we check v1 and v4 here.
     let engine_2 = cluster.get_engine(2);
 
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
-               b"v1");
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a4")).unwrap().unwrap(),
-               b"v4");
+    must_get_equal(&engine_2, b"a1", b"v1");
+    must_get_equal(&engine_2, b"a4", b"v4");
 
     // peer 3 has nothing, we check v1 and v4 here.
     assert!(engine_3.get_value(&keys::data_key(b"a1")).unwrap().is_none());
@@ -175,10 +181,8 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     // now peer 2 must have v1 and v2;
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
-               b"v1");
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a2")).unwrap().unwrap(),
-               b"v2");
+    must_get_equal(&engine_2, b"a1", b"v1");
+    must_get_equal(&engine_2, b"a2", b"v2");
 
     // add new peer to first region.
     let peer3 = new_conf_change_peer(&stores[2], &pd_client);
@@ -191,12 +195,9 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     // now peer 3 must have v1, v2 and v3
     let engine_3 = cluster.get_engine(peer3.get_node_id());
-    assert_eq!(&*engine_3.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
-               b"v1");
-    assert_eq!(&*engine_3.get_value(&keys::data_key(b"a2")).unwrap().unwrap(),
-               b"v2");
-    assert_eq!(&*engine_3.get_value(&keys::data_key(b"a3")).unwrap().unwrap(),
-               b"v3");
+    must_get_equal(&engine_3, b"a1", b"v1");
+    must_get_equal(&engine_3, b"a2", b"v2");
+    must_get_equal(&engine_3, b"a3", b"v3");
 
     // peer 2 has nothing
     assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
@@ -213,10 +214,8 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // now peer4 must have v1, v2, v3, v4, we check v1 and v4 here.
     let engine_2 = cluster.get_engine(peer4.get_node_id());
 
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a1")).unwrap().unwrap(),
-               b"v1");
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a4")).unwrap().unwrap(),
-               b"v4");
+    must_get_equal(&engine_2, b"a1", b"v1");
+    must_get_equal(&engine_2, b"a4", b"v4");
 
     // peer 3 has nothing, we check v1 and v4 here.
     assert!(engine_3.get_value(&keys::data_key(b"a1")).unwrap().is_none());
