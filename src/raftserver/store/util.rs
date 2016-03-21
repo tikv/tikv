@@ -3,6 +3,7 @@ use std::option::Option;
 use uuid::Uuid;
 
 use kvproto::metapb;
+use kvproto::raftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::RaftCommandRequest;
 use raftserver::{Result, Error};
 
@@ -46,6 +47,13 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
+}
+
+pub fn conf_change_type_str(conf_type: &raftpb::ConfChangeType) -> String {
+    match *conf_type {
+        ConfChangeType::AddNode => "AddNode".to_owned(),
+        ConfChangeType::RemoveNode => "RemoveNode".to_owned(),
     }
 }
 
