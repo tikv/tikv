@@ -682,6 +682,9 @@ impl Peer {
         // TODO: we should need more check, like peer validation, duplicated id, etc.
         let exists = util::find_peer(&region, store_id).is_some();
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
+
+        region.mut_region_epoch().set_conf_ver(conf_ver);
+
         match change_type {
             raftpb::ConfChangeType::AddNode => {
                 if exists {
@@ -700,8 +703,6 @@ impl Peer {
                 self.peer_cache.wl().insert(peer.get_peer_id(), peer.clone());
                 region.mut_peers().push(peer.clone());
 
-                region.mut_region_epoch().set_conf_ver(conf_ver);
-                try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
                 warn!("my peer id {}, add {}, region:{:?}",
                       self.peer_id(),
                       peer.get_peer_id(),
@@ -719,11 +720,6 @@ impl Peer {
                 self.peer_cache.wl().remove(&peer.get_peer_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
-                // TODO: use region epoch
-                if peer.get_peer_id() == self.peer_id() {
-                    try!(ctx.wb
-                            .put_msg(&keys::region_tombstone_key(region.get_region_id()), &region));
-                }
                 warn!("my peer_id {}, remove {}, region:{:?}",
                       self.peer_id(),
                       peer.get_peer_id(),
@@ -731,6 +727,7 @@ impl Peer {
             }
         }
 
+        try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
