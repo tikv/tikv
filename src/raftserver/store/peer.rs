@@ -35,6 +35,7 @@ pub struct PendingCmd {
     pub cmd: Option<RaftCommandRequest>,
 }
 
+#[derive(Debug)]
 pub enum ExecResult {
     ChangePeer {
         change_type: ConfChangeType,
@@ -469,14 +470,16 @@ impl Peer {
         let index = entry.get_index();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
-
         let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(conf_change.get_context()));
-        let res = self.process_raft_command(index, cmd).or_else(|e| {
-            error!("process raft command at index {} err: {:?}", index, e);
-            // If failed, tell raft that the config change was aborted.
-            conf_change = raftpb::ConfChange::new();
-            Ok(None)
-        });
+        let res = match self.process_raft_command(index, cmd) {
+            a@Ok(Some(_)) => a,
+            e => {
+                error!("process raft command at index {} err: {:?}", index, e);
+                // If failed, tell raft that the config change was aborted.
+                conf_change = raftpb::ConfChange::new();
+                Ok(None)
+            }
+        };
 
         self.raft_group.apply_conf_change(conf_change);
         res
@@ -642,7 +645,7 @@ impl Peer {
             cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
             cmd::AdminCommandType::Split => self.execute_split(ctx, request),
             cmd::AdminCommandType::CompactLog => self.execute_compact_log(ctx, request),
-            e => Err(other(format!("unsupported admin command type {:?}", e))),
+            cmd::AdminCommandType::InvalidAdmin => Err(other("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
 

@@ -15,6 +15,7 @@ use kvproto::metapb;
 use kvproto::raftpb::ConfChangeType;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
+use tikv::raftserver::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 
 // We simulate 3 or 5 nodes, each has a store.
@@ -27,17 +28,17 @@ pub trait Simulator {
     // If node id > 0, the node must be created in db already,
     // and the node id must be the same as given argument.
     // Return the node id.
-    fn run_node(&mut self, node_id: u64, engine: Arc<DB>) -> u64;
+    fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self,
                     request: RaftCommandRequest,
                     timeout: Duration)
-                    -> Option<RaftCommandResponse>;
+                    -> Result<RaftCommandResponse>;
 }
 
 pub struct Cluster<T: Simulator> {
-    pub id: u64,
+    pub cfg: ServerConfig,
     leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
     dbs: Vec<Arc<DB>>,
@@ -57,7 +58,7 @@ impl<T: Simulator> Cluster<T> {
                pd_client: Arc<RwLock<TestPdClient>>)
                -> Cluster<T> {
         let mut c = Cluster {
-            id: id,
+            cfg: new_server_config(id),
             leaders: HashMap::new(),
             paths: vec![],
             dbs: vec![],
@@ -69,6 +70,10 @@ impl<T: Simulator> Cluster<T> {
         c.create_engines(count);
 
         c
+    }
+
+    pub fn id(&self) -> u64 {
+        self.cfg.cluster_id
     }
 
     fn create_engines(&mut self, count: usize) {
@@ -83,14 +88,14 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn start(&mut self) {
         for engine in &self.dbs {
-            let node_id = self.sim.wl().run_node(0, engine.clone());
+            let node_id = self.sim.wl().run_node(0, self.cfg.clone(), engine.clone());
             self.engines.insert(node_id, engine.clone());
         }
     }
 
     pub fn run_node(&mut self, node_id: u64) {
         let engine = self.engines.get(&node_id).unwrap();
-        self.sim.wl().run_node(node_id, engine.clone());
+        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
     }
 
     pub fn stop_node(&mut self, node_id: u64) {
@@ -104,7 +109,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn call_command(&self,
                         request: RaftCommandRequest,
                         timeout: Duration)
-                        -> Option<RaftCommandResponse> {
+                        -> Result<RaftCommandResponse> {
         self.sim.rl().call_command(request, timeout)
     }
 
@@ -112,7 +117,7 @@ impl<T: Simulator> Cluster<T> {
                                   region_id: u64,
                                   mut request: RaftCommandRequest,
                                   timeout: Duration)
-                                  -> Option<RaftCommandResponse> {
+                                  -> Result<RaftCommandResponse> {
         request.mut_header().set_peer(self.leader_of_region(region_id).clone().unwrap());
         self.call_command(request, timeout)
     }
@@ -124,7 +129,7 @@ impl<T: Simulator> Cluster<T> {
         let mut leader = None;
         let mut retry_cnt = 100;
 
-        let stores = self.pd_client.rl().get_stores(self.id).unwrap();
+        let stores = self.pd_client.rl().get_stores(self.id()).unwrap();
         let node_ids: HashSet<u64> = self.sim.rl().get_node_ids();
         while leader.is_none() && retry_cnt > 0 {
             for store in &stores {
@@ -174,7 +179,7 @@ impl<T: Simulator> Cluster<T> {
         for (&id, engine) in &self.engines {
             let peer = new_peer(id, id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(engine.clone(), self.id, id, id).unwrap();
+            bootstrap_store(engine.clone(), self.id(), id, id).unwrap();
         }
 
         for engine in self.engines.values() {
@@ -194,7 +199,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for (&id, engine) in &self.engines {
-            bootstrap_store(engine.clone(), self.id, id, id).unwrap();
+            bootstrap_store(engine.clone(), self.id(), id, id).unwrap();
         }
 
         let node_id = 1;
@@ -211,15 +216,15 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client
             .write()
             .unwrap()
-            .bootstrap_cluster(self.id,
+            .bootstrap_cluster(self.id(),
                                new_node(1, "".to_owned()),
                                vec![new_store(1, 1)],
                                region)
             .unwrap();
 
         for &id in self.engines.keys() {
-            self.pd_client.wl().put_node(self.id, new_node(id, "".to_owned())).unwrap();
-            self.pd_client.wl().put_store(self.id, new_store(id, id)).unwrap();
+            self.pd_client.wl().put_node(self.id(), new_node(id, "".to_owned())).unwrap();
+            self.pd_client.wl().put_store(self.id(), new_store(id, id)).unwrap();
         }
     }
 
@@ -281,7 +286,7 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client
             .read()
             .unwrap()
-            .get_region(self.id, key)
+            .get_region(self.id(), key)
             .unwrap()
     }
 
@@ -352,7 +357,7 @@ impl<T: Simulator> Cluster<T> {
                        peer: metapb::Peer) {
         let epoch = self.pd_client
                         .rl()
-                        .get_region_by_id(self.id, region_id)
+                        .get_region_by_id(self.id(), region_id)
                         .unwrap()
                         .get_region_epoch()
                         .clone();
@@ -364,12 +369,12 @@ impl<T: Simulator> Cluster<T> {
                    AdminCommandType::ChangePeer);
 
         let region = resp.get_admin_response().get_change_peer().get_region();
-        self.pd_client.wl().change_peer(self.id, region.clone()).unwrap();
+        self.pd_client.wl().change_peer(self.id(), region.clone()).unwrap();
     }
 
     pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
         let new_region_id = self.pd_client.wl().alloc_id().unwrap();
-        let region = self.pd_client.rl().get_region_by_id(self.id, region_id).unwrap();
+        let region = self.pd_client.rl().get_region_by_id(self.id(), region_id).unwrap();
         let peer_count = region.get_peers().len();
         let mut peer_ids: Vec<u64> = vec![];
         for _ in 0..peer_count {
@@ -391,7 +396,7 @@ impl<T: Simulator> Cluster<T> {
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
 
-        self.pd_client.wl().split_region(self.id, left.clone(), right.clone()).unwrap();
+        self.pd_client.wl().split_region(self.id(), left.clone(), right.clone()).unwrap();
     }
 
     pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {
@@ -399,7 +404,7 @@ impl<T: Simulator> Cluster<T> {
         let peer = new_peer(peer_id, peer_id, peer_id);
         let req = new_status_request(region_id, &peer, status_cmd);
         let res = self.call_command(req, Duration::from_secs(3));
-        assert!(res.is_some());
+        assert!(res.is_ok(), format!("{:?}", res));
 
         let mut resp = res.unwrap();
         assert!(resp.has_status_response());
