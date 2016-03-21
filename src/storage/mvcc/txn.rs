@@ -183,17 +183,8 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::MvccTxn;
-    use storage::{Key, Mutation};
+    use storage::{make_key, Mutation};
     use storage::engine::{self, Engine, Dsn};
-    use kvproto::kvrpcpb::KeyAddress;
-
-    macro_rules! key {
-        ($x:expr) => {{
-            let mut k = Key::new(KeyAddress::default());
-            k.set_rawkey($x.to_vec());
-            k
-        }}
-    }
 
     #[test]
     fn test_mvcc_txn_read() {
@@ -219,7 +210,7 @@ mod tests {
         must_get_none(engine.as_ref(), b"x", 23);
 
         // insert bad format data
-        engine.put(key!(b"y").encode(), b"dummy".to_vec()).unwrap();
+        engine.put(make_key(b"y").encode(), b"dummy".to_vec()).unwrap();
         must_get_err(engine.as_ref(), b"y", 100);
     }
 
@@ -312,17 +303,17 @@ mod tests {
 
     fn must_get<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64, expect: &[u8]) {
         let txn = MvccTxn::new(engine, ts);
-        assert_eq!(txn.get(&key!(key)).unwrap().unwrap(), expect);
+        assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect);
     }
 
     fn must_get_none<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64) {
         let txn = MvccTxn::new(engine, ts);
-        assert!(txn.get(&key!(key)).unwrap().is_none());
+        assert!(txn.get(&make_key(key)).unwrap().is_none());
     }
 
     fn must_get_err<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64) {
         let txn = MvccTxn::new(engine, ts);
-        assert!(txn.get(&key!(key)).is_err());
+        assert!(txn.get(&make_key(key)).is_err());
     }
 
     fn must_prewrite_put<T: Engine + ?Sized>(engine: &T,
@@ -331,36 +322,36 @@ mod tests {
                                              pk: &[u8],
                                              ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        txn.prewrite(Mutation::Put((key!(key), value.to_vec())), pk).unwrap();
+        txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_delete<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        txn.prewrite(Mutation::Delete(key!(key)), pk).unwrap();
+        txn.prewrite(Mutation::Delete(make_key(key)), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_lock<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        txn.prewrite(Mutation::Lock(key!(key)), pk).unwrap();
+        txn.prewrite(Mutation::Lock(make_key(key)), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_lock_err<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let mut txn = MvccTxn::new(engine, ts);
-        assert!(txn.prewrite(Mutation::Lock(key!(key)), pk).is_err());
+        assert!(txn.prewrite(Mutation::Lock(make_key(key)), pk).is_err());
     }
 
     fn must_commit<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
         let mut txn = MvccTxn::new(engine, start_ts);
-        txn.commit(&key!(key), commit_ts).unwrap();
+        txn.commit(&make_key(key), commit_ts).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_commit_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
         let mut txn = MvccTxn::new(engine, start_ts);
-        assert!(txn.commit(&key!(key), commit_ts).is_err());
+        assert!(txn.commit(&make_key(key), commit_ts).is_err());
     }
 
     fn must_commit_then_get<T: Engine + ?Sized>(engine: &T,
@@ -370,7 +361,7 @@ mod tests {
                                                 get_ts: u64,
                                                 expect: &[u8]) {
         let mut txn = MvccTxn::new(engine, lock_ts);
-        assert_eq!(txn.commit_then_get(&key!(key), commit_ts, get_ts).unwrap().unwrap(),
+        assert_eq!(txn.commit_then_get(&make_key(key), commit_ts, get_ts).unwrap().unwrap(),
                    expect);
         txn.submit().unwrap();
     }
@@ -381,18 +372,18 @@ mod tests {
                                                     commit_ts: u64,
                                                     get_ts: u64) {
         let mut txn = MvccTxn::new(engine, lock_ts);
-        assert!(txn.commit_then_get(&key!(key), commit_ts, get_ts).is_err());
+        assert!(txn.commit_then_get(&make_key(key), commit_ts, get_ts).is_err());
     }
 
     fn must_rollback<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
         let mut txn = MvccTxn::new(engine, start_ts);
-        txn.rollback(&key!(key)).unwrap();
+        txn.rollback(&make_key(key)).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_rollback_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
         let mut txn = MvccTxn::new(engine, start_ts);
-        assert!(txn.rollback(&key!(key)).is_err());
+        assert!(txn.rollback(&make_key(key)).is_err());
     }
 
     fn must_rollback_then_get<T: Engine + ?Sized>(engine: &T,
@@ -400,12 +391,13 @@ mod tests {
                                                   lock_ts: u64,
                                                   expect: &[u8]) {
         let mut txn = MvccTxn::new(engine, lock_ts);
-        assert_eq!(txn.rollback_then_get(&key!(key)).unwrap().unwrap(), expect);
+        assert_eq!(txn.rollback_then_get(&make_key(key)).unwrap().unwrap(),
+                   expect);
         txn.submit().unwrap();
     }
 
     fn must_rollback_then_get_err<T: Engine + ?Sized>(engine: &T, key: &[u8], lock_ts: u64) {
         let mut txn = MvccTxn::new(engine, lock_ts);
-        assert!(txn.rollback_then_get(&key!(key)).is_err());
+        assert!(txn.rollback_then_get(&make_key(key)).is_err());
     }
 }

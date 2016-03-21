@@ -142,17 +142,8 @@ impl TxnStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::{Mutation, Key, KvPair};
+    use storage::{Mutation, Key, KvPair, make_key};
     use storage::engine::{self, Dsn};
-    use kvproto::kvrpcpb::KeyAddress;
-
-    macro_rules! key {
-        ($x:expr) => {{
-            let mut k = Key::new(KeyAddress::default());
-            k.set_rawkey($x.to_vec());
-            k
-        }}
-    }
 
     trait TxnStoreAssert {
         fn get_none(&self, key: &[u8], ts: u64);
@@ -182,31 +173,34 @@ mod tests {
 
     impl TxnStoreAssert for TxnStore {
         fn get_none(&self, key: &[u8], ts: u64) {
-            let key = key!(key);
+            let key = make_key(key);
             assert_eq!(self.get(&key, ts).unwrap(), None);
         }
 
         fn get_err(&self, key: &[u8], ts: u64) {
-            let key = key!(key);
+            let key = make_key(key);
             assert!(self.get(&key, ts).is_err());
         }
 
         fn get_ok(&self, key: &[u8], ts: u64, expect: &[u8]) {
-            let key = key!(key);
+            let key = make_key(key);
             assert_eq!(self.get(&key, ts).unwrap().unwrap(), expect);
         }
 
         fn put_ok(&self, key: &[u8], value: &[u8], start_ts: u64, commit_ts: u64) {
-            self.prewrite(vec![Mutation::Put((key!(key), value.to_vec()))],
+            self.prewrite(vec![Mutation::Put((make_key(key), value.to_vec()))],
                           key.to_vec(),
                           start_ts)
                 .unwrap();
-            self.commit(vec![key!(key)], start_ts, commit_ts).unwrap();
+            self.commit(vec![make_key(key)], start_ts, commit_ts).unwrap();
         }
 
         fn delete_ok(&self, key: &[u8], start_ts: u64, commit_ts: u64) {
-            self.prewrite(vec![Mutation::Delete(key!(key))], key.to_vec(), start_ts).unwrap();
-            self.commit(vec![key!(key)], start_ts, commit_ts).unwrap();
+            self.prewrite(vec![Mutation::Delete(make_key(key))],
+                          key.to_vec(),
+                          start_ts)
+                .unwrap();
+            self.commit(vec![make_key(key)], start_ts, commit_ts).unwrap();
         }
 
         fn scan_ok(&self,
@@ -214,7 +208,7 @@ mod tests {
                    limit: usize,
                    ts: u64,
                    expect: Vec<Option<(&[u8], &[u8])>>) {
-            let key_address = key!(start_key);
+            let key_address = make_key(start_key);
             let result = self.scan(key_address, limit, ts).unwrap();
             let result: Vec<Option<KvPair>> = result.into_iter()
                                                     .map(Result::ok)
@@ -236,22 +230,22 @@ mod tests {
         }
 
         fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
-            let keys: Vec<Key> = keys.iter().map(|x| key!(x)).collect();
+            let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
             self.commit(keys, start_ts, commit_ts).unwrap();
         }
 
         fn commit_err(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
-            let keys: Vec<Key> = keys.iter().map(|x| key!(x)).collect();
+            let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
             assert!(self.commit(keys, start_ts, commit_ts).is_err());
         }
 
         fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: u64) {
-            let keys: Vec<Key> = keys.iter().map(|x| key!(x)).collect();
+            let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
             self.rollback(keys, start_ts).unwrap();
         }
 
         fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: u64) {
-            let keys: Vec<Key> = keys.iter().map(|x| key!(x)).collect();
+            let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
             assert!(self.rollback(keys, start_ts).is_err());
         }
 
@@ -261,14 +255,14 @@ mod tests {
                               commit_ts: u64,
                               get_ts: u64,
                               expect: &[u8]) {
-            assert_eq!(self.commit_then_get(key!(key), lock_ts, commit_ts, get_ts)
+            assert_eq!(self.commit_then_get(make_key(key), lock_ts, commit_ts, get_ts)
                            .unwrap()
                            .unwrap(),
                        expect);
         }
 
         fn rollback_then_get_ok(&self, key: &[u8], lock_ts: u64, expect: &[u8]) {
-            assert_eq!(self.rollback_then_get(key!(key), lock_ts).unwrap().unwrap(),
+            assert_eq!(self.rollback_then_get(make_key(key), lock_ts).unwrap().unwrap(),
                        expect);
         }
     }
@@ -308,8 +302,8 @@ mod tests {
         let store = TxnStore::new(engine);
 
         store.put_ok(b"secondary", b"s-0", 0, 1);
-        store.prewrite_ok(vec![Mutation::Put((key!(b"primary"), b"p-5".to_vec())),
-                               Mutation::Put((key!(b"secondary"), b"s-5".to_vec()))],
+        store.prewrite_ok(vec![Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
+                               Mutation::Put((make_key(b"secondary"), b"s-5".to_vec()))],
                           b"primary",
                           5);
         store.get_err(b"secondary", 10);
@@ -324,8 +318,8 @@ mod tests {
         let store = TxnStore::new(engine);
 
         store.put_ok(b"secondary", b"s-0", 0, 1);
-        store.prewrite_ok(vec![Mutation::Put((key!(b"primary"), b"p-5".to_vec())),
-                               Mutation::Put((key!(b"secondary"), b"s-5".to_vec()))],
+        store.prewrite_ok(vec![Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
+                               Mutation::Put((make_key(b"secondary"), b"s-5".to_vec()))],
                           b"primary",
                           5);
         store.get_err(b"secondary", 8);
@@ -461,7 +455,7 @@ mod tests {
     const INC_MAX_RETRY: usize = 100;
 
     fn inc(store: &TxnStore, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
-        let key_address = key!(key);
+        let key_address = make_key(key);
         for i in 0..INC_MAX_RETRY {
             let start_ts = oracle.get_ts();
             let number: i32 = match store.get(&key_address, start_ts) {
@@ -473,7 +467,7 @@ mod tests {
                 }
             };
             let next = number + 1;
-            if let Err(_) = store.prewrite(vec![Mutation::Put((key!(key),
+            if let Err(_) = store.prewrite(vec![Mutation::Put((make_key(key),
                                                                next.to_string().into_bytes()))],
                                            key.to_vec(),
                                            start_ts) {
@@ -526,7 +520,7 @@ mod tests {
     fn inc_multi(store: &TxnStore, oracle: &Oracle, n: usize) -> bool {
         'retry: for i in 0..INC_MAX_RETRY {
             let start_ts = oracle.get_ts();
-            let keys: Vec<Key> = (0..n).map(format_key).map(|x| key!(x)).collect();
+            let keys: Vec<Key> = (0..n).map(format_key).map(|x| make_key(&x)).collect();
             let mut mutations = vec![];
             for key in keys.iter().take(n) {
                 let number = match store.get(&key, start_ts) {
