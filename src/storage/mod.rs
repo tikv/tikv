@@ -8,7 +8,7 @@ mod engine;
 pub mod mvcc;
 pub mod txn;
 
-pub use self::engine::{Engine, Dsn};
+pub use self::engine::{Engine, Dsn, new_engine};
 
 pub type Key = Vec<u8>;
 pub type RefKey<'a> = &'a [u8];

@@ -17,3 +17,16 @@ extern crate test;
 extern crate kvproto;
 
 mod raftserver;
+mod mvcc;
+#[path="../tests/util.rs"]
+mod util;
+
+use test::Bencher;
+
+use util::KVGenerator;
+
+#[bench]
+fn bench_kv_iter(b: &mut Bencher) {
+    let mut g = KVGenerator::new(100, 1000);
+    b.iter(|| g.next());
+}
