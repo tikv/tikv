@@ -59,10 +59,7 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.put(key2, value2);
     cluster.delete(key1);
     must_get_none(&cluster.engines[&last_leader.get_node_id()], key2);
-    assert!(cluster.engines[&last_leader.get_node_id()]
-                .get_value(&keys::data_key(key1))
-                .unwrap()
-                .is_some());
+    must_get_equal(&cluster.engines[&last_leader.get_node_id()], key1, value1);
 
     // week up
     cluster.run_node(last_leader.get_node_id());
