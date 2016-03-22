@@ -140,9 +140,7 @@ impl Peer {
         }
 
         let store_id = store.store_id();
-
         let ps = try!(PeerStorage::new(store.engine(), &region));
-
         let applied_index = ps.applied_index();
         let storage = Arc::new(RaftStorage::new(ps));
 
@@ -373,7 +371,6 @@ impl Peer {
         let mut snap_status = SnapshotStatus::Finish;
         let mut unreachable = false;
 
-        let trans = trans.rl();
         let from_peer = try!(self.get_peer_from_cache(msg.get_from()).ok_or_else(|| {
             other(format!("failed to lookup sender peer {} in region {}",
                           msg.get_from(),
@@ -392,6 +389,7 @@ impl Peer {
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
 
+        let trans = trans.rl();
         if let Err(e) = trans.send(send_msg) {
             warn!("region {} with peer {:?} failed to send msg to {} in store {}, err: {:?}",
                   self.region_id,
@@ -661,26 +659,26 @@ impl Peer {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let from_epoch = request.get_region_epoch();
-        let mut region = self.region();
         let store_id = peer.get_store_id();
         let change_type = request.get_change_type();
+        let mut region = self.region();
 
         if from_epoch.get_conf_ver() < region.get_region_epoch().get_conf_ver() {
-            return Err(other(format!("conf msg from staled peer {}, peer's conf version \
-                                      version: {:#?}, mine: {:#?}",
+            return Err(other(format!("{} stale msg, peer {}, from epoch \
+                                      {:#?}, my epoch {:#?}",
+                                     util::conf_change_type_str(&change_type),
                                      peer.get_peer_id(),
                                      from_epoch,
                                      region.get_region_epoch())));
         }
 
-        warn!("my peer id {}, conf change {:?} from peer {}, from region: {:?},  mine: \
+        warn!("my peer id {}, {:?} {}, region: {:?},  mine: \
                   {:?}\n",
               peer.get_peer_id(),
               util::conf_change_type_str(&change_type),
               self.peer.get_peer_id(),
               from_epoch,
               region.get_region_epoch());
-
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
         let exists = util::find_peer(&region, store_id).is_some();
@@ -691,12 +689,13 @@ impl Peer {
         match change_type {
             raftpb::ConfChangeType::AddNode => {
                 if exists {
-                    error!("my peer id {}, add duplicated peer {:?} to store {}, region {:?}",
+                    error!("my peer id {}, can't add duplicated peer {:?} to store {}, region \
+                            {:?}",
                            self.peer_id(),
                            peer,
                            store_id,
                            region);
-                    return Err(other(format!("add duplicated peer {:?} to store {}",
+                    return Err(other(format!("can't add duplicated peer {:?} to store {}",
                                              peer,
                                              store_id)));
                 }
@@ -706,7 +705,7 @@ impl Peer {
                 self.peer_cache.wl().insert(peer.get_peer_id(), peer.clone());
                 region.mut_peers().push(peer.clone());
 
-                warn!("my peer id {}, add {}, region:{:?}",
+                warn!("my peer id {}, add peer {}, region {:?}",
                       self.peer_id(),
                       peer.get_peer_id(),
                       self.region());
@@ -763,7 +762,7 @@ impl Peer {
               region.get_region_epoch());
 
         if from_epoch.get_version() < region.get_region_epoch().get_version() {
-            return Err(other(format!("split msg from staled peer, from region epoch: \
+            return Err(other(format!("stale msg from region epoch: \
                                       {:#?}, mine: {:#?}",
                                      from_epoch,
                                      region.get_region_epoch())));
@@ -783,7 +782,7 @@ impl Peer {
         // Update new region peer ids.
         let new_peer_ids = request.get_new_peer_ids();
         if new_peer_ids.len() != new_region.get_peers().len() {
-            return Err(other(format!("invalid new peer id number, need {}, but got {}",
+            return Err(other(format!("invalid new peer id count, need {}, but got {}",
                                      new_region.get_peers().len(),
                                      new_peer_ids.len())));
         }
