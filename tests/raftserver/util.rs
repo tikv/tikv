@@ -9,7 +9,6 @@ use rocksdb::{DB, WriteBatch, Writable};
 use tempdir::TempDir;
 use uuid::Uuid;
 use protobuf;
-use rand::{self, Rng};
 use super::cluster::{Cluster, Simulator};
 
 use tikv::raftserver::store::*;
@@ -196,27 +195,6 @@ pub fn write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
         wb.put(k, &v).expect("");
     }
     db.write(wb).unwrap();
-}
-
-pub fn generate_random_kvs(n: usize,
-                           key_len: Option<usize>,
-                           value_length: usize)
-                           -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut kvs = Vec::with_capacity(n);
-    let mut rng = rand::thread_rng();
-    for i in 0..n {
-        let k = if key_len.is_none() {
-            i.to_string().into_bytes()
-        } else {
-            let mut tmp_k = vec![0; key_len.unwrap()];
-            rng.fill_bytes(&mut tmp_k);
-            tmp_k
-        };
-        let mut v = vec![0; value_length];
-        rng.fill_bytes(&mut v);
-        kvs.push((k, v));
-    }
-    kvs
 }
 
 pub fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
