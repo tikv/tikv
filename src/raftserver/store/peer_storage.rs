@@ -213,6 +213,8 @@ impl PeerStorage {
         debug!("begin to generate a snapshot for region {}",
                self.get_region_id());
 
+        // TODO: time snapshot process
+
         let snap = self.engine.snapshot();
 
         let applied_index = try!(self.load_applied_index(&snap));

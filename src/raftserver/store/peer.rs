@@ -106,21 +106,22 @@ impl Peer {
                                                 from_epoch: &metapb::RegionEpoch,
                                                 peer_id: u64)
                                                 -> Result<Peer> {
-        if let Some(region) = try!(store.engine()
-                         .get_msg::<metapb::Region>(&keys::region_tombstone_key(region_id))) {
+        let tombstoen_key = &keys::region_tombstone_key(region_id);
+        if let Some(region) = try!(store.engine().get_msg::<metapb::Region>(tombstoen_key)) {
+            let region_epoch = region.get_region_epoch();
             // The region in this peer already destroyed
-            if !(from_epoch.get_version() >= region.get_region_epoch().get_version() &&
-                 from_epoch.get_conf_ver() > region.get_region_epoch().get_conf_ver()) {
+            if !(from_epoch.get_version() >= region_epoch.get_version() &&
+                 from_epoch.get_conf_ver() > region_epoch.get_conf_ver()) {
                 error!("from epoch {:?}, tombstone epoch {:?}",
                        from_epoch,
-                       region.get_region_epoch());
+                       region_epoch);
                 // We receive a stale message and we can't re-create the peer with the peer id.
-                return Err(other(format!("peer already destroyed {}", peer_id)));
+                return Err(other(format!("peer {} already destroyed", peer_id)));
             }
         }
 
         // We can accept the region by cleaning up region tombstone key
-        try!(store.engine().del(&keys::region_tombstone_key(region_id)));
+        try!(store.engine().del(tombstoen_key));
 
         info!("replicate peer, peer id {}, region_id {} \n",
               peer_id,
@@ -243,7 +244,7 @@ impl Peer {
             return Ok(None);
         }
 
-        debug!("handle raft ready for peer {:?} at region {}",
+        debug!("handle raft ready for peer {:?}, region {}",
                self.peer,
                self.region_id);
 
