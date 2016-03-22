@@ -9,7 +9,6 @@ use std::net::SocketAddr;
 use rocksdb::DB;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
-use mio::util::Slab;
 
 use raftserver::{Result, other};
 use raftserver::store::cmd_resp;
@@ -31,7 +30,16 @@ pub struct Server<T: PdClient + 'static> {
     cfg: Config,
 
     listener: TcpListener,
-    conns: Slab<Conn>,
+    // We use HashMap instead of common use mio slab to avoid token reusing.
+    // In our raft server, a client with token 1 sends a raft command, we will
+    // propose this command, execute it then send the response to the client with
+    // token 1. But before the response, the client connection is broken and another
+    // new client connects, mio slab may reuse the token 1 for it. So the subsequent
+    // response will be sent to the new client. 
+    // To avoid this, we use the HashMap instead and can guarantee the token id is 
+    // unique and can't be reused.
+    conns: HashMap<Token, Conn>,
+    conn_token_counter: usize,
     sendch: SendCh,
 
     peers: HashMap<String, Token>,
@@ -69,7 +77,6 @@ impl<T: PdClient + 'static> Server<T> {
 
         let sendch = SendCh::new(event_loop.channel());
 
-        let max_conn_capacity = cfg.max_conn_capacity;
         let trans = Arc::new(RwLock::new(ServerTransport::new(cfg.cluster_id,
                                                               sendch.clone(),
                                                               pd_client.clone())));
@@ -80,7 +87,8 @@ impl<T: PdClient + 'static> Server<T> {
             cfg: cfg,
             listener: listener,
             sendch: sendch,
-            conns: Slab::new_starting_at(FIRST_CUSTOM_TOKEN, max_conn_capacity),
+            conns: HashMap::new(),
+            conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             peers: HashMap::new(),
             store_handles: HashMap::new(),
             trans: trans,
@@ -114,7 +122,7 @@ impl<T: PdClient + 'static> Server<T> {
     }
 
     fn remove_conn(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
-        let conn = self.conns.remove(token);
+        let conn = self.conns.remove(&token);
         match conn {
             Some(conn) => {
                 // if connected to remote peer, remove this too.
@@ -137,29 +145,29 @@ impl<T: PdClient + 'static> Server<T> {
                     sock: TcpStream,
                     peer_addr: Option<String>)
                     -> Result<Token> {
+        let new_token = Token(self.conn_token_counter);
+        self.conn_token_counter += 1;
+
+        // TODO: check conn max capacity.
+
         try!(sock.set_nodelay(true));
 
-        // TODO: now slab crate doesn't support insert_with_opt, we should use it instead later.
-        self.conns
-            .insert_with(|new_token: Token| -> Conn {
-                // TODO: if insert_with_opt used, we will return None for register error.
-                // Now, just panic for this.
-                event_loop.register(&sock,
-                                    new_token,
-                                    EventSet::readable() | EventSet::hup(),
-                                    PollOpt::edge())
-                          .unwrap();
+        try!(event_loop.register(&sock,
+                                 new_token,
+                                 EventSet::readable() | EventSet::hup(),
+                                 PollOpt::edge()));
 
-                Conn::new(sock, new_token, peer_addr)
-            })
-            .ok_or_else(|| other("add new connection failed"))
+        let conn = Conn::new(sock, new_token, peer_addr);
+        self.conns.insert(new_token, conn);
+
+        Ok(new_token)
     }
 
     fn handle_conn_readable(&mut self,
                             event_loop: &mut EventLoop<Self>,
                             token: Token)
                             -> Result<()> {
-        let msgs = try!(match self.conns.get_mut(token) {
+        let msgs = try!(match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return Ok(());
@@ -186,7 +194,7 @@ impl<T: PdClient + 'static> Server<T> {
         }
 
         // append to write buffer here, no need using sender to notify.
-        if let Some(conn) = self.conns.get_mut(token) {
+        if let Some(conn) = self.conns.get_mut(&token) {
             for data in res {
                 try!(conn.append_write_buf(event_loop, data));
             }
@@ -303,7 +311,7 @@ impl<T: PdClient + 'static> Server<T> {
     }
 
     fn handle_writable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
-        let res = match self.conns.get_mut(token) {
+        let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
@@ -321,7 +329,7 @@ impl<T: PdClient + 'static> Server<T> {
                         event_loop: &mut EventLoop<Self>,
                         token: Token,
                         data: ConnData) {
-        let res = match self.conns.get_mut(token) {
+        let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
