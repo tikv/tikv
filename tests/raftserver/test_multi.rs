@@ -67,7 +67,6 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     // week up
     cluster.run_node(last_leader.get_node_id());
 
-    sleep_ms(400);
     must_get_equal(&cluster.engines[&last_leader.get_node_id()], key2, value2);
     must_get_none(&cluster.engines[&last_leader.get_node_id()], key1);
 }
