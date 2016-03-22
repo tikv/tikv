@@ -1,7 +1,6 @@
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
-use std::{thread, time};
-use rocksdb::DB;
+use std::thread;
 
 use tikv::raftserver::store::*;
 use kvproto::raftpb::ConfChangeType;
@@ -15,18 +14,7 @@ use super::server::new_server_cluster;
 use super::util::*;
 use super::pd::TestPdClient;
 
-fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
-    for _ in 1..100 {
-        if let Ok(res) = engine.get_value(&keys::data_key(key)) {
-            if let Some(val) = res {
-                assert_eq!(&*val, value);
-                return;
-            }
-            thread::sleep(time::Duration::from_millis(10));
-        }
-    }
-    assert!(false);
-}
+
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_env_log();
@@ -41,7 +29,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
-    assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
+    must_get_none(&engine_2, b"a1");
     // add peer (2,2,2) to region 1.
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2, 2));
 
@@ -51,8 +39,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // now peer 2 must have v1 and v2;
     must_get_equal(&engine_2, b"a1", b"v1");
-    assert_eq!(&*engine_2.get_value(&keys::data_key(b"a2")).unwrap().unwrap(),
-               b"v2");
+    must_get_equal(&engine_2, b"a2", b"v2");
 
     let epoch = cluster.pd_client
                        .rl()
@@ -83,8 +70,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"a3", b"v3");
 
     // peer 2 has nothing
-    assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
-    assert!(engine_2.get_value(&keys::data_key(b"a2")).unwrap().is_none());
+    must_get_none(&engine_2, b"a1");
+    must_get_none(&engine_2, b"a2");
 
     let epoch = cluster.pd_client
                        .rl()
@@ -132,8 +119,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"a4", b"v4");
 
     // peer 3 has nothing, we check v1 and v4 here.
-    assert!(engine_3.get_value(&keys::data_key(b"a1")).unwrap().is_none());
-    assert!(engine_3.get_value(&keys::data_key(b"a4")).unwrap().is_none());
+    must_get_none(&engine_3, b"a1");
+    must_get_none(&engine_3, b"a4");
 
     // TODO: add more tests.
 }
@@ -200,8 +187,8 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"a3", b"v3");
 
     // peer 2 has nothing
-    assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
-    assert!(engine_2.get_value(&keys::data_key(b"a2")).unwrap().is_none());
+    must_get_none(&engine_2, b"a1");
+    must_get_none(&engine_2, b"a2");
     // add peer4 to first region 1.
     let peer4 = new_conf_change_peer(&stores[1], &pd_client);
     cluster.change_peer(region_id, ConfChangeType::AddNode, peer4.clone());
@@ -218,8 +205,8 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"a4", b"v4");
 
     // peer 3 has nothing, we check v1 and v4 here.
-    assert!(engine_3.get_value(&keys::data_key(b"a1")).unwrap().is_none());
-    assert!(engine_3.get_value(&keys::data_key(b"a4")).unwrap().is_none());
+    must_get_none(&engine_3, b"a1");
+    must_get_none(&engine_3, b"a4");
 
 
     // TODO: add more tests.
@@ -285,7 +272,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let peer = new_conf_change_peer(&stores[i], &pd_client);
     let engine = cluster.get_engine(peer.get_node_id());
-    assert!(engine.get_value(&keys::data_key(b"a1")).unwrap().is_none());
+    must_get_none(&engine, b"a1");
 
     cluster.change_peer(region_id, ConfChangeType::AddNode, peer.clone());
 
