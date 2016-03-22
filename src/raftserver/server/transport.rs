@@ -78,7 +78,7 @@ impl<T: PdClient> Transport for ServerTransport<T> {
         }
 
         let to_node_id = msg.get_to_peer().get_node_id();
-        let node_meta = try!(self.pd_client.rl().get_node(self.cluster_id, to_node_id));
+        let node = try!(self.pd_client.rl().get_node(self.cluster_id, to_node_id));
 
         let mut req = Message::new();
         req.set_msg_type(MessageType::Raft);
@@ -86,7 +86,7 @@ impl<T: PdClient> Transport for ServerTransport<T> {
 
         let mut id = self.msg_id.lock().unwrap();
         *id += 1;
-        try!(self.ch.send_peer(node_meta.get_address().to_owned(), ConnData::new(*id, req)));
+        try!(self.ch.send_peer(node.get_address().to_owned(), ConnData::new(*id, req)));
 
         Ok(())
     }
