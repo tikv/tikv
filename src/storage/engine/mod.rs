@@ -2,7 +2,7 @@ use std::{error, result};
 use std::fmt::Debug;
 use self::memory::EngineBtree;
 use self::rocksdb::EngineRocksdb;
-use storage::{Key, RefKey, Value, KvPair};
+use storage::{Key, Value, KvPair};
 
 mod memory;
 mod rocksdb;
@@ -10,12 +10,12 @@ mod rocksdb;
 #[derive(Debug)]
 pub enum Modify {
     Delete(Key),
-    Put(KvPair),
+    Put((Key, Value)),
 }
 
 pub trait Engine : Send + Sync + Debug {
-    fn get(&self, key: RefKey) -> Result<Option<Value>>;
-    fn seek(&self, key: RefKey) -> Result<Option<KvPair>>;
+    fn get(&self, key: &Key) -> Result<Option<Value>>;
+    fn seek(&self, key: &Key) -> Result<Option<KvPair>>;
     fn write(&self, batch: Vec<Modify>) -> Result<()>;
 
     fn put(&self, key: Key, value: Value) -> Result<()> {
@@ -59,6 +59,7 @@ pub type Result<T> = result::Result<T, Error>;
 mod tests {
     use super::*;
     use tempdir::TempDir;
+    use storage::make_key;
 
     #[test]
     fn memory() {
@@ -79,23 +80,23 @@ mod tests {
     }
 
     fn must_put<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
-        engine.put(key.to_vec(), value.to_vec()).unwrap();
+        engine.put(make_key(key), value.to_vec()).unwrap();
     }
 
     fn must_delete<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
-        engine.delete(key.to_vec()).unwrap();
+        engine.delete(make_key(key)).unwrap();
     }
 
     fn assert_has<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
-        assert_eq!(engine.get(key).unwrap().unwrap(), value);
+        assert_eq!(engine.get(&make_key(key)).unwrap().unwrap(), value);
     }
 
     fn assert_none<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
-        assert_eq!(engine.get(key).unwrap(), None);
+        assert_eq!(engine.get(&make_key(key)).unwrap(), None);
     }
 
     fn assert_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
-        let (k, v) = engine.seek(key).unwrap().unwrap();
+        let (k, v) = engine.seek(&make_key(key)).unwrap().unwrap();
         assert_eq!((&k as &[u8], &v as &[u8]), pair);
     }
 
@@ -108,13 +109,13 @@ mod tests {
     }
 
     fn batch<T: Engine + ?Sized>(engine: &T) {
-        engine.write(vec![Modify::Put((b"x".to_vec(), b"1".to_vec())),
-                          Modify::Put((b"y".to_vec(), b"2".to_vec()))])
+        engine.write(vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
+                          Modify::Put((make_key(b"y"), b"2".to_vec()))])
               .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
-        engine.write(vec![Modify::Delete(b"x".to_vec()), Modify::Delete(b"y".to_vec())])
+        engine.write(vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
               .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
@@ -127,7 +128,7 @@ mod tests {
         must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
-        assert_eq!(engine.seek(b"z\x00").unwrap(), None);
+        assert_eq!(engine.seek(&make_key(b"z\x00")).unwrap(), None);
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
