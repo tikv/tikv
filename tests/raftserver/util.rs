@@ -20,6 +20,31 @@ use kvproto::raft_cmdpb::{CommandType, StatusCommandType, AdminCommandType};
 use kvproto::raftpb::ConfChangeType;
 use tikv::raft::INVALID_ID;
 
+pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
+    for _ in 1..200 {
+        if let Ok(res) = engine.get_value(&keys::data_key(key)) {
+            if let Some(val) = res {
+                assert_eq!(&*val, value);
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    assert!(false);
+}
+
+pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
+    for _ in 1..200 {
+        if let Ok(res) = engine.get_value(&keys::data_key(key)) {
+            if res.is_none() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    assert!(false);
+}
+
 pub fn new_engine(path: &TempDir) -> Arc<DB> {
     let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
     Arc::new(db)
