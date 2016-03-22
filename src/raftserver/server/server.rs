@@ -34,6 +34,7 @@ pub struct Server<T: PdClient + 'static> {
     conns: Slab<Conn>,
     sendch: SendCh,
 
+    // addr -> Token
     peers: HashMap<String, Token>,
 
     store_handles: HashMap<u64, thread::JoinHandle<()>>,
