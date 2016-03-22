@@ -58,10 +58,7 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.put(key2, value2);
     cluster.delete(key1);
-    assert!(cluster.engines[&last_leader.get_node_id()]
-                .get_value(&keys::data_key(key2))
-                .unwrap()
-                .is_none());
+    must_get_none(&cluster.engines[&last_leader.get_node_id()], key2);
     assert!(cluster.engines[&last_leader.get_node_id()]
                 .get_value(&keys::data_key(key1))
                 .unwrap()
@@ -71,15 +68,8 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(last_leader.get_node_id());
 
     sleep_ms(400);
-    let v = cluster.engines[&last_leader.get_node_id()]
-                .get_value(&keys::data_key(key2))
-                .unwrap()
-                .unwrap();
-    assert_eq!(&*v, value2);
-    assert!(cluster.engines[&last_leader.get_node_id()]
-                .get_value(&keys::data_key(key1))
-                .unwrap()
-                .is_none());
+    must_get_equal(&cluster.engines[&last_leader.get_node_id()], key2, value2);
+    must_get_none(&cluster.engines[&last_leader.get_node_id()], key1);
 }
 
 
