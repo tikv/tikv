@@ -213,10 +213,10 @@ impl PeerStorage {
         debug!("begin to generate a snapshot for region {}",
                self.get_region_id());
 
+        // TODO: time snapshot process
+
         let snap = self.engine.snapshot();
-
         let applied_index = try!(self.load_applied_index(&snap));
-
         let region: metapb::Region = try!(snap.get_msg::<metapb::Region>(
                                             &keys::region_info_key(self.get_region_id())).
         and_then(|res| {
@@ -227,7 +227,6 @@ impl PeerStorage {
         }));
 
         let term = try!(self.term(applied_index));
-
         let mut snapshot = Snapshot::new();
 
         // Set snapshot metadata.
@@ -260,7 +259,6 @@ impl PeerStorage {
 
         let mut v = vec![];
         try!(snap_data.write_to_vec(&mut v));
-
         snapshot.set_data(v);
 
         debug!("generate snapshot ok for region {}", self.get_region_id());

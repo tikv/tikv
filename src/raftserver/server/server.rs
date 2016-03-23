@@ -35,8 +35,8 @@ pub struct Server<T: PdClient + 'static> {
     // propose this command, execute it then send the response to the client with
     // token 1. But before the response, the client connection is broken and another
     // new client connects, mio slab may reuse the token 1 for it. So the subsequent
-    // response will be sent to the new client. 
-    // To avoid this, we use the HashMap instead and can guarantee the token id is 
+    // response will be sent to the new client.
+    // To avoid this, we use the HashMap instead and can guarantee the token id is
     // unique and can't be reused.
     conns: HashMap<Token, Conn>,
     conn_token_counter: usize,

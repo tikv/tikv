@@ -19,7 +19,7 @@ use raftserver::coprocessor::CoprocessorHost;
 use util::HandyRwLock;
 use pd::PdClient;
 use super::store::Store;
-use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
+use super::peer_storage::{self, PeerStorage, RaftStorage};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -106,22 +106,21 @@ impl Peer {
                                                 from_epoch: &metapb::RegionEpoch,
                                                 peer_id: u64)
                                                 -> Result<Peer> {
-        if let Some(region) = try!(store.engine()
-                         .get_msg::<metapb::Region>(&keys::region_tombstone_key(region_id))) {
+        let tombstone_key = &keys::region_tombstone_key(region_id);
+        if let Some(region) = try!(store.engine().get_msg::<metapb::Region>(tombstone_key)) {
+            let region_epoch = region.get_region_epoch();
             // The region in this peer already destroyed
-            if !(from_epoch.get_version() >= region.get_region_epoch().get_version() &&
-                 from_epoch.get_conf_ver() > region.get_region_epoch().get_conf_ver()) {
+            if !(from_epoch.get_version() >= region_epoch.get_version() &&
+                 from_epoch.get_conf_ver() > region_epoch.get_conf_ver()) {
                 error!("from epoch {:?}, tombstone epoch {:?}",
                        from_epoch,
-                       region.get_region_epoch());
+                       region_epoch);
                 // We receive a stale message and we can't re-create the peer with the peer id.
-                return Err(other(format!("peer already destroyed {}", peer_id)));
+                return Err(other(format!("peer {} already destroyed", peer_id)));
             }
         }
 
-        // We can accept the region by cleaning up region tombstone key
-        try!(store.engine().del(&keys::region_tombstone_key(region_id)));
-
+        // We will remove tombstone key when apply snapshot
         info!("replicate peer, peer id {}, region_id {} \n",
               peer_id,
               region_id);
@@ -243,7 +242,7 @@ impl Peer {
             return Ok(None);
         }
 
-        debug!("handle raft ready for peer {:?} at region {}",
+        debug!("handle raft ready for peer {:?}, region {}",
                self.peer,
                self.region_id);
 
@@ -309,26 +308,26 @@ impl Peer {
     }
 
     fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<Option<metapb::Region>> {
-        let batch = WriteBatch::new();
+        let wb = WriteBatch::new();
         let mut storage = self.storage.wl();
         let mut last_index = storage.last_index();
-        let mut apply_snap_res: Option<ApplySnapResult> = None;
+        let mut apply_snap_res = None;
         if !raft::is_empty_snap(&ready.snapshot) {
-            apply_snap_res = try!(storage.apply_snapshot(&batch, &ready.snapshot).map(|res| {
+            try!(wb.delete(&keys::region_tombstone_key(self.region_id)));
+            apply_snap_res = try!(storage.apply_snapshot(&wb, &ready.snapshot).map(|res| {
                 last_index = res.last_index;
                 Some(res)
             }));
         }
-
         if !ready.entries.is_empty() {
-            last_index = try!(storage.append(&batch, last_index, &ready.entries));
+            last_index = try!(storage.append(&wb, last_index, &ready.entries));
         }
 
         if let Some(ref hs) = ready.hs {
-            try!(peer_storage::save_hard_state(&batch, self.region_id, hs));
+            try!(peer_storage::save_hard_state(&wb, self.region_id, hs));
         }
 
-        try!(self.engine.write(batch));
+        try!(self.engine.write(wb));
 
         storage.set_last_index(last_index);
         // If we apply snapshot ok, we should update some infos like applied index too.
