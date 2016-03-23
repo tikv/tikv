@@ -9,7 +9,7 @@ pub mod mvcc;
 pub mod txn;
 mod types;
 
-pub use self::engine::{Engine, Dsn, new_engine, Modify};
+pub use self::engine::{Engine, Dsn, new_engine, Modify, Error as EngineError};
 pub use self::engine::raftkv::Config as RaftKvConfig;
 pub use self::engine::raftkv::RaftKv;
 pub use self::types::{Key, Value, KvPair};
@@ -311,7 +311,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Engine(err: engine::Error) {
+        Engine(err: EngineError) {
             from()
             cause(err)
             description(err.description())
