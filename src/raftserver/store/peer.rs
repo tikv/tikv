@@ -106,8 +106,8 @@ impl Peer {
                                                 from_epoch: &metapb::RegionEpoch,
                                                 peer_id: u64)
                                                 -> Result<Peer> {
-        let tombstoen_key = &keys::region_tombstone_key(region_id);
-        if let Some(region) = try!(store.engine().get_msg::<metapb::Region>(tombstoen_key)) {
+        let tombstone_key = &keys::region_tombstone_key(region_id);
+        if let Some(region) = try!(store.engine().get_msg::<metapb::Region>(tombstone_key)) {
             let region_epoch = region.get_region_epoch();
             // The region in this peer already destroyed
             if !(from_epoch.get_version() >= region_epoch.get_version() &&
@@ -120,9 +120,7 @@ impl Peer {
             }
         }
 
-        // We can accept the region by cleaning up region tombstone key
-        try!(store.engine().del(tombstoen_key));
-
+        // We will remove tombstone key when apply snapshot
         info!("replicate peer, peer id {}, region_id {} \n",
               peer_id,
               region_id);
@@ -320,6 +318,9 @@ impl Peer {
                 Some(res)
             }));
         }
+
+        // We can accept the region by cleaning up region tombstone key
+        try!(batch.delete(&keys::region_tombstone_key(self.region_id)));
 
         if !ready.entries.is_empty() {
             last_index = try!(storage.append(&batch, last_index, &ready.entries));
