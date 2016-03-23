@@ -313,15 +313,12 @@ impl Peer {
         let mut last_index = storage.last_index();
         let mut apply_snap_res = None;
         if !raft::is_empty_snap(&ready.snapshot) {
+            try!(wb.delete(&keys::region_tombstone_key(self.region_id)));
             apply_snap_res = try!(storage.apply_snapshot(&wb, &ready.snapshot).map(|res| {
                 last_index = res.last_index;
                 Some(res)
             }));
         }
-
-        // We can accept the region by cleaning up region tombstone key
-        try!(wb.delete(&keys::region_tombstone_key(self.region_id)));
-
         if !ready.entries.is_empty() {
             last_index = try!(storage.append(&wb, last_index, &ready.entries));
         }
