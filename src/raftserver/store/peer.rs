@@ -539,7 +539,7 @@ impl Peer {
 
     fn apply_raft_command(&mut self,
                           index: u64,
-                          cmd: &RaftCommandRequest)
+                          req: &RaftCommandRequest)
                           -> Result<(RaftCommandResponse, Option<ExecResult>)> {
         let last_applied_index = self.storage.rl().applied_index();
 
@@ -555,7 +555,7 @@ impl Peer {
             let ctx = ExecContext {
                 snap: engine.snapshot(),
                 wb: &wb,
-                request: cmd,
+                req: req,
             };
 
             self.execute_raft_command(&ctx).unwrap_or_else(|e| {
@@ -613,7 +613,7 @@ fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerReques
 struct ExecContext<'a> {
     pub snap: Snapshot<'a>,
     pub wb: &'a WriteBatch,
-    pub request: &'a RaftCommandRequest,
+    pub req: &'a RaftCommandRequest,
 }
 
 // Here we implement all commands.
@@ -621,7 +621,7 @@ impl Peer {
     fn execute_raft_command(&mut self,
                             ctx: &ExecContext)
                             -> Result<(RaftCommandResponse, Option<ExecResult>)> {
-        if ctx.request.has_admin_request() {
+        if ctx.req.has_admin_request() {
             self.execute_admin_command(ctx)
         } else {
             // Now we don't care write command outer, so use None.
@@ -632,7 +632,7 @@ impl Peer {
     fn execute_admin_command(&mut self,
                              ctx: &ExecContext)
                              -> Result<(RaftCommandResponse, Option<ExecResult>)> {
-        let request = ctx.request.get_admin_request();
+        let request = ctx.req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         info!("execute admin command {:?} at region {}",
               request,
@@ -743,18 +743,18 @@ impl Peer {
 
     fn execute_split(&mut self,
                      ctx: &ExecContext,
-                     request: &AdminRequest)
+                     req: &AdminRequest)
                      -> Result<(AdminResponse, Option<ExecResult>)> {
-        let request = request.get_split();
-        if !request.has_split_key() {
+        let split_req = req.get_split();
+        if !split_req.has_split_key() {
             return Err(other("missing split key"));
         }
 
-        let split_key = request.get_split_key();
+        let split_key = split_req.get_split_key();
         let mut region = self.region();
         try!(util::check_key_in_region(split_key, &region));
 
-        let from_epoch = request.get_region_epoch();
+        let from_epoch = split_req.get_region_epoch();
         info!("split msg from region epoch: {:#?}, \
                   mine: {:#?}",
               from_epoch,
@@ -768,7 +768,7 @@ impl Peer {
         }
 
         // TODO: check new region id validation.
-        let new_region_id = request.get_new_region_id();
+        let new_region_id = split_req.get_new_region_id();
 
         // After split, the origin region key range is [start_key, split_key),
         // the new split region is [split_key, end).
@@ -779,7 +779,7 @@ impl Peer {
         new_region.set_region_id(new_region_id);
 
         // Update new region peer ids.
-        let new_peer_ids = request.get_new_peer_ids();
+        let new_peer_ids = split_req.get_new_peer_ids();
         if new_peer_ids.len() != new_region.get_peers().len() {
             return Err(other(format!("invalid new peer id count, need {}, but got {}",
                                      new_region.get_peers().len(),
@@ -817,10 +817,9 @@ impl Peer {
 
     fn execute_compact_log(&mut self,
                            ctx: &ExecContext,
-                           request: &AdminRequest)
+                           req: &AdminRequest)
                            -> Result<(AdminResponse, Option<ExecResult>)> {
-        let request = request.get_compact_log();
-        let compact_index = request.get_compact_index();
+        let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::new();
 
         let first_index = self.storage.rl().first_index();
@@ -836,17 +835,16 @@ impl Peer {
     }
 
     fn execute_write_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
-        let requests = ctx.request.get_requests();
-
+        let requests = ctx.req.get_requests();
         let mut responses: Vec<Response> = Vec::with_capacity(requests.len());
 
-        for request in requests {
-            let cmd_type = request.get_cmd_type();
+        for req in requests {
+            let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
-                cmd::CommandType::Get => self.do_get(ctx, request),
-                cmd::CommandType::Seek => self.do_seek(ctx, request),
-                cmd::CommandType::Put => self.do_put(ctx, request),
-                cmd::CommandType::Delete => self.do_delete(ctx, request),
+                cmd::CommandType::Get => self.do_get(ctx, req),
+                cmd::CommandType::Seek => self.do_seek(ctx, req),
+                cmd::CommandType::Put => self.do_put(ctx, req),
+                cmd::CommandType::Delete => self.do_delete(ctx, req),
                 e => Err(other(format!("unsupported command type {:?}", e))),
             });
 
@@ -867,10 +865,9 @@ impl Peer {
         Ok(())
     }
 
-    fn do_get(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+    fn do_get(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         // TODO: the get_get looks wried, maybe we should think a better name later.
-        let request = request.get_get();
-        let key = request.get_key();
+        let key = req.get_get().get_key();
         try!(self.check_data_key(key));
 
         let mut resp = Response::new();
@@ -882,9 +879,8 @@ impl Peer {
         Ok(resp)
     }
 
-    fn do_seek(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
-        let request = request.get_seek();
-        let key = request.get_key();
+    fn do_seek(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+        let key = req.get_seek().get_key();
         try!(self.check_data_key(key));
 
         let mut resp = Response::new();
@@ -897,14 +893,12 @@ impl Peer {
         Ok(resp)
     }
 
-    fn do_put(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
-        let request = request.get_put();
-        let key = request.get_key();
+    fn do_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+        let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         try!(self.check_data_key(key));
 
         let resp = Response::new();
         let key = keys::data_key(key);
-        let value = request.get_value();
         self.size_diff_hint += key.len() as u64;
         self.size_diff_hint += value.len() as u64;
         try!(ctx.wb.put(&key, value));
@@ -913,9 +907,8 @@ impl Peer {
         Ok(resp)
     }
 
-    fn do_delete(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
-        let request = request.get_delete();
-        let key = request.get_key();
+    fn do_delete(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+        let key = req.get_delete().get_key();
         try!(self.check_data_key(key));
 
         let key = keys::data_key(key);
