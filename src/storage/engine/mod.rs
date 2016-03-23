@@ -1,16 +1,30 @@
 use std::{error, result};
 use std::fmt::Debug;
+use std::sync::{Arc, RwLock};
 use self::memory::EngineBtree;
 use self::rocksdb::EngineRocksdb;
+use self::raftkv::RaftKv;
 use storage::{Key, Value, KvPair};
+use self::raftkv::Config;
+use pd;
 
 mod memory;
 mod rocksdb;
+pub mod raftkv;
 
 #[derive(Debug)]
 pub enum Modify {
     Delete(Key),
     Put((Key, Value)),
+}
+
+impl Modify {
+    fn get_key(&self) -> &Key {
+        match self {
+            &Modify::Delete(ref k) => k,
+            &Modify::Put((ref k, _)) => k,
+        }
+    }
 }
 
 pub trait Engine : Send + Sync + Debug {
@@ -31,6 +45,7 @@ pub trait Engine : Send + Sync + Debug {
 pub enum Dsn<'a> {
     Memory,
     RocksDBPath(&'a str),
+    RaftKv(&'a Config, &'a str),
 }
 
 pub fn new_engine(dsn: Dsn) -> Result<Box<Engine>> {
@@ -38,6 +53,14 @@ pub fn new_engine(dsn: Dsn) -> Result<Box<Engine>> {
         Dsn::Memory => Ok(Box::new(EngineBtree::new())),
         Dsn::RocksDBPath(path) => {
             EngineRocksdb::new(path).map(|engine| -> Box<Engine> { Box::new(engine) })
+        }
+        Dsn::RaftKv(cfg, addr) => {
+            let client = match pd::new_rpc_client(addr) {
+                Err(e) => return Err(Error::Other(box e)),
+                Ok(c) => c,
+            };
+            let client = Arc::new(RwLock::new(client));
+            RaftKv::new(cfg, client).map(|e| -> Box<Engine> { box e }).map_err(From::from)
         }
     }
 }
