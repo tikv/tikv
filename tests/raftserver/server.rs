@@ -88,10 +88,7 @@ impl Simulator for ServerCluster {
         self.senders.keys().cloned().collect()
     }
 
-    fn call_command(&self,
-                    request: RaftCommandRequest,
-                    timeout: Duration)
-                    -> Result<RaftCommandResponse> {
+    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_node_id();
         let addr = self.addrs.get(&node_id).unwrap();
         let mut conn = TcpStream::connect(addr).unwrap();
@@ -99,7 +96,7 @@ impl Simulator for ServerCluster {
         conn.set_write_timeout(Some(timeout)).unwrap();
 
         let mut msg = Message::new();
-        msg.set_msg_type(MessageType::Command);
+        msg.set_msg_type(MessageType::Cmd);
         msg.set_cmd_req(request);
 
         let mut msg_id = self.msg_id.lock().unwrap();
@@ -111,7 +108,7 @@ impl Simulator for ServerCluster {
         let mut resp_msg = Message::new();
         let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg));
 
-        assert_eq!(resp_msg.get_msg_type(), MessageType::CommandResp);
+        assert_eq!(resp_msg.get_msg_type(), MessageType::CmdResp);
         assert_eq!(*msg_id, get_msg_id);
 
         Ok(resp_msg.take_cmd_resp())

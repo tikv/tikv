@@ -15,7 +15,7 @@ use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData};
 use kvproto::raftpb::ConfChangeType;
 use util::HandyRwLock;
 use pd::PdClient;
-use kvproto::raft_cmdpb::{self as cmd, RaftCommandRequest, RaftCommandResponse};
+use kvproto::raft_cmdpb::{self as cmd, RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
 
 use raftserver::{Result, other, Error};
@@ -378,9 +378,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn propose_raft_command(&mut self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
+    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) -> Result<()> {
         // TODO: simplify bind error, uuid, current term and callback for response.
-        let mut resp: RaftCommandResponse;
+        let mut resp: RaftCmdResponse;
         let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {
                 resp = cmd_resp::message_error("missing request uuid");
@@ -521,7 +521,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Create a compact log request and notify directly.
             let request = new_compact_log_request(region_id, peer.peer.clone(), applied_index);
 
-            let cb = Box::new(move |_: RaftCommandResponse| -> Result<()> { Ok(()) });
+            let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
             if let Err(e) = self.sendch.send_command(request, cb) {
                 error!("send compact log {} to region {} err {:?}",
@@ -652,14 +652,14 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
 fn new_compact_log_request(region_id: u64,
                            peer: metapb::Peer,
                            compact_index: u64)
-                           -> RaftCommandRequest {
-    let mut request = RaftCommandRequest::new();
+                           -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::new();
     request.mut_header().set_region_id(region_id);
     request.mut_header().set_peer(peer);
     request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
     let mut admin = cmd::AdminRequest::new();
-    admin.set_cmd_type(cmd::AdminCommandType::CompactLog);
+    admin.set_cmd_type(cmd::AdminCmdType::CompactLog);
     admin.mut_compact_log().set_compact_index(compact_index);
     request.set_admin_request(admin);
     request
@@ -676,7 +676,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     error!("handle raft message err: {:?}", e);
                 }
             }
-            Msg::RaftCommand{request, callback} => {
+            Msg::RaftCmd{request, callback} => {
                 if let Err(e) = self.propose_raft_command(request, callback) {
                     error!("propose raft command err: {:?}", e);
                 }
@@ -724,7 +724,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
 impl<T: Transport, C: PdClient> Store<T, C> {
     /// load the target peer of request as mutable borrow.
-    fn mut_target_peer(&mut self, request: &RaftCommandRequest) -> Result<&mut Peer> {
+    fn mut_target_peer(&mut self, request: &RaftCmdRequest) -> Result<&mut Peer> {
         let region_id = request.get_header().get_region_id();
         match self.region_peers.get_mut(&region_id) {
             None => Err(Error::RegionNotFound(region_id)),
@@ -736,20 +736,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current
     // store status, so no need to handle it in raft group.
-    fn execute_status_command(&mut self,
-                              request: RaftCommandRequest)
-                              -> Result<RaftCommandResponse> {
+    fn execute_status_command(&mut self, request: RaftCmdRequest) -> Result<RaftCmdResponse> {
         let cmd_type = request.get_status_request().get_cmd_type();
         let region_id = request.get_header().get_region_id();
 
         let mut response = try!(match cmd_type {
-            cmd::StatusCommandType::RegionLeader => self.execute_region_leader(request),
-            cmd::StatusCommandType::RegionDetail => self.execute_region_detail(request),
-            cmd::StatusCommandType::InvalidStatus => Err(other("invalid status command!")),
+            cmd::StatusCmdType::RegionLeader => self.execute_region_leader(request),
+            cmd::StatusCmdType::RegionDetail => self.execute_region_detail(request),
+            cmd::StatusCmdType::InvalidStatus => Err(other("invalid status command!")),
         });
         response.set_cmd_type(cmd_type);
 
-        let mut resp = RaftCommandResponse::new();
+        let mut resp = RaftCmdResponse::new();
         resp.set_status_response(response);
         // Bind peer current term here.
         if let Some(peer) = self.region_peers.get(&region_id) {
@@ -758,9 +756,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(resp)
     }
 
-    fn execute_region_leader(&mut self,
-                             request: RaftCommandRequest)
-                             -> Result<cmd::StatusResponse> {
+    fn execute_region_leader(&mut self, request: RaftCmdRequest) -> Result<cmd::StatusResponse> {
         let peer = try!(self.mut_target_peer(&request));
 
         let mut resp = cmd::StatusResponse::new();
@@ -771,9 +767,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(resp)
     }
 
-    fn execute_region_detail(&mut self,
-                             request: RaftCommandRequest)
-                             -> Result<cmd::StatusResponse> {
+    fn execute_region_detail(&mut self, request: RaftCmdRequest) -> Result<cmd::StatusResponse> {
         let peer = try!(self.mut_target_peer(&request));
         if !peer.storage.rl().is_initialized() {
             let region_id = request.get_header().get_region_id();

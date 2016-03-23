@@ -31,10 +31,7 @@ pub trait Simulator {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
-    fn call_command(&self,
-                    request: RaftCommandRequest,
-                    timeout: Duration)
-                    -> Result<RaftCommandResponse>;
+    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
 }
 
 pub struct Cluster<T: Simulator> {
@@ -107,17 +104,17 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn call_command(&self,
-                        request: RaftCommandRequest,
+                        request: RaftCmdRequest,
                         timeout: Duration)
-                        -> Result<RaftCommandResponse> {
+                        -> Result<RaftCmdResponse> {
         self.sim.rl().call_command(request, timeout)
     }
 
     pub fn call_command_on_leader(&mut self,
                                   region_id: u64,
-                                  mut request: RaftCommandRequest,
+                                  mut request: RaftCmdRequest,
                                   timeout: Duration)
-                                  -> Result<RaftCommandResponse> {
+                                  -> Result<RaftCmdResponse> {
         request.mut_header().set_peer(self.leader_of_region(region_id).clone().unwrap());
         self.call_command(request, timeout)
     }
@@ -250,7 +247,7 @@ impl<T: Simulator> Cluster<T> {
     // If the resp is "not leader error", get the real leader.
     // Sometimes, we may still can't get leader even in "not leader error",
     // returns a INVALID_PEER for this.
-    pub fn refresh_leader_if_needed(&mut self, resp: &RaftCommandResponse, region_id: u64) -> bool {
+    pub fn refresh_leader_if_needed(&mut self, resp: &RaftCmdResponse, region_id: u64) -> bool {
         if !is_error_response(resp) {
             return false;
         }
@@ -270,9 +267,9 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn request(&mut self,
                    region_id: u64,
-                   request: RaftCommandRequest,
+                   request: RaftCmdRequest,
                    timeout: Duration)
-                   -> RaftCommandResponse {
+                   -> RaftCmdResponse {
         loop {
             let resp = self.call_command_on_leader(region_id, request.clone(), timeout).unwrap();
             if !resp.get_header().has_error() || !self.refresh_leader_if_needed(&resp, region_id) {
@@ -302,7 +299,7 @@ impl<T: Simulator> Cluster<T> {
             panic!("response {:?} has error", resp);
         }
         assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Get);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
         let mut get = resp.mut_responses()[0].take_get();
         if get.has_value() {
             Some(get.take_value())
@@ -319,7 +316,7 @@ impl<T: Simulator> Cluster<T> {
             panic!("response {:?} has error", resp);
         }
         assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Put);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
@@ -331,7 +328,7 @@ impl<T: Simulator> Cluster<T> {
         }
         assert_eq!(resp.get_responses().len(), 1);
         let resp = &resp.get_responses()[0];
-        assert_eq!(resp.get_cmd_type(), CommandType::Seek);
+        assert_eq!(resp.get_cmd_type(), CmdType::Seek);
         if resp.has_seek() {
             Some((resp.get_seek().get_key().to_vec(),
                   resp.get_seek().get_value().to_vec()))
@@ -348,7 +345,7 @@ impl<T: Simulator> Cluster<T> {
             panic!("response {:?} has error", resp);
         }
         assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CommandType::Delete);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
     pub fn change_peer(&mut self,
@@ -366,7 +363,7 @@ impl<T: Simulator> Cluster<T> {
         let resp = self.call_command_on_leader(region_id, change_peer, Duration::from_secs(3))
                        .unwrap();
         assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCommandType::ChangePeer);
+                   AdminCmdType::ChangePeer);
 
         let region = resp.get_admin_response().get_change_peer().get_region();
         self.pd_client.wl().change_peer(self.id(), region.clone()).unwrap();
@@ -391,7 +388,7 @@ impl<T: Simulator> Cluster<T> {
         let resp = self.call_command_on_leader(region_id, split, Duration::from_secs(3)).unwrap();
 
         assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCommandType::Split);
+                   AdminCmdType::Split);
 
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
@@ -409,7 +406,7 @@ impl<T: Simulator> Cluster<T> {
         let mut resp = res.unwrap();
         assert!(resp.has_status_response());
         let mut status_resp = resp.take_status_response();
-        assert_eq!(status_resp.get_cmd_type(), StatusCommandType::RegionDetail);
+        assert_eq!(status_resp.get_cmd_type(), StatusCmdType::RegionDetail);
         assert!(status_resp.has_region_detail());
         status_resp.take_region_detail()
     }
