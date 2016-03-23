@@ -17,7 +17,7 @@ struct Store {
     region_ids: HashSet<u64>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Node {
     node: metapb::Node,
     store_ids: HashSet<u64>,
