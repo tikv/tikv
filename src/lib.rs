@@ -5,6 +5,7 @@
 #![feature(std_panic, recover)]
 #![feature(fnbox)]
 #![feature(plugin)]
+#![feature(box_syntax)]
 #![plugin(clippy)]
 
 #[macro_use]

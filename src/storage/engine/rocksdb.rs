@@ -15,7 +15,7 @@ impl EngineRocksdb {
         info!("EngineRocksdb: creating for path {}", path);
         DB::open_default(path)
             .map(|db| EngineRocksdb { db: db })
-            .map_err(|e| RocksDBError::new(e).to_engine_error())
+            .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 }
 
@@ -31,7 +31,7 @@ impl Engine for EngineRocksdb {
         self.db
             .get(key.get_rawkey())
             .map(|r| r.map(|v| v.to_vec()))
-            .map_err(|e| RocksDBError::new(e).to_engine_error())
+            .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 
     fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
@@ -48,19 +48,19 @@ impl Engine for EngineRocksdb {
                 Modify::Delete(k) => {
                     trace!("EngineRocksdb: delete {:?}", k);
                     if let Err(msg) = wb.delete(k.get_rawkey()) {
-                        return Err(RocksDBError::new(msg).to_engine_error());
+                        return Err(RocksDBError::new(msg).into_engine_error());
                     }
                 }
                 Modify::Put((k, v)) => {
                     trace!("EngineRocksdb: put {:?},{:?}", k, v);
                     if let Err(msg) = wb.put(k.get_rawkey(), &v) {
-                        return Err(RocksDBError::new(msg).to_engine_error());
+                        return Err(RocksDBError::new(msg).into_engine_error());
                     }
                 }
             }
         }
         if let Err(msg) = self.db.write(wb) {
-            return Err(RocksDBError::new(msg).to_engine_error());
+            return Err(RocksDBError::new(msg).into_engine_error());
         }
         Ok(())
     }
@@ -76,8 +76,8 @@ impl RocksDBError {
         RocksDBError { message: msg }
     }
 
-    fn to_engine_error(&self) -> super::Error {
-        super::Error::Other(Box::new(self.clone()))
+    fn into_engine_error(self) -> super::Error {
+        super::Error::Other(Box::new(self))
     }
 }
 

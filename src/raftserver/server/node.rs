@@ -28,13 +28,14 @@ impl<T, Trans> Node<T, Trans>
           Trans: Transport + Send + Sync + 'static
 {
     pub fn new(cfg: &Config,
+               addr: String,
                pd_client: Arc<RwLock<T>>,
                trans: Arc<RwLock<Trans>>)
                -> Node<T, Trans> {
         Node {
             cluster_id: cfg.cluster_id,
             node_id: INVALID_ID,
-            addr: cfg.addr.clone(),
+            addr: addr,
             store_cfg: cfg.store_cfg.clone(),
             store_handles: HashMap::new(),
             pd_client: pd_client,

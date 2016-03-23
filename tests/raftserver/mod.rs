@@ -1,9 +1,9 @@
-mod util;
-mod cluster;
+pub mod util;
+pub mod cluster;
 mod node;
 mod server;
-mod pd;
-mod pd_ask;
+pub mod pd;
+pub mod pd_ask;
 
 mod test_single;
 mod test_multi;
