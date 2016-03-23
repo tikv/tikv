@@ -19,7 +19,7 @@ use raftserver::coprocessor::CoprocessorHost;
 use util::HandyRwLock;
 use pd::PdClient;
 use super::store::Store;
-use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
+use super::peer_storage::{self, PeerStorage, RaftStorage};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -308,29 +308,29 @@ impl Peer {
     }
 
     fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<Option<metapb::Region>> {
-        let batch = WriteBatch::new();
+        let wb = WriteBatch::new();
         let mut storage = self.storage.wl();
         let mut last_index = storage.last_index();
-        let mut apply_snap_res: Option<ApplySnapResult> = None;
+        let mut apply_snap_res = None;
         if !raft::is_empty_snap(&ready.snapshot) {
-            apply_snap_res = try!(storage.apply_snapshot(&batch, &ready.snapshot).map(|res| {
+            apply_snap_res = try!(storage.apply_snapshot(&wb, &ready.snapshot).map(|res| {
                 last_index = res.last_index;
                 Some(res)
             }));
         }
 
         // We can accept the region by cleaning up region tombstone key
-        try!(batch.delete(&keys::region_tombstone_key(self.region_id)));
+        try!(wb.delete(&keys::region_tombstone_key(self.region_id)));
 
         if !ready.entries.is_empty() {
-            last_index = try!(storage.append(&batch, last_index, &ready.entries));
+            last_index = try!(storage.append(&wb, last_index, &ready.entries));
         }
 
         if let Some(ref hs) = ready.hs {
-            try!(peer_storage::save_hard_state(&batch, self.region_id, hs));
+            try!(peer_storage::save_hard_state(&wb, self.region_id, hs));
         }
 
-        try!(self.engine.write(batch));
+        try!(self.engine.write(wb));
 
         storage.set_last_index(last_index);
         // If we apply snapshot ok, we should update some infos like applied index too.
