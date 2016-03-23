@@ -6,9 +6,8 @@ use raftserver::server::SendCh;
 use raftserver::server::transport::ServerTransport;
 use raftserver::errors::Error as RaftServerError;
 use util::HandyRwLock;
-use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse, RaftRequestHeader, Request,
-                          Response, GetRequest, CommandType, SeekRequest, DeleteRequest,
-                          PutRequest};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
+                          GetRequest, CmdType, SeekRequest, DeleteRequest, PutRequest};
 use kvproto::errorpb;
 use kvproto::metapb;
 
@@ -60,7 +59,10 @@ pub type Result<T> = result::Result<T, Error>;
 
 impl From<Error> for EngineError {
     fn from(e: Error) -> EngineError {
-        EngineError::Other(box e)
+        match e {
+            Error::RequestFailed(e) => EngineError::Request(e),
+            e => EngineError::Other(box e),
+        }
     }
 }
 
@@ -145,7 +147,7 @@ impl<T: PdClient> RaftKv<T> {
         info!("raftkv engine closed.");
     }
 
-    fn exec_cmd_request(&self, req: RaftCommandRequest) -> Result<RaftCommandResponse> {
+    fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<RaftCmdResponse> {
         let (tx, rx) = mpsc::channel();
         let uuid = req.get_header().get_uuid().to_vec();
         let l = req.get_requests().len();
@@ -184,7 +186,7 @@ impl<T: PdClient> RaftKv<T> {
                      reqs: Vec<Request>)
                      -> Result<Vec<Response>> {
         let header = self.new_request_header(region_id, peer);
-        let mut command = RaftCommandRequest::new();
+        let mut command = RaftCmdRequest::new();
         command.set_header(header);
         command.set_requests(RepeatedField::from_vec(reqs));
         let mut resp = try!(self.exec_cmd_request(command));
@@ -214,13 +216,13 @@ impl<T: PdClient> Engine for RaftKv<T> {
         let mut get = GetRequest::new();
         get.set_key(key.get_rawkey().to_vec());
         let mut req = Request::new();
-        req.set_cmd_type(CommandType::Get);
+        req.set_cmd_type(CmdType::Get);
         req.set_get(get);
         let lead = key.get_peer().clone();
         let mut resp = try!(self.exec_request(key.get_region_id(), lead, req));
-        if resp.get_cmd_type() != CommandType::Get {
+        if resp.get_cmd_type() != CmdType::Get {
             return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!",
-                                                      CommandType::Get,
+                                                      CmdType::Get,
                                                       resp.get_cmd_type()))
                            .into());
         }
@@ -236,13 +238,13 @@ impl<T: PdClient> Engine for RaftKv<T> {
         let mut seek = SeekRequest::new();
         seek.set_key(key.get_rawkey().to_vec());
         let mut req = Request::new();
-        req.set_cmd_type(CommandType::Seek);
+        req.set_cmd_type(CmdType::Seek);
         req.set_seek(seek);
         let lead = key.get_peer().clone();
         let mut resp = try!(self.exec_request(key.get_region_id(), lead, req));
-        if resp.get_cmd_type() != CommandType::Seek {
+        if resp.get_cmd_type() != CmdType::Seek {
             return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}",
-                                                      CommandType::Seek,
+                                                      CmdType::Seek,
                                                       resp.get_cmd_type()))
                            .into());
         }
@@ -276,14 +278,14 @@ impl<T: PdClient> Engine for RaftKv<T> {
                 Modify::Delete(k) => {
                     let mut delete = DeleteRequest::new();
                     delete.set_key(k.get_rawkey().to_vec());
-                    req.set_cmd_type(CommandType::Delete);
+                    req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
                 Modify::Put((k, v)) => {
                     let mut put = PutRequest::new();
                     put.set_key(k.get_rawkey().to_vec());
                     put.set_value(v);
-                    req.set_cmd_type(CommandType::Put);
+                    req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
                 }
             }
