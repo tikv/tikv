@@ -7,6 +7,7 @@ use self::raftkv::RaftKv;
 use storage::{Key, Value, KvPair};
 use self::raftkv::Config;
 use pd;
+use kvproto::errorpb::Error as ErrorHeader;
 
 mod memory;
 mod rocksdb;
@@ -68,6 +69,10 @@ pub fn new_engine(dsn: Dsn) -> Result<Box<Engine>> {
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
+        Request(err: ErrorHeader) {
+            from()
+            description("request to underhook engine failed")
+        }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
