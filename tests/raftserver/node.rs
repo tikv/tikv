@@ -72,7 +72,10 @@ impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
-        let mut node = Node::new(&cfg, self.pd_client.clone(), self.trans.clone());
+        let mut node = Node::new(&cfg,
+                                 cfg.addr.clone(),
+                                 self.pd_client.clone(),
+                                 self.trans.clone());
 
         node.start(vec![engine]).unwrap();
         assert!(node_id == 0 || node_id == node.get_node_id());
