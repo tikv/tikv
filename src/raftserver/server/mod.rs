@@ -14,7 +14,7 @@ pub mod config;
 mod bench;
 mod conn;
 pub mod server;
-mod transport;
+pub mod transport;
 pub mod node;
 
 pub use self::config::{Config, StoreConfig};
@@ -48,11 +48,6 @@ impl ConnData {
 pub enum Msg {
     // Quit event loop.
     Quit,
-    // Read data from connection.
-    ReadData {
-        token: Token,
-        data: ConnData,
-    },
     // Write data to connection.
     WriteData {
         token: Token,
