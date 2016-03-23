@@ -13,7 +13,7 @@ use mio::tcp::{TcpListener, TcpStream};
 use raftserver::{Result, other};
 use raftserver::store::cmd_resp;
 use kvproto::raft_serverpb::{Message, MessageType};
-use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::config::Config;
@@ -220,9 +220,9 @@ impl<T: PdClient + 'static> Server<T> {
                 }
                 Ok(None)
             }
-            MessageType::Command => self.handle_conn_command(token, msg_id, msg.take_cmd_req()),
-            MessageType::CommandResp => {
-                // Now we have no way to handle CommandResp type,
+            MessageType::Cmd => self.handle_conn_command(token, msg_id, msg.take_cmd_req()),
+            MessageType::CmdResp => {
+                // Now we have no way to handle CmdResp type,
                 // so log an error here and do nothing.
                 error!("unsupported command response msg {:?} for token {:?} with msg id {}",
                        msg,
@@ -245,12 +245,12 @@ impl<T: PdClient + 'static> Server<T> {
     fn handle_conn_command(&mut self,
                            token: Token,
                            msg_id: u64,
-                           msg: RaftCommandRequest)
+                           msg: RaftCmdRequest)
                            -> Result<Option<ConnData>> {
         let ch = self.sendch.clone();
-        let cb = Box::new(move |resp: RaftCommandResponse| -> Result<()> {
+        let cb = Box::new(move |resp: RaftCmdResponse| -> Result<()> {
             let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CommandResp);
+            resp_msg.set_msg_type(MessageType::CmdResp);
             resp_msg.set_cmd_resp(resp);
             // Use send channel to let server return the
             // response to the specified connection with token.
@@ -267,7 +267,7 @@ impl<T: PdClient + 'static> Server<T> {
             let mut resp = cmd_resp::new_error(e);
             resp.mut_header().set_uuid(uuid);
             let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CommandResp);
+            resp_msg.set_msg_type(MessageType::CmdResp);
             resp_msg.set_cmd_resp(resp);
             return Ok(Some(ConnData::new(msg_id, resp_msg)));
         }

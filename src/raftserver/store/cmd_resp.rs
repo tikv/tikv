@@ -3,15 +3,15 @@ use std::error;
 
 use uuid::Uuid;
 
-use kvproto::raft_cmdpb::RaftCommandResponse;
+use kvproto::raft_cmdpb::RaftCmdResponse;
 use kvproto::errorpb;
 use raftserver::Error;
 
-pub fn bind_uuid(resp: &mut RaftCommandResponse, uuid: Uuid) {
+pub fn bind_uuid(resp: &mut RaftCmdResponse, uuid: Uuid) {
     resp.mut_header().set_uuid(uuid.as_bytes().to_vec());
 }
 
-pub fn bind_term(resp: &mut RaftCommandResponse, term: u64) {
+pub fn bind_term(resp: &mut RaftCmdResponse, term: u64) {
     if term == 0 {
         return;
     }
@@ -19,8 +19,8 @@ pub fn bind_term(resp: &mut RaftCommandResponse, term: u64) {
     resp.mut_header().set_current_term(term);
 }
 
-pub fn new_error(err: Error) -> RaftCommandResponse {
-    let mut msg = RaftCommandResponse::new();
+pub fn new_error(err: Error) -> RaftCmdResponse {
+    let mut msg = RaftCmdResponse::new();
     let mut error_header = errorpb::Error::new();
 
     error_header.set_message(error::Error::description(&err).to_owned());
@@ -49,7 +49,7 @@ pub fn new_error(err: Error) -> RaftCommandResponse {
     msg
 }
 
-pub fn message_error<E>(err: E) -> RaftCommandResponse
+pub fn message_error<E>(err: E) -> RaftCmdResponse
     where E: Into<Box<error::Error + Send + Sync>>
 {
     new_error(Error::Other(err.into()))

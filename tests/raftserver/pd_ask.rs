@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use kvproto::raft_cmdpb::AdminCommandType;
+use kvproto::raft_cmdpb::AdminCmdType;
 use kvproto::pdpb::{self, CommandType};
 use kvproto::raftpb::ConfChangeType;
 
@@ -100,7 +100,7 @@ impl<T: Simulator> AskHandler<T> {
         let resp = self.sim.wl().call_command(change_peer, Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), format!("{:?}", resp));
         assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCommandType::ChangePeer);
+                   AdminCmdType::ChangePeer);
 
         let region = resp.get_admin_response().get_change_peer().get_region();
         self.pd_client.wl().change_peer(cluster_id, region.clone()).unwrap();
@@ -128,7 +128,7 @@ impl<T: Simulator> AskHandler<T> {
         let resp = self.sim.wl().call_command(split, Duration::from_secs(3)).unwrap();
 
         assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCommandType::Split);
+                   AdminCmdType::Split);
 
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
