@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::option::Option;
 use std::sync::{Arc, RwLock};
 use std::vec::Vec;
-use std::thread;
 use std::boxed::Box;
 use std::net::SocketAddr;
 
@@ -45,8 +44,6 @@ pub struct Server<T: PdClient + 'static> {
     // addr -> Token
     peers: HashMap<String, Token>,
 
-    store_handles: HashMap<u64, thread::JoinHandle<()>>,
-
     trans: Arc<RwLock<ServerTransport<T>>>,
 
     node: Node<T, ServerTransport<T>>,
@@ -82,7 +79,10 @@ impl<T: PdClient + 'static> Server<T> {
                                                               sendch.clone(),
                                                               pd_client.clone())));
 
-        let node = Node::new(&cfg, pd_client, trans.clone());
+        let node = Node::new(&cfg,
+                             format!("{}", listener.local_addr().unwrap()),
+                             pd_client,
+                             trans.clone());
 
         let mut svr = Server {
             cfg: cfg,
@@ -91,7 +91,6 @@ impl<T: PdClient + 'static> Server<T> {
             conns: HashMap::new(),
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             peers: HashMap::new(),
-            store_handles: HashMap::new(),
             trans: trans,
             node: node,
         };
@@ -99,6 +98,10 @@ impl<T: PdClient + 'static> Server<T> {
         try!(svr.node.start(engines));
 
         Ok(svr)
+    }
+
+    pub fn get_trans(&self) -> Arc<RwLock<ServerTransport<T>>> {
+        self.trans.clone()
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
@@ -394,7 +397,6 @@ impl<T: PdClient + 'static> Handler for Server<T> {
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData{token, data} => self.handle_writedata(event_loop, token, data),
             Msg::SendPeer{addr, data} => self.handle_sendpeer(event_loop, addr, data),
-            _ => panic!("unexpected msg"),
         }
     }
 
