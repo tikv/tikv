@@ -9,7 +9,9 @@ pub mod mvcc;
 pub mod txn;
 mod types;
 
-pub use self::engine::{Engine, Dsn, new_engine};
+pub use self::engine::{Engine, Dsn, new_engine, Modify};
+pub use self::engine::raftkv::Config as RaftKvConfig;
+pub use self::engine::raftkv::RaftKv;
 pub use self::types::{Key, Value, KvPair};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
