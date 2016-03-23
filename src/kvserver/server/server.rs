@@ -11,10 +11,12 @@ use kvproto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRes
                        CmdCommitResponse, CmdCleanupRequest, CmdCleanupResponse,
                        CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
                        CmdCommitThenGetRequest, CmdCommitThenGetResponse, Request, Response,
-                       MessageType, Item, ResultType, ResultType_Type};
+                       MessageType, Item, ResultType, ResultType_Type, LockInfo, LeaderInfo};
 use storage::{Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
               Callback};
 use storage::Result as ResultStorage;
+use storage::Error as StorageError;
+use storage::EngineError;
 
 use super::conn::Conn;
 use super::{Result, ServerError};
@@ -218,11 +220,26 @@ impl Server {
                 }
             }
             Err(ref e) => {
-                if r.is_locked() {
+                if let StorageError::Engine(EngineError::Request(ref err)) = *e {
+                    if err.has_not_leader() {
+                        let not_leader = err.get_not_leader();
+                        res_type.set_field_type(ResultType_Type::NotLeader);
+                        let mut leader_info = LeaderInfo::new();
+                        leader_info.set_region_id(not_leader.get_region_id());
+                        leader_info.set_leader(not_leader.get_leader().clone());
+                        res_type.set_leader_info(leader_info);
+                    } else {
+                        error!("{:?}", err);
+                        res_type.set_field_type(ResultType_Type::Other);
+                        res_type.set_msg(format!("engine error: {:?}", err));
+                    }
+                } else if r.is_locked() {
                     if let Some((_, primary, ts)) = r.get_lock() {
                         res_type.set_field_type(ResultType_Type::Locked);
-                        cmd_get_resp.set_primary_lock(primary);
-                        cmd_get_resp.set_lock_version(ts);
+                        let mut lock_info = LockInfo::new();
+                        lock_info.set_primary_lock(primary);
+                        lock_info.set_lock_version(ts);
+                        res_type.set_lock_info(lock_info);
                     } else {
                         let err_str = "key is locked but primary info not found".to_owned();
                         error!("{}", err_str);
@@ -264,9 +281,11 @@ impl Server {
                             if result.is_locked() {
                                 if let Some((key, primary, ts)) = result.get_lock() {
                                     res_type.set_field_type(ResultType_Type::Locked);
+                                    let mut lock_info = LockInfo::new();
+                                    lock_info.set_primary_lock(primary);
+                                    lock_info.set_lock_version(ts);
+                                    res_type.set_lock_info(lock_info);
                                     new_kv.set_key(key);
-                                    new_kv.set_primary_lock(primary);
-                                    new_kv.set_lock_version(ts);
                                 }
                             } else {
                                 res_type.set_field_type(ResultType_Type::Retryable);
@@ -302,9 +321,11 @@ impl Server {
                     } else if let Some((key, primary, ts)) = result.get_lock() {
                         // Actually items only contain locked item, so `ok` is always false.
                         res_type.set_field_type(ResultType_Type::Locked);
+                        let mut lock_info = LockInfo::new();
+                        lock_info.set_primary_lock(primary);
+                        lock_info.set_lock_version(ts);
+                        res_type.set_lock_info(lock_info);
                         item.set_key(key);
-                        item.set_primary_lock(primary);
-                        item.set_lock_version(ts);
                     } else {
                         res_type.set_field_type(ResultType_Type::Retryable);
                     }
