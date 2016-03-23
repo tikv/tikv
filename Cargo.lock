@@ -87,7 +87,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#cb738b4756c68b6d77eedc5970c0d45249fd9e90"
+source = "git+https://github.com/pingcap/kvproto#8664c6e9dc6e4c3e34f9585abcde7df6664de710"
 dependencies = [
  "protobuf 1.0.18 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]

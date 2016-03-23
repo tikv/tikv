@@ -1,7 +1,7 @@
 use super::{RegionObserver, ObserverContext};
 
 use raftserver::store::PeerStorage;
-use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
 struct ObserverEntry {
     priority: u32,
@@ -41,7 +41,7 @@ impl CoprocessorHost {
     }
 
     /// Call all prepose hook until bypass is set to true.
-    pub fn pre_propose(&mut self, ps: &PeerStorage, req: &mut RaftCommandRequest) {
+    pub fn pre_propose(&mut self, ps: &PeerStorage, req: &mut RaftCmdRequest) {
         let ctx = ObserverContext::new(ps);
         if req.has_admin_request() {
             self.execute_pre_hook(ctx,
@@ -81,8 +81,8 @@ impl CoprocessorHost {
     /// call all apply hook until bypass is set to true.
     pub fn post_apply(&mut self,
                       ps: &PeerStorage,
-                      req: &RaftCommandRequest,
-                      resp: &mut RaftCommandResponse) {
+                      req: &RaftCmdRequest,
+                      resp: &mut RaftCmdResponse) {
         let ctx = ObserverContext::new(ps);
         if req.has_admin_request() {
             self.execute_post_hook(ctx,
@@ -122,8 +122,8 @@ mod test {
     use protobuf::RepeatedField;
 
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response, RaftCommandRequest,
-                              RaftCommandResponse};
+    use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response, RaftCmdRequest,
+                              RaftCmdResponse};
 
     struct TestCoprocessor {
         bypass_pre: Arc<RwLock<bool>>,
@@ -213,13 +213,13 @@ mod test {
         host.registry.register_observer(3, Box::new(observer1));
         let path = TempDir::new("test-raftserver").unwrap();
         let ps = new_peer_storage(&path);
-        let mut admin_req = RaftCommandRequest::new();
+        let mut admin_req = RaftCmdRequest::new();
         admin_req.set_admin_request(AdminRequest::new());
-        let mut query_req = RaftCommandRequest::new();
+        let mut query_req = RaftCmdRequest::new();
         query_req.set_requests(RepeatedField::from_vec(vec![Request::new()]));
-        let mut admin_resp = RaftCommandResponse::new();
+        let mut admin_resp = RaftCmdResponse::new();
         admin_resp.set_admin_response(AdminResponse::new());
-        let mut query_resp = RaftCommandResponse::new();
+        let mut query_resp = RaftCmdResponse::new();
         query_resp.set_responses(RepeatedField::from_vec(vec![Response::new()]));
 
         assert_eq!(*cpr1.rl(), 0);
