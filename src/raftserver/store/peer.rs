@@ -281,7 +281,7 @@ impl Peer {
         }
 
         // We handle change_peer command as ConfChange entry, and others as normal entry.
-        if let Some(change_peer) = get_change_peer_command(pending_cmd.cmd.as_ref().unwrap()) {
+        if let Some(change_peer) = get_change_peer_cmd(pending_cmd.cmd.as_ref().unwrap()) {
             let data = try!(pending_cmd.cmd.as_ref().unwrap().write_to_bytes());
 
             let mut cc = raftpb::ConfChange::new();
@@ -454,7 +454,7 @@ impl Peer {
 
         let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(data));
         // no need to return error here.
-        self.process_raft_command(index, cmd).or_else(|e| {
+        self.process_raft_cmd(index, cmd).or_else(|e| {
             error!("process raft command at index {} err: {:?}", index, e);
             Ok(None)
         })
@@ -468,7 +468,7 @@ impl Peer {
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
         let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(conf_change.get_context()));
-        let res = match self.process_raft_command(index, cmd) {
+        let res = match self.process_raft_cmd(index, cmd) {
             a@Ok(Some(_)) => a,
             e => {
                 error!("process raft command at index {} err: {:?}", index, e);
@@ -500,10 +500,10 @@ impl Peer {
         Ok(())
     }
 
-    fn process_raft_command(&mut self,
-                            index: u64,
-                            cmd: RaftCommandRequest)
-                            -> Result<Option<ExecResult>> {
+    fn process_raft_cmd(&mut self,
+                        index: u64,
+                        cmd: RaftCommandRequest)
+                        -> Result<Option<ExecResult>> {
         if index == 0 {
             return Err(other("processing raft command needs a none zero index"));
         }
@@ -512,7 +512,7 @@ impl Peer {
 
         let pending_cmd = self.pending_cmds.remove(&uuid);
 
-        let (mut resp, exec_result) = self.apply_raft_command(index, &cmd).unwrap_or_else(|e| {
+        let (mut resp, exec_result) = self.apply_raft_cmd(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);
             (cmd_resp::new_error(e), None)
         });
@@ -537,10 +537,10 @@ impl Peer {
         Ok(exec_result)
     }
 
-    fn apply_raft_command(&mut self,
-                          index: u64,
-                          cmd: &RaftCommandRequest)
-                          -> Result<(RaftCommandResponse, Option<ExecResult>)> {
+    fn apply_raft_cmd(&mut self,
+                      index: u64,
+                      req: &RaftCommandRequest)
+                      -> Result<(RaftCommandResponse, Option<ExecResult>)> {
         let last_applied_index = self.storage.rl().applied_index();
 
         if last_applied_index >= index {
@@ -555,10 +555,10 @@ impl Peer {
             let ctx = ExecContext {
                 snap: engine.snapshot(),
                 wb: &wb,
-                request: cmd,
+                req: req,
             };
 
-            self.execute_raft_command(&ctx).unwrap_or_else(|e| {
+            self.exec_raft_cmd(&ctx).unwrap_or_else(|e| {
                 error!("execute raft command err: {:?}", e);
                 (cmd_resp::new_error(e), None)
             })
@@ -598,7 +598,7 @@ impl Peer {
     }
 }
 
-fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerRequest> {
+fn get_change_peer_cmd(msg: &RaftCommandRequest) -> Option<&ChangePeerRequest> {
     if !msg.has_admin_request() {
         return None;
     }
@@ -613,35 +613,35 @@ fn get_change_peer_command(msg: &RaftCommandRequest) -> Option<&ChangePeerReques
 struct ExecContext<'a> {
     pub snap: Snapshot<'a>,
     pub wb: &'a WriteBatch,
-    pub request: &'a RaftCommandRequest,
+    pub req: &'a RaftCommandRequest,
 }
 
 // Here we implement all commands.
 impl Peer {
-    fn execute_raft_command(&mut self,
-                            ctx: &ExecContext)
-                            -> Result<(RaftCommandResponse, Option<ExecResult>)> {
-        if ctx.request.has_admin_request() {
-            self.execute_admin_command(ctx)
+    fn exec_raft_cmd(&mut self,
+                     ctx: &ExecContext)
+                     -> Result<(RaftCommandResponse, Option<ExecResult>)> {
+        if ctx.req.has_admin_request() {
+            self.exec_admin_cmd(ctx)
         } else {
             // Now we don't care write command outer, so use None.
-            self.execute_write_command(ctx).and_then(|v| Ok((v, None)))
+            self.exec_write_cmd(ctx).and_then(|v| Ok((v, None)))
         }
     }
 
-    fn execute_admin_command(&mut self,
-                             ctx: &ExecContext)
-                             -> Result<(RaftCommandResponse, Option<ExecResult>)> {
-        let request = ctx.request.get_admin_request();
+    fn exec_admin_cmd(&mut self,
+                      ctx: &ExecContext)
+                      -> Result<(RaftCommandResponse, Option<ExecResult>)> {
+        let request = ctx.req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         info!("execute admin command {:?} at region {}",
               request,
               self.region_id);
 
         let (mut response, exec_result) = try!(match cmd_type {
-            cmd::AdminCommandType::ChangePeer => self.execute_change_peer(ctx, request),
-            cmd::AdminCommandType::Split => self.execute_split(ctx, request),
-            cmd::AdminCommandType::CompactLog => self.execute_compact_log(ctx, request),
+            cmd::AdminCommandType::ChangePeer => self.exec_change_peer(ctx, request),
+            cmd::AdminCommandType::Split => self.exec_split(ctx, request),
+            cmd::AdminCommandType::CompactLog => self.exec_compact_log(ctx, request),
             cmd::AdminCommandType::InvalidAdmin => Err(other("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
@@ -651,10 +651,10 @@ impl Peer {
         Ok((resp, exec_result))
     }
 
-    fn execute_change_peer(&mut self,
-                           ctx: &ExecContext,
-                           request: &AdminRequest)
-                           -> Result<(AdminResponse, Option<ExecResult>)> {
+    fn exec_change_peer(&mut self,
+                        ctx: &ExecContext,
+                        request: &AdminRequest)
+                        -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let from_epoch = request.get_region_epoch();
@@ -741,20 +741,20 @@ impl Peer {
         })))
     }
 
-    fn execute_split(&mut self,
-                     ctx: &ExecContext,
-                     request: &AdminRequest)
-                     -> Result<(AdminResponse, Option<ExecResult>)> {
-        let request = request.get_split();
-        if !request.has_split_key() {
+    fn exec_split(&mut self,
+                  ctx: &ExecContext,
+                  req: &AdminRequest)
+                  -> Result<(AdminResponse, Option<ExecResult>)> {
+        let split_req = req.get_split();
+        if !split_req.has_split_key() {
             return Err(other("missing split key"));
         }
 
-        let split_key = request.get_split_key();
+        let split_key = split_req.get_split_key();
         let mut region = self.region();
         try!(util::check_key_in_region(split_key, &region));
 
-        let from_epoch = request.get_region_epoch();
+        let from_epoch = split_req.get_region_epoch();
         info!("split msg from region epoch: {:#?}, \
                   mine: {:#?}",
               from_epoch,
@@ -768,7 +768,7 @@ impl Peer {
         }
 
         // TODO: check new region id validation.
-        let new_region_id = request.get_new_region_id();
+        let new_region_id = split_req.get_new_region_id();
 
         // After split, the origin region key range is [start_key, split_key),
         // the new split region is [split_key, end).
@@ -779,7 +779,7 @@ impl Peer {
         new_region.set_region_id(new_region_id);
 
         // Update new region peer ids.
-        let new_peer_ids = request.get_new_peer_ids();
+        let new_peer_ids = split_req.get_new_peer_ids();
         if new_peer_ids.len() != new_region.get_peers().len() {
             return Err(other(format!("invalid new peer id count, need {}, but got {}",
                                      new_region.get_peers().len(),
@@ -815,12 +815,11 @@ impl Peer {
         })))
     }
 
-    fn execute_compact_log(&mut self,
-                           ctx: &ExecContext,
-                           request: &AdminRequest)
-                           -> Result<(AdminResponse, Option<ExecResult>)> {
-        let request = request.get_compact_log();
-        let compact_index = request.get_compact_index();
+    fn exec_compact_log(&mut self,
+                        ctx: &ExecContext,
+                        req: &AdminRequest)
+                        -> Result<(AdminResponse, Option<ExecResult>)> {
+        let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::new();
 
         let first_index = self.storage.rl().first_index();
@@ -835,18 +834,17 @@ impl Peer {
         Ok((resp, Some(ExecResult::CompactLog { state: state })))
     }
 
-    fn execute_write_command(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
-        let requests = ctx.request.get_requests();
-
+    fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
+        let requests = ctx.req.get_requests();
         let mut responses: Vec<Response> = Vec::with_capacity(requests.len());
 
-        for request in requests {
-            let cmd_type = request.get_cmd_type();
+        for req in requests {
+            let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
-                cmd::CommandType::Get => self.do_get(ctx, request),
-                cmd::CommandType::Seek => self.do_seek(ctx, request),
-                cmd::CommandType::Put => self.do_put(ctx, request),
-                cmd::CommandType::Delete => self.do_delete(ctx, request),
+                cmd::CommandType::Get => self.do_get(ctx, req),
+                cmd::CommandType::Seek => self.do_seek(ctx, req),
+                cmd::CommandType::Put => self.do_put(ctx, req),
+                cmd::CommandType::Delete => self.do_delete(ctx, req),
                 e => Err(other(format!("unsupported command type {:?}", e))),
             });
 
@@ -867,10 +865,9 @@ impl Peer {
         Ok(())
     }
 
-    fn do_get(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
-        // TODO: the get_get looks wried, maybe we should think a better name later.
-        let request = request.get_get();
-        let key = request.get_key();
+    fn do_get(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+        // TODO: the get_get looks wried, maybe we should figure out a better name later.
+        let key = req.get_get().get_key();
         try!(self.check_data_key(key));
 
         let mut resp = Response::new();
@@ -882,9 +879,8 @@ impl Peer {
         Ok(resp)
     }
 
-    fn do_seek(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
-        let request = request.get_seek();
-        let key = request.get_key();
+    fn do_seek(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+        let key = req.get_seek().get_key();
         try!(self.check_data_key(key));
 
         let mut resp = Response::new();
@@ -897,25 +893,21 @@ impl Peer {
         Ok(resp)
     }
 
-    fn do_put(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
-        let request = request.get_put();
-        let key = request.get_key();
+    fn do_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+        let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         try!(self.check_data_key(key));
 
         let resp = Response::new();
         let key = keys::data_key(key);
-        let value = request.get_value();
         self.size_diff_hint += key.len() as u64;
         self.size_diff_hint += value.len() as u64;
         try!(ctx.wb.put(&key, value));
 
-        // Should we call mut_put() explicitly?
         Ok(resp)
     }
 
-    fn do_delete(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
-        let request = request.get_delete();
-        let key = request.get_key();
+    fn do_delete(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+        let key = req.get_delete().get_key();
         try!(self.check_data_key(key));
 
         let key = keys::data_key(key);
@@ -929,7 +921,6 @@ impl Peer {
         let resp = Response::new();
         try!(ctx.wb.delete(&key));
 
-        // Should we call mut_delete() explicitly?
         Ok(resp)
     }
 }
