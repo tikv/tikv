@@ -1,7 +1,10 @@
 use std::vec::Vec;
 
 pub mod errors;
+mod client;
+mod protocol;
 pub use self::errors::{Result, Error};
+pub use self::client::{TRpcClient, RpcClient, Client};
 
 use kvproto::metapb;
 
