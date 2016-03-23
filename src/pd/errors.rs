@@ -5,6 +5,16 @@ use std::result;
 quick_error!{
     #[derive(Debug)]
     pub enum Error {
+        Io(err: ::std::io::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Codec(err: ::util::codec::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         ClusterBootstrapped(cluster_id: u64) {
             description("cluster bootstrap error")
             display("cluster {} is already bootstrapped", cluster_id)
