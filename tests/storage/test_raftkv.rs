@@ -7,7 +7,7 @@ use tikv::util::HandyRwLock;
 use kvproto::metapb;
 use kvproto::kvrpcpb::KeyAddress;
 use kvproto::raft_serverpb::{Message as ServerMessage, MessageType};
-use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
 use tempdir::TempDir;
 use std::sync::{Arc, RwLock, Mutex};
@@ -65,9 +65,9 @@ impl Simulator for PdTransport {
         unimplemented!();
     }
     fn call_command(&self,
-                    request: RaftCommandRequest,
+                    request: RaftCmdRequest,
                     timeout: Duration)
-                    -> raftserver::Result<RaftCommandResponse> {
+                    -> raftserver::Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_node_id();
         let node = self.pd_client.rl().get_node(self.cluster_id, node_id).unwrap();
         let addr = node.get_address();
@@ -76,7 +76,7 @@ impl Simulator for PdTransport {
         conn.set_write_timeout(Some(timeout)).unwrap();
 
         let mut msg = ServerMessage::new();
-        msg.set_msg_type(MessageType::Command);
+        msg.set_msg_type(MessageType::Cmd);
         msg.set_cmd_req(request);
 
         let msg_id = self.alloc_msg_id();
@@ -87,7 +87,7 @@ impl Simulator for PdTransport {
         let mut resp_msg = ServerMessage::new();
         let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg));
 
-        assert_eq!(resp_msg.get_msg_type(), MessageType::CommandResp);
+        assert_eq!(resp_msg.get_msg_type(), MessageType::CmdResp);
         assert_eq!(msg_id, get_msg_id);
 
         Ok(resp_msg.take_cmd_resp())
