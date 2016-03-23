@@ -14,9 +14,8 @@ use super::cluster::{Cluster, Simulator};
 use tikv::raftserver::store::*;
 use tikv::raftserver::server::Config as ServerConfig;
 use kvproto::metapb;
-use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCommandRequest,
-                          RaftCommandResponse};
-use kvproto::raft_cmdpb::{CommandType, StatusCommandType, AdminCommandType};
+use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::{CmdType, StatusCmdType, AdminCmdType};
 use kvproto::raftpb::ConfChangeType;
 use tikv::raft::INVALID_ID;
 
@@ -73,14 +72,14 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 }
 
 // Create a base request.
-pub fn new_base_request(region_id: u64) -> RaftCommandRequest {
-    let mut req = RaftCommandRequest::new();
+pub fn new_base_request(region_id: u64) -> RaftCmdRequest {
+    let mut req = RaftCmdRequest::new();
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
     req
 }
 
-pub fn new_request(region_id: u64, requests: Vec<Request>) -> RaftCommandRequest {
+pub fn new_request(region_id: u64, requests: Vec<Request>) -> RaftCmdRequest {
     let mut req = new_base_request(region_id);
     req.set_requests(protobuf::RepeatedField::from_vec(requests));
     req
@@ -88,7 +87,7 @@ pub fn new_request(region_id: u64, requests: Vec<Request>) -> RaftCommandRequest
 
 pub fn new_put_cmd(key: &[u8], value: &[u8]) -> Request {
     let mut cmd = Request::new();
-    cmd.set_cmd_type(CommandType::Put);
+    cmd.set_cmd_type(CmdType::Put);
     cmd.mut_put().set_key(key.to_vec());
     cmd.mut_put().set_value(value.to_vec());
     cmd
@@ -96,21 +95,21 @@ pub fn new_put_cmd(key: &[u8], value: &[u8]) -> Request {
 
 pub fn new_get_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
-    cmd.set_cmd_type(CommandType::Get);
+    cmd.set_cmd_type(CmdType::Get);
     cmd.mut_get().set_key(key.to_vec());
     cmd
 }
 
 pub fn new_delete_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
-    cmd.set_cmd_type(CommandType::Delete);
+    cmd.set_cmd_type(CmdType::Delete);
     cmd.mut_delete().set_key(key.to_vec());
     cmd
 }
 
 pub fn new_seek_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
-    cmd.set_cmd_type(CommandType::Seek);
+    cmd.set_cmd_type(CmdType::Seek);
     cmd.mut_seek().set_key(key.to_vec());
     cmd
 }
@@ -118,7 +117,7 @@ pub fn new_seek_cmd(key: &[u8]) -> Request {
 pub fn new_status_request(region_id: u64,
                           peer: &metapb::Peer,
                           request: StatusRequest)
-                          -> RaftCommandRequest {
+                          -> RaftCmdRequest {
     let mut req = new_base_request(region_id);
     req.mut_header().set_peer(peer.clone());
     req.set_status_request(request);
@@ -127,17 +126,17 @@ pub fn new_status_request(region_id: u64,
 
 pub fn new_region_detail_cmd() -> StatusRequest {
     let mut cmd = StatusRequest::new();
-    cmd.set_cmd_type(StatusCommandType::RegionDetail);
+    cmd.set_cmd_type(StatusCmdType::RegionDetail);
     cmd
 }
 
 pub fn new_region_leader_cmd() -> StatusRequest {
     let mut cmd = StatusRequest::new();
-    cmd.set_cmd_type(StatusCommandType::RegionLeader);
+    cmd.set_cmd_type(StatusCmdType::RegionLeader);
     cmd
 }
 
-pub fn new_admin_request(region_id: u64, request: AdminRequest) -> RaftCommandRequest {
+pub fn new_admin_request(region_id: u64, request: AdminRequest) -> RaftCmdRequest {
     let mut req = new_base_request(region_id);
     req.set_admin_request(request);
     req
@@ -148,7 +147,7 @@ pub fn new_change_peer_cmd(change_type: ConfChangeType,
                            region_epoch: &metapb::RegionEpoch)
                            -> AdminRequest {
     let mut cmd = AdminRequest::new();
-    cmd.set_cmd_type(AdminCommandType::ChangePeer);
+    cmd.set_cmd_type(AdminCmdType::ChangePeer);
     cmd.mut_change_peer().set_change_type(change_type);
     cmd.mut_change_peer().set_peer(peer);
     cmd.mut_change_peer().set_region_epoch(region_epoch.clone());
@@ -161,7 +160,7 @@ pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
                             peer_ids: Vec<u64>)
                             -> AdminRequest {
     let mut cmd = AdminRequest::new();
-    cmd.set_cmd_type(AdminCommandType::Split);
+    cmd.set_cmd_type(AdminCmdType::Split);
     if let Some(key) = split_key {
         cmd.mut_split().set_split_key(key);
     }
@@ -206,7 +205,7 @@ pub fn init_env_log() {
     env_logger::init().expect("");
 }
 
-pub fn is_error_response(resp: &RaftCommandResponse) -> bool {
+pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
 }
 

@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use kvproto::metapb;
 use kvproto::raftpb::{self, ConfChangeType};
-use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse, ChangePeerRequest};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest};
 use kvproto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, Ready, RawNode, SnapshotStatus};
@@ -32,7 +32,7 @@ pub struct PendingCmd {
     pub uuid: Uuid,
     pub cb: Option<Callback>,
     // Sometimes we should re-propose pending command (only ConfChnage).
-    pub cmd: Option<RaftCommandRequest>,
+    pub cmd: Option<RaftCmdRequest>,
 }
 
 #[derive(Debug)]
@@ -452,7 +452,7 @@ impl Peer {
             return Ok(None);
         }
 
-        let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(data));
+        let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data));
         // no need to return error here.
         self.process_raft_cmd(index, cmd).or_else(|e| {
             error!("process raft command at index {} err: {:?}", index, e);
@@ -467,7 +467,7 @@ impl Peer {
         let index = entry.get_index();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
-        let cmd = try!(protobuf::parse_from_bytes::<RaftCommandRequest>(conf_change.get_context()));
+        let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
         let res = match self.process_raft_cmd(index, cmd) {
             a@Ok(Some(_)) => a,
             e => {
@@ -500,10 +500,7 @@ impl Peer {
         Ok(())
     }
 
-    fn process_raft_cmd(&mut self,
-                        index: u64,
-                        cmd: RaftCommandRequest)
-                        -> Result<Option<ExecResult>> {
+    fn process_raft_cmd(&mut self, index: u64, cmd: RaftCmdRequest) -> Result<Option<ExecResult>> {
         if index == 0 {
             return Err(other("processing raft command needs a none zero index"));
         }
@@ -539,8 +536,8 @@ impl Peer {
 
     fn apply_raft_cmd(&mut self,
                       index: u64,
-                      req: &RaftCommandRequest)
-                      -> Result<(RaftCommandResponse, Option<ExecResult>)> {
+                      req: &RaftCmdRequest)
+                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let last_applied_index = self.storage.rl().applied_index();
 
         if last_applied_index >= index {
@@ -598,7 +595,7 @@ impl Peer {
     }
 }
 
-fn get_change_peer_cmd(msg: &RaftCommandRequest) -> Option<&ChangePeerRequest> {
+fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
     if !msg.has_admin_request() {
         return None;
     }
@@ -613,14 +610,14 @@ fn get_change_peer_cmd(msg: &RaftCommandRequest) -> Option<&ChangePeerRequest> {
 struct ExecContext<'a> {
     pub snap: Snapshot<'a>,
     pub wb: &'a WriteBatch,
-    pub req: &'a RaftCommandRequest,
+    pub req: &'a RaftCmdRequest,
 }
 
 // Here we implement all commands.
 impl Peer {
     fn exec_raft_cmd(&mut self,
                      ctx: &ExecContext)
-                     -> Result<(RaftCommandResponse, Option<ExecResult>)> {
+                     -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         if ctx.req.has_admin_request() {
             self.exec_admin_cmd(ctx)
         } else {
@@ -631,7 +628,7 @@ impl Peer {
 
     fn exec_admin_cmd(&mut self,
                       ctx: &ExecContext)
-                      -> Result<(RaftCommandResponse, Option<ExecResult>)> {
+                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let request = ctx.req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         info!("execute admin command {:?} at region {}",
@@ -639,14 +636,14 @@ impl Peer {
               self.region_id);
 
         let (mut response, exec_result) = try!(match cmd_type {
-            cmd::AdminCommandType::ChangePeer => self.exec_change_peer(ctx, request),
-            cmd::AdminCommandType::Split => self.exec_split(ctx, request),
-            cmd::AdminCommandType::CompactLog => self.exec_compact_log(ctx, request),
-            cmd::AdminCommandType::InvalidAdmin => Err(other("unsupported admin command type")),
+            cmd::AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
+            cmd::AdminCmdType::Split => self.exec_split(ctx, request),
+            cmd::AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
+            cmd::AdminCmdType::InvalidAdmin => Err(other("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
 
-        let mut resp = RaftCommandResponse::new();
+        let mut resp = RaftCmdResponse::new();
         resp.set_admin_response(response);
         Ok((resp, exec_result))
     }
@@ -834,17 +831,17 @@ impl Peer {
         Ok((resp, Some(ExecResult::CompactLog { state: state })))
     }
 
-    fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCommandResponse> {
+    fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
         let requests = ctx.req.get_requests();
         let mut responses: Vec<Response> = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
-                cmd::CommandType::Get => self.do_get(ctx, req),
-                cmd::CommandType::Seek => self.do_seek(ctx, req),
-                cmd::CommandType::Put => self.do_put(ctx, req),
-                cmd::CommandType::Delete => self.do_delete(ctx, req),
+                cmd::CmdType::Get => self.do_get(ctx, req),
+                cmd::CmdType::Seek => self.do_seek(ctx, req),
+                cmd::CmdType::Put => self.do_put(ctx, req),
+                cmd::CmdType::Delete => self.do_delete(ctx, req),
                 e => Err(other(format!("unsupported command type {:?}", e))),
             });
 
@@ -853,7 +850,7 @@ impl Peer {
             responses.push(resp);
         }
 
-        let mut resp = RaftCommandResponse::new();
+        let mut resp = RaftCmdResponse::new();
         resp.set_responses(protobuf::RepeatedField::from_vec(responses));
         Ok(resp)
     }

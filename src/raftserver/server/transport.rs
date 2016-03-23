@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock, Mutex};
 use raftserver::store::{Transport, SendCh as StoreSendCh, Callback};
 use raftserver::{Result, other};
 use kvproto::raft_serverpb::{Message, MessageType, RaftMessage};
-use kvproto::raft_cmdpb::RaftCommandRequest;
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use pd::PdClient;
 use util::HandyRwLock;
 use super::{SendCh, ConnData};
@@ -39,9 +39,9 @@ impl<T: PdClient> ServerTransport<T> {
         ch.send_raft_msg(msg)
     }
 
-    // Send RaftCommandRequest to specified store, the store must exist in current node.
+    // Send RaftCmdRequest to specified store, the store must exist in current node.
     // Unlike Transport trait Send, this function can only send message to local store.
-    pub fn send_command(&self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
+    pub fn send_command(&self, msg: RaftCmdRequest, cb: Callback) -> Result<()> {
         let to_store_id = msg.get_header().get_peer().get_store_id();
         let ch = try!(self.get_sendch(to_store_id));
 

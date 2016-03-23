@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use kvproto::metapb;
 use kvproto::raftpb::{self, ConfChangeType};
-use kvproto::raft_cmdpb::RaftCommandRequest;
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use raftserver::{Result, Error};
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -36,7 +36,7 @@ pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
     peer
 }
 
-pub fn get_uuid_from_req(cmd: &RaftCommandRequest) -> Option<Uuid> {
+pub fn get_uuid_from_req(cmd: &RaftCmdRequest) -> Option<Uuid> {
     Uuid::from_bytes(cmd.get_header().get_uuid())
 }
 

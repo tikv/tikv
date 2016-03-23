@@ -7,9 +7,9 @@ use mio;
 
 use raftserver::{Result, send_msg, Error};
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-pub type Callback = Box<FnBox(RaftCommandResponse) -> Result<()> + Send>;
+pub type Callback = Box<FnBox(RaftCmdResponse) -> Result<()> + Send>;
 
 #[derive(Debug)]
 pub enum Tick {
@@ -24,8 +24,8 @@ pub enum Msg {
 
     // For notify.
     RaftMessage(RaftMessage),
-    RaftCommand {
-        request: RaftCommandRequest,
+    RaftCmd {
+        request: RaftCmdRequest,
         callback: Callback,
     },
 
@@ -41,7 +41,7 @@ impl fmt::Debug for Msg {
         match *self {
             Msg::Quit => write!(fmt, "Quit"),
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            Msg::RaftCommand{..} => write!(fmt, "Raft Command"),
+            Msg::RaftCmd{..} => write!(fmt, "Raft Command"),
             Msg::SplitCheckResult{..} => write!(fmt, "Split Check Result"),
         }
     }
@@ -52,15 +52,15 @@ impl fmt::Debug for Msg {
 // We should know that even timeout happens, the command may still
 // be handled in store later.
 pub fn call_command(sendch: &SendCh,
-                    request: RaftCommandRequest,
+                    request: RaftCmdRequest,
                     timeout: Duration)
-                    -> Result<RaftCommandResponse> {
-    let resp: Option<RaftCommandResponse> = None;
+                    -> Result<RaftCmdResponse> {
+    let resp: Option<RaftCmdResponse> = None;
     let pair = Arc::new((Mutex::new(resp), Condvar::new()));
     let pair2 = pair.clone();
 
     try!(sendch.send_command(request,
-                             Box::new(move |resp: RaftCommandResponse| -> Result<()> {
+                             Box::new(move |resp: RaftCmdResponse| -> Result<()> {
                                  let &(ref lock, ref cvar) = &*pair2;
                                  let mut v = lock.lock().unwrap();
                                  *v = Some(resp);
@@ -108,8 +108,8 @@ impl SendCh {
         self.send(Msg::RaftMessage(msg))
     }
 
-    pub fn send_command(&self, msg: RaftCommandRequest, cb: Callback) -> Result<()> {
-        self.send(Msg::RaftCommand {
+    pub fn send_command(&self, msg: RaftCmdRequest, cb: Callback) -> Result<()> {
+        self.send(Msg::RaftCmd {
             request: msg,
             callback: cb,
         })
@@ -129,7 +129,7 @@ mod tests {
     use mio::{EventLoop, Handler};
 
     use super::*;
-    use kvproto::raft_cmdpb::{RaftCommandRequest, RaftCommandResponse};
+    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
     use raftserver::{Result, Error};
 
     struct TestHandler;
@@ -141,12 +141,12 @@ mod tests {
         fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Self::Message) {
             match msg {
                 Msg::Quit => event_loop.shutdown(),
-                Msg::RaftCommand{callback, request} => {
+                Msg::RaftCmd{callback, request} => {
                     // a trick for test timeout.
                     if request.get_header().get_region_id() == u64::max_value() {
                         thread::sleep(Duration::from_millis(100));
                     }
-                    callback.call_box((RaftCommandResponse::new(),)).unwrap()
+                    callback.call_box((RaftCmdResponse::new(),)).unwrap()
                 }
                 // we only test above message types, others panic.
                 _ => unreachable!(),
@@ -164,8 +164,8 @@ mod tests {
         });
 
         let (tx, rx) = channel();
-        sendch.send_command(RaftCommandRequest::new(),
-                            Box::new(move |_: RaftCommandResponse| -> Result<()> {
+        sendch.send_command(RaftCmdRequest::new(),
+                            Box::new(move |_: RaftCmdResponse| -> Result<()> {
                                 tx.send(1).unwrap();
                                 Ok(())
                             }))
@@ -173,7 +173,7 @@ mod tests {
 
         rx.recv().unwrap();
 
-        let mut request = RaftCommandRequest::new();
+        let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());
         assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
         match call_command(sendch, request.clone(), Duration::from_millis(10)) {
