@@ -843,10 +843,10 @@ impl Peer {
         for request in requests {
             let cmd_type = request.get_cmd_type();
             let mut resp = try!(match cmd_type {
-                cmd::CommandType::Get => self.execute_get(ctx, request),
-                cmd::CommandType::Seek => self.execute_seek(ctx, request),
-                cmd::CommandType::Put => self.execute_put(ctx, request),
-                cmd::CommandType::Delete => self.execute_delete(ctx, request),
+                cmd::CommandType::Get => self.do_get(ctx, request),
+                cmd::CommandType::Seek => self.do_seek(ctx, request),
+                cmd::CommandType::Put => self.do_put(ctx, request),
+                cmd::CommandType::Delete => self.do_delete(ctx, request),
                 e => Err(other(format!("unsupported command type {:?}", e))),
             });
 
@@ -867,7 +867,7 @@ impl Peer {
         Ok(())
     }
 
-    fn execute_get(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+    fn do_get(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
         // TODO: the get_get looks wried, maybe we should think a better name later.
         let request = request.get_get();
         let key = request.get_key();
@@ -882,7 +882,7 @@ impl Peer {
         Ok(resp)
     }
 
-    fn execute_seek(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+    fn do_seek(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
         let request = request.get_seek();
         let key = request.get_key();
         try!(self.check_data_key(key));
@@ -897,7 +897,7 @@ impl Peer {
         Ok(resp)
     }
 
-    fn execute_put(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+    fn do_put(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
         let request = request.get_put();
         let key = request.get_key();
         try!(self.check_data_key(key));
@@ -913,7 +913,7 @@ impl Peer {
         Ok(resp)
     }
 
-    fn execute_delete(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
+    fn do_delete(&mut self, ctx: &ExecContext, request: &Request) -> Result<Response> {
         let request = request.get_delete();
         let key = request.get_key();
         try!(self.check_data_key(key));
