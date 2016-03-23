@@ -6,6 +6,13 @@ mod protocol;
 pub use self::errors::{Result, Error};
 pub use self::client::{TRpcClient, RpcClient, Client};
 
+pub type PdRpcClient = Client<RpcClient>;
+
+pub fn new_rpc_client(addr: &str) -> Result<PdRpcClient> {
+    let client = try!(RpcClient::new(addr));
+    Ok(Client::new(client))
+}
+
 use kvproto::metapb;
 
 pub type Key = Vec<u8>;
