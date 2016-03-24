@@ -117,13 +117,8 @@ impl Iterable for DB {
 
 impl<'a> Peekable for Snapshot<'a> {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
-        let mut it = self.iterator(IteratorMode::From(key, Direction::Forward));
-        if let Some((seek_key, value)) = it.next() {
-            if seek_key.as_ref() == key {
-                return Ok(Some(DBValue::Box(value)));
-            }
-        }
-        Ok(None)
+        let v = try!(self.get(key));
+        Ok(v.map(DBValue::DBVector))
     }
 }
 
