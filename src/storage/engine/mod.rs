@@ -88,6 +88,7 @@ mod tests {
     use super::*;
     use tempdir::TempDir;
     use storage::make_key;
+    use util::codec::bytes;
 
     #[test]
     fn memory() {
@@ -125,7 +126,7 @@ mod tests {
 
     fn assert_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
         let (k, v) = engine.seek(&make_key(key)).unwrap().unwrap();
-        assert_eq!((&k as &[u8], &v as &[u8]), pair);
+        assert_eq!((k, &v as &[u8]), (bytes::encode_bytes(pair.0), pair.1));
     }
 
     fn get_put<T: Engine + ?Sized>(engine: &T) {
