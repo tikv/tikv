@@ -4,7 +4,7 @@ use std::thread::{self, JoinHandle};
 use std::sync::mpsc::{self, Sender};
 use self::txn::Scheduler;
 
-mod engine;
+pub mod engine;
 pub mod mvcc;
 pub mod txn;
 mod types;

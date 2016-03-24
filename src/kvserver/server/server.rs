@@ -11,7 +11,7 @@ use kvproto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRes
                        CmdCommitResponse, CmdCleanupRequest, CmdCleanupResponse,
                        CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
                        CmdCommitThenGetRequest, CmdCommitThenGetResponse, Request, Response,
-                       MessageType, Item, ResultType, ResultType_Type, LockInfo, LeaderInfo};
+                       MessageType, Item, ResultType, ResultType_Type, LockInfo};
 use storage::{Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
               Callback};
 use storage::Result as ResultStorage;
@@ -222,12 +222,8 @@ impl Server {
             Err(ref e) => {
                 if let StorageError::Engine(EngineError::Request(ref err)) = *e {
                     if err.has_not_leader() {
-                        let not_leader = err.get_not_leader();
                         res_type.set_field_type(ResultType_Type::NotLeader);
-                        let mut leader_info = LeaderInfo::new();
-                        leader_info.set_region_id(not_leader.get_region_id());
-                        leader_info.set_leader(not_leader.get_leader().clone());
-                        res_type.set_leader_info(leader_info);
+                        res_type.set_leader_info(err.get_not_leader().to_owned());
                     } else {
                         error!("{:?}", err);
                         res_type.set_field_type(ResultType_Type::Other);
@@ -594,7 +590,8 @@ mod tests {
     use mio::EventLoop;
 
     use kvproto::kvrpcpb::*;
-    use storage::{self, Value, Storage, Dsn, txn, mvcc};
+    use kvproto::errorpb::NotLeaderError;
+    use storage::{self, Value, Storage, Dsn, txn, mvcc, engine};
     use storage::Error::Other;
     use storage::KvPair as StorageKV;
     use storage::Result as ResultStorage;
@@ -693,6 +690,7 @@ mod tests {
 
     #[test]
     fn test_scan_done_lock() {
+        use kvproto::kvrpcpb::LockInfo;
         let k0 = vec![0u8, 0u8];
         let v0: Value = vec![255u8, 255u8];
         let k1 = vec![0u8, 1u8];
@@ -712,11 +710,17 @@ mod tests {
                    *actual_kvs[0].get_res_type());
         assert_eq!(k0, actual_kvs[0].get_key());
         assert_eq!(v0, actual_kvs[0].get_value());
-        assert_eq!(make_res_type(ResultType_Type::Locked),
-                   *actual_kvs[1].get_res_type());
+        let mut exp_res_type1 = make_res_type(ResultType_Type::Locked);
+        let mut lock_info1 = LockInfo::new();
+        lock_info1.set_primary_lock(k1_primary.clone());
+        lock_info1.set_lock_version(k1_ts);
+        exp_res_type1.set_lock_info(lock_info1);
+        assert_eq!(exp_res_type1, *actual_kvs[1].get_res_type());
         assert_eq!(k1, actual_kvs[1].get_key());
-        assert_eq!(k1_primary, actual_kvs[1].get_primary_lock());
-        assert_eq!(k1_ts, actual_kvs[1].get_lock_version());
+        assert_eq!(k1_primary.clone(),
+                   actual_kvs[1].get_res_type().get_lock_info().get_primary_lock());
+        assert_eq!(k1_ts,
+                   actual_kvs[1].get_res_type().get_lock_info().get_lock_version());
     }
 
     #[test]
@@ -766,6 +770,20 @@ mod tests {
                    *actual_resp.get_cmd_cleanup_resp().get_res_type());
     }
 
+    #[test]
+    fn test_not_leader() {
+        use kvproto::errorpb::NotLeaderError;
+        let mut leader_info = NotLeaderError::new();
+        leader_info.set_region_id(1);
+        let storage_res: ResultStorage<Option<Value>> =
+            make_not_leader_error(leader_info.to_owned());
+        let actual_resp: Response = Server::cmd_get_done(storage_res);
+        assert_eq!(MessageType::CmdGet, actual_resp.get_field_type());
+        let mut exp_res_type = make_res_type(ResultType_Type::NotLeader);
+        exp_res_type.set_leader_info(leader_info.to_owned());
+        assert_eq!(exp_res_type, *actual_resp.get_cmd_get_resp().get_res_type());
+    }
+
     fn make_lock_error<T>(key: Vec<u8>, primary: Vec<u8>, ts: u64) -> ResultStorage<T> {
         Err(mvcc::Error::KeyIsLocked {
             key: key,
@@ -774,6 +792,13 @@ mod tests {
         })
             .map_err(txn::Error::from)
             .map_err(storage::Error::from)
+    }
+
+    fn make_not_leader_error<T>(leader_info: NotLeaderError) -> ResultStorage<T> {
+        use kvproto::errorpb::Error;
+        let mut err = Error::new();
+        err.set_not_leader(leader_info);
+        Err(engine::Error::Request(err)).map_err(storage::Error::from)
     }
 
     fn make_res_type(tp: ResultType_Type) -> ResultType {
