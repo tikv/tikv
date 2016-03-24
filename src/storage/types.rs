@@ -53,7 +53,8 @@ impl Hash for Key {
 
 #[cfg(test)]
 pub fn make_key(k: &[u8]) -> Key {
+    use util::codec::bytes;
     let mut key = Key::new(KeyAddress::default());
-    key.set_rawkey(k.to_vec());
+    key.set_rawkey(bytes::encode_bytes(k));
     key
 }
