@@ -1,4 +1,3 @@
-use util::codec::bytes;
 use storage::{Key, Value, KvPair, Mutation};
 use storage::Engine;
 use storage::mvcc::{MvccTxn, Error as MvccError};
@@ -42,11 +41,8 @@ impl TxnStore {
         let mut key = key;
         let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
         while results.len() < limit {
-            let mut next_key = match try!(self.engine.seek(&key.encode())) {
-                Some((key, _)) => {
-                    let (key, _) = try!(bytes::decode_bytes(&key));
-                    key
-                }
+            let mut next_key = match try!(self.engine.seek(&key)) {
+                Some((key, _)) => key,
                 None => break,
             };
             let _guard = self.shard_mutex.lock(&next_key);
