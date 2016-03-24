@@ -41,7 +41,7 @@ impl TxnStore {
         let mut key = key;
         let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
         while results.len() < limit {
-            let mut next_key = match try!(self.engine.seek(&key)) {
+            let next_key = match try!(self.engine.seek(&key)) {
                 Some((key, _)) => key,
                 None => break,
             };
@@ -55,8 +55,7 @@ impl TxnStore {
                 }
                 Err(e) => return Err(e.into()),
             };
-            next_key.push(b'\0');
-            key.set_rawkey(next_key);
+            key = key.encode_ts(u64::max_value());
         }
         Ok(results)
     }
@@ -140,6 +139,7 @@ mod tests {
     use super::*;
     use storage::{Mutation, Key, KvPair, make_key};
     use storage::engine::{self, Dsn};
+    use util::codec::bytes;
 
     trait TxnStoreAssert {
         fn get_none(&self, key: &[u8], ts: u64);
@@ -211,7 +211,9 @@ mod tests {
                                                     .collect();
             let expect: Vec<Option<KvPair>> = expect.into_iter()
                                                     .map(|x| {
-                                                        x.map(|(k, v)| (k.to_vec(), v.to_vec()))
+                                                        x.map(|(k, v)| {
+                                                            (bytes::encode_bytes(k), v.to_vec())
+                                                        })
                                                     })
                                                     .collect();
             assert_eq!(result, expect);
