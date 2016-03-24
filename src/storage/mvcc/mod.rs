@@ -1,5 +1,4 @@
 mod meta;
-mod codec;
 mod txn;
 
 pub use self::txn::MvccTxn;
