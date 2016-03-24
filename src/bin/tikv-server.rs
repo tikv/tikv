@@ -12,7 +12,8 @@ use tikv::util::{self, logger};
 use tikv::storage::RaftKvConfig;
 use getopts::{Options, Matches};
 use std::env;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
 use std::collections::HashSet;
 use log::LogLevelFilter;
 
@@ -72,34 +73,23 @@ fn build_store(matches: &Matches, dsn_name: &str, pathes: &[String], pd_addr: &s
     Storage::new(dsn).unwrap()
 }
 
-/// expand a path to the actual location.
-fn expand_path(mut path: PathBuf) -> PathBuf {
-    if let Some(p) = path.parent().map(|p| p.to_path_buf()) {
-        path = expand_path(p);
-    }
-    while let Ok(res) = path.read_link() {
-        path = res;
-    }
-    path
-}
-
 /// Only directory is accepted. Same directoy can not be specified twice.
 fn parse_directory(mut path: Vec<String>) -> Vec<String> {
     let mut parsed = HashSet::with_capacity(path.len());
     for origin_path in path.drain(..) {
-        let p = Path::new(&origin_path).to_path_buf();
+        let p = Path::new(&origin_path);
         if p.exists() && p.is_file() {
             panic!("{} is not a directory!", origin_path);
         }
-        let mut absolute_path = env::current_dir().unwrap();
-        absolute_path.push(p);
-        let final_path = expand_path(absolute_path);
-        let final_path_str = format!("{}", final_path.display());
-        if parsed.contains(&final_path_str) {
+        if !p.exists() {
+            fs::create_dir_all(p).unwrap();
+        }
+        let absolute_path = p.canonicalize().unwrap();
+        let final_path = format!("{}", absolute_path.display());
+        if parsed.contains(&final_path) {
             panic!("{} has been specified twice.", origin_path);
         }
-        error!("final_path {}", final_path_str);
-        parsed.insert(final_path_str);
+        parsed.insert(final_path);
     }
     let mut res = Vec::with_capacity(parsed.len());
     res.extend(parsed.drain());
@@ -139,11 +129,11 @@ fn main() {
 
     let dsn_name = matches.opt_str("S").unwrap_or_else(|| DEFAULT_DSN.to_owned());
     let pathes = parse_directory(matches.opt_strs("s"));
-    let pd_addr = matches.opt_str("P").unwrap_or("".to_owned());
+    let pd_addr = matches.opt_str("pd").unwrap_or("".to_owned());
     let store = build_store(&matches, dsn_name.as_ref(), &pathes, pd_addr.as_ref());
 
     let mut kv_addr = matches.opt_str("H").unwrap_or_else(|| DEFAULT_HOST.to_owned());
-    let kv_port = matches.opt_str("p").unwrap_or_else(|| DEFAULT_PORT.to_owned());
+    let kv_port = matches.opt_str("P").unwrap_or_else(|| DEFAULT_PORT.to_owned());
     kv_addr.push_str(":");
     kv_addr.push_str(&kv_port);
 
