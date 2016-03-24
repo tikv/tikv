@@ -2,7 +2,6 @@ use std::hash::{Hash, Hasher};
 use kvproto::kvrpcpb::KeyAddress;
 use kvproto::metapb::Peer;
 use byteorder::{BigEndian, WriteBytesExt};
-use util::codec::bytes;
 
 pub type Value = Vec<u8>;
 pub type KvPair = (Vec<u8>, Value);
@@ -33,21 +32,9 @@ impl Key {
         self.inner.get_region_id()
     }
 
-    pub fn encode(&self) -> Key {
-        let mut key_address = KeyAddress::new();
-        key_address.set_key(bytes::encode_bytes(self.get_rawkey()));
-        key_address.set_peer(self.inner.get_peer().clone());
-        key_address.set_region_id(self.inner.get_region_id());
-        Key::new(key_address)
-    }
-
     pub fn encode_ts(&self, ts: u64) -> Key {
-        let mut key_address = KeyAddress::new();
-        let mut encoded_rawkey = bytes::encode_bytes(self.get_rawkey());
-        encoded_rawkey.write_u64::<BigEndian>(ts).unwrap();
-        key_address.set_key(encoded_rawkey);
-        key_address.set_peer(self.inner.get_peer().clone());
-        key_address.set_region_id(self.inner.get_region_id());
+        let mut key_address = self.inner.clone();
+        key_address.mut_key().write_u64::<BigEndian>(ts).unwrap();
         Key::new(key_address)
     }
 }

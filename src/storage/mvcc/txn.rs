@@ -33,13 +33,12 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         }
     }
 
-    fn load_meta(&self, key: &Key) -> Result<(Key, Meta)> {
-        let meta_key = key.encode();
-        let meta = match try!(self.engine.get(&meta_key)) {
+    fn load_meta(&self, key: &Key) -> Result<Meta> {
+        let meta = match try!(self.engine.get(key)) {
             Some(x) => try!(Meta::parse(&x)),
             None => Meta::new(),
         };
-        Ok((meta_key, meta))
+        Ok(meta)
     }
 
     pub fn submit(&mut self) -> Result<()> {
@@ -49,7 +48,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let (_, meta) = try!(self.load_meta(key));
+        let meta = try!(self.load_meta(key));
         self.get_impl(key, &meta, self.start_ts.to_owned())
     }
 
@@ -77,7 +76,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
 
     pub fn prewrite(&mut self, mutation: Mutation, primary: &[u8]) -> Result<()> {
         let key = mutation.key();
-        let (meta_key, mut meta) = try!(self.load_meta(key));
+        let mut meta = try!(self.load_meta(key));
         // Abort on writes after our start timestamp ...
         if let Some(latest) = meta.iter_items().nth(0) {
             if latest.get_commit_ts() >= self.start_ts {
@@ -98,7 +97,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         lock.set_primary_key(primary.to_vec());
         lock.set_start_ts(self.start_ts);
         meta.set_lock(lock);
-        let modify = Modify::Put((meta_key, meta.to_bytes()));
+        let modify = Modify::Put((key.clone(), meta.to_bytes()));
         self.writes.push(modify);
 
         if let Mutation::Put((_, ref value)) = mutation {
@@ -109,8 +108,8 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
     }
 
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
-        let (meta_key, mut meta) = try!(self.load_meta(key));
-        self.commit_impl(commit_ts, meta_key, &mut meta)
+        let mut meta = try!(self.load_meta(key));
+        self.commit_impl(commit_ts, key.clone(), &mut meta)
     }
 
     fn commit_impl(&mut self, commit_ts: u64, meta_key: Key, meta: &mut Meta) -> Result<()> {
@@ -142,14 +141,14 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
                            commit_ts: u64,
                            get_ts: u64)
                            -> Result<Option<Value>> {
-        let (meta_key, mut meta) = try!(self.load_meta(key));
-        try!(self.commit_impl(commit_ts, meta_key, &mut meta));
+        let mut meta = try!(self.load_meta(key));
+        try!(self.commit_impl(commit_ts, key.clone(), &mut meta));
         self.get_impl(key, &meta, get_ts)
     }
 
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
-        let (meta_key, mut meta) = try!(self.load_meta(key));
-        self.rollback_impl(key, meta_key, &mut meta)
+        let mut meta = try!(self.load_meta(key));
+        self.rollback_impl(key, key.clone(), &mut meta)
     }
 
     fn rollback_impl(&mut self, key: &Key, meta_key: Key, meta: &mut Meta) -> Result<()> {
@@ -174,8 +173,8 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
     }
 
     pub fn rollback_then_get(&mut self, key: &Key) -> Result<Option<Value>> {
-        let (meta_key, mut meta) = try!(self.load_meta(key));
-        try!(self.rollback_impl(key, meta_key, &mut meta));
+        let mut meta = try!(self.load_meta(key));
+        try!(self.rollback_impl(key, key.clone(), &mut meta));
         self.get_impl(key, &meta, self.start_ts)
     }
 }
@@ -210,7 +209,7 @@ mod tests {
         must_get_none(engine.as_ref(), b"x", 23);
 
         // insert bad format data
-        engine.put(make_key(b"y").encode(), b"dummy".to_vec()).unwrap();
+        engine.put(make_key(b"y"), b"dummy".to_vec()).unwrap();
         must_get_err(engine.as_ref(), b"y", 100);
     }
 
