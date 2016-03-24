@@ -26,7 +26,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::PeerStorage;
+use super::peer_storage::{PeerStorage, RAFT_INIT_LOG_INDEX};
 use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid, bind_term};
 use super::transport::Transport;
@@ -505,12 +505,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let applied_index = peer.storage.rl().applied_index();
             let first_index = peer.storage.rl().first_index();
             if applied_index < first_index {
-                // The peer is leader, so the applied_index can't < first index.
-                error!("applied_index {} < first_index {} for leader peer {:?} at region {}",
-                       applied_index,
-                       first_index,
-                       peer.peer,
-                       region_id);
+                // test if we are just started.
+                if first_index != RAFT_INIT_LOG_INDEX + 1 {
+                    // The peer is leader, so the applied_index can't < first index.
+                    error!("applied_index {} < first_index {} for leader peer {:?} at region {}",
+                           applied_index,
+                           first_index,
+                           peer.peer,
+                           region_id);
+                }
                 continue;
             }
 
