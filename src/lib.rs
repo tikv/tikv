@@ -22,6 +22,7 @@ extern crate tempdir;
 extern crate rocksdb;
 extern crate uuid;
 extern crate kvproto;
+extern crate time;
 
 #[cfg(test)]
 extern crate env_logger;
