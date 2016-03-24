@@ -1,5 +1,7 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::io::{self, Write};
+use time;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rand::{self, ThreadRng};
 use protobuf::Message;
@@ -14,22 +16,31 @@ pub mod logger;
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
         filter.set(level);
-        Box::new(StdOutLogger { level: level })
+        Box::new(DefaultLogger { level: level })
     })
 }
 
-struct StdOutLogger {
+struct DefaultLogger {
     level: LogLevelFilter,
 }
 
-impl Log for StdOutLogger {
+impl Log for DefaultLogger {
     fn enabled(&self, meta: &LogMetadata) -> bool {
         meta.level() <= self.level
     }
 
     fn log(&self, record: &LogRecord) {
         if self.enabled(record.metadata()) {
-            println!("[{}] {}", record.level(), record.args());
+            let t = time::now();
+            // TODO allow formatter to be configurable.
+            let _ = write!(io::stderr(),
+                           "{},{:03} {}:{} - {:5} - {}\n",
+                           time::strftime("%Y-%m-%d %H:%M:%S", &t).unwrap(),
+                           t.tm_nsec / 1000_000,
+                           record.location().file().rsplit('/').nth(0).unwrap(),
+                           record.location().line(),
+                           record.level(),
+                           record.args());
         }
     }
 }
