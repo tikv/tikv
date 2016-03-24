@@ -208,7 +208,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#a22a722c9932677cc708820f8af02e839c23b758"
+source = "git+https://github.com/ngaut/rust-rocksdb.git#a72957352a2b65060ceb622d0460825936eb1090"
 dependencies = [
  "clippy 0.0.48 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
