@@ -1,5 +1,4 @@
 use std::hash::{Hash, Hasher};
-use kvproto::kvrpcpb::KeyAddress;
 use kvproto::metapb::Peer;
 use byteorder::{BigEndian, WriteBytesExt};
 
@@ -26,12 +25,6 @@ impl Key {
         let mut encoded = self.0.clone();
         encoded.write_u64::<BigEndian>(ts).unwrap();
         Key(encoded)
-    }
-}
-
-impl From<KeyAddress> for Key {
-    fn from(key_address: KeyAddress) -> Key {
-        Key::new(key_address.get_key().to_owned())
     }
 }
 
