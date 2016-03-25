@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::option::Option;
 use std::sync::{Arc, RwLock, Mutex};
 
-use raftserver::store::{Transport, SendCh as StoreSendCh, Callback};
+use raftserver::store::{Msg as StoreMsg, Transport, SendCh as StoreSendCh, Callback};
 use raftserver::{Result, other};
 use kvproto::raft_serverpb::{Message, MessageType, RaftMessage};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -36,16 +36,19 @@ impl<T: PdClient> ServerTransport<T> {
         let to_store_id = msg.get_to_peer().get_store_id();
         let ch = try!(self.get_sendch(to_store_id));
 
-        ch.send_raft_msg(msg)
+        ch.send(StoreMsg::RaftMessage(msg))
     }
 
     // Send RaftCmdRequest to specified store, the store must exist in current node.
     // Unlike Transport trait Send, this function can only send message to local store.
-    pub fn send_command(&self, msg: RaftCmdRequest, cb: Callback) -> Result<()> {
-        let to_store_id = msg.get_header().get_peer().get_store_id();
+    pub fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> Result<()> {
+        let to_store_id = req.get_header().get_peer().get_store_id();
         let ch = try!(self.get_sendch(to_store_id));
 
-        ch.send_command(msg, cb)
+        ch.send(StoreMsg::RaftCmd {
+            request: req,
+            callback: cb,
+        })
     }
 
     fn get_sendch(&self, store_id: u64) -> Result<&StoreSendCh> {
@@ -74,7 +77,7 @@ impl<T: PdClient> Transport for ServerTransport<T> {
         let to_store_id = msg.get_to_peer().get_store_id();
         if let Some(ch) = self.stores.get(&to_store_id) {
             // use store send channel directly.
-            return ch.send_raft_msg(msg);
+            return ch.send(StoreMsg::RaftMessage(msg));
         }
 
         let to_node_id = msg.get_to_peer().get_node_id();

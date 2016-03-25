@@ -8,7 +8,7 @@ use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::raftserver::server::Node;
-use tikv::raftserver::store::{SendCh, Transport, msg};
+use tikv::raftserver::store::{SendCh, Transport, msg, Msg};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tikv::raftserver::{Result, other};
@@ -44,7 +44,7 @@ impl Transport for ChannelTransport {
         let to_store = msg.get_to_peer().get_store_id();
         match self.senders.get(&to_store) {
             None => Err(other(format!("missing sender for store {}", to_store))),
-            Some(sender) => sender.send_raft_msg(msg),
+            Some(sender) => sender.send(Msg::RaftMessage(msg)),
         }
     }
 }

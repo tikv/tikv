@@ -526,7 +526,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
-            if let Err(e) = self.sendch.send_command(request, cb) {
+            if let Err(e) = self.sendch.send(Msg::RaftCmd {
+                request: request,
+                callback: cb,
+            }) {
                 error!("send compact log {} to region {} err {:?}",
                        applied_index,
                        region_id,
