@@ -47,6 +47,10 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
                        .unwrap()
                        .get_region_epoch()
                        .clone();
+
+    // Conf version must change.
+    assert!(epoch.get_conf_ver() > 1);
+
     let change_peer = new_admin_request(1,
                                         new_change_peer_cmd(ConfChangeType::AddNode,
                                                             new_peer(2, 2, 2),
@@ -54,6 +58,22 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't add same peer twice");
+
+    // Send an invalid stale epoch
+    let mut stale_epoch = metapb::RegionEpoch::new();
+    stale_epoch.set_version(1);
+    stale_epoch.set_conf_ver(1);
+    let change_peer = new_admin_request(1,
+                                        new_change_peer_cmd(ConfChangeType::AddNode,
+                                                            new_peer(5, 5, 5),
+                                                            &stale_epoch));
+    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    assert!(resp.get_header().has_error(),
+            "We can't change peer with stale epoch");
+
+    // peer 5 must not exist
+    let engine_5 = cluster.get_engine(5);
+    must_get_none(&engine_5, b"a1");
 
     // add peer (3, 3, 3) to region 1.
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3, 3));
@@ -86,6 +106,17 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't remove same peer twice");
+
+    let change_peer = new_admin_request(1,
+                                        new_change_peer_cmd(ConfChangeType::RemoveNode,
+                                                            new_peer(3, 3, 3),
+                                                            &stale_epoch));
+    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    assert!(resp.get_header().has_error(),
+            "We can't change peer with stale epoch");
+
+    // peer 3 must exist
+    must_get_equal(&engine_3, b"a3", b"v3");
 
     // add peer 2 then remove it again.
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2, 2));
