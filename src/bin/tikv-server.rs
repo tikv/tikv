@@ -62,8 +62,15 @@ fn build_raftkv_dsn<'a>(matches: &Matches,
     Dsn::RaftKv(cfg, pd_addr)
 }
 
-fn build_store(matches: &Matches, dsn_name: &str, pathes: &[String], pd_addr: &str) -> Storage {
+fn build_store(matches: &Matches,
+               dsn_name: &str,
+               pathes: &[String],
+               pd_addr: &str,
+               kv_addr: &str)
+               -> Storage {
     let mut cfg = RaftKvConfig::default();
+    cfg.server_cfg.client_addr = kv_addr.to_owned();
+
     let dsn = match dsn_name {
         "mem" => Dsn::Memory,
         "rocksdb" => build_rocksdb_dsn(pathes),
@@ -130,12 +137,17 @@ fn main() {
     let dsn_name = matches.opt_str("S").unwrap_or_else(|| DEFAULT_DSN.to_owned());
     let pathes = parse_directory(matches.opt_strs("s"));
     let pd_addr = matches.opt_str("pd").unwrap_or("".to_owned());
-    let store = build_store(&matches, dsn_name.as_ref(), &pathes, pd_addr.as_ref());
 
     let mut kv_addr = matches.opt_str("H").unwrap_or_else(|| DEFAULT_HOST.to_owned());
     let kv_port = matches.opt_str("P").unwrap_or_else(|| DEFAULT_PORT.to_owned());
     kv_addr.push_str(":");
     kv_addr.push_str(&kv_port);
+
+    let store = build_store(&matches,
+                            dsn_name.as_ref(),
+                            &pathes,
+                            pd_addr.as_ref(),
+                            kv_addr.as_ref());
 
     info!("Start listening on {}...", kv_addr);
     run(&kv_addr, store);
