@@ -451,15 +451,20 @@ mod tests {
     #[test]
     fn test_get_put() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_get(make_key(b"x"), 100, expect_get_none()).unwrap();
+        storage.async_get(make_key(b"x"), 100, KvOpt::none(), expect_get_none()).unwrap();
         storage.async_prewrite(vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                                b"x".to_vec(),
                                100,
+                               KvOpt::none(),
                                expect_ok())
                .unwrap();
-        storage.async_commit(vec![make_key(b"x")], 100, 101, expect_ok()).unwrap();
-        storage.async_get(make_key(b"x"), 100, expect_get_none()).unwrap();
-        storage.async_get(make_key(b"x"), 101, expect_get_val(b"100".to_vec())).unwrap();
+        storage.async_commit(vec![make_key(b"x")], 100, 101, KvOpt::none(), expect_ok()).unwrap();
+        storage.async_get(make_key(b"x"), 100, KvOpt::none(), expect_get_none()).unwrap();
+        storage.async_get(make_key(b"x"),
+                          101,
+                          KvOpt::none(),
+                          expect_get_val(b"100".to_vec()))
+               .unwrap();
         storage.stop().unwrap();
     }
 
@@ -473,16 +478,19 @@ mod tests {
             ],
                                b"a".to_vec(),
                                1,
+                               KvOpt::none(),
                                expect_ok())
                .unwrap();
         storage.async_commit(vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
                              1,
                              2,
+                             KvOpt::none(),
                              expect_ok())
                .unwrap();
         storage.async_scan(make_key(b"\x00"),
                            1000,
                            5,
+                           KvOpt::none(),
                            expect_scan(vec![
             Some((bytes::encode_bytes(b"a"), b"aa".to_vec())),
             Some((bytes::encode_bytes(b"b"), b"bb".to_vec())),
@@ -498,20 +506,31 @@ mod tests {
         storage.async_prewrite(vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                                b"x".to_vec(),
                                100,
+                               KvOpt::none(),
                                expect_ok())
                .unwrap();
         storage.async_prewrite(vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                                b"y".to_vec(),
                                101,
+                               KvOpt::none(),
                                expect_ok())
                .unwrap();
-        storage.async_commit(vec![make_key(b"x")], 100, 110, expect_ok()).unwrap();
-        storage.async_commit(vec![make_key(b"y")], 101, 111, expect_ok()).unwrap();
-        storage.async_get(make_key(b"x"), 120, expect_get_val(b"100".to_vec())).unwrap();
-        storage.async_get(make_key(b"y"), 120, expect_get_val(b"101".to_vec())).unwrap();
+        storage.async_commit(vec![make_key(b"x")], 100, 110, KvOpt::none(), expect_ok()).unwrap();
+        storage.async_commit(vec![make_key(b"y")], 101, 111, KvOpt::none(), expect_ok()).unwrap();
+        storage.async_get(make_key(b"x"),
+                          120,
+                          KvOpt::none(),
+                          expect_get_val(b"100".to_vec()))
+               .unwrap();
+        storage.async_get(make_key(b"y"),
+                          120,
+                          KvOpt::none(),
+                          expect_get_val(b"101".to_vec()))
+               .unwrap();
         storage.async_prewrite(vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
                                b"x".to_vec(),
                                105,
+                               KvOpt::none(),
                                expect_fail())
                .unwrap();
         storage.stop().unwrap();
