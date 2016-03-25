@@ -8,7 +8,7 @@ use kvproto::raft_serverpb::{Message, MessageType, RaftMessage};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use pd::PdClient;
 use util::HandyRwLock;
-use super::{SendCh, ConnData};
+use super::{SendCh, Msg, ConnData};
 
 pub struct ServerTransport<T: PdClient> {
     cluster_id: u64,
@@ -86,7 +86,10 @@ impl<T: PdClient> Transport for ServerTransport<T> {
 
         let mut id = self.msg_id.lock().unwrap();
         *id += 1;
-        try!(self.ch.send_peer(node.get_address().to_owned(), ConnData::new(*id, req)));
+        try!(self.ch.send(Msg::SendPeer {
+            addr: node.get_address().to_owned(),
+            data: ConnData::new(*id, req),
+        }));
 
         Ok(())
     }

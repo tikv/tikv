@@ -62,14 +62,14 @@ impl Simulator for ServerCluster {
             .put_node(self.cluster_id, util::new_node(node_id, addr.to_string()))
             .unwrap();
 
-        let sender = server.get_sendch();
+        let ch = server.get_sendch();
 
         let t = thread::spawn(move || {
             server.run(&mut event_loop).unwrap();
         });
 
         self.handles.insert(node_id, t);
-        self.senders.insert(node_id, sender);
+        self.senders.insert(node_id, ch);
         self.addrs.insert(node_id, addr);
 
         node_id
@@ -77,10 +77,10 @@ impl Simulator for ServerCluster {
 
     fn stop_node(&mut self, node_id: u64) {
         let h = self.handles.remove(&node_id).unwrap();
-        let sender = self.senders.remove(&node_id).unwrap();
+        let ch = self.senders.remove(&node_id).unwrap();
         self.addrs.remove(&node_id).unwrap();
 
-        sender.kill().unwrap();
+        ch.send(Msg::Quit).unwrap();
         h.join().unwrap();
     }
 
