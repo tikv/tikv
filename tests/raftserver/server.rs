@@ -11,7 +11,7 @@ use super::cluster::{Simulator, Cluster};
 use tikv::raftserver::server::*;
 use tikv::raftserver::Result;
 use tikv::util::codec::rpc;
-use kvproto::raft_serverpb::{Message, MessageType};
+use kvproto::raft_serverpb::{self, Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use tikv::pd::PdClient;
 use super::util;
@@ -112,6 +112,25 @@ impl Simulator for ServerCluster {
         assert_eq!(*msg_id, get_msg_id);
 
         Ok(resp_msg.take_cmd_resp())
+    }
+
+    fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
+        let node_id = raft_msg.get_to_peer().get_node_id();
+        let addr = self.addrs.get(&node_id).unwrap();
+
+        let mut conn = TcpStream::connect(addr).unwrap();
+
+        conn.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
+
+        let mut msg = Message::new();
+        msg.set_msg_type(MessageType::Raft);
+        msg.set_raft(raft_msg);
+
+        let mut msg_id = self.msg_id.lock().unwrap();
+        *msg_id += 1;
+        try!(rpc::encode_msg(&mut conn, *msg_id, &msg));
+
+        Ok(())
     }
 }
 
