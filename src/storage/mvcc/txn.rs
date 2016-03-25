@@ -1,5 +1,5 @@
 use std::fmt;
-use storage::{Key, Value, Mutation};
+use storage::{Key, Value, Mutation, KvOpt};
 use storage::engine::{Engine, Modify};
 use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 use super::meta::Meta;
@@ -16,6 +16,7 @@ pub struct MvccTxn<'a, T: Engine + ?Sized + 'a> {
     engine: &'a T,
     start_ts: u64,
     writes: Vec<Modify>,
+    opt: &'a KvOpt,
 }
 
 impl<'a, T: Engine + ?Sized> fmt::Debug for MvccTxn<'a, T> {
@@ -25,16 +26,17 @@ impl<'a, T: Engine + ?Sized> fmt::Debug for MvccTxn<'a, T> {
 }
 
 impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
-    pub fn new(engine: &'a T, start_ts: u64) -> MvccTxn<'a, T> {
+    pub fn new(engine: &'a T, start_ts: u64, opt: &'a KvOpt) -> MvccTxn<'a, T> {
         MvccTxn {
             engine: engine,
             start_ts: start_ts,
             writes: vec![],
+            opt: opt,
         }
     }
 
     fn load_meta(&self, key: &Key) -> Result<Meta> {
-        let meta = match try!(self.engine.get(key)) {
+        let meta = match try!(self.engine.get(key, self.opt)) {
             Some(x) => try!(Meta::parse(&x)),
             None => Meta::new(),
         };
@@ -43,7 +45,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
 
     pub fn submit(&mut self) -> Result<()> {
         let batch = self.writes.drain(..).collect();
-        try!(self.engine.write(batch));
+        try!(self.engine.write(batch, self.opt));
         Ok(())
     }
 
@@ -68,7 +70,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         match meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
             Some(x) => {
                 let data_key = key.encode_ts(x.get_start_ts());
-                Ok(try!(self.engine.get(&data_key)))
+                Ok(try!(self.engine.get(&data_key, self.opt)))
             }
             None => Ok(None),
         }

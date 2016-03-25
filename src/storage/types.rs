@@ -58,3 +58,18 @@ pub fn make_key(k: &[u8]) -> Key {
     key.set_rawkey(bytes::encode_bytes(k));
     key
 }
+
+#[derive(Debug)]
+pub struct KvOpt {
+    pub region_id: u64,
+    pub peer: Peer,
+}
+
+impl KvOpt {
+    pub fn new(region_id: u64, peer: Peer) -> KvOpt {
+        KvOpt {
+            region_id: region_id,
+            peer: peer,
+        }
+    }
+}

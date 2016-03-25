@@ -12,7 +12,7 @@ mod types;
 pub use self::engine::{Engine, Dsn, new_engine, Modify, Error as EngineError};
 pub use self::engine::raftkv::Config as RaftKvConfig;
 pub use self::engine::raftkv::RaftKv;
-pub use self::types::{Key, Value, KvPair};
+pub use self::types::{Key, Value, KvPair, KvOpt};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 #[cfg(test)]
@@ -41,24 +41,28 @@ pub enum Command {
     Get {
         key: Key,
         start_ts: u64,
+        opt: KvOpt,
         callback: Callback<Option<Value>>,
     },
     Scan {
         start_key: Key,
         limit: usize,
         start_ts: u64,
+        opt: KvOpt,
         callback: Callback<Vec<Result<KvPair>>>,
     },
     Prewrite {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
+        opt: KvOpt,
         callback: Callback<Vec<Result<()>>>,
     },
     Commit {
         keys: Vec<Key>,
         lock_ts: u64,
         commit_ts: u64,
+        opt: KvOpt,
         callback: Callback<()>,
     },
     CommitThenGet {
@@ -66,21 +70,25 @@ pub enum Command {
         lock_ts: u64,
         commit_ts: u64,
         get_ts: u64,
+        opt: KvOpt,
         callback: Callback<Option<Value>>,
     },
     Cleanup {
         key: Key,
         start_ts: u64,
+        opt: KvOpt,
         callback: Callback<()>,
     },
     Rollback {
         keys: Vec<Key>,
         start_ts: u64,
+        opt: KvOpt,
         callback: Callback<()>,
     },
     RollbackThenGet {
         key: Key,
         lock_ts: u64,
+        opt: KvOpt,
         callback: Callback<Option<Value>>,
     },
 }
@@ -176,11 +184,13 @@ impl Storage {
     pub fn async_get(&self,
                      key: Key,
                      start_ts: u64,
+                     opt: KvOpt,
                      callback: Callback<Option<Value>>)
                      -> Result<()> {
         let cmd = Command::Get {
             key: key,
             start_ts: start_ts,
+            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -191,12 +201,14 @@ impl Storage {
                       start_key: Key,
                       limit: usize,
                       start_ts: u64,
+                      opt: KvOpt,
                       callback: Callback<Vec<Result<KvPair>>>)
                       -> Result<()> {
         let cmd = Command::Scan {
             start_key: start_key,
             limit: limit,
             start_ts: start_ts,
+            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -207,12 +219,14 @@ impl Storage {
                           mutations: Vec<Mutation>,
                           primary: Vec<u8>,
                           start_ts: u64,
+                          opt: KvOpt,
                           callback: Callback<Vec<Result<()>>>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
             mutations: mutations,
             primary: primary,
             start_ts: start_ts,
+            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -223,12 +237,14 @@ impl Storage {
                         keys: Vec<Key>,
                         lock_ts: u64,
                         commit_ts: u64,
+                        opt: KvOpt,
                         callback: Callback<()>)
                         -> Result<()> {
         let cmd = Command::Commit {
             keys: keys,
             lock_ts: lock_ts,
             commit_ts: commit_ts,
+            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -240,6 +256,7 @@ impl Storage {
                                  lock_ts: u64,
                                  commit_ts: u64,
                                  get_ts: u64,
+                                 opt: KvOpt,
                                  callback: Callback<Option<Value>>)
                                  -> Result<()> {
         let cmd = Command::CommitThenGet {
@@ -247,16 +264,23 @@ impl Storage {
             lock_ts: lock_ts,
             commit_ts: commit_ts,
             get_ts: get_ts,
+            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
         Ok(())
     }
 
-    pub fn async_cleanup(&self, key: Key, start_ts: u64, callback: Callback<()>) -> Result<()> {
+    pub fn async_cleanup(&self,
+                         key: Key,
+                         start_ts: u64,
+                         opt: KvOpt,
+                         callback: Callback<()>)
+                         -> Result<()> {
         let cmd = Command::Cleanup {
             key: key,
             start_ts: start_ts,
+            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -266,11 +290,13 @@ impl Storage {
     pub fn async_rollback(&self,
                           keys: Vec<Key>,
                           start_ts: u64,
+                          opt: KvOpt,
                           callback: Callback<()>)
                           -> Result<()> {
         let cmd = Command::Rollback {
             keys: keys,
             start_ts: start_ts,
+            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -280,11 +306,13 @@ impl Storage {
     pub fn async_rollback_then_get(&self,
                                    key: Key,
                                    lock_ts: u64,
+                                   opt: KvOpt,
                                    callback: Callback<Option<Value>>)
                                    -> Result<()> {
         let cmd = Command::RollbackThenGet {
             key: key,
             lock_ts: lock_ts,
+            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
