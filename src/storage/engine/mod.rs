@@ -3,9 +3,8 @@ use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use self::memory::EngineBtree;
 use self::rocksdb::EngineRocksdb;
-use self::raftkv::RaftKv;
-use storage::{Key, Value, KvPair};
-use self::raftkv::Config;
+use self::raftkv::{Config, RaftKv};
+use storage::{Key, Value, KvPair, KvOpt};
 use pd;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -19,26 +18,17 @@ pub enum Modify {
     Put((Key, Value)),
 }
 
-impl Modify {
-    fn get_key(&self) -> &Key {
-        match self {
-            &Modify::Delete(ref k) => k,
-            &Modify::Put((ref k, _)) => k,
-        }
-    }
-}
-
 pub trait Engine : Send + Sync + Debug {
-    fn get(&self, key: &Key) -> Result<Option<Value>>;
-    fn seek(&self, key: &Key) -> Result<Option<KvPair>>;
-    fn write(&self, batch: Vec<Modify>) -> Result<()>;
+    fn get(&self, key: &Key, opt: &KvOpt) -> Result<Option<Value>>;
+    fn seek(&self, key: &Key, opt: &KvOpt) -> Result<Option<KvPair>>;
+    fn write(&self, batch: Vec<Modify>, opt: &KvOpt) -> Result<()>;
 
-    fn put(&self, key: Key, value: Value) -> Result<()> {
-        self.write(vec![Modify::Put((key, value))])
+    fn put(&self, key: Key, value: Value, opt: &KvOpt) -> Result<()> {
+        self.write(vec![Modify::Put((key, value))], opt)
     }
 
-    fn delete(&self, key: Key) -> Result<()> {
-        self.write(vec![Modify::Delete(key)])
+    fn delete(&self, key: Key, opt: &KvOpt) -> Result<()> {
+        self.write(vec![Modify::Delete(key)], opt)
     }
 }
 

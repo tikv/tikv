@@ -1,4 +1,4 @@
-use storage::{Key, Value, KvPair, Mutation};
+use storage::{Key, Value, KvPair, Mutation, KvOpt};
 use storage::Engine;
 use storage::mvcc::{MvccTxn, Error as MvccError};
 use super::shard_mutex::ShardMutex;
@@ -19,15 +19,15 @@ impl TxnStore {
         }
     }
 
-    pub fn get(&self, key: &Key, start_ts: u64) -> Result<Option<Value>> {
+    pub fn get(&self, key: &Key, start_ts: u64, opt: KvOpt) -> Result<Option<Value>> {
         let _guard = self.shard_mutex.lock(&[key]);
-        let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let txn = MvccTxn::new(self.engine.as_ref(), start_ts, &opt);
         Ok(try!(txn.get(key)))
     }
 
     #[allow(dead_code)]
-    pub fn batch_get(&self, keys: &[Key], start_ts: u64) -> Vec<Result<Option<Value>>> {
-        let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+    pub fn batch_get(&self, keys: &[Key], start_ts: u64, opt: KvOpt) -> Vec<Result<Option<Value>>> {
+        let txn = MvccTxn::new(self.engine.as_ref(), start_ts, &opt);
         let mut results = Vec::<_>::with_capacity(keys.len());
         for k in keys {
             let _guard = self.shard_mutex.lock(&[k]);
@@ -36,12 +36,17 @@ impl TxnStore {
         results
     }
 
-    pub fn scan(&self, key: Key, limit: usize, start_ts: u64) -> Result<Vec<Result<KvPair>>> {
+    pub fn scan(&self,
+                key: Key,
+                limit: usize,
+                start_ts: u64,
+                opt: KvOpt)
+                -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         let mut key = key;
-        let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let txn = MvccTxn::new(self.engine.as_ref(), start_ts, &opt);
         while results.len() < limit {
-            let next_key = match try!(self.engine.seek(&key)) {
+            let next_key = match try!(self.engine.seek(&key, &opt)) {
                 Some((key, _)) => key,
                 None => break,
             };
@@ -63,14 +68,15 @@ impl TxnStore {
     pub fn prewrite(&self,
                     mutations: Vec<Mutation>,
                     primary: Vec<u8>,
-                    start_ts: u64)
+                    start_ts: u64,
+                    opt: KvOpt)
                     -> Result<Vec<Result<()>>> {
         let mut results = vec![];
         let _gurad = {
             let locked_keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
             self.shard_mutex.lock(&locked_keys)
         };
-        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts, &opt);
         for m in mutations {
             match txn.prewrite(m, &primary) {
                 Ok(_) => results.push(Ok(())),
@@ -82,9 +88,9 @@ impl TxnStore {
         Ok(results)
     }
 
-    pub fn commit(&self, keys: Vec<Key>, start_ts: u64, commit_ts: u64) -> Result<()> {
+    pub fn commit(&self, keys: Vec<Key>, start_ts: u64, commit_ts: u64, opt: KvOpt) -> Result<()> {
         let _guard = self.shard_mutex.lock(&keys);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts, &opt);
         for k in keys {
             try!(txn.commit(&k, commit_ts));
         }
@@ -92,31 +98,31 @@ impl TxnStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn commit_then_get(&self,
                            key: Key,
                            lock_ts: u64,
                            commit_ts: u64,
-                           get_ts: u64)
+                           get_ts: u64,
+                           opt: KvOpt)
                            -> Result<Option<Value>> {
         let _guard = self.shard_mutex.lock(&[&key]);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), lock_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), lock_ts, &opt);
         let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
         try!(txn.submit());
         Ok(val)
     }
 
-    pub fn cleanup(&self, key: Key, start_ts: u64) -> Result<()> {
+    pub fn cleanup(&self, key: Key, start_ts: u64, opt: KvOpt) -> Result<()> {
         let _guard = self.shard_mutex.lock(&[&key]);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts, &opt);
         try!(txn.rollback(&key));
         try!(txn.submit());
         Ok(())
     }
 
-    pub fn rollback(&self, keys: Vec<Key>, start_ts: u64) -> Result<()> {
+    pub fn rollback(&self, keys: Vec<Key>, start_ts: u64, opt: KvOpt) -> Result<()> {
         let _guard = self.shard_mutex.lock(&keys);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts, &opt);
         for k in keys {
             try!(txn.rollback(&k));
         }
@@ -125,9 +131,9 @@ impl TxnStore {
     }
 
     #[allow(dead_code)]
-    pub fn rollback_then_get(&self, key: Key, lock_ts: u64) -> Result<Option<Value>> {
+    pub fn rollback_then_get(&self, key: Key, lock_ts: u64, opt: KvOpt) -> Result<Option<Value>> {
         let _guard = self.shard_mutex.lock(&[&key]);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), lock_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), lock_ts, &opt);
         let val = try!(txn.rollback_then_get(&key));
         try!(txn.submit());
         Ok(val)
