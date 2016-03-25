@@ -6,7 +6,7 @@ use tikv::util::codec::rpc;
 use tikv::util::HandyRwLock;
 use kvproto::metapb;
 use kvproto::kvrpcpb::KeyAddress;
-use kvproto::raft_serverpb::{Message as ServerMessage, MessageType};
+use kvproto::raft_serverpb::{self, Message as ServerMessage, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
 use tempdir::TempDir;
@@ -91,6 +91,10 @@ impl Simulator for PdTransport {
         assert_eq!(msg_id, get_msg_id);
 
         Ok(resp_msg.take_cmd_resp())
+    }
+
+    fn send_raft_msg(&self, _: raft_serverpb::RaftMessage) -> raftserver::Result<()> {
+        unimplemented!();
     }
 }
 
