@@ -10,7 +10,7 @@ use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, Cmd
                        CmdCleanupResponse, CmdRollbackThenGetResponse, CmdCommitThenGetResponse,
                        Request, Response, MessageType, Item, ResultType, ResultType_Type,
                        LockInfo, Operator};
-use storage::{Storage, Key, Value, KvPair, KvOpt, Mutation, MaybeLocked, MaybeComitted,
+use storage::{Storage, Key, Value, KvPair, KvContext, Mutation, MaybeLocked, MaybeComitted,
               MaybeRolledback, Callback};
 use storage::Result as ResultStorage;
 use storage::Error as StorageError;
@@ -53,11 +53,11 @@ impl Server {
         let mut cmd_get_req = msg.take_cmd_get_req();
         let mut key_address = cmd_get_req.take_key_address();
         let key = key_address.take_key();
-        let opt = KvOpt::new(key_address.get_region_id(), key_address.take_peer());
+        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_get_done, sender, token, msg_id);
         self.store
-            .async_get(Key::new(key), cmd_get_req.get_version(), opt, cb)
+            .async_get(ctx, Key::new(key), cmd_get_req.get_version(), cb)
             .map_err(ServerError::Storage)
     }
 
@@ -74,18 +74,18 @@ impl Server {
         let sender = event_loop.channel();
         let mut start_key_addresss = cmd_scan_req.take_key_address();
         let start_key = start_key_addresss.take_key();
-        let opt = KvOpt::new(start_key_addresss.get_region_id(),
-                             start_key_addresss.take_peer());
+        let ctx = KvContext::new(start_key_addresss.get_region_id(),
+                                 start_key_addresss.take_peer());
         debug!("start_key [{:?}]", start_key);
         let cb = Server::make_cb::<Vec<ResultStorage<KvPair>>>(Server::cmd_scan_done,
                                                                sender,
                                                                token,
                                                                msg_id);
         self.store
-            .async_scan(Key::new(start_key),
+            .async_scan(ctx,
+                        Key::new(start_key),
                         cmd_scan_req.get_limit() as usize,
                         cmd_scan_req.get_version(),
-                        opt,
                         cb)
             .map_err(ServerError::Storage)
     }
@@ -118,19 +118,19 @@ impl Server {
                                             }
                                         })
                                         .collect();
-        let opt = {
+        let ctx = {
             let mut key_address = cmd_prewrite_req.take_key_address();
-            KvOpt::new(key_address.get_region_id(), key_address.take_peer())
+            KvContext::new(key_address.get_region_id(), key_address.take_peer())
         };
         let cb = Server::make_cb::<Vec<ResultStorage<()>>>(Server::cmd_prewrite_done,
                                                            sender,
                                                            token,
                                                            msg_id);
         self.store
-            .async_prewrite(mutations,
+            .async_prewrite(ctx,
+                            mutations,
                             cmd_prewrite_req.get_primary_lock().to_vec(),
                             cmd_prewrite_req.get_start_version(),
-                            opt,
                             cb)
             .map_err(ServerError::Storage)
     }
@@ -147,19 +147,19 @@ impl Server {
         let mut cmd_commit_req = msg.take_cmd_commit_req();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<()>(Server::cmd_commit_done, sender, token, msg_id);
-        let opt = {
+        let ctx = {
             let mut first = cmd_commit_req.get_keys_address()[0].clone();
-            KvOpt::new(first.get_region_id(), first.take_peer())
+            KvContext::new(first.get_region_id(), first.take_peer())
         };
         let keys = cmd_commit_req.take_keys_address()
                                  .into_iter()
                                  .map(|mut x| Key::new(x.take_key()))
                                  .collect();
         self.store
-            .async_commit(keys,
+            .async_commit(ctx,
+                          keys,
                           cmd_commit_req.get_start_version(),
                           cmd_commit_req.get_commit_version(),
-                          opt,
                           cb)
             .map_err(ServerError::Storage)
     }
@@ -178,9 +178,9 @@ impl Server {
         let cb = Server::make_cb::<()>(Server::cmd_cleanup_done, sender, token, msg_id);
         let mut key_address = cmd_cleanup_req.take_key_address();
         let key = key_address.take_key();
-        let opt = KvOpt::new(key_address.get_region_id(), key_address.take_peer());
+        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
-            .async_cleanup(Key::new(key), cmd_cleanup_req.get_start_version(), opt, cb)
+            .async_cleanup(ctx, Key::new(key), cmd_cleanup_req.get_start_version(), cb)
             .map_err(ServerError::Storage)
     }
 
@@ -201,13 +201,13 @@ impl Server {
                                                   msg_id);
         let mut key_address = cmd_commit_get_req.take_key_address();
         let key = key_address.take_key();
-        let opt = KvOpt::new(key_address.get_region_id(), key_address.take_peer());
+        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
-            .async_commit_then_get(Key::new(key),
+            .async_commit_then_get(ctx,
+                                   Key::new(key),
                                    cmd_commit_get_req.get_lock_version(),
                                    cmd_commit_get_req.get_commit_version(),
                                    cmd_commit_get_req.get_get_version(),
-                                   opt,
                                    cb)
             .map_err(ServerError::Storage)
     }
@@ -229,11 +229,11 @@ impl Server {
                                                   msg_id);
         let mut key_address = cmd_rollback_get_req.take_key_address();
         let key = key_address.take_key();
-        let opt = KvOpt::new(key_address.get_region_id(), key_address.take_peer());
+        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
-            .async_rollback_then_get(Key::new(key),
+            .async_rollback_then_get(ctx,
+                                     Key::new(key),
                                      cmd_rollback_get_req.get_lock_version(),
-                                     opt,
                                      cb)
             .map_err(ServerError::Storage)
     }

@@ -12,7 +12,7 @@ mod types;
 pub use self::engine::{Engine, Dsn, new_engine, Modify, Error as EngineError};
 pub use self::engine::raftkv::Config as RaftKvConfig;
 pub use self::engine::raftkv::RaftKv;
-pub use self::types::{Key, Value, KvPair, KvOpt};
+pub use self::types::{Key, Value, KvPair, KvContext};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 #[cfg(test)]
@@ -39,56 +39,56 @@ impl Mutation {
 #[allow(type_complexity)]
 pub enum Command {
     Get {
+        ctx: KvContext,
         key: Key,
         start_ts: u64,
-        opt: KvOpt,
         callback: Callback<Option<Value>>,
     },
     Scan {
+        ctx: KvContext,
         start_key: Key,
         limit: usize,
         start_ts: u64,
-        opt: KvOpt,
         callback: Callback<Vec<Result<KvPair>>>,
     },
     Prewrite {
+        ctx: KvContext,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
-        opt: KvOpt,
         callback: Callback<Vec<Result<()>>>,
     },
     Commit {
+        ctx: KvContext,
         keys: Vec<Key>,
         lock_ts: u64,
         commit_ts: u64,
-        opt: KvOpt,
         callback: Callback<()>,
     },
     CommitThenGet {
+        ctx: KvContext,
         key: Key,
         lock_ts: u64,
         commit_ts: u64,
         get_ts: u64,
-        opt: KvOpt,
         callback: Callback<Option<Value>>,
     },
     Cleanup {
+        ctx: KvContext,
         key: Key,
         start_ts: u64,
-        opt: KvOpt,
         callback: Callback<()>,
     },
     Rollback {
+        ctx: KvContext,
         keys: Vec<Key>,
         start_ts: u64,
-        opt: KvOpt,
         callback: Callback<()>,
     },
     RollbackThenGet {
+        ctx: KvContext,
         key: Key,
         lock_ts: u64,
-        opt: KvOpt,
         callback: Callback<Option<Value>>,
     },
 }
@@ -182,15 +182,15 @@ impl Storage {
     }
 
     pub fn async_get(&self,
+                     ctx: KvContext,
                      key: Key,
                      start_ts: u64,
-                     opt: KvOpt,
                      callback: Callback<Option<Value>>)
                      -> Result<()> {
         let cmd = Command::Get {
+            ctx: ctx,
             key: key,
             start_ts: start_ts,
-            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -198,17 +198,17 @@ impl Storage {
     }
 
     pub fn async_scan(&self,
+                      ctx: KvContext,
                       start_key: Key,
                       limit: usize,
                       start_ts: u64,
-                      opt: KvOpt,
                       callback: Callback<Vec<Result<KvPair>>>)
                       -> Result<()> {
         let cmd = Command::Scan {
+            ctx: ctx,
             start_key: start_key,
             limit: limit,
             start_ts: start_ts,
-            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -216,17 +216,17 @@ impl Storage {
     }
 
     pub fn async_prewrite(&self,
+                          ctx: KvContext,
                           mutations: Vec<Mutation>,
                           primary: Vec<u8>,
                           start_ts: u64,
-                          opt: KvOpt,
                           callback: Callback<Vec<Result<()>>>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
+            ctx: ctx,
             mutations: mutations,
             primary: primary,
             start_ts: start_ts,
-            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -234,17 +234,17 @@ impl Storage {
     }
 
     pub fn async_commit(&self,
+                        ctx: KvContext,
                         keys: Vec<Key>,
                         lock_ts: u64,
                         commit_ts: u64,
-                        opt: KvOpt,
                         callback: Callback<()>)
                         -> Result<()> {
         let cmd = Command::Commit {
+            ctx: ctx,
             keys: keys,
             lock_ts: lock_ts,
             commit_ts: commit_ts,
-            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -252,19 +252,19 @@ impl Storage {
     }
 
     pub fn async_commit_then_get(&self,
+                                 ctx: KvContext,
                                  key: Key,
                                  lock_ts: u64,
                                  commit_ts: u64,
                                  get_ts: u64,
-                                 opt: KvOpt,
                                  callback: Callback<Option<Value>>)
                                  -> Result<()> {
         let cmd = Command::CommitThenGet {
+            ctx: ctx,
             key: key,
             lock_ts: lock_ts,
             commit_ts: commit_ts,
             get_ts: get_ts,
-            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -272,15 +272,15 @@ impl Storage {
     }
 
     pub fn async_cleanup(&self,
+                         ctx: KvContext,
                          key: Key,
                          start_ts: u64,
-                         opt: KvOpt,
                          callback: Callback<()>)
                          -> Result<()> {
         let cmd = Command::Cleanup {
+            ctx: ctx,
             key: key,
             start_ts: start_ts,
-            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -288,15 +288,15 @@ impl Storage {
     }
 
     pub fn async_rollback(&self,
+                          ctx: KvContext,
                           keys: Vec<Key>,
                           start_ts: u64,
-                          opt: KvOpt,
                           callback: Callback<()>)
                           -> Result<()> {
         let cmd = Command::Rollback {
+            ctx: ctx,
             keys: keys,
             start_ts: start_ts,
-            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -304,15 +304,15 @@ impl Storage {
     }
 
     pub fn async_rollback_then_get(&self,
+                                   ctx: KvContext,
                                    key: Key,
                                    lock_ts: u64,
-                                   opt: KvOpt,
                                    callback: Callback<Option<Value>>)
                                    -> Result<()> {
         let cmd = Command::RollbackThenGet {
+            ctx: ctx,
             key: key,
             lock_ts: lock_ts,
-            opt: opt,
             callback: callback,
         };
         try!(self.tx.send(Message::Command(cmd)));
@@ -451,18 +451,23 @@ mod tests {
     #[test]
     fn test_get_put() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_get(make_key(b"x"), 100, KvOpt::none(), expect_get_none()).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+        storage.async_get(KvContext::none(), make_key(b"x"), 100, expect_get_none()).unwrap();
+        storage.async_prewrite(KvContext::none(),
+                               vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                                b"x".to_vec(),
                                100,
-                               KvOpt::none(),
                                expect_ok())
                .unwrap();
-        storage.async_commit(vec![make_key(b"x")], 100, 101, KvOpt::none(), expect_ok()).unwrap();
-        storage.async_get(make_key(b"x"), 100, KvOpt::none(), expect_get_none()).unwrap();
-        storage.async_get(make_key(b"x"),
+        storage.async_commit(KvContext::none(),
+                             vec![make_key(b"x")],
+                             100,
+                             101,
+                             expect_ok())
+               .unwrap();
+        storage.async_get(KvContext::none(), make_key(b"x"), 100, expect_get_none()).unwrap();
+        storage.async_get(KvContext::none(),
+                          make_key(b"x"),
                           101,
-                          KvOpt::none(),
                           expect_get_val(b"100".to_vec()))
                .unwrap();
         storage.stop().unwrap();
@@ -471,26 +476,26 @@ mod tests {
     #[test]
     fn test_scan() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_prewrite(vec![
+        storage.async_prewrite(KvContext::none(),
+                               vec![
             Mutation::Put((make_key(b"a"), b"aa".to_vec())),
             Mutation::Put((make_key(b"b"), b"bb".to_vec())),
             Mutation::Put((make_key(b"c"), b"cc".to_vec())),
             ],
                                b"a".to_vec(),
                                1,
-                               KvOpt::none(),
                                expect_ok())
                .unwrap();
-        storage.async_commit(vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
+        storage.async_commit(KvContext::none(),
+                             vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
                              1,
                              2,
-                             KvOpt::none(),
                              expect_ok())
                .unwrap();
-        storage.async_scan(make_key(b"\x00"),
+        storage.async_scan(KvContext::none(),
+                           make_key(b"\x00"),
                            1000,
                            5,
-                           KvOpt::none(),
                            expect_scan(vec![
             Some((bytes::encode_bytes(b"a"), b"aa".to_vec())),
             Some((bytes::encode_bytes(b"b"), b"bb".to_vec())),
@@ -503,34 +508,44 @@ mod tests {
     #[test]
     fn test_txn() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_prewrite(vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+        storage.async_prewrite(KvContext::none(),
+                               vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                                b"x".to_vec(),
                                100,
-                               KvOpt::none(),
                                expect_ok())
                .unwrap();
-        storage.async_prewrite(vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
+        storage.async_prewrite(KvContext::none(),
+                               vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                                b"y".to_vec(),
                                101,
-                               KvOpt::none(),
                                expect_ok())
                .unwrap();
-        storage.async_commit(vec![make_key(b"x")], 100, 110, KvOpt::none(), expect_ok()).unwrap();
-        storage.async_commit(vec![make_key(b"y")], 101, 111, KvOpt::none(), expect_ok()).unwrap();
-        storage.async_get(make_key(b"x"),
+        storage.async_commit(KvContext::none(),
+                             vec![make_key(b"x")],
+                             100,
+                             110,
+                             expect_ok())
+               .unwrap();
+        storage.async_commit(KvContext::none(),
+                             vec![make_key(b"y")],
+                             101,
+                             111,
+                             expect_ok())
+               .unwrap();
+        storage.async_get(KvContext::none(),
+                          make_key(b"x"),
                           120,
-                          KvOpt::none(),
                           expect_get_val(b"100".to_vec()))
                .unwrap();
-        storage.async_get(make_key(b"y"),
+        storage.async_get(KvContext::none(),
+                          make_key(b"y"),
                           120,
-                          KvOpt::none(),
                           expect_get_val(b"101".to_vec()))
                .unwrap();
-        storage.async_prewrite(vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
+        storage.async_prewrite(KvContext::none(),
+                               vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
                                b"x".to_vec(),
                                105,
-                               KvOpt::none(),
                                expect_fail())
                .unwrap();
         storage.stop().unwrap();

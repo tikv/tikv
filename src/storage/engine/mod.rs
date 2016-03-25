@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use self::memory::EngineBtree;
 use self::rocksdb::EngineRocksdb;
 use self::raftkv::{Config, RaftKv};
-use storage::{Key, Value, KvPair, KvOpt};
+use storage::{Key, Value, KvPair, KvContext};
 use pd;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -19,16 +19,16 @@ pub enum Modify {
 }
 
 pub trait Engine : Send + Sync + Debug {
-    fn get(&self, key: &Key, opt: &KvOpt) -> Result<Option<Value>>;
-    fn seek(&self, key: &Key, opt: &KvOpt) -> Result<Option<KvPair>>;
-    fn write(&self, batch: Vec<Modify>, opt: &KvOpt) -> Result<()>;
+    fn get(&self, ctx: &KvContext, key: &Key) -> Result<Option<Value>>;
+    fn seek(&self, ctx: &KvContext, key: &Key) -> Result<Option<KvPair>>;
+    fn write(&self, ctx: &KvContext, batch: Vec<Modify>) -> Result<()>;
 
-    fn put(&self, key: Key, value: Value, opt: &KvOpt) -> Result<()> {
-        self.write(vec![Modify::Put((key, value))], opt)
+    fn put(&self, ctx: &KvContext, key: Key, value: Value) -> Result<()> {
+        self.write(ctx, vec![Modify::Put((key, value))])
     }
 
-    fn delete(&self, key: Key, opt: &KvOpt) -> Result<()> {
-        self.write(vec![Modify::Delete(key)], opt)
+    fn delete(&self, ctx: &KvContext, key: Key) -> Result<()> {
+        self.write(ctx, vec![Modify::Delete(key)])
     }
 }
 
@@ -77,7 +77,7 @@ pub type Result<T> = result::Result<T, Error>;
 mod tests {
     use super::*;
     use tempdir::TempDir;
-    use storage::{make_key, KvOpt};
+    use storage::{make_key, KvContext};
     use util::codec::bytes;
 
     #[test]
@@ -99,24 +99,25 @@ mod tests {
     }
 
     fn must_put<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
-        engine.put(make_key(key), value.to_vec(), &KvOpt::none()).unwrap();
+        engine.put(&KvContext::none(), make_key(key), value.to_vec()).unwrap();
     }
 
     fn must_delete<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
-        engine.delete(make_key(key), &KvOpt::none()).unwrap();
+        engine.delete(&KvContext::none(), make_key(key)).unwrap();
     }
 
     fn assert_has<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
-        assert_eq!(engine.get(&make_key(key), &KvOpt::none()).unwrap().unwrap(),
+        assert_eq!(engine.get(&KvContext::none(), &make_key(key)).unwrap().unwrap(),
                    value);
     }
 
     fn assert_none<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
-        assert_eq!(engine.get(&make_key(key), &KvOpt::none()).unwrap(), None);
+        assert_eq!(engine.get(&KvContext::none(), &make_key(key)).unwrap(),
+                   None);
     }
 
     fn assert_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
-        let (k, v) = engine.seek(&make_key(key), &KvOpt::none()).unwrap().unwrap();
+        let (k, v) = engine.seek(&KvContext::none(), &make_key(key)).unwrap().unwrap();
         assert_eq!((k, &v as &[u8]), (bytes::encode_bytes(pair.0), pair.1));
     }
 
@@ -129,15 +130,15 @@ mod tests {
     }
 
     fn batch<T: Engine + ?Sized>(engine: &T) {
-        engine.write(vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
-                          Modify::Put((make_key(b"y"), b"2".to_vec()))],
-                     &KvOpt::none())
+        engine.write(&KvContext::none(),
+                     vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
+                          Modify::Put((make_key(b"y"), b"2".to_vec()))])
               .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
-        engine.write(vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))],
-                     &KvOpt::none())
+        engine.write(&KvContext::none(),
+                     vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
               .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
@@ -150,7 +151,7 @@ mod tests {
         must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
-        assert_eq!(engine.seek(&make_key(b"z\x00"), &KvOpt::none()).unwrap(),
+        assert_eq!(engine.seek(&KvContext::none(), &make_key(b"z\x00")).unwrap(),
                    None);
         must_delete(engine, b"x");
         must_delete(engine, b"z");

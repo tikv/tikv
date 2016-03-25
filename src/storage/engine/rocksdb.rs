@@ -3,7 +3,7 @@ use std::error::Error;
 
 use rocksdb::{DB, Writable, WriteBatch, IteratorMode, Direction};
 
-use storage::{Key, Value, KvPair, KvOpt};
+use storage::{Key, Value, KvPair, KvContext};
 use super::{Engine, Modify, Result};
 
 pub struct EngineRocksdb {
@@ -26,7 +26,7 @@ impl Debug for EngineRocksdb {
 }
 
 impl Engine for EngineRocksdb {
-    fn get(&self, key: &Key, _: &KvOpt) -> Result<Option<Value>> {
+    fn get(&self, _: &KvContext, key: &Key) -> Result<Option<Value>> {
         trace!("EngineRocksdb: get {:?}", key);
         self.db
             .get(key.get_rawkey())
@@ -34,14 +34,14 @@ impl Engine for EngineRocksdb {
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 
-    fn seek(&self, key: &Key, _: &KvOpt) -> Result<Option<KvPair>> {
+    fn seek(&self, _: &KvContext, key: &Key) -> Result<Option<KvPair>> {
         trace!("EngineRocksdb: seek {:?}", key);
         let mode = IteratorMode::From(key.get_rawkey(), Direction::Forward);
         let pair = self.db.iterator(mode).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
         Ok(pair)
     }
 
-    fn write(&self, batch: Vec<Modify>, _: &KvOpt) -> Result<()> {
+    fn write(&self, _: &KvContext, batch: Vec<Modify>) -> Result<()> {
         let wb = WriteBatch::new();
         for rev in batch {
             match rev {
