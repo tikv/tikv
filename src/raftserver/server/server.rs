@@ -257,7 +257,10 @@ impl<T: PdClient + 'static> Server<T> {
             resp_msg.set_cmd_resp(resp);
             // Use send channel to let server return the
             // response to the specified connection with token.
-            ch.write_data(token, ConnData::new(msg_id, resp_msg))
+            ch.send(Msg::WriteData {
+                token: token,
+                data: ConnData::new(msg_id, resp_msg),
+            })
         });
 
         let uuid = msg.get_header().get_uuid().to_vec();
