@@ -162,7 +162,6 @@ mod tests {
     use rocksdb::Writable;
 
     use super::*;
-    use raftserver::Result;
     use kvproto::metapb::Region;
 
     #[test]
