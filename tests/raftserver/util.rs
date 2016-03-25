@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
-use env_logger;
+use tikv::util::{self as tikv_util, logger};
+use std::env;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use tempdir::TempDir;
@@ -200,9 +201,10 @@ pub fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
 }
 
-// A help function to simplify using env_logger.
-pub fn init_env_log() {
-    env_logger::init().expect("");
+// A help function to initial logger.
+pub fn init_log() {
+    let level = logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or("debug".to_owned()));
+    tikv_util::init_log(level).unwrap();
 }
 
 pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
