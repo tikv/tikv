@@ -39,6 +39,12 @@ impl ServerCluster {
             pd_client: pd_client,
         }
     }
+
+    fn alloc_msg_id(&self) -> u64 {
+        let mut msg_id = self.msg_id.lock().unwrap();
+        *msg_id += 1;
+        *msg_id
+    }
 }
 
 impl Simulator for ServerCluster {
@@ -99,9 +105,8 @@ impl Simulator for ServerCluster {
         msg.set_msg_type(MessageType::Cmd);
         msg.set_cmd_req(request);
 
-        let mut msg_id = self.msg_id.lock().unwrap();
-        *msg_id += 1;
-        try!(rpc::encode_msg(&mut conn, *msg_id, &msg));
+        let msg_id = self.alloc_msg_id();
+        try!(rpc::encode_msg(&mut conn, msg_id, &msg));
 
         conn.set_read_timeout(Some(timeout)).unwrap();
 
@@ -109,7 +114,7 @@ impl Simulator for ServerCluster {
         let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg));
 
         assert_eq!(resp_msg.get_msg_type(), MessageType::CmdResp);
-        assert_eq!(*msg_id, get_msg_id);
+        assert_eq!(msg_id, get_msg_id);
 
         Ok(resp_msg.take_cmd_resp())
     }
@@ -126,9 +131,8 @@ impl Simulator for ServerCluster {
         msg.set_msg_type(MessageType::Raft);
         msg.set_raft(raft_msg);
 
-        let mut msg_id = self.msg_id.lock().unwrap();
-        *msg_id += 1;
-        try!(rpc::encode_msg(&mut conn, *msg_id, &msg));
+        let msg_id = self.alloc_msg_id();
+        try!(rpc::encode_msg(&mut conn, msg_id, &msg));
 
         Ok(())
     }
