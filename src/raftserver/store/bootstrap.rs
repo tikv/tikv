@@ -22,7 +22,7 @@ pub fn bootstrap_store(engine: Arc<DB>,
     let mut count: u32 = 0;
     try!(engine.scan(keys::MIN_KEY,
                      keys::MAX_KEY,
-                     &mut |_, _| -> Result<(bool)> {
+                     &mut |_, _| {
                          count += 1;
                          Ok(false)
                      }));
