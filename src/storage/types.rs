@@ -41,21 +41,21 @@ pub fn make_key(k: &[u8]) -> Key {
 }
 
 #[derive(Debug)]
-pub struct KvOpt {
+pub struct KvContext {
     pub region_id: u64,
     pub peer: Peer,
 }
 
-impl KvOpt {
-    pub fn new(region_id: u64, peer: Peer) -> KvOpt {
-        KvOpt {
+impl KvContext {
+    pub fn new(region_id: u64, peer: Peer) -> KvContext {
+        KvContext {
             region_id: region_id,
             peer: peer,
         }
     }
 
     #[cfg(test)]
-    pub fn none() -> KvOpt {
-        KvOpt::new(0, Peer::new())
+    pub fn none() -> KvContext {
+        KvContext::new(0, Peer::new())
     }
 }

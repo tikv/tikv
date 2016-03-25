@@ -84,7 +84,7 @@ impl Simulator for PdTransport {
     }
 }
 
-type EngineInfo = (KvOpt, RaftKv<TestPdClient>);
+type EngineInfo = (KvContext, RaftKv<TestPdClient>);
 
 /// Build an engine with given path as rocksdb directory.
 fn build_engine(pathes: Vec<TempDir>) -> EngineInfo {
@@ -105,7 +105,7 @@ fn build_engine(pathes: Vec<TempDir>) -> EngineInfo {
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
     assert_eq!(region.get_peers().len(), 1);
 
-    let res = (KvOpt::new(region.get_region_id(), region.get_peers()[0].clone()),
+    let res = (KvContext::new(region.get_region_id(), region.get_peers()[0].clone()),
                raft_kv);
 
     let region_id = region.get_region_id();
@@ -125,51 +125,51 @@ fn build_engine(pathes: Vec<TempDir>) -> EngineInfo {
            actual_count);
 }
 
-fn put(engine: &Engine, k: &Key, opt: &KvOpt, v: &[u8]) {
+fn put(engine: &Engine, ctx: &KvContext, k: &Key, v: &[u8]) {
     let put = Modify::Put((k.clone(), v.to_vec()));
-    engine.write(vec![put], &opt).unwrap();
+    engine.write(&ctx, vec![put]).unwrap();
 }
 
-fn delete(engine: &Engine, k: &Key, opt: &KvOpt) {
+fn delete(engine: &Engine, ctx: &KvContext, k: &Key) {
     let delete = Modify::Delete(k.clone());
-    engine.write(vec![delete], &opt).unwrap();
+    engine.write(&ctx, vec![delete]).unwrap();
 }
 
 #[test]
 fn test_normal() {
     let pathes = (0..5).map(|_| TempDir::new("test-raftkv").unwrap()).collect();
-    let (opt, engine) = build_engine(pathes);
+    let (ctx, engine) = build_engine(pathes);
 
     thread::sleep(Duration::from_secs(1));
 
     let k1 = Key::new(b"b".to_vec());
-    assert_eq!(engine.get(&k1, &opt).unwrap(), None);
+    assert_eq!(engine.get(&ctx, &k1).unwrap(), None);
 
-    put(&engine, &k1, &opt, b"b");
-    assert_eq!(engine.get(&k1, &opt).unwrap(), Some(b"b".to_vec()));
+    put(&engine, &ctx, &k1, b"b");
+    assert_eq!(engine.get(&ctx, &k1).unwrap(), Some(b"b".to_vec()));
 
-    put(&engine, &k1, &opt, b"c");
-    assert_eq!(engine.get(&k1, &opt).unwrap(), Some(b"c".to_vec()));
+    put(&engine, &ctx, &k1, b"c");
+    assert_eq!(engine.get(&ctx, &k1).unwrap(), Some(b"c".to_vec()));
 
-    assert_eq!(engine.seek(&k1, &opt).unwrap(),
+    assert_eq!(engine.seek(&ctx, &k1).unwrap(),
                Some((b"b".to_vec(), b"c".to_vec())));
-    assert_eq!(engine.seek(&Key::new(b"a".to_vec()), &opt).unwrap(),
+    assert_eq!(engine.seek(&ctx, &Key::new(b"a".to_vec())).unwrap(),
                Some((b"b".to_vec(), b"c".to_vec())));
-    assert_eq!(engine.seek(&Key::new(b"b\0".to_vec()), &opt).unwrap(), None);
+    assert_eq!(engine.seek(&ctx, &Key::new(b"b\0".to_vec())).unwrap(), None);
 
     // it's ok to delete a non-exist key.
     let k2 = Key::new(b"c".to_vec());
-    assert_eq!(engine.get(&k2, &opt).unwrap(), None);
-    delete(&engine, &k2, &opt);
+    assert_eq!(engine.get(&ctx, &k2).unwrap(), None);
+    delete(&engine, &ctx, &k2);
 
-    delete(&engine, &k1, &opt);
-    assert_eq!(engine.get(&k1, &opt).unwrap(), None);
+    delete(&engine, &ctx, &k1);
+    assert_eq!(engine.get(&ctx, &k1).unwrap(), None);
 }
 
 #[test]
 fn test_batch() {
     let pathes = (0..5).map(|_| TempDir::new("test-raftkv").unwrap()).collect();
-    let (opt, engine) = build_engine(pathes);
+    let (ctx, engine) = build_engine(pathes);
 
     thread::sleep(Duration::from_secs(1));
 
@@ -179,11 +179,11 @@ fn test_batch() {
         let put = Modify::Put((k, i.to_string().into_bytes()));
         mutation.push(put);
     }
-    engine.write(mutation, &opt).unwrap();
+    engine.write(&ctx, mutation).unwrap();
 
     for i in 1..100 {
         let k = Key::new(i.to_string().into_bytes());
-        assert_eq!(engine.get(&k, &opt).unwrap(),
+        assert_eq!(engine.get(&ctx, &k).unwrap(),
                    Some(i.to_string().into_bytes()));
     }
 
@@ -193,10 +193,10 @@ fn test_batch() {
         let delete = Modify::Delete(k);
         mutation.push(delete);
     }
-    engine.write(mutation, &opt).unwrap();
+    engine.write(&ctx, mutation).unwrap();
 
     for i in 1..100 {
         let k = Key::new(i.to_string().into_bytes());
-        assert_eq!(engine.get(&k, &opt).unwrap(), None);
+        assert_eq!(engine.get(&ctx, &k).unwrap(), None);
     }
 }
