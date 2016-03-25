@@ -6,14 +6,12 @@ use mio::{self, Token, EventLoop, EventSet, PollOpt, Sender};
 use mio::tcp::{TcpListener, TcpStream};
 use protobuf::RepeatedField;
 
-use kvproto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanResponse,
-                       CmdPrewriteRequest, CmdPrewriteResponse, CmdCommitRequest,
-                       CmdCommitResponse, CmdCleanupRequest, CmdCleanupResponse,
-                       CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
-                       CmdCommitThenGetRequest, CmdCommitThenGetResponse, Request, Response,
-                       MessageType, Item, ResultType, ResultType_Type, LockInfo};
-use storage::{Storage, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
-              Callback};
+use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
+                       CmdCleanupResponse, CmdRollbackThenGetResponse, CmdCommitThenGetResponse,
+                       Request, Response, MessageType, Item, ResultType, ResultType_Type,
+                       LockInfo, Operator};
+use storage::{Storage, Key, Value, KvPair, KvContext, Mutation, MaybeLocked, MaybeComitted,
+              MaybeRolledback, Callback};
 use storage::Result as ResultStorage;
 use storage::Error as StorageError;
 use storage::EngineError;
@@ -44,7 +42,7 @@ impl Server {
     }
 
     pub fn handle_get(&mut self,
-                      msg: &Request,
+                      mut msg: Request,
                       msg_id: u64,
                       token: Token,
                       event_loop: &mut EventLoop<Server>)
@@ -52,17 +50,19 @@ impl Server {
         if !msg.has_cmd_get_req() {
             format_err!("Msg doesn't contain a CmdGetRequest");
         }
-        let cmd_get_req: &CmdGetRequest = msg.get_cmd_get_req();
-        let key = cmd_get_req.get_key_address().clone();
+        let mut cmd_get_req = msg.take_cmd_get_req();
+        let mut key_address = cmd_get_req.take_key_address();
+        let key = key_address.take_key();
+        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_get_done, sender, token, msg_id);
         self.store
-            .async_get(key.into(), cmd_get_req.get_version(), cb)
+            .async_get(ctx, Key::new(key), cmd_get_req.get_version(), cb)
             .map_err(ServerError::Storage)
     }
 
     pub fn handle_scan(&mut self,
-                       msg: &Request,
+                       mut msg: Request,
                        msg_id: u64,
                        token: Token,
                        event_loop: &mut EventLoop<Server>)
@@ -70,16 +70,20 @@ impl Server {
         if !msg.has_cmd_scan_req() {
             format_err!("Msg doesn't contain a CmdScanRequest");
         }
-        let cmd_scan_req: &CmdScanRequest = msg.get_cmd_scan_req();
+        let mut cmd_scan_req = msg.take_cmd_scan_req();
         let sender = event_loop.channel();
-        let start_key = cmd_scan_req.get_key_address().clone();
+        let mut start_key_addresss = cmd_scan_req.take_key_address();
+        let start_key = start_key_addresss.take_key();
+        let ctx = KvContext::new(start_key_addresss.get_region_id(),
+                                 start_key_addresss.take_peer());
         debug!("start_key [{:?}]", start_key);
         let cb = Server::make_cb::<Vec<ResultStorage<KvPair>>>(Server::cmd_scan_done,
                                                                sender,
                                                                token,
                                                                msg_id);
         self.store
-            .async_scan(start_key.into(),
+            .async_scan(ctx,
+                        Key::new(start_key),
                         cmd_scan_req.get_limit() as usize,
                         cmd_scan_req.get_version(),
                         cb)
@@ -87,7 +91,7 @@ impl Server {
     }
 
     pub fn handle_prewrite(&mut self,
-                           msg: &Request,
+                           mut msg: Request,
                            msg_id: u64,
                            token: Token,
                            event_loop: &mut EventLoop<Server>)
@@ -95,24 +99,36 @@ impl Server {
         if !msg.has_cmd_prewrite_req() {
             format_err!("Msg doesn't contain a CmdPrewriteRequest");
         }
-        let cmd_prewrite_req: &CmdPrewriteRequest = msg.get_cmd_prewrite_req();
+        let mut cmd_prewrite_req = msg.take_cmd_prewrite_req();
         let sender = event_loop.channel();
-        let mut mutations = vec![];
-        mutations.extend(cmd_prewrite_req.get_puts().iter().map(|kv| {
-            Mutation::Put((kv.get_key_address().clone().into(), kv.get_value().to_vec()))
-        }));
-        mutations.extend(cmd_prewrite_req.get_dels()
-                                         .iter()
-                                         .map(|k| Mutation::Delete(k.clone().into())));
-        mutations.extend(cmd_prewrite_req.get_locks()
-                                         .iter()
-                                         .map(|k| Mutation::Lock(k.clone().into())));
+        let mutations = cmd_prewrite_req.take_mutations()
+                                        .into_iter()
+                                        .map(|mut x| {
+                                            match x.get_op() {
+                                                Operator::OpPut => {
+                                                    Mutation::Put((Key::new(x.take_key()),
+                                                                   x.take_value()))
+                                                }
+                                                Operator::OpDel => {
+                                                    Mutation::Delete(Key::new(x.take_key()))
+                                                }
+                                                Operator::OpLock => {
+                                                    Mutation::Lock(Key::new(x.take_key()))
+                                                }
+                                            }
+                                        })
+                                        .collect();
+        let ctx = {
+            let mut key_address = cmd_prewrite_req.take_key_address();
+            KvContext::new(key_address.get_region_id(), key_address.take_peer())
+        };
         let cb = Server::make_cb::<Vec<ResultStorage<()>>>(Server::cmd_prewrite_done,
                                                            sender,
                                                            token,
                                                            msg_id);
         self.store
-            .async_prewrite(mutations,
+            .async_prewrite(ctx,
+                            mutations,
                             cmd_prewrite_req.get_primary_lock().to_vec(),
                             cmd_prewrite_req.get_start_version(),
                             cb)
@@ -120,7 +136,7 @@ impl Server {
     }
 
     pub fn handle_commit(&mut self,
-                         msg: &Request,
+                         mut msg: Request,
                          msg_id: u64,
                          token: Token,
                          event_loop: &mut EventLoop<Server>)
@@ -128,14 +144,20 @@ impl Server {
         if !msg.has_cmd_commit_req() {
             format_err!("Msg doesn't contain a CmdCommitRequest");
         }
-        let cmd_commit_req: &CmdCommitRequest = msg.get_cmd_commit_req();
+        let mut cmd_commit_req = msg.take_cmd_commit_req();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<()>(Server::cmd_commit_done, sender, token, msg_id);
+        let ctx = {
+            let mut first = cmd_commit_req.get_keys_address()[0].clone();
+            KvContext::new(first.get_region_id(), first.take_peer())
+        };
+        let keys = cmd_commit_req.take_keys_address()
+                                 .into_iter()
+                                 .map(|mut x| Key::new(x.take_key()))
+                                 .collect();
         self.store
-            .async_commit(cmd_commit_req.get_keys_address()
-                                        .iter()
-                                        .map(|x| x.clone().into())
-                                        .collect(),
+            .async_commit(ctx,
+                          keys,
                           cmd_commit_req.get_start_version(),
                           cmd_commit_req.get_commit_version(),
                           cb)
@@ -143,7 +165,7 @@ impl Server {
     }
 
     pub fn handle_cleanup(&mut self,
-                          msg: &Request,
+                          mut msg: Request,
                           msg_id: u64,
                           token: Token,
                           event_loop: &mut EventLoop<Server>)
@@ -151,18 +173,19 @@ impl Server {
         if !msg.has_cmd_cleanup_req() {
             format_err!("Msg doesn't contain a CmdCleanupRequest");
         }
-        let cmd_cleanup_req: &CmdCleanupRequest = msg.get_cmd_cleanup_req();
+        let mut cmd_cleanup_req = msg.take_cmd_cleanup_req();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<()>(Server::cmd_cleanup_done, sender, token, msg_id);
+        let mut key_address = cmd_cleanup_req.take_key_address();
+        let key = key_address.take_key();
+        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
-            .async_cleanup(cmd_cleanup_req.get_key_address().clone().into(),
-                           cmd_cleanup_req.get_start_version(),
-                           cb)
+            .async_cleanup(ctx, Key::new(key), cmd_cleanup_req.get_start_version(), cb)
             .map_err(ServerError::Storage)
     }
 
     pub fn handle_commit_then_get(&mut self,
-                                  msg: &Request,
+                                  mut msg: Request,
                                   msg_id: u64,
                                   token: Token,
                                   event_loop: &mut EventLoop<Server>)
@@ -170,14 +193,18 @@ impl Server {
         if !msg.has_cmd_commit_get_req() {
             format_err!("Msg doesn't contain a CmdCommitThenGetRequest");
         }
-        let cmd_commit_get_req: &CmdCommitThenGetRequest = msg.get_cmd_commit_get_req();
+        let mut cmd_commit_get_req = msg.take_cmd_commit_get_req();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_commit_get_done,
                                                   sender,
                                                   token,
                                                   msg_id);
+        let mut key_address = cmd_commit_get_req.take_key_address();
+        let key = key_address.take_key();
+        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
-            .async_commit_then_get(cmd_commit_get_req.get_key_address().clone().into(),
+            .async_commit_then_get(ctx,
+                                   Key::new(key),
                                    cmd_commit_get_req.get_lock_version(),
                                    cmd_commit_get_req.get_commit_version(),
                                    cmd_commit_get_req.get_get_version(),
@@ -186,7 +213,7 @@ impl Server {
     }
 
     pub fn handle_rollback_then_get(&mut self,
-                                    msg: &Request,
+                                    mut msg: Request,
                                     msg_id: u64,
                                     token: Token,
                                     event_loop: &mut EventLoop<Server>)
@@ -194,14 +221,18 @@ impl Server {
         if !msg.has_cmd_rb_get_req() {
             format_err!("Msg doesn't contain a CmdRollbackThenGetRequest");
         }
-        let cmd_rollback_get_req: &CmdRollbackThenGetRequest = msg.get_cmd_rb_get_req();
+        let mut cmd_rollback_get_req = msg.take_cmd_rb_get_req();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_rollback_get_done,
                                                   sender,
                                                   token,
                                                   msg_id);
+        let mut key_address = cmd_rollback_get_req.take_key_address();
+        let key = key_address.take_key();
+        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
-            .async_rollback_then_get(cmd_rollback_get_req.get_key_address().clone().into(),
+            .async_rollback_then_get(ctx,
+                                     Key::new(key),
                                      cmd_rollback_get_req.get_lock_version(),
                                      cb)
             .map_err(ServerError::Storage)
@@ -498,16 +529,16 @@ impl Server {
                msg_id,
                req.get_field_type());
         if let Err(e) = match req.get_field_type() {
-            MessageType::CmdGet => self.handle_get(&req, msg_id, token, event_loop),
-            MessageType::CmdScan => self.handle_scan(&req, msg_id, token, event_loop),
-            MessageType::CmdPrewrite => self.handle_prewrite(&req, msg_id, token, event_loop),
-            MessageType::CmdCommit => self.handle_commit(&req, msg_id, token, event_loop),
-            MessageType::CmdCleanup => self.handle_cleanup(&req, msg_id, token, event_loop),
+            MessageType::CmdGet => self.handle_get(req, msg_id, token, event_loop),
+            MessageType::CmdScan => self.handle_scan(req, msg_id, token, event_loop),
+            MessageType::CmdPrewrite => self.handle_prewrite(req, msg_id, token, event_loop),
+            MessageType::CmdCommit => self.handle_commit(req, msg_id, token, event_loop),
+            MessageType::CmdCleanup => self.handle_cleanup(req, msg_id, token, event_loop),
             MessageType::CmdCommitThenGet => {
-                self.handle_commit_then_get(&req, msg_id, token, event_loop)
+                self.handle_commit_then_get(req, msg_id, token, event_loop)
             }
             MessageType::CmdRollbackThenGet => {
-                self.handle_rollback_then_get(&req, msg_id, token, event_loop)
+                self.handle_rollback_then_get(req, msg_id, token, event_loop)
             }
         } {
             error!("Some error occur err[{:?}]", e);
