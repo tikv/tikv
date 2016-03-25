@@ -59,14 +59,16 @@ pub fn call_command(sendch: &SendCh,
     let pair = Arc::new((Mutex::new(resp), Condvar::new()));
     let pair2 = pair.clone();
 
-    try!(sendch.send_command(request,
-                             Box::new(move |resp: RaftCmdResponse| -> Result<()> {
-                                 let &(ref lock, ref cvar) = &*pair2;
-                                 let mut v = lock.lock().unwrap();
-                                 *v = Some(resp);
-                                 cvar.notify_one();
-                                 Ok(())
-                             })));
+    try!(sendch.send(Msg::RaftCmd {
+        request: request,
+        callback: Box::new(move |resp: RaftCmdResponse| -> Result<()> {
+            let &(ref lock, ref cvar) = &*pair2;
+            let mut v = lock.lock().unwrap();
+            *v = Some(resp);
+            cvar.notify_one();
+            Ok(())
+        }),
+    }));
 
     let &(ref lock, ref cvar) = &*pair;
     let mut v = lock.lock().unwrap();
@@ -102,21 +104,6 @@ impl SendCh {
     pub fn send(&self, msg: Msg) -> Result<()> {
         try!(send_msg(&self.ch, msg));
         Ok(())
-    }
-
-    pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
-        self.send(Msg::RaftMessage(msg))
-    }
-
-    pub fn send_command(&self, msg: RaftCmdRequest, cb: Callback) -> Result<()> {
-        self.send(Msg::RaftCmd {
-            request: msg,
-            callback: cb,
-        })
-    }
-
-    pub fn send_quit(&self) -> Result<()> {
-        self.send(Msg::Quit)
     }
 }
 
@@ -164,12 +151,14 @@ mod tests {
         });
 
         let (tx, rx) = channel();
-        sendch.send_command(RaftCmdRequest::new(),
-                            Box::new(move |_: RaftCmdResponse| -> Result<()> {
-                                tx.send(1).unwrap();
-                                Ok(())
-                            }))
-              .unwrap();
+        let cmd = Msg::RaftCmd {
+            request: RaftCmdRequest::new(),
+            callback: Box::new(move |_: RaftCmdResponse| -> Result<()> {
+                tx.send(1).unwrap();
+                Ok(())
+            }),
+        };
+        sendch.send(cmd).unwrap();
 
         rx.recv().unwrap();
 
@@ -181,7 +170,7 @@ mod tests {
             _ => panic!("should failed with timeout"),
         }
 
-        sendch.send_quit().unwrap();
+        sendch.send(Msg::Quit).unwrap();
 
         t.join().unwrap();
     }
