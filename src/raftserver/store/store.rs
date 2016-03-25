@@ -254,6 +254,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
+
         try!(peer.raft_group.step(msg.get_message().clone()));
 
         // Add into pending raft groups for later handling ready.
