@@ -76,31 +76,8 @@ impl SendCh {
         SendCh { ch: ch }
     }
 
-    fn send(&self, msg: Msg) -> Result<()> {
+    pub fn send(&self, msg: Msg) -> Result<()> {
         try!(send_msg(&self.ch, msg));
-        Ok(())
-    }
-
-    pub fn kill(&self) -> Result<()> {
-        try!(self.send(Msg::Quit));
-        Ok(())
-    }
-
-    pub fn write_data(&self, token: Token, data: ConnData) -> Result<()> {
-        try!(self.send(Msg::WriteData {
-            token: token,
-            data: data,
-        }));
-
-        Ok(())
-    }
-
-    pub fn send_peer(&self, addr: String, data: ConnData) -> Result<()> {
-        try!(self.send(Msg::SendPeer {
-            addr: addr,
-            data: data,
-        }));
-
         Ok(())
     }
 }
@@ -129,12 +106,12 @@ mod tests {
     #[test]
     fn test_sender() {
         let mut event_loop = EventLoop::new().unwrap();
-        let sender = SendCh::new(event_loop.channel());
+        let ch = SendCh::new(event_loop.channel());
         let h = thread::spawn(move || {
             event_loop.run(&mut SenderHandler).unwrap();
         });
 
-        sender.kill().unwrap();
+        ch.send(Msg::Quit).unwrap();
 
         h.join().unwrap();
     }
