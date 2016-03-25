@@ -2,7 +2,7 @@
 
 use raftserver::server::Server;
 use raftserver::server::Config as ServerConfig;
-use raftserver::server::SendCh;
+use raftserver::server::{SendCh, Msg};
 use raftserver::server::transport::ServerTransport;
 use raftserver::errors::Error as RaftServerError;
 use util::HandyRwLock;
@@ -137,7 +137,7 @@ impl<T: PdClient> RaftKv<T> {
     }
 
     fn close(&mut self) {
-        if let Err(e) = self.ch.kill() {
+        if let Err(e) = self.ch.send(Msg::Quit) {
             error!("failed to send kill message to raft server: {}", e);
         }
         let handler = self.handler.take().unwrap();
