@@ -47,6 +47,10 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
                        .unwrap()
                        .get_region_epoch()
                        .clone();
+
+    // Conf version must change.
+    assert!(epoch.get_conf_ver() > 1);
+
     let change_peer = new_admin_request(1,
                                         new_change_peer_cmd(ConfChangeType::AddNode,
                                                             new_peer(2, 2, 2),
