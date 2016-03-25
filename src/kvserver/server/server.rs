@@ -11,8 +11,8 @@ use kvproto::kvrpcpb::{CmdGetRequest, CmdGetResponse, CmdScanRequest, CmdScanRes
                        CmdCommitResponse, CmdCleanupRequest, CmdCleanupResponse,
                        CmdRollbackThenGetRequest, CmdRollbackThenGetResponse,
                        CmdCommitThenGetRequest, CmdCommitThenGetResponse, Request, Response,
-                       MessageType, Item, ResultType, ResultType_Type, LockInfo};
-use storage::{Storage, Value, KvPair, KvOpt, Mutation, MaybeLocked, MaybeComitted,
+                       MessageType, Item, ResultType, ResultType_Type, LockInfo, Operator};
+use storage::{Storage, Key, Value, KvPair, KvOpt, Mutation, MaybeLocked, MaybeComitted,
               MaybeRolledback, Callback};
 use storage::Result as ResultStorage;
 use storage::Error as StorageError;
@@ -101,33 +101,32 @@ impl Server {
         }
         let cmd_prewrite_req: &CmdPrewriteRequest = msg.get_cmd_prewrite_req();
         let sender = event_loop.channel();
-        let mut mutations = vec![];
-        mutations.extend(cmd_prewrite_req.get_puts().iter().map(|kv| {
-            Mutation::Put((kv.get_key_address().clone().into(), kv.get_value().to_vec()))
-        }));
-        mutations.extend(cmd_prewrite_req.get_dels()
-                                         .iter()
-                                         .map(|k| Mutation::Delete(k.clone().into())));
-        mutations.extend(cmd_prewrite_req.get_locks()
-                                         .iter()
-                                         .map(|k| Mutation::Lock(k.clone().into())));
+        let mutations = cmd_prewrite_req.get_mutations()
+                                        .into_iter()
+                                        .map(|x| {
+                                            match x.get_op() {
+                                                Operator::OpPut => {
+                                                    Mutation::Put((Key::new(x.get_key().to_owned()),
+                                                                   x.get_value().to_owned()))
+                                                }
+                                                Operator::OpDel => {
+                                                    Mutation::Delete(Key::new(x.get_key()
+                                                                               .to_owned()))
+                                                }
+                                                Operator::OpLock => {
+                                                    Mutation::Lock(Key::new(x.get_key().to_owned()))
+                                                }
+                                            }
+                                        })
+                                        .collect();
+        let opt = {
+            let key_address = cmd_prewrite_req.get_key_address();
+            KvOpt::new(key_address.get_region_id(), key_address.get_peer().clone())
+        };
         let cb = Server::make_cb::<Vec<ResultStorage<()>>>(Server::cmd_prewrite_done,
                                                            sender,
                                                            token,
                                                            msg_id);
-        // TODO: Modify pb message, send only one KvOpt from client.
-        let opt = {
-            if cmd_prewrite_req.get_puts().len() > 0 {
-                let key_address = cmd_prewrite_req.get_puts()[0].get_key_address().clone();
-                KvOpt::new(key_address.get_region_id(), key_address.get_peer().clone())
-            } else if cmd_prewrite_req.get_dels().len() > 0 {
-                let key_address = cmd_prewrite_req.get_dels()[0].clone();
-                KvOpt::new(key_address.get_region_id(), key_address.get_peer().clone())
-            } else {
-                let key_address = cmd_prewrite_req.get_locks()[0].clone();
-                KvOpt::new(key_address.get_region_id(), key_address.get_peer().clone())
-            }
-        };
         self.store
             .async_prewrite(mutations,
                             cmd_prewrite_req.get_primary_lock().to_vec(),
