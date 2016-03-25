@@ -135,7 +135,7 @@ impl PeerStorage {
 
         try!(self.engine.scan(&start_key,
                               &end_key,
-                              &mut |_, value| -> Result<bool> {
+                              &mut |_, value| {
                                   let mut entry = Entry::new();
                                   try!(entry.merge_from_bytes(value));
 
@@ -372,7 +372,7 @@ impl PeerStorage {
 
         try!(self.engine.scan(&start_key,
                               &end_key,
-                              &mut |key, _| -> Result<bool> {
+                              &mut |key, _| {
                                   try!(w.delete(key));
                                   Ok(true)
                               }));

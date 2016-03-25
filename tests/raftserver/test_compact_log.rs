@@ -9,7 +9,7 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
 fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_env_log();
+    // init_log();
 
     // test a cluster with five nodes [1, 5], only one region (region 1).
     // every node has a store and a peer with same id as node's.

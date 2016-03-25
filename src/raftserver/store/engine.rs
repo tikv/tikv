@@ -217,7 +217,7 @@ mod tests {
         let mut data = vec![];
         engine.scan(b"",
                     &[0xFF, 0xFF],
-                    &mut |key, value| -> Result<bool> {
+                    &mut |key, value| {
                         data.push((key.to_vec(), value.to_vec()));
                         Ok(true)
                     })
@@ -232,7 +232,7 @@ mod tests {
         let mut index = 0;
         engine.scan(b"",
                     &[0xFF, 0xFF],
-                    &mut |key, value| -> Result<bool> {
+                    &mut |key, value| {
                         data.push((key.to_vec(), value.to_vec()));
                         index += 1;
                         Ok(index != 1)
@@ -254,7 +254,7 @@ mod tests {
 
         snap.scan(b"",
                   &[0xFF, 0xFF],
-                  &mut |key, value| -> Result<bool> {
+                  &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       Ok(true)
                   })
