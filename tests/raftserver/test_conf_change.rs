@@ -17,7 +17,7 @@ use super::pd::TestPdClient;
 
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_env_log();
+    // init_log();
     let r1 = cluster.bootstrap_conf_change();
 
     cluster.start();
@@ -164,7 +164,7 @@ fn new_conf_change_peer(store: &metapb::Store,
 }
 
 fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_env_log();
+    // init_log();
     cluster.start();
 
     let cluster_id = cluster.id();

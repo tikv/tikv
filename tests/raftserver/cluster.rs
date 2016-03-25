@@ -115,7 +115,7 @@ impl<T: Simulator> Cluster<T> {
                                   mut request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
-        request.mut_header().set_peer(self.leader_of_region(region_id).clone().unwrap());
+        request.mut_header().set_peer(self.leader_of_region(region_id).unwrap());
         self.call_command(request, timeout)
     }
 
@@ -124,11 +124,14 @@ impl<T: Simulator> Cluster<T> {
             return Some(l.clone());
         }
         let mut leader = None;
-        let mut retry_cnt = 100;
+        let mut retry_cnt = 200;
 
         let stores = self.pd_client.rl().get_stores(self.id()).unwrap();
         let node_ids: HashSet<u64> = self.sim.rl().get_node_ids();
-        while leader.is_none() && retry_cnt > 0 {
+        let mut count = 0;
+        while (leader.is_none() || count < node_ids.len()) && retry_cnt > 0 {
+            count = 0;
+            leader = None;
             for store in &stores {
                 // For some tests, we stop the node but pd still has this information,
                 // and we must skip this.
@@ -141,9 +144,13 @@ impl<T: Simulator> Cluster<T> {
                 let find_leader = new_status_request(region_id, &peer, new_region_leader_cmd());
                 let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
                 let region_leader = resp.get_status_response().get_region_leader();
-                if region_leader.has_leader() {
+                if region_leader.has_leader() &&
+                   (leader.is_none() || leader.as_ref().unwrap() == region_leader.get_leader()) {
+                    debug!("found leader {:?} from {}",
+                           region_leader.get_leader(),
+                           store.get_store_id());
+                    count += 1;
                     leader = Some(region_leader.get_leader().clone());
-                    break;
                 }
             }
             sleep_ms(10);
@@ -242,6 +249,7 @@ impl<T: Simulator> Cluster<T> {
             self.stop_node(id);
         }
         self.leaders.clear();
+        debug!("all nodes are shut down.");
     }
 
     // If the resp is "not leader error", get the real leader.
