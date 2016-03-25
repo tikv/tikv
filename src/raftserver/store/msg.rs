@@ -61,13 +61,13 @@ pub fn call_command(sendch: &SendCh,
 
     try!(sendch.send(Msg::RaftCmd {
         request: request,
-        callback: Box::new(move |resp: RaftCmdResponse| -> Result<()> {
+        callback: box move |resp| {
             let &(ref lock, ref cvar) = &*pair2;
             let mut v = lock.lock().unwrap();
             *v = Some(resp);
             cvar.notify_one();
             Ok(())
-        }),
+        },
     }));
 
     let &(ref lock, ref cvar) = &*pair;
@@ -117,7 +117,7 @@ mod tests {
 
     use super::*;
     use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-    use raftserver::{Result, Error};
+    use raftserver::Error;
 
     struct TestHandler;
 
@@ -153,10 +153,10 @@ mod tests {
         let (tx, rx) = channel();
         let cmd = Msg::RaftCmd {
             request: RaftCmdRequest::new(),
-            callback: Box::new(move |_: RaftCmdResponse| -> Result<()> {
+            callback: box move |_| {
                 tx.send(1).unwrap();
                 Ok(())
-            }),
+            },
         };
         sendch.send(cmd).unwrap();
 
