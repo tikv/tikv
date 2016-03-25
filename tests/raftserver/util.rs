@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
-use env_logger;
+use tikv::util::{self as tikv_util, logger};
+use std::env;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use tempdir::TempDir;
@@ -115,11 +116,11 @@ pub fn new_seek_cmd(key: &[u8]) -> Request {
 }
 
 pub fn new_status_request(region_id: u64,
-                          peer: &metapb::Peer,
+                          peer: metapb::Peer,
                           request: StatusRequest)
                           -> RaftCmdRequest {
     let mut req = new_base_request(region_id);
-    req.mut_header().set_peer(peer.clone());
+    req.mut_header().set_peer(peer);
     req.set_status_request(request);
     req
 }
@@ -200,9 +201,10 @@ pub fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
 }
 
-// A help function to simplify using env_logger.
-pub fn init_env_log() {
-    env_logger::init().expect("");
+// A help function to initial logger.
+pub fn init_log() {
+    let level = logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or("debug".to_owned()));
+    tikv_util::init_log(level).unwrap();
 }
 
 pub fn is_error_response(resp: &RaftCmdResponse) -> bool {

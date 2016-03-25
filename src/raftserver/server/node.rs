@@ -7,7 +7,7 @@ use rocksdb::DB;
 use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
-use raftserver::store::{self, Store, Config as StoreConfig, keys, Peekable, Transport};
+use raftserver::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport};
 use raftserver::{Result, other};
 use util::HandyRwLock;
 use super::config::Config;
@@ -253,7 +253,7 @@ impl<T, Trans> Node<T, Trans>
             return Err(other(format!("store {} thread has already gone", store_id)));
         }
 
-        try!(ch.unwrap().send_quit());
+        try!(ch.unwrap().send(Msg::Quit));
 
         if let Err(e) = h.unwrap().join() {
             return Err(other(format!("join store {} thread err {:?}", store_id, e)));

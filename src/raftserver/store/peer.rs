@@ -187,7 +187,7 @@ impl Peer {
         // Delete all data in this peer.
         let wb = WriteBatch::new();
         try!(self.storage.wl().scan_region(self.engine.as_ref(),
-                                           &mut |key, _| -> Result<bool> {
+                                           &mut |key, _| {
                                                try!(wb.delete(key));
                                                Ok(true)
                                            }));
@@ -242,7 +242,7 @@ impl Peer {
             return Ok(None);
         }
 
-        debug!("handle raft ready for peer {:?}, region {}",
+        debug!("handle raft ready: peer {:?}, region {}",
                self.peer,
                self.region_id);
 
@@ -416,7 +416,7 @@ impl Peer {
     fn handle_raft_commit_entries(&mut self,
                                   committed_entries: &[raftpb::Entry])
                                   -> Result<Vec<ExecResult>> {
-        // If we send multi ConfChange commands, only first one will be proposed correctly,
+        // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         let mut results = vec![];
