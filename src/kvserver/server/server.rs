@@ -115,12 +115,24 @@ impl Server {
                                                            sender,
                                                            token,
                                                            msg_id);
-        let first = mutations[0].key().clone();
+        // TODO: Modify pb message, send only one KvOpt from client.
+        let opt = {
+            if cmd_prewrite_req.get_puts().len() > 0 {
+                let key_address = cmd_prewrite_req.get_puts()[0].get_key_address().clone();
+                KvOpt::new(key_address.get_region_id(), key_address.get_peer().clone())
+            } else if cmd_prewrite_req.get_dels().len() > 0 {
+                let key_address = cmd_prewrite_req.get_dels()[0].clone();
+                KvOpt::new(key_address.get_region_id(), key_address.get_peer().clone())
+            } else {
+                let key_address = cmd_prewrite_req.get_locks()[0].clone();
+                KvOpt::new(key_address.get_region_id(), key_address.get_peer().clone())
+            }
+        };
         self.store
             .async_prewrite(mutations,
                             cmd_prewrite_req.get_primary_lock().to_vec(),
                             cmd_prewrite_req.get_start_version(),
-                            KvOpt::new(first.get_region_id(), first.get_peer().clone()),
+                            opt,
                             cb)
             .map_err(ServerError::Storage)
     }
