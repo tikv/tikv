@@ -6,7 +6,7 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_env_log();
+    // init_log();
 
     // test a cluster with five nodes [1, 5], only one region (region 1).
     // every node has a store and a peer with same id as node's.
@@ -75,7 +75,6 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let (key, value) = (b"a1", b"v1");
 
-    assert!(cluster.leader_of_region(1).is_some());
     assert_eq!(cluster.get(key), None);
     cluster.put(key, value);
 
@@ -84,7 +83,6 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.shutdown();
     cluster.start();
 
-    assert!(cluster.leader_of_region(1).is_some());
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 }
 
