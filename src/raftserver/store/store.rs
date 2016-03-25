@@ -254,14 +254,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        // Now we have no way to check whether a raft message is really valid.
-        // e,g, we may some a message with all fields valid except peer id.
-        // So we will log an error here now.
-        if peer.peer.get_peer_id() != to.get_peer_id() {
-            error!("mismatch peer id for raft msg {:?}, my {:?}",
-                   msg,
-                   peer.peer);
-        }
 
         try!(peer.raft_group.step(msg.get_message().clone()));
 
