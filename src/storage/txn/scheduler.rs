@@ -14,44 +14,46 @@ impl Scheduler {
     pub fn handle_cmd(&mut self, cmd: Command) {
         debug!("scheduler::handle_cmd: {:?}", cmd);
         match cmd {
-            Command::Get{key, start_ts, callback} => {
-                callback(self.store.get(&key, start_ts).map_err(::storage::Error::from));
+            Command::Get{ctx, key, start_ts, callback} => {
+                callback(self.store.get(ctx, &key, start_ts).map_err(::storage::Error::from));
             }
-            Command::Scan{start_key, limit, start_ts, callback} => {
-                callback(match self.store.scan(start_key, limit, start_ts) {
+            Command::Scan{ctx, start_key, limit, start_ts, callback} => {
+                callback(match self.store.scan(ctx, start_key, limit, start_ts) {
                     Ok(mut results) => {
                         Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
                     }
                     Err(e) => Err(e.into()),
                 });
             }
-            Command::Prewrite{mutations, primary, start_ts, callback} => {
-                callback(match self.store.prewrite(mutations, primary, start_ts) {
+            Command::Prewrite{ctx, mutations, primary, start_ts, callback} => {
+                callback(match self.store.prewrite(ctx, mutations, primary, start_ts) {
                     Ok(mut results) => {
                         Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
                     }
                     Err(e) => Err(e.into()),
                 });
             }
-            Command::Commit{keys, lock_ts, commit_ts, callback} => {
+            Command::Commit{ctx, keys, lock_ts, commit_ts, callback} => {
                 callback(self.store
-                             .commit(keys, lock_ts, commit_ts)
+                             .commit(ctx, keys, lock_ts, commit_ts)
                              .map_err(::storage::Error::from));
             }
-            Command::CommitThenGet{key, lock_ts, commit_ts, get_ts, callback} => {
+            Command::CommitThenGet{ctx, key, lock_ts, commit_ts, get_ts, callback} => {
                 callback(self.store
-                             .commit_then_get(key, lock_ts, commit_ts, get_ts)
+                             .commit_then_get(ctx, key, lock_ts, commit_ts, get_ts)
                              .map_err(::storage::Error::from));
             }
-            Command::Cleanup{key, start_ts, callback} => {
-                callback(self.store.cleanup(key, start_ts).map_err(::storage::Error::from));
+            Command::Cleanup{ctx, key, start_ts, callback} => {
+                callback(self.store.cleanup(ctx, key, start_ts).map_err(::storage::Error::from));
             }
-            Command::Rollback{keys, start_ts, callback} => {
-                callback(self.store.rollback(keys, start_ts).map_err(::storage::Error::from));
-            }
-            Command::RollbackThenGet{key, lock_ts, callback} => {
+            Command::Rollback{ctx, keys, start_ts, callback} => {
                 callback(self.store
-                             .rollback_then_get(key, lock_ts)
+                             .rollback(ctx, keys, start_ts)
+                             .map_err(::storage::Error::from));
+            }
+            Command::RollbackThenGet{ctx, key, lock_ts, callback} => {
+                callback(self.store
+                             .rollback_then_get(ctx, key, lock_ts)
                              .map_err(::storage::Error::from));
             }
         }

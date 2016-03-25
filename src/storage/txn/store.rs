@@ -1,4 +1,4 @@
-use storage::{Key, Value, KvPair, Mutation};
+use storage::{Key, Value, KvPair, Mutation, KvContext};
 use storage::Engine;
 use storage::mvcc::{MvccTxn, Error as MvccError};
 use super::shard_mutex::ShardMutex;
@@ -19,15 +19,19 @@ impl TxnStore {
         }
     }
 
-    pub fn get(&self, key: &Key, start_ts: u64) -> Result<Option<Value>> {
+    pub fn get(&self, ctx: KvContext, key: &Key, start_ts: u64) -> Result<Option<Value>> {
         let _guard = self.shard_mutex.lock(&[key]);
-        let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let txn = MvccTxn::new(self.engine.as_ref(), &ctx, start_ts);
         Ok(try!(txn.get(key)))
     }
 
     #[allow(dead_code)]
-    pub fn batch_get(&self, keys: &[Key], start_ts: u64) -> Vec<Result<Option<Value>>> {
-        let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+    pub fn batch_get(&self,
+                     ctx: KvContext,
+                     keys: &[Key],
+                     start_ts: u64)
+                     -> Vec<Result<Option<Value>>> {
+        let txn = MvccTxn::new(self.engine.as_ref(), &ctx, start_ts);
         let mut results = Vec::<_>::with_capacity(keys.len());
         for k in keys {
             let _guard = self.shard_mutex.lock(&[k]);
@@ -36,12 +40,17 @@ impl TxnStore {
         results
     }
 
-    pub fn scan(&self, key: Key, limit: usize, start_ts: u64) -> Result<Vec<Result<KvPair>>> {
+    pub fn scan(&self,
+                ctx: KvContext,
+                key: Key,
+                limit: usize,
+                start_ts: u64)
+                -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         let mut key = key;
-        let txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let txn = MvccTxn::new(self.engine.as_ref(), &ctx, start_ts);
         while results.len() < limit {
-            let next_key = match try!(self.engine.seek(&key)) {
+            let next_key = match try!(self.engine.seek(&ctx, &key)) {
                 Some((key, _)) => key,
                 None => break,
             };
@@ -61,6 +70,7 @@ impl TxnStore {
     }
 
     pub fn prewrite(&self,
+                    ctx: KvContext,
                     mutations: Vec<Mutation>,
                     primary: Vec<u8>,
                     start_ts: u64)
@@ -70,7 +80,7 @@ impl TxnStore {
             let locked_keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
             self.shard_mutex.lock(&locked_keys)
         };
-        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), &ctx, start_ts);
         for m in mutations {
             match txn.prewrite(m, &primary) {
                 Ok(_) => results.push(Ok(())),
@@ -82,9 +92,14 @@ impl TxnStore {
         Ok(results)
     }
 
-    pub fn commit(&self, keys: Vec<Key>, start_ts: u64, commit_ts: u64) -> Result<()> {
+    pub fn commit(&self,
+                  ctx: KvContext,
+                  keys: Vec<Key>,
+                  start_ts: u64,
+                  commit_ts: u64)
+                  -> Result<()> {
         let _guard = self.shard_mutex.lock(&keys);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), &ctx, start_ts);
         for k in keys {
             try!(txn.commit(&k, commit_ts));
         }
@@ -92,31 +107,31 @@ impl TxnStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn commit_then_get(&self,
+                           ctx: KvContext,
                            key: Key,
                            lock_ts: u64,
                            commit_ts: u64,
                            get_ts: u64)
                            -> Result<Option<Value>> {
         let _guard = self.shard_mutex.lock(&[&key]);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), lock_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), &ctx, lock_ts);
         let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
         try!(txn.submit());
         Ok(val)
     }
 
-    pub fn cleanup(&self, key: Key, start_ts: u64) -> Result<()> {
+    pub fn cleanup(&self, ctx: KvContext, key: Key, start_ts: u64) -> Result<()> {
         let _guard = self.shard_mutex.lock(&[&key]);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), &ctx, start_ts);
         try!(txn.rollback(&key));
         try!(txn.submit());
         Ok(())
     }
 
-    pub fn rollback(&self, keys: Vec<Key>, start_ts: u64) -> Result<()> {
+    pub fn rollback(&self, ctx: KvContext, keys: Vec<Key>, start_ts: u64) -> Result<()> {
         let _guard = self.shard_mutex.lock(&keys);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), start_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), &ctx, start_ts);
         for k in keys {
             try!(txn.rollback(&k));
         }
@@ -125,9 +140,13 @@ impl TxnStore {
     }
 
     #[allow(dead_code)]
-    pub fn rollback_then_get(&self, key: Key, lock_ts: u64) -> Result<Option<Value>> {
+    pub fn rollback_then_get(&self,
+                             ctx: KvContext,
+                             key: Key,
+                             lock_ts: u64)
+                             -> Result<Option<Value>> {
         let _guard = self.shard_mutex.lock(&[&key]);
-        let mut txn = MvccTxn::new(self.engine.as_ref(), lock_ts);
+        let mut txn = MvccTxn::new(self.engine.as_ref(), &ctx, lock_ts);
         let val = try!(txn.rollback_then_get(&key));
         try!(txn.submit());
         Ok(val)
@@ -137,7 +156,7 @@ impl TxnStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::{Mutation, Key, KvPair, make_key};
+    use storage::{Mutation, Key, KvPair, make_key, KvContext};
     use storage::engine::{self, Dsn};
     use util::codec::bytes;
 
@@ -170,33 +189,36 @@ mod tests {
     impl TxnStoreAssert for TxnStore {
         fn get_none(&self, key: &[u8], ts: u64) {
             let key = make_key(key);
-            assert_eq!(self.get(&key, ts).unwrap(), None);
+            assert_eq!(self.get(KvContext::none(), &key, ts).unwrap(), None);
         }
 
         fn get_err(&self, key: &[u8], ts: u64) {
             let key = make_key(key);
-            assert!(self.get(&key, ts).is_err());
+            assert!(self.get(KvContext::none(), &key, ts).is_err());
         }
 
         fn get_ok(&self, key: &[u8], ts: u64, expect: &[u8]) {
             let key = make_key(key);
-            assert_eq!(self.get(&key, ts).unwrap().unwrap(), expect);
+            assert_eq!(self.get(KvContext::none(), &key, ts).unwrap().unwrap(),
+                       expect);
         }
 
         fn put_ok(&self, key: &[u8], value: &[u8], start_ts: u64, commit_ts: u64) {
-            self.prewrite(vec![Mutation::Put((make_key(key), value.to_vec()))],
+            self.prewrite(KvContext::none(),
+                          vec![Mutation::Put((make_key(key), value.to_vec()))],
                           key.to_vec(),
                           start_ts)
                 .unwrap();
-            self.commit(vec![make_key(key)], start_ts, commit_ts).unwrap();
+            self.commit(KvContext::none(), vec![make_key(key)], start_ts, commit_ts).unwrap();
         }
 
         fn delete_ok(&self, key: &[u8], start_ts: u64, commit_ts: u64) {
-            self.prewrite(vec![Mutation::Delete(make_key(key))],
+            self.prewrite(KvContext::none(),
+                          vec![Mutation::Delete(make_key(key))],
                           key.to_vec(),
                           start_ts)
                 .unwrap();
-            self.commit(vec![make_key(key)], start_ts, commit_ts).unwrap();
+            self.commit(KvContext::none(), vec![make_key(key)], start_ts, commit_ts).unwrap();
         }
 
         fn scan_ok(&self,
@@ -205,7 +227,7 @@ mod tests {
                    ts: u64,
                    expect: Vec<Option<(&[u8], &[u8])>>) {
             let key_address = make_key(start_key);
-            let result = self.scan(key_address, limit, ts).unwrap();
+            let result = self.scan(KvContext::none(), key_address, limit, ts).unwrap();
             let result: Vec<Option<KvPair>> = result.into_iter()
                                                     .map(Result::ok)
                                                     .collect();
@@ -220,31 +242,32 @@ mod tests {
         }
 
         fn prewrite_ok(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
-            self.prewrite(mutations, primary.to_vec(), start_ts).unwrap();
+            self.prewrite(KvContext::none(), mutations, primary.to_vec(), start_ts).unwrap();
         }
 
         fn prewrite_err(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
-            assert!(self.prewrite(mutations, primary.to_vec(), start_ts).is_err());
+            assert!(self.prewrite(KvContext::none(), mutations, primary.to_vec(), start_ts)
+                        .is_err());
         }
 
         fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
             let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
-            self.commit(keys, start_ts, commit_ts).unwrap();
+            self.commit(KvContext::none(), keys, start_ts, commit_ts).unwrap();
         }
 
         fn commit_err(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
             let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
-            assert!(self.commit(keys, start_ts, commit_ts).is_err());
+            assert!(self.commit(KvContext::none(), keys, start_ts, commit_ts).is_err());
         }
 
         fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: u64) {
             let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
-            self.rollback(keys, start_ts).unwrap();
+            self.rollback(KvContext::none(), keys, start_ts).unwrap();
         }
 
         fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: u64) {
             let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
-            assert!(self.rollback(keys, start_ts).is_err());
+            assert!(self.rollback(KvContext::none(), keys, start_ts).is_err());
         }
 
         fn commit_then_get_ok(&self,
@@ -253,14 +276,20 @@ mod tests {
                               commit_ts: u64,
                               get_ts: u64,
                               expect: &[u8]) {
-            assert_eq!(self.commit_then_get(make_key(key), lock_ts, commit_ts, get_ts)
+            assert_eq!(self.commit_then_get(KvContext::none(),
+                                            make_key(key),
+                                            lock_ts,
+                                            commit_ts,
+                                            get_ts)
                            .unwrap()
                            .unwrap(),
                        expect);
         }
 
         fn rollback_then_get_ok(&self, key: &[u8], lock_ts: u64, expect: &[u8]) {
-            assert_eq!(self.rollback_then_get(make_key(key), lock_ts).unwrap().unwrap(),
+            assert_eq!(self.rollback_then_get(KvContext::none(), make_key(key), lock_ts)
+                           .unwrap()
+                           .unwrap(),
                        expect);
         }
     }
@@ -456,7 +485,7 @@ mod tests {
         let key_address = make_key(key);
         for i in 0..INC_MAX_RETRY {
             let start_ts = oracle.get_ts();
-            let number: i32 = match store.get(&key_address, start_ts) {
+            let number: i32 = match store.get(KvContext::none(), &key_address, start_ts) {
                 Ok(Some(x)) => String::from_utf8(x).unwrap().parse().unwrap(),
                 Ok(None) => 0,
                 Err(_) => {
@@ -465,7 +494,8 @@ mod tests {
                 }
             };
             let next = number + 1;
-            if let Err(_) = store.prewrite(vec![Mutation::Put((make_key(key),
+            if let Err(_) = store.prewrite(KvContext::none(),
+                                           vec![Mutation::Put((make_key(key),
                                                                next.to_string().into_bytes()))],
                                            key.to_vec(),
                                            start_ts) {
@@ -473,7 +503,10 @@ mod tests {
                 continue;
             }
             let commit_ts = oracle.get_ts();
-            if let Err(_) = store.commit(vec![key_address.clone()], start_ts, commit_ts) {
+            if let Err(_) = store.commit(KvContext::none(),
+                                         vec![key_address.clone()],
+                                         start_ts,
+                                         commit_ts) {
                 backoff(i);
                 continue;
             }
@@ -521,7 +554,7 @@ mod tests {
             let keys: Vec<Key> = (0..n).map(format_key).map(|x| make_key(&x)).collect();
             let mut mutations = vec![];
             for key in keys.iter().take(n) {
-                let number = match store.get(&key, start_ts) {
+                let number = match store.get(KvContext::none(), &key, start_ts) {
                     Ok(Some(n)) => String::from_utf8(n).unwrap().parse().unwrap(),
                     Ok(None) => 0,
                     Err(_) => {
@@ -532,12 +565,12 @@ mod tests {
                 let next = number + 1;
                 mutations.push(Mutation::Put((key.clone(), next.to_string().into_bytes())));
             }
-            if let Err(_) = store.prewrite(mutations, b"k0".to_vec(), start_ts) {
+            if let Err(_) = store.prewrite(KvContext::none(), mutations, b"k0".to_vec(), start_ts) {
                 backoff(i);
                 continue;
             }
             let commit_ts = oracle.get_ts();
-            if let Err(_) = store.commit(keys, start_ts, commit_ts) {
+            if let Err(_) = store.commit(KvContext::none(), keys, start_ts, commit_ts) {
                 backoff(i);
                 continue;
             }

@@ -24,7 +24,7 @@ use std::thread::{self, JoinHandle};
 use protobuf::RepeatedField;
 
 use super::{Result as EngineResult, Error as EngineError, Engine, Modify};
-use storage::{Key, Value, KvPair};
+use storage::{Key, Value, KvPair, KvContext};
 
 quick_error! {
     #[derive(Debug)]
@@ -212,14 +212,14 @@ impl<T: PdClient> Debug for RaftKv<T> {
 }
 
 impl<T: PdClient> Engine for RaftKv<T> {
-    fn get(&self, key: &Key) -> EngineResult<Option<Value>> {
+    fn get(&self, ctx: &KvContext, key: &Key) -> EngineResult<Option<Value>> {
         let mut get = GetRequest::new();
         get.set_key(key.get_rawkey().to_vec());
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Get);
         req.set_get(get);
-        let lead = key.get_peer().clone();
-        let mut resp = try!(self.exec_request(key.get_region_id(), lead, req));
+        let lead = ctx.peer.clone();
+        let mut resp = try!(self.exec_request(ctx.region_id, lead, req));
         if resp.get_cmd_type() != CmdType::Get {
             return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!",
                                                       CmdType::Get,
@@ -234,14 +234,14 @@ impl<T: PdClient> Engine for RaftKv<T> {
         }
     }
 
-    fn seek(&self, key: &Key) -> EngineResult<Option<KvPair>> {
+    fn seek(&self, ctx: &KvContext, key: &Key) -> EngineResult<Option<KvPair>> {
         let mut seek = SeekRequest::new();
         seek.set_key(key.get_rawkey().to_vec());
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Seek);
         req.set_seek(seek);
-        let lead = key.get_peer().clone();
-        let mut resp = try!(self.exec_request(key.get_region_id(), lead, req));
+        let lead = ctx.peer.clone();
+        let mut resp = try!(self.exec_request(ctx.region_id, lead, req));
         if resp.get_cmd_type() != CmdType::Seek {
             return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}",
                                                       CmdType::Seek,
@@ -256,23 +256,13 @@ impl<T: PdClient> Engine for RaftKv<T> {
         }
     }
 
-    fn write(&self, mut modifies: Vec<Modify>) -> EngineResult<()> {
+    fn write(&self, ctx: &KvContext, mut modifies: Vec<Modify>) -> EngineResult<()> {
         if modifies.len() == 0 {
             return Ok(());
         }
-        let (region_id, lead, mut reqs) = {
-            let key = modifies[0].get_key();
-            (key.get_region_id(),
-             key.get_peer().clone(),
-             Vec::with_capacity(modifies.len()))
-        };
+        let mut reqs = Vec::with_capacity(modifies.len());
         while !modifies.is_empty() {
             let m = modifies.pop().unwrap();
-            if m.get_key().get_region_id() != region_id || m.get_key().get_peer() != &lead {
-                return Err(Error::InvalidRequest("Only keys in same region are supported"
-                                                     .to_owned())
-                               .into());
-            }
             let mut req = Request::new();
             match m {
                 Modify::Delete(k) => {
@@ -291,7 +281,7 @@ impl<T: PdClient> Engine for RaftKv<T> {
             }
             reqs.push(req);
         }
-        try!(self.exec_requests(region_id, lead, reqs));
+        try!(self.exec_requests(ctx.region_id, ctx.peer.clone(), reqs));
         Ok(())
     }
 }
