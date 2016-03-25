@@ -138,12 +138,12 @@ fn build_engine(pathes: Vec<TempDir>) -> EngineInfo {
 
 fn put(engine: &Engine, k: &Key, v: &[u8]) {
     let put = Modify::Put((k.clone(), v.to_vec()));
-    engine.write(vec![put]).unwrap();
+    engine.write(vec![put], &k.to_owned().into()).unwrap();
 }
 
 fn delete(engine: &Engine, k: &Key) {
     let delete = Modify::Delete(k.clone());
-    engine.write(vec![delete]).unwrap();
+    engine.write(vec![delete], &k.to_owned().into()).unwrap();
 }
 
 #[test]
@@ -154,34 +154,36 @@ fn test_normal() {
     thread::sleep(Duration::from_secs(1));
 
     let k1 = new_key(region_id, &leader, b"b");
-    assert_eq!(engine.get(&k1).unwrap(), None);
+    let opt = KvOpt::new(region_id, leader.clone());
+    assert_eq!(engine.get(&k1, &opt).unwrap(), None);
 
     put(&engine, &k1, b"b");
-    assert_eq!(engine.get(&k1).unwrap(), Some(b"b".to_vec()));
+    assert_eq!(engine.get(&k1, &opt).unwrap(), Some(b"b".to_vec()));
 
     put(&engine, &k1, b"c");
-    assert_eq!(engine.get(&k1).unwrap(), Some(b"c".to_vec()));
+    assert_eq!(engine.get(&k1, &opt).unwrap(), Some(b"c".to_vec()));
 
-    assert_eq!(engine.seek(&k1).unwrap(),
+    assert_eq!(engine.seek(&k1, &opt).unwrap(),
                Some((b"b".to_vec(), b"c".to_vec())));
-    assert_eq!(engine.seek(&new_key(region_id, &leader, b"a")).unwrap(),
+    assert_eq!(engine.seek(&new_key(region_id, &leader, b"a"), &opt).unwrap(),
                Some((b"b".to_vec(), b"c".to_vec())));
-    assert_eq!(engine.seek(&new_key(region_id, &leader, b"b\0")).unwrap(),
+    assert_eq!(engine.seek(&new_key(region_id, &leader, b"b\0"), &opt).unwrap(),
                None);
 
     // it's ok to delete a non-exist key.
     let k2 = new_key(region_id, &leader, b"c");
-    assert_eq!(engine.get(&k2).unwrap(), None);
+    assert_eq!(engine.get(&k2, &opt).unwrap(), None);
     delete(&engine, &k2);
 
     delete(&engine, &k1);
-    assert_eq!(engine.get(&k1).unwrap(), None);
+    assert_eq!(engine.get(&k1, &opt).unwrap(), None);
 }
 
 #[test]
 fn test_batch() {
     let pathes = (0..5).map(|_| TempDir::new("test-raftkv").unwrap()).collect();
     let (region_id, leader, engine) = build_engine(pathes);
+    let opt = KvOpt::new(region_id, leader.clone());
 
     thread::sleep(Duration::from_secs(1));
 
@@ -191,11 +193,12 @@ fn test_batch() {
         let put = Modify::Put((k, i.to_string().into_bytes()));
         mutation.push(put);
     }
-    engine.write(mutation).unwrap();
+    engine.write(mutation, &opt).unwrap();
 
     for i in 1..100 {
         let k = new_key(region_id, &leader, i.to_string().as_bytes());
-        assert_eq!(engine.get(&k).unwrap(), Some(i.to_string().into_bytes()));
+        assert_eq!(engine.get(&k, &opt).unwrap(),
+                   Some(i.to_string().into_bytes()));
     }
 
     let mut mutation = vec![];
@@ -204,10 +207,10 @@ fn test_batch() {
         let delete = Modify::Delete(k);
         mutation.push(delete);
     }
-    engine.write(mutation).unwrap();
+    engine.write(mutation, &opt).unwrap();
 
     for i in 1..100 {
         let k = new_key(region_id, &leader, i.to_string().as_bytes());
-        assert_eq!(engine.get(&k).unwrap(), None);
+        assert_eq!(engine.get(&k, &opt).unwrap(), None);
     }
 }

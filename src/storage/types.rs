@@ -72,4 +72,15 @@ impl KvOpt {
             peer: peer,
         }
     }
+
+    #[cfg(test)]
+    pub fn none() -> KvOpt {
+        KvOpt::new(0, Peer::new())
+    }
+}
+
+impl From<Key> for KvOpt {
+    fn from(key: Key) -> KvOpt {
+        KvOpt::new(key.get_region_id(), key.get_peer().clone())
+    }
 }
