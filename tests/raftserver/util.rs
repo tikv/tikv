@@ -116,11 +116,11 @@ pub fn new_seek_cmd(key: &[u8]) -> Request {
 }
 
 pub fn new_status_request(region_id: u64,
-                          peer: &metapb::Peer,
+                          peer: metapb::Peer,
                           request: StatusRequest)
                           -> RaftCmdRequest {
     let mut req = new_base_request(region_id);
-    req.mut_header().set_peer(peer.clone());
+    req.mut_header().set_peer(peer);
     req.set_status_request(request);
     req
 }

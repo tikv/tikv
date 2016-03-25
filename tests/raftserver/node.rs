@@ -100,6 +100,10 @@ impl Simulator for NodeCluster {
         let sender = self.trans.rl().get_sendch(store_id).unwrap();
         msg::call_command(&sender, request, timeout)
     }
+
+    fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+        self.trans.rl().send(msg)
+    }
 }
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
