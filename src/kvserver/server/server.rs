@@ -42,7 +42,7 @@ impl Server {
     }
 
     pub fn handle_get(&mut self,
-                      msg: &mut Request,
+                      mut msg: Request,
                       msg_id: u64,
                       token: Token,
                       event_loop: &mut EventLoop<Server>)
@@ -62,7 +62,7 @@ impl Server {
     }
 
     pub fn handle_scan(&mut self,
-                       msg: &mut Request,
+                       mut msg: Request,
                        msg_id: u64,
                        token: Token,
                        event_loop: &mut EventLoop<Server>)
@@ -91,7 +91,7 @@ impl Server {
     }
 
     pub fn handle_prewrite(&mut self,
-                           msg: &mut Request,
+                           mut msg: Request,
                            msg_id: u64,
                            token: Token,
                            event_loop: &mut EventLoop<Server>)
@@ -136,7 +136,7 @@ impl Server {
     }
 
     pub fn handle_commit(&mut self,
-                         msg: &mut Request,
+                         mut msg: Request,
                          msg_id: u64,
                          token: Token,
                          event_loop: &mut EventLoop<Server>)
@@ -165,7 +165,7 @@ impl Server {
     }
 
     pub fn handle_cleanup(&mut self,
-                          msg: &mut Request,
+                          mut msg: Request,
                           msg_id: u64,
                           token: Token,
                           event_loop: &mut EventLoop<Server>)
@@ -185,7 +185,7 @@ impl Server {
     }
 
     pub fn handle_commit_then_get(&mut self,
-                                  msg: &mut Request,
+                                  mut msg: Request,
                                   msg_id: u64,
                                   token: Token,
                                   event_loop: &mut EventLoop<Server>)
@@ -213,7 +213,7 @@ impl Server {
     }
 
     pub fn handle_rollback_then_get(&mut self,
-                                    msg: &mut Request,
+                                    mut msg: Request,
                                     msg_id: u64,
                                     token: Token,
                                     event_loop: &mut EventLoop<Server>)
@@ -523,22 +523,22 @@ impl Server {
                       event_loop: &mut EventLoop<Server>,
                       token: Token,
                       msg_id: u64,
-                      mut req: Request) {
+                      req: Request) {
         debug!("notify Request token[{}] msg_id[{}] type[{:?}]",
                token.0,
                msg_id,
                req.get_field_type());
         if let Err(e) = match req.get_field_type() {
-            MessageType::CmdGet => self.handle_get(&mut req, msg_id, token, event_loop),
-            MessageType::CmdScan => self.handle_scan(&mut req, msg_id, token, event_loop),
-            MessageType::CmdPrewrite => self.handle_prewrite(&mut req, msg_id, token, event_loop),
-            MessageType::CmdCommit => self.handle_commit(&mut req, msg_id, token, event_loop),
-            MessageType::CmdCleanup => self.handle_cleanup(&mut req, msg_id, token, event_loop),
+            MessageType::CmdGet => self.handle_get(req, msg_id, token, event_loop),
+            MessageType::CmdScan => self.handle_scan(req, msg_id, token, event_loop),
+            MessageType::CmdPrewrite => self.handle_prewrite(req, msg_id, token, event_loop),
+            MessageType::CmdCommit => self.handle_commit(req, msg_id, token, event_loop),
+            MessageType::CmdCleanup => self.handle_cleanup(req, msg_id, token, event_loop),
             MessageType::CmdCommitThenGet => {
-                self.handle_commit_then_get(&mut req, msg_id, token, event_loop)
+                self.handle_commit_then_get(req, msg_id, token, event_loop)
             }
             MessageType::CmdRollbackThenGet => {
-                self.handle_rollback_then_get(&mut req, msg_id, token, event_loop)
+                self.handle_rollback_then_get(req, msg_id, token, event_loop)
             }
         } {
             error!("Some error occur err[{:?}]", e);
