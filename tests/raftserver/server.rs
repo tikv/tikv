@@ -23,6 +23,7 @@ pub struct ServerCluster {
     senders: HashMap<u64, SendCh>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
     addrs: HashMap<u64, SocketAddr>,
+    conns: Mutex<HashMap<SocketAddr, TcpStream>>,
 
     msg_id: Mutex<u64>,
     pd_client: Arc<RwLock<TestPdClient>>,
@@ -35,6 +36,7 @@ impl ServerCluster {
             senders: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
+            conns: Mutex::new(HashMap::new()),
             msg_id: Mutex::new(0),
             pd_client: pd_client,
         }
@@ -97,7 +99,9 @@ impl Simulator for ServerCluster {
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_node_id();
         let addr = self.addrs.get(&node_id).unwrap();
-        let mut conn = TcpStream::connect(addr).unwrap();
+
+        let mut conns = self.conns.lock().unwrap();
+        let mut conn = conns.entry(*addr).or_insert_with(|| TcpStream::connect(addr).unwrap());
 
         conn.set_write_timeout(Some(timeout)).unwrap();
 
