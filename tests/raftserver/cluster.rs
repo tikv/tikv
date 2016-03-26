@@ -11,7 +11,7 @@ use tikv::raftserver::Result;
 use tikv::raftserver::store::*;
 use super::util::*;
 use kvproto::raft_cmdpb::*;
-use kvproto::metapb;
+use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raftpb::ConfChangeType;
 use kvproto::raft_serverpb;
 use tikv::pd::PdClient;
@@ -307,7 +307,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let region_id = self.get_region_id(key);
-        let get = new_request(region_id, vec![new_get_cmd(key)]);
+        let epoch = self.get_region_epoch(region_id);
+        let get = new_request(region_id, epoch, vec![new_get_cmd(key)]);
         let mut resp = self.request(region_id, get, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -324,7 +325,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
         let region_id = self.get_region_id(key);
-        let put = new_request(region_id, vec![new_put_cmd(key, value)]);
+        let epoch = self.get_region_epoch(region_id);
+        let put = new_request(region_id, epoch, vec![new_put_cmd(key, value)]);
         let resp = self.request(region_id, put, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -335,7 +337,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
         let region_id = self.get_region_id(key);
-        let seek = new_request(region_id, vec![new_seek_cmd(key)]);
+        let epoch = self.get_region_epoch(region_id);
+        let seek = new_request(region_id, epoch, vec![new_seek_cmd(key)]);
         let resp = self.request(region_id, seek, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -353,7 +356,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn delete(&mut self, key: &[u8]) {
         let region_id = self.get_region_id(key);
-        let delete = new_request(region_id, vec![new_delete_cmd(key)]);
+        let epoch = self.get_region_epoch(region_id);
+        let delete = new_request(region_id, epoch, vec![new_delete_cmd(key)]);
         let resp = self.request(region_id, delete, Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -362,18 +366,23 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
+    pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
+        self.pd_client
+            .rl()
+            .get_region_by_id(self.id(), region_id)
+            .unwrap()
+            .get_region_epoch()
+            .clone()
+    }
+
     pub fn change_peer(&mut self,
                        region_id: u64,
                        change_type: ConfChangeType,
                        peer: metapb::Peer) {
-        let epoch = self.pd_client
-                        .rl()
-                        .get_region_by_id(self.id(), region_id)
-                        .unwrap()
-                        .get_region_epoch()
-                        .clone();
+        let epoch = self.get_region_epoch(region_id);
         let change_peer = new_admin_request(region_id,
-                                            new_change_peer_cmd(change_type, peer, &epoch));
+                                            &epoch,
+                                            new_change_peer_cmd(change_type, peer));
         let resp = self.call_command_on_leader(region_id, change_peer, Duration::from_secs(3))
                        .unwrap();
         assert_eq!(resp.get_admin_response().get_cmd_type(),
@@ -395,10 +404,8 @@ impl<T: Simulator> Cluster<T> {
 
         // TODO: use region instead of region_id
         let split = new_admin_request(region_id,
-                                      new_split_region_cmd(split_key,
-                                                           new_region_id,
-                                                           region.get_region_epoch(),
-                                                           peer_ids));
+                                      region.get_region_epoch(),
+                                      new_split_region_cmd(split_key, new_region_id, peer_ids));
         let resp = self.call_command_on_leader(region_id, split, Duration::from_secs(3)).unwrap();
 
         assert_eq!(resp.get_admin_response().get_cmd_type(),

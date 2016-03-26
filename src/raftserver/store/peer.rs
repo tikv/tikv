@@ -14,7 +14,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest};
 use kvproto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, Ready, RawNode, SnapshotStatus};
-use raftserver::{Result, other};
+use raftserver::{Result, other, Error};
 use raftserver::coprocessor::CoprocessorHost;
 use util::HandyRwLock;
 use pd::PdClient;
@@ -300,9 +300,58 @@ impl Peer {
 
         // TODO: validate request for unexpected changes.
         let mut cmd = pending_cmd.cmd.take().unwrap();
+
+        try!(self.check_epoch(&cmd));
+
         self.coprocessor_host.pre_propose(&self.storage.rl(), &mut cmd);
         let data = try!(cmd.write_to_bytes());
         try!(self.raft_group.propose(data));
+
+        Ok(())
+    }
+
+    fn check_epoch(&self, req: &RaftCmdRequest) -> Result<()> {
+        // TODO remove following check once client and kvserver fulfill the epoch header.
+        if !req.get_requests().is_empty() {
+            return Ok(());
+        }
+
+        let (mut check_ver, mut check_conf_ver) = (false, false);
+        if req.has_admin_request() {
+            match req.get_admin_request().get_cmd_type() {
+                cmd::AdminCmdType::CompactLog | cmd::AdminCmdType::InvalidAdmin => {}
+                cmd::AdminCmdType::Split => check_ver = true,
+                cmd::AdminCmdType::ChangePeer => check_conf_ver = true,
+            };
+        } else {
+            // for get/set/seek/delete, we don't care conf_version.
+            check_ver = true;
+        }
+
+        if !check_ver && !check_conf_ver {
+            return Ok(());
+        }
+
+        if !req.get_header().has_region_epoch() {
+            return Err(other("missing epoch!"));
+        }
+
+        let from_epoch = req.get_header().get_region_epoch();
+        let latest_region = self.region();
+        let latest_epoch = latest_region.get_region_epoch();
+
+        // should we use not equal here?
+        if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver()) ||
+           (check_ver && from_epoch.get_version() < latest_epoch.get_version()) {
+            debug!("received stale epoch {:?}, mime: {:?}",
+                   from_epoch,
+                   latest_epoch);
+            return Err(Error::StaleEpoch(format!("latest_epoch of region {} is {:?}, but you \
+                                                  sent {:?}",
+                                                 self.region_id,
+                                                 latest_epoch,
+                                                 from_epoch)));
+        }
 
         Ok(())
     }
@@ -618,6 +667,7 @@ impl Peer {
     fn exec_raft_cmd(&mut self,
                      ctx: &ExecContext)
                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
+        try!(self.check_epoch(&ctx.req));
         if ctx.req.has_admin_request() {
             self.exec_admin_cmd(ctx)
         } else {
@@ -654,26 +704,14 @@ impl Peer {
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
-        let from_epoch = request.get_region_epoch();
         let store_id = peer.get_store_id();
         let change_type = request.get_change_type();
         let mut region = self.region();
 
-        if from_epoch.get_conf_ver() < region.get_region_epoch().get_conf_ver() {
-            return Err(other(format!("{} stale msg, peer {}, from epoch \
-                                      {:#?}, my epoch {:#?}",
-                                     util::conf_change_type_str(&change_type),
-                                     peer.get_peer_id(),
-                                     from_epoch,
-                                     region.get_region_epoch())));
-        }
-
-        warn!("my peer id {}, {:?} {}, region: {:?},  mine: \
-                  {:?}\n",
+        warn!("my peer id {}, {:?} {}, epoch: {:?}\n",
               peer.get_peer_id(),
               util::conf_change_type_str(&change_type),
               self.peer.get_peer_id(),
-              from_epoch,
               region.get_region_epoch());
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
@@ -751,18 +789,7 @@ impl Peer {
         let mut region = self.region();
         try!(util::check_key_in_region(split_key, &region));
 
-        let from_epoch = split_req.get_region_epoch();
-        info!("split msg from region epoch: {:#?}, \
-                  mine: {:#?}",
-              from_epoch,
-              region.get_region_epoch());
-
-        if from_epoch.get_version() < region.get_region_epoch().get_version() {
-            return Err(other(format!("stale msg from region epoch: \
-                                      {:#?}, mine: {:#?}",
-                                     from_epoch,
-                                     region.get_region_epoch())));
-        }
+        info!("split at {:?}", split_key);
 
         // TODO: check new region id validation.
         let new_region_id = split_req.get_new_region_id();
