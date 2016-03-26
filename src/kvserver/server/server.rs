@@ -621,7 +621,7 @@ mod tests {
     use mio::EventLoop;
 
     use kvproto::kvrpcpb::*;
-    use kvproto::errorpb::NotLeaderError;
+    use kvproto::errorpb::NotLeader;
     use storage::{self, Value, Storage, Dsn, txn, mvcc, engine};
     use storage::Error::Other;
     use storage::KvPair as StorageKV;
@@ -803,8 +803,8 @@ mod tests {
 
     #[test]
     fn test_not_leader() {
-        use kvproto::errorpb::NotLeaderError;
-        let mut leader_info = NotLeaderError::new();
+        use kvproto::errorpb::NotLeader;
+        let mut leader_info = NotLeader::new();
         leader_info.set_region_id(1);
         let storage_res: StorageResult<Option<Value>> =
             make_not_leader_error(leader_info.to_owned());
@@ -825,7 +825,7 @@ mod tests {
             .map_err(storage::Error::from)
     }
 
-    fn make_not_leader_error<T>(leader_info: NotLeaderError) -> StorageResult<T> {
+    fn make_not_leader_error<T>(leader_info: NotLeader) -> StorageResult<T> {
         use kvproto::errorpb::Error;
         let mut err = Error::new();
         err.set_not_leader(leader_info);
