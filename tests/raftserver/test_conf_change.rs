@@ -15,7 +15,6 @@ use super::util::*;
 use super::pd::TestPdClient;
 
 
-
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
     let r1 = cluster.bootstrap_conf_change();
@@ -52,9 +51,9 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(epoch.get_conf_ver() > 1);
 
     let change_peer = new_admin_request(1,
+                                        &epoch,
                                         new_change_peer_cmd(ConfChangeType::AddNode,
-                                                            new_peer(2, 2, 2),
-                                                            &epoch));
+                                                            new_peer(2, 2, 2)));
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't add same peer twice");
@@ -64,9 +63,9 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     stale_epoch.set_version(1);
     stale_epoch.set_conf_ver(1);
     let change_peer = new_admin_request(1,
+                                        &stale_epoch,
                                         new_change_peer_cmd(ConfChangeType::AddNode,
-                                                            new_peer(5, 5, 5),
-                                                            &stale_epoch));
+                                                            new_peer(5, 5, 5)));
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "We can't change peer with stale epoch");
@@ -100,17 +99,17 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
                        .get_region_epoch()
                        .clone();
     let change_peer = new_admin_request(1,
+                                        &epoch,
                                         new_change_peer_cmd(ConfChangeType::RemoveNode,
-                                                            new_peer(2, 2, 2),
-                                                            &epoch));
+                                                            new_peer(2, 2, 2)));
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't remove same peer twice");
 
     let change_peer = new_admin_request(1,
+                                        &stale_epoch,
                                         new_change_peer_cmd(ConfChangeType::RemoveNode,
-                                                            new_peer(3, 3, 3),
-                                                            &stale_epoch));
+                                                            new_peer(3, 3, 3)));
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "We can't change peer with stale epoch");

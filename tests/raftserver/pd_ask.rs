@@ -93,9 +93,8 @@ impl<T: Simulator> AskHandler<T> {
         };
 
         let mut change_peer = new_admin_request(region.get_region_id(),
-                                                new_change_peer_cmd(conf_change_type,
-                                                                    peer,
-                                                                    region.get_region_epoch()));
+                                                region.get_region_epoch(),
+                                                new_change_peer_cmd(conf_change_type, peer));
         change_peer.mut_header().set_peer(leader.clone());
         let resp = self.sim.wl().call_command(change_peer, Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), format!("{:?}", resp));
@@ -120,9 +119,9 @@ impl<T: Simulator> AskHandler<T> {
         }
 
         let mut split = new_admin_request(region.get_region_id(),
+                                          region.get_region_epoch(),
                                           new_split_region_cmd(Some(split_key),
                                                                new_region_id,
-                                                               &region.get_region_epoch(),
                                                                peer_ids));
         split.mut_header().set_peer(leader.clone());
         let resp = self.sim.wl().call_command(split, Duration::from_secs(3)).unwrap();

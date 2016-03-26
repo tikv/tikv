@@ -7,7 +7,7 @@ dependencies = [
  "clippy 0.0.48 (registry+https://github.com/rust-lang/crates.io-index)",
  "env_logger 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto?branch=busyjay/add-epoch)",
  "log 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.0.18 (git+https://github.com/stepancheg/rust-protobuf.git)",
@@ -88,7 +88,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#9d982cf81ed9ca6cb612a89d031bfe18f8daebf8"
+source = "git+https://github.com/pingcap/kvproto?branch=busyjay/add-epoch#d1a3f53814548a887f3f1a1e87ce2746363c8080"
 dependencies = [
  "protobuf 1.0.18 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]

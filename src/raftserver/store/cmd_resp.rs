@@ -41,6 +41,9 @@ pub fn new_error(err: Error) -> RaftCmdResponse {
             error_header.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
             error_header.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
         }
+        Error::StaleEpoch(_) => {
+            error_header.set_stale_epoch(errorpb::StaleEpoch::new());
+        }
         _ => {}
     };
 

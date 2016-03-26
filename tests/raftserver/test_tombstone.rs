@@ -35,7 +35,8 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     // Remove peer (2, 2, 2) from region 1.
     cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2, 2));
 
-    // After put/get, the change peer must be finished.
+    // After new leader is elected, the change peer must be finished.
+    cluster.leader_of_region(1).unwrap();
     let (key, value) = (b"a3", b"v3");
     cluster.put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
