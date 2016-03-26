@@ -2,6 +2,7 @@
 
 use raftserver::server::Server;
 use raftserver::server::Config as ServerConfig;
+pub use raftserver::server::config::DEFAULT_LISTENING_ADDR as DEFAULT_RAFT_LISTENING_ADDR;
 use raftserver::server::{SendCh, Msg};
 use raftserver::server::transport::ServerTransport;
 use raftserver::errors::Error as RaftServerError;

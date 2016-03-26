@@ -11,6 +11,7 @@ mod types;
 
 pub use self::engine::{Engine, Dsn, new_engine, Modify, Error as EngineError};
 pub use self::engine::raftkv::Config as RaftKvConfig;
+pub use self::engine::raftkv::DEFAULT_RAFT_LISTENING_ADDR;
 pub use self::engine::raftkv::RaftKv;
 pub use self::types::{Key, Value, KvPair, KvContext};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
