@@ -55,7 +55,7 @@ impl TxnStore {
                 None => break,
             };
             let _guard = self.shard_mutex.lock(&next_key);
-            key.set_rawkey(next_key.clone());
+            key.set(next_key.clone());
             match txn.get(&key) {
                 Ok(Some(value)) => results.push(Ok((next_key.clone(), value))),
                 Ok(None) => {}

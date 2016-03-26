@@ -13,11 +13,11 @@ impl Key {
         Key(key)
     }
 
-    pub fn set_rawkey(&mut self, key: Vec<u8>) {
+    pub fn set(&mut self, key: Vec<u8>) {
         self.0 = key
     }
 
-    pub fn get_rawkey(&self) -> &[u8] {
+    pub fn raw(&self) -> &[u8] {
         &self.0
     }
 
@@ -30,7 +30,7 @@ impl Key {
 
 impl Hash for Key {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.get_rawkey().hash(state)
+        self.raw().hash(state)
     }
 }
 
