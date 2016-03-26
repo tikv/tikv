@@ -33,8 +33,15 @@ impl<T, Trans> Node<T, Trans>
                -> Node<T, Trans> {
         let mut node = metapb::Node::new();
         node.set_node_id(INVALID_ID);
-        node.set_address(addr);
-        node.set_client_addr(cfg.client_addr.clone());
+        if cfg.advertise_addr.is_empty() {
+            // If we don't set default advertise listening address,
+            // use current listening address instead.
+            node.set_address(addr);
+        } else {
+            node.set_address(cfg.advertise_addr.clone())
+        }
+
+        node.set_client_addr(cfg.advertise_client_addr.clone());
 
         Node {
             cluster_id: cfg.cluster_id,
