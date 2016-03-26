@@ -17,7 +17,7 @@ use std::path::Path;
 use std::collections::HashSet;
 use log::LogLevelFilter;
 
-const DEFAULT_HOST: &'static str = "0.0.0.0";
+const DEFAULT_HOST: &'static str = "127.0.0.1";
 const DEFAULT_PORT: &'static str = "6102";
 const DEFAULT_DSN: &'static str = "mem";
 
@@ -138,6 +138,7 @@ fn main() {
     let pathes = parse_directory(matches.opt_strs("s"));
     let pd_addr = matches.opt_str("pd").unwrap_or("".to_owned());
 
+    // TODO: in production, we should not allow 127.0.0.1 or 0.0.0.0.
     let mut kv_addr = matches.opt_str("H").unwrap_or_else(|| DEFAULT_HOST.to_owned());
     let kv_port = matches.opt_str("P").unwrap_or_else(|| DEFAULT_PORT.to_owned());
     kv_addr.push_str(":");
