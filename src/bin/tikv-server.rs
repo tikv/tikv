@@ -10,6 +10,7 @@ use tikv::storage::{Storage, Dsn};
 use tikv::kvserver::server::run::run;
 use tikv::util::{self, logger};
 use tikv::storage::RaftKvConfig;
+use tikv::storage::DEFAULT_RAFT_LISTENING_ADDR;
 use getopts::{Options, Matches};
 use std::env;
 use std::fs;
@@ -18,7 +19,6 @@ use std::collections::HashSet;
 use log::LogLevelFilter;
 
 const DEFAULT_ADDR: &'static str = "127.0.0.1:6102";
-const DEFAULT_RAFT_ADDR: &'static str = "127.0.0.1:20160";
 const DEFAULT_DSN: &'static str = "mem";
 
 fn print_usage(program: &str, opts: Options) {
@@ -52,7 +52,8 @@ fn build_raftkv_dsn<'a>(matches: &Matches,
     if pd_addr.len() == 0 {
         panic!("pd_addr is required when using raftkv.");
     }
-    let raftserver_addr = matches.opt_str("R").unwrap_or_else(|| DEFAULT_RAFT_ADDR.to_owned());
+    let raftserver_addr = matches.opt_str("R")
+                                 .unwrap_or_else(|| DEFAULT_RAFT_LISTENING_ADDR.to_owned());
     cfg.server_cfg.addr = raftserver_addr.clone();
 
     // Set advertise address for outer node and client use.
@@ -118,7 +119,7 @@ fn main() {
     opts.optopt("",
                 "advertise-addr",
                 "set advertise listening address for client communication",
-                "host:port, if not set, use addr instead.");
+                "127.0.0.1:6102, if not set, use addr instead.");
     opts.optopt("R",
                 "raft",
                 "set raft server listening address",
@@ -126,7 +127,7 @@ fn main() {
     opts.optopt("",
                 "advertise-raft",
                 "set advertise raft server listening address",
-                "host:port, if not set, use raft addr instead.");
+                "127.0.0.1:20160, if not set, use raft addr instead.");
 
     opts.optopt("L",
                 "log",

@@ -2,10 +2,10 @@ pub use raftserver::store::Config as StoreConfig;
 use raftserver::Result;
 
 const DEFAULT_CLUSTER_ID: u64 = 0;
-const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
-const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
+pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
+const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
 const DEFAULT_MAX_CONN_CAPACITY: usize = 4096;
-const DEFAULT_ADVERTISE_CLIENT_ADDR: &'static str = "127.0.0.1:6102";
+const DEFAULT_ADVERTISE_CLIENT_ADDR: &'static str = "";
 
 #[derive(Clone, Debug)]
 pub struct Config {
