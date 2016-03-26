@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, Cmd
                        LockInfo, Operator};
 use storage::{Storage, Key, Value, KvPair, KvContext, Mutation, MaybeLocked, MaybeComitted,
               MaybeRolledback, Callback};
-use storage::Result as ResultStorage;
+use storage::Result as StorageResult;
 use storage::Error as StorageError;
 use storage::EngineError;
 
@@ -77,7 +77,7 @@ impl Server {
         let ctx = KvContext::new(start_key_addresss.get_region_id(),
                                  start_key_addresss.take_peer());
         debug!("start_key [{:?}]", start_key);
-        let cb = Server::make_cb::<Vec<ResultStorage<KvPair>>>(Server::cmd_scan_done,
+        let cb = Server::make_cb::<Vec<StorageResult<KvPair>>>(Server::cmd_scan_done,
                                                                sender,
                                                                token,
                                                                msg_id);
@@ -122,7 +122,7 @@ impl Server {
             let mut key_address = cmd_prewrite_req.take_key_address();
             KvContext::new(key_address.get_region_id(), key_address.take_peer())
         };
-        let cb = Server::make_cb::<Vec<ResultStorage<()>>>(Server::cmd_prewrite_done,
+        let cb = Server::make_cb::<Vec<StorageResult<()>>>(Server::cmd_prewrite_done,
                                                            sender,
                                                            token,
                                                            msg_id);
@@ -238,7 +238,7 @@ impl Server {
             .map_err(ServerError::Storage)
     }
 
-    fn cmd_get_done(r: ResultStorage<Option<Value>>) -> Response {
+    fn cmd_get_done(r: StorageResult<Option<Value>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_get_resp: CmdGetResponse = CmdGetResponse::new();
         let mut res_type: ResultType = ResultType::new();
@@ -287,7 +287,7 @@ impl Server {
         resp
     }
 
-    fn cmd_scan_done(kvs: ResultStorage<Vec<ResultStorage<KvPair>>>) -> Response {
+    fn cmd_scan_done(kvs: StorageResult<Vec<StorageResult<KvPair>>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_scan_resp: CmdScanResponse = CmdScanResponse::new();
         cmd_scan_resp.set_ok(kvs.is_ok());
@@ -333,7 +333,7 @@ impl Server {
         resp
     }
 
-    fn cmd_prewrite_done(results: ResultStorage<Vec<ResultStorage<()>>>) -> Response {
+    fn cmd_prewrite_done(results: StorageResult<Vec<StorageResult<()>>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_prewrite_resp: CmdPrewriteResponse = CmdPrewriteResponse::new();
         cmd_prewrite_resp.set_ok(results.is_ok());
@@ -370,7 +370,7 @@ impl Server {
         resp
     }
 
-    fn cmd_commit_done(r: ResultStorage<()>) -> Response {
+    fn cmd_commit_done(r: StorageResult<()>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_commit_resp: CmdCommitResponse = CmdCommitResponse::new();
         cmd_commit_resp.set_ok(r.is_ok());
@@ -379,7 +379,7 @@ impl Server {
         resp
     }
 
-    fn cmd_cleanup_done(r: ResultStorage<()>) -> Response {
+    fn cmd_cleanup_done(r: StorageResult<()>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_cleanup_resp: CmdCleanupResponse = CmdCleanupResponse::new();
         let mut res_type: ResultType = ResultType::new();
@@ -404,7 +404,7 @@ impl Server {
         resp
     }
 
-    fn cmd_commit_get_done(r: ResultStorage<Option<Value>>) -> Response {
+    fn cmd_commit_get_done(r: StorageResult<Option<Value>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_commit_get_resp: CmdCommitThenGetResponse = CmdCommitThenGetResponse::new();
         cmd_commit_get_resp.set_ok(r.is_ok());
@@ -416,7 +416,7 @@ impl Server {
         resp
     }
 
-    fn cmd_rollback_get_done(r: ResultStorage<Option<Value>>) -> Response {
+    fn cmd_rollback_get_done(r: StorageResult<Option<Value>>) -> Response {
         let mut resp: Response = Response::new();
         let mut cmd_rollback_get_resp: CmdRollbackThenGetResponse =
             CmdRollbackThenGetResponse::new();
@@ -432,12 +432,12 @@ impl Server {
         resp
     }
 
-    fn make_cb<T: 'static>(f: fn(ResultStorage<T>) -> Response,
+    fn make_cb<T: 'static>(f: fn(StorageResult<T>) -> Response,
                            sender: Sender<QueueMessage>,
                            token: Token,
                            msg_id: u64)
                            -> Callback<T> {
-        Box::new(move |r: ResultStorage<T>| {
+        Box::new(move |r: StorageResult<T>| {
             let resp: Response = f(r);
             let queue_msg: QueueMessage = QueueMessage::Response(token, msg_id, resp);
             if let Err(e) = sender.send(queue_msg) {
@@ -625,7 +625,7 @@ mod tests {
     use storage::{self, Value, Storage, Dsn, txn, mvcc, engine};
     use storage::Error::Other;
     use storage::KvPair as StorageKV;
-    use storage::Result as ResultStorage;
+    use storage::Result as StorageResult;
     use super::*;
 
     #[test]
@@ -701,7 +701,7 @@ mod tests {
         let v0: Value = vec![255u8, 255u8];
         let k1 = vec![0u8, 1u8];
         let v1: Value = vec![255u8, 254u8];
-        let kvs: Vec<ResultStorage<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
+        let kvs: Vec<StorageResult<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
                                                       Ok((k1.clone(), v1.clone()))];
         let actual_resp: Response = Server::cmd_scan_done(Ok(kvs));
         assert_eq!(MessageType::CmdScan, actual_resp.get_field_type());
@@ -727,7 +727,7 @@ mod tests {
         let k1 = vec![0u8, 1u8];
         let k1_primary = k0.clone();
         let k1_ts: u64 = 10000;
-        let kvs: Vec<ResultStorage<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
+        let kvs: Vec<StorageResult<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
                                                       make_lock_error(k1.clone(),
                                                                       k1_primary.clone(),
                                                                       k1_ts)];
@@ -806,7 +806,7 @@ mod tests {
         use kvproto::errorpb::NotLeaderError;
         let mut leader_info = NotLeaderError::new();
         leader_info.set_region_id(1);
-        let storage_res: ResultStorage<Option<Value>> =
+        let storage_res: StorageResult<Option<Value>> =
             make_not_leader_error(leader_info.to_owned());
         let actual_resp: Response = Server::cmd_get_done(storage_res);
         assert_eq!(MessageType::CmdGet, actual_resp.get_field_type());
@@ -815,7 +815,7 @@ mod tests {
         assert_eq!(exp_res_type, *actual_resp.get_cmd_get_resp().get_res_type());
     }
 
-    fn make_lock_error<T>(key: Vec<u8>, primary: Vec<u8>, ts: u64) -> ResultStorage<T> {
+    fn make_lock_error<T>(key: Vec<u8>, primary: Vec<u8>, ts: u64) -> StorageResult<T> {
         Err(mvcc::Error::KeyIsLocked {
             key: key,
             primary: primary,
@@ -825,7 +825,7 @@ mod tests {
             .map_err(storage::Error::from)
     }
 
-    fn make_not_leader_error<T>(leader_info: NotLeaderError) -> ResultStorage<T> {
+    fn make_not_leader_error<T>(leader_info: NotLeaderError) -> StorageResult<T> {
         use kvproto::errorpb::Error;
         let mut err = Error::new();
         err.set_not_leader(leader_info);
