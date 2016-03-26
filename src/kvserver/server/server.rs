@@ -659,12 +659,12 @@ mod tests {
 
     #[test]
     fn test_get_done_some() {
-        let storage_val: Vec<_> = vec![0u8; 8];
+        let storage_val: Vec<_> = vec![0x0; 0x8];
         let actual_resp: Response = Server::cmd_get_done(Ok(Some(storage_val)));
         let mut exp_resp: Response = Response::new();
         let mut exp_cmd_resp: CmdGetResponse = CmdGetResponse::new();
         exp_cmd_resp.set_res_type(make_res_type(ResultType_Type::Ok));
-        exp_cmd_resp.set_value(vec![0u8; 8]);
+        exp_cmd_resp.set_value(vec![0x0; 0x8]);
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
         assert_eq!(exp_resp, actual_resp);
@@ -697,10 +697,10 @@ mod tests {
 
     #[test]
     fn test_scan_done_some() {
-        let k0 = vec![0u8, 0u8];
-        let v0: Value = vec![255u8, 255u8];
-        let k1 = vec![0u8, 1u8];
-        let v1: Value = vec![255u8, 254u8];
+        let k0 = vec![0x0, 0x0];
+        let v0: Value = vec![0xff, 0xff];
+        let k1 = vec![0x0, 0x1];
+        let v1: Value = vec![0xff, 0xfe];
         let kvs: Vec<StorageResult<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
                                                       Ok((k1.clone(), v1.clone()))];
         let actual_resp: Response = Server::cmd_scan_done(Ok(kvs));
@@ -722,9 +722,9 @@ mod tests {
     #[test]
     fn test_scan_done_lock() {
         use kvproto::kvrpcpb::LockInfo;
-        let k0 = vec![0u8, 0u8];
-        let v0: Value = vec![255u8, 255u8];
-        let k1 = vec![0u8, 1u8];
+        let k0 = vec![0x0, 0x0];
+        let v0: Value = vec![0xff, 0xff];
+        let k1 = vec![0x0, 0x1];
         let k1_primary = k0.clone();
         let k1_ts: u64 = 10000;
         let kvs: Vec<StorageResult<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
