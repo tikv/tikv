@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use kvproto::metapb;
 use kvproto::raftpb::{self, ConfChangeType};
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest};
-use kvproto::raft_cmdpb::{CmdType, AdminCmdType, Request, Response, AdminRequest, AdminResponse};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
+                          AdminCmdType, Request, Response, AdminRequest, AdminResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other};
