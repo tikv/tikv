@@ -62,7 +62,7 @@ impl Simulator for PdTransport {
         let node = self.pd_client.rl().get_node(self.cluster_id, node_id).unwrap();
         let addr = node.get_address();
         let mut conn = TcpStream::connect(addr).unwrap();
-
+        conn.set_nodelay(true).unwrap();
         conn.set_write_timeout(Some(timeout)).unwrap();
 
         let mut msg = ServerMessage::new();
