@@ -214,7 +214,7 @@ impl<T: PdClient> Debug for RaftKv<T> {
 impl<T: PdClient> Engine for RaftKv<T> {
     fn get(&self, ctx: &KvContext, key: &Key) -> EngineResult<Option<Value>> {
         let mut get = GetRequest::new();
-        get.set_key(key.raw().to_vec());
+        get.set_key(key.raw().clone());
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Get);
         req.set_get(get);
@@ -236,7 +236,7 @@ impl<T: PdClient> Engine for RaftKv<T> {
 
     fn seek(&self, ctx: &KvContext, key: &Key) -> EngineResult<Option<KvPair>> {
         let mut seek = SeekRequest::new();
-        seek.set_key(key.raw().to_vec());
+        seek.set_key(key.raw().clone());
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Seek);
         req.set_seek(seek);
@@ -267,13 +267,13 @@ impl<T: PdClient> Engine for RaftKv<T> {
             match m {
                 Modify::Delete(k) => {
                     let mut delete = DeleteRequest::new();
-                    delete.set_key(k.raw().to_vec());
+                    delete.set_key(k.raw().clone());
                     req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
                 Modify::Put((k, v)) => {
                     let mut put = PutRequest::new();
-                    put.set_key(k.raw().to_vec());
+                    put.set_key(k.raw().clone());
                     put.set_value(v);
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);

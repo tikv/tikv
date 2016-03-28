@@ -28,7 +28,7 @@ impl Engine for EngineBtree {
     fn seek(&self, _: &KvContext, key: &Key) -> Result<Option<KvPair>> {
         trace!("EngineBtree: seek {:?}", key);
         let m = self.map.rl();
-        let mut iter = m.range::<Vec<u8>, Vec<u8>>(Included(&key.raw().to_vec()), Unbounded);
+        let mut iter = m.range::<Vec<u8>, Vec<u8>>(Included(key.raw()), Unbounded);
         Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
     }
 
@@ -42,7 +42,7 @@ impl Engine for EngineBtree {
                 }
                 Modify::Put((k, v)) => {
                     trace!("EngineBtree: put {:?},{:?}", k, v);
-                    m.insert(k.raw().to_owned(), v);
+                    m.insert(k.raw().clone(), v);
                 }
             }
         }
