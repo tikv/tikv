@@ -99,27 +99,22 @@ impl Server {
         if !msg.has_cmd_prewrite_req() {
             format_err!("Msg doesn't contain a CmdPrewriteRequest");
         }
-        let mut cmd_prewrite_req = msg.take_cmd_prewrite_req();
+        let mut req = msg.take_cmd_prewrite_req();
         let sender = event_loop.channel();
-        let mutations = cmd_prewrite_req.take_mutations()
-                                        .into_iter()
-                                        .map(|mut x| {
-                                            match x.get_op() {
-                                                Operator::OpPut => {
-                                                    Mutation::Put((Key::from_raw(x.take_key()),
-                                                                   x.take_value()))
-                                                }
-                                                Operator::OpDel => {
-                                                    Mutation::Delete(Key::from_raw(x.take_key()))
-                                                }
-                                                Operator::OpLock => {
-                                                    Mutation::Lock(Key::from_raw(x.take_key()))
-                                                }
-                                            }
-                                        })
-                                        .collect();
+        let mutations = req.take_mutations()
+                           .into_iter()
+                           .map(|mut x| {
+                               match x.get_op() {
+                                   Operator::OpPut => {
+                                       Mutation::Put((Key::from_raw(x.take_key()), x.take_value()))
+                                   }
+                                   Operator::OpDel => Mutation::Delete(Key::from_raw(x.take_key())),
+                                   Operator::OpLock => Mutation::Lock(Key::from_raw(x.take_key())),
+                               }
+                           })
+                           .collect();
         let ctx = {
-            let mut key_address = cmd_prewrite_req.take_key_address();
+            let mut key_address = req.take_key_address();
             KvContext::new(key_address.get_region_id(), key_address.take_peer())
         };
         let cb = Server::make_cb::<Vec<StorageResult<()>>>(Server::cmd_prewrite_done,
@@ -129,8 +124,8 @@ impl Server {
         self.store
             .async_prewrite(ctx,
                             mutations,
-                            cmd_prewrite_req.get_primary_lock().to_vec(),
-                            cmd_prewrite_req.get_start_version(),
+                            req.get_primary_lock().to_vec(),
+                            req.get_start_version(),
                             cb)
             .map_err(ServerError::Storage)
     }
