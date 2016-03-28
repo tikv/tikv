@@ -129,7 +129,7 @@ impl Conn {
                             msg_id: u64,
                             resp: Response)
                             -> Result<()> {
-        let resp_len: usize = rpc::MSG_HEADER_LEN + resp.compute_size() as usize;
+        let resp_len = rpc::MSG_HEADER_LEN + resp.compute_size() as usize;
         let mut resp_buf = ByteBuf::mut_with_capacity(resp_len);
         rpc::encode_msg(&mut resp_buf, msg_id, &resp).unwrap();
         self.res.push_back(resp_buf.flip());
