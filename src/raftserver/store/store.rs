@@ -28,7 +28,7 @@ use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::peer_storage::{PeerStorage, RAFT_INIT_LOG_INDEX};
 use super::msg::Callback;
-use super::cmd_resp::{self, bind_uuid, bind_term};
+use super::cmd_resp::{self, bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 
 type Key = Vec<u8>;
@@ -380,14 +380,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) -> Result<()> {
-        // TODO: simplify bind error, uuid, current term and callback for response.
-        let mut resp: RaftCmdResponse;
+        let mut resp = RaftCmdResponse::new();
         let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {
-                resp = cmd_resp::message_error("missing request uuid");
+                bind_error(&mut resp, other("missing request uuid"));
                 return cb.call_box((resp,));
             }
-            Some(uuid) => uuid,
+            Some(uuid) => {
+                bind_uuid(&mut resp, uuid);
+                uuid
+            }
         };
 
         if msg.has_status_request() {
@@ -403,38 +405,29 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_header().get_region_id();
         let mut peer = match self.region_peers.get_mut(&region_id) {
             None => {
-                resp = cmd_resp::new_error(Error::RegionNotFound(region_id));
-                bind_uuid(&mut resp, uuid);
+                bind_error(&mut resp, Error::RegionNotFound(region_id));
                 return cb.call_box((resp,));
             }
             Some(peer) => peer,
         };
 
-        let current_term = peer.current_term;
+        bind_term(&mut resp, peer.current_term);
 
         if !peer.is_leader() {
-            resp =
-                cmd_resp::new_error(Error::NotLeader(region_id,
-                                                     peer.get_peer_from_cache(peer.leader_id())));
-            bind_uuid(&mut resp, uuid);
-            bind_term(&mut resp, current_term);
+            bind_error(&mut resp,
+                       Error::NotLeader(region_id, peer.get_peer_from_cache(peer.leader_id())));
             return cb.call_box((resp,));
         }
 
         let peer_id = msg.get_header().get_peer().get_peer_id();
         if peer.peer_id() != peer_id {
-            resp = cmd_resp::message_error(format!("mismatch peer id {} != {}",
-                                                   peer.peer_id(),
-                                                   peer_id));
-            bind_uuid(&mut resp, uuid);
-            bind_term(&mut resp, current_term);
+            bind_error(&mut resp,
+                       other(format!("mismatch peer id {} != {}", peer.peer_id(), peer_id)));
             return cb.call_box((resp,));
         }
 
         if peer.pending_cmds.contains_key(&uuid) {
-            resp = cmd_resp::message_error(format!("duplicated uuid {:?}", uuid));
-            bind_uuid(&mut resp, uuid);
-            bind_term(&mut resp, current_term);
+            bind_error(&mut resp, other(format!("duplicated uuid {:?}", uuid)));
             return cb.call_box((resp,));
         }
 
@@ -455,9 +448,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         if let Err(e) = peer.propose_pending_cmd(&mut pending_cmd) {
-            resp = cmd_resp::new_error(e);
-            bind_uuid(&mut resp, uuid);
-            bind_term(&mut resp, current_term);
+            bind_error(&mut resp, e);
             return cb.call_box((resp,));
         };
 
