@@ -2,7 +2,7 @@ use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::vec::Vec;
 use std::error;
 
-use rocksdb::DB;
+use rocksdb::{DB, WriteBatch, Writable};
 use rocksdb::rocksdb::Snapshot as RocksDBSnapshot;
 use protobuf::{self, Message};
 
@@ -10,7 +10,7 @@ use kvproto::metapb;
 use kvproto::raftpb::{Entry, Snapshot, HardState, ConfState};
 use kvproto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
 use util::HandyRwLock;
-use raft::{self, Storage, RaftState, StorageError, Error as RaftError};
+use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftserver::{Result, Error, other};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable, Mutable};
@@ -480,6 +480,39 @@ impl PeerStorage {
 
     pub fn get_region_id(&self) -> u64 {
         self.region.get_region_id()
+    }
+
+    pub fn handle_raft_ready(&mut self, ready: &Ready) -> Result<Option<metapb::Region>> {
+        let wb = WriteBatch::new();
+        let mut last_index = self.last_index();
+        let mut apply_snap_res = None;
+        let region_id = self.get_region_id();
+        if !raft::is_empty_snap(&ready.snapshot) {
+            try!(wb.delete(&keys::region_tombstone_key(region_id)));
+            apply_snap_res = try!(self.apply_snapshot(&wb, &ready.snapshot).map(|res| {
+                last_index = res.last_index;
+                Some(res)
+            }));
+        }
+        if !ready.entries.is_empty() {
+            last_index = try!(self.append(&wb, last_index, &ready.entries));
+        }
+
+        if let Some(ref hs) = ready.hs {
+            try!(save_hard_state(&wb, region_id, hs));
+        }
+
+        try!(self.engine.write(wb));
+
+        self.set_last_index(last_index);
+        // If we apply snapshot ok, we should update some infos like applied index too.
+        if let Some(res) = apply_snap_res {
+            self.set_applied_index(res.applied_index);
+            self.set_region(&res.region);
+            return Ok(Some(res.region.clone()));
+        }
+
+        Ok(None)
     }
 }
 
