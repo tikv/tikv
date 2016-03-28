@@ -55,7 +55,7 @@ impl Server {
         let key = key_address.take_key();
         let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         let sender = event_loop.channel();
-        let cb = Server::make_cb::<Option<Value>>(Server::cmd_get_done, sender, token, msg_id);
+        let cb = Server::make_cb(Server::cmd_get_done, sender, token, msg_id);
         self.store
             .async_get(ctx, Key::from_raw(key), cmd_get_req.get_version(), cb)
             .map_err(ServerError::Storage)
@@ -77,10 +77,7 @@ impl Server {
         let ctx = KvContext::new(start_key_addresss.get_region_id(),
                                  start_key_addresss.take_peer());
         debug!("start_key [{:?}]", start_key);
-        let cb = Server::make_cb::<Vec<StorageResult<KvPair>>>(Server::cmd_scan_done,
-                                                               sender,
-                                                               token,
-                                                               msg_id);
+        let cb = Server::make_cb(Server::cmd_scan_done, sender, token, msg_id);
         self.store
             .async_scan(ctx,
                         Key::from_raw(start_key),
@@ -117,10 +114,7 @@ impl Server {
             let mut key_address = req.take_key_address();
             KvContext::new(key_address.get_region_id(), key_address.take_peer())
         };
-        let cb = Server::make_cb::<Vec<StorageResult<()>>>(Server::cmd_prewrite_done,
-                                                           sender,
-                                                           token,
-                                                           msg_id);
+        let cb = Server::make_cb(Server::cmd_prewrite_done, sender, token, msg_id);
         self.store
             .async_prewrite(ctx,
                             mutations,
@@ -141,7 +135,7 @@ impl Server {
         }
         let mut req = msg.take_cmd_commit_req();
         let sender = event_loop.channel();
-        let cb = Server::make_cb::<()>(Server::cmd_commit_done, sender, token, msg_id);
+        let cb = Server::make_cb(Server::cmd_commit_done, sender, token, msg_id);
         let ctx = {
             let mut first = req.get_keys_address()[0].clone();
             KvContext::new(first.get_region_id(), first.take_peer())
@@ -170,7 +164,7 @@ impl Server {
         }
         let mut req = msg.take_cmd_cleanup_req();
         let sender = event_loop.channel();
-        let cb = Server::make_cb::<()>(Server::cmd_cleanup_done, sender, token, msg_id);
+        let cb = Server::make_cb(Server::cmd_cleanup_done, sender, token, msg_id);
         let mut key_address = req.take_key_address();
         let key = key_address.take_key();
         let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
@@ -189,10 +183,7 @@ impl Server {
             format_err!("Msg doesn't contain a CmdCommitThenGetRequest");
         }
         let sender = event_loop.channel();
-        let cb = Server::make_cb::<Option<Value>>(Server::cmd_commit_get_done,
-                                                  sender,
-                                                  token,
-                                                  msg_id);
+        let cb = Server::make_cb(Server::cmd_commit_get_done, sender, token, msg_id);
         let mut req = msg.take_cmd_commit_get_req();
         let mut key_address = req.take_key_address();
         let key = key_address.take_key();
@@ -218,10 +209,7 @@ impl Server {
         }
         let mut req = msg.take_cmd_rb_get_req();
         let sender = event_loop.channel();
-        let cb = Server::make_cb::<Option<Value>>(Server::cmd_rollback_get_done,
-                                                  sender,
-                                                  token,
-                                                  msg_id);
+        let cb = Server::make_cb(Server::cmd_rollback_get_done, sender, token, msg_id);
         let mut key_address = req.take_key_address();
         let key = key_address.take_key();
         let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
@@ -329,7 +317,7 @@ impl Server {
         let mut resp = Response::new();
         let mut cmd_prewrite_resp = CmdPrewriteResponse::new();
         cmd_prewrite_resp.set_ok(results.is_ok());
-        let mut items: Vec<Item> = Vec::new();
+        let mut items = Vec::new();
         match results {
             Ok(results) => {
                 for result in results {
