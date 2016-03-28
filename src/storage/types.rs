@@ -9,12 +9,8 @@ pub type KvPair = (Vec<u8>, Value);
 pub struct Key(Vec<u8>);
 
 impl Key {
-    pub fn new(key: Vec<u8>) -> Key {
+    pub fn from_raw(key: Vec<u8>) -> Key {
         Key(key)
-    }
-
-    pub fn set(&mut self, key: Vec<u8>) {
-        self.0 = key
     }
 
     pub fn raw(&self) -> &Vec<u8> {
@@ -37,7 +33,7 @@ impl Hash for Key {
 #[cfg(test)]
 pub fn make_key(k: &[u8]) -> Key {
     use util::codec::bytes;
-    Key::new(bytes::encode_bytes(k))
+    Key::from_raw(bytes::encode_bytes(k))
 }
 
 #[derive(Debug)]
