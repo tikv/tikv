@@ -17,7 +17,7 @@ impl Key {
         self.0 = key
     }
 
-    pub fn raw(&self) -> &[u8] {
+    pub fn raw(&self) -> &Vec<u8> {
         &self.0
     }
 
