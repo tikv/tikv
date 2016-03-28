@@ -63,6 +63,7 @@ impl ServerCluster {
         }
 
         let conn = TcpStream::connect(addr).unwrap();
+        conn.set_nodelay(true);
         Ok(conn)
     }
 }
