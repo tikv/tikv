@@ -63,7 +63,7 @@ impl ServerCluster {
         }
 
         let conn = TcpStream::connect(addr).unwrap();
-        conn.set_nodelay(true);
+        conn.set_nodelay(true).unwrap();
         Ok(conn)
     }
 }
@@ -115,6 +115,7 @@ impl Simulator for ServerCluster {
         self.senders.keys().cloned().collect()
     }
 
+    #[allow(or_fun_call)]
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_node_id();
         let addr = self.addrs.get(&node_id).unwrap();
@@ -125,8 +126,10 @@ impl Simulator for ServerCluster {
         msg.set_cmd_req(request);
 
         let msg_id = self.alloc_msg_id();
+        conn.set_write_timeout(Some(timeout)).unwrap();
         try!(rpc::encode_msg(&mut conn, msg_id, &msg));
 
+        conn.set_read_timeout(Some(timeout)).unwrap();
         let mut resp_msg = Message::new();
         let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg));
 
