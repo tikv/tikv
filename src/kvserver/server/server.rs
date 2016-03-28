@@ -196,21 +196,21 @@ impl Server {
         if !msg.has_cmd_commit_get_req() {
             format_err!("Msg doesn't contain a CmdCommitThenGetRequest");
         }
-        let mut cmd_commit_get_req = msg.take_cmd_commit_get_req();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_commit_get_done,
                                                   sender,
                                                   token,
                                                   msg_id);
-        let mut key_address = cmd_commit_get_req.take_key_address();
+        let mut req = msg.take_cmd_commit_get_req();
+        let mut key_address = req.take_key_address();
         let key = key_address.take_key();
         let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
             .async_commit_then_get(ctx,
                                    Key::from_raw(key),
-                                   cmd_commit_get_req.get_lock_version(),
-                                   cmd_commit_get_req.get_commit_version(),
-                                   cmd_commit_get_req.get_get_version(),
+                                   req.get_lock_version(),
+                                   req.get_commit_version(),
+                                   req.get_get_version(),
                                    cb)
             .map_err(ServerError::Storage)
     }
@@ -224,20 +224,17 @@ impl Server {
         if !msg.has_cmd_rb_get_req() {
             format_err!("Msg doesn't contain a CmdRollbackThenGetRequest");
         }
-        let mut cmd_rollback_get_req = msg.take_cmd_rb_get_req();
+        let mut req = msg.take_cmd_rb_get_req();
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_rollback_get_done,
                                                   sender,
                                                   token,
                                                   msg_id);
-        let mut key_address = cmd_rollback_get_req.take_key_address();
+        let mut key_address = req.take_key_address();
         let key = key_address.take_key();
         let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
-            .async_rollback_then_get(ctx,
-                                     Key::from_raw(key),
-                                     cmd_rollback_get_req.get_lock_version(),
-                                     cb)
+            .async_rollback_then_get(ctx, Key::from_raw(key), req.get_lock_version(), cb)
             .map_err(ServerError::Storage)
     }
 
