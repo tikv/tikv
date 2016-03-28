@@ -14,8 +14,7 @@ use super::config::Config;
 
 pub struct Node<T: PdClient + 'static, Trans: Transport + Send + Sync + 'static> {
     cluster_id: u64,
-    node_id: u64,
-    addr: String,
+    node: metapb::Node,
     store_cfg: StoreConfig,
     store_handles: HashMap<u64, thread::JoinHandle<()>>,
 
@@ -32,10 +31,21 @@ impl<T, Trans> Node<T, Trans>
                pd_client: Arc<RwLock<T>>,
                trans: Arc<RwLock<Trans>>)
                -> Node<T, Trans> {
+        let mut node = metapb::Node::new();
+        node.set_node_id(INVALID_ID);
+        if cfg.advertise_addr.is_empty() {
+            // If we don't set default advertise listening address,
+            // use current listening address instead.
+            node.set_address(addr);
+        } else {
+            node.set_address(cfg.advertise_addr.clone())
+        }
+
+        node.set_client_addr(cfg.advertise_client_addr.clone());
+
         Node {
             cluster_id: cfg.cluster_id,
-            node_id: INVALID_ID,
-            addr: addr,
+            node: node,
             store_cfg: cfg.store_cfg.clone(),
             store_handles: HashMap::new(),
             pd_client: pd_client,
@@ -50,17 +60,18 @@ impl<T, Trans> Node<T, Trans>
                                     .read()
                                     .unwrap()
                                     .is_cluster_bootstrapped(self.cluster_id));
-        let (node_id, mut store_ids) = try!(self.check_stores(&engines));
+        let (mut node_id, mut store_ids) = try!(self.check_stores(&engines));
         if node_id == INVALID_ID {
-            self.node_id = try!(self.pd_client.wl().alloc_id());
-            debug!("alloc node id {:?}", self.node_id);
+            node_id = try!(self.pd_client.wl().alloc_id());
+            self.node.set_node_id(node_id);
+            debug!("alloc node id {:?}", node_id);
         } else {
-            self.node_id = node_id;
+            self.node.set_node_id(node_id);
             // We have saved data before, and the cluster must be bootstrapped.
             if !bootstrapped {
                 return Err(other(format!("node {} is not empty, but cluster {} is not \
                                           bootstrapped",
-                                         self.node_id,
+                                         node_id,
                                          self.cluster_id)));
             }
         }
@@ -68,7 +79,7 @@ impl<T, Trans> Node<T, Trans>
         for (index, store_id) in store_ids.iter_mut().enumerate() {
             if *store_id == INVALID_ID {
                 *store_id = try!(self.bootstrap_store(engines[index].clone()));
-                debug!("bootstrap store {} in node {}", store_id, self.node_id);
+                debug!("bootstrap store {} in node {}", store_id, node_id);
             }
         }
 
@@ -80,7 +91,7 @@ impl<T, Trans> Node<T, Trans>
         }
 
         // inform pd.
-        try!(self.pd_client.wl().put_node(self.cluster_id, self.new_node_meta()));
+        try!(self.pd_client.wl().put_node(self.cluster_id, self.node.clone()));
         let cluster_meta = try!(self.pd_client.rl().get_cluster_meta(self.cluster_id));
 
         for (index, store_id) in store_ids.iter().enumerate() {
@@ -95,7 +106,7 @@ impl<T, Trans> Node<T, Trans>
     }
 
     pub fn get_node_id(&self) -> u64 {
-        self.node_id
+        self.node.get_node_id()
     }
 
     // check stores, return node id, corresponding store id for the engine.
@@ -140,9 +151,11 @@ impl<T, Trans> Node<T, Trans>
 
     fn bootstrap_store(&self, engine: Arc<DB>) -> Result<u64> {
         let store_id = try!(self.pd_client.wl().alloc_id());
-        debug!("alloc store id {} for node {}", store_id, self.node_id);
+        debug!("alloc store id {} for node {}",
+               store_id,
+               self.get_node_id());
 
-        try!(store::bootstrap_store(engine, self.cluster_id, self.node_id, store_id));
+        try!(store::bootstrap_store(engine, self.cluster_id, self.get_node_id(), store_id));
 
         Ok(store_id)
     }
@@ -152,7 +165,7 @@ impl<T, Trans> Node<T, Trans>
         debug!("alloc first region id {} for cluster {}, node {}, store {}",
                region_id,
                self.cluster_id,
-               self.node_id,
+               self.get_node_id(),
                store_id);
         let peer_id = try!(self.pd_client.wl().alloc_id());
         debug!("alloc first peer id {} for first region {}",
@@ -160,24 +173,16 @@ impl<T, Trans> Node<T, Trans>
                region_id);
 
         let region = try!(store::bootstrap_region(engine,
-                                                  self.node_id,
+                                                  self.get_node_id(),
                                                   store_id,
                                                   region_id,
                                                   peer_id));
         Ok(region)
     }
 
-    fn new_node_meta(&self) -> metapb::Node {
-        let mut node = metapb::Node::new();
-        node.set_node_id(self.node_id);
-        node.set_address(self.addr.clone());
-
-        node
-    }
-
     fn new_store_meta(&self, store_id: u64) -> metapb::Store {
         let mut store = metapb::Store::new();
-        store.set_node_id(self.node_id);
+        store.set_node_id(self.get_node_id());
         store.set_store_id(store_id);
         store
     }
@@ -197,7 +202,7 @@ impl<T, Trans> Node<T, Trans>
                          -> Result<()> {
         let region_id = region.get_region_id();
         match self.pd_client.wl().bootstrap_cluster(self.cluster_id,
-                                                    self.new_node_meta(),
+                                                    self.node.clone(),
                                                     self.new_store_metas(store_ids),
                                                     region) {
             Err(PdError::ClusterBootstrapped(_)) => {

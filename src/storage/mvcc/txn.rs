@@ -60,7 +60,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
             if lock.get_start_ts() <= ts {
                 // There is a pending lock. Client should wait or clean it.
                 return Err(Error::KeyIsLocked {
-                    key: key.get_rawkey().to_owned(),
+                    key: key.raw().to_owned(),
                     primary: lock.get_primary_key().to_vec(),
                     ts: lock.get_start_ts(),
                 });
@@ -88,7 +88,7 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         // ... or locks at any timestamp.
         if let Some(lock) = meta.get_lock() {
             return Err(Error::KeyIsLocked {
-                key: key.get_rawkey().to_owned(),
+                key: key.raw().to_owned(),
                 primary: lock.get_primary_key().to_vec(),
                 ts: lock.get_start_ts(),
             });

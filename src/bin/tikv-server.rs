@@ -10,6 +10,7 @@ use tikv::storage::{Storage, Dsn};
 use tikv::kvserver::server::run::run;
 use tikv::util::{self, logger};
 use tikv::storage::RaftKvConfig;
+use tikv::storage::DEFAULT_RAFT_LISTENING_ADDR;
 use getopts::{Options, Matches};
 use std::env;
 use std::fs;
@@ -17,8 +18,7 @@ use std::path::Path;
 use std::collections::HashSet;
 use log::LogLevelFilter;
 
-const DEFAULT_HOST: &'static str = "0.0.0.0";
-const DEFAULT_PORT: &'static str = "6102";
+const DEFAULT_ADDR: &'static str = "127.0.0.1:6102";
 const DEFAULT_DSN: &'static str = "mem";
 
 fn print_usage(program: &str, opts: Options) {
@@ -52,8 +52,20 @@ fn build_raftkv_dsn<'a>(matches: &Matches,
     if pd_addr.len() == 0 {
         panic!("pd_addr is required when using raftkv.");
     }
-    let raftserver_addr = matches.opt_str("R").expect("raftkv dsn require raftserver addr");
-    cfg.server_cfg.addr = raftserver_addr;
+    let raftserver_addr = matches.opt_str("R")
+                                 .unwrap_or_else(|| DEFAULT_RAFT_LISTENING_ADDR.to_owned());
+    cfg.server_cfg.addr = raftserver_addr.clone();
+
+    // Set advertise address for outer node and client use.
+    // If no advertise listening address set, use the associated listening address.
+    cfg.server_cfg.advertise_addr = matches.opt_str("advertise-raft")
+                                           .unwrap_or_else(|| raftserver_addr);
+
+    // Maybe we can find another place to set the advertise client address later.
+    let kv_addr = matches.opt_str("A").unwrap_or_else(|| DEFAULT_ADDR.to_owned());
+    cfg.server_cfg.advertise_client_addr = matches.opt_str("advertise-addr")
+                                                  .unwrap_or_else(|| kv_addr);
+
     let cluster_id = matches.opt_str("I").expect("raftkv dsn require cluster id");
     cfg.server_cfg.cluster_id = u64::from_str_radix(&cluster_id, 10).expect("invalid cluster id");
     if cfg.server_cfg.cluster_id == 0 {
@@ -62,12 +74,12 @@ fn build_raftkv_dsn<'a>(matches: &Matches,
     Dsn::RaftKv(cfg, pd_addr)
 }
 
-fn build_store(matches: &Matches, dsn_name: &str, pathes: &[String], pd_addr: &str) -> Storage {
+fn build_store(matches: &Matches, dsn_name: &str, paths: &[String], pd_addr: &str) -> Storage {
     let mut cfg = RaftKvConfig::default();
     let dsn = match dsn_name {
         "mem" => Dsn::Memory,
-        "rocksdb" => build_rocksdb_dsn(pathes),
-        "raftkv" => build_raftkv_dsn(matches, &mut cfg, pathes, pd_addr),
+        "rocksdb" => build_rocksdb_dsn(paths),
+        "raftkv" => build_raftkv_dsn(matches, &mut cfg, paths, pd_addr),
         n => panic!("unrecognized dns name: {}", n),
     };
     Storage::new(dsn).unwrap()
@@ -100,8 +112,23 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
     let mut opts = Options::new();
-    opts.optopt("P", "port", "set listening port", "default is 6102");
-    opts.optopt("H", "host", "set listening host", "default is 0.0.0.0");
+    opts.optopt("A",
+                "addr",
+                "set listening address",
+                "default is 127.0.0.1:6102");
+    opts.optopt("",
+                "advertise-addr",
+                "set advertise listening address for client communication",
+                "127.0.0.1:6102, if not set, use addr instead.");
+    opts.optopt("R",
+                "raft",
+                "set raft server listening address",
+                "default is 127.0.0.1:20160");
+    opts.optopt("",
+                "advertise-raft",
+                "set advertise raft server listening address",
+                "127.0.0.1:20160, if not set, use raft addr instead.");
+
     opts.optopt("L",
                 "log",
                 "set log level",
@@ -118,7 +145,6 @@ fn main() {
                 "set which dsn to use, default is mem",
                 "dsn: mem, rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
-    opts.optopt("R", "raft", "set raftserver address", "host:port");
     opts.optopt("", "pd", "set pd address", "host:port");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
@@ -130,12 +156,10 @@ fn main() {
     let dsn_name = matches.opt_str("S").unwrap_or_else(|| DEFAULT_DSN.to_owned());
     let pathes = parse_directory(matches.opt_strs("s"));
     let pd_addr = matches.opt_str("pd").unwrap_or("".to_owned());
-    let store = build_store(&matches, dsn_name.as_ref(), &pathes, pd_addr.as_ref());
 
-    let mut kv_addr = matches.opt_str("H").unwrap_or_else(|| DEFAULT_HOST.to_owned());
-    let kv_port = matches.opt_str("P").unwrap_or_else(|| DEFAULT_PORT.to_owned());
-    kv_addr.push_str(":");
-    kv_addr.push_str(&kv_port);
+    let kv_addr = matches.opt_str("A").unwrap_or_else(|| DEFAULT_ADDR.to_owned());
+
+    let store = build_store(&matches, dsn_name.as_ref(), &pathes, pd_addr.as_ref());
 
     info!("Start listening on {}...", kv_addr);
     run(&kv_addr, store);

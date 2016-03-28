@@ -57,7 +57,7 @@ impl Server {
         let sender = event_loop.channel();
         let cb = Server::make_cb::<Option<Value>>(Server::cmd_get_done, sender, token, msg_id);
         self.store
-            .async_get(ctx, Key::new(key), cmd_get_req.get_version(), cb)
+            .async_get(ctx, Key::from_raw(key), cmd_get_req.get_version(), cb)
             .map_err(ServerError::Storage)
     }
 
@@ -83,7 +83,7 @@ impl Server {
                                                                msg_id);
         self.store
             .async_scan(ctx,
-                        Key::new(start_key),
+                        Key::from_raw(start_key),
                         cmd_scan_req.get_limit() as usize,
                         cmd_scan_req.get_version(),
                         cb)
@@ -106,14 +106,14 @@ impl Server {
                                         .map(|mut x| {
                                             match x.get_op() {
                                                 Operator::OpPut => {
-                                                    Mutation::Put((Key::new(x.take_key()),
+                                                    Mutation::Put((Key::from_raw(x.take_key()),
                                                                    x.take_value()))
                                                 }
                                                 Operator::OpDel => {
-                                                    Mutation::Delete(Key::new(x.take_key()))
+                                                    Mutation::Delete(Key::from_raw(x.take_key()))
                                                 }
                                                 Operator::OpLock => {
-                                                    Mutation::Lock(Key::new(x.take_key()))
+                                                    Mutation::Lock(Key::from_raw(x.take_key()))
                                                 }
                                             }
                                         })
@@ -153,7 +153,7 @@ impl Server {
         };
         let keys = cmd_commit_req.take_keys_address()
                                  .into_iter()
-                                 .map(|mut x| Key::new(x.take_key()))
+                                 .map(|mut x| Key::from_raw(x.take_key()))
                                  .collect();
         self.store
             .async_commit(ctx,
@@ -180,7 +180,10 @@ impl Server {
         let key = key_address.take_key();
         let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
-            .async_cleanup(ctx, Key::new(key), cmd_cleanup_req.get_start_version(), cb)
+            .async_cleanup(ctx,
+                           Key::from_raw(key),
+                           cmd_cleanup_req.get_start_version(),
+                           cb)
             .map_err(ServerError::Storage)
     }
 
@@ -204,7 +207,7 @@ impl Server {
         let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
             .async_commit_then_get(ctx,
-                                   Key::new(key),
+                                   Key::from_raw(key),
                                    cmd_commit_get_req.get_lock_version(),
                                    cmd_commit_get_req.get_commit_version(),
                                    cmd_commit_get_req.get_get_version(),
@@ -232,7 +235,7 @@ impl Server {
         let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         self.store
             .async_rollback_then_get(ctx,
-                                     Key::new(key),
+                                     Key::from_raw(key),
                                      cmd_rollback_get_req.get_lock_version(),
                                      cb)
             .map_err(ServerError::Storage)
@@ -621,7 +624,7 @@ mod tests {
     use mio::EventLoop;
 
     use kvproto::kvrpcpb::*;
-    use kvproto::errorpb::NotLeaderError;
+    use kvproto::errorpb::NotLeader;
     use storage::{self, Value, Storage, Dsn, txn, mvcc, engine};
     use storage::Error::Other;
     use storage::KvPair as StorageKV;
@@ -803,8 +806,8 @@ mod tests {
 
     #[test]
     fn test_not_leader() {
-        use kvproto::errorpb::NotLeaderError;
-        let mut leader_info = NotLeaderError::new();
+        use kvproto::errorpb::NotLeader;
+        let mut leader_info = NotLeader::new();
         leader_info.set_region_id(1);
         let storage_res: StorageResult<Option<Value>> =
             make_not_leader_error(leader_info.to_owned());
@@ -825,7 +828,7 @@ mod tests {
             .map_err(storage::Error::from)
     }
 
-    fn make_not_leader_error<T>(leader_info: NotLeaderError) -> StorageResult<T> {
+    fn make_not_leader_error<T>(leader_info: NotLeader) -> StorageResult<T> {
         use kvproto::errorpb::Error;
         let mut err = Error::new();
         err.set_not_leader(leader_info);
