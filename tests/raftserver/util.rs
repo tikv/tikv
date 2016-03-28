@@ -14,7 +14,7 @@ use super::cluster::{Cluster, Simulator};
 
 use tikv::raftserver::store::*;
 use tikv::raftserver::server::Config as ServerConfig;
-use kvproto::metapb;
+use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_cmdpb::{CmdType, StatusCmdType, AdminCmdType};
 use kvproto::raftpb::ConfChangeType;
@@ -73,15 +73,16 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 }
 
 // Create a base request.
-pub fn new_base_request(region_id: u64) -> RaftCmdRequest {
+pub fn new_base_request(region_id: u64, epoch: RegionEpoch) -> RaftCmdRequest {
     let mut req = RaftCmdRequest::new();
     req.mut_header().set_region_id(region_id);
+    req.mut_header().set_region_epoch(epoch);
     req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
     req
 }
 
-pub fn new_request(region_id: u64, requests: Vec<Request>) -> RaftCmdRequest {
-    let mut req = new_base_request(region_id);
+pub fn new_request(region_id: u64, epoch: RegionEpoch, requests: Vec<Request>) -> RaftCmdRequest {
+    let mut req = new_base_request(region_id, epoch);
     req.set_requests(protobuf::RepeatedField::from_vec(requests));
     req
 }
@@ -119,7 +120,7 @@ pub fn new_status_request(region_id: u64,
                           peer: metapb::Peer,
                           request: StatusRequest)
                           -> RaftCmdRequest {
-    let mut req = new_base_request(region_id);
+    let mut req = new_base_request(region_id, RegionEpoch::new());
     req.mut_header().set_peer(peer);
     req.set_status_request(request);
     req
@@ -137,27 +138,25 @@ pub fn new_region_leader_cmd() -> StatusRequest {
     cmd
 }
 
-pub fn new_admin_request(region_id: u64, request: AdminRequest) -> RaftCmdRequest {
-    let mut req = new_base_request(region_id);
+pub fn new_admin_request(region_id: u64,
+                         epoch: &RegionEpoch,
+                         request: AdminRequest)
+                         -> RaftCmdRequest {
+    let mut req = new_base_request(region_id, epoch.clone());
     req.set_admin_request(request);
     req
 }
 
-pub fn new_change_peer_cmd(change_type: ConfChangeType,
-                           peer: metapb::Peer,
-                           region_epoch: &metapb::RegionEpoch)
-                           -> AdminRequest {
+pub fn new_change_peer_cmd(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
     let mut cmd = AdminRequest::new();
     cmd.set_cmd_type(AdminCmdType::ChangePeer);
     cmd.mut_change_peer().set_change_type(change_type);
     cmd.mut_change_peer().set_peer(peer);
-    cmd.mut_change_peer().set_region_epoch(region_epoch.clone());
     cmd
 }
 
 pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
                             new_region_id: u64,
-                            region_epoch: &metapb::RegionEpoch,
                             peer_ids: Vec<u64>)
                             -> AdminRequest {
     let mut cmd = AdminRequest::new();
@@ -166,7 +165,6 @@ pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
         cmd.mut_split().set_split_key(key);
     }
     cmd.mut_split().set_new_region_id(new_region_id);
-    cmd.mut_split().set_region_epoch(region_epoch.clone());
     cmd.mut_split().set_new_peer_ids(peer_ids);
     cmd
 

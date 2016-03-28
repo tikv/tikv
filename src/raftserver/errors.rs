@@ -80,6 +80,10 @@ quick_error!{
             description("request timeout")
             display("{}", msg)
         }
+        StaleEpoch(msg: String) {
+            description("region is stale")
+            display("{}", msg)
+        }
     }
 }
 

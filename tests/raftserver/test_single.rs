@@ -3,6 +3,8 @@ use tikv::raftserver::store::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
+// TODO add stale epoch test cases.
+
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
     cluster.start();
