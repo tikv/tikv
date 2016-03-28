@@ -146,7 +146,7 @@ fn test_normal() {
 
     thread::sleep(Duration::from_secs(1));
 
-    let k1 = Key::new(b"b".to_vec());
+    let k1 = Key::from_raw(b"b".to_vec());
     assert_eq!(engine.get(&ctx, &k1).unwrap(), None);
 
     put(&engine, &ctx, &k1, b"b");
@@ -157,12 +157,13 @@ fn test_normal() {
 
     assert_eq!(engine.seek(&ctx, &k1).unwrap(),
                Some((b"b".to_vec(), b"c".to_vec())));
-    assert_eq!(engine.seek(&ctx, &Key::new(b"a".to_vec())).unwrap(),
+    assert_eq!(engine.seek(&ctx, &Key::from_raw(b"a".to_vec())).unwrap(),
                Some((b"b".to_vec(), b"c".to_vec())));
-    assert_eq!(engine.seek(&ctx, &Key::new(b"b\0".to_vec())).unwrap(), None);
+    assert_eq!(engine.seek(&ctx, &Key::from_raw(b"b\0".to_vec())).unwrap(),
+               None);
 
     // it's ok to delete a non-exist key.
-    let k2 = Key::new(b"c".to_vec());
+    let k2 = Key::from_raw(b"c".to_vec());
     assert_eq!(engine.get(&ctx, &k2).unwrap(), None);
     delete(&engine, &ctx, &k2);
 
@@ -179,28 +180,28 @@ fn test_batch() {
 
     let mut mutation = vec![];
     for i in 1..100 {
-        let k = Key::new(i.to_string().into_bytes());
+        let k = Key::from_raw(i.to_string().into_bytes());
         let put = Modify::Put((k, i.to_string().into_bytes()));
         mutation.push(put);
     }
     engine.write(&ctx, mutation).unwrap();
 
     for i in 1..100 {
-        let k = Key::new(i.to_string().into_bytes());
+        let k = Key::from_raw(i.to_string().into_bytes());
         assert_eq!(engine.get(&ctx, &k).unwrap(),
                    Some(i.to_string().into_bytes()));
     }
 
     let mut mutation = vec![];
     for i in 1..100 {
-        let k = Key::new(i.to_string().into_bytes());
+        let k = Key::from_raw(i.to_string().into_bytes());
         let delete = Modify::Delete(k);
         mutation.push(delete);
     }
     engine.write(&ctx, mutation).unwrap();
 
     for i in 1..100 {
-        let k = Key::new(i.to_string().into_bytes());
+        let k = Key::from_raw(i.to_string().into_bytes());
         assert_eq!(engine.get(&ctx, &k).unwrap(), None);
     }
 }
