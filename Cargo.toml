@@ -35,7 +35,6 @@ git = "https://github.com/carllerche/bytes"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
-branch = "busyjay/add-epoch"
 
 [dev-dependencies]
 env_logger = "0.3"

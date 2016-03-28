@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use kvproto::metapb;
 use kvproto::raftpb::{self, ConfChangeType};
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest};
-use kvproto::raft_cmdpb::{self as cmd, Request, Response, AdminRequest, AdminResponse};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
+                          AdminCmdType, Request, Response, AdminRequest, AdminResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, Ready, RawNode, SnapshotStatus};
 use raftserver::{Result, other, Error};
@@ -319,9 +319,9 @@ impl Peer {
         let (mut check_ver, mut check_conf_ver) = (false, false);
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
-                cmd::AdminCmdType::CompactLog | cmd::AdminCmdType::InvalidAdmin => {}
-                cmd::AdminCmdType::Split => check_ver = true,
-                cmd::AdminCmdType::ChangePeer => check_conf_ver = true,
+                AdminCmdType::CompactLog | AdminCmdType::InvalidAdmin => {}
+                AdminCmdType::Split => check_ver = true,
+                AdminCmdType::ChangePeer => check_conf_ver = true,
             };
         } else {
             // for get/set/seek/delete, we don't care conf_version.
@@ -555,9 +555,7 @@ impl Peer {
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
-
         let pending_cmd = self.pending_cmds.remove(&uuid);
-
         let (mut resp, exec_result) = self.apply_raft_cmd(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);
             (cmd_resp::new_error(e), None)
@@ -588,7 +586,6 @@ impl Peer {
                       req: &RaftCmdRequest)
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let last_applied_index = self.storage.rl().applied_index();
-
         if last_applied_index >= index {
             return Err(other(format!("applied index moved backwards, {} >= {}",
                                      last_applied_index,
@@ -686,10 +683,10 @@ impl Peer {
               self.region_id);
 
         let (mut response, exec_result) = try!(match cmd_type {
-            cmd::AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
-            cmd::AdminCmdType::Split => self.exec_split(ctx, request),
-            cmd::AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
-            cmd::AdminCmdType::InvalidAdmin => Err(other("unsupported admin command type")),
+            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
+            AdminCmdType::Split => self.exec_split(ctx, request),
+            AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
+            AdminCmdType::InvalidAdmin => Err(other("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
 
@@ -865,10 +862,10 @@ impl Peer {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
-                cmd::CmdType::Get => self.do_get(ctx, req),
-                cmd::CmdType::Seek => self.do_seek(ctx, req),
-                cmd::CmdType::Put => self.do_put(ctx, req),
-                cmd::CmdType::Delete => self.do_delete(ctx, req),
+                CmdType::Get => self.do_get(ctx, req),
+                CmdType::Seek => self.do_seek(ctx, req),
+                CmdType::Put => self.do_put(ctx, req),
+                CmdType::Delete => self.do_delete(ctx, req),
                 e => Err(other(format!("unsupported command type {:?}", e))),
             });
 

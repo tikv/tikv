@@ -19,8 +19,7 @@ pub fn bind_term(resp: &mut RaftCmdResponse, term: u64) {
     resp.mut_header().set_current_term(term);
 }
 
-pub fn new_error(err: Error) -> RaftCmdResponse {
-    let mut msg = RaftCmdResponse::new();
+pub fn bind_error(resp: &mut RaftCmdResponse, err: Error) {
     let mut error_header = errorpb::Error::new();
 
     error_header.set_message(error::Error::description(&err).to_owned());
@@ -47,9 +46,13 @@ pub fn new_error(err: Error) -> RaftCmdResponse {
         _ => {}
     };
 
-    msg.mut_header().set_error(error_header);
+    resp.mut_header().set_error(error_header);
+}
 
-    msg
+pub fn new_error(err: Error) -> RaftCmdResponse {
+    let mut resp = RaftCmdResponse::new();
+    bind_error(&mut resp, err);
+    resp
 }
 
 pub fn message_error<E>(err: E) -> RaftCmdResponse
