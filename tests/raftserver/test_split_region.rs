@@ -47,7 +47,8 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.put(b"a3", b"vv3");
     assert_eq!(cluster.get(b"a3").unwrap(), b"vv3".to_vec());
 
-    let get = util::new_request(left.get_region_id(), vec![util::new_get_cmd(b"a3")]);
+    let epoch = left.get_region_epoch().clone();
+    let get = util::new_request(left.get_region_id(), epoch, vec![util::new_get_cmd(b"a3")]);
     let resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -144,7 +145,10 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // be small.
     assert!(size > REGION_SPLIT_SIZE - 1000);
 
-    let get = util::new_request(left.get_region_id(), vec![util::new_get_cmd(&max_key)]);
+    let epoch = left.get_region_epoch().clone();
+    let get = util::new_request(left.get_region_id(),
+                                epoch,
+                                vec![util::new_get_cmd(&max_key)]);
     let resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
