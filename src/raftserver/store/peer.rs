@@ -13,7 +13,7 @@ use kvproto::raftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
-use raft::{self, Ready, RawNode, SnapshotStatus};
+use raft::{self, RawNode, SnapshotStatus};
 use raftserver::{Result, other, Error};
 use raftserver::coprocessor::CoprocessorHost;
 use util::HandyRwLock;
@@ -256,7 +256,7 @@ impl Peer {
             self.current_term = hs.get_term();
         }
 
-        let applied_region = try!(self.handle_raft_ready_in_storage(&ready));
+        let applied_region = try!(self.storage.wl().handle_raft_ready(&ready));
 
         for msg in &ready.messages {
             try!(self.send_raft_message(&msg, trans));
@@ -354,39 +354,6 @@ impl Peer {
         }
 
         Ok(())
-    }
-
-    fn handle_raft_ready_in_storage(&mut self, ready: &Ready) -> Result<Option<metapb::Region>> {
-        let wb = WriteBatch::new();
-        let mut storage = self.storage.wl();
-        let mut last_index = storage.last_index();
-        let mut apply_snap_res = None;
-        if !raft::is_empty_snap(&ready.snapshot) {
-            try!(wb.delete(&keys::region_tombstone_key(self.region_id)));
-            apply_snap_res = try!(storage.apply_snapshot(&wb, &ready.snapshot).map(|res| {
-                last_index = res.last_index;
-                Some(res)
-            }));
-        }
-        if !ready.entries.is_empty() {
-            last_index = try!(storage.append(&wb, last_index, &ready.entries));
-        }
-
-        if let Some(ref hs) = ready.hs {
-            try!(peer_storage::save_hard_state(&wb, self.region_id, hs));
-        }
-
-        try!(self.engine.write(wb));
-
-        storage.set_last_index(last_index);
-        // If we apply snapshot ok, we should update some infos like applied index too.
-        if let Some(res) = apply_snap_res {
-            storage.set_applied_index(res.applied_index);
-            storage.set_region(&res.region);
-            return Ok(Some(res.region.clone()));
-        }
-
-        Ok(None)
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
