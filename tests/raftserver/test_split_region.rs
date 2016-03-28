@@ -49,7 +49,8 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let epoch = left.get_region_epoch().clone();
     let get = util::new_request(left.get_region_id(), epoch, vec![util::new_get_cmd(b"a3")]);
-    let resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));
+    let region_id = left.get_region_id();
+    let resp = cluster.call_command_on_leader(region_id, get, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
 }
@@ -69,14 +70,16 @@ fn test_server_base_split_region() {
 }
 
 /// Keep puting random kvs until specified size limit is reached.
-fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>, limit: u64) -> Vec<u8> {
+fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>,
+                               limit: u64,
+                               range: &mut Iterator<Item = u64>)
+                               -> Vec<u8> {
     let mut len = 0;
     let mut rng = rand::thread_rng();
     let mut max_key = vec![];
     while len < limit {
-        let mut key = vec![0; 64];
-        let mut value = vec![0; 32];
-        rng.fill_bytes(&mut key);
+        let key = range.next().unwrap().to_string().into_bytes();
+        let mut value = vec![0; 64];
         rng.fill_bytes(&mut value);
         cluster.put(&key, &value);
         // plus 1 for the extra encoding prefix
@@ -94,6 +97,9 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.store_cfg.region_max_size = REGION_MAX_SIZE;
     cluster.cfg.store_cfg.region_split_size = REGION_SPLIT_SIZE;
 
+    let check_size_diff = cluster.cfg.store_cfg.region_check_size_diff;
+    let mut range = 1..;
+
     cluster.bootstrap_region().expect("");
     cluster.start();
 
@@ -102,7 +108,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
 
-    let last_key = put_till_size(cluster, REGION_SPLIT_SIZE);
+    let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
 
     // it should be finished in millis if split.
     thread::sleep(Duration::from_secs(1));
@@ -111,7 +117,9 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     assert_eq!(region, target);
 
-    let final_key = put_till_size(cluster, REGION_MAX_SIZE - REGION_SPLIT_SIZE + 1);
+    let final_key = put_till_size(cluster,
+                                  REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
+                                  &mut range);
     let max_key = cmp::max(last_key, final_key);
 
     thread::sleep(Duration::from_secs(1));
@@ -119,6 +127,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let left = pd_client.rl().get_region(cluster_id, b"").unwrap();
     let right = pd_client.rl().get_region(cluster_id, &max_key).unwrap();
 
+    assert!(left != right);
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
@@ -149,7 +158,8 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let get = util::new_request(left.get_region_id(),
                                 epoch,
                                 vec![util::new_get_cmd(&max_key)]);
-    let resp = cluster.request(left.get_region_id(), get, Duration::from_secs(3));
+    let region_id = left.get_region_id();
+    let resp = cluster.call_command_on_leader(region_id, get, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
 }
