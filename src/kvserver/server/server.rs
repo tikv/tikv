@@ -620,7 +620,6 @@ mod tests {
     use kvproto::errorpb::NotLeader;
     use storage::{self, Value, Storage, Dsn, txn, mvcc, engine};
     use storage::Error::Other;
-    use storage::KvPair as StorageKV;
     use storage::Result as StorageResult;
     use super::*;
 
@@ -655,7 +654,7 @@ mod tests {
 
     #[test]
     fn test_get_done_some() {
-        let storage_val: Vec<_> = vec![0x0; 0x8];
+        let storage_val = vec![0x0; 0x8];
         let actual_resp = Server::cmd_get_done(Ok(Some(storage_val)));
         let mut exp_resp = Response::new();
         let mut exp_cmd_resp = CmdGetResponse::new();
@@ -694,14 +693,13 @@ mod tests {
     #[test]
     fn test_scan_done_some() {
         let k0 = vec![0x0, 0x0];
-        let v0: Value = vec![0xff, 0xff];
+        let v0 = vec![0xff, 0xff];
         let k1 = vec![0x0, 0x1];
-        let v1: Value = vec![0xff, 0xfe];
-        let kvs: Vec<StorageResult<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
-                                                      Ok((k1.clone(), v1.clone()))];
+        let v1 = vec![0xff, 0xfe];
+        let kvs = vec![Ok((k0.clone(), v0.clone())), Ok((k1.clone(), v1.clone()))];
         let actual_resp = Server::cmd_scan_done(Ok(kvs));
         assert_eq!(MessageType::CmdScan, actual_resp.get_field_type());
-        let actual_cmd_resp: &CmdScanResponse = actual_resp.get_cmd_scan_resp();
+        let actual_cmd_resp = actual_resp.get_cmd_scan_resp();
         assert_eq!(true, actual_cmd_resp.get_ok());
         let actual_kvs = actual_cmd_resp.get_results();
         assert_eq!(2, actual_kvs.len());
@@ -719,14 +717,12 @@ mod tests {
     fn test_scan_done_lock() {
         use kvproto::kvrpcpb::LockInfo;
         let k0 = vec![0x0, 0x0];
-        let v0: Value = vec![0xff, 0xff];
+        let v0 = vec![0xff, 0xff];
         let k1 = vec![0x0, 0x1];
         let k1_primary = k0.clone();
-        let k1_ts: u64 = 10000;
-        let kvs: Vec<StorageResult<StorageKV>> = vec![Ok((k0.clone(), v0.clone())),
-                                                      make_lock_error(k1.clone(),
-                                                                      k1_primary.clone(),
-                                                                      k1_ts)];
+        let k1_ts = 10000;
+        let kvs = vec![Ok((k0.clone(), v0.clone())),
+                       make_lock_error(k1.clone(), k1_primary.clone(), k1_ts)];
         let actual_resp = Server::cmd_scan_done(Ok(kvs));
         assert_eq!(MessageType::CmdScan, actual_resp.get_field_type());
         let actual_cmd_resp = actual_resp.get_cmd_scan_resp();
