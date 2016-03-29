@@ -50,7 +50,6 @@ impl KvContext {
         }
     }
 
-    #[cfg(test)]
     pub fn none() -> KvContext {
         KvContext::new(0, Peer::new())
     }
