@@ -3,7 +3,7 @@ use uuid::Uuid;
 use kvproto::{metapb, pdpb};
 use super::{Error, Result, errors, TRpcClient, Client};
 
-impl<T: TRpcClient> super::PdClient for Client<T> {
+impl<T: TRpcClient + 'static> super::PdClient for Client<T> {
     fn bootstrap_cluster(&mut self,
                          cluster_id: u64,
                          node: metapb::Node,
@@ -18,7 +18,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::Bootstrap);
         req.set_bootstrap(bootstrap);
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(())
     }
@@ -27,7 +27,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::IsBootstrapped);
         req.set_is_bootstrapped(pdpb::IsBootstrappedRequest::new());
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(resp.get_is_bootstrapped().get_bootstrapped())
     }
@@ -36,7 +36,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(0, pdpb::CommandType::AllocId);
         req.set_alloc_id(pdpb::AllocIdRequest::new());
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(resp.get_alloc_id().get_id())
     }
@@ -49,7 +49,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::PutMeta);
         req.set_put_meta(put_meta);
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(())
     }
@@ -62,7 +62,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::PutMeta);
         req.set_put_meta(put_meta);
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(())
     }
@@ -75,7 +75,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::DeleteMeta);
         req.set_delete_meta(delete_meta);
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(())
     }
@@ -88,7 +88,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::DeleteMeta);
         req.set_delete_meta(delete_meta);
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(())
     }
@@ -101,7 +101,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::GetMeta);
         req.set_get_meta(get_meta);
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(resp.get_get_meta().get_node().clone())
     }
@@ -114,7 +114,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::GetMeta);
         req.set_get_meta(get_meta);
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(resp.get_get_meta().get_store().clone())
     }
@@ -127,7 +127,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::GetMeta);
         req.set_get_meta(get_meta);
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(resp.get_get_meta().get_cluster().clone())
     }
@@ -140,7 +140,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::GetMeta);
         req.set_get_meta(get_meta);
 
-        let resp = try!(self.send_message(&req));
+        let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(resp.get_get_meta().get_region().clone())
     }
@@ -157,7 +157,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::AskChangePeer);
         req.set_ask_change_peer(ask_change_peer);
 
-        self.post_message::<_, pdpb::Response>(req)
+        self.post(req)
     }
 
     fn ask_split(&self,
@@ -174,7 +174,7 @@ impl<T: TRpcClient> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::AskSplit);
         req.set_ask_split(ask_split);
 
-        self.post_message::<_, pdpb::Response>(req)
+        self.post(req)
     }
 }
 
