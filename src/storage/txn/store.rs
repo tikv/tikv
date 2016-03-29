@@ -57,7 +57,7 @@ impl TxnStore {
             let _guard = self.shard_mutex.lock(&next_key);
             key = Key::from_raw(next_key.clone());
             match txn.get(&key) {
-                Ok(Some(value)) => results.push(Ok((next_key.clone(), value))),
+                Ok(Some(value)) => results.push(Ok((next_key, value))),
                 Ok(None) => {}
                 e @ Err(MvccError::KeyIsLocked{..}) => {
                     results.push(Err(Error::from(e.unwrap_err())))
