@@ -655,7 +655,7 @@ mod tests {
         let mut exp_resp = Response::new();
         let mut exp_cmd_resp = CmdGetResponse::new();
         let mut res_type = make_res_type(ResultType_Type::Retryable);
-        res_type.set_msg("storage error: Other(Any)".to_owned());
+        res_type.set_msg("storage error: Other(StringError(\"error\"))".to_owned());
         exp_cmd_resp.set_res_type(res_type);
         exp_resp.set_field_type(MessageType::CmdGet);
         exp_resp.set_cmd_get_resp(exp_cmd_resp);
