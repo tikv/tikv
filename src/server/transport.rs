@@ -73,7 +73,7 @@ impl<T: PdClient> Transport for ServerTransport<T> {
             addr: node.get_address().to_owned(),
             data: ConnData::new(*id, req),
         }) {
-            return Err(raft_other(e));
+            return Err(raft_other(format!("send peer to {} err {:?}", node.get_address(), e)));
         }
 
         Ok(())

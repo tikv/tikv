@@ -11,6 +11,7 @@ use util::codec::rpc;
 pub mod errors;
 pub mod server;
 mod conn;
+mod kv;
 pub mod transport;
 
 pub use self::errors::{Result, Error, other};

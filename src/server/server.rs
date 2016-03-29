@@ -15,6 +15,8 @@ use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::{Result, other};
 use util::HandyRwLock;
+use storage::Storage;
+use super::kv::StoreHandler;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
@@ -43,6 +45,8 @@ pub struct Server<T: Transport> {
     peers: HashMap<String, Token>,
 
     trans: Arc<RwLock<T>>,
+
+    store: StoreHandler,
 }
 
 impl<T: Transport> Server<T> {
@@ -50,6 +54,7 @@ impl<T: Transport> Server<T> {
     // We must bootstrap all stores before running the server.
     pub fn new(event_loop: &mut EventLoop<Self>,
                addr: &str,
+               storage: Storage,
                trans: Arc<RwLock<T>>)
                -> Result<Server<T>> {
         let laddr = try!(addr.parse());
@@ -62,6 +67,8 @@ impl<T: Transport> Server<T> {
 
         let sendch = SendCh::new(event_loop.channel());
 
+        let store_handler = StoreHandler::new(storage, sendch.clone());
+
         let svr = Server {
             listener: listener,
             sendch: sendch,
@@ -69,6 +76,7 @@ impl<T: Transport> Server<T> {
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             peers: HashMap::new(),
             trans: trans,
+            store: store_handler,
         };
 
         Ok(svr)
@@ -177,7 +185,8 @@ impl<T: Transport> Server<T> {
                 }
                 Ok(())
             }
-            MessageType::Cmd => self.handle_raft_command(token, msg_id, msg.take_cmd_req()),
+            MessageType::Cmd => self.handle_raft_command(msg.take_cmd_req(), token, msg_id),
+            MessageType::KvReq => self.store.handle_request(msg.take_kv_req(), token, msg_id),
             _ => {
                 Err(other(format!("unsupported message {:?} for token {:?} with msg id {}",
                                   msg_type,
@@ -188,9 +197,9 @@ impl<T: Transport> Server<T> {
     }
 
     fn handle_raft_command(&mut self,
+                           msg: RaftCmdRequest,
                            token: Token,
-                           msg_id: u64,
-                           msg: RaftCmdRequest)
+                           msg_id: u64)
                            -> Result<()> {
         debug!("handle raft command {:?}", msg);
         let ch = self.sendch.clone();
