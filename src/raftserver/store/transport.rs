@@ -6,7 +6,7 @@ use super::Callback;
 use super::msg::SendCh;
 
 // Transports message between different raft peers.
-pub trait Transport {
+pub trait Transport : Send + Sync {
     // For transporting message with store send channel.
     // TODO: we may remove these to another trait or structure later.
     fn add_sendch(&mut self, store_id: u64, ch: SendCh);
