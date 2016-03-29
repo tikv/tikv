@@ -410,7 +410,7 @@ mod tests {
     use kvproto::kvrpcpb::*;
     use kvproto::errorpb::NotLeader;
     use storage::{self, Value, txn, mvcc, engine};
-    use storage::Error::Other;
+    use storage::Error;
     use storage::Result as StorageResult;
     use super::*;
 
@@ -442,7 +442,7 @@ mod tests {
     #[test]
     // #[should_panic]
     fn test_get_done_error() {
-        let actual_resp = StoreHandler::cmd_get_done(Err(Other(Box::new("error"))));
+        let actual_resp = StoreHandler::cmd_get_done(Err(Error::other("error")));
         let mut exp_resp = Response::new();
         let mut exp_cmd_resp = CmdGetResponse::new();
         let mut res_type = make_res_type(ResultType_Type::Retryable);
@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_done_err() {
-        let err = Other(Box::new("prewrite error"));
+        let err = Error::other("prewrite error");
         let actual_resp = StoreHandler::cmd_prewrite_done(Err(err));
         assert_eq!(MessageType::CmdPrewrite, actual_resp.get_field_type());
         assert_eq!(false, actual_resp.get_cmd_prewrite_resp().get_ok());
@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn test_commit_done_err() {
-        let err = Other(Box::new("commit error"));
+        let err = Error::other("commit error");
         let actual_resp = StoreHandler::cmd_commit_done(Err(err));
         assert_eq!(MessageType::CmdCommit, actual_resp.get_field_type());
         assert_eq!(false, actual_resp.get_cmd_commit_resp().get_ok());
@@ -560,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_done_err() {
-        let err = Other(Box::new("cleanup error"));
+        let err = Error::other("cleanup error");
         let actual_resp = StoreHandler::cmd_cleanup_done(Err(err));
         assert_eq!(MessageType::CmdCleanup, actual_resp.get_field_type());
         assert_eq!(make_res_type(ResultType_Type::Retryable),
