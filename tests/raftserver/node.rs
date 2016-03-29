@@ -8,7 +8,7 @@ use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::raftserver::server::Node;
-use tikv::raftserver::store::{SendCh, Transport, msg, Msg};
+use tikv::raftserver::store::{SendCh, Transport, msg, Msg, Callback};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tikv::raftserver::{Result, other};
@@ -46,6 +46,14 @@ impl Transport for ChannelTransport {
             None => Err(other(format!("missing sender for store {}", to_store))),
             Some(sender) => sender.send(Msg::RaftMessage(msg)),
         }
+    }
+
+    fn send_raft_msg(&self, _: raft_serverpb::RaftMessage) -> Result<()> {
+        unimplemented!();
+    }
+
+    fn send_command(&self, _: RaftCmdRequest, _: Callback) -> Result<()> {
+        unimplemented!();
     }
 }
 

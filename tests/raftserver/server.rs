@@ -8,13 +8,13 @@ use std::time::Duration;
 use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::raftserver::server::*;
+use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg};
+use tikv::raftserver::server::{Node, Config};
 use tikv::raftserver::Result;
 use tikv::util::codec::rpc;
-use kvproto::raft_serverpb::{self, Message, MessageType};
+use kvproto::raft_serverpb;
+use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
-use tikv::pd::PdClient;
-use super::util;
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
 
@@ -75,24 +75,27 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
         let mut event_loop = create_event_loop().unwrap();
-        let mut server = Server::new(&mut event_loop, cfg, vec![engine], self.pd_client.clone())
-                             .unwrap();
+        let sendch = SendCh::new(event_loop.channel());
+        let trans = Arc::new(RwLock::new(ServerTransport::new(self.cluster_id,
+                                                              sendch,
+                                                              self.pd_client.clone())));
+        // TODO: we will create a Raft storage including Node and pass it to server later.
+        let mut server = Server::new(&mut event_loop, &cfg.addr, trans.clone()).unwrap();
         let addr = server.listening_addr().unwrap();
 
-        assert!(node_id == 0 || node_id == server.get_node_id());
-        let node_id = server.get_node_id();
+        let mut node = Node::new(&cfg, format!("{}", addr), self.pd_client.clone(), trans);
+        node.start(vec![engine]).unwrap();
 
-        // We must get real listening address and re-update pd again.
-        self.pd_client
-            .write()
-            .unwrap()
-            .put_node(self.cluster_id, util::new_node(node_id, addr.to_string()))
-            .unwrap();
+        assert!(node_id == 0 || node_id == node.get_node_id());
+        let node_id = node.get_node_id();
 
         let ch = server.get_sendch();
 
         let t = thread::spawn(move || {
             server.run(&mut event_loop).unwrap();
+
+            // Force move node here, we will refactor whole later.
+            drop(node)
         });
 
         self.handles.insert(node_id, t);
