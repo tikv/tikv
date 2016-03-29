@@ -3,8 +3,9 @@ use std::option::Option;
 use std::sync::{Arc, RwLock, Mutex};
 
 use raftserver::store::{Msg as StoreMsg, Transport, SendCh as StoreSendCh, Callback};
-use raftserver::{Result, other};
-use kvproto::raft_serverpb::{Message, MessageType, RaftMessage};
+use raftserver::{Result as RaftResult, other as raft_other};
+use kvproto::raft_serverpb::RaftMessage;
+use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use pd::PdClient;
 use util::HandyRwLock;
@@ -30,12 +31,12 @@ impl<T: PdClient> ServerTransport<T> {
         }
     }
 
-    fn get_sendch(&self, store_id: u64) -> Result<&StoreSendCh> {
+    fn get_sendch(&self, store_id: u64) -> RaftResult<&StoreSendCh> {
         match self.stores.get(&store_id) {
             None => {
-                Err(other(format!("send message to invalid store {}, missing send \
+                Err(raft_other(format!("send message to invalid store {}, missing send \
                                    channel",
-                                  store_id)))
+                                       store_id)))
             }
 
             Some(ch) => Ok(ch),
@@ -52,7 +53,7 @@ impl<T: PdClient> Transport for ServerTransport<T> {
         self.stores.remove(&store_id)
     }
 
-    fn send(&self, msg: RaftMessage) -> Result<()> {
+    fn send(&self, msg: RaftMessage) -> RaftResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
         if let Some(ch) = self.stores.get(&to_store_id) {
             // use store send channel directly.
@@ -68,32 +69,38 @@ impl<T: PdClient> Transport for ServerTransport<T> {
 
         let mut id = self.msg_id.lock().unwrap();
         *id += 1;
-        try!(self.ch.send(Msg::SendPeer {
+        if let Err(e) = self.ch.send(Msg::SendPeer {
             addr: node.get_address().to_owned(),
             data: ConnData::new(*id, req),
-        }));
+        }) {
+            return Err(raft_other(e));
+        }
 
         Ok(())
     }
 
     // Send RaftMessage to specified store, the store must exist in current node.
     // Unlike Transport trait Send, this function can only send message to local store.
-    fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
+    fn send_raft_msg(&self, msg: RaftMessage) -> RaftResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
         let ch = try!(self.get_sendch(to_store_id));
 
-        ch.send(StoreMsg::RaftMessage(msg))
+        try!(ch.send(StoreMsg::RaftMessage(msg)));
+
+        Ok(())
     }
 
     // Send RaftCmdRequest to specified store, the store must exist in current node.
     // Unlike Transport trait Send, this function can only send message to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> Result<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftResult<()> {
         let to_store_id = req.get_header().get_peer().get_store_id();
         let ch = try!(self.get_sendch(to_store_id));
 
-        ch.send(StoreMsg::RaftCmd {
+        try!(ch.send(StoreMsg::RaftCmd {
             request: req,
             callback: cb,
-        })
+        }));
+
+        Ok(())
     }
 }
