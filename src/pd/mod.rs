@@ -10,7 +10,7 @@ pub type PdRpcClient = Client<RpcClient>;
 
 pub fn new_rpc_client(addr: &str) -> Result<PdRpcClient> {
     let client = try!(RpcClient::new(addr));
-    Ok(Client::new(client))
+    Ok(try!(Client::new(client)))
 }
 
 use kvproto::metapb;

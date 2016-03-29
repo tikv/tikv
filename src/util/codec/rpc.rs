@@ -24,10 +24,10 @@ fn other_err(msg: String) -> Error {
 
 
 // Encodes message with message ID and protobuf body.
-pub fn encode_msg<T: io::Write, M: protobuf::Message>(w: &mut T,
-                                                      msg_id: u64,
-                                                      msg: &M)
-                                                      -> Result<()> {
+pub fn encode_msg<T: io::Write, M: protobuf::Message + ?Sized>(w: &mut T,
+                                                               msg_id: u64,
+                                                               msg: &M)
+                                                               -> Result<()> {
     let payload_len = msg.compute_size();
     let header = encode_msg_header(msg_id, payload_len as usize);
     try!(w.write(&header));
