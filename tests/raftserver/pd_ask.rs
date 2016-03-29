@@ -110,6 +110,15 @@ impl<T: Simulator> AskHandler<T> {
         let region = req.get_ask_split().get_region();
         let leader = req.get_ask_split().get_leader();
         let split_key = req.get_ask_split().get_split_key().to_vec();
+        let region = self.pd_client
+                         .rl()
+                         .get_region_by_id(cluster_id, region.get_region_id())
+                         .unwrap();
+        if &*split_key <= region.get_start_key() ||
+           (!region.get_end_key().is_empty() && &*split_key >= region.get_end_key()) {
+            error!("invalid split key {:?} for region {:?}", split_key, region);
+            return;
+        }
 
         let new_region_id = self.pd_client.wl().alloc_id().unwrap();
         let mut peer_ids: Vec<u64> = vec![];
@@ -126,6 +135,7 @@ impl<T: Simulator> AskHandler<T> {
         split.mut_header().set_peer(leader.clone());
         let resp = self.sim.wl().call_command(split, Duration::from_secs(3)).unwrap();
 
+        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
         assert_eq!(resp.get_admin_response().get_cmd_type(),
                    AdminCmdType::Split);
 
