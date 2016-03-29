@@ -280,16 +280,28 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn request(&mut self,
-                   region_id: u64,
-                   request: RaftCmdRequest,
+                   key: &[u8],
+                   reqs: Vec<Request>,
                    timeout: Duration)
                    -> RaftCmdResponse {
+        let mut try_cnt = 1;
         loop {
-            let resp = self.call_command_on_leader(region_id, request.clone(), timeout).unwrap();
-            if !resp.get_header().has_error() || !self.refresh_leader_if_needed(&resp, region_id) {
-                return resp;
+            let mut region = self.get_region(key);
+            let region_id = region.get_region_id();
+            let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
+            let resp = self.call_command_on_leader(region_id, req, timeout).unwrap();
+            if resp.get_header().has_error() {
+                // TODO check epoch instead.
+                if self.refresh_leader_if_needed(&resp, region_id) {
+                    warn!("seems leader changed, let's retry");
+                    continue;
+                } else if try_cnt == 1 && resp.get_header().get_error().has_key_not_in_region() {
+                    warn!("seems split, let's retry");
+                    try_cnt += 1;
+                    continue;
+                }
             }
-            error!("refreshed leader of region {}", region_id);
+            return resp;
         }
     }
 
@@ -306,10 +318,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        let region_id = self.get_region_id(key);
-        let epoch = self.get_region_epoch(region_id);
-        let get = new_request(region_id, epoch, vec![new_get_cmd(key)]);
-        let mut resp = self.request(region_id, get, Duration::from_secs(3));
+        let mut resp = self.request(key, vec![new_get_cmd(key)], Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -324,10 +333,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
-        let region_id = self.get_region_id(key);
-        let epoch = self.get_region_epoch(region_id);
-        let put = new_request(region_id, epoch, vec![new_put_cmd(key, value)]);
-        let resp = self.request(region_id, put, Duration::from_secs(3));
+        let resp = self.request(key, vec![new_put_cmd(key, value)], Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -336,10 +342,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-        let region_id = self.get_region_id(key);
-        let epoch = self.get_region_epoch(region_id);
-        let seek = new_request(region_id, epoch, vec![new_seek_cmd(key)]);
-        let resp = self.request(region_id, seek, Duration::from_secs(3));
+        let resp = self.request(key, vec![new_seek_cmd(key)], Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -355,10 +358,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn delete(&mut self, key: &[u8]) {
-        let region_id = self.get_region_id(key);
-        let epoch = self.get_region_epoch(region_id);
-        let delete = new_request(region_id, epoch, vec![new_delete_cmd(key)]);
-        let resp = self.request(region_id, delete, Duration::from_secs(3));
+        let resp = self.request(key, vec![new_delete_cmd(key)], Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
