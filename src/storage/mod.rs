@@ -1,5 +1,6 @@
 use std::boxed::FnBox;
 use std::fmt;
+use std::error;
 use std::thread::{self, JoinHandle};
 use std::sync::mpsc::{self, Sender};
 use self::txn::Scheduler;
@@ -178,7 +179,9 @@ impl Storage {
 
     pub fn stop(self) -> Result<()> {
         try!(self.tx.send(Message::Close));
-        try!(try!(self.thread.join()));
+        if self.thread.join().is_err() {
+            return Err(Error::other("failed to wait storage thread quit"));
+        }
         Ok(())
     }
 
@@ -350,9 +353,19 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Other(err: Box<::std::any::Any + Send>) {
+        Other(err: Box<error::Error + Send + Sync>) {
             from()
+            cause(err.as_ref())
+            description(err.description())
         }
+    }
+}
+
+impl Error {
+    pub fn other<T>(err: T) -> Error
+        where T: Into<Box<error::Error + Sync + Send + 'static>>
+    {
+        Error::Other(err.into())
     }
 }
 
