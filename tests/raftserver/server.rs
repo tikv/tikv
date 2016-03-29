@@ -9,7 +9,7 @@ use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg};
-use tikv::raftserver::server::{Node, Config};
+use tikv::server::{Node, Config};
 use tikv::raftserver::Result;
 use tikv::util::codec::rpc;
 use tikv::storage::{Storage, Dsn};
@@ -83,11 +83,14 @@ impl Simulator for ServerCluster {
 
         // TODO: we will create a Raft storage including Node and pass it to server later.
         // Now use a memory store instead.
+        let mut cfg = cfg;
         let store = Storage::new(Dsn::Memory).unwrap();
         let mut server = Server::new(&mut event_loop, &cfg.addr, store, trans.clone()).unwrap();
         let addr = server.listening_addr().unwrap();
 
-        let mut node = Node::new(&cfg, format!("{}", addr), self.pd_client.clone(), trans);
+        cfg.addr = format!("{}", addr);
+
+        let mut node = Node::new(&cfg, self.pd_client.clone(), trans);
         node.start(vec![engine]).unwrap();
 
         assert!(node_id == 0 || node_id == node.get_node_id());

@@ -8,15 +8,19 @@ use protobuf::Message;
 use kvproto::msgpb;
 use util::codec::rpc;
 
+pub mod config;
 pub mod errors;
 pub mod server;
 mod conn;
 mod kv;
 pub mod transport;
+pub mod node;
 
+pub use self::config::{Config, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Result, Error, other};
 pub use self::server::{Server, create_event_loop};
 pub use self::transport::ServerTransport;
+pub use self::node::Node;
 
 
 const MAX_SEND_RETRY_CNT: i32 = 20;
