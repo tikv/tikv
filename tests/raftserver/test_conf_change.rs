@@ -281,8 +281,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let stores = pd_client.rl().get_stores(cluster_id).unwrap();
 
-    // Must have only one peer
-    assert_eq!(region.get_peers().len(), 1);
+    assert!(region.get_peers().len() < 5);
 
     thread::sleep(Duration::from_secs(1));
 
