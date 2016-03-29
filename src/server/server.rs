@@ -1,33 +1,31 @@
 use std::collections::HashMap;
 use std::option::Option;
 use std::sync::{Arc, RwLock};
-use std::vec::Vec;
 use std::boxed::Box;
 use std::net::SocketAddr;
 
-use rocksdb::DB;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
-use raftserver::{Result, other};
 use raftserver::store::{cmd_resp, Transport};
-use kvproto::raft_serverpb::{Message, MessageType};
+use raftserver::Result as RaftResult;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
-use super::config::Config;
-use super::transport::ServerTransport;
-use super::node::Node;
-use pd::PdClient;
+use super::{Result, other};
 use util::HandyRwLock;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const INVALID_TOKEN: Token = Token(0);
 
-pub struct Server<T: PdClient + 'static> {
-    cfg: Config,
+pub fn create_event_loop<T: Transport>() -> Result<EventLoop<Server<T>>> {
+    let event_loop = try!(EventLoop::new());
+    Ok(event_loop)
+}
 
+pub struct Server<T: Transport> {
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
     // In our raft server, a client with token 1 sends a raft command, we will
@@ -44,29 +42,18 @@ pub struct Server<T: PdClient + 'static> {
     // addr -> Token
     peers: HashMap<String, Token>,
 
-    trans: Arc<RwLock<ServerTransport<T>>>,
-
-    node: Node<T, ServerTransport<T>>,
+    trans: Arc<RwLock<T>>,
 }
 
-pub fn create_event_loop<T: PdClient + 'static>() -> Result<EventLoop<Server<T>>> {
-    let event_loop = try!(EventLoop::new());
-    Ok(event_loop)
-}
-
-impl<T: PdClient + 'static> Server<T> {
+impl<T: Transport> Server<T> {
     // Create a server with already initialized engines.
     // We must bootstrap all stores before running the server.
     pub fn new(event_loop: &mut EventLoop<Self>,
-               cfg: Config,
-               engines: Vec<Arc<DB>>,
-               pd_client: Arc<RwLock<T>>)
+               addr: &str,
+               trans: Arc<RwLock<T>>)
                -> Result<Server<T>> {
-        try!(cfg.validate());
-
-
-        let addr = try!((&cfg.addr).parse());
-        let listener = try!(TcpListener::bind(&addr));
+        let laddr = try!(addr.parse());
+        let listener = try!(TcpListener::bind(&laddr));
 
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
@@ -75,42 +62,25 @@ impl<T: PdClient + 'static> Server<T> {
 
         let sendch = SendCh::new(event_loop.channel());
 
-        let trans = Arc::new(RwLock::new(ServerTransport::new(cfg.cluster_id,
-                                                              sendch.clone(),
-                                                              pd_client.clone())));
-
-        let node = Node::new(&cfg,
-                             format!("{}", listener.local_addr().unwrap()),
-                             pd_client,
-                             trans.clone());
-
-        let mut svr = Server {
-            cfg: cfg,
+        let svr = Server {
             listener: listener,
             sendch: sendch,
             conns: HashMap::new(),
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             peers: HashMap::new(),
             trans: trans,
-            node: node,
         };
-
-        try!(svr.node.start(engines));
 
         Ok(svr)
     }
 
-    pub fn get_trans(&self) -> Arc<RwLock<ServerTransport<T>>> {
+    pub fn get_trans(&self) -> Arc<RwLock<T>> {
         self.trans.clone()
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(event_loop.run(self));
         Ok(())
-    }
-
-    pub fn get_node_id(&self) -> u64 {
-        self.node.get_node_id()
     }
 
     pub fn get_sendch(&self) -> SendCh {
@@ -184,35 +154,19 @@ impl<T: PdClient + 'static> Server<T> {
             return Ok(());
         }
 
-        let mut res = vec![];
         for msg in msgs {
-            let resp = try!(self.handle_conn_msg(token, msg));
-            if let Some(resp) = resp {
-                res.push(resp);
-            }
-
-        }
-
-        if res.is_empty() {
-            return Ok(());
-        }
-
-        // append to write buffer here, no need using sender to notify.
-        if let Some(conn) = self.conns.get_mut(&token) {
-            for data in res {
-                try!(conn.append_write_buf(event_loop, data));
-            }
+            try!(self.handle_conn_msg(token, msg))
         }
 
         Ok(())
     }
 
-    fn handle_conn_msg(&mut self, token: Token, data: ConnData) -> Result<Option<ConnData>> {
+    fn handle_conn_msg(&mut self, token: Token, data: ConnData) -> Result<()> {
         let msg_id = data.msg_id;
         let mut msg = data.msg;
 
         let msg_type = msg.get_msg_type();
-        let res = try!(match msg_type {
+        match msg_type {
             MessageType::Raft => {
                 if let Err(e) = self.trans.rl().send_raft_msg(msg.take_raft()) {
                     // Should we return error to let outer close this connection later?
@@ -221,46 +175,28 @@ impl<T: PdClient + 'static> Server<T> {
                            msg_id,
                            e);
                 }
-                Ok(None)
+                Ok(())
             }
-            MessageType::Cmd => self.handle_conn_command(token, msg_id, msg.take_cmd_req()),
-            MessageType::CmdResp => {
-                // Now we have no way to handle CmdResp type,
-                // so log an error here and do nothing.
-                error!("unsupported command response msg {:?} for token {:?} with msg id {}",
-                       msg,
-                       token,
-                       msg_id);
-                Ok(None)
-            }
+            MessageType::Cmd => self.handle_raft_command(token, msg_id, msg.take_cmd_req()),
             _ => {
                 Err(other(format!("unsupported message {:?} for token {:?} with msg id {}",
                                   msg_type,
                                   token,
                                   msg_id)))
             }
-
-        });
-
-        Ok(res)
+        }
     }
 
-    fn handle_conn_command(&mut self,
+    fn handle_raft_command(&mut self,
                            token: Token,
                            msg_id: u64,
                            msg: RaftCmdRequest)
-                           -> Result<Option<ConnData>> {
+                           -> Result<()> {
+        debug!("handle raft command {:?}", msg);
         let ch = self.sendch.clone();
-        let cb = Box::new(move |resp: RaftCmdResponse| -> Result<()> {
-            let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CmdResp);
-            resp_msg.set_cmd_resp(resp);
-            // Use send channel to let server return the
-            // response to the specified connection with token.
-            ch.send(Msg::WriteData {
-                token: token,
-                data: ConnData::new(msg_id, resp_msg),
-            })
+        let cb = Box::new(move |resp: RaftCmdResponse| -> RaftResult<()> {
+            send_raft_cmd_resp(ch, token, msg_id, resp);
+            Ok(())
         });
 
         let uuid = msg.get_header().get_uuid().to_vec();
@@ -270,17 +206,14 @@ impl<T: PdClient + 'static> Server<T> {
                   token,
                   msg_id,
                   e);
-            let mut resp = cmd_resp::new_error(e);
+
+            let mut resp = cmd_resp::message_error(e);
             resp.mut_header().set_uuid(uuid);
-            let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CmdResp);
-            resp_msg.set_cmd_resp(resp);
-            return Ok(Some(ConnData::new(msg_id, resp_msg)));
+            send_raft_cmd_resp(self.sendch.clone(), token, msg_id, resp)
         }
 
-        Ok(None)
+        Ok(())
     }
-
 
     fn handle_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         match token {
@@ -376,7 +309,7 @@ impl<T: PdClient + 'static> Server<T> {
     }
 }
 
-impl<T: PdClient + 'static> Handler for Server<T> {
+impl<T: Transport> Handler for Server<T> {
     type Timeout = Msg;
     type Message = Msg;
 
@@ -415,5 +348,20 @@ impl<T: PdClient + 'static> Handler for Server<T> {
         // tick is called in the end of the loop, so if we notify to quit,
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
+    }
+}
+
+fn send_raft_cmd_resp(ch: SendCh, token: Token, msg_id: u64, resp: RaftCmdResponse) {
+    let mut resp_msg = Message::new();
+    resp_msg.set_msg_type(MessageType::CmdResp);
+    resp_msg.set_cmd_resp(resp);
+    if let Err(e) = ch.send(Msg::WriteData {
+        token: token,
+        data: ConnData::new(msg_id, resp_msg),
+    }) {
+        error!("send raft cmd resp failed with token {:?}, msg id {}, err {:?}",
+               token,
+               msg_id,
+               e);
     }
 }
