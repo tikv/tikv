@@ -267,7 +267,7 @@ impl<T: Transport> Server<T> {
         }
     }
 
-    fn on_writedata(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
+    fn writedata(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
         let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
@@ -290,7 +290,7 @@ impl<T: Transport> Server<T> {
         Ok(token)
     }
 
-    fn on_sendpeer(&mut self, event_loop: &mut EventLoop<Self>, addr: String, data: ConnData) {
+    fn sendpeer(&mut self, event_loop: &mut EventLoop<Self>, addr: String, data: ConnData) {
         // check the corresponding token for peer address.
         let mut token = self.peers.get(&addr).map_or(INVALID_TOKEN, |t| *t);
 
@@ -304,7 +304,7 @@ impl<T: Transport> Server<T> {
             }
         }
 
-        self.on_writedata(event_loop, token, data);
+        self.writedata(event_loop, token, data);
     }
 }
 
@@ -330,8 +330,8 @@ impl<T: Transport> Handler for Server<T> {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData{token, data} => self.on_writedata(event_loop, token, data),
-            Msg::SendPeer{addr, data} => self.on_sendpeer(event_loop, addr, data),
+            Msg::WriteData{token, data} => self.writedata(event_loop, token, data),
+            Msg::SendPeer{addr, data} => self.sendpeer(event_loop, addr, data),
         }
     }
 
