@@ -15,8 +15,6 @@ use tikv::util::codec::rpc;
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
-use tikv::pd::PdClient;
-use super::util;
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
 
@@ -78,7 +76,7 @@ impl Simulator for ServerCluster {
 
         let mut event_loop = create_event_loop().unwrap();
         let sendch = SendCh::new(event_loop.channel());
-        let trans = Arc::new(RwLock::new(ServerTransport::new(cfg.cluster_id,
+        let trans = Arc::new(RwLock::new(ServerTransport::new(self.cluster_id,
                                                               sendch,
                                                               self.pd_client.clone())));
         // TODO: we will create a Raft storage including Node and pass it to server later.

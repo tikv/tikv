@@ -39,12 +39,8 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
     // TODO: use try_read_buf directly if we can solve the compile problem.
     unsafe {
         // header is not full read, we will try read more.
-        let n = try!(r.try_read(buf.mut_bytes()));
-        match n {
-            None => {
-                // nothing to do here.
-            }
-            Some(n) => buf.advance(n),
+        if let Some(n) = try!(r.try_read(buf.mut_bytes())) {
+            buf.advance(n)
         }
     }
 
@@ -124,10 +120,8 @@ impl Conn {
         // we check empty before.
         let mut buf = self.res.front_mut().unwrap();
 
-        let n = try!(self.sock.try_write(buf.bytes()));
-        match n {
-            None => {}
-            Some(n) => buf.advance(n),
+        if let Some(n) = try!(self.sock.try_write(buf.bytes())) {
+            buf.advance(n)
         }
 
         Ok(buf.remaining())
