@@ -1,4 +1,4 @@
-use tikv::storage::{self, Dsn, Mutation};
+use tikv::storage::{self, Dsn, Mutation, Key, KvContext};
 use tikv::storage::txn::TxnStore;
 use util::KVGenerator;
 
@@ -17,18 +17,39 @@ fn bench_tombstone_scan(b: &mut Bencher, dsn: Dsn) {
 
     for (k, v) in kvs.take(100000) {
         let mut ts = ts_generator.next().unwrap();
-        store.prewrite(vec![Mutation::Put((k.clone(), v))], k.clone(), ts).expect("");
-        store.commit(vec![k.clone()], ts, ts_generator.next().unwrap()).expect("");
+        store.prewrite(KvContext::none(),
+                       vec![Mutation::Put((Key::from_raw(k.clone()), v))],
+                       k.clone(),
+                       ts)
+             .expect("");
+        store.commit(KvContext::none(),
+                     vec![Key::from_raw(k.clone())],
+                     ts,
+                     ts_generator.next().unwrap())
+             .expect("");
 
         ts = ts_generator.next().unwrap();
-        store.prewrite(vec![Mutation::Delete(k.clone())], k.clone(), ts).expect("");
-        store.commit(vec![k.clone()], ts, ts_generator.next().unwrap()).expect("");
+        store.prewrite(KvContext::none(),
+                       vec![Mutation::Delete(Key::from_raw(k.clone()))],
+                       k.clone(),
+                       ts)
+             .expect("");
+        store.commit(KvContext::none(),
+                     vec![Key::from_raw(k.clone())],
+                     ts,
+                     ts_generator.next().unwrap())
+             .expect("");
     }
 
     kvs = KVGenerator::new(100, 1000);
     b.iter(|| {
         let (k, _) = kvs.next().unwrap();
-        assert!(store.scan(&k, 1, ts_generator.next().unwrap()).unwrap().is_empty());
+        assert!(store.scan(KvContext::none(),
+                           Key::from_raw(k.clone()),
+                           1,
+                           ts_generator.next().unwrap())
+                     .unwrap()
+                     .is_empty());
     })
 }
 
