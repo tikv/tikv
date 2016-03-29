@@ -8,7 +8,6 @@ use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
 use raftserver::store::{cmd_resp, Transport};
-use raftserver::Result as RaftResult;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
@@ -196,7 +195,7 @@ impl<T: Transport> Server<T> {
     fn on_raft_command(&mut self, msg: RaftCmdRequest, token: Token, msg_id: u64) -> Result<()> {
         debug!("handle raft command {:?}", msg);
         let ch = self.sendch.clone();
-        let cb = Box::new(move |resp: RaftCmdResponse| -> RaftResult<()> {
+        let cb = Box::new(move |resp| {
             send_raft_cmd_resp(ch, token, msg_id, resp);
             Ok(())
         });
