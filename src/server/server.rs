@@ -8,13 +8,14 @@ use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
 use raftserver::store::{cmd_resp, Transport};
-use raftserver::Result as RaftResult;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::{Result, other};
 use util::HandyRwLock;
+use storage::Storage;
+use super::kv::StoreHandler;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
@@ -43,6 +44,8 @@ pub struct Server<T: Transport> {
     peers: HashMap<String, Token>,
 
     trans: Arc<RwLock<T>>,
+
+    store: StoreHandler,
 }
 
 impl<T: Transport> Server<T> {
@@ -50,6 +53,7 @@ impl<T: Transport> Server<T> {
     // We must bootstrap all stores before running the server.
     pub fn new(event_loop: &mut EventLoop<Self>,
                addr: &str,
+               storage: Storage,
                trans: Arc<RwLock<T>>)
                -> Result<Server<T>> {
         let laddr = try!(addr.parse());
@@ -62,6 +66,8 @@ impl<T: Transport> Server<T> {
 
         let sendch = SendCh::new(event_loop.channel());
 
+        let store_handler = StoreHandler::new(storage, sendch.clone());
+
         let svr = Server {
             listener: listener,
             sendch: sendch,
@@ -69,6 +75,7 @@ impl<T: Transport> Server<T> {
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             peers: HashMap::new(),
             trans: trans,
+            store: store_handler,
         };
 
         Ok(svr)
@@ -137,10 +144,7 @@ impl<T: Transport> Server<T> {
         Ok(new_token)
     }
 
-    fn handle_conn_readable(&mut self,
-                            event_loop: &mut EventLoop<Self>,
-                            token: Token)
-                            -> Result<()> {
+    fn on_conn_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) -> Result<()> {
         let msgs = try!(match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
@@ -155,13 +159,13 @@ impl<T: Transport> Server<T> {
         }
 
         for msg in msgs {
-            try!(self.handle_conn_msg(token, msg))
+            try!(self.on_conn_msg(token, msg))
         }
 
         Ok(())
     }
 
-    fn handle_conn_msg(&mut self, token: Token, data: ConnData) -> Result<()> {
+    fn on_conn_msg(&mut self, token: Token, data: ConnData) -> Result<()> {
         let msg_id = data.msg_id;
         let mut msg = data.msg;
 
@@ -177,7 +181,8 @@ impl<T: Transport> Server<T> {
                 }
                 Ok(())
             }
-            MessageType::Cmd => self.handle_raft_command(token, msg_id, msg.take_cmd_req()),
+            MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
+            MessageType::KvReq => self.store.on_request(msg.take_kv_req(), token, msg_id),
             _ => {
                 Err(other(format!("unsupported message {:?} for token {:?} with msg id {}",
                                   msg_type,
@@ -187,14 +192,10 @@ impl<T: Transport> Server<T> {
         }
     }
 
-    fn handle_raft_command(&mut self,
-                           token: Token,
-                           msg_id: u64,
-                           msg: RaftCmdRequest)
-                           -> Result<()> {
+    fn on_raft_command(&mut self, msg: RaftCmdRequest, token: Token, msg_id: u64) -> Result<()> {
         debug!("handle raft command {:?}", msg);
         let ch = self.sendch.clone();
-        let cb = Box::new(move |resp: RaftCmdResponse| -> RaftResult<()> {
+        let cb = Box::new(move |resp| {
             send_raft_cmd_resp(ch, token, msg_id, resp);
             Ok(())
         });
@@ -215,7 +216,7 @@ impl<T: Transport> Server<T> {
         Ok(())
     }
 
-    fn handle_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
+    fn on_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         match token {
             SERVER_TOKEN => {
                 loop {
@@ -241,7 +242,7 @@ impl<T: Transport> Server<T> {
                 }
             }
             token => {
-                if let Err(e) = self.handle_conn_readable(event_loop, token) {
+                if let Err(e) = self.on_conn_readable(event_loop, token) {
                     warn!("handle read conn for token {:?} err {:?}, remove", token, e);
                     self.remove_conn(event_loop, token);
                 }
@@ -250,7 +251,7 @@ impl<T: Transport> Server<T> {
         }
     }
 
-    fn handle_writable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
+    fn on_writable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
@@ -265,10 +266,7 @@ impl<T: Transport> Server<T> {
         }
     }
 
-    fn handle_writedata(&mut self,
-                        event_loop: &mut EventLoop<Self>,
-                        token: Token,
-                        data: ConnData) {
+    fn writedata(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
         let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
@@ -291,7 +289,7 @@ impl<T: Transport> Server<T> {
         Ok(token)
     }
 
-    fn handle_sendpeer(&mut self, event_loop: &mut EventLoop<Self>, addr: String, data: ConnData) {
+    fn sendpeer(&mut self, event_loop: &mut EventLoop<Self>, addr: String, data: ConnData) {
         // check the corresponding token for peer address.
         let mut token = self.peers.get(&addr).map_or(INVALID_TOKEN, |t| *t);
 
@@ -305,7 +303,7 @@ impl<T: Transport> Server<T> {
             }
         }
 
-        self.handle_writedata(event_loop, token, data);
+        self.writedata(event_loop, token, data);
     }
 }
 
@@ -320,19 +318,19 @@ impl<T: Transport> Handler for Server<T> {
         }
 
         if events.is_readable() {
-            self.handle_readable(event_loop, token);
+            self.on_readable(event_loop, token);
         }
 
         if events.is_writable() {
-            self.handle_writable(event_loop, token);
+            self.on_writable(event_loop, token);
         }
     }
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData{token, data} => self.handle_writedata(event_loop, token, data),
-            Msg::SendPeer{addr, data} => self.handle_sendpeer(event_loop, addr, data),
+            Msg::WriteData{token, data} => self.writedata(event_loop, token, data),
+            Msg::SendPeer{addr, data} => self.sendpeer(event_loop, addr, data),
         }
     }
 
