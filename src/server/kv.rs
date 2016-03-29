@@ -29,26 +29,26 @@ impl StoreHandler {
         }
     }
 
-    fn handle_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
+    fn on_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_get_req() {
             return Err(other("Msg doesn't contain a CmdGetRequest"));
         }
-        let mut cmd_get_req = msg.take_cmd_get_req();
-        let mut key_address = cmd_get_req.take_key_address();
+        let mut req = msg.take_cmd_get_req();
+        let mut key_address = req.take_key_address();
         let key = key_address.take_key();
         let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
         let cb = self.make_cb(StoreHandler::cmd_get_done, token, msg_id);
         self.store
-            .async_get(ctx, Key::from_raw(key), cmd_get_req.get_version(), cb)
+            .async_get(ctx, Key::from_raw(key), req.get_version(), cb)
             .map_err(Error::Storage)
     }
 
-    fn handle_scan(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
+    fn on_scan(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_scan_req() {
             return Err(other("Msg doesn't contain a CmdScanRequest"));
         }
-        let mut cmd_scan_req = msg.take_cmd_scan_req();
-        let mut start_key_addresss = cmd_scan_req.take_key_address();
+        let mut req = msg.take_cmd_scan_req();
+        let mut start_key_addresss = req.take_key_address();
         let start_key = start_key_addresss.take_key();
         let ctx = KvContext::new(start_key_addresss.get_region_id(),
                                  start_key_addresss.take_peer());
@@ -57,13 +57,13 @@ impl StoreHandler {
         self.store
             .async_scan(ctx,
                         Key::from_raw(start_key),
-                        cmd_scan_req.get_limit() as usize,
-                        cmd_scan_req.get_version(),
+                        req.get_limit() as usize,
+                        req.get_version(),
                         cb)
             .map_err(Error::Storage)
     }
 
-    fn handle_prewrite(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
+    fn on_prewrite(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_prewrite_req() {
             return Err(other("Msg doesn't contain a CmdPrewriteRequest"));
         }
@@ -94,7 +94,7 @@ impl StoreHandler {
             .map_err(Error::Storage)
     }
 
-    fn handle_commit(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
+    fn on_commit(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_commit_req() {
             return Err(other("Msg doesn't contain a CmdCommitRequest"));
         }
@@ -117,7 +117,7 @@ impl StoreHandler {
             .map_err(Error::Storage)
     }
 
-    fn handle_cleanup(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
+    fn on_cleanup(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_cleanup_req() {
             return Err(other("Msg doesn't contain a CmdCleanupRequest"));
         }
@@ -131,7 +131,7 @@ impl StoreHandler {
             .map_err(Error::Storage)
     }
 
-    fn handle_commit_then_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
+    fn on_commit_then_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_commit_get_req() {
             return Err(other("Msg doesn't contain a CmdCommitThenGetRequest"));
         }
@@ -150,7 +150,7 @@ impl StoreHandler {
             .map_err(Error::Storage)
     }
 
-    fn handle_rollback_then_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
+    fn on_rollback_then_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_rb_get_req() {
             return Err(other("Msg doesn't contain a CmdRollbackThenGetRequest"));
         }
@@ -382,19 +382,19 @@ impl StoreHandler {
         resp
     }
 
-    pub fn handle_request(&self, req: Request, token: Token, msg_id: u64) -> Result<()> {
+    pub fn on_request(&self, req: Request, token: Token, msg_id: u64) -> Result<()> {
         debug!("notify Request token[{:?}] msg_id[{}] type[{:?}]",
                token,
                msg_id,
                req.get_field_type());
         if let Err(e) = match req.get_field_type() {
-            MessageType::CmdGet => self.handle_get(req, token, msg_id),
-            MessageType::CmdScan => self.handle_scan(req, token, msg_id),
-            MessageType::CmdPrewrite => self.handle_prewrite(req, token, msg_id),
-            MessageType::CmdCommit => self.handle_commit(req, token, msg_id),
-            MessageType::CmdCleanup => self.handle_cleanup(req, token, msg_id),
-            MessageType::CmdCommitThenGet => self.handle_commit_then_get(req, token, msg_id),
-            MessageType::CmdRollbackThenGet => self.handle_rollback_then_get(req, token, msg_id),
+            MessageType::CmdGet => self.on_get(req, token, msg_id),
+            MessageType::CmdScan => self.on_scan(req, token, msg_id),
+            MessageType::CmdPrewrite => self.on_prewrite(req, token, msg_id),
+            MessageType::CmdCommit => self.on_commit(req, token, msg_id),
+            MessageType::CmdCleanup => self.on_cleanup(req, token, msg_id),
+            MessageType::CmdCommitThenGet => self.on_commit_then_get(req, token, msg_id),
+            MessageType::CmdRollbackThenGet => self.on_rollback_then_get(req, token, msg_id),
         } {
             // TODO: should we return an error and tell the client later?
             error!("Some error occur err[{:?}]", e);
