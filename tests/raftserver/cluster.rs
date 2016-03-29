@@ -16,7 +16,7 @@ use kvproto::raftpb::ConfChangeType;
 use kvproto::raft_serverpb;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
-use tikv::raftserver::server::Config as ServerConfig;
+use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 
 // We simulate 3 or 5 nodes, each has a store.

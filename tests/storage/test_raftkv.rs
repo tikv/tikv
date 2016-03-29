@@ -6,6 +6,7 @@ use tikv::util::codec::rpc;
 use tikv::util::HandyRwLock;
 use kvproto::raft_serverpb::{self, Message as ServerMessage, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use tikv::server::Config;
 
 use tempdir::TempDir;
 use std::sync::{Arc, RwLock, Mutex};
@@ -19,7 +20,7 @@ use rocksdb::DB;
 use raftserver::pd::TestPdClient;
 use raftserver::pd_ask::run_ask_loop;
 use raftserver::cluster::Simulator;
-use raftserver::util::new_server_config;
+use raftserver::util::new_store_cfg;
 
 /// A simple transport that forward request from TestPdClient to raft kv server.
 struct PdTransport {
@@ -45,7 +46,7 @@ impl PdTransport {
 }
 
 impl Simulator for PdTransport {
-    fn run_node(&mut self, _: u64, _: ServerConfig, _: Arc<DB>) -> u64 {
+    fn run_node(&mut self, _: u64, _: Config, _: Arc<DB>) -> u64 {
         unimplemented!();
     }
     fn stop_node(&mut self, _: u64) {
@@ -89,6 +90,17 @@ impl Simulator for PdTransport {
 }
 
 type EngineInfo = (KvContext, RaftKv<TestPdClient>);
+
+pub fn new_server_config(cluster_id: u64) -> ServerConfig {
+    let store_cfg = new_store_cfg();
+
+    ServerConfig {
+        cluster_id: cluster_id,
+        addr: "127.0.0.1:0".to_owned(),
+        store_cfg: store_cfg,
+        ..ServerConfig::default()
+    }
+}
 
 /// Build an engine with given path as rocksdb directory.
 fn build_engine(pathes: Vec<TempDir>) -> EngineInfo {

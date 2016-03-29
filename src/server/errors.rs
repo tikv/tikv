@@ -1,14 +1,15 @@
 use std::error;
 use std::boxed::Box;
 use std::result;
-use std::io;
-use std::net;
+use std::io::Error as IoError;
+use std::net::AddrParseError;
 
 use protobuf::ProtobufError;
 
-use util::codec;
-use raftserver;
-use storage;
+use util::codec::Error as CodecError;
+use raftserver::Error as RaftServerError;
+use storage::Error as StorageError;
+use pd::Error as PdError;
 
 quick_error!{
     #[derive(Debug)]
@@ -19,7 +20,7 @@ quick_error!{
             display("{:?}", err)
         }
         // Following is for From other errors.
-        Io(err: io::Error) {
+        Io(err: IoError) {
             from()
             cause(err)
             description(err.description())
@@ -29,22 +30,27 @@ quick_error!{
             cause(err)
             description(err.description())
         }
-        Codec(err: codec::Error) {
+        Codec(err: CodecError) {
             from()
             cause(err)
             description(err.description())
         }
-        AddrParse(err: net::AddrParseError) {
+        AddrParse(err: AddrParseError) {
             from()
             cause(err)
             description(err.description())
         }
-        RaftServer(err: raftserver::Error) {
+        RaftServer(err: RaftServerError) {
             from()
             cause(err)
             description(err.description())
         }
-        Storage(err: storage::Error) {
+        Storage(err: StorageError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Pd(err: PdError) {
             from()
             cause(err)
             description(err.description())
