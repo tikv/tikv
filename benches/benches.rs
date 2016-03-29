@@ -15,9 +15,12 @@ extern crate tempdir;
 extern crate uuid;
 extern crate test;
 extern crate kvproto;
+extern crate mio;
 
 mod raftserver;
 mod mvcc;
+mod channel;
+
 #[path="../tests/util.rs"]
 mod util;
 

@@ -11,7 +11,6 @@ use kvproto::raft_serverpb;
 
 pub mod bootstrap;
 pub mod config;
-mod bench;
 mod conn;
 pub mod server;
 pub mod transport;
