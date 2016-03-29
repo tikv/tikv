@@ -15,7 +15,8 @@ use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData};
 use kvproto::raftpb::ConfChangeType;
 use util::HandyRwLock;
 use pd::PdClient;
-use kvproto::raft_cmdpb::{self as cmd, RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
+                          RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
 
 use raftserver::{Result, other, Error};
@@ -656,8 +657,8 @@ fn new_compact_log_request(region_id: u64,
     request.mut_header().set_peer(peer);
     request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
-    let mut admin = cmd::AdminRequest::new();
-    admin.set_cmd_type(cmd::AdminCmdType::CompactLog);
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::CompactLog);
     admin.mut_compact_log().set_compact_index(compact_index);
     request.set_admin_request(admin);
     request
@@ -739,9 +740,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = request.get_header().get_region_id();
 
         let mut response = try!(match cmd_type {
-            cmd::StatusCmdType::RegionLeader => self.execute_region_leader(request),
-            cmd::StatusCmdType::RegionDetail => self.execute_region_detail(request),
-            cmd::StatusCmdType::InvalidStatus => Err(other("invalid status command!")),
+            StatusCmdType::RegionLeader => self.execute_region_leader(request),
+            StatusCmdType::RegionDetail => self.execute_region_detail(request),
+            StatusCmdType::StoreStats => Err(other("unsupported store statistic now")),
+            StatusCmdType::InvalidStatus => Err(other("invalid status command!")),
         });
         response.set_cmd_type(cmd_type);
 
@@ -754,10 +756,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(resp)
     }
 
-    fn execute_region_leader(&mut self, request: RaftCmdRequest) -> Result<cmd::StatusResponse> {
+    fn execute_region_leader(&mut self, request: RaftCmdRequest) -> Result<StatusResponse> {
         let peer = try!(self.mut_target_peer(&request));
 
-        let mut resp = cmd::StatusResponse::new();
+        let mut resp = StatusResponse::new();
         if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
             resp.mut_region_leader().set_leader(leader);
         }
@@ -765,13 +767,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(resp)
     }
 
-    fn execute_region_detail(&mut self, request: RaftCmdRequest) -> Result<cmd::StatusResponse> {
+    fn execute_region_detail(&mut self, request: RaftCmdRequest) -> Result<StatusResponse> {
         let peer = try!(self.mut_target_peer(&request));
         if !peer.storage.rl().is_initialized() {
             let region_id = request.get_header().get_region_id();
             return Err(Error::RegionNotInitialized(region_id));
         }
-        let mut resp = cmd::StatusResponse::new();
+        let mut resp = StatusResponse::new();
         resp.mut_region_detail().set_region(peer.region());
         if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
             resp.mut_region_detail().set_leader(leader);
