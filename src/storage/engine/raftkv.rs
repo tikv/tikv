@@ -5,6 +5,7 @@ use raftserver::server::Config as ServerConfig;
 pub use raftserver::server::config::DEFAULT_LISTENING_ADDR as DEFAULT_RAFT_LISTENING_ADDR;
 use raftserver::server::{SendCh, Msg};
 use raftserver::server::transport::ServerTransport;
+use raftserver::store::Transport;
 use raftserver::errors::Error as RaftServerError;
 use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
