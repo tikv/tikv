@@ -13,7 +13,7 @@ use protobuf;
 use super::cluster::{Cluster, Simulator};
 
 use tikv::raftserver::store::*;
-use tikv::raftserver::server::Config as ServerConfig;
+use tikv::server::Config as ServerConfig;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_cmdpb::{CmdType, StatusCmdType, AdminCmdType};

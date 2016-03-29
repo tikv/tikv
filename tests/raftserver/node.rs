@@ -7,13 +7,13 @@ use std::time::Duration;
 use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::raftserver::server::Node;
+use tikv::server::Node;
 use tikv::raftserver::store::{SendCh, Transport, msg, Msg, Callback};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tikv::raftserver::{Result, other};
 use tikv::util::HandyRwLock;
-use tikv::raftserver::server::Config as ServerConfig;
+use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
 
@@ -80,10 +80,7 @@ impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
-        let mut node = Node::new(&cfg,
-                                 cfg.addr.clone(),
-                                 self.pd_client.clone(),
-                                 self.trans.clone());
+        let mut node = Node::new(&cfg, self.pd_client.clone(), self.trans.clone());
 
         node.start(vec![engine]).unwrap();
         assert!(node_id == 0 || node_id == node.get_node_id());
