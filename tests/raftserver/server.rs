@@ -23,7 +23,7 @@ pub struct ServerCluster {
     senders: HashMap<u64, SendCh>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
     addrs: HashMap<u64, SocketAddr>,
-    conns: Mutex<HashMap<SocketAddr, TcpStream>>,
+    conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
 
     msg_id: Mutex<u64>,
     pd_client: Arc<RwLock<TestPdClient>>,
@@ -46,6 +46,25 @@ impl ServerCluster {
         let mut msg_id = self.msg_id.lock().unwrap();
         *msg_id += 1;
         *msg_id
+    }
+
+
+    fn get_conn(&self, addr: &SocketAddr) -> Result<TcpStream> {
+        {
+            let mut conns = self.conns
+                                .lock()
+                                .unwrap();
+            let conn = conns.get_mut(addr);
+            if let Some(mut pool) = conn {
+                if !pool.is_empty() {
+                    return Ok(pool.pop().unwrap());
+                }
+            }
+        }
+
+        let conn = TcpStream::connect(addr).unwrap();
+        conn.set_nodelay(true).unwrap();
+        Ok(conn)
     }
 }
 
@@ -99,23 +118,28 @@ impl Simulator for ServerCluster {
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_node_id();
         let addr = self.addrs.get(&node_id).unwrap();
-
-        let mut conns = self.conns.lock().unwrap();
-        let mut conn = conns.entry(*addr).or_insert_with(|| TcpStream::connect(addr).unwrap());
-
-        conn.set_write_timeout(Some(timeout)).unwrap();
+        let mut conn = self.get_conn(addr).unwrap();
 
         let mut msg = Message::new();
         msg.set_msg_type(MessageType::Cmd);
         msg.set_cmd_req(request);
 
         let msg_id = self.alloc_msg_id();
+        conn.set_write_timeout(Some(timeout)).unwrap();
         try!(rpc::encode_msg(&mut conn, msg_id, &msg));
 
         conn.set_read_timeout(Some(timeout)).unwrap();
-
         let mut resp_msg = Message::new();
         let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg));
+
+        {
+            let mut conns = self.conns
+                                .lock()
+                                .unwrap();
+            let p = conns.entry(*addr).or_insert_with(Vec::new);
+            p.push(conn);
+        }
+
 
         assert_eq!(resp_msg.get_msg_type(), MessageType::CmdResp);
         assert_eq!(msg_id, get_msg_id);
@@ -128,6 +152,7 @@ impl Simulator for ServerCluster {
         let addr = self.addrs.get(&node_id).unwrap();
 
         let mut conn = TcpStream::connect(addr).unwrap();
+        conn.set_nodelay(true).unwrap();
 
         conn.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
 
