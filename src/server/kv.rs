@@ -245,7 +245,7 @@ impl StoreHandler {
         match kvs {
             Ok(kvs) => {
                 // convert storage::KvPair to kvrpcpb::Item
-                let mut new_kvs: Vec<Item> = Vec::new();
+                let mut new_kvs = Vec::new();
                 for result in kvs {
                     let mut new_kv = Item::new();
                     let mut res_type = ResultType::new();
