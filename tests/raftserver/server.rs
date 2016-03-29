@@ -12,6 +12,7 @@ use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg};
 use tikv::raftserver::server::{Node, Config};
 use tikv::raftserver::Result;
 use tikv::util::codec::rpc;
+use tikv::storage::{Storage, Dsn};
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
@@ -79,8 +80,11 @@ impl Simulator for ServerCluster {
         let trans = Arc::new(RwLock::new(ServerTransport::new(self.cluster_id,
                                                               sendch,
                                                               self.pd_client.clone())));
+
         // TODO: we will create a Raft storage including Node and pass it to server later.
-        let mut server = Server::new(&mut event_loop, &cfg.addr, trans.clone()).unwrap();
+        // Now use a memory store instead.
+        let store = Storage::new(Dsn::Memory).unwrap();
+        let mut server = Server::new(&mut event_loop, &cfg.addr, store, trans.clone()).unwrap();
         let addr = server.listening_addr().unwrap();
 
         let mut node = Node::new(&cfg, format!("{}", addr), self.pd_client.clone(), trans);

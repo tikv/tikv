@@ -8,6 +8,7 @@ use protobuf::ProtobufError;
 
 use util::codec;
 use raftserver;
+use storage;
 
 quick_error!{
     #[derive(Debug)]
@@ -39,6 +40,11 @@ quick_error!{
             description(err.description())
         }
         RaftServer(err: raftserver::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Storage(err: storage::Error) {
             from()
             cause(err)
             description(err.description())

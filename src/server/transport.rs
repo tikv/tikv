@@ -69,14 +69,13 @@ impl<T: PdClient> Transport for ServerTransport<T> {
 
         let mut id = self.msg_id.lock().unwrap();
         *id += 1;
-        if let Err(e) = self.ch.send(Msg::SendPeer {
-            addr: node.get_address().to_owned(),
-            data: ConnData::new(*id, req),
-        }) {
-            return Err(raft_other(e));
-        }
 
-        Ok(())
+        self.ch
+            .send(Msg::SendPeer {
+                addr: node.get_address().to_owned(),
+                data: ConnData::new(*id, req),
+            })
+            .map_err(|e| raft_other(format!("send peer to {} err {:?}", node.get_address(), e)))
     }
 
     // Send RaftMessage to specified store, the store must exist in current node.
