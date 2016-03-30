@@ -329,7 +329,7 @@ impl<T> RaftLog<T>
         }
 
 
-        let mut ents: Vec<Entry> = vec![];
+        let mut ents = vec![];
         if low == high {
             return Ok(ents);
         }

@@ -215,7 +215,7 @@ impl<T: Storage> Raft<T> {
         }
         let term = r.term;
         r.become_follower(term, INVALID_ID);
-        let hex_nodes: Vec<String> = r.nodes().iter().map(|n| format!("{:x}", n)).collect();
+        let hex_nodes: Vec<_> = r.nodes().iter().map(|n| format!("{:x}", n)).collect();
         info!("newRaft {:x} [peers: {:?}, term: {:?}, commit: {}, applied: {}, last_index: {}, \
                last_term: {}]",
               r.id,
@@ -393,8 +393,8 @@ impl<T: Storage> Raft<T> {
     // according to the progress recorded in r.prs.
     pub fn bcast_append(&mut self) {
         // TODO: avoid copy
-        let keys: Vec<u64> = self.prs.keys().cloned().collect();
-        for id in keys {
+        let ids: Vec<_> = self.prs.keys().cloned().collect();
+        for id in ids {
             if id == self.id {
                 continue;
             }
@@ -405,8 +405,8 @@ impl<T: Storage> Raft<T> {
     // bcast_heartbeat sends RPC, without entries to all the peers.
     pub fn bcast_heartbeat(&mut self) {
         // TODO: avoid copy
-        let keys: Vec<u64> = self.prs.keys().cloned().collect();
-        for id in keys {
+        let ids: Vec<_> = self.prs.keys().cloned().collect();
+        for id in ids {
             if id == self.id {
                 continue;
             }
@@ -561,8 +561,8 @@ impl<T: Storage> Raft<T> {
             self.become_leader();
             return;
         }
-        let keys: Vec<u64> = self.prs.keys().cloned().collect();
-        for id in keys {
+        let ids: Vec<_> = self.prs.keys().cloned().collect();
+        for id in ids {
             if id == self.id {
                 continue;
             }
