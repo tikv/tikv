@@ -50,7 +50,7 @@ impl ServerCluster {
     }
 
 
-    fn get_conn(&self, addr: &SocketAddr) -> Result<TcpStream> {
+    fn pool_get(&self, addr: &SocketAddr) -> Result<TcpStream> {
         {
             let mut conns = self.conns
                                 .lock()
@@ -66,6 +66,14 @@ impl ServerCluster {
         let conn = TcpStream::connect(addr).unwrap();
         conn.set_nodelay(true).unwrap();
         Ok(conn)
+    }
+
+    fn pool_put(&self, addr: &SocketAddr, conn: TcpStream) {
+        let mut conns = self.conns
+                            .lock()
+                            .unwrap();
+        let p = conns.entry(*addr).or_insert_with(Vec::new);
+        p.push(conn);
     }
 }
 
@@ -128,7 +136,7 @@ impl Simulator for ServerCluster {
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_node_id();
         let addr = self.addrs.get(&node_id).unwrap();
-        let mut conn = self.get_conn(addr).unwrap();
+        let mut conn = self.pool_get(addr).unwrap();
 
         let mut msg = Message::new();
         msg.set_msg_type(MessageType::Cmd);
@@ -142,14 +150,7 @@ impl Simulator for ServerCluster {
         let mut resp_msg = Message::new();
         let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg));
 
-        {
-            let mut conns = self.conns
-                                .lock()
-                                .unwrap();
-            let p = conns.entry(*addr).or_insert_with(Vec::new);
-            p.push(conn);
-        }
-
+        self.pool_put(addr, conn);
 
         assert_eq!(resp_msg.get_msg_type(), MessageType::CmdResp);
         assert_eq!(msg_id, get_msg_id);
@@ -161,17 +162,17 @@ impl Simulator for ServerCluster {
         let node_id = raft_msg.get_to_peer().get_node_id();
         let addr = self.addrs.get(&node_id).unwrap();
 
-        let mut conn = TcpStream::connect(addr).unwrap();
-        conn.set_nodelay(true).unwrap();
-
-        conn.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
 
         let mut msg = Message::new();
         msg.set_msg_type(MessageType::Raft);
         msg.set_raft(raft_msg);
-
         let msg_id = self.alloc_msg_id();
+
+        let mut conn = self.pool_get(addr).unwrap();
+        conn.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
         try!(rpc::encode_msg(&mut conn, msg_id, &msg));
+
+        self.pool_put(addr, conn);
 
         Ok(())
     }
