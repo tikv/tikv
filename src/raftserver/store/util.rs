@@ -31,8 +31,7 @@ pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::new();
     peer.set_node_id(node_id);
     peer.set_store_id(store_id);
-    peer.set_peer_id(peer_id);
-
+    peer.set_id(peer_id);
     peer
 }
 
@@ -66,7 +65,7 @@ mod tests {
     #[test]
     fn test_peer() {
         let mut region = metapb::Region::new();
-        region.set_region_id(1);
+        region.set_id(1);
         region.mut_peers().push(new_peer(1, 1, 1));
 
         assert!(find_peer(&region, 1).is_some());

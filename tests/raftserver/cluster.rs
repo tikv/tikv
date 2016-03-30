@@ -146,7 +146,7 @@ impl<T: Simulator> Cluster<T> {
                 }
 
                 // To get region leader, we don't care real peer id, so use 0 instead.
-                let peer = new_peer(store.get_node_id(), store.get_store_id(), 0);
+                let peer = new_peer(store.get_node_id(), store.get_id(), 0);
                 let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
                 let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
                 let region_leader = resp.get_status_response().get_region_leader();
@@ -154,7 +154,7 @@ impl<T: Simulator> Cluster<T> {
                    (leader.is_none() || leader.as_ref().unwrap() == region_leader.get_leader()) {
                     debug!("found leader {:?} from {}",
                            region_leader.get_leader(),
-                           store.get_store_id());
+                           store.get_id());
                     count += 1;
                     leader = Some(region_leader.get_leader().clone());
                 }
@@ -180,7 +180,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let mut region = metapb::Region::new();
-        region.set_region_id(1);
+        region.set_id(1);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());
         region.mut_region_epoch().set_version(1);
@@ -215,7 +215,7 @@ impl<T: Simulator> Cluster<T> {
         let node_id = 1;
         let region = bootstrap_region(self.engines.get(&node_id).unwrap().clone(), 1, 1, 1, 1)
                          .unwrap();
-        let rid = region.get_region_id();
+        let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid
     }
@@ -287,7 +287,7 @@ impl<T: Simulator> Cluster<T> {
         let mut try_cnt = 1;
         loop {
             let mut region = self.get_region(key);
-            let region_id = region.get_region_id();
+            let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
             let resp = self.call_command_on_leader(region_id, req, timeout).unwrap();
             if resp.get_header().has_error() {
@@ -314,7 +314,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_region_id(&self, key: &[u8]) -> u64 {
-        self.get_region(key).get_region_id()
+        self.get_region(key).get_id()
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
