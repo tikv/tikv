@@ -36,7 +36,7 @@ pub fn bind_error(resp: &mut RaftCmdResponse, err: Error) {
         }
         Error::KeyNotInRegion(key, region) => {
             error_header.mut_key_not_in_region().set_key(key);
-            error_header.mut_key_not_in_region().set_region_id(region.get_region_id());
+            error_header.mut_key_not_in_region().set_region_id(region.get_id());
             error_header.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
             error_header.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
         }

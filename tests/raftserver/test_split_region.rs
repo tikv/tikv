@@ -31,12 +31,12 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.put(b"a3", b"v3");
 
     // Split with a2, so a1 must in left, and a3 in right.
-    cluster.split_region(region.get_region_id(), Some(b"a2".to_vec()));
+    cluster.split_region(region.get_id(), Some(b"a2".to_vec()));
 
     let left = pd_client.rl().get_region(cluster_id, b"a1").unwrap();
     let right = pd_client.rl().get_region(cluster_id, b"a3").unwrap();
 
-    assert_eq!(region.get_region_id(), left.get_region_id());
+    assert_eq!(region.get_id(), left.get_id());
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(left.get_end_key(), right.get_start_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
@@ -48,8 +48,8 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(b"a3").unwrap(), b"vv3".to_vec());
 
     let epoch = left.get_region_epoch().clone();
-    let get = util::new_request(left.get_region_id(), epoch, vec![util::new_get_cmd(b"a3")]);
-    let region_id = left.get_region_id();
+    let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(b"a3")]);
+    let region_id = left.get_id();
     let resp = cluster.call_command_on_leader(region_id, get, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
@@ -137,7 +137,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
                right);
 
     let middle_key = left.get_end_key();
-    let leader = cluster.leader_of_region(left.get_region_id()).unwrap();
+    let leader = cluster.leader_of_region(left.get_id()).unwrap();
     let node_id = leader.get_node_id();
     let mut size = 0;
     cluster.engines[&node_id]
@@ -155,10 +155,8 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(size > REGION_SPLIT_SIZE - 1000);
 
     let epoch = left.get_region_epoch().clone();
-    let get = util::new_request(left.get_region_id(),
-                                epoch,
-                                vec![util::new_get_cmd(&max_key)]);
-    let region_id = left.get_region_id();
+    let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(&max_key)]);
+    let region_id = left.get_id();
     let resp = cluster.call_command_on_leader(region_id, get, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
