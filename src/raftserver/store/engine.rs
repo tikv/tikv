@@ -170,7 +170,7 @@ mod tests {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
 
         let mut r = Region::new();
-        r.set_region_id(10);
+        r.set_id(10);
 
         let key = b"key";
         engine.put_msg(key, &r).unwrap();
@@ -183,7 +183,7 @@ mod tests {
         let mut r2: Region = snap.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r2);
 
-        r.set_region_id(11);
+        r.set_id(11);
         engine.put_msg(key, &r).unwrap();
         r1 = engine.get_msg(key).unwrap().unwrap();
         r2 = snap.get_msg(key).unwrap().unwrap();

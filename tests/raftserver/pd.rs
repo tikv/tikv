@@ -27,7 +27,7 @@ impl Node {
     pub fn new(node: metapb::Node, stores: &[metapb::Store]) -> Node {
         let mut ids = HashSet::new();
         for v in stores {
-            let id = v.get_store_id();
+            let id = v.get_id();
             ids.insert(id);
         }
 
@@ -53,7 +53,7 @@ impl Cluster {
                region: metapb::Region)
                -> Cluster {
         let mut meta = metapb::Cluster::new();
-        meta.set_cluster_id(cluster_id);
+        meta.set_id(cluster_id);
         meta.set_max_peer_number(5);
 
         let mut c = Cluster {
@@ -64,7 +64,7 @@ impl Cluster {
             region_id_keys: HashMap::new(),
         };
 
-        let node_id = node.get_node_id();
+        let node_id = node.get_id();
         c.nodes.insert(node_id, Node::new(node, &stores));
 
         // Now, some tests use multi peers in bootstrap,
@@ -74,35 +74,35 @@ impl Cluster {
         let first_store_id = region.get_peers()[0].get_store_id();
 
         for v in stores {
-            let store_id = v.get_store_id();
+            let store_id = v.get_id();
             let mut store = Store {
                 store: v,
                 region_ids: HashSet::new(),
             };
 
             if store_id == first_store_id {
-                store.region_ids.insert(region.get_region_id());
+                store.region_ids.insert(region.get_id());
             }
 
             c.stores.insert(store_id, store);
         }
 
-        c.region_id_keys.insert(region.get_region_id(), enc_end_key(&region));
+        c.region_id_keys.insert(region.get_id(), enc_end_key(&region));
         c.regions.insert(enc_end_key(&region), region);
 
         c
     }
 
     fn put_node(&mut self, node: metapb::Node) -> Result<()> {
-        let mut n = self.nodes.entry(node.get_node_id()).or_insert_with(Node::default);
+        let mut n = self.nodes.entry(node.get_id()).or_insert_with(Node::default);
         n.node = node;
         Ok(())
     }
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
         let mut n = self.nodes.get_mut(&store.get_node_id()).unwrap();
-        let mut s = self.stores.entry(store.get_store_id()).or_insert_with(Store::default);
-        n.store_ids.insert(store.get_store_id());
+        let mut s = self.stores.entry(store.get_id()).or_insert_with(Store::default);
+        n.store_ids.insert(store.get_id());
         s.store = store;
         Ok(())
     }
@@ -168,7 +168,7 @@ impl Cluster {
 
         for peer in region.get_peers() {
             let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
-            store.region_ids.insert(region.get_region_id());
+            store.region_ids.insert(region.get_id());
         }
 
         assert!(self.regions.insert(end_key, region).is_some());
@@ -194,12 +194,12 @@ impl Cluster {
             return Err(other(format!("region {:?} has already existed", left)));
         }
 
-        assert!(self.region_id_keys.insert(left.get_region_id(), left_end_key.clone()).is_some());
-        assert!(self.region_id_keys.insert(right.get_region_id(), right_end_key.clone()).is_none());
+        assert!(self.region_id_keys.insert(left.get_id(), left_end_key.clone()).is_some());
+        assert!(self.region_id_keys.insert(right.get_id(), right_end_key.clone()).is_none());
 
         for peer in right.get_peers() {
             let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
-            store.region_ids.insert(right.get_region_id());
+            store.region_ids.insert(right.get_id());
         }
 
         assert!(self.regions.insert(left_end_key, left).is_none());

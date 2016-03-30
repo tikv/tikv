@@ -11,7 +11,7 @@ fn test_region_detail() {
     let region_detail = cluster.region_detail(1, 1);
     assert!(region_detail.has_region());
     let region = region_detail.get_region();
-    assert_eq!(region.get_region_id(), 1);
+    assert_eq!(region.get_id(), 1);
     assert!(region.has_start_key());
     assert!(region.get_start_key().is_empty());
     assert!(region.has_end_key());

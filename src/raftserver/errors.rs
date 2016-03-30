@@ -30,7 +30,7 @@ quick_error!{
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             description("key is not in region")
             display("key {:?} is not in region key range [{:?}, {:?}) for region {}",
-                key, region.get_start_key(), region.get_end_key(), region.get_region_id())
+                key, region.get_start_key(), region.get_end_key(), region.get_id())
         }
         Other(err: Box<error::Error + Sync + Send>) {
             cause(err.as_ref())

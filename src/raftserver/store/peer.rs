@@ -92,7 +92,7 @@ impl Peer {
                                          store_id,
                                          region)))
             }
-            Some(peer) => peer.get_peer_id(),
+            Some(peer) => peer.get_id(),
         };
 
         Peer::new(store, region, peer_id)
@@ -126,7 +126,7 @@ impl Peer {
               region_id);
 
         let mut region = metapb::Region::new();
-        region.set_region_id(region_id);
+        region.set_id(region_id);
         Peer::new(store, &region, peer_id)
     }
 
@@ -161,7 +161,7 @@ impl Peer {
         let mut peer = Peer {
             engine: store.engine(),
             peer: util::new_peer(node_id, store_id, peer_id),
-            region_id: region.get_region_id(),
+            region_id: region.get_id(),
             leader_id: raft::INVALID_ID,
             storage: storage,
             raft_group: raft_group,
@@ -205,9 +205,9 @@ impl Peer {
     }
 
     pub fn update_region(&mut self, region: &metapb::Region) -> Result<()> {
-        if self.region_id != region.get_region_id() {
+        if self.region_id != region.get_id() {
             return Err(other(format!("invalid region id {} != {}",
-                                     region.get_region_id(),
+                                     region.get_id(),
                                      self.region_id)));
         }
 
@@ -220,7 +220,7 @@ impl Peer {
     }
 
     pub fn peer_id(&self) -> u64 {
-        self.peer.get_peer_id()
+        self.peer.get_id()
     }
 
     pub fn get_raft_status(&self) -> raft::Status {
@@ -286,7 +286,7 @@ impl Peer {
 
             let mut cc = raftpb::ConfChange::new();
             cc.set_change_type(change_peer.get_change_type());
-            cc.set_node_id(change_peer.get_peer().get_peer_id());
+            cc.set_node_id(change_peer.get_peer().get_id());
             cc.set_context(data);
 
             info!("propose conf change {:?} peer {:?} at region {}",
@@ -363,7 +363,7 @@ impl Peer {
 
         // Try to find in region, if found, set in cache.
         for peer in self.storage.rl().get_region().get_peers() {
-            if peer.get_peer_id() == peer_id {
+            if peer.get_id() == peer_id {
                 self.peer_cache.wl().insert(peer_id, peer.clone());
                 return Some(peer.clone());
             }
@@ -398,7 +398,7 @@ impl Peer {
                           self.region_id))
         }));
 
-        let to_peer_id = to_peer.get_peer_id();
+        let to_peer_id = to_peer.get_id();
         let to_store_id = to_peer.get_store_id();
 
         send_msg.set_from_peer(from_peer);
@@ -673,9 +673,9 @@ impl Peer {
         let mut region = self.region();
 
         warn!("my peer id {}, {:?} {}, epoch: {:?}\n",
-              peer.get_peer_id(),
+              peer.get_id(),
               util::conf_change_type_str(&change_type),
-              self.peer.get_peer_id(),
+              self.peer.get_id(),
               region.get_region_epoch());
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
@@ -700,12 +700,12 @@ impl Peer {
                 // TODO: Do we allow adding peer in same node?
 
                 // Add this peer to cache.
-                self.peer_cache.wl().insert(peer.get_peer_id(), peer.clone());
+                self.peer_cache.wl().insert(peer.get_id(), peer.clone());
                 region.mut_peers().push(peer.clone());
 
                 warn!("my peer id {}, add peer {}, region {:?}",
                       self.peer_id(),
-                      peer.get_peer_id(),
+                      peer.get_id(),
                       self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
@@ -717,17 +717,17 @@ impl Peer {
                 }
 
                 // Remove this peer from cache.
-                self.peer_cache.wl().remove(&peer.get_peer_id());
+                self.peer_cache.wl().remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
                 warn!("my peer_id {}, remove {}, region:{:?}",
                       self.peer_id(),
-                      peer.get_peer_id(),
+                      peer.get_id(),
                       self.region());
             }
         }
 
-        try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
+        try!(ctx.wb.put_msg(&keys::region_info_key(region.get_id()), &region));
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
@@ -764,7 +764,7 @@ impl Peer {
         region.set_end_key(split_key.to_vec());
 
         new_region.set_start_key(split_key.to_vec());
-        new_region.set_region_id(new_region_id);
+        new_region.set_id(new_region_id);
 
         // Update new region peer ids.
         let new_peer_ids = split_req.get_new_peer_ids();
@@ -776,7 +776,7 @@ impl Peer {
 
         for (index, peer) in new_region.mut_peers().iter_mut().enumerate() {
             let peer_id = new_peer_ids[index];
-            peer.set_peer_id(peer_id);
+            peer.set_id(peer_id);
 
             // Add this peer to cache.
             self.peer_cache.wl().insert(peer_id, peer.clone());
@@ -786,9 +786,8 @@ impl Peer {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        try!(ctx.wb.put_msg(&keys::region_info_key(region.get_region_id()), &region));
-        try!(ctx.wb.put_msg(&keys::region_info_key(new_region.get_region_id()),
-                            &new_region));
+        try!(ctx.wb.put_msg(&keys::region_info_key(region.get_id()), &region));
+        try!(ctx.wb.put_msg(&keys::region_info_key(new_region.get_id()), &new_region));
 
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());

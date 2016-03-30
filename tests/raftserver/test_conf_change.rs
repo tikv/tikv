@@ -159,7 +159,7 @@ fn new_conf_change_peer(store: &metapb::Store,
                         pd_client: &Arc<RwLock<TestPdClient>>)
                         -> metapb::Peer {
     let peer_id = pd_client.wl().alloc_id().unwrap();
-    new_peer(store.get_node_id(), store.get_store_id(), peer_id)
+    new_peer(store.get_node_id(), store.get_id(), peer_id)
 }
 
 fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -169,7 +169,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let cluster_id = cluster.id();
     let pd_client = cluster.pd_client.clone();
     let region = &pd_client.rl().get_region(cluster_id, b"").unwrap();
-    let region_id = region.get_region_id();
+    let region_id = region.get_id();
 
     let mut stores = pd_client.rl().get_stores(cluster_id).unwrap();
 
@@ -178,7 +178,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let peer = &region.get_peers()[0];
 
-    let i = stores.iter().position(|store| store.get_store_id() == peer.get_store_id()).unwrap();
+    let i = stores.iter().position(|store| store.get_id() == peer.get_store_id()).unwrap();
     stores.swap(0, i);
 
     // Now the first store has first region. others have none.
@@ -277,7 +277,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     let cluster_id = cluster.id();
     let pd_client = cluster.pd_client.clone();
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
-    let region_id = region.get_region_id();
+    let region_id = region.get_id();
 
     let stores = pd_client.rl().get_stores(cluster_id).unwrap();
 
@@ -294,9 +294,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let i = stores.iter()
-                  .position(|s| {
-                      region.get_peers().iter().all(|p| s.get_store_id() != p.get_store_id())
-                  })
+                  .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
                   .unwrap();
 
     let peer = new_conf_change_peer(&stores[i], &pd_client);
