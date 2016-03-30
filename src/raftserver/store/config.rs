@@ -1,17 +1,17 @@
 use raftserver::{Result, other};
 
-pub const DEFAULT_RAFT_BASE_TICK_INTERVAL: u64 = 100;
-pub const DEFAULT_RAFT_HEARTBEAT_TICKS: usize = 3;
-pub const DEFAULT_RAFT_ELECTION_TIMEOUT_TICKS: usize = 15;
-pub const DEFAULT_RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
-pub const DEFAULT_RAFT_MAX_INFLIGHT_MSGS: usize = 256;
-pub const DEFAULT_RAFT_LOG_GC_INTERVAL: u64 = 1000;
-pub const DEFAULT_RAFT_LOG_GC_THRESHOLD: u64 = 1;
-pub const DEFAULT_SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
-pub const DEFAULT_REPLICA_CHECK_TICK_INTERVAL: u64 = 5 * 60 * 1000;
-pub const DEFAULT_REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
-pub const DEFAULT_REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
-pub const DEFAULT_REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
+const RAFT_BASE_TICK_INTERVAL: u64 = 100;
+const RAFT_HEARTBEAT_TICKS: usize = 3;
+const RAFT_ELECTION_TIMEOUT_TICKS: usize = 15;
+const RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
+const RAFT_MAX_INFLIGHT_MSGS: usize = 256;
+const RAFT_LOG_GC_INTERVAL: u64 = 3000;
+const RAFT_LOG_GC_THRESHOLD: u64 = 1;
+const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
+const REPLICA_CHECK_TICK_INTERVAL: u64 = 5 * 60 * 1000;
+const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
+const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
+const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -45,18 +45,18 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            raft_base_tick_interval: DEFAULT_RAFT_BASE_TICK_INTERVAL,
-            raft_heartbeat_ticks: DEFAULT_RAFT_HEARTBEAT_TICKS,
-            raft_election_timeout_ticks: DEFAULT_RAFT_ELECTION_TIMEOUT_TICKS,
-            raft_max_size_per_msg: DEFAULT_RAFT_MAX_SIZE_PER_MSG,
-            raft_max_inflight_msgs: DEFAULT_RAFT_MAX_INFLIGHT_MSGS,
-            raft_log_gc_tick_interval: DEFAULT_RAFT_LOG_GC_INTERVAL,
-            raft_log_gc_threshold: DEFAULT_RAFT_LOG_GC_THRESHOLD,
-            split_region_check_tick_interval: DEFAULT_SPLIT_REGION_CHECK_TICK_INTERVAL,
-            replica_check_tick_interval: DEFAULT_REPLICA_CHECK_TICK_INTERVAL,
-            region_max_size: DEFAULT_REGION_MAX_SIZE,
-            region_split_size: DEFAULT_REGION_SPLIT_SIZE,
-            region_check_size_diff: DEFAULT_REGION_CHECK_DIFF,
+            raft_base_tick_interval: RAFT_BASE_TICK_INTERVAL,
+            raft_heartbeat_ticks: RAFT_HEARTBEAT_TICKS,
+            raft_election_timeout_ticks: RAFT_ELECTION_TIMEOUT_TICKS,
+            raft_max_size_per_msg: RAFT_MAX_SIZE_PER_MSG,
+            raft_max_inflight_msgs: RAFT_MAX_INFLIGHT_MSGS,
+            raft_log_gc_tick_interval: RAFT_LOG_GC_INTERVAL,
+            raft_log_gc_threshold: RAFT_LOG_GC_THRESHOLD,
+            split_region_check_tick_interval: SPLIT_REGION_CHECK_TICK_INTERVAL,
+            replica_check_tick_interval: REPLICA_CHECK_TICK_INTERVAL,
+            region_max_size: REGION_MAX_SIZE,
+            region_split_size: REGION_SPLIT_SIZE,
+            region_check_size_diff: REGION_CHECK_DIFF,
         }
     }
 }
