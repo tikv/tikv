@@ -5,21 +5,29 @@ extern crate tikv;
 extern crate getopts;
 #[macro_use]
 extern crate log;
+extern crate rocksdb;
+extern crate mio;
 
-use tikv::storage::{Storage, Dsn};
-use tikv::kvserver::server::run::run;
-use tikv::util::{self, logger};
-use tikv::storage::RaftKvConfig;
-use tikv::storage::DEFAULT_RAFT_LISTENING_ADDR;
-use getopts::{Options, Matches};
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::collections::HashSet;
-use log::LogLevelFilter;
+use std::sync::{Arc, RwLock};
 
-const DEFAULT_ADDR: &'static str = "127.0.0.1:6102";
-const DEFAULT_DSN: &'static str = "mem";
+use getopts::{Options, Matches};
+use log::LogLevelFilter;
+use rocksdb::DB;
+use mio::tcp::TcpListener;
+
+use tikv::storage::{Storage, Dsn};
+use tikv::util::{self, logger};
+use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
+                   create_raft_storage};
+use tikv::server::{ServerTransport, MockTransport};
+use tikv::pd::{PdRpcClient, new_rpc_client};
+
+const MEM_DSN: &'static str = "mem";
+const ROCKSDB_DSN: &'static str = "rocksdb";
+const RAFTKV_DSN: &'static str = "raftkv";
 
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -34,78 +42,65 @@ fn initial_log(matches: &Matches) {
     util::init_log(log_filter).unwrap();
 }
 
-fn build_rocksdb_dsn(dirs: &[String]) -> Dsn {
-    if dirs.is_empty() {
-        panic!("use rocksdb dsn but no rocksdb directory is specified!");
-    }
-    Dsn::RocksDBPath(dirs[0].as_ref())
-}
+type RaftTransport = ServerTransport<PdRpcClient>;
 
-fn build_raftkv_dsn<'a>(matches: &Matches,
-                        cfg: &'a mut RaftKvConfig,
-                        dirs: &'a [String],
-                        pd_addr: &'a str)
-                        -> Dsn<'a> {
-    assert!(dirs.len() > 0,
-            "use raftkv dsn but no rocksdb directory is specified!");
-    cfg.store_pathes = dirs.to_vec();
-    if pd_addr.len() == 0 {
-        panic!("pd_addr is required when using raftkv.");
-    }
-    let raftserver_addr = matches.opt_str("R")
-                                 .unwrap_or_else(|| DEFAULT_RAFT_LISTENING_ADDR.to_owned());
-    cfg.server_cfg.addr = raftserver_addr.clone();
+fn build_raftkv(matches: &Matches,
+                ch: SendCh,
+                addr: String)
+                -> (Storage, Arc<RwLock<RaftTransport>>) {
+    let pd_addr = matches.opt_str("pd").expect("raftkv needs pd client");
+    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
+    let id = matches.opt_str("I").expect("raftkv requires cluster id");
+    let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
+
+    let trans = Arc::new(RwLock::new(ServerTransport::new(cluster_id, ch, pd_client.clone())));
+
+    let path = get_store_path(matches);
+    let engine = Arc::new(DB::open_default(&path).unwrap());
+    let mut cfg = Config::new();
+    cfg.cluster_id = cluster_id;
+
+    cfg.addr = addr.clone();
 
     // Set advertise address for outer node and client use.
     // If no advertise listening address set, use the associated listening address.
-    cfg.server_cfg.advertise_addr = matches.opt_str("advertise-raft")
-                                           .unwrap_or_else(|| raftserver_addr);
+    cfg.advertise_addr = matches.opt_str("advertise-addr")
+                                .unwrap_or_else(|| addr);
 
-    // Maybe we can find another place to set the advertise client address later.
-    let kv_addr = matches.opt_str("A").unwrap_or_else(|| DEFAULT_ADDR.to_owned());
-    cfg.server_cfg.advertise_client_addr = matches.opt_str("advertise-addr")
-                                                  .unwrap_or_else(|| kv_addr);
+    let mut node = Node::new(&cfg, pd_client, trans.clone());
+    node.start(vec![engine]).unwrap();
 
-    let cluster_id = matches.opt_str("I").expect("raftkv dsn require cluster id");
-    cfg.server_cfg.cluster_id = u64::from_str_radix(&cluster_id, 10).expect("invalid cluster id");
-    if cfg.server_cfg.cluster_id == 0 {
-        panic!("cluster should not be 0!");
-    }
-    Dsn::RaftKv(cfg, pd_addr)
+    (create_raft_storage(node).unwrap(), trans)
 }
 
-fn build_store(matches: &Matches, dsn_name: &str, paths: &[String], pd_addr: &str) -> Storage {
-    let mut cfg = RaftKvConfig::default();
-    let dsn = match dsn_name {
-        "mem" => Dsn::Memory,
-        "rocksdb" => build_rocksdb_dsn(paths),
-        "raftkv" => build_raftkv_dsn(matches, &mut cfg, paths, pd_addr),
-        n => panic!("unrecognized dns name: {}", n),
-    };
-    Storage::new(dsn).unwrap()
+fn get_store_path(matches: &Matches) -> String {
+    let path = matches.opt_str("s").expect("need store path, but none is specified!");
+
+    let p = Path::new(&path);
+    if p.exists() && p.is_file() {
+        panic!("{} is not a directory!", path);
+    }
+    if !p.exists() {
+        fs::create_dir_all(p).unwrap();
+    }
+    let absolute_path = p.canonicalize().unwrap();
+    format!("{}", absolute_path.display())
 }
 
-/// Only directory is accepted. Same directoy can not be specified twice.
-fn parse_directory(mut path: Vec<String>) -> Vec<String> {
-    let mut parsed = HashSet::with_capacity(path.len());
-    for origin_path in path.drain(..) {
-        let p = Path::new(&origin_path);
-        if p.exists() && p.is_file() {
-            panic!("{} is not a directory!", origin_path);
-        }
-        if !p.exists() {
-            fs::create_dir_all(p).unwrap();
-        }
-        let absolute_path = p.canonicalize().unwrap();
-        let final_path = format!("{}", absolute_path.display());
-        if parsed.contains(&final_path) {
-            panic!("{} has been specified twice.", origin_path);
-        }
-        parsed.insert(final_path);
-    }
-    let mut res = Vec::with_capacity(parsed.len());
-    res.extend(parsed.drain());
-    res
+fn run_local_server(listener: TcpListener, store: Storage) {
+    let mut event_loop = create_event_loop().unwrap();
+    let trans = Arc::new(RwLock::new(MockTransport));
+    let mut svr = Server::new(&mut event_loop, listener, store, trans).unwrap();
+    svr.run(&mut event_loop).unwrap();
+}
+
+fn run_raft_server(listener: TcpListener, matches: &Matches) {
+    let mut event_loop = create_event_loop().unwrap();
+    let ch = SendCh::new(event_loop.channel());
+
+    let (store, trans) = build_raftkv(&matches, ch, format!("{}", listener.local_addr().unwrap()));
+    let mut svr = Server::new(&mut event_loop, listener, store, trans).unwrap();
+    svr.run(&mut event_loop).unwrap();
 }
 
 fn main() {
@@ -115,20 +110,11 @@ fn main() {
     opts.optopt("A",
                 "addr",
                 "set listening address",
-                "default is 127.0.0.1:6102");
+                "default is 127.0.0.1:20160");
     opts.optopt("",
                 "advertise-addr",
                 "set advertise listening address for client communication",
-                "127.0.0.1:6102, if not set, use addr instead.");
-    opts.optopt("R",
-                "raft",
-                "set raft server listening address",
-                "default is 127.0.0.1:20160");
-    opts.optopt("",
-                "advertise-raft",
-                "set advertise raft server listening address",
-                "127.0.0.1:20160, if not set, use raft addr instead.");
-
+                "127.0.0.1:20160, if not set, use addr instead.");
     opts.optopt("L",
                 "log",
                 "set log level",
@@ -136,10 +122,10 @@ fn main() {
     opts.optflag("h", "help", "print this help menu");
     // TODO: support loading config file
     // opts.optopt("C", "config", "set configuration file", "file path");
-    opts.optmulti("s",
-                  "store",
-                  "set the path to rocksdb directory",
-                  "when specified multiple times, will use each as a rocksdb storage.");
+    opts.optopt("s",
+                "store",
+                "set the path to rocksdb directory",
+                "/tmp/tikv/store");
     opts.optopt("S",
                 "dsn",
                 "set which dsn to use, default is mem",
@@ -153,14 +139,26 @@ fn main() {
     }
     initial_log(&matches);
 
-    let dsn_name = matches.opt_str("S").unwrap_or_else(|| DEFAULT_DSN.to_owned());
-    let pathes = parse_directory(matches.opt_strs("s"));
-    let pd_addr = matches.opt_str("pd").unwrap_or("".to_owned());
+    let addr = matches.opt_str("A").unwrap_or_else(|| DEFAULT_LISTENING_ADDR.to_owned());
+    let listener = bind(&addr).unwrap();
 
-    let kv_addr = matches.opt_str("A").unwrap_or_else(|| DEFAULT_ADDR.to_owned());
+    info!("Start listening on {}...", addr);
 
-    let store = build_store(&matches, dsn_name.as_ref(), &pathes, pd_addr.as_ref());
+    let dsn_name = matches.opt_str("S").unwrap_or_else(|| MEM_DSN.to_owned());
 
-    info!("Start listening on {}...", kv_addr);
-    run(&kv_addr, store);
+    match dsn_name.as_ref() {
+        MEM_DSN => {
+            let store = Storage::new(Dsn::Memory).unwrap();
+            run_local_server(listener, store);
+        }
+        ROCKSDB_DSN => {
+            let path = get_store_path(&matches);
+            let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();
+            run_local_server(listener, store);
+        }
+        RAFTKV_DSN => {
+            run_raft_server(listener, &matches);
+        }
+        n => panic!("unrecognized dns name: {}", n),
+    };
 }

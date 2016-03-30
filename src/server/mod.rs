@@ -18,10 +18,9 @@ pub mod node;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Result, Error, other};
-pub use self::server::{Server, create_event_loop};
-pub use self::transport::ServerTransport;
-pub use self::node::Node;
-
+pub use self::server::{Server, create_event_loop, bind};
+pub use self::transport::{ServerTransport, MockTransport};
+pub use self::node::{Node, create_raft_storage};
 
 const MAX_SEND_RETRY_CNT: i32 = 20;
 

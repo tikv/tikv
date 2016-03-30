@@ -8,11 +8,10 @@ use std::time::Duration;
 use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg};
-use tikv::server::{Node, Config};
+use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
+use tikv::server::{Node, Config, create_raft_storage};
 use tikv::raftserver::Result;
 use tikv::util::codec::rpc;
-use tikv::storage::{Storage, Dsn};
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
@@ -75,34 +74,33 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || !self.handles.contains_key(&node_id));
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
+        // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop().unwrap();
         let sendch = SendCh::new(event_loop.channel());
         let trans = Arc::new(RwLock::new(ServerTransport::new(self.cluster_id,
                                                               sendch,
                                                               self.pd_client.clone())));
 
-        // TODO: we will create a Raft storage including Node and pass it to server later.
-        // Now use a memory store instead.
         let mut cfg = cfg;
-        let store = Storage::new(Dsn::Memory).unwrap();
-        let mut server = Server::new(&mut event_loop, &cfg.addr, store, trans.clone()).unwrap();
-        let addr = server.listening_addr().unwrap();
 
+        let listener = bind(&cfg.addr).unwrap();
+        let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
 
-        let mut node = Node::new(&cfg, self.pd_client.clone(), trans);
+        let mut node = Node::new(&cfg, self.pd_client.clone(), trans.clone());
         node.start(vec![engine]).unwrap();
 
-        assert!(node_id == 0 || node_id == node.get_node_id());
-        let node_id = node.get_node_id();
+        assert!(node_id == 0 || node_id == node.id());
+        let node_id = node.id();
+
+        let store = create_raft_storage(node).unwrap();
+
+        let mut server = Server::new(&mut event_loop, listener, store, trans).unwrap();
 
         let ch = server.get_sendch();
 
         let t = thread::spawn(move || {
             server.run(&mut event_loop).unwrap();
-
-            // Force move node here, we will refactor whole later.
-            drop(node)
         });
 
         self.handles.insert(node_id, t);
