@@ -194,7 +194,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn handle_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+    fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (region_id, peer) in &mut self.region_peers {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(*region_id);
@@ -207,7 +207,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     // using entry().or_insert() instead, but we can't use this because creating peer
     // may fail, so we allow map_entry.
     #[allow(map_entry)]
-    fn handle_raft_message(&mut self, msg: RaftMessage) -> Result<()> {
+    fn on_raft_message(&mut self, msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         let from = msg.get_from_peer();
         let to = msg.get_to_peer();
@@ -261,7 +261,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn handle_raft_ready(&mut self) -> Result<()> {
+    fn on_raft_ready(&mut self) -> Result<()> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
 
         for region_id in ids {
@@ -278,7 +278,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             if let Some(ready_result) = ready_result {
-                if let Err(e) = self.handle_ready_result(region_id, ready_result) {
+                if let Err(e) = self.on_ready_result(region_id, ready_result) {
                     error!("handle raft ready result at region {} err: {:?}",
                            region_id,
                            e);
@@ -290,7 +290,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn handle_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
+    fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
         if let Some(region) = ready_result.snap_applied_region {
             self.region_ranges.insert(enc_end_key(&region), region.get_id());
         }
@@ -474,7 +474,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn handle_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+    fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
@@ -538,7 +538,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn handle_split_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+    fn on_split_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         // TODO: check whether a gc progress has been started.
@@ -570,7 +570,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_split_region_check_tick(event_loop);
     }
 
-    fn handle_split_check_result(&mut self, region_id: u64, split_key: Vec<u8>) {
+    fn on_split_check_result(&mut self, region_id: u64, split_key: Vec<u8>) {
         if split_key.is_empty() {
             error!("split key should not be empty!!!");
             return;
@@ -603,7 +603,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn handle_replica_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+    fn on_replica_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values() {
             if !peer.is_leader() {
                 continue;
@@ -668,7 +668,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::RaftMessage(data) => {
-                if let Err(e) = self.handle_raft_message(data) {
+                if let Err(e) = self.on_raft_message(data) {
                     error!("handle raft message err: {:?}", e);
                 }
             }
@@ -683,17 +683,17 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             }
             Msg::SplitCheckResult {region_id, split_key} => {
                 info!("split check of {} complete.", region_id);
-                self.handle_split_check_result(region_id, split_key);
+                self.on_split_check_result(region_id, split_key);
             }
         }
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
         match timeout {
-            Tick::Raft => self.handle_raft_base_tick(event_loop),
-            Tick::RaftLogGc => self.handle_raft_gc_log_tick(event_loop),
-            Tick::SplitRegionCheck => self.handle_split_region_check_tick(event_loop),
-            Tick::ReplicaCheck => self.handle_replica_check_tick(event_loop),
+            Tick::Raft => self.on_raft_base_tick(event_loop),
+            Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
+            Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
+            Tick::ReplicaCheck => self.on_replica_check_tick(event_loop),
         }
     }
 
@@ -711,7 +711,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         // We handle raft ready in event loop.
-        if let Err(e) = self.handle_raft_ready() {
+        if let Err(e) = self.on_raft_ready() {
             // TODO: should we panic here or shutdown the store?
             error!("handle raft ready err: {:?}", e);
         }
