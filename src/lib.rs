@@ -31,7 +31,6 @@ pub mod util;
 pub mod raft;
 #[allow(clippy)]
 pub mod storage;
-pub mod kvserver;
 
 pub use storage::{Storage, Dsn};
 pub mod raftserver;
