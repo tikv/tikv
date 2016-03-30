@@ -104,7 +104,7 @@ impl PeerStorage {
         let mut conf_state = ConfState::new();
         if found || initialized {
             for p in self.region.get_peers() {
-                conf_state.mut_nodes().push(p.get_peer_id());
+                conf_state.mut_nodes().push(p.get_id());
             }
         }
 
@@ -235,7 +235,7 @@ impl PeerStorage {
 
         let mut conf_state = ConfState::new();
         for p in region.get_peers() {
-            conf_state.mut_nodes().push(p.get_peer_id());
+            conf_state.mut_nodes().push(p.get_id());
         }
 
         snapshot.mut_metadata().set_conf_state(conf_state);
@@ -315,10 +315,8 @@ impl PeerStorage {
         let hard_state: Option<HardState> = try!(self.engine.get_msg(&hard_state_key));
 
         let region = snap_data.get_region();
-        if region.get_region_id() != region_id {
-            return Err(other(format!("mismatch region id {} != {}",
-                                     region_id,
-                                     region.get_region_id())));
+        if region.get_id() != region_id {
+            return Err(other(format!("mismatch region id {} != {}", region_id, region.get_id())));
         }
 
         // Delete everything in the region for this peer.
@@ -479,7 +477,7 @@ impl PeerStorage {
     }
 
     pub fn get_region_id(&self) -> u64 {
-        self.region.get_region_id()
+        self.region.get_id()
     }
 
     pub fn handle_raft_ready(&mut self, ready: &Ready) -> Result<Option<metapb::Region>> {
@@ -722,7 +720,7 @@ mod test {
         assert!(!snap.get_data().is_empty());
         let mut data = RaftSnapshotData::new();
         protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).expect("");
-        assert_eq!(data.get_region().get_region_id(), 1);
+        assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
     }
 

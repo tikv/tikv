@@ -41,7 +41,7 @@ impl<T, Trans> Node<T, Trans>
                trans: Arc<RwLock<Trans>>)
                -> Node<T, Trans> {
         let mut node = metapb::Node::new();
-        node.set_node_id(INVALID_ID);
+        node.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
             node.set_address(cfg.addr.clone());
         } else {
@@ -68,10 +68,10 @@ impl<T, Trans> Node<T, Trans>
         let (mut node_id, mut store_ids) = try!(self.check_stores(&engines));
         if node_id == INVALID_ID {
             node_id = try!(self.pd_client.wl().alloc_id());
-            self.node.set_node_id(node_id);
+            self.node.set_id(node_id);
             debug!("alloc node id {:?}", node_id);
         } else {
-            self.node.set_node_id(node_id);
+            self.node.set_id(node_id);
             // We have saved data before, and the cluster must be bootstrapped.
             if !bootstrapped {
                 return Err(other(format!("node {} is not empty, but cluster {} is not \
@@ -111,7 +111,7 @@ impl<T, Trans> Node<T, Trans>
     }
 
     pub fn id(&self) -> u64 {
-        self.node.get_node_id()
+        self.node.get_id()
     }
 
     pub fn get_trans(&self) -> Arc<RwLock<Trans>> {
@@ -186,7 +186,7 @@ impl<T, Trans> Node<T, Trans>
     fn new_store_meta(&self, store_id: u64) -> metapb::Store {
         let mut store = metapb::Store::new();
         store.set_node_id(self.id());
-        store.set_store_id(store_id);
+        store.set_id(store_id);
         store
     }
 
@@ -203,7 +203,7 @@ impl<T, Trans> Node<T, Trans>
                          store_ids: &[u64],
                          region: metapb::Region)
                          -> Result<()> {
-        let region_id = region.get_region_id();
+        let region_id = region.get_id();
         match self.pd_client.wl().bootstrap_cluster(self.cluster_id,
                                                     self.node.clone(),
                                                     self.new_store_metas(store_ids),

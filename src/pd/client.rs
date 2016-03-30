@@ -181,7 +181,7 @@ mod tests {
                     let meta = req.get_put_meta();
                     if meta.get_meta_type() == pdpb::MetaType::NodeType {
                         let node = meta.get_node();
-                        assert_eq!(node.get_node_id(), 233);
+                        assert_eq!(node.get_id(), 233);
                         assert_eq!(node.get_address(), "localhost");
                     }
                 }
@@ -228,7 +228,7 @@ mod tests {
         assert!(client.is_cluster_bootstrapped(1).is_err());
 
         let mut node = metapb::Node::new();
-        node.set_node_id(233);
+        node.set_id(233);
         node.set_address("localhost".to_owned());
         assert!(client.put_node(1, node).is_ok());
     }

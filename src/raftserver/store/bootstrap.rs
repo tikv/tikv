@@ -42,7 +42,7 @@ pub fn bootstrap_store(engine: Arc<DB>,
 
 // Write first region meta.
 pub fn write_region(engine: &DB, region: &metapb::Region) -> Result<()> {
-    try!(engine.put_msg(&keys::region_info_key(region.get_region_id()), region));
+    try!(engine.put_msg(&keys::region_info_key(region.get_id()), region));
     Ok(())
 }
 
@@ -60,7 +60,7 @@ pub fn bootstrap_region(engine: Arc<DB>,
                         peer_id: u64)
                         -> Result<metapb::Region> {
     let mut region = metapb::Region::new();
-    region.set_region_id(region_id);
+    region.set_id(region_id);
     region.set_start_key(keys::EMPTY_KEY.to_vec());
     region.set_end_key(keys::EMPTY_KEY.to_vec());
     region.mut_region_epoch().set_version(INIT_EPOCH_VER);
@@ -69,7 +69,7 @@ pub fn bootstrap_region(engine: Arc<DB>,
     let mut peer = metapb::Peer::new();
     peer.set_node_id(node_id);
     peer.set_store_id(store_id);
-    peer.set_peer_id(peer_id);
+    peer.set_id(peer_id);
     region.mut_peers().push(peer);
 
     try!(write_region(&engine, &region));

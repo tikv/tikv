@@ -213,8 +213,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let to = msg.get_to_peer();
         debug!("handle raft message for region {}, from {} to {}",
                region_id,
-               from.get_peer_id(),
-               to.get_peer_id());
+               from.get_id(),
+               to.get_id());
 
         if !msg.has_region_epoch() {
             error!("missing epoch in raft message, ignore it");
@@ -222,17 +222,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if !self.region_peers.contains_key(&region_id) {
-            let peer = try!(Peer::replicate(self,
-                                            region_id,
-                                            msg.get_region_epoch(),
-                                            to.get_peer_id()));
+            let peer = try!(Peer::replicate(self, region_id, msg.get_region_epoch(), to.get_id()));
             // We don't have start_key of the region, so there is no need to insert into
             // region_ranges
             self.region_peers.insert(region_id, peer);
         }
 
-        self.peer_cache.wl().insert(from.get_peer_id(), from.clone());
-        self.peer_cache.wl().insert(to.get_peer_id(), to.clone());
+        self.peer_cache.wl().insert(from.get_id(), from.clone());
+        self.peer_cache.wl().insert(to.get_id(), to.clone());
 
         // Check if we can accept the snapshot
         // TODO: we need to inject failure or re-order network packet to test the situtain
@@ -295,7 +292,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn handle_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
         if let Some(region) = ready_result.snap_applied_region {
-            self.region_ranges.insert(enc_end_key(&region), region.get_region_id());
+            self.region_ranges.insert(enc_end_key(&region), region.get_id());
         }
 
         // handle executing committed log results
@@ -332,7 +329,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     // Nothing to do, skip to handle it.
                 }
                 ExecResult::SplitRegion{ref left, ref right} => {
-                    let new_region_id = right.get_region_id();
+                    let new_region_id = right.get_id();
                     match Peer::create(self, &right) {
                         Err(e) => {
                             error!("create new split region {:?} err {:?}", right, e);
@@ -361,7 +358,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                             // Insert new regions and validation
                             if self.region_ranges
-                                   .insert(enc_end_key(left), left.get_region_id())
+                                   .insert(enc_end_key(left), left.get_id())
                                    .is_some() {
                                 panic!("region should not exist, {:?}", left);
                             }
@@ -420,7 +417,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return cb.call_box((resp,));
         }
 
-        let peer_id = msg.get_header().get_peer().get_peer_id();
+        let peer_id = msg.get_header().get_peer().get_id();
         if peer.peer_id() != peer_id {
             bind_error(&mut resp,
                        other(format!("mismatch peer id {} != {}", peer.peer_id(), peer_id)));
@@ -587,7 +584,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = p.unwrap();
         if let Err(e) = self.pd_client
                             .rl()
-                            .ask_split(self.cluster_meta.get_cluster_id(),
+                            .ask_split(self.cluster_meta.get_id(),
                                        peer.region(),
                                        key,
                                        peer.peer.clone()) {
@@ -622,7 +619,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   max_count);
             if let Err(e) = self.pd_client
                                 .rl()
-                                .ask_change_peer(self.cluster_meta.get_cluster_id(),
+                                .ask_change_peer(self.cluster_meta.get_id(),
                                                  peer.region(),
                                                  peer.peer.clone()) {
                 error!("failed to notify pd: {}", e);

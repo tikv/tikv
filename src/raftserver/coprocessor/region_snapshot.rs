@@ -138,7 +138,7 @@ mod tests {
         let path = TempDir::new("test-raftserver").unwrap();
         let engine = new_temp_engine(&path);
         let mut r = Region::new();
-        r.set_region_id(10);
+        r.set_id(10);
         r.set_start_key(b"key0".to_vec());
         r.set_end_key(b"key4".to_vec());
         let store = new_peer_storage(engine.clone(), &r);
@@ -170,7 +170,7 @@ mod tests {
         let path = TempDir::new("test-raftserver").unwrap();
         let engine = new_temp_engine(&path);
         let mut r = Region::new();
-        r.set_region_id(10);
+        r.set_id(10);
         r.set_start_key(b"a2".to_vec());
         r.set_end_key(b"a4".to_vec());
         let store = new_peer_storage(engine.clone(), &r);
@@ -237,7 +237,7 @@ mod tests {
         let path = TempDir::new("test-raftserver").unwrap();
         let engine = new_temp_engine(&path);
         let mut r = Region::new();
-        r.set_region_id(10);
+        r.set_id(10);
         r.set_start_key(b"a1".to_vec());
         r.set_end_key(b"a5".to_vec());
         let store = new_peer_storage(engine.clone(), &r);
