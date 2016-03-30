@@ -7,7 +7,7 @@ use mio::{self, NotifyError};
 
 pub mod store;
 pub mod errors;
-pub mod server;
+// pub mod server;
 pub mod coprocessor;
 pub use self::errors::{Result, Error, other};
 

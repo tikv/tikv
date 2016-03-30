@@ -1,12 +1,12 @@
 use std::sync::RwLock;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Included, Unbounded};
+use std::fmt::{self, Formatter, Debug};
 
 use storage::{Key, Value, KvPair, KvContext};
 use util::HandyRwLock;
 use super::{Engine, Modify, Result};
 
-#[derive(Debug)]
 pub struct EngineBtree {
     map: RwLock<BTreeMap<Vec<u8>, Value>>,
 }
@@ -15,6 +15,12 @@ impl EngineBtree {
     pub fn new() -> EngineBtree {
         info!("EngineBtree: creating");
         EngineBtree { map: RwLock::new(BTreeMap::new()) }
+    }
+}
+
+impl Debug for EngineBtree {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "Memory")
     }
 }
 
