@@ -83,9 +83,9 @@ impl Simulator for NodeCluster {
         let mut node = Node::new(&cfg, self.pd_client.clone(), self.trans.clone());
 
         node.start(vec![engine]).unwrap();
-        assert!(node_id == 0 || node_id == node.get_node_id());
+        assert!(node_id == 0 || node_id == node.id());
 
-        let node_id = node.get_node_id();
+        let node_id = node.id();
         self.nodes.insert(node_id, node);
 
         node_id

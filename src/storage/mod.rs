@@ -11,8 +11,6 @@ pub mod txn;
 mod types;
 
 pub use self::engine::{Engine, Dsn, new_engine, Modify, Error as EngineError};
-pub use self::engine::raftkv::Config as RaftKvConfig;
-pub use self::engine::raftkv::DEFAULT_RAFT_LISTENING_ADDR;
 pub use self::engine::raftkv::RaftKv;
 pub use self::types::{Key, Value, KvPair, KvContext};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
@@ -151,13 +149,11 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn new(dsn: Dsn) -> Result<Storage> {
-        let mut scheduler = {
-            let engine = try!(engine::new_engine(dsn));
-            Scheduler::new(engine)
-        };
+    pub fn from_engine(engine: Box<Engine>) -> Result<Storage> {
+        let desc = format!("{:?}", engine);
+        let mut scheduler = Scheduler::new(engine);
+
         let (tx, rx) = mpsc::channel::<Message>();
-        let desc = format!("{:?}", dsn);
         let handle = thread::spawn(move || {
             info!("storage: [{}] started.", desc);
             loop {
@@ -175,6 +171,11 @@ impl Storage {
             tx: tx,
             thread: handle,
         })
+    }
+
+    pub fn new(dsn: Dsn) -> Result<Storage> {
+        let engine = try!(engine::new_engine(dsn));
+        Storage::from_engine(engine)
     }
 
     pub fn stop(self) -> Result<()> {

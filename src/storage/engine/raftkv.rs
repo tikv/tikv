@@ -1,10 +1,6 @@
 #![allow(dead_code)]
 
-use raftserver::server::Server;
-use raftserver::server::Config as ServerConfig;
-pub use raftserver::server::config::DEFAULT_LISTENING_ADDR as DEFAULT_RAFT_LISTENING_ADDR;
-use raftserver::server::{SendCh, Msg};
-use raftserver::server::transport::ServerTransport;
+use server::Node;
 use raftserver::store::Transport;
 use raftserver::errors::Error as RaftServerError;
 use util::HandyRwLock;
@@ -13,16 +9,13 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Re
 use kvproto::errorpb;
 use kvproto::metapb;
 
-use rocksdb::{DB, Options as DbConfig};
 use pd::PdClient;
-use mio::{EventLoop, EventLoopConfig};
 use uuid::Uuid;
 use std::sync::{Arc, RwLock};
 use std::sync::mpsc;
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
 use std::result;
-use std::thread::{self, JoinHandle};
 use protobuf::RepeatedField;
 
 use super::{Result as EngineResult, Error as EngineError, Engine, Modify};
@@ -68,92 +61,27 @@ impl From<Error> for EngineError {
     }
 }
 
-#[derive(Default)]
-pub struct Config {
-    pub server_cfg: ServerConfig,
-    pub store_pathes: Vec<String>,
-    pub store_cfg: Option<DbConfig>,
-    pub el_cfg: EventLoopConfig,
-}
-
-impl Debug for Config {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        // DbConfig is an opaque object, we don't know what's in there without ABI.
-        let store_cfg_hint = if self.store_cfg.is_some() {
-            "customized"
-        } else {
-            "default"
-        };
-        write!(f,
-               "{{ server_cfg: {:?}, store_pathes: {:?}, store_config: {}, event loop config: \
-                {:?} }}",
-               self.server_cfg,
-               self.store_pathes,
-               store_cfg_hint,
-               self.el_cfg)
-    }
-}
-
 /// RaftKv is a storage engine base on RaftKvServer.
-pub struct RaftKv<T: PdClient + 'static> {
-    cluster_id: u64,
-    ch: SendCh,
-    trans: Arc<RwLock<ServerTransport<T>>>,
-    handler: Option<JoinHandle<()>>,
+pub struct RaftKv<T: PdClient + 'static, Trans: Transport + 'static> {
+    node: Node<T, Trans>,
+    trans: Arc<RwLock<Trans>>,
 }
 
-impl<T: PdClient> RaftKv<T> {
+impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(cfg: &Config, t: Arc<RwLock<T>>) -> Result<RaftKv<T>> {
-        assert!(cfg.store_pathes.len() > 0);
-        let mut engines = Vec::with_capacity(cfg.store_pathes.len());
-        for path in &cfg.store_pathes {
-            let db = match cfg.store_cfg {
-                None => DB::open_default(path),
-                Some(ref opt) => DB::open(opt, path),
-            };
-            match db {
-                Err(e) => return Err(Error::RocksDb(e)),
-                Ok(db) => engines.push(Arc::new(db)),
-            };
-        }
-
-        let mut event_loop = try!(EventLoop::configured(cfg.el_cfg.clone()));
-        let mut server = try!(Server::new(&mut event_loop, cfg.server_cfg.clone(), engines, t));
-        let ch = server.get_sendch();
-        let trans = server.get_trans();
-        let handler = try!(thread::Builder::new()
-                               .name("raftkv server".to_owned())
-                               .spawn(move || {
-                                   if let Err(e) = server.run(&mut event_loop) {
-                                       error!("failed to run server: {:?}", e);
-                                   }
-                               }));
-
-        Ok(RaftKv {
-            cluster_id: cfg.server_cfg.cluster_id,
-            ch: ch,
-            handler: Some(handler),
+    pub fn new(node: Node<T, Trans>) -> RaftKv<T, Trans> {
+        let trans = node.get_trans();
+        RaftKv {
+            node: node,
             trans: trans,
-        })
-    }
-
-    fn close(&mut self) {
-        if let Err(e) = self.ch.send(Msg::Quit) {
-            error!("failed to send kill message to raft server: {}", e);
         }
-        let handler = self.handler.take().unwrap();
-        if handler.join().is_err() {
-            error!("failed to wait raftkv server quit!");
-        }
-        info!("raftkv engine closed.");
     }
 
     fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<RaftCmdResponse> {
         let (tx, rx) = mpsc::channel();
         let uuid = req.get_header().get_uuid().to_vec();
         let l = req.get_requests().len();
-        try!(self.trans.wl().send_command(req,
+        try!(self.trans.rl().send_command(req,
                                           Box::new(move |r| {
                                               tx.send(r).map_err(::raftserver::errors::other)
                                           })));
@@ -201,19 +129,13 @@ impl<T: PdClient> RaftKv<T> {
     }
 }
 
-impl<T: PdClient> Drop for RaftKv<T> {
-    fn drop(&mut self) {
-        self.close();
-    }
-}
-
-impl<T: PdClient> Debug for RaftKv<T> {
+impl<T: PdClient, Trans: Transport> Debug for RaftKv<T, Trans> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<T: PdClient> Engine for RaftKv<T> {
+impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
     fn get(&self, ctx: &KvContext, key: &Key) -> EngineResult<Option<Value>> {
         let mut get = GetRequest::new();
         get.set_key(key.raw().clone());
