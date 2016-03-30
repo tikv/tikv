@@ -823,7 +823,7 @@ impl Peer {
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
         let requests = ctx.req.get_requests();
-        let mut responses: Vec<Response> = Vec::with_capacity(requests.len());
+        let mut responses = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
