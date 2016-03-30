@@ -26,6 +26,12 @@ pub fn create_event_loop<T: Transport>() -> Result<EventLoop<Server<T>>> {
     Ok(event_loop)
 }
 
+pub fn bind(addr: &str) -> Result<TcpListener> {
+    let laddr = try!(addr.parse());
+    let listener = try!(TcpListener::bind(&laddr));
+    Ok(listener)
+}
+
 pub struct Server<T: Transport> {
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
@@ -50,15 +56,15 @@ pub struct Server<T: Transport> {
 
 impl<T: Transport> Server<T> {
     // Create a server with already initialized engines.
-    // We must bootstrap all stores before running the server.
+    // Now some tests use 127.0.0.1:0 but we need real listening
+    // address in Node before creating the Server, so we first
+    // create the listener outer, get the real listening address for
+    // Node and then pass it here.
     pub fn new(event_loop: &mut EventLoop<Self>,
-               addr: &str,
+               listener: TcpListener,
                storage: Storage,
                trans: Arc<RwLock<T>>)
                -> Result<Server<T>> {
-        let laddr = try!(addr.parse());
-        let listener = try!(TcpListener::bind(&laddr));
-
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
                                  EventSet::readable(),

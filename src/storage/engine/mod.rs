@@ -1,11 +1,8 @@
 use std::{error, result};
 use std::fmt::Debug;
-use std::sync::{Arc, RwLock};
 use self::memory::EngineBtree;
 use self::rocksdb::EngineRocksdb;
-use self::raftkv::{Config, RaftKv};
 use storage::{Key, Value, KvPair, KvContext};
-use pd;
 use kvproto::errorpb::Error as ErrorHeader;
 
 mod memory;
@@ -36,23 +33,17 @@ pub trait Engine : Send + Sync + Debug {
 pub enum Dsn<'a> {
     Memory,
     RocksDBPath(&'a str),
-    RaftKv(&'a Config, &'a str),
+    RaftKv,
 }
 
+// Now we only support Memory and RocksDB.
 pub fn new_engine(dsn: Dsn) -> Result<Box<Engine>> {
     match dsn {
         Dsn::Memory => Ok(Box::new(EngineBtree::new())),
         Dsn::RocksDBPath(path) => {
             EngineRocksdb::new(path).map(|engine| -> Box<Engine> { Box::new(engine) })
         }
-        Dsn::RaftKv(cfg, addr) => {
-            let client = match pd::new_rpc_client(addr) {
-                Err(e) => return Err(Error::Other(box e)),
-                Ok(c) => c,
-            };
-            let client = Arc::new(RwLock::new(client));
-            RaftKv::new(cfg, client).map(|e| -> Box<Engine> { box e }).map_err(From::from)
-        }
+        Dsn::RaftKv => unimplemented!(),
     }
 }
 

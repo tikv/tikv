@@ -103,3 +103,28 @@ impl<T: PdClient> Transport for ServerTransport<T> {
         Ok(())
     }
 }
+
+// FakeTransport is used for Memory and RocksDB to pass compile.
+pub struct MockTransport;
+
+impl Transport for MockTransport {
+    fn add_sendch(&mut self, _: u64, _: StoreSendCh) {
+        unimplemented!();
+    }
+
+    fn remove_sendch(&mut self, _: u64) -> Option<StoreSendCh> {
+        unimplemented!();
+    }
+
+    fn send_raft_msg(&self, _: RaftMessage) -> RaftResult<()> {
+        unimplemented!();
+    }
+
+    fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftResult<()> {
+        unimplemented!();
+    }
+
+    fn send(&self, _: RaftMessage) -> RaftResult<()> {
+        unimplemented!();
+    }
+}

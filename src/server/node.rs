@@ -11,6 +11,16 @@ use raftserver::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable,
 use super::{Result, other};
 use util::HandyRwLock;
 use super::config::Config;
+use storage::{Storage, Engine, RaftKv};
+
+pub fn create_raft_storage<T, Trans>(node: Node<T, Trans>) -> Result<Storage>
+    where T: PdClient + 'static,
+          Trans: Transport + 'static
+{
+    let engine = box RaftKv::new(node);
+    let store = try!(Storage::from_engine(engine));
+    Ok(store)
+}
 
 pub struct Node<T: PdClient + 'static, Trans: Transport + 'static> {
     cluster_id: u64,
@@ -100,8 +110,12 @@ impl<T, Trans> Node<T, Trans>
         Ok(())
     }
 
-    pub fn get_node_id(&self) -> u64 {
+    pub fn id(&self) -> u64 {
         self.node.get_node_id()
+    }
+
+    pub fn get_trans(&self) -> Arc<RwLock<Trans>> {
+        self.trans.clone()
     }
 
     // check stores, return node id, corresponding store id for the engine.
@@ -146,11 +160,9 @@ impl<T, Trans> Node<T, Trans>
 
     fn bootstrap_store(&self, engine: Arc<DB>) -> Result<u64> {
         let store_id = try!(self.pd_client.wl().alloc_id());
-        debug!("alloc store id {} for node {}",
-               store_id,
-               self.get_node_id());
+        debug!("alloc store id {} for node {}", store_id, self.id());
 
-        try!(store::bootstrap_store(engine, self.cluster_id, self.get_node_id(), store_id));
+        try!(store::bootstrap_store(engine, self.cluster_id, self.id(), store_id));
 
         Ok(store_id)
     }
@@ -160,24 +172,20 @@ impl<T, Trans> Node<T, Trans>
         debug!("alloc first region id {} for cluster {}, node {}, store {}",
                region_id,
                self.cluster_id,
-               self.get_node_id(),
+               self.id(),
                store_id);
         let peer_id = try!(self.pd_client.wl().alloc_id());
         debug!("alloc first peer id {} for first region {}",
                peer_id,
                region_id);
 
-        let region = try!(store::bootstrap_region(engine,
-                                                  self.get_node_id(),
-                                                  store_id,
-                                                  region_id,
-                                                  peer_id));
+        let region = try!(store::bootstrap_region(engine, self.id(), store_id, region_id, peer_id));
         Ok(region)
     }
 
     fn new_store_meta(&self, store_id: u64) -> metapb::Store {
         let mut store = metapb::Store::new();
-        store.set_node_id(self.get_node_id());
+        store.set_node_id(self.id());
         store.set_store_id(store_id);
         store
     }
