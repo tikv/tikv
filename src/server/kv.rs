@@ -34,12 +34,11 @@ impl StoreHandler {
             return Err(other("Msg doesn't contain a CmdGetRequest"));
         }
         let mut req = msg.take_cmd_get_req();
-        let mut key_address = req.take_key_address();
-        let key = key_address.take_key();
-        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
+        let mut ctx = req.take_context();
+        let ctx = KvContext::new(ctx.get_region_id(), ctx.take_peer());
         let cb = self.make_cb(StoreHandler::cmd_get_done, token, msg_id);
         self.store
-            .async_get(ctx, Key::from_raw(key), req.get_version(), cb)
+            .async_get(ctx, Key::from_raw(req.take_key()), req.get_version(), cb)
             .map_err(Error::Storage)
     }
 
@@ -48,10 +47,9 @@ impl StoreHandler {
             return Err(other("Msg doesn't contain a CmdScanRequest"));
         }
         let mut req = msg.take_cmd_scan_req();
-        let mut start_key_addresss = req.take_key_address();
-        let start_key = start_key_addresss.take_key();
-        let ctx = KvContext::new(start_key_addresss.get_region_id(),
-                                 start_key_addresss.take_peer());
+        let mut ctx = req.take_context();
+        let ctx = KvContext::new(ctx.get_region_id(), ctx.take_peer());
+        let start_key = req.take_start_key();
         debug!("start_key [{:?}]", start_key);
         let cb = self.make_cb(StoreHandler::cmd_scan_done, token, msg_id);
         self.store
@@ -80,10 +78,8 @@ impl StoreHandler {
                                }
                            })
                            .collect();
-        let ctx = {
-            let mut key_address = req.take_key_address();
-            KvContext::new(key_address.get_region_id(), key_address.take_peer())
-        };
+        let mut ctx = req.take_context();
+        let ctx = KvContext::new(ctx.get_region_id(), ctx.take_peer());
         let cb = self.make_cb(StoreHandler::cmd_prewrite_done, token, msg_id);
         self.store
             .async_prewrite(ctx,
@@ -100,13 +96,11 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_commit_req();
         let cb = self.make_cb(StoreHandler::cmd_commit_done, token, msg_id);
-        let ctx = {
-            let mut first = req.get_keys_address()[0].clone();
-            KvContext::new(first.get_region_id(), first.take_peer())
-        };
-        let keys = req.take_keys_address()
+        let mut ctx = req.take_context();
+        let ctx = KvContext::new(ctx.get_region_id(), ctx.take_peer());
+        let keys = req.take_keys()
                       .into_iter()
-                      .map(|mut x| Key::from_raw(x.take_key()))
+                      .map(Key::from_raw)
                       .collect();
         self.store
             .async_commit(ctx,
@@ -123,11 +117,13 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_cleanup_req();
         let cb = self.make_cb(StoreHandler::cmd_cleanup_done, token, msg_id);
-        let mut key_address = req.take_key_address();
-        let key = key_address.take_key();
-        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
+        let mut ctx = req.take_context();
+        let ctx = KvContext::new(ctx.get_region_id(), ctx.take_peer());
         self.store
-            .async_cleanup(ctx, Key::from_raw(key), req.get_start_version(), cb)
+            .async_cleanup(ctx,
+                           Key::from_raw(req.take_key()),
+                           req.get_start_version(),
+                           cb)
             .map_err(Error::Storage)
     }
 
@@ -137,12 +133,11 @@ impl StoreHandler {
         }
         let cb = self.make_cb(StoreHandler::cmd_commit_get_done, token, msg_id);
         let mut req = msg.take_cmd_commit_get_req();
-        let mut key_address = req.take_key_address();
-        let key = key_address.take_key();
-        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
+        let mut ctx = req.take_context();
+        let ctx = KvContext::new(ctx.get_region_id(), ctx.take_peer());
         self.store
             .async_commit_then_get(ctx,
-                                   Key::from_raw(key),
+                                   Key::from_raw(req.take_key()),
                                    req.get_lock_version(),
                                    req.get_commit_version(),
                                    req.get_get_version(),
@@ -156,11 +151,13 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_rb_get_req();
         let cb = self.make_cb(StoreHandler::cmd_rollback_get_done, token, msg_id);
-        let mut key_address = req.take_key_address();
-        let key = key_address.take_key();
-        let ctx = KvContext::new(key_address.get_region_id(), key_address.take_peer());
+        let mut ctx = req.take_context();
+        let ctx = KvContext::new(ctx.get_region_id(), ctx.take_peer());
         self.store
-            .async_rollback_then_get(ctx, Key::from_raw(key), req.get_lock_version(), cb)
+            .async_rollback_then_get(ctx,
+                                     Key::from_raw(req.take_key()),
+                                     req.get_lock_version(),
+                                     cb)
             .map_err(Error::Storage)
     }
 
