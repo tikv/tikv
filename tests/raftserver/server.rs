@@ -96,7 +96,7 @@ impl Simulator for ServerCluster {
         cfg.addr = format!("{}", addr);
 
         let mut node = Node::new(&cfg, self.pd_client.clone(), trans.clone());
-        node.start(vec![engine]).unwrap();
+        node.start(engine).unwrap();
 
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

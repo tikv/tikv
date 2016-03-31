@@ -1,6 +1,3 @@
-
-use std::sync::Arc;
-
 use rocksdb::{DB, Writable};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
@@ -12,11 +9,7 @@ const INIT_EPOCH_VER: u64 = 1;
 const INIT_EPOCH_CONF_VER: u64 = 1;
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
-pub fn bootstrap_store(engine: Arc<DB>,
-                       cluster_id: u64,
-                       node_id: u64,
-                       store_id: u64)
-                       -> Result<()> {
+pub fn bootstrap_store(engine: &DB, cluster_id: u64, node_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::new();
 
     let mut count: u32 = 0;
@@ -53,7 +46,7 @@ pub fn clear_region(engine: &DB, region_id: u64) -> Result<()> {
 }
 
 // Bootstrap first region.
-pub fn bootstrap_region(engine: Arc<DB>,
+pub fn bootstrap_region(engine: &DB,
                         node_id: u64,
                         store_id: u64,
                         region_id: u64,
@@ -72,7 +65,7 @@ pub fn bootstrap_region(engine: Arc<DB>,
     peer.set_id(peer_id);
     region.mut_peers().push(peer);
 
-    try!(write_region(&engine, &region));
+    try!(write_region(engine, &region));
 
     Ok(region)
 }
