@@ -1,19 +1,21 @@
+use test::BenchSamples;
+use tempdir::TempDir;
+
+use test_util::*;
 use tikv::storage::{self, Dsn, Mutation, Key, KvContext};
 use tikv::storage::txn::TxnStore;
-use util::KVGenerator;
 
-use tempdir::TempDir;
-use test::Bencher;
+use super::print_result;
 
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.
-fn bench_tombstone_scan(b: &mut Bencher, dsn: Dsn) {
+fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
     let engine = storage::new_engine(dsn).unwrap();
 
     let store = TxnStore::new(engine);
     let mut ts_generator = 1..;
 
-    let mut kvs = KVGenerator::new(100, 1000);
+    let mut kvs = KvGenerator::new(100, 1000);
 
     for (k, v) in kvs.take(100000) {
         let mut ts = ts_generator.next().unwrap();
@@ -41,25 +43,23 @@ fn bench_tombstone_scan(b: &mut Bencher, dsn: Dsn) {
              .expect("");
     }
 
-    kvs = KVGenerator::new(100, 1000);
-    b.iter(|| {
+    kvs = KvGenerator::new(100, 1000);
+    bench!{
         let (k, _) = kvs.next().unwrap();
         assert!(store.scan(KvContext::none(),
                            Key::from_raw(k.clone()),
                            1,
                            ts_generator.next().unwrap())
                      .unwrap()
-                     .is_empty());
-    })
+                     .is_empty())
+    }
 }
 
-#[bench]
-fn bench_tombstone_scan_in_rocksdb(b: &mut Bencher) {
+pub fn bench_engine() {
     let path = TempDir::new("bench-mvcc").unwrap();
-    bench_tombstone_scan(b, Dsn::RocksDBPath(path.path().to_str().unwrap()));
-}
-
-#[bench]
-fn bench_tombstone_scan_in_memory(b: &mut Bencher) {
-    bench_tombstone_scan(b, Dsn::Memory);
+    let dsn = Dsn::RocksDBPath(path.path().to_str().unwrap());
+    printf!("benching tombstone scan with rocksdb\t...\t");
+    print_result(bench_tombstone_scan(dsn));
+    printf!("benching tombstone scan with memory\t...\t");
+    print_result(bench_tombstone_scan(Dsn::Memory));
 }
