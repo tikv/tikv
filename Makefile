@@ -14,7 +14,8 @@ test:
 
 bench:
 	# todo remove ulimit once issue #372 of mio is resolved.
-	ulimit -n 10240 && LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench -- --nocapture
+	ulimit -n 4096 && LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench -- --nocapture
+	ulimit -n 4096 && RUST_BACKTRACE=1 cargo run --release --bin bench-tikv
 
 genprotobuf:
 	cd ./src/proto && protoc --rust_out . *.proto

@@ -9,8 +9,16 @@ name = "tikv"
 [[bin]]
 name = "tikv-server"
 
+[[bin]]
+name = "bench-tikv"
+path = "benches/bin/bench-tikv.rs"
+
 [[test]]
 name = "tests"
+
+[[test]]
+name = "benches"
+path = "benches/benches.rs"
 
 [dependencies]
 log = "0.3"
