@@ -6,7 +6,7 @@ use protobuf::RepeatedField;
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
                        CmdCleanupResponse, CmdRollbackThenGetResponse, CmdCommitThenGetResponse,
                        Request, Response, MessageType, Item, ResultType, ResultType_Type,
-                       LockInfo, Operator};
+                       LockInfo, Op};
 use kvproto::msgpb;
 use storage::{Storage, Key, Value, KvPair, KvContext, Mutation, MaybeLocked, MaybeComitted,
               MaybeRolledback, Callback};
@@ -72,11 +72,11 @@ impl StoreHandler {
                            .into_iter()
                            .map(|mut x| {
                                match x.get_op() {
-                                   Operator::OpPut => {
+                                   Op::Put => {
                                        Mutation::Put((Key::from_raw(x.take_key()), x.take_value()))
                                    }
-                                   Operator::OpDel => Mutation::Delete(Key::from_raw(x.take_key())),
-                                   Operator::OpLock => Mutation::Lock(Key::from_raw(x.take_key())),
+                                   Op::Del => Mutation::Delete(Key::from_raw(x.take_key())),
+                                   Op::Lock => Mutation::Lock(Key::from_raw(x.take_key())),
                                }
                            })
                            .collect();
