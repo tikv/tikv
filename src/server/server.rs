@@ -87,10 +87,6 @@ impl<T: Transport> Server<T> {
         Ok(svr)
     }
 
-    pub fn get_trans(&self) -> Arc<RwLock<T>> {
-        self.trans.clone()
-    }
-
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(event_loop.run(self));
         Ok(())

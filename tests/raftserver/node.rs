@@ -8,7 +8,7 @@ use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
-use tikv::raftserver::store::{SendCh, Transport, msg, Msg, Callback};
+use tikv::raftserver::store::{SendCh, Transport, msg, Msg, Callback, StoreSendCh};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tikv::raftserver::{Result, other};
@@ -18,34 +18,48 @@ use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
 
 pub struct ChannelTransport {
-    senders: HashMap<u64, SendCh>,
+    store_id: Option<u64>,
+    senders: Arc<RwLock<HashMap<u64, StoreSendCh>>>,
 }
 
 impl ChannelTransport {
-    pub fn new() -> Arc<RwLock<ChannelTransport>> {
-        Arc::new(RwLock::new(ChannelTransport { senders: HashMap::new() }))
+    pub fn new(trans: Arc<RwLock<HashMap<u64, StoreSendCh>>>) -> Arc<RwLock<ChannelTransport>> {
+        Arc::new(RwLock::new(ChannelTransport {
+            store_id: None,
+            senders: trans,
+        }))
     }
 
     pub fn get_sendch(&self, store_id: u64) -> Option<SendCh> {
-        self.senders.get(&store_id).cloned()
+        self.senders.rl().get(&store_id).cloned().map(|h| h.ch)
+    }
+}
+
+fn send_msg(senders: Arc<RwLock<HashMap<u64, StoreSendCh>>>,
+            msg: raft_serverpb::RaftMessage)
+            -> Result<()> {
+    let to_store = msg.get_to_peer().get_store_id();
+
+    match senders.rl().get(&to_store) {
+        Some(sender) => sender.ch.send(Msg::RaftMessage(msg)),
+        _ => Err(other(format!("missing sender for store {}", to_store))),
     }
 }
 
 impl Transport for ChannelTransport {
-    fn add_sendch(&mut self, store_id: u64, sender: SendCh) {
-        self.senders.insert(store_id, sender);
+    fn set_sendch(&mut self, sender: StoreSendCh) {
+        assert!(self.store_id.is_none());
+        self.store_id = Some(sender.store_id);
+        self.senders.wl().insert(sender.store_id, sender);
     }
 
-    fn remove_sendch(&mut self, store_id: u64) -> Option<SendCh> {
-        self.senders.remove(&store_id)
+    fn remove_sendch(&mut self) -> Option<StoreSendCh> {
+        let store_id = self.store_id.take().unwrap();
+        self.senders.wl().remove(&store_id)
     }
 
     fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        let to_store = msg.get_to_peer().get_store_id();
-        match self.senders.get(&to_store) {
-            None => Err(other(format!("missing sender for store {}", to_store))),
-            Some(sender) => sender.send(Msg::RaftMessage(msg)),
-        }
+        send_msg(self.senders.clone(), msg)
     }
 
     fn send_raft_msg(&self, _: raft_serverpb::RaftMessage) -> Result<()> {
@@ -60,7 +74,7 @@ impl Transport for ChannelTransport {
 
 pub struct NodeCluster {
     cluster_id: u64,
-    trans: Arc<RwLock<ChannelTransport>>,
+    trans: Arc<RwLock<HashMap<u64, StoreSendCh>>>,
     pd_client: Arc<RwLock<TestPdClient>>,
     nodes: HashMap<u64, Node<TestPdClient, ChannelTransport>>,
 }
@@ -69,7 +83,7 @@ impl NodeCluster {
     pub fn new(cluster_id: u64, pd_client: Arc<RwLock<TestPdClient>>) -> NodeCluster {
         NodeCluster {
             cluster_id: cluster_id,
-            trans: ChannelTransport::new(),
+            trans: Arc::new(RwLock::new(HashMap::new())),
             pd_client: pd_client,
             nodes: HashMap::new(),
         }
@@ -80,9 +94,10 @@ impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
-        let mut node = Node::new(&cfg, self.pd_client.clone(), self.trans.clone());
+        let trans = ChannelTransport::new(self.trans.clone());
+        let mut node = Node::new(&cfg, self.pd_client.clone(), trans);
 
-        node.start(vec![engine]).unwrap();
+        node.start(engine).unwrap();
         assert!(node_id == 0 || node_id == node.id());
 
         let node_id = node.id();
@@ -102,12 +117,12 @@ impl Simulator for NodeCluster {
 
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let store_id = request.get_header().get_peer().get_store_id();
-        let sender = self.trans.rl().get_sendch(store_id).unwrap();
-        msg::call_command(&sender, request, timeout)
+        let sender = self.trans.rl().get(&store_id).cloned().unwrap();
+        msg::call_command(&sender.ch, request, timeout)
     }
 
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        self.trans.rl().send(msg)
+        send_msg(self.trans.clone(), msg)
     }
 }
 
