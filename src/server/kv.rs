@@ -242,44 +242,45 @@ impl StoreHandler {
         let mut resp = Response::new();
         let mut cmd_scan_resp = CmdScanResponse::new();
         cmd_scan_resp.set_ok(kvs.is_ok());
-        match kvs {
-            Ok(kvs) => {
-                // convert storage::KvPair to kvrpcpb::Item
-                let mut new_kvs = Vec::new();
-                for result in kvs {
-                    let mut new_kv = Item::new();
-                    let mut res_type = ResultType::new();
-                    match result {
-                        Ok((ref key, ref value)) => {
-                            res_type.set_field_type(ResultType_Type::Ok);
-                            new_kv.set_key(key.clone());
-                            new_kv.set_value(value.clone());
-                        }
-                        Err(..) => {
-                            if result.is_locked() {
-                                if let Some((key, primary, ts)) = result.get_lock() {
-                                    res_type.set_field_type(ResultType_Type::Locked);
-                                    let mut lock_info = LockInfo::new();
-                                    lock_info.set_primary_lock(primary);
-                                    lock_info.set_lock_version(ts);
-                                    res_type.set_lock_info(lock_info);
-                                    new_kv.set_key(key);
-                                }
-                            } else {
-                                res_type.set_field_type(ResultType_Type::Retryable);
-                            }
-                        }
-                    }
-                    new_kv.set_res_type(res_type);
-                    new_kvs.push(new_kv);
-                }
-                cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
-            }
-            Err(e) => {
-                error!("storage error: {:?}", e);
-            }
-        }
         resp.set_field_type(MessageType::CmdScan);
+
+        if let Err(e) = kvs {
+            error!("storage error: {:?}", e);
+            resp.set_cmd_scan_resp(cmd_scan_resp);
+            return resp;
+        }
+
+        // convert storage::KvPair to kvrpcpb::Item
+        let mut new_kvs = Vec::new();
+        for result in kvs.unwrap() {
+            let mut new_kv = Item::new();
+            let mut res_type = ResultType::new();
+            match result {
+                Ok((ref key, ref value)) => {
+                    res_type.set_field_type(ResultType_Type::Ok);
+                    new_kv.set_key(key.clone());
+                    new_kv.set_value(value.clone());
+                }
+                Err(..) => {
+                    if result.is_locked() {
+                        if let Some((key, primary, ts)) = result.get_lock() {
+                            res_type.set_field_type(ResultType_Type::Locked);
+                            let mut lock_info = LockInfo::new();
+                            lock_info.set_primary_lock(primary);
+                            lock_info.set_lock_version(ts);
+                            res_type.set_lock_info(lock_info);
+                            new_kv.set_key(key);
+                        }
+                    } else {
+                        res_type.set_field_type(ResultType_Type::Retryable);
+                    }
+                }
+            }
+            new_kv.set_res_type(res_type);
+            new_kvs.push(new_kv);
+        }
+
+        cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
         resp.set_cmd_scan_resp(cmd_scan_resp);
         resp
     }
@@ -288,15 +289,15 @@ impl StoreHandler {
         let mut resp = Response::new();
         let mut cmd_prewrite_resp = CmdPrewriteResponse::new();
         cmd_prewrite_resp.set_ok(results.is_ok());
-        let mut items = Vec::new();
+        let mut items = vec![];
         match results {
             Ok(results) => {
-                for result in results {
+                for res in results {
                     let mut item = Item::new();
                     let mut res_type = ResultType::new();
-                    if result.is_ok() {
+                    if res.is_ok() {
                         res_type.set_field_type(ResultType_Type::Ok);
-                    } else if let Some((key, primary, ts)) = result.get_lock() {
+                    } else if let Some((key, primary, ts)) = res.get_lock() {
                         // Actually items only contain locked item, so `ok` is always false.
                         res_type.set_field_type(ResultType_Type::Locked);
                         let mut lock_info = LockInfo::new();
