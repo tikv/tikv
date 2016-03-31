@@ -68,7 +68,7 @@ fn build_raftkv(matches: &Matches,
                                 .unwrap_or_else(|| addr);
 
     let mut node = Node::new(&cfg, pd_client, trans.clone());
-    node.start(vec![engine]).unwrap();
+    node.start(engine).unwrap();
 
     (create_raft_storage(node).unwrap(), trans)
 }
