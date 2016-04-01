@@ -1,6 +1,6 @@
 use super::{RegionObserver, ObserverContext};
 
-use raftserver::store::PeerStorage;
+use raftstore::store::PeerStorage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
 struct ObserverEntry {
@@ -112,10 +112,10 @@ impl Drop for CoprocessorHost {
 
 #[cfg(test)]
 mod test {
-    use raftserver::coprocessor::*;
+    use raftstore::coprocessor::*;
     use tempdir::TempDir;
-    use raftserver::store::engine::*;
-    use raftserver::store::PeerStorage;
+    use raftstore::store::engine::*;
+    use raftstore::store::PeerStorage;
     use util::HandyRwLock;
     use std::sync::*;
     use std::fmt::Debug;
@@ -211,7 +211,7 @@ mod test {
                                              cpt1.clone());
         let mut host = CoprocessorHost::default();
         host.registry.register_observer(3, Box::new(observer1));
-        let path = TempDir::new("test-raftserver").unwrap();
+        let path = TempDir::new("test-raftstore").unwrap();
         let ps = new_peer_storage(&path);
         let mut admin_req = RaftCmdRequest::new();
         admin_req.set_admin_request(AdminRequest::new());

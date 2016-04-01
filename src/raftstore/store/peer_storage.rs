@@ -11,7 +11,7 @@ use kvproto::raftpb::{Entry, Snapshot, HardState, ConfState};
 use kvproto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
 use util::HandyRwLock;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
-use raftserver::{Result, Error, other};
+use raftstore::{Result, Error, other};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable, Mutable};
 
@@ -588,7 +588,7 @@ mod test {
     use tempdir::*;
     use protobuf;
     use raft::Storage;
-    use raftserver::store::bootstrap;
+    use raftstore::store::bootstrap;
 
     fn new_storage(path: &TempDir) -> RaftStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();

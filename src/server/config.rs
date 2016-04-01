@@ -1,4 +1,4 @@
-pub use raftserver::store::Config as StoreConfig;
+pub use raftstore::store::Config as StoreConfig;
 use super::Result;
 
 const DEFAULT_CLUSTER_ID: u64 = 0;

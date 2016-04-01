@@ -1,7 +1,7 @@
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 
-use raftserver::Result;
+use raftstore::Result;
 use super::Callback;
 use super::msg::SendCh;
 

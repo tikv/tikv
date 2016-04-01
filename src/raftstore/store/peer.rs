@@ -14,8 +14,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, RawNode, SnapshotStatus};
-use raftserver::{Result, other, Error};
-use raftserver::coprocessor::CoprocessorHost;
+use raftstore::{Result, other, Error};
+use raftstore::coprocessor::CoprocessorHost;
 use util::HandyRwLock;
 use pd::PdClient;
 use super::store::Store;

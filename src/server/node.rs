@@ -6,8 +6,8 @@ use rocksdb::DB;
 use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
-use raftserver::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
-                        StoreSendCh};
+use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
+                       StoreSendCh};
 use super::{Result, other};
 use util::HandyRwLock;
 use super::config::Config;
