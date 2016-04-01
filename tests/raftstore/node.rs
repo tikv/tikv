@@ -62,10 +62,6 @@ impl Transport for ChannelTransport {
         send_msg(self.senders.clone(), msg)
     }
 
-    fn send_raft_msg(&self, _: raft_serverpb::RaftMessage) -> Result<()> {
-        unimplemented!();
-    }
-
     fn send_command(&self, _: RaftCmdRequest, _: Callback) -> Result<()> {
         unimplemented!();
     }

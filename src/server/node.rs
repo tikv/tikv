@@ -91,7 +91,6 @@ impl<T, Trans> Node<T, Trans>
                  .unwrap()
                  .put_store(self.cluster_id, self.store.clone()));
 
-
         Ok(())
     }
 

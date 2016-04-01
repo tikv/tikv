@@ -174,7 +174,7 @@ impl<T: Transport> Server<T> {
         let msg_type = msg.get_msg_type();
         match msg_type {
             MessageType::Raft => {
-                if let Err(e) = self.trans.rl().send_raft_msg(msg.take_raft()) {
+                if let Err(e) = self.trans.rl().send(msg.take_raft()) {
                     // Should we return error to let outer close this connection later?
                     error!("send raft message for token {:?} with msg id {} err {:?}",
                            token,
