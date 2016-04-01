@@ -1,7 +1,8 @@
 use std::fmt;
-use storage::{Key, Value, Mutation, KvContext};
+use storage::{Key, Value, Mutation};
 use storage::engine::{Engine, Modify};
 use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
+use kvproto::kvrpcpb::Context;
 use super::meta::Meta;
 use super::{Error, Result};
 
@@ -14,7 +15,7 @@ fn meta_lock_type(mutation: &Mutation) -> MetaLockType {
 
 pub struct MvccTxn<'a, T: Engine + ?Sized + 'a> {
     engine: &'a T,
-    ctx: &'a KvContext,
+    ctx: &'a Context,
     start_ts: u64,
     writes: Vec<Modify>,
 }
@@ -26,7 +27,7 @@ impl<'a, T: Engine + ?Sized> fmt::Debug for MvccTxn<'a, T> {
 }
 
 impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
-    pub fn new(engine: &'a T, ctx: &'a KvContext, start_ts: u64) -> MvccTxn<'a, T> {
+    pub fn new(engine: &'a T, ctx: &'a Context, start_ts: u64) -> MvccTxn<'a, T> {
         MvccTxn {
             engine: engine,
             ctx: ctx,
@@ -183,8 +184,9 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
 
 #[cfg(test)]
 mod tests {
+    use kvproto::kvrpcpb::Context;
     use super::MvccTxn;
-    use storage::{make_key, Mutation, KvContext};
+    use storage::{make_key, Mutation};
     use storage::engine::{self, Engine, Dsn};
 
     #[test]
@@ -211,7 +213,7 @@ mod tests {
         must_get_none(engine.as_ref(), b"x", 23);
 
         // insert bad format data
-        engine.put(&KvContext::none(), make_key(b"y"), b"dummy".to_vec()).unwrap();
+        engine.put(&Context::new(), make_key(b"y"), b"dummy".to_vec()).unwrap();
         must_get_err(engine.as_ref(), b"y", 100);
     }
 
@@ -303,19 +305,19 @@ mod tests {
     }
 
     fn must_get<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64, expect: &[u8]) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let txn = MvccTxn::new(engine, &ctx, ts);
         assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect);
     }
 
     fn must_get_none<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let txn = MvccTxn::new(engine, &ctx, ts);
         assert!(txn.get(&make_key(key)).unwrap().is_none());
     }
 
     fn must_get_err<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let txn = MvccTxn::new(engine, &ctx, ts);
         assert!(txn.get(&make_key(key)).is_err());
     }
@@ -325,41 +327,41 @@ mod tests {
                                              value: &[u8],
                                              pk: &[u8],
                                              ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, ts);
         txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_delete<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, ts);
         txn.prewrite(Mutation::Delete(make_key(key)), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_lock<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, ts);
         txn.prewrite(Mutation::Lock(make_key(key)), pk).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_prewrite_lock_err<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, ts);
         assert!(txn.prewrite(Mutation::Lock(make_key(key)), pk).is_err());
     }
 
     fn must_commit<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, start_ts);
         txn.commit(&make_key(key), commit_ts).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_commit_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, start_ts);
         assert!(txn.commit(&make_key(key), commit_ts).is_err());
     }
@@ -370,7 +372,7 @@ mod tests {
                                                 commit_ts: u64,
                                                 get_ts: u64,
                                                 expect: &[u8]) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, lock_ts);
         assert_eq!(txn.commit_then_get(&make_key(key), commit_ts, get_ts).unwrap().unwrap(),
                    expect);
@@ -382,20 +384,20 @@ mod tests {
                                                     lock_ts: u64,
                                                     commit_ts: u64,
                                                     get_ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, lock_ts);
         assert!(txn.commit_then_get(&make_key(key), commit_ts, get_ts).is_err());
     }
 
     fn must_rollback<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, start_ts);
         txn.rollback(&make_key(key)).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_rollback_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, start_ts);
         assert!(txn.rollback(&make_key(key)).is_err());
     }
@@ -404,7 +406,7 @@ mod tests {
                                                   key: &[u8],
                                                   lock_ts: u64,
                                                   expect: &[u8]) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, lock_ts);
         assert_eq!(txn.rollback_then_get(&make_key(key)).unwrap().unwrap(),
                    expect);
@@ -412,7 +414,7 @@ mod tests {
     }
 
     fn must_rollback_then_get_err<T: Engine + ?Sized>(engine: &T, key: &[u8], lock_ts: u64) {
-        let ctx = KvContext::none();
+        let ctx = Context::new();
         let mut txn = MvccTxn::new(engine, &ctx, lock_ts);
         assert!(txn.rollback_then_get(&make_key(key)).is_err());
     }

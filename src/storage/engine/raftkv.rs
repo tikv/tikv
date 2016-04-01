@@ -8,6 +8,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Re
                           GetRequest, CmdType, SeekRequest, DeleteRequest, PutRequest};
 use kvproto::errorpb;
 use kvproto::metapb;
+use kvproto::kvrpcpb::Context;
 
 use pd::PdClient;
 use uuid::Uuid;
@@ -19,7 +20,7 @@ use std::result;
 use protobuf::RepeatedField;
 
 use super::{Result as EngineResult, Error as EngineError, Engine, Modify};
-use storage::{Key, Value, KvPair, KvContext};
+use storage::{Key, Value, KvPair};
 
 quick_error! {
     #[derive(Debug)]
@@ -136,14 +137,14 @@ impl<T: PdClient, Trans: Transport> Debug for RaftKv<T, Trans> {
 }
 
 impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
-    fn get(&self, ctx: &KvContext, key: &Key) -> EngineResult<Option<Value>> {
+    fn get(&self, ctx: &Context, key: &Key) -> EngineResult<Option<Value>> {
         let mut get = GetRequest::new();
         get.set_key(key.raw().clone());
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Get);
         req.set_get(get);
-        let lead = ctx.peer.clone();
-        let mut resp = try!(self.exec_request(ctx.region_id, lead, req));
+        let lead = ctx.get_peer().clone();
+        let mut resp = try!(self.exec_request(ctx.get_region_id(), lead, req));
         if resp.get_cmd_type() != CmdType::Get {
             return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!",
                                                       CmdType::Get,
@@ -158,14 +159,14 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
     }
 
-    fn seek(&self, ctx: &KvContext, key: &Key) -> EngineResult<Option<KvPair>> {
+    fn seek(&self, ctx: &Context, key: &Key) -> EngineResult<Option<KvPair>> {
         let mut seek = SeekRequest::new();
         seek.set_key(key.raw().clone());
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Seek);
         req.set_seek(seek);
-        let lead = ctx.peer.clone();
-        let mut resp = try!(self.exec_request(ctx.region_id, lead, req));
+        let lead = ctx.get_peer().clone();
+        let mut resp = try!(self.exec_request(ctx.get_region_id(), lead, req));
         if resp.get_cmd_type() != CmdType::Seek {
             return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}",
                                                       CmdType::Seek,
@@ -180,7 +181,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
     }
 
-    fn write(&self, ctx: &KvContext, mut modifies: Vec<Modify>) -> EngineResult<()> {
+    fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> EngineResult<()> {
         if modifies.len() == 0 {
             return Ok(());
         }
@@ -205,7 +206,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
             }
             reqs.push(req);
         }
-        try!(self.exec_requests(ctx.region_id, ctx.peer.clone(), reqs));
+        try!(self.exec_requests(ctx.get_region_id(), ctx.get_peer().clone(), reqs));
         Ok(())
     }
 }
