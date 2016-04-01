@@ -47,8 +47,8 @@ impl<T> RaftLog<T>
     where T: Storage
 {
     pub fn new(storage: Arc<T>) -> RaftLog<T> {
-        let first_index = storage.first_index().unwrap_or_else(|e| panic!(e));
-        let last_index = storage.last_index().unwrap_or_else(|e| panic!(e));
+        let first_index = storage.first_index().unwrap();
+        let last_index = storage.last_index().unwrap();
 
         // Initialize committed and applied pointers to the time of the last compaction.
         RaftLog {
@@ -60,9 +60,7 @@ impl<T> RaftLog<T>
     }
 
     pub fn last_term(&self) -> u64 {
-        self.term(self.last_index())
-            .map_err(|e| panic!("unexpected error when getting the last term({})", e))
-            .unwrap()
+        self.term(self.last_index()).expect("unexpected error when getting the last term")
     }
 
     pub fn get_store(&self) -> Arc<T> {
@@ -92,14 +90,14 @@ impl<T> RaftLog<T>
     pub fn first_index(&self) -> u64 {
         match self.unstable.maybe_first_index() {
             Some(idx) => idx,
-            None => self.store.first_index().map_err(|e| panic!(e)).unwrap(),
+            None => self.store.first_index().unwrap(),
         }
     }
 
     pub fn last_index(&self) -> u64 {
         match self.unstable.maybe_last_index() {
             Some(idx) => idx,
-            None => self.store.last_index().map_err(|e| panic!(e)).unwrap(),
+            None => self.store.last_index().unwrap(),
         }
     }
 
