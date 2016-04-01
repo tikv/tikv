@@ -14,6 +14,7 @@
 mod region_snapshot;
 pub mod dispatcher;
 pub mod split_observer;
+mod error;
 
 pub use self::region_snapshot::RegionSnapshot;
 pub use self::dispatcher::{CoprocessorHost, Registry};
@@ -21,6 +22,9 @@ pub use self::dispatcher::{CoprocessorHost, Registry};
 use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
 use protobuf::RepeatedField;
 use raftstore::store::PeerStorage;
+
+pub use self::error::{Error, Result};
+
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.
@@ -49,10 +53,13 @@ impl<'a> ObserverContext<'a> {
 /// Observer hook of region level.
 pub trait RegionObserver: Coprocessor {
     /// Hook to call before execute admin request.
-    fn pre_admin(&mut self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> ();
+    fn pre_admin(&mut self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> Result<()>;
 
     /// Hook to call before execute read/write request.
-    fn pre_query(&mut self, ctx: &mut ObserverContext, req: &mut RepeatedField<Request>) -> ();
+    fn pre_query(&mut self,
+                 ctx: &mut ObserverContext,
+                 req: &mut RepeatedField<Request>)
+                 -> Result<()>;
 
     /// Hook to call after admin request being executed.
     fn post_admin(&mut self,
