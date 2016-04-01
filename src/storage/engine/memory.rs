@@ -2,8 +2,8 @@ use std::sync::RwLock;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Included, Unbounded};
 use std::fmt::{self, Formatter, Debug};
-
-use storage::{Key, Value, KvPair, KvContext};
+use kvproto::kvrpcpb::Context;
+use storage::{Key, Value, KvPair};
 use util::HandyRwLock;
 use super::{Engine, Modify, Result};
 
@@ -25,20 +25,20 @@ impl Debug for EngineBtree {
 }
 
 impl Engine for EngineBtree {
-    fn get(&self, _: &KvContext, key: &Key) -> Result<Option<Value>> {
+    fn get(&self, _: &Context, key: &Key) -> Result<Option<Value>> {
         trace!("EngineBtree: get {:?}", key);
         let m = self.map.rl();
         Ok(m.get(key.raw()).cloned())
     }
 
-    fn seek(&self, _: &KvContext, key: &Key) -> Result<Option<KvPair>> {
+    fn seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
         trace!("EngineBtree: seek {:?}", key);
         let m = self.map.rl();
         let mut iter = m.range::<Vec<u8>, Vec<u8>>(Included(key.raw()), Unbounded);
         Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
     }
 
-    fn write(&self, _: &KvContext, batch: Vec<Modify>) -> Result<()> {
+    fn write(&self, _: &Context, batch: Vec<Modify>) -> Result<()> {
         let mut m = self.map.wl();
         for rev in batch {
             match rev {
