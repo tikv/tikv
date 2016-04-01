@@ -135,7 +135,7 @@ fn new_request(cluster_id: u64, cmd_type: pdpb::CommandType) -> pdpb::Request {
 
 fn check_resp(resp: &pdpb::Response) -> Result<()> {
     if !resp.has_header() {
-        box_try!(Err("pd response missing header"));
+        return Err(box_err!("pd response missing header"));
     }
     let header = resp.get_header();
     if !header.has_error() {
