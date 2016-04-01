@@ -1,4 +1,3 @@
-use protobuf;
 use uuid::Uuid;
 use kvproto::{metapb, pdpb};
 use super::{Error, Result, errors, TRpcClient, Client};
@@ -6,13 +5,11 @@ use super::{Error, Result, errors, TRpcClient, Client};
 impl<T: TRpcClient + 'static> super::PdClient for Client<T> {
     fn bootstrap_cluster(&mut self,
                          cluster_id: u64,
-                         node: metapb::Node,
-                         stores: Vec<metapb::Store>,
+                         store: metapb::Store,
                          region: metapb::Region)
                          -> Result<()> {
         let mut bootstrap = pdpb::BootstrapRequest::new();
-        bootstrap.set_node(node);
-        bootstrap.set_stores(protobuf::RepeatedField::from_vec(stores));
+        bootstrap.set_store(store);
         bootstrap.set_region(region);
 
         let mut req = new_request(cluster_id, pdpb::CommandType::Bootstrap);
@@ -41,19 +38,6 @@ impl<T: TRpcClient + 'static> super::PdClient for Client<T> {
         Ok(resp.get_alloc_id().get_id())
     }
 
-    fn put_node(&mut self, cluster_id: u64, node: metapb::Node) -> Result<()> {
-        let mut put_meta = pdpb::PutMetaRequest::new();
-        put_meta.set_meta_type(pdpb::MetaType::NodeType);
-        put_meta.set_node(node);
-
-        let mut req = new_request(cluster_id, pdpb::CommandType::PutMeta);
-        req.set_put_meta(put_meta);
-
-        let resp = try!(self.send(&req));
-        try!(check_resp(&resp));
-        Ok(())
-    }
-
     fn put_store(&mut self, cluster_id: u64, store: metapb::Store) -> Result<()> {
         let mut put_meta = pdpb::PutMetaRequest::new();
         put_meta.set_meta_type(pdpb::MetaType::StoreType);
@@ -65,45 +49,6 @@ impl<T: TRpcClient + 'static> super::PdClient for Client<T> {
         let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(())
-    }
-
-    fn delete_node(&mut self, cluster_id: u64, node_id: u64) -> Result<()> {
-        let mut delete_meta = pdpb::DeleteMetaRequest::new();
-        delete_meta.set_meta_type(pdpb::MetaType::NodeType);
-        delete_meta.set_node_id(node_id);
-
-        let mut req = new_request(cluster_id, pdpb::CommandType::DeleteMeta);
-        req.set_delete_meta(delete_meta);
-
-        let resp = try!(self.send(&req));
-        try!(check_resp(&resp));
-        Ok(())
-    }
-
-    fn delete_store(&mut self, cluster_id: u64, store_id: u64) -> Result<()> {
-        let mut delete_meta = pdpb::DeleteMetaRequest::new();
-        delete_meta.set_meta_type(pdpb::MetaType::StoreType);
-        delete_meta.set_store_id(store_id);
-
-        let mut req = new_request(cluster_id, pdpb::CommandType::DeleteMeta);
-        req.set_delete_meta(delete_meta);
-
-        let resp = try!(self.send(&req));
-        try!(check_resp(&resp));
-        Ok(())
-    }
-
-    fn get_node(&self, cluster_id: u64, node_id: u64) -> Result<metapb::Node> {
-        let mut get_meta = pdpb::GetMetaRequest::new();
-        get_meta.set_meta_type(pdpb::MetaType::NodeType);
-        get_meta.set_node_id(node_id);
-
-        let mut req = new_request(cluster_id, pdpb::CommandType::GetMeta);
-        req.set_get_meta(get_meta);
-
-        let resp = try!(self.send(&req));
-        try!(check_resp(&resp));
-        Ok(resp.get_get_meta().get_node().clone())
     }
 
     fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store> {

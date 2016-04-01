@@ -88,7 +88,7 @@ impl<T: Simulator> AskHandler<T> {
 
             let store = &stores[pos.unwrap()];
             let peer_id = self.pd_client.wl().alloc_id().unwrap();
-            let peer = new_peer(store.get_node_id(), store.get_id(), peer_id);
+            let peer = new_peer(store.get_id(), peer_id);
             (ConfChangeType::AddNode, peer)
         };
 

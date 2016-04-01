@@ -179,10 +179,10 @@ mod tests {
                 }
                 pdpb::CommandType::PutMeta => {
                     let meta = req.get_put_meta();
-                    if meta.get_meta_type() == pdpb::MetaType::NodeType {
-                        let node = meta.get_node();
-                        assert_eq!(node.get_id(), 233);
-                        assert_eq!(node.get_address(), "localhost");
+                    if meta.get_meta_type() == pdpb::MetaType::StoreType {
+                        let store = meta.get_store();
+                        assert_eq!(store.get_id(), 233);
+                        assert_eq!(store.get_address(), "localhost");
                     }
                 }
                 _ => {
@@ -227,9 +227,9 @@ mod tests {
         assert_eq!(client.alloc_id().unwrap(), 42u64);
         assert!(client.is_cluster_bootstrapped(1).is_err());
 
-        let mut node = metapb::Node::new();
-        node.set_id(233);
-        node.set_address("localhost".to_owned());
-        assert!(client.put_node(1, node).is_ok());
+        let mut store = metapb::Store::new();
+        store.set_id(233);
+        store.set_address("localhost".to_owned());
+        assert!(client.put_store(1, store).is_ok());
     }
 }
