@@ -8,7 +8,6 @@ use std::sync::{Mutex, mpsc};
 use kvproto::metapb;
 use kvproto::pdpb;
 use tikv::pd::{PdClient, Result, Error, Key};
-use tikv::pd::errors::other;
 use tikv::raftstore::store::keys::{enc_end_key, data_key};
 
 #[derive(Default)]
@@ -81,14 +80,14 @@ impl Cluster {
         if self.regions.contains_key(key) {
             Ok(self.regions[key].clone())
         } else {
-            Err(other(format!("region of {} not exist!!!", region_id)))
+            Err(box_err!("region of {} not exist!!!", region_id))
         }
     }
 
     fn change_peer(&mut self, region: metapb::Region) -> Result<()> {
         let end_key = enc_end_key(&region);
         if !self.regions.contains_key(&end_key) {
-            return Err(other(format!("region {:?} doesn't exist", region)));
+            return Err(box_err!("region {:?} doesn't exist", region));
         }
 
         for peer in region.get_peers() {
@@ -112,11 +111,11 @@ impl Cluster {
         // origin pre-split region's end key is the same as right end key,
         // and must exists.
         if !self.regions.contains_key(&right_end_key) {
-            return Err(other(format!("region {:?} doesn't exist", right)));
+            return Err(box_err!("region {:?} doesn't exist", right));
         }
 
         if self.regions.contains_key(&left_end_key) {
-            return Err(other(format!("region {:?} has already existed", left)));
+            return Err(box_err!("region {:?} has already existed", left));
         }
 
         assert!(self.region_id_keys.insert(left.get_id(), left_end_key.clone()).is_some());

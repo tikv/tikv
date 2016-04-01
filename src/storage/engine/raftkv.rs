@@ -84,7 +84,8 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         let l = req.get_requests().len();
         try!(self.trans.rl().send_command(req,
                                           Box::new(move |r| {
-                                              tx.send(r).map_err(::raftstore::errors::other)
+                                              box_try!(tx.send(r));
+                                              Ok(())
                                           })));
 
         // Only when tx is closed will recv return Err, which should never happen.

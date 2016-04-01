@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 use util::codec::rpc;
 use protobuf::{self, MessageStatic};
-use super::{errors, Result};
+use super::Result;
 
 pub trait TRpcClient: Sync + Send {
     fn send<M, P>(&self, msg_id: u64, message: &M) -> Result<P>
@@ -43,7 +43,7 @@ impl TRpcClient for RpcClient {
         let mut resp = P::new();
         match try!(rpc::decode_msg(&mut *stream, &mut resp)) {
             id if id == msg_id => Ok(resp),
-            _ => Err(errors::other("pd response msg_id not match")),
+            _ => Err(box_err!("pd response msg_id not match")),
         }
     }
 
@@ -53,11 +53,7 @@ impl TRpcClient for RpcClient {
         try!(rpc::encode_msg(&mut *stream, msg_id, message));
         match try!(rpc::decode_data(&mut *stream)) {
             (id, _) if id == msg_id => Ok(()),
-            (id, _) => {
-                Err(errors::other(format!("pd response msg_id not match, want {}, got {}",
-                                          msg_id,
-                                          id)))
-            }
+            (id, _) => Err(box_err!("pd response msg_id not match, want {}, got {}", msg_id, id)),
         }
     }
 }
@@ -126,7 +122,7 @@ impl<C: TRpcClient + 'static> Client<C> {
     pub fn post<M: protobuf::Message + Send>(&self, message: M) -> Result<()> {
         let id = self.alloc_msg_id();
         if let Err(e) = self.clone_tx().send(Msg::Rpc(id, box message)) {
-            return Err(errors::other(format!("SendError: {:?}", e)));
+            return Err(box_err!(format!("SendError: {:?}", e)));
         }
         Ok(())
     }

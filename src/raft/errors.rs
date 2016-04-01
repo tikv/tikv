@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 use std::{cmp, result, io};
 use std::error;
-use protobuf::error::ProtobufError;
 
 quick_error! {
     #[derive(Debug)]
@@ -26,17 +25,10 @@ quick_error! {
             description(desc)
         }
         Other(err: Box<error::Error + Sync + Send>) {
+            from()
             cause(err.as_ref())
             description(err.description())
         }
-    }
-}
-
-impl Error {
-    pub fn other<T>(err: T) -> Error
-        where T: Into<Box<error::Error + Sync + Send + 'static>>
-    {
-        Error::Other(err.into())
     }
 }
 
@@ -51,12 +43,6 @@ impl cmp::PartialEq for Error {
             (&Error::ConfigInvalid(ref e1), &Error::ConfigInvalid(ref e2)) => e1 == e2,
             _ => false,
         }
-    }
-}
-
-impl From<ProtobufError> for Error {
-    fn from(e: ProtobufError) -> Error {
-        Error::other(e)
     }
 }
 
@@ -76,17 +62,10 @@ quick_error! {
             description("snapshot is temporarily unavailable")
         }
         Other(err: Box<error::Error + Sync + Send>) {
+            from()
             cause(err.as_ref())
             description(err.description())
         }
-    }
-}
-
-impl StorageError {
-    pub fn other<T>(err: T) -> StorageError
-        where T: Into<Box<error::Error + Sync + Send + 'static>>
-    {
-        StorageError::Other(err.into())
     }
 }
 
@@ -132,15 +111,6 @@ mod tests {
                    StorageError::SnapshotOutOfDate);
         assert_eq!(StorageError::SnapshotTemporarilyUnavailable,
                    StorageError::SnapshotTemporarilyUnavailable);
-        assert!(StorageError::other(Error::StepLocalMsg) != StorageError::Unavailable);
-    }
-
-    #[test]
-    fn test_other() {
-        // just for check compile.
-        Error::other("a simple string error");
-        StorageError::other("a simple string error");
-        Error::other(io::Error::new(io::ErrorKind::Other, "hello io"));
-        StorageError::other(io::Error::new(io::ErrorKind::Other, "hello io"));
+        assert!(StorageError::Other(box Error::StepLocalMsg) != StorageError::Unavailable);
     }
 }

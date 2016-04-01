@@ -68,3 +68,27 @@ macro_rules! map {
         }
     };
 }
+
+/// box try will box error first, and then do the same thing as try!.
+#[macro_export]
+macro_rules! box_try {
+    ($expr:expr) => ({
+        match $expr {
+            Ok(r) => r,
+            Err(e) => return Err(box_err!(e)),
+        }
+    })
+}
+
+/// A shortcut to box an error.
+#[macro_export]
+macro_rules! box_err {
+    ($e:expr) => ({
+        use std::error::Error;
+        let e: Box<Error + Sync + Send> = ($e).into();
+        e.into()
+    });
+    ($f:tt, $($arg:expr),+) => ({
+        box_err!(format!($f, $($arg),+))
+    });
+}

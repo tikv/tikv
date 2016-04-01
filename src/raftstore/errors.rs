@@ -33,6 +33,7 @@ quick_error!{
                 key, region.get_start_key(), region.get_end_key(), region.get_id())
         }
         Other(err: Box<error::Error + Sync + Send>) {
+            from()
             cause(err.as_ref())
             description(err.description())
             display("{:?}", err)
@@ -89,9 +90,3 @@ quick_error!{
 
 
 pub type Result<T> = result::Result<T, Error>;
-
-pub fn other<T>(err: T) -> Error
-    where T: Into<Box<error::Error + Sync + Send + 'static>>
-{
-    Error::Other(err.into())
-}
