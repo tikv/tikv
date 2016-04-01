@@ -29,6 +29,7 @@ pub trait Simulator {
     // If node id > 0, the node must be created in db already,
     // and the node id must be the same as given argument.
     // Return the node id.
+    // TODO: we will rename node name here because now we use store only.
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -141,12 +142,12 @@ impl<T: Simulator> Cluster<T> {
             for store in &stores {
                 // For some tests, we stop the node but pd still has this information,
                 // and we must skip this.
-                if !node_ids.contains(&store.get_node_id()) {
+                if !node_ids.contains(&store.get_id()) {
                     continue;
                 }
 
                 // To get region leader, we don't care real peer id, so use 0 instead.
-                let peer = new_peer(store.get_node_id(), store.get_id(), 0);
+                let peer = new_peer(store.get_id(), 0);
                 let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
                 let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
                 let region_leader = resp.get_status_response().get_region_leader();
@@ -187,9 +188,9 @@ impl<T: Simulator> Cluster<T> {
         region.mut_region_epoch().set_conf_ver(1);
 
         for (&id, engine) in &self.engines {
-            let peer = new_peer(id, id, id);
+            let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(&engine, self.id(), id, id).unwrap();
+            bootstrap_store(&engine, self.id(), id).unwrap();
         }
 
         for engine in self.engines.values() {
@@ -209,11 +210,11 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for (&id, engine) in &self.engines {
-            bootstrap_store(&engine, self.id(), id, id).unwrap();
+            bootstrap_store(&engine, self.id(), id).unwrap();
         }
 
         let node_id = 1;
-        let region = bootstrap_region(self.engines.get(&node_id).unwrap(), 1, 1, 1, 1).unwrap();
+        let region = bootstrap_region(self.engines.get(&node_id).unwrap(), 1, 1, 1).unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid
@@ -225,15 +226,11 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client
             .write()
             .unwrap()
-            .bootstrap_cluster(self.id(),
-                               new_node(1, "".to_owned()),
-                               vec![new_store(1, 1)],
-                               region)
+            .bootstrap_cluster(self.id(), new_store(1, "".to_owned()), region)
             .unwrap();
 
         for &id in self.engines.keys() {
-            self.pd_client.wl().put_node(self.id(), new_node(id, "".to_owned())).unwrap();
-            self.pd_client.wl().put_store(self.id(), new_store(id, id)).unwrap();
+            self.pd_client.wl().put_store(self.id(), new_store(id, "".to_owned())).unwrap();
         }
     }
 
@@ -418,7 +415,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {
         let status_cmd = new_region_detail_cmd();
-        let peer = new_peer(peer_id, peer_id, peer_id);
+        let peer = new_peer(peer_id, peer_id);
         let req = new_status_request(region_id, peer, status_cmd);
         let res = self.call_command(req, Duration::from_secs(3));
         assert!(res.is_ok(), format!("{:?}", res));

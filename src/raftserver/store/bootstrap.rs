@@ -9,7 +9,7 @@ const INIT_EPOCH_VER: u64 = 1;
 const INIT_EPOCH_CONF_VER: u64 = 1;
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
-pub fn bootstrap_store(engine: &DB, cluster_id: u64, node_id: u64, store_id: u64) -> Result<()> {
+pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::new();
 
     let mut count: u32 = 0;
@@ -27,7 +27,6 @@ pub fn bootstrap_store(engine: &DB, cluster_id: u64, node_id: u64, store_id: u64
     let ident_key = keys::store_ident_key();
 
     ident.set_cluster_id(cluster_id);
-    ident.set_node_id(node_id);
     ident.set_store_id(store_id);
 
     engine.put_msg(&ident_key, &ident)
@@ -47,7 +46,6 @@ pub fn clear_region(engine: &DB, region_id: u64) -> Result<()> {
 
 // Bootstrap first region.
 pub fn bootstrap_region(engine: &DB,
-                        node_id: u64,
                         store_id: u64,
                         region_id: u64,
                         peer_id: u64)
@@ -60,7 +58,6 @@ pub fn bootstrap_region(engine: &DB,
     region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
     let mut peer = metapb::Peer::new();
-    peer.set_node_id(node_id);
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
     region.mut_peers().push(peer);

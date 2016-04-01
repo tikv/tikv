@@ -63,8 +63,7 @@ impl<T: PdClient> Transport for ServerTransport<T> {
             return self.store_handle.as_ref().unwrap().ch.send(StoreMsg::RaftMessage(msg));
         }
 
-        let to_node_id = msg.get_to_peer().get_node_id();
-        let node = try!(self.pd_client.rl().get_node(self.cluster_id, to_node_id));
+        let store = try!(self.pd_client.rl().get_store(self.cluster_id, to_store_id));
 
         let mut req = Message::new();
         req.set_msg_type(MessageType::Raft);
@@ -72,10 +71,10 @@ impl<T: PdClient> Transport for ServerTransport<T> {
 
         self.ch
             .send(Msg::SendPeer {
-                addr: node.get_address().to_owned(),
+                addr: store.get_address().to_owned(),
                 data: ConnData::new(self.alloc_msg_id(), req),
             })
-            .map_err(|e| raft_other(format!("send peer to {} err {:?}", node.get_address(), e)))
+            .map_err(|e| raft_other(format!("send peer to {} err {:?}", store.get_address(), e)))
     }
 
     // Send RaftMessage to specified store, the store must exist in current node.
