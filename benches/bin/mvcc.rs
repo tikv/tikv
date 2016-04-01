@@ -2,8 +2,9 @@ use test::BenchSamples;
 use tempdir::TempDir;
 
 use test_util::*;
-use tikv::storage::{self, Dsn, Mutation, Key, KvContext};
+use tikv::storage::{self, Dsn, Mutation, Key};
 use tikv::storage::txn::TxnStore;
+use kvproto::kvrpcpb::Context;
 
 use super::print_result;
 
@@ -19,24 +20,24 @@ fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
 
     for (k, v) in kvs.take(100000) {
         let mut ts = ts_generator.next().unwrap();
-        store.prewrite(KvContext::none(),
+        store.prewrite(Context::new(),
                        vec![Mutation::Put((Key::from_raw(k.clone()), v))],
                        k.clone(),
                        ts)
              .expect("");
-        store.commit(KvContext::none(),
+        store.commit(Context::new(),
                      vec![Key::from_raw(k.clone())],
                      ts,
                      ts_generator.next().unwrap())
              .expect("");
 
         ts = ts_generator.next().unwrap();
-        store.prewrite(KvContext::none(),
+        store.prewrite(Context::new(),
                        vec![Mutation::Delete(Key::from_raw(k.clone()))],
                        k.clone(),
                        ts)
              .expect("");
-        store.commit(KvContext::none(),
+        store.commit(Context::new(),
                      vec![Key::from_raw(k.clone())],
                      ts,
                      ts_generator.next().unwrap())
@@ -46,7 +47,7 @@ fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
     kvs = KvGenerator::new(100, 1000);
     bench!{
         let (k, _) = kvs.next().unwrap();
-        assert!(store.scan(KvContext::none(),
+        assert!(store.scan(Context::new(),
                            Key::from_raw(k.clone()),
                            1,
                            ts_generator.next().unwrap())
