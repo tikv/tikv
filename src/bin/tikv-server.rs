@@ -22,8 +22,8 @@ use tikv::storage::{Storage, Dsn};
 use tikv::util::{self, logger};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
-use tikv::server::{ServerTransport, MockTransport};
-use tikv::pd::{PdRpcClient, new_rpc_client};
+use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
+use tikv::pd::new_rpc_client;
 
 const MEM_DSN: &'static str = "mem";
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -42,12 +42,11 @@ fn initial_log(matches: &Matches) {
     util::init_log(log_filter).unwrap();
 }
 
-type RaftTransport = ServerTransport<PdRpcClient>;
 
 fn build_raftkv(matches: &Matches,
                 ch: SendCh,
                 addr: String)
-                -> (Storage, Arc<RwLock<RaftTransport>>) {
+                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>) {
     let pd_addr = matches.opt_str("pd").expect("raftkv needs pd client");
     let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
     let id = matches.opt_str("I").expect("raftkv requires cluster id");
@@ -69,8 +68,9 @@ fn build_raftkv(matches: &Matches,
 
     let mut node = Node::new(&cfg, pd_client, trans.clone());
     node.start(engine).unwrap();
+    let raft_router = node.raft_store_router();
 
-    (create_raft_storage(node).unwrap(), trans)
+    (create_raft_storage(node).unwrap(), raft_router)
 }
 
 fn get_store_path(matches: &Matches) -> String {
@@ -89,8 +89,8 @@ fn get_store_path(matches: &Matches) -> String {
 
 fn run_local_server(listener: TcpListener, store: Storage) {
     let mut event_loop = create_event_loop().unwrap();
-    let trans = Arc::new(RwLock::new(MockTransport));
-    let mut svr = Server::new(&mut event_loop, listener, store, trans).unwrap();
+    let router = Arc::new(RwLock::new(MockRaftStoreRouter));
+    let mut svr = Server::new(&mut event_loop, listener, store, router).unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
@@ -98,8 +98,10 @@ fn run_raft_server(listener: TcpListener, matches: &Matches) {
     let mut event_loop = create_event_loop().unwrap();
     let ch = SendCh::new(event_loop.channel());
 
-    let (store, trans) = build_raftkv(&matches, ch, format!("{}", listener.local_addr().unwrap()));
-    let mut svr = Server::new(&mut event_loop, listener, store, trans).unwrap();
+    let (store, raft_router) = build_raftkv(&matches,
+                                            ch,
+                                            format!("{}", listener.local_addr().unwrap()));
+    let mut svr = Server::new(&mut event_loop, listener, store, raft_router).unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 

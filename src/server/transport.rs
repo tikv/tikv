@@ -1,7 +1,6 @@
-use std::option::Option;
 use std::sync::{Arc, RwLock, Mutex};
 
-use raftstore::store::{Msg as StoreMsg, Transport, Callback, StoreSendCh, SendCh};
+use raftstore::store::{Msg as StoreMsg, Transport, Callback, SendCh};
 use raftstore::{Result as RaftStoreResult, other as raft_other};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
@@ -11,10 +10,58 @@ use util::HandyRwLock;
 use super::{SendCh as ServerSendCh, Msg, ConnData};
 
 
+pub trait RaftStoreRouter {
+    // Send RaftMessage to local store.
+    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
+
+    // Send RaftCmdRequest to local store.
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()>;
+}
+
+pub struct ServerRaftStoreRouter {
+    pub store_id: u64,
+    pub ch: SendCh,
+}
+
+impl ServerRaftStoreRouter {
+    pub fn new(store_id: u64, ch: SendCh) -> ServerRaftStoreRouter {
+        ServerRaftStoreRouter {
+            store_id: store_id,
+            ch: ch,
+        }
+    }
+
+    fn check_store(&self, store_id: u64) -> RaftStoreResult<()> {
+        if store_id != self.store_id {
+            return Err(raft_other(format!("invalid store {} != {}", store_id, self.store_id)));
+        }
+        Ok(())
+    }
+}
+
+impl RaftStoreRouter for ServerRaftStoreRouter {
+    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+        try!(self.check_store(msg.get_to_peer().get_store_id()));
+
+        try!(self.ch.send(StoreMsg::RaftMessage(msg)));
+
+        Ok(())
+    }
+
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
+        try!(self.check_store(req.get_header().get_peer().get_store_id()));
+
+        try!(self.ch.send(StoreMsg::RaftCmd {
+            request: req,
+            callback: cb,
+        }));
+
+        Ok(())
+    }
+}
+
 pub struct ServerTransport<T: PdClient> {
     cluster_id: u64,
-
-    store_handle: Option<StoreSendCh>,
 
     pd_client: Arc<RwLock<T>>,
     ch: ServerSendCh,
@@ -25,18 +72,9 @@ impl<T: PdClient> ServerTransport<T> {
     pub fn new(cluster_id: u64, ch: ServerSendCh, pd_client: Arc<RwLock<T>>) -> ServerTransport<T> {
         ServerTransport {
             cluster_id: cluster_id,
-            store_handle: None,
             pd_client: pd_client.clone(),
             ch: ch,
             msg_id: Mutex::new(0),
-        }
-    }
-
-    fn get_sendch(&self) -> RaftStoreResult<&SendCh> {
-        match self.store_handle {
-            None => Err(raft_other("current sender not set")),
-
-            Some(ref h) => Ok(&h.ch),
         }
     }
 
@@ -48,20 +86,8 @@ impl<T: PdClient> ServerTransport<T> {
 }
 
 impl<T: PdClient> Transport for ServerTransport<T> {
-    fn set_sendch(&mut self, ch: StoreSendCh) {
-        self.store_handle = Some(ch);
-    }
-
-    fn remove_sendch(&mut self) -> Option<StoreSendCh> {
-        self.store_handle.take()
-    }
-
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
-        if self.store_handle.iter().any(|h| h.store_id == to_store_id) {
-            // use store send channel directly.
-            return self.store_handle.as_ref().unwrap().ch.send(StoreMsg::RaftMessage(msg));
-        }
 
         let store = try!(self.pd_client.rl().get_store(self.cluster_id, to_store_id));
 
@@ -76,52 +102,18 @@ impl<T: PdClient> Transport for ServerTransport<T> {
             })
             .map_err(|e| raft_other(format!("send peer to {} err {:?}", store.get_address(), e)))
     }
-
-    // Send RaftMessage to specified store, the store must exist in current node.
-    // Unlike Transport trait Send, this function can only send message to local store.
-    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        let ch = try!(self.get_sendch());
-
-        try!(ch.send(StoreMsg::RaftMessage(msg)));
-
-        Ok(())
-    }
-
-    // Send RaftCmdRequest to specified store, the store must exist in current node.
-    // Unlike Transport trait Send, this function can only send message to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        let ch = try!(self.get_sendch());
-
-        try!(ch.send(StoreMsg::RaftCmd {
-            request: req,
-            callback: cb,
-        }));
-
-        Ok(())
-    }
 }
 
-// FakeTransport is used for Memory and RocksDB to pass compile.
-pub struct MockTransport;
 
-impl Transport for MockTransport {
-    fn set_sendch(&mut self, _: StoreSendCh) {
-        unimplemented!();
-    }
+// MockRaftStoreRouter is used for Memory and RocksDB to pass compile.
+pub struct MockRaftStoreRouter;
 
-    fn remove_sendch(&mut self) -> Option<StoreSendCh> {
-        unimplemented!();
-    }
-
+impl RaftStoreRouter for MockRaftStoreRouter {
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         unimplemented!();
     }
 
     fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
-        unimplemented!();
-    }
-
-    fn send(&self, _: RaftMessage) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }
