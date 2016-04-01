@@ -16,7 +16,7 @@ TiKV uses Raft to support Geo-Replication. We have ported etcd's raft implementa
 - __Coprocessor support__  
 
 
-- __Works with [TiDB](https://github.com/pingcap/tidb)__  
+- __Working with [TiDB](https://github.com/pingcap/tidb)__  
 
 
 
