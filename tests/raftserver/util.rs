@@ -171,26 +171,18 @@ pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
 
 }
 
-pub fn new_peer(node_id: u64, store_id: u64, peer_id: u64) -> metapb::Peer {
+pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::new();
-    peer.set_node_id(node_id);
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
     peer
 }
 
-pub fn new_node(node_id: u64, addr: String) -> metapb::Node {
-    let mut node = metapb::Node::new();
-    node.set_id(node_id);
-    node.set_address(addr);
 
-    node
-}
-
-pub fn new_store(node_id: u64, store_id: u64) -> metapb::Store {
+pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
     let mut store = metapb::Store::new();
-    store.set_node_id(node_id);
     store.set_id(store_id);
+    store.set_address(addr);
 
     store
 }

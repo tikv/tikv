@@ -157,10 +157,9 @@ impl Peer {
 
         let raft_group = try!(RawNode::new(&raft_cfg, storage.clone(), &[]));
 
-        let node_id = store.node_id();
         let mut peer = Peer {
             engine: store.engine(),
-            peer: util::new_peer(node_id, store_id, peer_id),
+            peer: util::new_peer(store_id, peer_id),
             region_id: region.get_id(),
             leader_id: raft::INVALID_ID,
             storage: storage,

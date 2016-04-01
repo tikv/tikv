@@ -31,8 +31,7 @@ pub trait PdClient: Send + Sync {
     // and must remove their created local region data themselves.
     fn bootstrap_cluster(&mut self,
                          cluster_id: u64,
-                         node: metapb::Node,
-                         stores: Vec<metapb::Store>,
+                         stores: metapb::Store,
                          region: metapb::Region)
                          -> Result<()>;
 
@@ -45,28 +44,9 @@ pub trait PdClient: Send + Sync {
     // Allocate a unique positive id.
     fn alloc_id(&mut self) -> Result<u64>;
 
-    // When the node starts, or some node information changed, it
-    // uses put_node to inform pd.
-    fn put_node(&mut self, cluster_id: u64, node: metapb::Node) -> Result<()>;
-
     // When the store starts, or some store information changed, it
     // uses put_store to inform pd.
     fn put_store(&mut self, cluster_id: u64, store: metapb::Store) -> Result<()>;
-
-    // Delete the node from cluster, it is a very dangerous operation
-    // and can not be recoverable, all the data belongs to this node
-    // will be removed and we can't re-add this node again.
-    // Sometimes, the node may crash and restart again, if the node is
-    // off-line for a long time, pd will try to do auto-balance and then
-    // delete the node.
-    fn delete_node(&mut self, cluster_id: u64, node_id: u64) -> Result<()>;
-
-    // Delete the store from cluster, it is a very dangerous operation
-    // and can not be recoverable, all the data belongs to this store
-    // will be removed and we can't re-add this store again.
-    // If the store is off-line for a long time, pd will try to do
-    // auto-balance and then delete the store.
-    fn delete_store(&mut self, cluster_id: u64, store_id: u64) -> Result<()>;
 
     // We don't need to support region and peer put/delete,
     // because pd knows all region and peers itself.
@@ -78,9 +58,6 @@ pub trait PdClient: Send + Sync {
     // When region merging, pd knows which two regions will be merged and which region
     // and peers will be removed.
     // When doing auto-balance, pd determines how to move the region from one store to another.
-
-    // Get node information.
-    fn get_node(&self, cluster_id: u64, node_id: u64) -> Result<metapb::Node>;
 
     // Get store information.
     fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store>;

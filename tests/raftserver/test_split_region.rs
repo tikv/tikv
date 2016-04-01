@@ -138,9 +138,9 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let middle_key = left.get_end_key();
     let leader = cluster.leader_of_region(left.get_id()).unwrap();
-    let node_id = leader.get_node_id();
+    let store_id = leader.get_store_id();
     let mut size = 0;
-    cluster.engines[&node_id]
+    cluster.engines[&store_id]
         .scan(&data_key(b""),
               &data_key(middle_key),
               &mut |k, v| {

@@ -170,10 +170,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &self.ident
     }
 
-    pub fn node_id(&self) -> u64 {
-        self.ident.get_node_id()
-    }
-
     pub fn store_id(&self) -> u64 {
         self.ident.get_store_id()
     }
