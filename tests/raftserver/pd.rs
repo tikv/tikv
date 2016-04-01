@@ -17,75 +17,40 @@ struct Store {
     region_ids: HashSet<u64>,
 }
 
-#[derive(Default, Debug)]
-struct Node {
-    node: metapb::Node,
-    store_ids: HashSet<u64>,
-}
-
-impl Node {
-    pub fn new(node: metapb::Node, stores: &[metapb::Store]) -> Node {
-        let mut ids = HashSet::new();
-        for v in stores {
-            let id = v.get_id();
-            ids.insert(id);
-        }
-
-        Node {
-            node: node,
-            store_ids: ids,
-        }
-    }
-}
-
 struct Cluster {
     meta: metapb::Cluster,
-    nodes: HashMap<u64, Node>,
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
     region_id_keys: HashMap<u64, Key>,
 }
 
 impl Cluster {
-    pub fn new(cluster_id: u64,
-               node: metapb::Node,
-               stores: Vec<metapb::Store>,
-               region: metapb::Region)
-               -> Cluster {
+    pub fn new(cluster_id: u64, store: metapb::Store, region: metapb::Region) -> Cluster {
         let mut meta = metapb::Cluster::new();
         meta.set_id(cluster_id);
         meta.set_max_peer_number(5);
 
         let mut c = Cluster {
             meta: meta,
-            nodes: HashMap::new(),
             stores: HashMap::new(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
         };
 
-        let node_id = node.get_id();
-        c.nodes.insert(node_id, Node::new(node, &stores));
-
         // Now, some tests use multi peers in bootstrap,
         // disable this check.
         // TODO: enable this check later.
         // assert_eq!(region.get_peers().len(), 1);
-        let first_store_id = region.get_peers()[0].get_store_id();
+        let store_id = store.get_id();
+        let mut s = Store {
+            store: store,
+            region_ids: HashSet::new(),
+        };
 
-        for v in stores {
-            let store_id = v.get_id();
-            let mut store = Store {
-                store: v,
-                region_ids: HashSet::new(),
-            };
 
-            if store_id == first_store_id {
-                store.region_ids.insert(region.get_id());
-            }
+        s.region_ids.insert(region.get_id());
 
-            c.stores.insert(store_id, store);
-        }
+        c.stores.insert(store_id, s);
 
         c.region_id_keys.insert(region.get_id(), enc_end_key(&region));
         c.regions.insert(enc_end_key(&region), region);
@@ -93,50 +58,10 @@ impl Cluster {
         c
     }
 
-    fn put_node(&mut self, node: metapb::Node) -> Result<()> {
-        let mut n = self.nodes.entry(node.get_id()).or_insert_with(Node::default);
-        n.node = node;
-        Ok(())
-    }
-
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
-        let mut n = self.nodes.get_mut(&store.get_node_id()).unwrap();
         let mut s = self.stores.entry(store.get_id()).or_insert_with(Store::default);
-        n.store_ids.insert(store.get_id());
         s.store = store;
         Ok(())
-    }
-
-    fn delete_node(&mut self, node_id: u64) -> Result<()> {
-        {
-            let n = self.nodes.get(&node_id).unwrap();
-            if !n.store_ids.is_empty() {
-                return Err(Error::DeleteNotEmptyNode(node_id));
-            }
-        }
-
-        self.nodes.remove(&node_id);
-        Ok(())
-    }
-
-    fn delete_store(&mut self, store_id: u64) -> Result<()> {
-        {
-            let s = self.stores.get(&store_id).unwrap();
-            if !s.region_ids.is_empty() {
-                return Err(Error::DeleteNotEmptyStore(store_id));
-            }
-
-            let mut n = self.nodes.get_mut(&s.store.get_node_id()).unwrap();
-            n.store_ids.remove(&store_id);
-        }
-
-        self.stores.remove(&store_id);
-
-        Ok(())
-    }
-
-    fn get_node(&self, node_id: u64) -> Result<metapb::Node> {
-        Ok(self.nodes.get(&node_id).unwrap().node.clone())
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
@@ -273,15 +198,14 @@ impl TestPdClient {
 impl PdClient for TestPdClient {
     fn bootstrap_cluster(&mut self,
                          cluster_id: u64,
-                         node: metapb::Node,
-                         stores: Vec<metapb::Store>,
+                         store: metapb::Store,
                          region: metapb::Region)
                          -> Result<()> {
         if self.is_cluster_bootstrapped(cluster_id).unwrap() {
             return Err(Error::ClusterBootstrapped(cluster_id));
         }
 
-        self.clusters.insert(cluster_id, Cluster::new(cluster_id, node, stores, region));
+        self.clusters.insert(cluster_id, Cluster::new(cluster_id, store, region));
 
         Ok(())
     }
@@ -295,29 +219,9 @@ impl PdClient for TestPdClient {
         Ok(self.base_id)
     }
 
-    fn put_node(&mut self, cluster_id: u64, node: metapb::Node) -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster(cluster_id));
-        cluster.put_node(node)
-    }
-
     fn put_store(&mut self, cluster_id: u64, store: metapb::Store) -> Result<()> {
         let mut cluster = try!(self.get_mut_cluster(cluster_id));
         cluster.put_store(store)
-    }
-
-    fn delete_node(&mut self, cluster_id: u64, node_id: u64) -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster(cluster_id));
-        cluster.delete_node(node_id)
-    }
-
-    fn delete_store(&mut self, cluster_id: u64, store_id: u64) -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster(cluster_id));
-        cluster.delete_store(store_id)
-    }
-
-    fn get_node(&self, cluster_id: u64, node_id: u64) -> Result<metapb::Node> {
-        let cluster = try!(self.get_cluster(cluster_id));
-        cluster.get_node(node_id)
     }
 
     fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store> {

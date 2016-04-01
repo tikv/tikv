@@ -30,7 +30,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_2 = cluster.get_engine(2);
     must_get_none(&engine_2, b"a1");
     // add peer (2,2,2) to region 1.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2, 2));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
 
     let (key, value) = (b"a2", b"v2");
     cluster.put(key, value);
@@ -53,7 +53,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let change_peer = new_admin_request(1,
                                         &epoch,
                                         new_change_peer_cmd(ConfChangeType::AddNode,
-                                                            new_peer(2, 2, 2)));
+                                                            new_peer(2, 2)));
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't add same peer twice");
@@ -65,7 +65,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let change_peer = new_admin_request(1,
                                         &stale_epoch,
                                         new_change_peer_cmd(ConfChangeType::AddNode,
-                                                            new_peer(5, 5, 5)));
+                                                            new_peer(5, 5)));
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "We can't change peer with stale epoch");
@@ -75,9 +75,9 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_5, b"a1");
 
     // add peer (3, 3, 3) to region 1.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3, 3));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
     // Remove peer (2, 2, 2) from region 1.
-    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2, 2));
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2));
 
     let (key, value) = (b"a3", b"v3");
     cluster.put(key, value);
@@ -101,7 +101,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let change_peer = new_admin_request(1,
                                         &epoch,
                                         new_change_peer_cmd(ConfChangeType::RemoveNode,
-                                                            new_peer(2, 2, 2)));
+                                                            new_peer(2, 2)));
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't remove same peer twice");
@@ -109,7 +109,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let change_peer = new_admin_request(1,
                                         &stale_epoch,
                                         new_change_peer_cmd(ConfChangeType::RemoveNode,
-                                                            new_peer(3, 3, 3)));
+                                                            new_peer(3, 3)));
     let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "We can't change peer with stale epoch");
@@ -118,7 +118,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"a3", b"v3");
 
     // add peer 2 then remove it again.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2, 2));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
 
     // Force update a2 to check whether peer 2 added ok and received the snapshot.
     let (key, value) = (b"a2", b"v2");
@@ -132,12 +132,12 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"a3", b"v3");
 
     // Remove peer (2, 2, 2) from region 1.
-    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2, 2));
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2));
 
     // add peer (2, 2, 4) to region 1.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2, 4));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 4));
     // Remove peer (3, 3, 3) from region 1.
-    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(3, 3, 3));
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(3, 3));
 
     let (key, value) = (b"a4", b"v4");
     cluster.put(key, value);
@@ -159,7 +159,7 @@ fn new_conf_change_peer(store: &metapb::Store,
                         pd_client: &Arc<RwLock<TestPdClient>>)
                         -> metapb::Peer {
     let peer_id = pd_client.wl().alloc_id().unwrap();
-    new_peer(store.get_node_id(), store.get_id(), peer_id)
+    new_peer(store.get_id(), peer_id)
 }
 
 fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -188,7 +188,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let peer2 = new_conf_change_peer(&stores[1], &pd_client);
-    let engine_2 = cluster.get_engine(peer2.get_node_id());
+    let engine_2 = cluster.get_engine(peer2.get_store_id());
     assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
     // add new peer to first region.
     cluster.change_peer(region_id, ConfChangeType::AddNode, peer2.clone());
@@ -211,7 +211,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     // now peer 3 must have v1, v2 and v3
-    let engine_3 = cluster.get_engine(peer3.get_node_id());
+    let engine_3 = cluster.get_engine(peer3.get_store_id());
     must_get_equal(&engine_3, b"a1", b"v1");
     must_get_equal(&engine_3, b"a2", b"v2");
     must_get_equal(&engine_3, b"a3", b"v3");
@@ -229,7 +229,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     // now peer4 must have v1, v2, v3, v4, we check v1 and v4 here.
-    let engine_2 = cluster.get_engine(peer4.get_node_id());
+    let engine_2 = cluster.get_engine(peer4.get_store_id());
 
     must_get_equal(&engine_2, b"a1", b"v1");
     must_get_equal(&engine_2, b"a4", b"v4");
@@ -298,7 +298,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
                   .unwrap();
 
     let peer = new_conf_change_peer(&stores[i], &pd_client);
-    let engine = cluster.get_engine(peer.get_node_id());
+    let engine = cluster.get_engine(peer.get_store_id());
     must_get_none(&engine, b"a1");
 
     cluster.change_peer(region_id, ConfChangeType::AddNode, peer.clone());

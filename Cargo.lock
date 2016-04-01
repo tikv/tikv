@@ -88,7 +88,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#a7b572dbc84e124428310d73fdd23c28aaf5ed98"
+source = "git+https://github.com/pingcap/kvproto#8c1f02e7ae3d14ee56558a17fd540fd66ee0df94"
 dependencies = [
  "protobuf 1.0.18 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]
@@ -289,3 +289,4 @@ dependencies = [
  "winapi 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi-build 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
