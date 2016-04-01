@@ -8,7 +8,7 @@ use mio::{self, NotifyError};
 pub mod store;
 pub mod errors;
 pub mod coprocessor;
-pub use self::errors::{Result, Error, other};
+pub use self::errors::{Result, Error};
 
 const MAX_SEND_RETRY_CNT: i32 = 20;
 
@@ -28,11 +28,11 @@ pub fn send_msg<M: Send>(ch: &mio::Sender<M>, mut msg: M) -> Result<()> {
                 continue;
             }
             e => {
-                return Err(other(format!("{:?}", e)));
+                return Err(box_err!("{:?}", e));
             }
         }
     }
 
     // TODO: if we refactor with quick_error, we can use NotifyError instead later.
-    Err(other("notify channel is full"))
+    Err(box_err!("notify channel is full"))
 }

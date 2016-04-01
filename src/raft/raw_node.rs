@@ -207,7 +207,7 @@ impl<T: Storage> RawNode<T> {
 
     // ProposeConfChange proposes a config change.
     pub fn propose_conf_change(&mut self, cc: ConfChange) -> Result<()> {
-        let data = try!(protobuf::Message::write_to_bytes(&cc));
+        let data = box_try!(protobuf::Message::write_to_bytes(&cc));
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgPropose);
         let mut e = Entry::new();

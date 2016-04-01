@@ -10,6 +10,7 @@ pub use log::LogLevelFilter;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 pub mod codec;
+#[macro_use]
 pub mod macros;
 pub mod logger;
 

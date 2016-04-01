@@ -24,6 +24,7 @@ quick_error!{
             display("cluster {} is not bootstrapped", cluster_id)
         }
         Other(err: Box<error::Error + Sync + Send>) {
+            from()
             cause(err.as_ref())
             description(err.description())
         }
@@ -32,9 +33,3 @@ quick_error!{
 
 
 pub type Result<T> = result::Result<T, Error>;
-
-pub fn other<T>(err: T) -> Error
-    where T: Into<Box<error::Error + Sync + Send + 'static>>
-{
-    Error::Other(err.into())
-}

@@ -11,7 +11,7 @@ use kvproto::raftpb::{Entry, Snapshot, HardState, ConfState};
 use kvproto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
 use util::HandyRwLock;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
-use raftstore::{Result, Error, other};
+use raftstore::{Result, Error};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable, Mutable};
 
@@ -221,7 +221,7 @@ impl PeerStorage {
                                             &keys::region_info_key(self.get_region_id())).
         and_then(|res| {
             match res {
-                None => return Err(other("could not find region info")),
+                None => Err(box_err!("could not find region info")),
                 Some(region) => Ok(region),
             }
         }));
@@ -258,7 +258,7 @@ impl PeerStorage {
         snap_data.set_data(protobuf::RepeatedField::from_vec(data));
 
         let mut v = vec![];
-        try!(snap_data.write_to_vec(&mut v));
+        box_try!(snap_data.write_to_vec(&mut v));
         snapshot.set_data(v);
 
         debug!("generate snapshot ok for region {}", self.get_region_id());
@@ -316,7 +316,7 @@ impl PeerStorage {
 
         let region = snap_data.get_region();
         if region.get_id() != region_id {
-            return Err(other(format!("mismatch region id {} != {}", region_id, region.get_id())));
+            return Err(box_err!("mismatch region id {} != {}", region_id, region.get_id()));
         }
 
         // Delete everything in the region for this peer.
@@ -357,11 +357,11 @@ impl PeerStorage {
                self.get_region_id());
 
         if compact_index <= self.truncated_state.get_index() {
-            return Err(other("try to truncate compacted entries"));
+            return Err(box_err!("try to truncate compacted entries"));
         } else if compact_index > self.applied_index {
-            return Err(other(format!("compact index {} > applied index {}",
-                                     compact_index,
-                                     self.applied_index)));
+            return Err(box_err!("compact index {} > applied index {}",
+                                compact_index,
+                                self.applied_index));
         }
 
         let term = try!(self.term(compact_index - 1));

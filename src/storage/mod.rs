@@ -183,7 +183,7 @@ impl Storage {
     pub fn stop(self) -> Result<()> {
         try!(self.tx.send(Message::Close));
         if self.thread.join().is_err() {
-            return Err(Error::other("failed to wait storage thread quit"));
+            return Err(box_err!("failed to wait storage thread quit"));
         }
         Ok(())
     }
@@ -361,14 +361,6 @@ quick_error! {
             cause(err.as_ref())
             description(err.description())
         }
-    }
-}
-
-impl Error {
-    pub fn other<T>(err: T) -> Error
-        where T: Into<Box<error::Error + Sync + Send + 'static>>
-    {
-        Error::Other(err.into())
     }
 }
 

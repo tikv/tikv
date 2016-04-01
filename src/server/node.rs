@@ -8,7 +8,7 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
                        StoreSendCh};
-use super::{Result, other};
+use super::Result;
 use util::HandyRwLock;
 use super::config::Config;
 use storage::{Storage, Engine, RaftKv};
@@ -70,9 +70,9 @@ impl<T, Trans> Node<T, Trans>
             store_id = try!(self.bootstrap_store(&engine));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
-            return Err(other(format!("store {} is not empty, but cluster {} is not bootstrapped",
-                                     store_id,
-                                     self.cluster_id)));
+            return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped",
+                                store_id,
+                                self.cluster_id));
         }
 
         self.store.set_id(store_id);
@@ -113,14 +113,14 @@ impl<T, Trans> Node<T, Trans>
 
         let ident = res.unwrap();
         if ident.get_cluster_id() != self.cluster_id {
-            return Err(other(format!("store ident {:?} has mismatched cluster id with {}",
-                                     ident,
-                                     self.cluster_id)));
+            return Err(box_err!("store ident {:?} has mismatched cluster id with {}",
+                                ident,
+                                self.cluster_id));
         }
 
         let store_id = ident.get_store_id();
         if store_id == INVALID_ID {
-            return Err(other(format!("invalid store ident {:?}", ident)));
+            return Err(box_err!("invalid store ident {:?}", ident));
         }
 
         Ok(store_id)
@@ -159,7 +159,7 @@ impl<T, Trans> Node<T, Trans>
                 Ok(())
             }
             // TODO: should we clean region for other errors too?
-            Err(e) => Err(other(format!("bootstrap cluster {} err: {:?}", self.cluster_id, e))),
+            Err(e) => Err(box_err!("bootstrap cluster {} err: {:?}", self.cluster_id, e)),
             Ok(_) => {
                 info!("bootstrap cluster {} ok", self.cluster_id);
                 Ok(())
@@ -171,7 +171,7 @@ impl<T, Trans> Node<T, Trans>
         let meta = try!(self.pd_client.rl().get_cluster_meta(self.cluster_id));
 
         if self.store_handle.is_some() {
-            return Err(other(format!("{} is already started", store_id)));
+            return Err(box_err!("{} is already started", store_id));
         }
 
         let cfg = self.store_cfg.clone();
@@ -198,7 +198,7 @@ impl<T, Trans> Node<T, Trans>
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
         match self.trans.wl().remove_sendch() {
-            None => return Err(other(format!("stop invalid store with id {}", store_id))),
+            None => return Err(box_err!("stop invalid store with id {}", store_id)),
             Some(ch) => try!(ch.ch.send(Msg::Quit)),
         }
 
@@ -206,7 +206,7 @@ impl<T, Trans> Node<T, Trans>
         let h = self.store_handle.take().unwrap();
 
         if let Err(e) = h.join() {
-            return Err(other(format!("join store {} thread err {:?}", store_id, e)));
+            return Err(box_err!("join store {} thread err {:?}", store_id, e));
         }
 
         Ok(())

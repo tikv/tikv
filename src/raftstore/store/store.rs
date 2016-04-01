@@ -19,7 +19,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusRespo
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
 
-use raftstore::{Result, other, Error};
+use raftstore::{Result, Error};
 use kvproto::metapb;
 use super::util;
 use super::{SendCh, Msg, Tick};
@@ -85,7 +85,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let ident: StoreIdent = try!(load_store_ident(engine.as_ref()).and_then(|res| {
             match res {
-                None => Err(other("store must be bootstrapped first")),
+                None => Err(box_err!("store must be bootstrapped first")),
                 Some(ident) => Ok(ident),
             }
         }));
@@ -377,7 +377,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut resp = RaftCmdResponse::new();
         let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {
-                bind_error(&mut resp, other("missing request uuid"));
+                bind_error(&mut resp, Error::Other("missing request uuid".into()));
                 return cb.call_box((resp,));
             }
             Some(uuid) => {
@@ -416,12 +416,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer_id = msg.get_header().get_peer().get_id();
         if peer.peer_id() != peer_id {
             bind_error(&mut resp,
-                       other(format!("mismatch peer id {} != {}", peer.peer_id(), peer_id)));
+                       box_err!("mismatch peer id {} != {}", peer.peer_id(), peer_id));
             return cb.call_box((resp,));
         }
 
         if peer.pending_cmds.contains_key(&uuid) {
-            bind_error(&mut resp, other(format!("duplicated uuid {:?}", uuid)));
+            bind_error(&mut resp, box_err!("duplicated uuid {:?}", uuid));
             return cb.call_box((resp,));
         }
 
@@ -638,7 +638,7 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
                                              -> Result<mio::Timeout> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
-    event_loop.timeout_ms(tick, delay).map_err(|e| other(format!("register timer err: {:?}", e)))
+    event_loop.timeout_ms(tick, delay).map_err(|e| box_err!("register timer err: {:?}", e))
 }
 
 fn new_compact_log_request(region_id: u64,
@@ -735,8 +735,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut response = try!(match cmd_type {
             StatusCmdType::RegionLeader => self.execute_region_leader(request),
             StatusCmdType::RegionDetail => self.execute_region_detail(request),
-            StatusCmdType::StoreStats => Err(other("unsupported store statistic now")),
-            StatusCmdType::InvalidStatus => Err(other("invalid status command!")),
+            StatusCmdType::StoreStats => Err(box_err!("unsupported store statistic now")),
+            StatusCmdType::InvalidStatus => Err(box_err!("invalid status command!")),
         });
         response.set_cmd_type(cmd_type);
 
