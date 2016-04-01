@@ -2,7 +2,7 @@ use std::option::Option;
 use std::sync::{Arc, RwLock, Mutex};
 
 use raftstore::store::{Msg as StoreMsg, Transport, Callback, StoreSendCh, SendCh};
-use raftstore::{Result as RaftStoreResult, other as raft_other};
+use raftstore::Result as RaftStoreResult;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -34,8 +34,7 @@ impl<T: PdClient> ServerTransport<T> {
 
     fn get_sendch(&self) -> RaftStoreResult<&SendCh> {
         match self.store_handle {
-            None => Err(raft_other("current sender not set")),
-
+            None => Err(box_err!("current sender not set")),
             Some(ref h) => Ok(&h.ch),
         }
     }
@@ -69,12 +68,13 @@ impl<T: PdClient> Transport for ServerTransport<T> {
         req.set_msg_type(MessageType::Raft);
         req.set_raft(msg);
 
-        self.ch
-            .send(Msg::SendPeer {
-                addr: store.get_address().to_owned(),
-                data: ConnData::new(self.alloc_msg_id(), req),
-            })
-            .map_err(|e| raft_other(format!("send peer to {} err {:?}", store.get_address(), e)))
+        if let Err(e) = self.ch.send(Msg::SendPeer {
+            addr: store.get_address().to_owned(),
+            data: ConnData::new(self.alloc_msg_id(), req),
+        }) {
+            return Err(box_err!("send peer to {} err {:?}", store.get_address(), e));
+        }
+        Ok(())
     }
 
     // Send RaftMessage to specified store, the store must exist in current node.

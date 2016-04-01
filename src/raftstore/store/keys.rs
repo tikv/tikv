@@ -2,7 +2,7 @@ use std::vec::Vec;
 
 use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
 
-use raftstore::{Result, other};
+use raftstore::Result;
 use kvproto::metapb::Region;
 use std::mem;
 
@@ -109,11 +109,11 @@ fn make_region_meta_key(region_id: u64, suffix: u8) -> Vec<u8> {
 // Decode region meta key, return the region key and meta suffix type.
 pub fn decode_region_meta_key(key: &[u8]) -> Result<(u64, u8)> {
     if REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>() + mem::size_of::<u8>() != key.len() {
-        return Err(other(format!("invalid region meta key length for key {:?}", key)));
+        return Err(box_err!("invalid region meta key length for key {:?}", key));
     }
 
     if !key.starts_with(REGION_META_PREFIX_KEY) {
-        return Err(other(format!("invalid region meta prefix for key {:?}", key)));
+        return Err(box_err!("invalid region meta prefix for key {:?}", key));
     }
 
     let region_id =
@@ -143,9 +143,9 @@ pub fn region_tombstone_key(region_id: u64) -> Vec<u8> {
 
 pub fn validate_data_key(key: &[u8]) -> Result<()> {
     if !key.starts_with(DATA_PREFIX_KEY) {
-        return Err(other(format!("invalid data key {:?}, must start with {}",
-                                 key,
-                                 DATA_PREFIX)));
+        return Err(box_err!("invalid data key {:?}, must start with {}",
+                            key,
+                            DATA_PREFIX));
     }
 
     Ok(())

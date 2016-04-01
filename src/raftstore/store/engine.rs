@@ -6,7 +6,7 @@ use rocksdb::rocksdb::Snapshot;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
 
-use raftstore::{Result, other};
+use raftstore::Result;
 
 pub fn new_engine(path: &str) -> Result<DB> {
     // TODO: set proper options here,
@@ -55,7 +55,7 @@ pub trait Peekable {
 
         let value = value.unwrap();
         if value.len() != 8 {
-            return Err(other(format!("need 8 bytes, but only got {}", value.len())));
+            return Err(box_err!("need 8 bytes, but only got {}", value.len()));
         }
 
         let n = BigEndian::read_u64(&value);
