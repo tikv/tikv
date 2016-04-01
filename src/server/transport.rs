@@ -77,16 +77,6 @@ impl<T: PdClient> Transport for ServerTransport<T> {
             .map_err(|e| raft_other(format!("send peer to {} err {:?}", store.get_address(), e)))
     }
 
-    // Send RaftMessage to specified store, the store must exist in current node.
-    // Unlike Transport trait Send, this function can only send message to local store.
-    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        let ch = try!(self.get_sendch());
-
-        try!(ch.send(StoreMsg::RaftMessage(msg)));
-
-        Ok(())
-    }
-
     // Send RaftCmdRequest to specified store, the store must exist in current node.
     // Unlike Transport trait Send, this function can only send message to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
@@ -110,10 +100,6 @@ impl Transport for MockTransport {
     }
 
     fn remove_sendch(&mut self) -> Option<StoreSendCh> {
-        unimplemented!();
-    }
-
-    fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         unimplemented!();
     }
 

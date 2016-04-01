@@ -28,10 +28,6 @@ pub trait Transport : Send + Sync {
     fn set_sendch(&mut self, StoreSendCh);
     fn remove_sendch(&mut self) -> Option<StoreSendCh>;
 
-    // Send RaftMessage to specified store, the store must exist in current node.
-    // Unlike  Send, this function can only send message to local store.
-    fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
-
     // Send RaftCmdRequest to specified store, the store must exist in current node.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> Result<()>;
 
