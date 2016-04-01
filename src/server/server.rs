@@ -16,12 +16,13 @@ use super::{Result, other};
 use util::HandyRwLock;
 use storage::Storage;
 use super::kv::StoreHandler;
+use super::transport::RaftStoreRouter;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const INVALID_TOKEN: Token = Token(0);
 
-pub fn create_event_loop<T: Transport>() -> Result<EventLoop<Server<T>>> {
+pub fn create_event_loop<T: RaftStoreRouter>() -> Result<EventLoop<Server<T>>> {
     let event_loop = try!(EventLoop::new());
     Ok(event_loop)
 }
@@ -32,7 +33,7 @@ pub fn bind(addr: &str) -> Result<TcpListener> {
     Ok(listener)
 }
 
-pub struct Server<T: Transport> {
+pub struct Server<T: RaftStoreRouter> {
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
     // In our raft server, a client with token 1 sends a raft command, we will
@@ -49,12 +50,12 @@ pub struct Server<T: Transport> {
     // addr -> Token
     peers: HashMap<String, Token>,
 
-    trans: Arc<RwLock<T>>,
+    raft_router: Arc<RwLock<T>>,
 
     store: StoreHandler,
 }
 
-impl<T: Transport> Server<T> {
+impl<T: RaftStoreRouter> Server<T> {
     // Create a server with already initialized engines.
     // Now some tests use 127.0.0.1:0 but we need real listening
     // address in Node before creating the Server, so we first
@@ -63,7 +64,7 @@ impl<T: Transport> Server<T> {
     pub fn new(event_loop: &mut EventLoop<Self>,
                listener: TcpListener,
                storage: Storage,
-               trans: Arc<RwLock<T>>)
+               raft_router: Arc<RwLock<T>>)
                -> Result<Server<T>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
@@ -80,7 +81,7 @@ impl<T: Transport> Server<T> {
             conns: HashMap::new(),
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             peers: HashMap::new(),
-            trans: trans,
+            raft_router: raft_router,
             store: store_handler,
         };
 
@@ -174,7 +175,7 @@ impl<T: Transport> Server<T> {
         let msg_type = msg.get_msg_type();
         match msg_type {
             MessageType::Raft => {
-                if let Err(e) = self.trans.rl().send_raft_msg(msg.take_raft()) {
+                if let Err(e) = self.raft_router.rl().send_raft_msg(msg.take_raft()) {
                     // Should we return error to let outer close this connection later?
                     error!("send raft message for token {:?} with msg id {} err {:?}",
                            token,
@@ -203,7 +204,7 @@ impl<T: Transport> Server<T> {
         });
 
         let uuid = msg.get_header().get_uuid().to_vec();
-        if let Err(e) = self.trans.rl().send_command(msg, cb) {
+        if let Err(e) = self.raft_router.rl().send_command(msg, cb) {
             // send error, reply an error response.
             warn!("send command for token {:?} with msg id {} err {:?}",
                   token,
@@ -309,7 +310,7 @@ impl<T: Transport> Server<T> {
     }
 }
 
-impl<T: Transport> Handler for Server<T> {
+impl<T: RaftStoreRouter> Handler for Server<T> {
     type Timeout = Msg;
     type Message = Msg;
 
