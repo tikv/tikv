@@ -9,8 +9,8 @@ use super::server::new_server_cluster;
 use super::util;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
-use tikv::raftserver::store::keys::data_key;
-use tikv::raftserver::store::engine::Iterable;
+use tikv::raftstore::store::keys::data_key;
+use tikv::raftstore::store::engine::Iterable;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;

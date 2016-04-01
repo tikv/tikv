@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tikv::raftserver::store::*;
+use tikv::raftstore::store::*;
 use kvproto::raft_serverpb::RaftTruncatedState;
 
 use super::util::*;

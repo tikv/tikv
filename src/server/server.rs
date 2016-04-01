@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
-use raftserver::store::{cmd_resp, Transport};
+use raftstore::store::{cmd_resp, Transport};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};

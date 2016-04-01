@@ -2,7 +2,7 @@ use std::time::Duration;
 use std::sync::{Arc, RwLock};
 use std::thread;
 
-use tikv::raftserver::store::*;
+use tikv::raftstore::store::*;
 use kvproto::raftpb::ConfChangeType;
 use kvproto::metapb;
 use tikv::pd::PdClient;

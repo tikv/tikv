@@ -2,7 +2,7 @@ use std::vec::Vec;
 
 use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
 
-use raftserver::{Result, other};
+use raftstore::{Result, other};
 use kvproto::metapb::Region;
 use std::mem;
 

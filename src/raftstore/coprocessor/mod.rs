@@ -7,7 +7,7 @@ pub use self::dispatcher::{CoprocessorHost, Registry};
 
 use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
 use protobuf::RepeatedField;
-use raftserver::store::PeerStorage;
+use raftstore::store::PeerStorage;
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.

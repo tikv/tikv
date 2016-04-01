@@ -1,4 +1,4 @@
-use tikv::raftserver::store::*;
+use tikv::raftstore::store::*;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};

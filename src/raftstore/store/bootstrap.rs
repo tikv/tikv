@@ -1,7 +1,7 @@
 use rocksdb::{DB, Writable};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
-use raftserver::{Result, other};
+use raftstore::{Result, other};
 use super::keys;
 use super::engine::{Iterable, Mutable};
 

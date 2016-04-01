@@ -96,10 +96,10 @@ mod test {
     use super::*;
     use std::sync::Arc;
     use tempdir::TempDir;
-    use raftserver::store::engine::*;
-    use raftserver::store::PeerStorage;
-    use raftserver::coprocessor::ObserverContext;
-    use raftserver::coprocessor::RegionObserver;
+    use raftstore::store::engine::*;
+    use raftstore::store::PeerStorage;
+    use raftstore::coprocessor::ObserverContext;
+    use raftstore::coprocessor::RegionObserver;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
     use util::codec::bytes;
@@ -151,7 +151,7 @@ mod test {
 
     #[test]
     fn test_split() {
-        let path = TempDir::new("test-raftserver").unwrap();
+        let path = TempDir::new("test-raftstore").unwrap();
         let storage = new_peer_storage(&path);
         let mut ctx = ObserverContext::new(&storage);
         let mut req = AdminRequest::new();
