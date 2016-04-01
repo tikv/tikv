@@ -252,27 +252,25 @@ impl StoreHandler {
         for result in kvs.unwrap() {
             let mut new_kv = Item::new();
             let mut res_type = ResultType::new();
-            match result {
-                Ok((ref key, ref value)) => {
-                    res_type.set_field_type(ResultType_Type::Ok);
-                    new_kv.set_key(key.clone());
-                    new_kv.set_value(value.clone());
-                }
-                Err(..) => {
-                    if result.is_locked() {
-                        if let Some((key, primary, ts)) = result.get_lock() {
-                            res_type.set_field_type(ResultType_Type::Locked);
-                            let mut lock_info = LockInfo::new();
-                            lock_info.set_primary_lock(primary);
-                            lock_info.set_lock_version(ts);
-                            res_type.set_lock_info(lock_info);
-                            new_kv.set_key(key);
-                        }
-                    } else {
-                        res_type.set_field_type(ResultType_Type::Retryable);
+            if let Ok((ref key, ref value)) = result {
+                res_type.set_field_type(ResultType_Type::Ok);
+                new_kv.set_key(key.clone());
+                new_kv.set_value(value.clone());
+            } else {
+                if result.is_locked() {
+                    if let Some((key, primary, ts)) = result.get_lock() {
+                        res_type.set_field_type(ResultType_Type::Locked);
+                        let mut lock_info = LockInfo::new();
+                        lock_info.set_primary_lock(primary);
+                        lock_info.set_lock_version(ts);
+                        res_type.set_lock_info(lock_info);
+                        new_kv.set_key(key);
                     }
+                } else {
+                    res_type.set_field_type(ResultType_Type::Retryable);
                 }
             }
+
             new_kv.set_res_type(res_type);
             new_kvs.push(new_kv);
         }
