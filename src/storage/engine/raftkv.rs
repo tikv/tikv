@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
 use server::Node;
-use raftserver::store::Transport;
-use raftserver::errors::Error as RaftServerError;
+use raftstore::store::Transport;
+use raftstore::errors::Error as RaftServerError;
 use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           GetRequest, CmdType, SeekRequest, DeleteRequest, PutRequest};
@@ -83,7 +83,7 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         let l = req.get_requests().len();
         try!(self.trans.rl().send_command(req,
                                           Box::new(move |r| {
-                                              tx.send(r).map_err(::raftserver::errors::other)
+                                              tx.send(r).map_err(::raftstore::errors::other)
                                           })));
 
         // Only when tx is closed will recv return Err, which should never happen.

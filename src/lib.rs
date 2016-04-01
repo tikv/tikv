@@ -33,6 +33,6 @@ pub mod raft;
 pub mod storage;
 
 pub use storage::{Storage, Dsn};
-pub mod raftserver;
+pub mod raftstore;
 pub mod pd;
 pub mod server;

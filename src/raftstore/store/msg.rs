@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use mio;
 
-use raftserver::{Result, send_msg, Error};
+use raftstore::{Result, send_msg, Error};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
@@ -117,7 +117,7 @@ mod tests {
 
     use super::*;
     use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-    use raftserver::Error;
+    use raftstore::Error;
 
     struct TestHandler;
 

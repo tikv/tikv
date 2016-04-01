@@ -17,17 +17,17 @@ extern crate kvproto;
 
 #[path="../../tests/util.rs"]
 mod test_util;
-#[path="../../tests/raftserver/util.rs"]
+#[path="../../tests/raftstore/util.rs"]
 mod util;
-#[path="../../tests/raftserver/cluster.rs"]
+#[path="../../tests/raftstore/cluster.rs"]
 mod cluster;
-#[path="../../tests/raftserver/node.rs"]
+#[path="../../tests/raftstore/node.rs"]
 mod node;
-#[path="../../tests/raftserver/server.rs"]
+#[path="../../tests/raftstore/server.rs"]
 mod server;
-#[path="../../tests/raftserver/pd.rs"]
+#[path="../../tests/raftstore/pd.rs"]
 mod pd;
-#[path="../../tests/raftserver/pd_ask.rs"]
+#[path="../../tests/raftstore/pd_ask.rs"]
 mod pd_ask;
 
 use test::BenchSamples;
@@ -53,7 +53,7 @@ macro_rules! printf {
     });
 }
 
-mod raftserver;
+mod raftstore;
 mod mvcc;
 
 fn print_result(smp: BenchSamples) {
@@ -62,6 +62,6 @@ fn print_result(smp: BenchSamples) {
 
 fn main() {
     // TODO allow user to specify flag to just bench some cases.
-    raftserver::bench_raftserver();
+    raftstore::bench_raftstore();
     mvcc::bench_engine();
 }

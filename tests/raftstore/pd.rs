@@ -9,7 +9,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use tikv::pd::{PdClient, Result, Error, Key};
 use tikv::pd::errors::other;
-use tikv::raftserver::store::keys::{enc_end_key, data_key};
+use tikv::raftstore::store::keys::{enc_end_key, data_key};
 
 #[derive(Default)]
 struct Store {

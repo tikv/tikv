@@ -1,8 +1,8 @@
 use rocksdb::rocksdb::{Snapshot, DBIterator};
-use raftserver::store::engine::{Iterable, Peekable, DBValue};
-use raftserver::store::keys::{self, enc_end_key};
-use raftserver::store::{util, PeerStorage};
-use raftserver::Result;
+use raftstore::store::engine::{Iterable, Peekable, DBValue};
+use raftstore::store::keys::{self, enc_end_key};
+use raftstore::store::{util, PeerStorage};
+use raftstore::Result;
 use kvproto::metapb;
 
 /// Snapshot of a region.
@@ -111,12 +111,12 @@ impl<'a> Peekable for RegionSnapshot<'a> {
 mod tests {
     use tempdir::TempDir;
     use rocksdb::{Writable, DB};
-    use raftserver::store::engine::*;
-    use raftserver::store::keys::*;
-    use raftserver::store::PeerStorage;
+    use raftstore::store::engine::*;
+    use raftstore::store::keys::*;
+    use raftstore::store::PeerStorage;
 
     use super::*;
-    use raftserver::Result;
+    use raftstore::Result;
     use std::sync::Arc;
     use kvproto::metapb::Region;
 
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_peekable() {
-        let path = TempDir::new("test-raftserver").unwrap();
+        let path = TempDir::new("test-raftstore").unwrap();
         let engine = new_temp_engine(&path);
         let mut r = Region::new();
         r.set_id(10);
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn test_iterate() {
-        let path = TempDir::new("test-raftserver").unwrap();
+        let path = TempDir::new("test-raftstore").unwrap();
         let engine = new_temp_engine(&path);
         let mut r = Region::new();
         r.set_id(10);
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_next() {
-        let path = TempDir::new("test-raftserver").unwrap();
+        let path = TempDir::new("test-raftstore").unwrap();
         let engine = new_temp_engine(&path);
         let mut r = Region::new();
         r.set_id(10);
