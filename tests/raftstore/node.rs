@@ -11,7 +11,7 @@ use tikv::server::Node;
 use tikv::raftstore::store::{SendCh, Transport, msg, Msg, Callback, StoreSendCh};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
-use tikv::raftstore::{Result, other};
+use tikv::raftstore::Result;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
@@ -42,7 +42,7 @@ fn send_msg(senders: Arc<RwLock<HashMap<u64, StoreSendCh>>>,
 
     match senders.rl().get(&to_store) {
         Some(sender) => sender.ch.send(Msg::RaftMessage(msg)),
-        _ => Err(other(format!("missing sender for store {}", to_store))),
+        _ => Err(box_err!("missing sender for store {}", to_store)),
     }
 }
 

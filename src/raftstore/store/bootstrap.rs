@@ -1,7 +1,7 @@
 use rocksdb::{DB, Writable};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
-use raftstore::{Result, other};
+use raftstore::Result;
 use super::keys;
 use super::engine::{Iterable, Mutable};
 
@@ -21,7 +21,7 @@ pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()
                      }));
 
     if count > 0 {
-        return Err(other("store is not empty and has already had data."));
+        return Err(box_err!("store is not empty and has already had data."));
     }
 
     let ident_key = keys::store_ident_key();
