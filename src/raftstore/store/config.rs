@@ -1,4 +1,4 @@
-use raftserver::{Result, other};
+use raftstore::{Result, other};
 
 const RAFT_BASE_TICK_INTERVAL: u64 = 100;
 const RAFT_HEARTBEAT_TICKS: usize = 3;

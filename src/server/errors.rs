@@ -7,7 +7,7 @@ use std::net::AddrParseError;
 use protobuf::ProtobufError;
 
 use util::codec::Error as CodecError;
-use raftserver::Error as RaftServerError;
+use raftstore::Error as RaftServerError;
 use storage::Error as StorageError;
 use pd::Error as PdError;
 

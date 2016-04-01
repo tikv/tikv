@@ -7,8 +7,8 @@ use std::time::Duration;
 use rocksdb::DB;
 use tempdir::TempDir;
 
-use tikv::raftserver::Result;
-use tikv::raftserver::store::*;
+use tikv::raftstore::Result;
+use tikv::raftstore::store::*;
 use super::util::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};

@@ -19,7 +19,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusRespo
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
 
-use raftserver::{Result, other, Error};
+use raftstore::{Result, other, Error};
 use kvproto::metapb;
 use super::util;
 use super::{SendCh, Msg, Tick};

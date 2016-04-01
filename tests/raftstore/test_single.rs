@@ -1,5 +1,5 @@
 use super::cluster::{Cluster, Simulator};
-use tikv::raftserver::store::*;
+use tikv::raftstore::store::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 

@@ -21,4 +21,4 @@ mod test_raft_snap;
 mod test_raft_paper;
 mod test_raft_flow_control;
 mod test_raw_node;
-mod raftserver;
+mod raftstore;

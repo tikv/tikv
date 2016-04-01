@@ -6,7 +6,7 @@ use rocksdb::rocksdb::Snapshot;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
 
-use raftserver::{Result, other};
+use raftstore::{Result, other};
 
 pub fn new_engine(path: &str) -> Result<DB> {
     // TODO: set proper options here,

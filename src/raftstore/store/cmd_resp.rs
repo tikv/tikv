@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use kvproto::errorpb;
-use raftserver::Error;
+use raftstore::Error;
 
 pub fn bind_uuid(resp: &mut RaftCmdResponse, uuid: Uuid) {
     resp.mut_header().set_uuid(uuid.as_bytes().to_vec());

@@ -9,7 +9,7 @@ use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 use kvproto::msgpb::Message;
 use super::{Result, ConnData};
 use super::server::Server;
-use raftserver::store::Transport;
+use raftstore::store::Transport;
 use util::codec::rpc;
 
 pub struct Conn {

@@ -99,7 +99,7 @@ fn bench_raft_cluster<T, F>(factory: F, tag: &'static str)
     }
 }
 
-pub fn bench_raftserver() {
+pub fn bench_raftstore() {
     bench_raft_cluster(new_node_cluster, "raft cluster (channel)");
     bench_raft_cluster(new_server_cluster, "raft cluster (tcp)");
 }

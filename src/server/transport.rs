@@ -1,8 +1,8 @@
 use std::option::Option;
 use std::sync::{Arc, RwLock, Mutex};
 
-use raftserver::store::{Msg as StoreMsg, Transport, Callback, StoreSendCh, SendCh};
-use raftserver::{Result as RaftStoreResult, other as raft_other};
+use raftstore::store::{Msg as StoreMsg, Transport, Callback, StoreSendCh, SendCh};
+use raftstore::{Result as RaftStoreResult, other as raft_other};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;

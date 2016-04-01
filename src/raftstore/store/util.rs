@@ -5,7 +5,7 @@ use uuid::Uuid;
 use kvproto::metapb;
 use kvproto::raftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use raftserver::{Result, Error};
+use raftstore::{Result, Error};
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     for peer in region.get_peers() {
