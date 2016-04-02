@@ -1,4 +1,4 @@
-use raftstore::{Result, other};
+use raftstore::Result;
 
 const RAFT_BASE_TICK_INTERVAL: u64 = 100;
 const RAFT_HEARTBEAT_TICKS: usize = 3;
@@ -68,8 +68,8 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         if self.raft_log_gc_threshold < 1 {
-            return Err(other(format!("raft log gc threshold must >= 1, not {}",
-                                     self.raft_log_gc_threshold)));
+            return Err(box_err!("raft log gc threshold must >= 1, not {}",
+                                self.raft_log_gc_threshold));
         }
 
         Ok(())

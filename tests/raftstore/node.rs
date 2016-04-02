@@ -11,7 +11,7 @@ use tikv::server::Node;
 use tikv::raftstore::store::{Transport, msg};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
-use tikv::raftstore::{Result, other};
+use tikv::raftstore::Result;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
@@ -34,7 +34,7 @@ impl Transport for ChannelTransport {
 
         match self.routers.get(&to_store) {
             Some(h) => h.rl().send_raft_msg(msg),
-            _ => Err(other(format!("missing sender for store {}", to_store))),
+            _ => Err(box_err!("missing sender for store {}", to_store)),
         }
     }
 }

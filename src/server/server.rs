@@ -12,7 +12,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
-use super::{Result, other};
+use super::Result;
 use util::HandyRwLock;
 use storage::Storage;
 use super::kv::StoreHandler;
@@ -187,10 +187,10 @@ impl<T: RaftStoreRouter> Server<T> {
             MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
             MessageType::KvReq => self.store.on_request(msg.take_kv_req(), token, msg_id),
             _ => {
-                Err(other(format!("unsupported message {:?} for token {:?} with msg id {}",
-                                  msg_type,
-                                  token,
-                                  msg_id)))
+                Err(box_err!("unsupported message {:?} for token {:?} with msg id {}",
+                             msg_type,
+                             token,
+                             msg_id))
             }
         }
     }

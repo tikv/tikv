@@ -12,7 +12,7 @@ mod types;
 
 pub use self::engine::{Engine, Dsn, new_engine, Modify, Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
-pub use self::types::{Key, Value, KvPair, KvContext};
+pub use self::types::{Key, Value, KvPair};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 #[cfg(test)]
@@ -36,37 +36,39 @@ impl Mutation {
     }
 }
 
+use kvproto::kvrpcpb::Context;
+
 #[allow(type_complexity)]
 pub enum Command {
     Get {
-        ctx: KvContext,
+        ctx: Context,
         key: Key,
         start_ts: u64,
         callback: Callback<Option<Value>>,
     },
     Scan {
-        ctx: KvContext,
+        ctx: Context,
         start_key: Key,
         limit: usize,
         start_ts: u64,
         callback: Callback<Vec<Result<KvPair>>>,
     },
     Prewrite {
-        ctx: KvContext,
+        ctx: Context,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
         callback: Callback<Vec<Result<()>>>,
     },
     Commit {
-        ctx: KvContext,
+        ctx: Context,
         keys: Vec<Key>,
         lock_ts: u64,
         commit_ts: u64,
         callback: Callback<()>,
     },
     CommitThenGet {
-        ctx: KvContext,
+        ctx: Context,
         key: Key,
         lock_ts: u64,
         commit_ts: u64,
@@ -74,19 +76,19 @@ pub enum Command {
         callback: Callback<Option<Value>>,
     },
     Cleanup {
-        ctx: KvContext,
+        ctx: Context,
         key: Key,
         start_ts: u64,
         callback: Callback<()>,
     },
     Rollback {
-        ctx: KvContext,
+        ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
         callback: Callback<()>,
     },
     RollbackThenGet {
-        ctx: KvContext,
+        ctx: Context,
         key: Key,
         lock_ts: u64,
         callback: Callback<Option<Value>>,
@@ -181,13 +183,13 @@ impl Storage {
     pub fn stop(self) -> Result<()> {
         try!(self.tx.send(Message::Close));
         if self.thread.join().is_err() {
-            return Err(Error::other("failed to wait storage thread quit"));
+            return Err(box_err!("failed to wait storage thread quit"));
         }
         Ok(())
     }
 
     pub fn async_get(&self,
-                     ctx: KvContext,
+                     ctx: Context,
                      key: Key,
                      start_ts: u64,
                      callback: Callback<Option<Value>>)
@@ -203,7 +205,7 @@ impl Storage {
     }
 
     pub fn async_scan(&self,
-                      ctx: KvContext,
+                      ctx: Context,
                       start_key: Key,
                       limit: usize,
                       start_ts: u64,
@@ -221,7 +223,7 @@ impl Storage {
     }
 
     pub fn async_prewrite(&self,
-                          ctx: KvContext,
+                          ctx: Context,
                           mutations: Vec<Mutation>,
                           primary: Vec<u8>,
                           start_ts: u64,
@@ -239,7 +241,7 @@ impl Storage {
     }
 
     pub fn async_commit(&self,
-                        ctx: KvContext,
+                        ctx: Context,
                         keys: Vec<Key>,
                         lock_ts: u64,
                         commit_ts: u64,
@@ -257,7 +259,7 @@ impl Storage {
     }
 
     pub fn async_commit_then_get(&self,
-                                 ctx: KvContext,
+                                 ctx: Context,
                                  key: Key,
                                  lock_ts: u64,
                                  commit_ts: u64,
@@ -277,7 +279,7 @@ impl Storage {
     }
 
     pub fn async_cleanup(&self,
-                         ctx: KvContext,
+                         ctx: Context,
                          key: Key,
                          start_ts: u64,
                          callback: Callback<()>)
@@ -293,7 +295,7 @@ impl Storage {
     }
 
     pub fn async_rollback(&self,
-                          ctx: KvContext,
+                          ctx: Context,
                           keys: Vec<Key>,
                           start_ts: u64,
                           callback: Callback<()>)
@@ -309,7 +311,7 @@ impl Storage {
     }
 
     pub fn async_rollback_then_get(&self,
-                                   ctx: KvContext,
+                                   ctx: Context,
                                    key: Key,
                                    lock_ts: u64,
                                    callback: Callback<Option<Value>>)
@@ -359,14 +361,6 @@ quick_error! {
             cause(err.as_ref())
             description(err.description())
         }
-    }
-}
-
-impl Error {
-    pub fn other<T>(err: T) -> Error
-        where T: Into<Box<error::Error + Sync + Send + 'static>>
-    {
-        Error::Other(err.into())
     }
 }
 
@@ -435,6 +429,7 @@ impl<T> MaybeRolledback for Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvproto::kvrpcpb::Context;
     use util::codec::bytes;
 
     fn expect_get_none() -> Callback<Option<Value>> {
@@ -466,21 +461,17 @@ mod tests {
     #[test]
     fn test_get_put() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_get(KvContext::none(), make_key(b"x"), 100, expect_get_none()).unwrap();
-        storage.async_prewrite(KvContext::none(),
+        storage.async_get(Context::new(), make_key(b"x"), 100, expect_get_none()).unwrap();
+        storage.async_prewrite(Context::new(),
                                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                                b"x".to_vec(),
                                100,
                                expect_ok())
                .unwrap();
-        storage.async_commit(KvContext::none(),
-                             vec![make_key(b"x")],
-                             100,
-                             101,
-                             expect_ok())
+        storage.async_commit(Context::new(), vec![make_key(b"x")], 100, 101, expect_ok())
                .unwrap();
-        storage.async_get(KvContext::none(), make_key(b"x"), 100, expect_get_none()).unwrap();
-        storage.async_get(KvContext::none(),
+        storage.async_get(Context::new(), make_key(b"x"), 100, expect_get_none()).unwrap();
+        storage.async_get(Context::new(),
                           make_key(b"x"),
                           101,
                           expect_get_val(b"100".to_vec()))
@@ -491,7 +482,7 @@ mod tests {
     #[test]
     fn test_scan() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_prewrite(KvContext::none(),
+        storage.async_prewrite(Context::new(),
                                vec![
             Mutation::Put((make_key(b"a"), b"aa".to_vec())),
             Mutation::Put((make_key(b"b"), b"bb".to_vec())),
@@ -501,13 +492,13 @@ mod tests {
                                1,
                                expect_ok())
                .unwrap();
-        storage.async_commit(KvContext::none(),
+        storage.async_commit(Context::new(),
                              vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
                              1,
                              2,
                              expect_ok())
                .unwrap();
-        storage.async_scan(KvContext::none(),
+        storage.async_scan(Context::new(),
                            make_key(b"\x00"),
                            1000,
                            5,
@@ -523,41 +514,33 @@ mod tests {
     #[test]
     fn test_txn() {
         let storage = Storage::new(Dsn::Memory).unwrap();
-        storage.async_prewrite(KvContext::none(),
+        storage.async_prewrite(Context::new(),
                                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                                b"x".to_vec(),
                                100,
                                expect_ok())
                .unwrap();
-        storage.async_prewrite(KvContext::none(),
+        storage.async_prewrite(Context::new(),
                                vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                                b"y".to_vec(),
                                101,
                                expect_ok())
                .unwrap();
-        storage.async_commit(KvContext::none(),
-                             vec![make_key(b"x")],
-                             100,
-                             110,
-                             expect_ok())
+        storage.async_commit(Context::new(), vec![make_key(b"x")], 100, 110, expect_ok())
                .unwrap();
-        storage.async_commit(KvContext::none(),
-                             vec![make_key(b"y")],
-                             101,
-                             111,
-                             expect_ok())
+        storage.async_commit(Context::new(), vec![make_key(b"y")], 101, 111, expect_ok())
                .unwrap();
-        storage.async_get(KvContext::none(),
+        storage.async_get(Context::new(),
                           make_key(b"x"),
                           120,
                           expect_get_val(b"100".to_vec()))
                .unwrap();
-        storage.async_get(KvContext::none(),
+        storage.async_get(Context::new(),
                           make_key(b"y"),
                           120,
                           expect_get_val(b"101".to_vec()))
                .unwrap();
-        storage.async_prewrite(KvContext::none(),
+        storage.async_prewrite(Context::new(),
                                vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
                                b"x".to_vec(),
                                105,

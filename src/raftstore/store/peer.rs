@@ -14,7 +14,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, RawNode, SnapshotStatus};
-use raftstore::{Result, other, Error};
+use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use util::HandyRwLock;
 use pd::PdClient;
@@ -88,9 +88,7 @@ impl Peer {
         let store_id = store.store_id();
         let peer_id = match util::find_peer(&region, store_id) {
             None => {
-                return Err(other(format!("find no peer for store {} in region {:?}",
-                                         store_id,
-                                         region)))
+                return Err(box_err!("find no peer for store {} in region {:?}", store_id, region))
             }
             Some(peer) => peer.get_id(),
         };
@@ -116,7 +114,7 @@ impl Peer {
                        from_epoch,
                        region_epoch);
                 // We receive a stale message and we can't re-create the peer with the peer id.
-                return Err(other(format!("peer {} already destroyed", peer_id)));
+                return Err(box_err!("peer {} already destroyed", peer_id));
             }
         }
 
@@ -135,7 +133,7 @@ impl Peer {
                                       peer_id: u64)
                                       -> Result<Peer> {
         if peer_id == raft::INVALID_ID {
-            return Err(other("invalid peer id"));
+            return Err(box_err!("invalid peer id"));
         }
 
         let store_id = store.store_id();
@@ -205,9 +203,9 @@ impl Peer {
 
     pub fn update_region(&mut self, region: &metapb::Region) -> Result<()> {
         if self.region_id != region.get_id() {
-            return Err(other(format!("invalid region id {} != {}",
-                                     region.get_id(),
-                                     self.region_id)));
+            return Err(box_err!("invalid region id {} != {}",
+                                region.get_id(),
+                                self.region_id));
         }
 
         self.storage.wl().set_region(region);
@@ -332,7 +330,7 @@ impl Peer {
         }
 
         if !req.get_header().has_region_epoch() {
-            return Err(other("missing epoch!"));
+            return Err(box_err!("missing epoch!"));
         }
 
         let from_epoch = req.get_header().get_region_epoch();
@@ -385,17 +383,23 @@ impl Peer {
         let mut snap_status = SnapshotStatus::Finish;
         let mut unreachable = false;
 
-        let from_peer = try!(self.get_peer_from_cache(msg.get_from()).ok_or_else(|| {
-            other(format!("failed to lookup sender peer {} in region {}",
-                          msg.get_from(),
-                          self.region_id))
-        }));
+        let from_peer = match self.get_peer_from_cache(msg.get_from()) {
+            Some(p) => p,
+            None => {
+                return Err(box_err!("failed to lookup sender peer {} in region {}",
+                                    msg.get_from(),
+                                    self.region_id))
+            }
+        };
 
-        let to_peer = try!(self.get_peer_from_cache(msg.get_to()).ok_or_else(|| {
-            other(format!("failed to look up recipient peer {} in region {}",
-                          msg.get_to(),
-                          self.region_id))
-        }));
+        let to_peer = match self.get_peer_from_cache(msg.get_to()) {
+            Some(p) => p,
+            None => {
+                return Err(box_err!("failed to look up recipient peer {} in region {}",
+                                    msg.get_to(),
+                                    self.region_id))
+            }
+        };
 
         let to_peer_id = to_peer.get_id();
         let to_store_id = to_peer.get_store_id();
@@ -517,7 +521,7 @@ impl Peer {
 
     fn process_raft_cmd(&mut self, index: u64, cmd: RaftCmdRequest) -> Result<Option<ExecResult>> {
         if index == 0 {
-            return Err(other("processing raft command needs a none zero index"));
+            return Err(box_err!("processing raft command needs a none zero index"));
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
@@ -553,9 +557,9 @@ impl Peer {
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let last_applied_index = self.storage.rl().applied_index();
         if last_applied_index >= index {
-            return Err(other(format!("applied index moved backwards, {} >= {}",
-                                     last_applied_index,
-                                     index)));
+            return Err(box_err!("applied index moved backwards, {} >= {}",
+                                last_applied_index,
+                                index));
         }
 
         let wb = WriteBatch::new();
@@ -652,7 +656,7 @@ impl Peer {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
-            AdminCmdType::InvalidAdmin => Err(other("unsupported admin command type")),
+            AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
 
@@ -692,9 +696,9 @@ impl Peer {
                            peer,
                            store_id,
                            region);
-                    return Err(other(format!("can't add duplicated peer {:?} to store {}",
-                                             peer,
-                                             store_id)));
+                    return Err(box_err!("can't add duplicated peer {:?} to store {}",
+                                        peer,
+                                        store_id));
                 }
                 // TODO: Do we allow adding peer in same node?
 
@@ -710,9 +714,7 @@ impl Peer {
             raftpb::ConfChangeType::RemoveNode => {
                 if !exists {
                     error!("remove missing peer {:?} from store {}", peer, store_id);
-                    return Err(other(format!("remove missing peer {:?} from store {}",
-                                             peer,
-                                             store_id)));
+                    return Err(box_err!("remove missing peer {:?} from store {}", peer, store_id));
                 }
 
                 // Remove this peer from cache.
@@ -745,7 +747,7 @@ impl Peer {
                   -> Result<(AdminResponse, Option<ExecResult>)> {
         let split_req = req.get_split();
         if !split_req.has_split_key() {
-            return Err(other("missing split key"));
+            return Err(box_err!("missing split key"));
         }
 
         let split_key = split_req.get_split_key();
@@ -768,9 +770,9 @@ impl Peer {
         // Update new region peer ids.
         let new_peer_ids = split_req.get_new_peer_ids();
         if new_peer_ids.len() != new_region.get_peers().len() {
-            return Err(other(format!("invalid new peer id count, need {}, but got {}",
-                                     new_region.get_peers().len(),
-                                     new_peer_ids.len())));
+            return Err(box_err!("invalid new peer id count, need {}, but got {}",
+                                new_region.get_peers().len(),
+                                new_peer_ids.len()));
         }
 
         for (index, peer) in new_region.mut_peers().iter_mut().enumerate() {
@@ -831,7 +833,7 @@ impl Peer {
                 CmdType::Seek => self.do_seek(ctx, req),
                 CmdType::Put => self.do_put(ctx, req),
                 CmdType::Delete => self.do_delete(ctx, req),
-                e => Err(other(format!("unsupported command type {:?}", e))),
+                e => Err(box_err!("unsupported command type {:?}", e)),
             });
 
             resp.set_cmd_type(cmd_type);

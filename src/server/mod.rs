@@ -17,7 +17,7 @@ pub mod transport;
 pub mod node;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR};
-pub use self::errors::{Result, Error, other};
+pub use self::errors::{Result, Error};
 pub use self::server::{Server, create_event_loop, bind};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
@@ -40,13 +40,13 @@ pub fn send_msg<M: Send>(ch: &mio::Sender<M>, mut msg: M) -> Result<()> {
                 continue;
             }
             e => {
-                return Err(other(format!("{:?}", e)));
+                return Err(box_err!("{:?}", e));
             }
         }
     }
 
     // TODO: if we refactor with quick_error, we can use NotifyError instead later.
-    Err(other("notify channel is full"))
+    Err(box_err!("notify channel is full"))
 }
 
 

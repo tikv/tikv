@@ -8,5 +8,4 @@ os:
   - osx
 
 script:
-  - cargo update
-  - ulimit -n 4096 && RUST_LOG=tikv=DEBUG RUST_BACKTRACE=1 cargo test -- --nocapture
+  - make

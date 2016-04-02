@@ -1,6 +1,6 @@
 use uuid::Uuid;
 use kvproto::{metapb, pdpb};
-use super::{Error, Result, errors, TRpcClient, Client};
+use super::{Error, Result, TRpcClient, Client};
 
 impl<T: TRpcClient + 'static> super::PdClient for Client<T> {
     fn bootstrap_cluster(&mut self,
@@ -135,7 +135,7 @@ fn new_request(cluster_id: u64, cmd_type: pdpb::CommandType) -> pdpb::Request {
 
 fn check_resp(resp: &pdpb::Response) -> Result<()> {
     if !resp.has_header() {
-        return Err(errors::other("pd response missing header"));
+        return Err(box_err!("pd response missing header"));
     }
     let header = resp.get_header();
     if !header.has_error() {
@@ -146,6 +146,6 @@ fn check_resp(resp: &pdpb::Response) -> Result<()> {
     if error.has_bootstrapped() {
         Err(Error::ClusterBootstrapped(header.get_cluster_id()))
     } else {
-        Err(errors::other(error.get_message()))
+        Err(box_err!(error.get_message()))
     }
 }
