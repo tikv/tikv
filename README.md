@@ -21,6 +21,6 @@ TiKV uses Raft to support Geo-Replication. We have ported etcd's raft implementa
 
 - __Working with [TiDB](https://github.com/pingcap/tidb)__  
 
+### Required rust version
 
-
-
+This project requires rust nightly, otherwise it can't build.
