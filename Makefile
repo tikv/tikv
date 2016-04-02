@@ -10,7 +10,7 @@ run:
 
 test:
 	# todo remove ulimit once issue #372 of mio is resolved.
-	ulimit -n 4096 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test -- --nocapture
+	ulimit -n 2000 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test -- --nocapture
 
 bench:
 	# todo remove ulimit once issue #372 of mio is resolved.

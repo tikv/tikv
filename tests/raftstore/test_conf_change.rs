@@ -270,29 +270,43 @@ fn test_server_pd_conf_change() {
     test_pd_conf_change(&mut cluster);
 }
 
+fn wait_till_reach_count(pd_client: Arc<RwLock<TestPdClient>>,
+                         cluster_id: u64,
+                         region_id: u64,
+                         c: usize) {
+    let mut replica_count = 0;
+    for _ in 0..1000 {
+        let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
+        replica_count = region.get_peers().len();
+        if replica_count == c {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("replica count {} still not meet {} after 10 secs",
+           replica_count,
+           c);
+}
+
 fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.store_cfg.replica_check_tick_interval = 200;
     cluster.start();
 
     let cluster_id = cluster.id();
     let pd_client = cluster.pd_client.clone();
-    let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
+    let mut region = pd_client.rl().get_region(cluster_id, b"").unwrap();
     let region_id = region.get_id();
 
     let stores = pd_client.rl().get_stores(cluster_id).unwrap();
 
-    assert!(region.get_peers().len() < 5);
-
-    thread::sleep(Duration::from_secs(1));
-
-    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
     // default replica is 5.
-    assert_eq!(region.get_peers().len(), 5);
+    wait_till_reach_count(pd_client.clone(), cluster_id, region_id, 5);
 
     let (key, value) = (b"a1", b"v1");
     cluster.put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
+    region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
     let i = stores.iter()
                   .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
                   .unwrap();
@@ -303,24 +317,17 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.change_peer(region_id, ConfChangeType::AddNode, peer.clone());
 
-    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
-    assert_eq!(region.get_peers().len(), 6);
+    wait_till_reach_count(pd_client.clone(), cluster_id, region_id, 6);
+    // it should remove extra replica.
+    wait_till_reach_count(pd_client.clone(), cluster_id, region_id, 5);
 
-    thread::sleep(Duration::from_millis(300));
-
-    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
-    assert_eq!(region.get_peers().len(), 5);
-
+    region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
 
     cluster.change_peer(region_id, ConfChangeType::RemoveNode, peer);
-    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
-    assert_eq!(region.get_peers().len(), 4);
-
-    thread::sleep(Duration::from_millis(300));
-
-    let region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();
-    assert_eq!(region.get_peers().len(), 5);
+    wait_till_reach_count(pd_client.clone(), cluster_id, region_id, 4);
+    // it should add missing replica.
+    wait_till_reach_count(pd_client.clone(), cluster_id, region_id, 5);
 }
 
 #[test]
