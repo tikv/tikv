@@ -1,5 +1,4 @@
 use std::hash::{Hash, Hasher};
-use kvproto::metapb::Peer;
 use byteorder::{BigEndian, WriteBytesExt};
 
 pub type Value = Vec<u8>;
@@ -34,23 +33,4 @@ impl Hash for Key {
 pub fn make_key(k: &[u8]) -> Key {
     use util::codec::bytes;
     Key::from_raw(bytes::encode_bytes(k))
-}
-
-#[derive(Debug)]
-pub struct KvContext {
-    pub region_id: u64,
-    pub peer: Peer,
-}
-
-impl KvContext {
-    pub fn new(region_id: u64, peer: Peer) -> KvContext {
-        KvContext {
-            region_id: region_id,
-            peer: peer,
-        }
-    }
-
-    pub fn none() -> KvContext {
-        KvContext::new(0, Peer::new())
-    }
 }

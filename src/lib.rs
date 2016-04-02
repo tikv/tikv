@@ -27,6 +27,7 @@ extern crate time;
 #[cfg(test)]
 extern crate env_logger;
 
+#[macro_use]
 pub mod util;
 pub mod raft;
 #[allow(clippy)]

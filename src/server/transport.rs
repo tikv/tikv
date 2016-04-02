@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock, Mutex};
 
 use raftstore::store::{Msg as StoreMsg, Transport, Callback, SendCh};
-use raftstore::{Result as RaftStoreResult, other as raft_other};
+use raftstore::Result as RaftStoreResult;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -33,7 +33,7 @@ impl ServerRaftStoreRouter {
 
     fn check_store(&self, store_id: u64) -> RaftStoreResult<()> {
         if store_id != self.store_id {
-            return Err(raft_other(format!("invalid store {} != {}", store_id, self.store_id)));
+            return Err(box_err!("invalid store {} != {}", store_id, self.store_id));
         }
         Ok(())
     }
@@ -95,12 +95,13 @@ impl<T: PdClient> Transport for ServerTransport<T> {
         req.set_msg_type(MessageType::Raft);
         req.set_raft(msg);
 
-        self.ch
-            .send(Msg::SendPeer {
-                addr: store.get_address().to_owned(),
-                data: ConnData::new(self.alloc_msg_id(), req),
-            })
-            .map_err(|e| raft_other(format!("send peer to {} err {:?}", store.get_address(), e)))
+        if let Err(e) = self.ch.send(Msg::SendPeer {
+            addr: store.get_address().to_owned(),
+            data: ConnData::new(self.alloc_msg_id(), req),
+        }) {
+            return Err(box_err!("send peer to {} err {:?}", store.get_address(), e));
+        }
+        Ok(())
     }
 }
 
