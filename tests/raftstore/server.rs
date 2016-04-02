@@ -96,14 +96,16 @@ impl Simulator for ServerCluster {
         cfg.addr = format!("{}", addr);
 
         let mut node = Node::new(&cfg, self.pd_client.clone(), trans.clone());
+
         node.start(engine).unwrap();
+        let router = node.raft_store_router();
 
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
 
         let store = create_raft_storage(node).unwrap();
 
-        let mut server = Server::new(&mut event_loop, listener, store, trans).unwrap();
+        let mut server = Server::new(&mut event_loop, listener, store, router).unwrap();
 
         let ch = server.get_sendch();
 
