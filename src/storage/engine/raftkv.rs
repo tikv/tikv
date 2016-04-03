@@ -134,10 +134,10 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
                      reqs: Vec<Request>)
                      -> Result<Vec<Response>> {
         let header = self.new_request_header(region_id, peer);
-        let mut command = RaftCmdRequest::new();
-        command.set_header(header);
-        command.set_requests(RepeatedField::from_vec(reqs));
-        let mut resp = try!(self.exec_cmd_request(command));
+        let mut cmd = RaftCmdRequest::new();
+        cmd.set_header(header);
+        cmd.set_requests(RepeatedField::from_vec(reqs));
+        let mut resp = try!(self.exec_cmd_request(cmd));
         Ok(resp.take_responses().to_vec())
     }
 
