@@ -29,6 +29,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, RawNode, SnapshotStatus};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::split_observer::SplitObserver;
 use util::HandyRwLock;
 use pd::PdClient;
 use super::store::Store;
@@ -211,7 +212,8 @@ impl Peer {
     }
 
     pub fn load_all_coprocessors(&mut self) {
-        // TODO: load processors.
+        // TODO load coprocessors from configuation
+        self.coprocessor_host.registry.register_observer(100, box SplitObserver);
     }
 
     pub fn update_region(&mut self, region: &metapb::Region) -> Result<()> {
@@ -313,7 +315,7 @@ impl Peer {
 
         try!(self.check_epoch(&cmd));
 
-        self.coprocessor_host.pre_propose(&self.storage.rl(), &mut cmd);
+        try!(self.coprocessor_host.pre_propose(&self.storage.rl(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
         try!(self.raft_group.propose(data));
 
