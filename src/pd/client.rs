@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 use util::codec::rpc;
+use util::make_std_tcp_conn;
 use protobuf::{self, MessageStatic};
 use super::Result;
 
@@ -37,8 +38,7 @@ const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
 impl RpcClient {
     pub fn new<A: ToSocketAddrs>(addr: A) -> Result<RpcClient> {
-        let stream = try!(TcpStream::connect(addr));
-        try!(stream.set_nodelay(true));
+        let stream = try!(make_std_tcp_conn(addr));
         try!(stream.set_read_timeout(Some(Duration::from_secs(SOCKET_READ_TIMEOUT))));
         try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
         Ok(RpcClient { stream: Mutex::new(stream) })
