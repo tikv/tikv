@@ -413,7 +413,6 @@ mod test {
     use kvproto::raftpb;
     use raft::errors::{Error, StorageError};
     use protobuf;
-    use std::panic;
 
     fn new_entry(index: u64, term: u64) -> raftpb::Entry {
         let mut e = raftpb::Entry::new();
@@ -830,8 +829,7 @@ mod test {
         ];
 
         for (i, &(from, to, limit, ref w, wpanic)) in tests.iter().enumerate() {
-            let raft_log_wrapper = panic::AssertRecoverSafe::new(&raft_log);
-            let res = panic::recover(move || raft_log_wrapper.slice(from, to, limit));
+            let res = recover_safe!(|| raft_log.slice(from, to, limit));
             if res.is_err() ^ wpanic {
                 panic!("#{}: panic = {}, want {}: {:?}", i, true, false, res);
             }
@@ -854,7 +852,7 @@ mod test {
         }
     }
 
-    /// TestLogMaybeAppend ensures:
+    /// `test_log_maybe_append` ensures:
     /// If the given (index, term) matches with the existing log:
     /// 	1. If an existing entry conflicts with a new one (same index
     /// 	but different terms), delete the existing entry and all that
@@ -919,13 +917,7 @@ mod test {
             let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&previous_ents);
             raft_log.committed = commit;
-            let res = {
-                let mut raft_log_wrapper = panic::AssertRecoverSafe::new(&mut raft_log);
-                let ents_wrap = panic::AssertRecoverSafe::new(&ents);
-                panic::recover(move || {
-                    raft_log_wrapper.maybe_append(index, log_term, committed, &ents_wrap)
-                })
-            };
+            let res = recover_safe!(|| raft_log.maybe_append(index, log_term, committed, &ents));
             if res.is_err() ^ wpanic {
                 panic!("#{}: panic = {}, want {}", i, res.is_err(), wpanic);
             }
@@ -967,10 +959,7 @@ mod test {
             let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&previous_ents);
             raft_log.committed = previous_commit;
-            let has_panic = {
-                let mut raft_log_wrap = panic::AssertRecoverSafe::new(&mut raft_log);
-                panic::recover(move || raft_log_wrap.commit_to(commit)).is_err()
-            };
+            let has_panic = recover_safe!(|| raft_log.commit_to(commit)).is_err();
             if has_panic ^ wpanic {
                 panic!("#{}: panic = {}, want {}", i, has_panic, wpanic)
             }
@@ -1003,11 +992,7 @@ mod test {
             raft_log.applied_to(committed);
 
             for j in 0..compact.len() {
-                let raft_log_wrapper = panic::AssertRecoverSafe::new(&raft_log);
-                let res = {
-                    let compact_to = compact[j];
-                    panic::recover(move || raft_log_wrapper.store.wl().compact(compact_to))
-                };
+                let res = recover_safe!(|| raft_log.store.wl().compact(compact[j]));
                 if res.is_err() {
                     if wallow {
                         panic!("#{}: has_panic = true, want false: {:?}", i, res);
@@ -1051,8 +1036,7 @@ mod test {
         ];
 
         for (i, &(lo, hi, wpanic, w_err_compacted)) in tests.iter().enumerate() {
-            let raft_log_wrap = panic::AssertRecoverSafe::new(&raft_log);
-            let res = panic::recover(move || raft_log_wrap.must_check_outofbounds(lo, hi));
+            let res = recover_safe!(|| raft_log.must_check_outofbounds(lo, hi));
             if res.is_err() ^ wpanic {
                 panic!("#{}: panic = {}, want {}: {:?}",
                        i,

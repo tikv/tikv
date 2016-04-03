@@ -19,6 +19,9 @@
 #![feature(fnbox)]
 #![feature(plugin)]
 #![feature(box_syntax)]
+#![feature(const_fn)]
+#![feature(panic_handler)]
+#![feature(static_rwlock)]
 #![plugin(clippy)]
 
 #[macro_use]
