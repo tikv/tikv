@@ -26,6 +26,8 @@ pub mod codec;
 #[macro_use]
 pub mod macros;
 pub mod logger;
+// TODO: add #[cfg(test)] if we get it compiled.
+pub mod panic_hook;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
@@ -106,7 +108,7 @@ impl DerefMut for DefaultRng {
     }
 }
 
-/// A handy shortcut to replace RwLock write/read().unwrap() pattern to
+/// A handy shortcut to replace `RwLock` write/read().unwrap() pattern to
 /// shortcut wl and rl.
 pub trait HandyRwLock<T> {
     fn wl(&self) -> RwLockWriteGuard<T>;
