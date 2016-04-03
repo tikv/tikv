@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Coprocessor, RegionObserver, ObserverContext};
+use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
 
 use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
                           AdminCmdType};
 use protobuf::RepeatedField;
 use util::codec::bytes;
-use std::result;
+use std::result::Result as StdResult;
 
 /// SplitObserver adjusts the split key so that it won't seperate
 /// the data of a row into two region.
@@ -26,7 +26,7 @@ pub struct SplitObserver;
 pub const TABLE_PREFIX: &'static [u8] = b"t";
 pub const TABLE_ROW_MARK: &'static [u8] = b"_r";
 
-type Result<T> = result::Result<T, String>;
+type Result<T> = StdResult<T, String>;
 
 impl SplitObserver {
     fn extract_sql_key(&self, split: &SplitRequest) -> Result<Vec<u8>> {
@@ -75,25 +75,28 @@ impl Coprocessor for SplitObserver {
 }
 
 impl RegionObserver for SplitObserver {
-    fn pre_admin(&mut self, ctx: &mut ObserverContext, req: &mut AdminRequest) {
+    fn pre_admin(&mut self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> CopResult<()> {
         if req.get_cmd_type() != AdminCmdType::Split {
-            return;
+            return Ok(());
         }
         if !req.has_split() {
-            error!("cmd_type is Split but it doesn't have split request, message maybe corrupted!");
-            return;
+            box_try!(Err("cmd_type is Split but it doesn't have split request, message maybe \
+                          corrupted!"
+                             .to_owned()));
         }
-        if let Err(e) = self.on_split(ctx, req.mut_split()) {
-            error!("failed to check split request: {}", e);
-            // TODO add error to coprocessor
-            req.take_split();
-        }
+        box_try!(self.on_split(ctx, req.mut_split()));
+        Ok(())
     }
 
     fn post_admin(&mut self, _: &mut ObserverContext, _: &AdminRequest, _: &mut AdminResponse) {}
 
     /// Hook to call before execute read/write request.
-    fn pre_query(&mut self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) -> () {}
+    fn pre_query(&mut self,
+                 _: &mut ObserverContext,
+                 _: &mut RepeatedField<Request>)
+                 -> CopResult<()> {
+        Ok(())
+    }
 
     /// Hook to call after read/write request being executed.
     fn post_query(&mut self,
@@ -171,47 +174,48 @@ mod test {
 
         let mut observer = SplitObserver;
 
-        observer.pre_admin(&mut ctx, &mut req);
-        assert!(!req.has_split(),
-                "only when split request should be handle.");
+        let res = observer.pre_admin(&mut ctx, &mut req);
+        // since no split is defined, actual coprocessor won't be invoke.
+        assert!(res.is_ok());
+        assert!(!req.has_split(), "only split request should be handle.");
 
         req = new_split_request(b"test");
-        observer.pre_admin(&mut ctx, &mut req);
-        assert!(!req.has_split(), "invalid split should be prevented");
+        let res = observer.pre_admin(&mut ctx, &mut req);
+        assert!(res.is_err(), "invalid split should be prevented");
 
         let mut key = Vec::with_capacity(100);
         key.write(TABLE_PREFIX).unwrap();
         key = bytes::encode_bytes(&key);
         req = new_split_request(&key);
-        observer.pre_admin(&mut ctx, &mut req);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*key);
 
         key = new_row_key(1, 2, 0, 0);
         req = new_split_request(&key);
         let mut expect_key = key;
-        observer.pre_admin(&mut ctx, &mut req);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_row_key(1, 2, 1, 0);
         req = new_split_request(&key);
-        observer.pre_admin(&mut ctx, &mut req);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_row_key(1, 2, 1, 1);
         req = new_split_request(&key);
-        observer.pre_admin(&mut ctx, &mut req);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_index_key(1, 2, 0, 0);
         req = new_split_request(&key);
         expect_key = key;
-        observer.pre_admin(&mut ctx, &mut req);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_index_key(1, 2, 1, 5);
         req = new_split_request(&key);
         let expect_key = new_index_key(1, 2, 1, 0);
-        observer.pre_admin(&mut ctx, &mut req);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
     }
 }

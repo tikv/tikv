@@ -25,6 +25,8 @@ use pd;
 use raft;
 use kvproto::metapb;
 
+use super::coprocessor::Error as CopError;
+
 quick_error!{
     #[derive(Debug)]
     pub enum Error {
@@ -57,46 +59,58 @@ quick_error!{
             from()
             cause(err)
             description(err.description())
+            display("Io {}", err)
         }
-        // RocksDB uses plain string as the error.
+        // RocksDb uses plain string as the error.
         // Maybe other libs use this too?
-        RocksDB(msg: String) {
+        RocksDb(msg: String) {
             from()
-            description("RocksDB error")
-            display("{}", msg)
+            description("RocksDb error")
+            display("RocksDb {}", msg)
         }
         Protobuf(err: ProtobufError) {
             from()
             cause(err)
             description(err.description())
+            display("Protobuf {}", err)
         }
         Codec(err: codec::Error) {
             from()
             cause(err)
             description(err.description())
+            display("Codec {}", err)
         }
         AddrParse(err: net::AddrParseError) {
             from()
             cause(err)
             description(err.description())
+            display("AddrParse {}", err)
         }
         Pd(err: pd::Error) {
             from()
             cause(err)
             description(err.description())
+            display("Pd {}", err)
         }
         Raft(err: raft::Error) {
             from()
             cause(err)
             description(err.description())
+            display("Raft {}", err)
         }
         Timeout(msg: String) {
             description("request timeout")
-            display("{}", msg)
+            display("Timeout {}", msg)
         }
         StaleEpoch(msg: String) {
             description("region is stale")
-            display("{}", msg)
+            display("StaleEpoch {}", msg)
+        }
+        Coprocessor(err: CopError) {
+            from()
+            cause(err)
+            description(err.description())
+            display("Coprocessor {}", err)
         }
     }
 }
