@@ -29,4 +29,4 @@ This project requires rust nightly, otherwise it can't build.
 - Thanks [Etcd](https://github.com/coreos/etcd) for providing some great open source tools.
 - Thanks [RocksDB](https://github.com/facebook/rocksdb) for their powerful storage engines.
 - Thanks [mio](https://github.com/carllerche/mio) for providing metal IO library for Rust.
-- Thanks [rust-clippy](https://github.com/Manishearth/rust-clippy) We do love the project. 
+- Thanks [rust-clippy](https://github.com/Manishearth/rust-clippy). We do love the great project. 
