@@ -14,6 +14,7 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io::{self, Write};
+use std::net::{ToSocketAddrs, TcpStream};
 use time;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rand::{self, ThreadRng};
@@ -123,4 +124,11 @@ impl<T> HandyRwLock<T> for RwLock<T> {
     fn rl(&self) -> RwLockReadGuard<T> {
         self.read().unwrap()
     }
+}
+
+
+pub fn make_std_tcp_conn<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
+    let stream = try!(TcpStream::connect(addr));
+    try!(stream.set_nodelay(false));
+    Ok(stream)
 }
