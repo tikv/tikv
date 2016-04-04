@@ -32,7 +32,6 @@ use std::collections::HashMap;
 use protobuf::{self, RepeatedField};
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::panic;
 use std::cmp;
 use kvproto::raftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
                       ConfChange, ConfChangeType};
@@ -807,8 +806,7 @@ fn test_proposal() {
 
     for (j, (mut nw, success)) in tests.drain(..).enumerate() {
         let send = |nw: &mut Network, m| {
-            let mut network_wrapper = panic::AssertRecoverSafe::new(nw);
-            let res = panic::recover(move || network_wrapper.send(vec![m]));
+            let res = recover_safe!(|| nw.send(vec![m]));
             assert!(res.is_ok() || !success);
         };
 
@@ -1228,16 +1226,13 @@ fn test_state_transition() {
         let mut sm: &mut Raft<MemStorage> = &mut new_test_raft(1, vec![1], 10, 1, new_storage());
         sm.state = from;
 
-        let res = {
-            let mut sm_wrapper = panic::AssertRecoverSafe::new(&mut sm);
-            panic::recover(move || {
-                match to {
-                    StateRole::Follower => sm_wrapper.become_follower(wterm, wlead),
-                    StateRole::Candidate => sm_wrapper.become_candidate(),
-                    StateRole::Leader => sm_wrapper.become_leader(),
-                }
-            })
-        };
+        let res = recover_safe!(|| {
+            match to {
+                StateRole::Follower => sm.become_follower(wterm, wlead),
+                StateRole::Candidate => sm.become_candidate(),
+                StateRole::Leader => sm.become_leader(),
+            }
+        });
         if res.is_ok() ^ wallow {
             panic!("#{}: allow = {}, want {}", i, res.is_ok(), wallow);
         }
@@ -1802,7 +1797,6 @@ fn test_recover_pending_config() {
 // test_recover_double_pending_config tests that new leader will panic if
 // there exist two uncommitted config entries.
 #[test]
-#[should_panic]
 fn test_recover_double_pending_config() {
     let mut r = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
     let mut e = Entry::new();
@@ -1810,7 +1804,7 @@ fn test_recover_double_pending_config() {
     r.append_entry(&mut [e.clone()]);
     r.append_entry(&mut [e]);
     r.become_candidate();
-    r.become_leader();
+    assert!(recover_safe!(|| r.become_leader()).is_err());
 }
 
 // test_add_node tests that addNode could update pendingConf and nodes correctly.
