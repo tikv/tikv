@@ -105,3 +105,20 @@ macro_rules! box_err {
         box_err!(format!($f, $($arg),+))
     });
 }
+
+/// Recover from panicable closure.
+///
+/// Please note that this macro assume the closure is able to be forced to implement `RecoverSafe`.
+/// Also see https://doc.rust-lang.org/nightly/std/panic/trait.RecoverSafe.html
+// Maybe we should define a recover macro too.
+#[macro_export]
+macro_rules! recover_safe {
+    ($e:expr) => ({
+        use std::panic::{self, AssertRecoverSafe};
+        use $crate::util::panic_hook;
+        panic_hook::mute();
+        let res = panic::recover(AssertRecoverSafe($e));
+        panic_hook::unmute();
+        res
+    })
+}
