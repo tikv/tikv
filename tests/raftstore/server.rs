@@ -13,8 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::thread;
-use std::net::SocketAddr;
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::time::Duration;
 
@@ -25,6 +24,7 @@ use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind
 use tikv::server::{Node, Config, create_raft_storage};
 use tikv::raftstore::Result;
 use tikv::util::codec::rpc;
+use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
@@ -75,8 +75,7 @@ impl ServerCluster {
             }
         }
 
-        let conn = TcpStream::connect(addr).unwrap();
-        conn.set_nodelay(true).unwrap();
+        let conn = make_std_tcp_conn(addr).unwrap();
         Ok(conn)
     }
 
