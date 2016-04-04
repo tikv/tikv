@@ -24,3 +24,9 @@ TiKV uses Raft to support Geo-Replication. We have ported etcd's raft implementa
 ### Required rust version
 
 This project requires rust nightly, otherwise it can't build.
+
+## Acknowledgments
+- Thanks [Etcd](https://github.com/coreos/etcd) for providing some great open source tools.
+- Thanks [RocksDB](https://github.com/facebook/rocksdb) for their powerful storage engines.
+- Thanks [mio](https://github.com/carllerche/mio) for providing metal IO library for Rust.
+- Thanks [rust-clippy](https://github.com/Manishearth/rust-clippy) We do love the project. 
