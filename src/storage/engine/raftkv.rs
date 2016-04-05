@@ -21,7 +21,6 @@ use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           GetRequest, CmdType, SeekRequest, DeleteRequest, PutRequest};
 use kvproto::errorpb;
-use kvproto::metapb;
 use kvproto::kvrpcpb::Context;
 
 use pd::PdClient;
@@ -120,20 +119,17 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         Ok(resp)
     }
 
-    fn new_request_header(&self, region_id: u64, peer: metapb::Peer) -> RaftRequestHeader {
+    fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
         let mut header = RaftRequestHeader::new();
-        header.set_region_id(region_id);
-        header.set_peer(peer);
+        header.set_region_id(ctx.get_region_id());
+        header.set_peer(ctx.get_peer().clone());
+        header.set_region_epoch(ctx.get_region_epoch().clone());
         header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
         header
     }
 
-    fn exec_requests(&self,
-                     region_id: u64,
-                     peer: metapb::Peer,
-                     reqs: Vec<Request>)
-                     -> Result<Vec<Response>> {
-        let header = self.new_request_header(region_id, peer);
+    fn exec_requests(&self, ctx: &Context, reqs: Vec<Request>) -> Result<Vec<Response>> {
+        let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::new();
         cmd.set_header(header);
         cmd.set_requests(RepeatedField::from_vec(reqs));
@@ -141,8 +137,8 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         Ok(resp.take_responses().to_vec())
     }
 
-    fn exec_request(&self, region_id: u64, peer: metapb::Peer, req: Request) -> Result<Response> {
-        let resps = self.exec_requests(region_id, peer, vec![req]);
+    fn exec_request(&self, ctx: &Context, req: Request) -> Result<Response> {
+        let resps = self.exec_requests(ctx, vec![req]);
         resps.map(|mut v| v.remove(0))
     }
 }
@@ -160,8 +156,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Get);
         req.set_get(get);
-        let lead = ctx.get_peer().clone();
-        let mut resp = try!(self.exec_request(ctx.get_region_id(), lead, req));
+        let mut resp = try!(self.exec_request(ctx, req));
         if resp.get_cmd_type() != CmdType::Get {
             return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!",
                                                       CmdType::Get,
@@ -182,8 +177,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Seek);
         req.set_seek(seek);
-        let lead = ctx.get_peer().clone();
-        let mut resp = try!(self.exec_request(ctx.get_region_id(), lead, req));
+        let mut resp = try!(self.exec_request(ctx, req));
         if resp.get_cmd_type() != CmdType::Seek {
             return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}",
                                                       CmdType::Seek,
@@ -223,7 +217,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
             }
             reqs.push(req);
         }
-        try!(self.exec_requests(ctx.get_region_id(), ctx.get_peer().clone(), reqs));
+        try!(self.exec_requests(ctx, reqs));
         Ok(())
     }
 }

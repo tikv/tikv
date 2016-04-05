@@ -300,11 +300,10 @@ impl<T: Simulator> Cluster<T> {
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
             let resp = self.call_command_on_leader(region_id, req, timeout).unwrap();
             if resp.get_header().has_error() {
-                // TODO check epoch instead.
                 if self.refresh_leader_if_needed(&resp, region_id) {
                     warn!("seems leader changed, let's retry");
                     continue;
-                } else if try_cnt == 1 && resp.get_header().get_error().has_key_not_in_region() {
+                } else if try_cnt == 1 && resp.get_header().get_error().has_stale_epoch() {
                     warn!("seems split, let's retry");
                     try_cnt += 1;
                     continue;
