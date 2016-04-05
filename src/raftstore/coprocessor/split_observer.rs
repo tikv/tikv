@@ -174,14 +174,14 @@ mod test {
 
         let mut observer = SplitObserver;
 
-        let response = observer.pre_admin(&mut ctx, &mut request);
+        let resp = observer.pre_admin(&mut ctx, &mut request);
         // since no split is defined, actual coprocessor won't be invoke.
-        assert!(response.is_ok());
+        assert!(resp.is_ok());
         assert!(!request.has_split(), "only split request should be handle.");
 
         request = new_split_request(b"test");
-        let response = observer.pre_admin(&mut ctx, &mut request);
-        assert!(response.is_err(), "invalid split should be prevented");
+        let resp = observer.pre_admin(&mut ctx, &mut request);
+        assert!(resp.is_err(), "invalid split should be prevented");
 
         let mut key = Vec::with_capacity(100);
         key.write(TABLE_PREFIX).unwrap();
