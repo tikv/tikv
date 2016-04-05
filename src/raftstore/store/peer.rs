@@ -323,11 +323,6 @@ impl Peer {
     }
 
     fn check_epoch(&self, req: &RaftCmdRequest) -> Result<()> {
-        // TODO remove following check once client and kvserver fulfill the epoch header.
-        if !req.get_requests().is_empty() {
-            return Ok(());
-        }
-
         let (mut check_ver, mut check_conf_ver) = (false, false);
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
