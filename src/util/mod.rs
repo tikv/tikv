@@ -129,6 +129,6 @@ impl<T> HandyRwLock<T> for RwLock<T> {
 
 pub fn make_std_tcp_conn<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
     let stream = try!(TcpStream::connect(addr));
-    try!(stream.set_nodelay(false));
+    try!(stream.set_nodelay(true));
     Ok(stream)
 }
