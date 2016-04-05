@@ -24,20 +24,20 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
-        let putk = k.as_bytes();
-        let putv = v.as_bytes();
-        cluster.put(putk, putv);
-        let v = cluster.get(putk);
-        assert_eq!(v, Some(putv.to_vec()));
+        let put_key = k.as_bytes();
+        let put_value = v.as_bytes();
+        cluster.put(put_key, put_value);
+        let v = cluster.get(put_key);
+        assert_eq!(v, Some(put_value.to_vec()));
     }
     // value should be overwrited.
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i + 1));
-        let putk = k.as_bytes();
-        let putv = v.as_bytes();
-        cluster.put(putk, putv);
-        let v = cluster.get(putk);
-        assert_eq!(v, Some(putv.to_vec()));
+        let put_key = k.as_bytes();
+        let put_value = v.as_bytes();
+        cluster.put(put_key, put_value);
+        let v = cluster.get(put_key);
+        assert_eq!(v, Some(put_value.to_vec()));
     }
 }
 
@@ -47,18 +47,18 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
-        let putk = k.as_bytes();
-        let putv = v.as_bytes();
-        cluster.put(putk, putv);
-        let v = cluster.get(putk);
-        assert_eq!(v, Some(putv.to_vec()));
+        let put_key = k.as_bytes();
+        let put_value = v.as_bytes();
+        cluster.put(put_key, put_value);
+        let v = cluster.get(put_key);
+        assert_eq!(v, Some(put_value.to_vec()));
     }
 
     for i in 1..1000 {
         let k = format!("key{}", i);
-        let putk = k.as_bytes();
-        cluster.delete(putk);
-        assert!(cluster.get(putk).is_none());
+        let put_key = k.as_bytes();
+        cluster.delete(put_key);
+        assert!(cluster.get(put_key).is_none());
     }
 }
 
@@ -68,32 +68,32 @@ fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for i in 100..200 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
-        let putk = k.as_bytes();
-        let putv = v.as_bytes();
-        cluster.put(putk, putv);
+        let put_key = k.as_bytes();
+        let put_value = v.as_bytes();
+        cluster.put(put_key, put_value);
     }
 
     for i in 0..100 {
         let k = format!("key{:03}", i);
-        let putk = k.as_bytes();
-        let (k, v) = cluster.seek(putk).unwrap();
+        let put_key = k.as_bytes();
+        let (k, v) = cluster.seek(put_key).unwrap();
         assert_eq!(k, b"key100");
         assert_eq!(v, b"value100");
     }
 
     for i in 100..200 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
-        let putk = k.as_bytes();
-        let putv = v.as_bytes();
-        let (sk, sv) = cluster.seek(putk).unwrap();
-        assert_eq!(sk, putk);
-        assert_eq!(sv, putv);
+        let put_key = k.as_bytes();
+        let put_value = v.as_bytes();
+        let (sk, sv) = cluster.seek(put_key).unwrap();
+        assert_eq!(sk, put_key);
+        assert_eq!(sv, put_value);
     }
 
     for i in 200..300 {
         let k = format!("key{}", i);
-        let putk = k.as_bytes();
-        assert!(cluster.seek(putk).is_none());
+        let put_key = k.as_bytes();
+        assert!(cluster.seek(put_key).is_none());
     }
 
     assert!(cluster.seek(b"key2").is_none(),

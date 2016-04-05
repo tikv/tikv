@@ -55,6 +55,12 @@ pub struct MemStorageCore {
     entries: Vec<Entry>,
 }
 
+impl Default for MemStorageCore {
+    fn default() -> MemStorageCore {
+        MemStorageCore::new()
+    }
+}
+
 impl MemStorageCore {
     pub fn new() -> MemStorageCore {
         MemStorageCore {

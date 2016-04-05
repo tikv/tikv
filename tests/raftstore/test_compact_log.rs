@@ -40,11 +40,11 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
-        let putk = k.as_bytes();
-        let putv = v.as_bytes();
-        cluster.put(putk, putv);
-        let v = cluster.get(putk);
-        assert_eq!(v, Some(putv.to_vec()));
+        let put_key = k.as_bytes();
+        let put_value = v.as_bytes();
+        cluster.put(put_key, put_value);
+        let v = cluster.get(put_key);
+        assert_eq!(v, Some(put_value.to_vec()));
     }
 
     // wait log gc.

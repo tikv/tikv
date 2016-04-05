@@ -14,7 +14,7 @@
 use rand::{self, Rng, ThreadRng};
 
 /// A random generator of kv.
-/// Every iter should be taken in µs. See also benches::bench_kv_iter.
+/// Every iter should be taken in µs. See also `benches::bench_kv_iter`.
 pub struct KvGenerator {
     key_len: usize,
     value_len: usize,

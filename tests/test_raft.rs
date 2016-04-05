@@ -1765,8 +1765,8 @@ fn test_step_ignore_config() {
     let mut we = empty_entry(1, 3);
     we.set_entry_type(EntryType::EntryNormal);
     let wents = vec![we];
-    let ents = r.raft_log.entries(index + 1, NO_LIMIT).expect("");
-    assert_eq!(ents, wents);
+    let entries = r.raft_log.entries(index + 1, NO_LIMIT).expect("");
+    assert_eq!(entries, wents);
     assert_eq!(r.pending_conf, pending_conf);
 }
 

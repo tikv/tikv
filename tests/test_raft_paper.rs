@@ -158,11 +158,11 @@ fn test_leader_bcast_beat() {
         m
     };
 
-    let wmsgs = vec![
+    let expect_msgs = vec![
         new_message_ext(1, 2),
         new_message_ext(1, 3),
     ];
-    assert_eq!(msgs, wmsgs);
+    assert_eq!(msgs, expect_msgs);
 }
 
 #[test]
@@ -211,11 +211,11 @@ fn test_nonleader_start_election(state: StateRole) {
         m.set_index(0);
         m
     };
-    let wmsgs = vec![
+    let expect_msgs = vec![
         new_message_ext(1, 2),
         new_message_ext(1, 3),
     ];
-    assert_eq!(msgs, wmsgs);
+    assert_eq!(msgs, expect_msgs);
 }
 
 // test_leader_election_in_one_round_rpc tests all cases that may happen in
@@ -292,9 +292,9 @@ fn test_follower_vote() {
         let mut m = new_message(1, nvote, MessageType::MsgRequestVoteResponse, 0);
         m.set_term(1);
         m.set_reject(wreject);
-        let wmsgs = vec![m];
-        if msgs != wmsgs {
-            panic!("#{}: msgs = {:?}, want {:?}", i, msgs, wmsgs);
+        let expect_msgs = vec![m];
+        if msgs != expect_msgs {
+            panic!("#{}: msgs = {:?}, want {:?}", i, msgs, expect_msgs);
         }
     }
 }
@@ -458,11 +458,11 @@ fn test_leader_start_replication() {
         m.set_entries(RepeatedField::from_vec(ents));
         m
     };
-    let wmsgs = vec![
+    let expect_msgs = vec![
         new_message_ext(1, 2, wents.clone()),
         new_message_ext(1, 3, wents.clone()),
     ];
-    assert_eq!(msgs, wmsgs);
+    assert_eq!(msgs, expect_msgs);
     assert_eq!(r.raft_log.unstable_entries(), Some(&*wents));
 }
 
@@ -651,9 +651,9 @@ fn test_follower_check_msg_append() {
             wm.set_reject(wreject);
             wm.set_reject_hint(wreject_hint);
         }
-        let wmsgs = vec![wm];
-        if msgs != wmsgs {
-            panic!("#{}: msgs = {:?}, want {:?}", i, msgs, wmsgs);
+        let expect_msgs = vec![wm];
+        if msgs != expect_msgs {
+            panic!("#{}: msgs = {:?}, want {:?}", i, msgs, expect_msgs);
         }
     }
 }
