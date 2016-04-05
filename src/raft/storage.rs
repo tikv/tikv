@@ -55,8 +55,8 @@ pub struct MemStorageCore {
     entries: Vec<Entry>,
 }
 
-impl MemStorageCore {
-    pub fn new() -> MemStorageCore {
+impl Default for MemStorageCore {
+    fn default() -> MemStorageCore {
         MemStorageCore {
             // When starting from scratch populate the list with a dummy entry at term zero.
             entries: vec![Entry::new()],
@@ -64,7 +64,9 @@ impl MemStorageCore {
             snapshot: Snapshot::new(),
         }
     }
+}
 
+impl MemStorageCore {
     pub fn set_hardstate(&mut self, hs: HardState) {
         self.hard_state = hs;
     }
@@ -181,7 +183,7 @@ impl MemStorage {
 
 impl Default for MemStorage {
     fn default() -> MemStorage {
-        MemStorage { core: RwLock::new(MemStorageCore::new()) }
+        MemStorage { core: RwLock::new(MemStorageCore::default()) }
     }
 }
 
