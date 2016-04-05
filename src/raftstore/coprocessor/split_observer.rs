@@ -170,52 +170,52 @@ mod test {
         let path = TempDir::new("test-raftstore").unwrap();
         let storage = new_peer_storage(&path);
         let mut ctx = ObserverContext::new(&storage);
-        let mut request = AdminRequest::new();
+        let mut req = AdminRequest::new();
 
         let mut observer = SplitObserver;
 
-        let resp = observer.pre_admin(&mut ctx, &mut request);
+        let resp = observer.pre_admin(&mut ctx, &mut req);
         // since no split is defined, actual coprocessor won't be invoke.
         assert!(resp.is_ok());
-        assert!(!request.has_split(), "only split request should be handle.");
+        assert!(!req.has_split(), "only split req should be handle.");
 
-        request = new_split_request(b"test");
-        let resp = observer.pre_admin(&mut ctx, &mut request);
+        req = new_split_request(b"test");
+        let resp = observer.pre_admin(&mut ctx, &mut req);
         assert!(resp.is_err(), "invalid split should be prevented");
 
         let mut key = Vec::with_capacity(100);
         key.write(TABLE_PREFIX).unwrap();
         key = bytes::encode_bytes(&key);
-        request = new_split_request(&key);
-        assert!(observer.pre_admin(&mut ctx, &mut request).is_ok());
-        assert_eq!(request.get_split().get_split_key(), &*key);
+        req = new_split_request(&key);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert_eq!(req.get_split().get_split_key(), &*key);
 
         key = new_row_key(1, 2, 0, 0);
-        request = new_split_request(&key);
+        req = new_split_request(&key);
         let mut expect_key = key;
-        assert!(observer.pre_admin(&mut ctx, &mut request).is_ok());
-        assert_eq!(request.get_split().get_split_key(), &*expect_key);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_row_key(1, 2, 1, 0);
-        request = new_split_request(&key);
-        assert!(observer.pre_admin(&mut ctx, &mut request).is_ok());
-        assert_eq!(request.get_split().get_split_key(), &*expect_key);
+        req = new_split_request(&key);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_row_key(1, 2, 1, 1);
-        request = new_split_request(&key);
-        assert!(observer.pre_admin(&mut ctx, &mut request).is_ok());
-        assert_eq!(request.get_split().get_split_key(), &*expect_key);
+        req = new_split_request(&key);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_index_key(1, 2, 0, 0);
-        request = new_split_request(&key);
+        req = new_split_request(&key);
         expect_key = key;
-        assert!(observer.pre_admin(&mut ctx, &mut request).is_ok());
-        assert_eq!(request.get_split().get_split_key(), &*expect_key);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_index_key(1, 2, 1, 5);
-        request = new_split_request(&key);
+        req = new_split_request(&key);
         let expect_key = new_index_key(1, 2, 1, 0);
-        assert!(observer.pre_admin(&mut ctx, &mut request).is_ok());
-        assert_eq!(request.get_split().get_split_key(), &*expect_key);
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert_eq!(req.get_split().get_split_key(), &*expect_key);
     }
 }
