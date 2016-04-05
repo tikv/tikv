@@ -469,23 +469,22 @@ mod tests {
     }
 
     use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use std::thread;
     use rand::random;
 
     struct Oracle {
-        ts: Mutex<u64>,
+        ts: AtomicUsize,
     }
 
     impl Oracle {
         fn new() -> Oracle {
-            Oracle { ts: Mutex::new(0) }
+            Oracle { ts: AtomicUsize::new(0) }
         }
 
         fn get_ts(&self) -> u64 {
-            let mut ts = self.ts.lock().unwrap();
-            *ts += 1;
-            *ts
+            self.ts.fetch_add(1, Ordering::SeqCst) as u64
         }
     }
 

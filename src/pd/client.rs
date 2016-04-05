@@ -14,6 +14,7 @@
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 use util::codec::rpc;
@@ -78,7 +79,7 @@ enum Msg {
 }
 
 pub struct Client<C: TRpcClient + 'static> {
-    msg_id: Mutex<u64>,
+    msg_id: AtomicUsize,
     rpc_client: Arc<C>,
     tx: Mutex<Sender<Msg>>,
     handle: Option<JoinHandle<()>>,
@@ -105,7 +106,7 @@ impl<C: TRpcClient + 'static> Client<C> {
                      }))
         };
         Ok(Client {
-            msg_id: Mutex::new(0),
+            msg_id: AtomicUsize::new(0),
             rpc_client: shared.clone(),
             tx: Mutex::new(tx),
             handle: Some(handle),
@@ -141,9 +142,7 @@ impl<C: TRpcClient + 'static> Client<C> {
     }
 
     fn alloc_msg_id(&self) -> u64 {
-        let mut id = self.msg_id.lock().unwrap();
-        *id += 1;
-        *id
+        self.msg_id.fetch_add(1, Ordering::SeqCst) as u64
     }
 
     fn clone_tx(&self) -> Sender<Msg> {
