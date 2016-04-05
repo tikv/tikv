@@ -23,3 +23,5 @@ genprotobuf:
 format:
 	@cargo fmt -- --write-mode overwrite | grep -v "found TODO" || exit 0
 	@rustfmt --write-mode overwrite tests/tests.rs benches/benches.rs | grep -v "found TODO" || exit 0
+clean:
+	cargo clean
