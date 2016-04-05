@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use raftstore::store::{Msg as StoreMsg, Transport, Callback, SendCh};
 use raftstore::Result as RaftStoreResult;
@@ -78,7 +79,7 @@ pub struct ServerTransport<T: PdClient> {
 
     pd_client: Arc<RwLock<T>>,
     ch: ServerSendCh,
-    msg_id: Mutex<u64>,
+    msg_id: AtomicUsize,
 }
 
 impl<T: PdClient> ServerTransport<T> {
@@ -87,14 +88,12 @@ impl<T: PdClient> ServerTransport<T> {
             cluster_id: cluster_id,
             pd_client: pd_client.clone(),
             ch: ch,
-            msg_id: Mutex::new(0),
+            msg_id: AtomicUsize::new(1),
         }
     }
 
     fn alloc_msg_id(&self) -> u64 {
-        let mut id = self.msg_id.lock().unwrap();
-        *id += 1;
-        *id
+        self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
     }
 }
 
