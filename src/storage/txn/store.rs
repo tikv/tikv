@@ -484,7 +484,7 @@ mod tests {
         }
 
         fn get_ts(&self) -> u64 {
-            self.ts.fetch_add(1, Ordering::SeqCst) as u64
+            self.ts.fetch_add(1, Ordering::Relaxed) as u64
         }
     }
 

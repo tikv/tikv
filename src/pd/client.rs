@@ -142,7 +142,7 @@ impl<C: TRpcClient + 'static> Client<C> {
     }
 
     fn alloc_msg_id(&self) -> u64 {
-        self.msg_id.fetch_add(1, Ordering::SeqCst) as u64
+        self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
     }
 
     fn clone_tx(&self) -> Sender<Msg> {
