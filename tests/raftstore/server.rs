@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::thread;
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
 
 use rocksdb::DB;
@@ -38,7 +39,7 @@ pub struct ServerCluster {
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
 
-    msg_id: Mutex<u64>,
+    msg_id: AtomicUsize,
     pd_client: Arc<RwLock<TestPdClient>>,
 }
 
@@ -50,15 +51,13 @@ impl ServerCluster {
             handles: HashMap::new(),
             addrs: HashMap::new(),
             conns: Mutex::new(HashMap::new()),
-            msg_id: Mutex::new(0),
+            msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
         }
     }
 
     fn alloc_msg_id(&self) -> u64 {
-        let mut msg_id = self.msg_id.lock().unwrap();
-        *msg_id += 1;
-        *msg_id
+        self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
     }
 
 
