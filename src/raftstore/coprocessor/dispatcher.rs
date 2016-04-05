@@ -235,16 +235,15 @@ mod test {
 
     #[test]
     fn test_coprocessor_host() {
-        // bypass_pre, bypass_post, called_pre, called_post
-        let (bpr1, bpt1, cpr1, cpt1, r1) = (share(false),
-                                            share(false),
-                                            share(0),
-                                            share(0),
-                                            share(false));
-        let observer1 = TestCoprocessor::new(bpr1.clone(),
-                                             bpt1.clone(),
-                                             cpr1.clone(),
-                                             cpt1.clone(),
+        let (bypass_pre1, bypass_post1, called_pre1, called_post1, r1) = (share(false),
+                                                                          share(false),
+                                                                          share(0),
+                                                                          share(0),
+                                                                          share(false));
+        let observer1 = TestCoprocessor::new(bypass_pre1.clone(),
+                                             bypass_post1.clone(),
+                                             called_pre1.clone(),
+                                             called_post1.clone(),
                                              r1.clone());
         let mut host = CoprocessorHost::default();
         host.registry.register_observer(3, Box::new(observer1));
@@ -259,54 +258,61 @@ mod test {
         let mut query_resp = RaftCmdResponse::new();
         query_resp.set_responses(RepeatedField::from_vec(vec![Response::new()]));
 
-        assert_eq!(*cpr1.rl(), 0);
+        assert_eq!(*called_pre1.rl(), 0);
         assert!(host.pre_propose(&ps, &mut admin_req).is_ok());
-        assert_eq!(*cpr1.rl(), 1);
+        assert_eq!(*called_pre1.rl(), 1);
 
-        assert_eq!(*cpt1.rl(), 0);
+        assert_eq!(*called_post1.rl(), 0);
         host.post_apply(&ps, &admin_req, &mut admin_resp);
-        assert_eq!(*cpt1.rl(), 1);
+        assert_eq!(*called_post1.rl(), 1);
 
         // reset
-        set_all(&[&cpt1, &cpr1], 0);
+        set_all(&[&called_post1, &called_pre1], 0);
 
-        let (bpr2, bpt2, cpr2, cpt2, r2) = (share(false),
-                                            share(false),
-                                            share(0),
-                                            share(0),
-                                            share(false));
-        let observer2 = TestCoprocessor::new(bpr2.clone(),
-                                             bpt2.clone(),
-                                             cpr2.clone(),
-                                             cpt2.clone(),
+        let (bypass_pre2, bypass_post2, called_pre2, called_post2, r2) = (share(false),
+                                                                          share(false),
+                                                                          share(0),
+                                                                          share(0),
+                                                                          share(false));
+        let observer2 = TestCoprocessor::new(bypass_pre2.clone(),
+                                             bypass_post2.clone(),
+                                             called_pre2.clone(),
+                                             called_post2.clone(),
                                              r2.clone());
         host.registry.register_observer(2, Box::new(observer2));
 
-        set_all(&[&bpr2, &bpt2], true);
+        set_all(&[&bypass_pre2, &bypass_post2], true);
 
-        assert_all(&[&cpr1, &cpt1, &cpr2, &cpt2], &[0, 0, 0, 0]);
+        assert_all(&[&called_pre1, &called_post1, &called_pre2, &called_post2],
+                   &[0, 0, 0, 0]);
 
         assert!(host.pre_propose(&ps, &mut query_req).is_ok());
         host.post_apply(&ps, &query_req, &mut query_resp);
 
-        assert_all(&[&cpr1, &cpt1, &cpr2, &cpt2], &[0, 0, 2, 2]);
+        assert_all(&[&called_pre1, &called_post1, &called_pre2, &called_post2],
+                   &[0, 0, 2, 2]);
 
-        set_all(&[&bpr2, &bpt2], false);
-        set_all(&[&cpr2, &cpt2], 0);
+        set_all(&[&bypass_pre2, &bypass_post2], false);
+        set_all(&[&called_pre2, &called_post2], 0);
 
-        assert_all(&[&cpr1, &cpt1, &cpr2, &cpt2], &[0, 0, 0, 0]);
+        assert_all(&[&called_pre1, &called_post1, &called_pre2, &called_post2],
+                   &[0, 0, 0, 0]);
 
         assert!(host.pre_propose(&ps, &mut admin_req).is_ok());
         host.post_apply(&ps, &admin_req, &mut admin_resp);
 
-        assert_all(&[&cpr1, &cpt1, &cpr2, &cpt2], &[1, 1, 1, 1]);
+        assert_all(&[&called_pre1, &called_post1, &called_pre2, &called_post2],
+                   &[1, 1, 1, 1]);
 
-        set_all(&[&bpr2, &bpt2], false);
-        set_all(&[&cpr1, &cpt1, &cpr2, &cpt2], 0);
-        assert_all(&[&cpr1, &cpt1, &cpr2, &cpt2], &[0, 0, 0, 0]);
+        set_all(&[&bypass_pre2, &bypass_post2], false);
+        set_all(&[&called_pre1, &called_post1, &called_pre2, &called_post2],
+                0);
+        assert_all(&[&called_pre1, &called_post1, &called_pre2, &called_post2],
+                   &[0, 0, 0, 0]);
         // when return error, following coprocessor should not be run.
         *r2.wl() = true;
         assert!(host.pre_propose(&ps, &mut admin_req).is_err());
-        assert_all(&[&cpr1, &cpt1, &cpr2, &cpt2], &[0, 0, 1, 0]);
+        assert_all(&[&called_pre1, &called_post1, &called_pre2, &called_post2],
+                   &[0, 0, 1, 0]);
     }
 }

@@ -430,10 +430,10 @@ impl<T: Simulator> Cluster<T> {
         let status_cmd = new_region_detail_cmd();
         let peer = new_peer(peer_id, peer_id);
         let req = new_status_request(region_id, peer, status_cmd);
-        let res = self.call_command(req, Duration::from_secs(3));
-        assert!(res.is_ok(), format!("{:?}", res));
+        let resp = self.call_command(req, Duration::from_secs(3));
+        assert!(resp.is_ok(), format!("{:?}", resp));
 
-        let mut resp = res.unwrap();
+        let mut resp = resp.unwrap();
         assert!(resp.has_status_response());
         let mut status_resp = resp.take_status_response();
         assert_eq!(status_resp.get_cmd_type(), StatusCmdType::RegionDetail);

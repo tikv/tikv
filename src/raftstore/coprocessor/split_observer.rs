@@ -19,7 +19,7 @@ use protobuf::RepeatedField;
 use util::codec::bytes;
 use std::result::Result as StdResult;
 
-/// SplitObserver adjusts the split key so that it won't seperate
+/// `SplitObserver` adjusts the split key so that it won't seperate
 /// the data of a row into two region.
 pub struct SplitObserver;
 
@@ -174,14 +174,14 @@ mod test {
 
         let mut observer = SplitObserver;
 
-        let res = observer.pre_admin(&mut ctx, &mut req);
+        let resp = observer.pre_admin(&mut ctx, &mut req);
         // since no split is defined, actual coprocessor won't be invoke.
-        assert!(res.is_ok());
-        assert!(!req.has_split(), "only split request should be handle.");
+        assert!(resp.is_ok());
+        assert!(!req.has_split(), "only split req should be handle.");
 
         req = new_split_request(b"test");
-        let res = observer.pre_admin(&mut ctx, &mut req);
-        assert!(res.is_err(), "invalid split should be prevented");
+        let resp = observer.pre_admin(&mut ctx, &mut req);
+        assert!(resp.is_err(), "invalid split should be prevented");
 
         let mut key = Vec::with_capacity(100);
         key.write(TABLE_PREFIX).unwrap();

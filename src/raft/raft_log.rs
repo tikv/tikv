@@ -648,28 +648,31 @@ mod test {
 
     #[test]
     fn test_stable_to_with_snap() {
-        let (snapi, snapt) = (5u64, 2u64);
+        let (snap_index, snap_term) = (5u64, 2u64);
         let tests = vec![
-            (snapi + 1, snapt, vec![], snapi + 1),
-            (snapi, snapt, vec![], snapi + 1),
-            (snapi - 1, snapt, vec![], snapi + 1),
+            (snap_index + 1, snap_term, vec![], snap_index + 1),
+            (snap_index, snap_term, vec![], snap_index + 1),
+            (snap_index - 1, snap_term, vec![], snap_index + 1),
 
-            (snapi + 1, snapt + 1, vec![], snapi + 1),
-            (snapi, snapt + 1, vec![], snapi + 1),
-            (snapi - 1, snapt + 1, vec![], snapi + 1),
+            (snap_index + 1, snap_term + 1, vec![], snap_index + 1),
+            (snap_index, snap_term + 1, vec![], snap_index + 1),
+            (snap_index - 1, snap_term + 1, vec![], snap_index + 1),
 
-            (snapi + 1, snapt, vec![new_entry(snapi + 1, snapt)], snapi + 2),
-            (snapi, snapt, vec![new_entry(snapi + 1, snapt)], snapi + 1),
-            (snapi - 1, snapt, vec![new_entry(snapi + 1, snapt)], snapi + 1),
+            (snap_index + 1, snap_term, vec![new_entry(snap_index + 1, snap_term)], snap_index + 2),
+            (snap_index, snap_term, vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
+            (snap_index - 1, snap_term, vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
 
-            (snapi + 1, snapt + 1, vec![new_entry(snapi + 1, snapt)], snapi + 1),
-            (snapi, snapt + 1, vec![new_entry(snapi + 1, snapt)], snapi + 1),
-            (snapi - 1, snapt + 1, vec![new_entry(snapi + 1, snapt)], snapi + 1),
+            (snap_index + 1, snap_term + 1,
+                vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
+            (snap_index, snap_term + 1,
+                vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
+            (snap_index - 1, snap_term + 1,
+                vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
         ];
 
         for (i, &(stablei, stablet, ref new_ents, wunstable)) in tests.iter().enumerate() {
             let store = MemStorage::new();
-            store.wl().apply_snapshot(new_snapshot(snapi, snapt)).expect("");
+            store.wl().apply_snapshot(new_snapshot(snap_index, snap_term)).expect("");
             let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&new_ents);
             raft_log.stable_to(stablei, stablet);
@@ -748,7 +751,7 @@ mod test {
             (4, Some(&ents[1..2])),
             (5, None),
         ];
-        for (i, &(applied, ref wents)) in tests.iter().enumerate() {
+        for (i, &(applied, ref expect_entries)) in tests.iter().enumerate() {
             let store = MemStorage::new();
             store.wl().apply_snapshot(new_snapshot(3, 1)).expect("");
             let mut raft_log = RaftLog::new(Arc::new(store));
@@ -756,9 +759,12 @@ mod test {
             raft_log.maybe_commit(5, 1);
             raft_log.applied_to(applied);
 
-            let nents = raft_log.next_entries();
-            if nents != wents.map(|n| n.to_vec()) {
-                panic!("#{}: nents = {:?}, want {:?}", i, nents, wents);
+            let next_entries = raft_log.next_entries();
+            if next_entries != expect_entries.map(|n| n.to_vec()) {
+                panic!("#{}: next_entries = {:?}, want {:?}",
+                       i,
+                       next_entries,
+                       expect_entries);
             }
         }
     }
@@ -925,12 +931,12 @@ mod test {
                 continue;
             }
             let glasti = res.unwrap();
-            let gcommit = raft_log.committed;
+            let gcommitted = raft_log.committed;
             if glasti != wlasti {
                 panic!("#{}: lastindex = {:?}, want {:?}", i, glasti, wlasti);
             }
-            if gcommit != wcommit {
-                panic!("#{}: committed = {}, want {}", i, gcommit, wcommit);
+            if gcommitted != wcommit {
+                panic!("#{}: committed = {}, want {}", i, gcommitted, wcommit);
             }
             let ents_len = ents.len() as u64;
             if glasti.is_some() && ents_len != 0 {
