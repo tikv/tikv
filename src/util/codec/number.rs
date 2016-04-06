@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use byteorder::{ByteOrder, BigEndian};
-use super::{check_bound, Result};
+use super::{check_bound, Result, Error};
 
 const SIGN_MARK: u64 = 0x8000000000000000;
 
@@ -70,18 +70,67 @@ pub fn encode_u64_desc(buf: &mut [u8], v: u64) -> Result<()> {
     Ok(())
 }
 
-// `decode_u64` decodes value encoded by `encode_u64` before.
+/// `decode_u64` decodes value encoded by `encode_u64` before.
 pub fn decode_u64(buf: &[u8]) -> Result<u64> {
     try!(check_bound(buf, 8));
     let v = BigEndian::read_u64(buf);
     Ok(v)
 }
 
-// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
+/// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
 pub fn decode_u64_desc(buf: &[u8]) -> Result<u64> {
     try!(check_bound(buf, 8));
     let v = BigEndian::read_u64(buf);
     Ok(!v)
+}
+
+/// `encode_var_i64` writes the encoded value to slice buf.
+/// Note that the encoded result is not memcomparable.
+pub fn encode_var_i64(buf: &mut [u8], v: i64) -> usize {
+    let mut vx = (v as u64) << 1;
+    if v < 0 {
+        vx = !vx;
+    }
+    encode_var_u64(buf, vx)
+}
+
+/// `decode_var_i64` decodes value encoded by `encode_var_i64` before.
+pub fn decode_var_i64(buf: &[u8]) -> Result<(i64, usize)> {
+    let (v, n) = try!(decode_var_u64(buf));
+    let mut vx = v >> 1;
+    if v & 1 != 0 {
+        vx = !vx;
+    }
+    Ok((vx as i64, n))
+}
+
+/// `encode_var_u64` writes the encoded value to slice buf.
+/// Note that the encoded result is not memcomparable.
+pub fn encode_var_u64(buf: &mut [u8], mut v: u64) -> usize {
+    let mut i = 0;
+    while v >= 0x80 {
+        buf[i] = v as u8 | 0x80;
+        v >>= 7;
+        i += 1;
+    }
+    buf[i] = v as u8;
+    i + 1
+}
+
+/// `decode_var_u64` decodes value encoded by `encode_var_u64` before.
+pub fn decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
+    let (mut x, mut s) = (0, 0);
+    for (i, &b) in buf.iter().enumerate() {
+        if b < 0x80 {
+            if i > 9 || i == 9 && b > 1 {
+                return Err(Error::OutOfBound(8, i));
+            }
+            return Ok((x | ((b as u64) << s), i + 1));
+        }
+        x |= ((b & 0x7f) as u64) << s;
+        s += 7;
+    }
+    Err(Error::Eof)
 }
 
 #[cfg(test)]
@@ -90,6 +139,7 @@ mod test {
     use std::{i64, u64};
     use util::codec::Result;
     use std::fmt::Debug;
+    use protobuf::CodedOutputStream;
 
     type TestCodecPair<T> = (Box<Fn(&mut [u8], T) -> Result<()>>, Box<Fn(&[u8]) -> Result<T>>);
 
@@ -143,5 +193,33 @@ mod test {
 
         ordered_case.reverse();
         test_order(&test_func[1], &test_values, &ordered_case);
+    }
+
+    #[test]
+    fn test_var_i64_codec() {
+        let test_values = vec![i64::MAX, i64::MIN, -2, -3, 0, 0, 4, 1024];
+        for &v in &test_values {
+            let mut buf = vec![0; 10];
+            assert!(encode_var_i64(&mut buf, v) <= 10);
+            assert_eq!(v, decode_var_i64(&buf).unwrap().0);
+        }
+    }
+
+    #[test]
+    fn test_var_u64_codec() {
+        let test_values = vec![u64::MAX, u64::MIN, 2, 3, 0, 0, 4, 1024];
+        for &v in &test_values {
+            let mut buf = vec![0; 10];
+            let mut p_buf = vec![];
+            {
+                let mut writer = CodedOutputStream::new(&mut p_buf);
+                writer.write_uint64_no_tag(v).unwrap();
+                writer.flush().unwrap();
+            }
+            let n = encode_var_u64(&mut buf, v);
+            assert!(n <= 10);
+            assert_eq!(buf[..n], *p_buf);
+            assert_eq!(v, decode_var_u64(&buf).unwrap().0);
+        }
     }
 }
