@@ -358,8 +358,7 @@ impl<T: Simulator> Cluster<T> {
         let resp = &resp.get_responses()[0];
         assert_eq!(resp.get_cmd_type(), CmdType::Seek);
         if resp.has_seek() {
-            Some((resp.get_seek().get_key().to_vec(),
-                  resp.get_seek().get_value().to_vec()))
+            Some((resp.get_seek().get_key().to_vec(), resp.get_seek().get_value().to_vec()))
         } else {
             None
         }

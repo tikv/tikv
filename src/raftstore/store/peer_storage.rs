@@ -180,7 +180,7 @@ impl PeerStorage {
 
     pub fn term(&self, idx: u64) -> raft::Result<u64> {
         match self.entries(idx, idx + 1, 0) {
-            Err(e@RaftError::Store(StorageError::Compacted)) => {
+            Err(e @ RaftError::Store(StorageError::Compacted)) => {
                 // Maybe the dummy entry.
                 if self.truncated_state.get_index() == idx {
                     return Ok(self.truncated_state.get_term());
@@ -466,10 +466,8 @@ impl PeerStorage {
                                     enc_end_key(self.get_region()));
 
         let region_id = self.get_region_id();
-        vec![(keys::region_raft_prefix(region_id),
-              keys::region_raft_prefix(region_id + 1)),
-             (keys::region_meta_prefix(region_id),
-              keys::region_meta_prefix(region_id + 1)),
+        vec![(keys::region_raft_prefix(region_id), keys::region_raft_prefix(region_id + 1)),
+             (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1)),
              (start_key, end_key)]
 
     }

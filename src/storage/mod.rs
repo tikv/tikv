@@ -111,30 +111,30 @@ pub enum Command {
 impl fmt::Debug for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Command::Get{ref key, start_ts, ..} => {
+            Command::Get { ref key, start_ts, .. } => {
                 write!(f, "kv::command::get {:?} @ {}", key, start_ts)
             }
-            Command::Scan{ref start_key, limit, start_ts, ..} => {
+            Command::Scan { ref start_key, limit, start_ts, .. } => {
                 write!(f,
                        "kv::command::scan {:?}({}) @ {}",
                        start_key,
                        limit,
                        start_ts)
             }
-            Command::Prewrite {ref mutations, start_ts, ..} => {
+            Command::Prewrite { ref mutations, start_ts, .. } => {
                 write!(f,
                        "kv::command::prewrite mutations({}) @ {}",
                        mutations.len(),
                        start_ts)
             }
-            Command::Commit{ref keys, lock_ts, commit_ts, ..} => {
+            Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
                 write!(f,
                        "kv::command::commit {} {} -> {}",
                        keys.len(),
                        lock_ts,
                        commit_ts)
             }
-            Command::CommitThenGet{ref key, lock_ts, commit_ts, get_ts, ..} => {
+            Command::CommitThenGet { ref key, lock_ts, commit_ts, get_ts, .. } => {
                 write!(f,
                        "kv::command::commit_then_get {:?} {} -> {} @ {}",
                        key,
@@ -142,16 +142,16 @@ impl fmt::Debug for Command {
                        commit_ts,
                        get_ts)
             }
-            Command::Cleanup{ref key, start_ts, ..} => {
+            Command::Cleanup { ref key, start_ts, .. } => {
                 write!(f, "kv::command::cleanup {:?} @ {}", key, start_ts)
             }
-            Command::Rollback{ref keys, start_ts, ..} => {
+            Command::Rollback { ref keys, start_ts, .. } => {
                 write!(f,
                        "kv::command::rollback keys({}) @ {}",
                        keys.len(),
                        start_ts)
             }
-            Command::RollbackThenGet{ref key, lock_ts, ..} => {
+            Command::RollbackThenGet { ref key, lock_ts, .. } => {
                 write!(f, "kv::rollback_then_get {:?} @ {}", key, lock_ts)
             }
         }
@@ -387,17 +387,18 @@ pub trait MaybeLocked {
 impl<T> MaybeLocked for Result<T> {
     fn is_locked(&self) -> bool {
         match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked{..}))) => true,
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { .. }))) => true,
             _ => false,
         }
     }
 
     fn get_lock(&self) -> Option<(Vec<u8>, Vec<u8>, u64)> {
         match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked{
-                ref key,
-                ref primary,
-                ts}))) => Some((key.to_owned(), primary.to_owned(), ts)),
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { ref key,
+                                                                       ref primary,
+                                                                       ts }))) => {
+                Some((key.to_owned(), primary.to_owned(), ts))
+            }
             _ => None,
         }
     }
@@ -411,14 +412,14 @@ pub trait MaybeComitted {
 impl<T> MaybeComitted for Result<T> {
     fn is_committed(&self) -> bool {
         match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted{..}))) => true,
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted { .. }))) => true,
             _ => false,
         }
     }
 
     fn get_commit(&self) -> Option<u64> {
         match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted{commit_ts}))) => {
+            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted { commit_ts }))) => {
                 Some(commit_ts)
             }
             _ => None,

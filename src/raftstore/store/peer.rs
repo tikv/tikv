@@ -498,7 +498,7 @@ impl Peer {
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
         let res = match self.process_raft_cmd(index, cmd) {
-            a@Ok(Some(_)) => a,
+            a @ Ok(Some(_)) => a,
             e => {
                 error!("process raft command at index {} err: {:?}", index, e);
                 // If failed, tell raft that the config change was aborted.
@@ -597,15 +597,15 @@ impl Peer {
 
                 if let Some(ref exec_result) = exec_result {
                     match *exec_result {
-                        ExecResult::ChangePeer{ref region, ..} => {
+                        ExecResult::ChangePeer { ref region, .. } => {
                             self.storage.wl().set_region(region);
                         }
-                        ExecResult::CompactLog{ref state} => {
+                        ExecResult::CompactLog { ref state } => {
                             self.storage.wl().set_truncated_state(state);
                             // TODO: we can set exec_result to None, because outer store
                             // doesn't need it.
                         }
-                        ExecResult::SplitRegion{ref left, ..} => {
+                        ExecResult::SplitRegion { ref left, .. } => {
                             self.storage.wl().set_region(left);
                         }
                     }

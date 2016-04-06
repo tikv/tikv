@@ -345,8 +345,8 @@ impl<T: RaftStoreRouter> Handler for Server<T> {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData{token, data} => self.writedata(event_loop, token, data),
-            Msg::SendPeer{addr, data} => self.sendpeer(event_loop, addr, data),
+            Msg::WriteData { token, data } => self.writedata(event_loop, token, data),
+            Msg::SendPeer { addr, data } => self.sendpeer(event_loop, addr, data),
         }
     }
 
