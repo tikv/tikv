@@ -155,9 +155,8 @@ fn main() {
     initial_log(&matches);
 
     let addr = matches.opt_str("A").unwrap_or_else(|| DEFAULT_LISTENING_ADDR.to_owned());
-    let listener = bind(&addr).unwrap();
-
     info!("Start listening on {}...", addr);
+    let listener = bind(&addr).unwrap();
 
     let dsn_name = matches.opt_str("S").unwrap_or_else(|| MEM_DSN.to_owned());
 
