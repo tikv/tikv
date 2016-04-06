@@ -15,6 +15,7 @@ use byteorder::{ByteOrder, BigEndian};
 use super::{check_bound, Result, Error};
 
 const SIGN_MARK: u64 = 0x8000000000000000;
+pub const MAX_VAR_I64_LEN: usize = 10;
 
 fn order_encode(v: i64) -> u64 {
     v as u64 ^ SIGN_MARK
@@ -246,7 +247,7 @@ mod test {
     #[test]
     fn test_var_u64_codec() {
         for &v in U64_TESTS {
-            let mut buf = vec![0; 10];
+            let mut buf = vec![0; MAX_VAR_I64_LEN];
             let mut p_buf = vec![];
             {
                 let mut writer = CodedOutputStream::new(&mut p_buf);
