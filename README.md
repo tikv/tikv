@@ -39,7 +39,7 @@ git clone https://github.com/facebook/rocksdb.git
 
 cd rocksdb
 make shared_lib
-cp cp librocksdb.so* /usr/lib64/
+cp librocksdb.so* /usr/lib64/
 
 # 3. Install TiKV
 git clone https://github.com/pingcap/tikv.git
