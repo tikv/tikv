@@ -30,6 +30,7 @@ quick_error! {
             from()
             cause(err)
             description(err.description())
+            display("unknown error {:?}", err)
         }
         KeyLength {description("bad format key(length)")}
         KeyPadding {description("bad format key(padding)")}
