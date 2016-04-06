@@ -17,6 +17,7 @@ use protobuf;
 
 pub mod bytes;
 pub mod rpc;
+pub mod number;
 
 quick_error! {
     #[derive(Debug)]
@@ -34,7 +35,18 @@ quick_error! {
         }
         KeyLength {description("bad format key(length)")}
         KeyPadding {description("bad format key(padding)")}
+        OutOfBound(want: usize, actual: usize) {
+            description("out of bound.")
+            display("want {} actual {}", want, actual)
+        }
     }
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+pub fn check_bound<T>(buf: &[T], want: usize) -> Result<()> {
+    if want > buf.len() {
+        return Err(Error::OutOfBound(want, buf.len()));
+    }
+    Ok(())
+}
