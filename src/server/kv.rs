@@ -241,42 +241,61 @@ impl StoreHandler {
         cmd_scan_resp.set_ok(kvs.is_ok());
         resp.set_field_type(MessageType::CmdScan);
 
-        if let Err(e) = kvs {
-            error!("storage error: {:?}", e);
-            resp.set_cmd_scan_resp(cmd_scan_resp);
-            return resp;
-        }
-
-        // convert storage::KvPair to kvrpcpb::Item
         let mut new_kvs = Vec::new();
-        for result in kvs.unwrap() {
-            let mut new_kv = Item::new();
-            let mut res_type = ResultType::new();
-            if let Ok((ref key, ref value)) = result {
-                res_type.set_field_type(ResultType_Type::Ok);
-                new_kv.set_key(key.clone());
-                new_kv.set_value(value.clone());
-            } else {
-                if result.is_locked() {
-                    if let Some((key, primary, ts)) = result.get_lock() {
-                        res_type.set_field_type(ResultType_Type::Locked);
-                        let mut lock_info = LockInfo::new();
-                        lock_info.set_primary_lock(primary);
-                        lock_info.set_lock_version(ts);
-                        res_type.set_lock_info(lock_info);
-                        new_kv.set_key(key);
+        match kvs {
+            Ok(kvs) => {
+                // convert storage::KvPair to kvrpcpb::Item
+                for result in kvs {
+                    let mut new_kv = Item::new();
+                    let mut res_type = ResultType::new();
+                    if let Ok((ref key, ref value)) = result {
+                        res_type.set_field_type(ResultType_Type::Ok);
+                        new_kv.set_key(key.clone());
+                        new_kv.set_value(value.clone());
+                    } else {
+                        if result.is_locked() {
+                            if let Some((key, primary, ts)) = result.get_lock() {
+                                res_type.set_field_type(ResultType_Type::Locked);
+                                let mut lock_info = LockInfo::new();
+                                lock_info.set_primary_lock(primary);
+                                lock_info.set_lock_version(ts);
+                                res_type.set_lock_info(lock_info);
+                                new_kv.set_key(key);
+                            }
+                        } else {
+                            res_type.set_field_type(ResultType_Type::Retryable);
+                        }
                     }
+
+                    new_kv.set_res_type(res_type);
+                    new_kvs.push(new_kv);
+                }
+
+                cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
+            }
+            Err(e) => {
+                if let StorageError::Engine(EngineError::Request(ref err)) = e {
+                    let mut new_kv = Item::new();
+                    let mut res_type = ResultType::new();
+                    // If has_not_leader then fill first item with NotLeader error and return.
+                    if err.has_not_leader() {
+                        res_type.set_field_type(ResultType_Type::NotLeader);
+                        res_type.set_leader_info(err.get_not_leader().to_owned());
+                    } else {
+                        error!("{:?}", err);
+                        res_type.set_field_type(ResultType_Type::Other);
+                        res_type.set_msg(format!("engine error: {:?}", err));
+                    }
+                    new_kv.set_res_type(res_type);
+                    new_kvs.push(new_kv);
+                    cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
                 } else {
-                    res_type.set_field_type(ResultType_Type::Retryable);
+                    error!("storage error: {:?}", e);
                 }
             }
-
-            new_kv.set_res_type(res_type);
-            new_kvs.push(new_kv);
         }
-
-        cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
         resp.set_cmd_scan_resp(cmd_scan_resp);
+
         resp
     }
 
@@ -284,6 +303,8 @@ impl StoreHandler {
         let mut resp = Response::new();
         let mut cmd_prewrite_resp = CmdPrewriteResponse::new();
         cmd_prewrite_resp.set_ok(results.is_ok());
+        resp.set_field_type(MessageType::CmdPrewrite);
+
         let mut items = vec![];
         match results {
             Ok(results) => {
@@ -308,11 +329,26 @@ impl StoreHandler {
                 }
             }
             Err(e) => {
-                error!("storage error: {:?}", e);
+                if let StorageError::Engine(EngineError::Request(ref err)) = e {
+                    let mut item = Item::new();
+                    let mut res_type = ResultType::new();
+                    // If has_not_leader then fill first item with NotLeader error and return.
+                    if err.has_not_leader() {
+                        res_type.set_field_type(ResultType_Type::NotLeader);
+                        res_type.set_leader_info(err.get_not_leader().to_owned());
+                    } else {
+                        error!("{:?}", err);
+                        res_type.set_field_type(ResultType_Type::Other);
+                        res_type.set_msg(format!("engine error: {:?}", err));
+                    }
+                    item.set_res_type(res_type);
+                    items.push(item);
+                    cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
+                } else {
+                    error!("storage error: {:?}", e);
+                }
             }
         }
-        cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
-        resp.set_field_type(MessageType::CmdPrewrite);
         resp.set_cmd_prewrite_resp(cmd_prewrite_resp);
         resp
     }
