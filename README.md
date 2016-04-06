@@ -31,10 +31,15 @@ curl -s https://static.rust-lang.org/rustup.sh | sh -s -- --channel=nightly
 
 # 2. Install RocksDB Library
 
+# 2.1 [optional step] Upgrade Your GCC To Version At Least 4.7 To Get C++11 Support
+
+yum install gcc47-c++ 
+
+# 2.2 Get RocksDB Of 4.3.1 Version Which Is Offical Recommend
 wget https://github.com/facebook/rocksdb/archive/rocksdb-4.3.1.tar.gz
 tar -xzvf rocksdb-4.3.1.tar.gz
 
-# OR
+# [optional step] Clone The Newest Version Of RocksDB
 git clone https://github.com/facebook/rocksdb.git
 
 cd rocksdb
