@@ -29,7 +29,7 @@ pub enum Modify {
     Put((Key, Value)),
 }
 
-pub trait Engine : Send + Sync + Debug {
+pub trait Engine: Send + Sync + Debug {
     fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
     fn seek(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
@@ -72,6 +72,7 @@ quick_error! {
             from()
             cause(err.as_ref())
             description(err.description())
+            display("unknown error {:?}", err)
         }
     }
 }

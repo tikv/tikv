@@ -41,7 +41,9 @@ quick_error! {
             from()
             cause(err.as_ref())
             description(err.description())
+            display("unknown error {:?}", err)
         }
+
     }
 }
 
@@ -78,6 +80,7 @@ quick_error! {
             from()
             cause(err.as_ref())
             description(err.description())
+            display("unknown error {:?}", err)
         }
     }
 }
@@ -88,8 +91,7 @@ impl cmp::PartialEq for StorageError {
         match (self, other) {
             (&StorageError::Compacted, &StorageError::Compacted) => true,
             (&StorageError::Unavailable, &StorageError::Unavailable) => true,
-            (&StorageError::SnapshotOutOfDate,
-             &StorageError::SnapshotOutOfDate) => true,
+            (&StorageError::SnapshotOutOfDate, &StorageError::SnapshotOutOfDate) => true,
             (&StorageError::SnapshotTemporarilyUnavailable,
              &StorageError::SnapshotTemporarilyUnavailable) => true,
             _ => false,
