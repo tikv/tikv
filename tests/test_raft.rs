@@ -1350,9 +1350,8 @@ fn test_leader_append_response() {
         (0, false, 0, 3, 0, 0, 0),
     ];
 
-    for (i,
-         (index, reject, wmatch, wnext, wmsg_num, windex, wcomitted)) in tests.drain(..)
-                                                                              .enumerate() {
+    for (i, (index, reject, wmatch, wnext, wmsg_num, windex, wcomitted)) in tests.drain(..)
+                                                                                 .enumerate() {
         // sm term is 1 after it becomes the leader.
         // thus the last log term must be 1 to be committed.
         let mut sm = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());

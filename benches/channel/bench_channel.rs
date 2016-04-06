@@ -23,7 +23,7 @@ struct CountHandler {
 
 impl Handler for CountHandler {
     type Timeout = ();
-        type Message = u32;
+    type Message = u32;
 
     fn notify(&mut self, event_loop: &mut EventLoop<CountHandler>, msg: u32) {
         if msg == 0 {
