@@ -137,11 +137,52 @@ pub fn decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
 mod test {
     use super::*;
     use std::{i64, u64};
-    use util::codec::Result;
+    use util::codec::{Result, Error};
     use std::fmt::Debug;
     use protobuf::CodedOutputStream;
 
     type TestCodecPair<T> = (Box<Fn(&mut [u8], T) -> Result<()>>, Box<Fn(&[u8]) -> Result<T>>);
+
+    const U64_TESTS: &'static [u64] = &[i64::MIN as u64,
+                                        i64::MAX as u64,
+                                        u64::MIN,
+                                        u64::MAX,
+                                        0,
+                                        1,
+                                        2,
+                                        10,
+                                        20,
+                                        63,
+                                        64,
+                                        65,
+                                        127,
+                                        128,
+                                        129,
+                                        255,
+                                        256,
+                                        257,
+                                        1024];
+    const I64_TESTS: &'static [i64] = &[i64::MIN,
+                                        i64::MAX,
+                                        u64::MIN as i64,
+                                        u64::MAX as i64,
+                                        -1,
+                                        0,
+                                        1,
+                                        2,
+                                        10,
+                                        20,
+                                        63,
+                                        64,
+                                        65,
+                                        127,
+                                        128,
+                                        129,
+                                        255,
+                                        256,
+                                        257,
+                                        1024,
+                                        -1023];
 
     fn test_order<T: Ord + Debug + Copy>(pair: &TestCodecPair<T>, arr: &[T], sorted: &[T]) {
         let mut buf = vec![0; 8];
@@ -160,45 +201,42 @@ mod test {
 
     #[test]
     fn test_u64_codec() {
-        let test_values = vec![u64::MAX, u64::MIN, 2, 3, 0, 4, 4, 1024];
         let test_func: Vec<TestCodecPair<u64>> = vec![
 			(box encode_u64, box decode_u64),
 			(box encode_u64_desc, box decode_u64_desc),
 		];
-        test_codec(test_values, test_func);
+        test_codec(U64_TESTS, test_func);
     }
 
     #[test]
     fn test_i64_codec() {
-        let test_values = vec![i64::MAX, i64::MIN, -2, -3, 0, 0, 4, 1024];
         let test_func: Vec<TestCodecPair<i64>> = vec![
 			(box encode_i64, box decode_i64),
 			(box encode_i64_desc, box decode_i64_desc),
 		];
-        test_codec(test_values, test_func);
+        test_codec(I64_TESTS, test_func);
     }
 
-    fn test_codec<T: Debug + Copy + Ord>(test_values: Vec<T>, test_func: Vec<TestCodecPair<T>>) {
+    fn test_codec<T: Debug + Copy + Ord>(tests: &[T], test_func: Vec<TestCodecPair<T>>) {
         let mut buf = vec![0; 8];
         for &(ref enc, ref dec) in &test_func {
-            for &v in &test_values {
+            for &v in tests {
                 enc(&mut buf, v).unwrap();
                 assert_eq!(v, dec(&buf).unwrap());
             }
         }
 
-        let mut ordered_case = test_values.clone();
+        let mut ordered_case = tests.to_vec();
         ordered_case.sort();
-        test_order(&test_func[0], &test_values, &ordered_case);
+        test_order(&test_func[0], tests, &ordered_case);
 
         ordered_case.reverse();
-        test_order(&test_func[1], &test_values, &ordered_case);
+        test_order(&test_func[1], tests, &ordered_case);
     }
 
     #[test]
     fn test_var_i64_codec() {
-        let test_values = vec![i64::MAX, i64::MIN, -2, -3, 0, 0, 4, 1024];
-        for &v in &test_values {
+        for &v in I64_TESTS {
             let mut buf = vec![0; 10];
             assert!(encode_var_i64(&mut buf, v) <= 10);
             assert_eq!(v, decode_var_i64(&buf).unwrap().0);
@@ -207,8 +245,7 @@ mod test {
 
     #[test]
     fn test_var_u64_codec() {
-        let test_values = vec![u64::MAX, u64::MIN, 2, 3, 0, 0, 4, 1024];
-        for &v in &test_values {
+        for &v in U64_TESTS {
             let mut buf = vec![0; 10];
             let mut p_buf = vec![];
             {
@@ -221,5 +258,46 @@ mod test {
             assert_eq!(buf[..n], *p_buf);
             assert_eq!(v, decode_var_u64(&buf).unwrap().0);
         }
+    }
+
+    fn test_encode_out_of_bound<T, B, R, F: Fn(B, T) -> Result<R>>(f: F, t: T, buf: B) {
+        if let Err(Error::OutOfBound(_, _)) = f(buf, t) {
+            return;
+        }
+        panic!("out_of_bound should be thrown!");
+    }
+
+    fn test_decode_out_of_bound<B, R, F: Fn(B) -> Result<R>>(f: F, buf: B) {
+        if let Err(Error::OutOfBound(_, _)) = f(buf) {
+            return;
+        }
+        panic!("out_of_bound should be thrown!");
+    }
+
+    #[test]
+    fn test_bad_case() {
+        let mut buf = vec![0; 7];
+        test_encode_out_of_bound(encode_i64, 1, &mut buf);
+        test_encode_out_of_bound(encode_u64, 1, &mut buf);
+        test_encode_out_of_bound(encode_i64_desc, 1, &mut buf);
+        test_encode_out_of_bound(encode_u64, 1, &mut buf);
+        test_decode_out_of_bound(decode_i64, &buf);
+        test_decode_out_of_bound(decode_u64, &buf);
+        test_decode_out_of_bound(decode_i64_desc, &buf);
+        test_decode_out_of_bound(decode_u64_desc, &buf);
+
+        buf = vec![0x80; 9];
+        buf.push(0x2);
+        test_decode_out_of_bound(decode_var_u64, &buf);
+        test_decode_out_of_bound(decode_var_i64, &buf);
+
+        buf = vec![0x80; 3];
+        match decode_var_u64(&buf) {
+            Err(Error::Eof) => {}
+            o => panic!("eof is epxpected, but we got: {:?}", o),
+        };
+
+        buf.push(0);
+        assert_eq!(0, decode_var_u64(&buf).unwrap().0);
     }
 }
