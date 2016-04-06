@@ -25,6 +25,30 @@ TiKV uses Raft to support Geo-Replication. We have ported etcd's raft implementa
 
 This project requires rust nightly, otherwise it can't build.
 
+```
+# 1. Install Rust Nightly
+curl -s https://static.rust-lang.org/rustup.sh | sh -s -- --channel=nightly
+
+# 2. Install RocksDB Library
+
+wget https://github.com/facebook/rocksdb/archive/rocksdb-4.3.1.tar.gz
+tar -xzvf rocksdb-4.3.1.tar.gz
+
+# OR
+git clone https://github.com/facebook/rocksdb.git
+
+cd rocksdb
+make shared_lib
+cp cp librocksdb.so* /usr/lib64/
+
+# 3. Install TiKV
+git clone https://github.com/pingcap/tikv.git
+cd tikv
+make
+
+# 4. Have A Fun!
+```
+
 ## Acknowledgments
 - Thanks [etcd](https://github.com/coreos/etcd) for providing some great open source tools.
 - Thanks [RocksDB](https://github.com/facebook/rocksdb) for their powerful storage engines.
