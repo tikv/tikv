@@ -71,7 +71,6 @@ pub fn encode_u64_desc(buf: &mut [u8], v: u64) -> Result<()> {
 }
 
 // `decode_u64` decodes value encoded by `encode_u64` before.
-// It returns the leftover un-decoded slice, decoded value if no error.
 pub fn decode_u64(buf: &[u8]) -> Result<u64> {
     try!(check_bound(buf, 8));
     let v = BigEndian::read_u64(buf);
@@ -79,7 +78,6 @@ pub fn decode_u64(buf: &[u8]) -> Result<u64> {
 }
 
 // `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
-// It returns the leftover un-decoded slice, decoded value if no error.
 pub fn decode_u64_desc(buf: &[u8]) -> Result<u64> {
     try!(check_bound(buf, 8));
     let v = BigEndian::read_u64(buf);
