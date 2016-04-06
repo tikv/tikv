@@ -141,7 +141,7 @@ impl<'a> Iterable for Snapshot<'a> {
     }
 }
 
-pub trait Mutable : Writable{
+pub trait Mutable: Writable {
     fn put_msg<M: protobuf::Message>(&self, key: &[u8], m: &M) -> Result<()> {
         let value = try!(m.write_to_bytes());
         try!(self.put(key, &value));

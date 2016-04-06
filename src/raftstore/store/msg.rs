@@ -54,8 +54,8 @@ impl fmt::Debug for Msg {
         match *self {
             Msg::Quit => write!(fmt, "Quit"),
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            Msg::RaftCmd{..} => write!(fmt, "Raft Command"),
-            Msg::SplitCheckResult{..} => write!(fmt, "Split Check Result"),
+            Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
+            Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
         }
     }
 }
@@ -141,7 +141,7 @@ mod tests {
         fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Self::Message) {
             match msg {
                 Msg::Quit => event_loop.shutdown(),
-                Msg::RaftCmd{callback, request} => {
+                Msg::RaftCmd { callback, request } => {
                     // a trick for test timeout.
                     if request.get_header().get_region_id() == u64::max_value() {
                         thread::sleep(Duration::from_millis(100));

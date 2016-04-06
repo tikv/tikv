@@ -73,7 +73,7 @@ impl TxnStore {
             match txn.get(&key) {
                 Ok(Some(value)) => results.push(Ok((next_key, value))),
                 Ok(None) => {}
-                e @ Err(MvccError::KeyIsLocked{..}) => {
+                e @ Err(MvccError::KeyIsLocked { .. }) => {
                     results.push(Err(Error::from(e.unwrap_err())))
                 }
                 Err(e) => return Err(e.into()),
@@ -98,7 +98,7 @@ impl TxnStore {
         for m in mutations {
             match txn.prewrite(m, &primary) {
                 Ok(_) => results.push(Ok(())),
-                e @ Err(MvccError::KeyIsLocked{..}) => results.push(e.map_err(Error::from)),
+                e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
                 Err(e) => return Err(Error::from(e)),
             }
         }

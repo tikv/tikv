@@ -307,7 +307,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // handle executing committed log results
         for result in &ready_result.exec_results {
             match *result {
-                ExecResult::ChangePeer{ref change_type, ref peer, ..} => {
+                ExecResult::ChangePeer { ref change_type, ref peer, .. } => {
                     // We only care remove itself now.
                     if *change_type == ConfChangeType::RemoveNode &&
                        peer.get_store_id() == self.store_id() {
@@ -334,10 +334,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         }
                     }
                 }
-                ExecResult::CompactLog{..} => {
+                ExecResult::CompactLog { .. } => {
                     // Nothing to do, skip to handle it.
                 }
-                ExecResult::SplitRegion{ref left, ref right} => {
+                ExecResult::SplitRegion { ref left, ref right } => {
                     let new_region_id = right.get_id();
                     match Peer::create(self, &right) {
                         Err(e) => {
@@ -681,7 +681,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     error!("handle raft message err: {:?}", e);
                 }
             }
-            Msg::RaftCmd{request, callback} => {
+            Msg::RaftCmd { request, callback } => {
                 if let Err(e) = self.propose_raft_command(request, callback) {
                     error!("propose raft command err: {:?}", e);
                 }
@@ -690,7 +690,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("receive quit message");
                 event_loop.shutdown();
             }
-            Msg::SplitCheckResult {region_id, split_key} => {
+            Msg::SplitCheckResult { region_id, split_key } => {
                 info!("split check of {} complete.", region_id);
                 self.on_split_check_result(region_id, split_key);
             }
