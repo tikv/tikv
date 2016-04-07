@@ -19,6 +19,9 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::transport_simulate;
 
+use rand;
+use rand::Rng;
+
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     test_multi_with_transport_strategy(cluster, vec![]);
 }
@@ -126,6 +129,26 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
 
 }
 
+fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+
+    let (key, value) = (b"a1", b"v1");
+
+    assert_eq!(cluster.get(key), None);
+    cluster.put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+    let mut rng = rand::thread_rng();
+    for _ in 1..100 {
+        let id = 1+rng.gen_range(0, count as u64);
+        cluster.stop_node(id);
+        cluster.run_node(id);
+        sleep_ms(600);
+        assert_eq!(cluster.get(key), Some(value.to_vec()));
+    }
+}
+
 #[test]
 fn test_multi_node_base() {
     let count = 5;
@@ -214,4 +237,20 @@ fn test_multi_server_lost_majority() {
         let mut cluster = new_server_cluster(0, count);
         test_multi_lost_majority(&mut cluster, count)
     }
+}
+
+#[test]
+#[ignore] // take more then 1 minute to run
+fn test_multi_node_random_restart() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_random_restart(&mut cluster, count);
+}
+
+#[test]
+#[ignore] // take more then 1 minute to run
+fn test_multi_server_random_restart() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    test_multi_random_restart(&mut cluster, count);
 }
