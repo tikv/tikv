@@ -22,6 +22,7 @@
 #![feature(const_fn)]
 #![feature(panic_handler)]
 #![feature(static_rwlock)]
+#![feature(iter_arith)]
 #![plugin(clippy)]
 
 #[macro_use]

@@ -18,6 +18,7 @@ use protobuf;
 pub mod bytes;
 pub mod rpc;
 pub mod number;
+pub mod datum;
 
 quick_error! {
     #[derive(Debug)]

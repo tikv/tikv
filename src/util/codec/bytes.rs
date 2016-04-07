@@ -29,23 +29,30 @@ pub fn max_encoded_bytes_size(n: usize) -> usize {
 // Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
 pub fn encode_bytes(key: &[u8]) -> Vec<u8> {
     let cap = max_encoded_bytes_size(key.len());
-    let mut encoded = Vec::<u8>::with_capacity(cap);
+    let mut encoded = vec![0; cap];
+    let len = encode_bytes_to_buf(&mut encoded, key).unwrap();
+    encoded.truncate(len);
+    encoded
+}
+
+pub fn encode_bytes_to_buf(mut buf: &mut [u8], key: &[u8]) -> Result<usize> {
     let len = key.len();
     let mut index = 0;
+    let origin_offset = buf.as_ptr() as usize;
     while index <= len {
         let remain = len - index;
         let mut pad: usize = 0;
         if remain > ENC_GROUP_SIZE {
-            encoded.write(&key[index..index + ENC_GROUP_SIZE]).unwrap();
+            try!(buf.write_all(&key[index..index + ENC_GROUP_SIZE]));
         } else {
             pad = ENC_GROUP_SIZE - remain;
-            encoded.write(&key[index..]).unwrap();
-            encoded.write(&ENC_PADDING[..pad]).unwrap();
+            try!(buf.write_all(&key[index..]));
+            try!(buf.write_all(&ENC_PADDING[..pad]));
         }
-        encoded.push(ENC_MARKER - (pad as u8));
+        try!(buf.write_all(&[ENC_MARKER - (pad as u8)]));
         index += ENC_GROUP_SIZE;
     }
-    encoded
+    Ok(buf.as_ptr() as usize - origin_offset)
 }
 
 pub fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
