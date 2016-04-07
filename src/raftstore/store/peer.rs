@@ -685,10 +685,10 @@ impl Peer {
         let change_type = request.get_change_type();
         let mut region = self.region();
 
-        warn!("my peer id {}, {:?} {}, epoch: {:?}\n",
+        warn!("my peer id {}, {}, {:?}, epoch: {:?}\n",
+              self.peer_id(),
               peer.get_id(),
               util::conf_change_type_str(&change_type),
-              self.peer.get_id(),
               region.get_region_epoch());
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
@@ -716,9 +716,9 @@ impl Peer {
                 self.peer_cache.wl().insert(peer.get_id(), peer.clone());
                 region.mut_peers().push(peer.clone());
 
-                warn!("my peer id {}, add peer {}, region {:?}",
+                warn!("my peer id {}, add peer {:?}, region {:?}",
                       self.peer_id(),
-                      peer.get_id(),
+                      peer,
                       self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
