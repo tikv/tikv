@@ -90,15 +90,16 @@ mod test {
     use super::*;
     use util::codec::{number, datum};
     use util::codec::datum::Datum;
+    use std::i64;
 
     #[test]
     fn test_row_key_codec() {
         let tests = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
         for &t in &tests {
             let mut buf = vec![0; 8];
-            number::encode_i64(&mut buf, 2).unwrap();
+            number::encode_i64(&mut buf, t).unwrap();
             let k = encode_row_key(1, &buf).unwrap();
-            assert_eq!(2, decode_handle(&k).unwrap());
+            assert_eq!(t, decode_handle(&k).unwrap());
         }
     }
 
