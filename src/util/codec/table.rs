@@ -26,14 +26,14 @@ const INDEX_PREFIX_SEP: &'static [u8] = b"_i";
 fn append_table_record_prefix(mut buf: &mut [u8], table_id: i64) -> Result<()> {
     try!(buf.write_all(TABLE_PREFIX));
     try!(number::encode_i64(buf, table_id));
-    try!((&mut buf[8..]).write_all(RECORD_PREFIX_SEP));
+    try!((&mut buf[ID_LEN..]).write_all(RECORD_PREFIX_SEP));
     Ok(())
 }
 
 fn append_table_index_prefix(mut buf: &mut [u8], table_id: i64) -> Result<()> {
     try!(buf.write_all(TABLE_PREFIX));
     try!(number::encode_i64(buf, table_id));
-    try!((&mut buf[8..]).write_all(INDEX_PREFIX_SEP));
+    try!((&mut buf[ID_LEN..]).write_all(INDEX_PREFIX_SEP));
     Ok(())
 }
 
