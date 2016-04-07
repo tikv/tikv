@@ -93,10 +93,13 @@ mod test {
 
     #[test]
     fn test_row_key_codec() {
-        let mut buf = vec![0; 8];
-        number::encode_i64(&mut buf, 2).unwrap();
-        let k = encode_row_key(1, &buf).unwrap();
-        assert_eq!(2, decode_handle(&k).unwrap());
+        let tests = vec![i64::MIN, i64::MAX, -1, 0, 2, 3, 1024];
+        for &t in &tests {
+            let mut buf = vec![0; 8];
+            number::encode_i64(&mut buf, 2).unwrap();
+            let k = encode_row_key(1, &buf).unwrap();
+            assert_eq!(2, decode_handle(&k).unwrap());
+        }
     }
 
     #[test]
