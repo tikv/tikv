@@ -19,6 +19,9 @@ pub mod bytes;
 pub mod rpc;
 pub mod number;
 pub mod datum;
+pub mod table;
+
+pub use self::datum::Datum;
 
 quick_error! {
     #[derive(Debug)]
