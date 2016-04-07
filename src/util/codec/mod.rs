@@ -18,6 +18,7 @@ use protobuf;
 pub mod bytes;
 pub mod rpc;
 pub mod number;
+pub mod datum;
 
 quick_error! {
     #[derive(Debug)]
@@ -38,6 +39,13 @@ quick_error! {
         OutOfBound(want: usize, actual: usize) {
             description("out of bound.")
             display("want {} actual {}", want, actual)
+        }
+        InvalidDataType(reason: String) {
+            description("invalid data type")
+            display("{}", reason)
+        }
+        Eof {
+            description("eof")
         }
     }
 }
