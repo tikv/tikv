@@ -106,8 +106,6 @@ impl<T, Trans> Node<T, Trans>
                  .write()
                  .unwrap()
                  .put_store(self.cluster_id, self.store.clone()));
-
-
         Ok(())
     }
 
@@ -156,14 +154,14 @@ impl<T, Trans> Node<T, Trans>
 
     fn bootstrap_first_region(&self, engine: &DB, store_id: u64) -> Result<metapb::Region> {
         let region_id = try!(self.pd_client.wl().alloc_id());
-        debug!("alloc first region id {} for cluster {}, store {}",
-               region_id,
-               self.cluster_id,
-               store_id);
+        info!("alloc first region id {} for cluster {}, store {}",
+              region_id,
+              self.cluster_id,
+              store_id);
         let peer_id = try!(self.pd_client.wl().alloc_id());
-        debug!("alloc first peer id {} for first region {}",
-               peer_id,
-               region_id);
+        info!("alloc first peer id {} for first region {}",
+              peer_id,
+              region_id);
 
         let region = try!(store::bootstrap_region(engine, store_id, region_id, peer_id));
         Ok(region)
@@ -178,7 +176,7 @@ impl<T, Trans> Node<T, Trans>
                 Ok(())
             }
             // TODO: should we clean region for other errors too?
-            Err(e) => Err(box_err!("bootstrap cluster {} err: {:?}", self.cluster_id, e)),
+            Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
             Ok(_) => {
                 info!("bootstrap cluster {} ok", self.cluster_id);
                 Ok(())
