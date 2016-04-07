@@ -238,8 +238,8 @@ mod test {
     #[test]
     fn test_var_i64_codec() {
         for &v in I64_TESTS {
-            let mut buf = vec![0; 10];
-            assert!(encode_var_i64(&mut buf, v) <= 10);
+            let mut buf = vec![0; MAX_VAR_I64_LEN];
+            assert!(encode_var_i64(&mut buf, v) <= MAX_VAR_I64_LEN);
             assert_eq!(v, decode_var_i64(&buf).unwrap().0);
         }
     }
@@ -255,7 +255,7 @@ mod test {
                 writer.flush().unwrap();
             }
             let n = encode_var_u64(&mut buf, v);
-            assert!(n <= 10);
+            assert!(n <= MAX_VAR_I64_LEN);
             assert_eq!(buf[..n], *p_buf);
             assert_eq!(v, decode_var_u64(&buf).unwrap().0);
         }
@@ -295,7 +295,7 @@ mod test {
         buf = vec![0x80; 3];
         match decode_var_u64(&buf) {
             Err(Error::Eof) => {}
-            o => panic!("eof is epxpected, but we got: {:?}", o),
+            o => panic!("eof is expected, but we got: {:?}", o),
         };
 
         buf.push(0);
