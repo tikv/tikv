@@ -14,7 +14,8 @@
 use std::vec::Vec;
 use std::io::Write;
 
-use super::{Result, Error};
+use super::{Result, Error, number};
+use util::codec;
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -75,9 +76,28 @@ pub fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
     Err(Error::KeyLength)
 }
 
+/// `encode_compact_bytes` joins bytes with its length into a byte slice. It is more
+/// efficient in both space and time compare to `encode_bytes`. Note that the encoded
+/// result is not memcomparable.
+pub fn encode_compact_bytes(buf: &mut [u8], data: &[u8]) -> Result<usize> {
+    try!(codec::check_bound(buf, number::MAX_VAR_I64_LEN + data.len()));
+    let vn = number::encode_var_i64(buf, data.len() as i64);
+    try!((&mut buf[vn..]).write(data));
+    Ok(vn + data.len())
+}
+
+/// `decode_compact_bytes` decodes bytes which is encoded by `encode_compact_bytes` before.
+pub fn decode_compact_bytes(buf: &[u8]) -> Result<(Vec<u8>, usize)> {
+    let (v, vn) = try!(number::decode_var_i64(buf));
+    try!(codec::check_bound(&buf[vn..], v as usize));
+    let readed = vn + v as usize;
+    Ok((buf[vn..readed].to_vec(), readed))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{encode_bytes, decode_bytes, max_encoded_bytes_size, ENC_GROUP_SIZE};
+    use super::*;
+    use util::codec::{number, bytes};
     use std::cmp::Ordering;
 
     #[test]
@@ -166,10 +186,24 @@ mod tests {
 
     #[test]
     fn test_max_encoded_bytes_size() {
-        let n = ENC_GROUP_SIZE;
+        let n = bytes::ENC_GROUP_SIZE;
         let tbl: Vec<(usize, usize)> = vec![(0, n + 1), (n / 2, n + 1), (n, 2 * (n + 1))];
         for (x, y) in tbl {
             assert_eq!(max_encoded_bytes_size(x), y);
+        }
+    }
+
+    #[test]
+    fn test_compact_codec() {
+        let tests = vec!["", "hello", "世界"];
+        for &s in &tests {
+            let max_size = s.len() + number::MAX_VAR_I64_LEN;
+            let mut buf = vec![0; max_size];
+            let written = encode_compact_bytes(&mut buf, s.as_bytes()).unwrap();
+            assert!(written <= max_size);
+            let (decoded, readed) = decode_compact_bytes(&buf).unwrap();
+            assert_eq!(readed, written);
+            assert_eq!(decoded, s.as_bytes());
         }
     }
 
