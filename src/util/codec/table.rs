@@ -60,15 +60,15 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
         return Err(Error::InvalidDataType(format!("record key expected, but got {:?}", encoded)));
     }
 
-    let mut left = &encoded[TABLE_PREFIX.len()..];
-    try!(number::decode_i64(left));
+    let mut remaining = &encoded[TABLE_PREFIX.len()..];
+    try!(number::decode_i64(remaining));
 
-    if !left[8..].starts_with(RECORD_PREFIX_SEP) {
+    if !remaining[8..].starts_with(RECORD_PREFIX_SEP) {
         return Err(Error::InvalidDataType(format!("record key expected, but got {:?}", encoded)));
     }
 
-    left = &left[8 + RECORD_PREFIX_SEP.len()..];
-    number::decode_i64(left)
+    remaining = &remaining[8 + RECORD_PREFIX_SEP.len()..];
+    number::decode_i64(remaining)
 }
 
 /// `encode_index_seek_key` encodes an index value to byte array.
