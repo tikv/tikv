@@ -47,7 +47,7 @@ impl StoreHandler {
             return Err(box_err!("Msg doesn't contain a CmdGetRequest"));
         }
         let mut req = msg.take_cmd_get_req();
-        let ctx = req.take_context();
+        let ctx = msg.take_context();
         let cb = self.make_cb(StoreHandler::cmd_get_done, token, msg_id);
         self.store
             .async_get(ctx, Key::from_raw(req.take_key()), req.get_version(), cb)
@@ -63,7 +63,7 @@ impl StoreHandler {
         debug!("start_key [{:?}]", start_key);
         let cb = self.make_cb(StoreHandler::cmd_scan_done, token, msg_id);
         self.store
-            .async_scan(req.take_context(),
+            .async_scan(msg.take_context(),
                         Key::from_raw(start_key),
                         req.get_limit() as usize,
                         req.get_version(),
@@ -90,7 +90,7 @@ impl StoreHandler {
                            .collect();
         let cb = self.make_cb(StoreHandler::cmd_prewrite_done, token, msg_id);
         self.store
-            .async_prewrite(req.take_context(),
+            .async_prewrite(msg.take_context(),
                             mutations,
                             req.get_primary_lock().to_vec(),
                             req.get_start_version(),
@@ -109,7 +109,7 @@ impl StoreHandler {
                       .map(Key::from_raw)
                       .collect();
         self.store
-            .async_commit(req.take_context(),
+            .async_commit(msg.take_context(),
                           keys,
                           req.get_start_version(),
                           req.get_commit_version(),
@@ -124,7 +124,7 @@ impl StoreHandler {
         let mut req = msg.take_cmd_cleanup_req();
         let cb = self.make_cb(StoreHandler::cmd_cleanup_done, token, msg_id);
         self.store
-            .async_cleanup(req.take_context(),
+            .async_cleanup(msg.take_context(),
                            Key::from_raw(req.take_key()),
                            req.get_start_version(),
                            cb)
@@ -138,7 +138,7 @@ impl StoreHandler {
         let cb = self.make_cb(StoreHandler::cmd_commit_get_done, token, msg_id);
         let mut req = msg.take_cmd_commit_get_req();
         self.store
-            .async_commit_then_get(req.take_context(),
+            .async_commit_then_get(msg.take_context(),
                                    Key::from_raw(req.take_key()),
                                    req.get_lock_version(),
                                    req.get_commit_version(),
@@ -154,7 +154,7 @@ impl StoreHandler {
         let mut req = msg.take_cmd_rb_get_req();
         let cb = self.make_cb(StoreHandler::cmd_rollback_get_done, token, msg_id);
         self.store
-            .async_rollback_then_get(req.take_context(),
+            .async_rollback_then_get(msg.take_context(),
                                      Key::from_raw(req.take_key()),
                                      req.get_lock_version(),
                                      cb)
@@ -270,7 +270,6 @@ impl StoreHandler {
                     new_kv.set_res_type(res_type);
                     new_kvs.push(new_kv);
                 }
-
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
             }
             Err(e) => {
@@ -314,7 +313,6 @@ impl StoreHandler {
                     if res.is_ok() {
                         res_type.set_field_type(ResultType_Type::Ok);
                     } else if let Some((key, primary, ts)) = res.get_lock() {
-                        // Actually items only contain locked item, so `ok` is always false.
                         res_type.set_field_type(ResultType_Type::Locked);
                         let mut lock_info = LockInfo::new();
                         lock_info.set_primary_lock(primary);
@@ -327,6 +325,7 @@ impl StoreHandler {
                     item.set_res_type(res_type);
                     items.push(item);
                 }
+                cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
             }
             Err(e) => {
                 if let StorageError::Engine(EngineError::Request(ref err)) = e {
