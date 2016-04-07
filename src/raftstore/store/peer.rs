@@ -686,7 +686,7 @@ impl Peer {
         let mut region = self.region();
 
         warn!("my peer id {}, {}, {:?}, epoch: {:?}\n",
-              self.peer.get_id(),
+              self.peer_id(),
               peer.get_id(),
               util::conf_change_type_str(&change_type),
               region.get_region_epoch());
