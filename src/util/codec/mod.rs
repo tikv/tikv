@@ -39,6 +39,13 @@ quick_error! {
             description("out of bound.")
             display("want {} actual {}", want, actual)
         }
+        InvalidDataType(reason: String) {
+            description("invalid data type")
+            display("{}", reason)
+        }
+        Eof {
+            description("eof")
+        }
     }
 }
 
