@@ -44,6 +44,18 @@ impl RpcClient {
         try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
         Ok(RpcClient { stream: Mutex::new(stream) })
     }
+
+    fn post_msg<M: protobuf::Message + ?Sized>(&self, msg_id: u64, message: &M) -> Result<Vec<u8>> {
+        // TODO: reconnect if error
+        let mut stream = self.stream.lock().unwrap();
+        try!(rpc::encode_msg(&mut *stream, msg_id, message));
+        let (id, data) = try!(rpc::decode_data(&mut *stream));
+        if id != msg_id {
+            return Err(box_err!("pd response msg_id not match, want {}, got {}", msg_id, id));
+        }
+
+        Ok(data)
+    }
 }
 
 impl TRpcClient for RpcClient {
@@ -51,24 +63,15 @@ impl TRpcClient for RpcClient {
         where M: protobuf::Message,
               P: protobuf::Message + MessageStatic
     {
-        // TODO: reconnect if error
-        let mut stream = self.stream.lock().unwrap();
-        try!(rpc::encode_msg(&mut *stream, msg_id, message));
         let mut resp = P::new();
-        match try!(rpc::decode_msg(&mut *stream, &mut resp)) {
-            id if id == msg_id => Ok(resp),
-            _ => Err(box_err!("pd response msg_id not match")),
-        }
+        let data = try!(self.post_msg(msg_id, message));
+        try!(rpc::decode_body(&data, &mut resp));
+        Ok(resp)
     }
 
     fn post<M: protobuf::Message + ?Sized>(&self, msg_id: u64, message: &M) -> Result<()> {
-        // TODO: reconnect if error
-        let mut stream = self.stream.lock().unwrap();
-        try!(rpc::encode_msg(&mut *stream, msg_id, message));
-        match try!(rpc::decode_data(&mut *stream)) {
-            (id, _) if id == msg_id => Ok(()),
-            (id, _) => Err(box_err!("pd response msg_id not match, want {}, got {}", msg_id, id)),
-        }
+        let _ = try!(self.post_msg(msg_id, message));
+        Ok(())
     }
 }
 
