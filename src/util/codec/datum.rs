@@ -49,8 +49,8 @@ pub fn decode_datum(buf: &[u8]) -> Result<(Datum, usize)> {
     match buf[0] {
         INT_FLAG => {
             let v = try!(number::decode_i64(&buf[1..]));
-            readed += 8;
             datum = Datum::I64(v);
+            readed += 8;
         }
         UINT_FLAG => {
             let v = try!(number::decode_u64(&buf[1..]));
@@ -112,6 +112,7 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
 }
 
 fn encode_bytes(buf: &mut [u8], value: &[u8], comparable: bool) -> Result<usize> {
+    try!(codec::check_bound(buf, 1 + value.len()));
     let len = if comparable {
         buf[0] = BYTES_FLAG;
         try!(bytes::encode_bytes_to_buf(&mut buf[1..], value))
@@ -186,7 +187,6 @@ mod test {
 		];
 
         for vs in table.drain(..) {
-
             let mut buf = vec![0; approximate_size(&vs, true)];
             let written = encode_key(&mut buf, &vs).unwrap();
             let (decoded, readed) = decode(&buf[0..written]).unwrap();
