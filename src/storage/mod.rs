@@ -15,6 +15,7 @@ use std::boxed::FnBox;
 use std::fmt;
 use std::error;
 use std::thread::{self, JoinHandle};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use self::txn::Scheduler;
 
@@ -23,8 +24,9 @@ pub mod mvcc;
 pub mod txn;
 mod types;
 
-pub use self::engine::{Engine, Dsn, new_engine, Modify, Error as EngineError};
+pub use self::engine::{Engine, Snapshot, Dsn, new_engine, Modify, Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
+pub use self::txn::SnapshotStore;
 pub use self::types::{Key, Value, KvPair};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
@@ -159,6 +161,7 @@ impl fmt::Debug for Command {
 }
 
 pub struct Storage {
+    engine: Arc<Box<Engine>>,
     tx: Sender<Message>,
     thread: JoinHandle<Result<()>>,
 }
@@ -166,7 +169,8 @@ pub struct Storage {
 impl Storage {
     pub fn from_engine(engine: Box<Engine>) -> Result<Storage> {
         let desc = format!("{:?}", engine);
-        let mut scheduler = Scheduler::new(engine);
+        let shared = Arc::new(engine);
+        let mut scheduler = Scheduler::new(shared.clone());
 
         let (tx, rx) = mpsc::channel::<Message>();
         let handle = thread::spawn(move || {
@@ -183,6 +187,7 @@ impl Storage {
             Ok(())
         });
         Ok(Storage {
+            engine: shared,
             tx: tx,
             thread: handle,
         })
@@ -199,6 +204,10 @@ impl Storage {
             return Err(box_err!("failed to wait storage thread quit"));
         }
         Ok(())
+    }
+
+    pub fn get_engine(&self) -> Arc<Box<Engine>> {
+        self.engine.clone()
     }
 
     pub fn async_get(&self,

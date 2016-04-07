@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use storage::Engine;
 use storage::Command;
 use super::store::TxnStore;
@@ -20,7 +21,7 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(engine: Box<Engine>) -> Scheduler {
+    pub fn new(engine: Arc<Box<Engine>>) -> Scheduler {
         Scheduler { store: TxnStore::new(engine) }
     }
 

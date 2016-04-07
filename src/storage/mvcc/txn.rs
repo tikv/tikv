@@ -13,7 +13,7 @@
 
 use std::fmt;
 use storage::{Key, Value, Mutation};
-use storage::engine::{Engine, Modify};
+use storage::engine::{Engine, Snapshot, Modify};
 use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 use kvproto::kvrpcpb::Context;
 use super::meta::Meta;
@@ -192,6 +192,61 @@ impl<'a, T: Engine + ?Sized> MvccTxn<'a, T> {
         let mut meta = try!(self.load_meta(key));
         try!(self.rollback_impl(key, key.clone(), &mut meta));
         self.get_impl(key, &meta, self.start_ts)
+    }
+}
+
+pub struct SnapshotTxn<'a, T: Snapshot + ?Sized + 'a> {
+    snapshot: &'a T,
+    start_ts: u64,
+}
+
+impl<'a, T: Snapshot + ?Sized> fmt::Debug for SnapshotTxn<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "snapshot txn @{}", self.start_ts)
+    }
+}
+
+impl<'a, T: Snapshot + ?Sized> SnapshotTxn<'a, T> {
+    pub fn new(snapshot: &'a T, start_ts: u64) -> SnapshotTxn<'a, T> {
+        SnapshotTxn {
+            snapshot: snapshot,
+            start_ts: start_ts,
+        }
+    }
+
+    fn load_meta(&self, key: &Key) -> Result<Meta> {
+        let meta = match try!(self.snapshot.get(key)) {
+            Some(x) => try!(Meta::parse(&x)),
+            None => Meta::new(),
+        };
+        Ok(meta)
+    }
+
+    pub fn get(&self, key: &Key) -> Result<Option<Value>> {
+        let meta = try!(self.load_meta(key));
+        self.get_impl(key, &meta, self.start_ts.to_owned())
+    }
+
+    fn get_impl(&self, key: &Key, meta: &Meta, ts: u64) -> Result<Option<Value>> {
+        // Check for locks that signal concurrent writes.
+        if let Some(lock) = meta.get_lock() {
+            if lock.get_start_ts() <= ts {
+                // There is a pending lock. Client should wait or clean it.
+                return Err(Error::KeyIsLocked {
+                    key: key.raw().to_owned(),
+                    primary: lock.get_primary_key().to_vec(),
+                    ts: lock.get_start_ts(),
+                });
+            }
+        }
+        // Find the latest write below our start timestamp.
+        match meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
+            Some(x) => {
+                let data_key = key.encode_ts(x.get_start_ts());
+                Ok(try!(self.snapshot.get(&data_key)))
+            }
+            None => Ok(None),
+        }
     }
 }
 

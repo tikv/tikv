@@ -32,7 +32,7 @@ use std::io::Error as IoError;
 use std::result;
 use protobuf::RepeatedField;
 
-use super::{Result as EngineResult, Error as EngineError, Engine, Modify};
+use super::{Result as EngineResult, Error as EngineError, Engine, Snapshot, Modify};
 use storage::{Key, Value, KvPair};
 
 quick_error! {
@@ -219,5 +219,9 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
         try!(self.exec_requests(ctx, reqs));
         Ok(())
+    }
+
+    fn get_snapshot<'a>(&'a self, _: &Context) -> EngineResult<Box<Snapshot + 'a>> {
+        unimplemented!();
     }
 }

@@ -18,7 +18,7 @@ use std::fmt::{self, Formatter, Debug};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
 use util::HandyRwLock;
-use super::{Engine, Modify, Result};
+use super::{Engine, Snapshot, Modify, Result};
 
 pub struct EngineBtree {
     map: RwLock<BTreeMap<Vec<u8>, Value>>,
@@ -66,5 +66,9 @@ impl Engine for EngineBtree {
             }
         }
         Ok(())
+    }
+
+    fn get_snapshot(&self, _: &Context) -> Result<Box<Snapshot>> {
+        unimplemented!();
     }
 }
