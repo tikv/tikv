@@ -39,19 +39,19 @@ fn append_table_index_prefix(mut buf: &mut [u8], table_id: i64) -> Result<()> {
 
 /// `encode_row_key` encodes the table id and record handle into a byte array.
 pub fn encode_row_key(table_id: i64, encoded_handle: &[u8]) -> Result<Vec<u8>> {
-    let mut k = vec![0; RECORD_ROW_KEY_LEN];
-    try!(append_table_record_prefix(&mut k, table_id));
-    try!((&mut k[PREFIX_LEN..]).write_all(encoded_handle));
-    Ok(k)
+    let mut key = vec![0; RECORD_ROW_KEY_LEN];
+    try!(append_table_record_prefix(&mut key, table_id));
+    try!((&mut key[PREFIX_LEN..]).write_all(encoded_handle));
+    Ok(key)
 }
 
 /// `encode_column_key` encodes the table id, row handle and column id into a byte array.
 pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Result<Vec<u8>> {
-    let mut k = vec![0; RECORD_ROW_KEY_LEN + ID_LEN];
-    try!(append_table_record_prefix(&mut k, table_id));
-    try!(number::encode_i64(&mut k[PREFIX_LEN..], handle));
-    try!(number::encode_i64(&mut k[RECORD_ROW_KEY_LEN..], column_id));
-    Ok(k)
+    let mut key = vec![0; RECORD_ROW_KEY_LEN + ID_LEN];
+    try!(append_table_record_prefix(&mut key, table_id));
+    try!(number::encode_i64(&mut key[PREFIX_LEN..], handle));
+    try!(number::encode_i64(&mut key[RECORD_ROW_KEY_LEN..], column_id));
+    Ok(key)
 }
 
 /// `decode_handle` decodes the key and gets the handle.
@@ -63,21 +63,21 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     let mut remaining = &encoded[TABLE_PREFIX.len()..];
     try!(number::decode_i64(remaining));
 
-    if !remaining[8..].starts_with(RECORD_PREFIX_SEP) {
+    if !remaining[ID_LEN..].starts_with(RECORD_PREFIX_SEP) {
         return Err(Error::InvalidDataType(format!("record key expected, but got {:?}", encoded)));
     }
 
-    remaining = &remaining[8 + RECORD_PREFIX_SEP.len()..];
+    remaining = &remaining[ID_LEN + RECORD_PREFIX_SEP.len()..];
     number::decode_i64(remaining)
 }
 
 /// `encode_index_seek_key` encodes an index value to byte array.
 pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Result<Vec<u8>> {
-    let mut k = vec![0; PREFIX_LEN + ID_LEN + encoded.len()];
-    try!(append_table_index_prefix(&mut k, table_id));
-    try!(number::encode_i64(&mut k[PREFIX_LEN..], idx_id));
-    try!((&mut k[PREFIX_LEN + ID_LEN..]).write_all(encoded));
-    Ok(k)
+    let mut key = vec![0; PREFIX_LEN + ID_LEN + encoded.len()];
+    try!(append_table_index_prefix(&mut key, table_id));
+    try!(number::encode_i64(&mut key[PREFIX_LEN..], idx_id));
+    try!((&mut key[PREFIX_LEN + ID_LEN..]).write_all(encoded));
+    Ok(key)
 }
 
 // `decode_index_key` decodes datums from an index key.
