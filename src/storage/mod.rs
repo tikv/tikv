@@ -169,7 +169,8 @@ impl Storage {
         let mut scheduler = Scheduler::new(engine);
 
         let (tx, rx) = mpsc::channel::<Message>();
-        let handle = thread::spawn(move || {
+        let builder = thread::Builder::new().name(format!("storage-{:?}", desc));
+        let handle = box_try!(builder.spawn(move || {
             info!("storage: [{}] started.", desc);
             loop {
                 let msg = try!(rx.recv());
@@ -181,7 +182,8 @@ impl Storage {
             }
             info!("storage: [{}] closing.", desc);
             Ok(())
-        });
+        }));
+        
         Ok(Storage {
             tx: tx,
             thread: handle,
