@@ -15,7 +15,7 @@ use std::{error, result};
 use std::fmt::Debug;
 use self::memory::EngineBtree;
 use self::rocksdb::EngineRocksdb;
-use storage::{Key, Value, KvPair};
+use storage::{Key, Value, KvPair, Error as StorageError};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -81,6 +81,13 @@ quick_error! {
             display("unknown error {:?}", err)
         }
     }
+}
+
+pub fn get_request_err(e: &StorageError) -> Option<ErrorHeader> {
+    if let StorageError::Engine(Error::Request(ref err)) = *e {
+        return Some(err.to_owned());
+    }
+    None
 }
 
 pub type Result<T> = result::Result<T, Error>;

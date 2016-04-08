@@ -21,11 +21,9 @@ use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, Cmd
                        Request, Response, MessageType, Item, ResultType, ResultType_Type,
                        LockInfo, Op};
 use kvproto::msgpb;
+use kvproto::errorpb::Error as ErrorHeader;
 use storage::{Storage, Key, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
-              Callback};
-use storage::Result as StorageResult;
-use storage::Error as StorageError;
-use storage::EngineError;
+              Callback, Result as StorageResult, engine};
 
 use super::{Result, SendCh, ConnData, Error, Msg};
 
@@ -199,7 +197,7 @@ impl StoreHandler {
                 }
             }
             Err(ref e) => {
-                if let StorageError::Engine(EngineError::Request(ref err)) = *e {
+                if let Some(err) = engine::get_request_err(&e) {
                     if err.has_not_leader() {
                         res_type.set_field_type(ResultType_Type::NotLeader);
                         res_type.set_leader_info(err.get_not_leader().to_owned());
@@ -208,19 +206,12 @@ impl StoreHandler {
                         res_type.set_field_type(ResultType_Type::Other);
                         res_type.set_msg(format!("engine error: {:?}", err));
                     }
-                } else if r.is_locked() {
-                    if let Some((_, primary, ts)) = r.get_lock() {
-                        res_type.set_field_type(ResultType_Type::Locked);
-                        let mut lock_info = LockInfo::new();
-                        lock_info.set_primary_lock(primary);
-                        lock_info.set_lock_version(ts);
-                        res_type.set_lock_info(lock_info);
-                    } else {
-                        let err_str = "key is locked but primary info not found".to_owned();
-                        error!("{}", err_str);
-                        res_type.set_field_type(ResultType_Type::Other);
-                        res_type.set_msg(err_str);
-                    }
+                } else if let Some((_, primary, ts)) = r.get_lock() {
+                    res_type.set_field_type(ResultType_Type::Locked);
+                    let mut lock_info = LockInfo::new();
+                    lock_info.set_primary_lock(primary);
+                    lock_info.set_lock_version(ts);
+                    res_type.set_lock_info(lock_info);
                 } else {
                     let err_str = format!("storage error: {:?}", e);
                     error!("{}", err_str);
@@ -253,15 +244,13 @@ impl StoreHandler {
                         new_kv.set_key(key.clone());
                         new_kv.set_value(value.clone());
                     } else {
-                        if result.is_locked() {
-                            if let Some((key, primary, ts)) = result.get_lock() {
-                                res_type.set_field_type(ResultType_Type::Locked);
-                                let mut lock_info = LockInfo::new();
-                                lock_info.set_primary_lock(primary);
-                                lock_info.set_lock_version(ts);
-                                res_type.set_lock_info(lock_info);
-                                new_kv.set_key(key);
-                            }
+                        if let Some((key, primary, ts)) = result.get_lock() {
+                            res_type.set_field_type(ResultType_Type::Locked);
+                            let mut lock_info = LockInfo::new();
+                            lock_info.set_primary_lock(primary);
+                            lock_info.set_lock_version(ts);
+                            res_type.set_lock_info(lock_info);
+                            new_kv.set_key(key);
                         } else {
                             res_type.set_field_type(ResultType_Type::Retryable);
                         }
@@ -273,19 +262,8 @@ impl StoreHandler {
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
             }
             Err(e) => {
-                if let StorageError::Engine(EngineError::Request(ref err)) = e {
-                    let mut new_kv = Item::new();
-                    let mut res_type = ResultType::new();
-                    // If has_not_leader then fill first item with NotLeader error and return.
-                    if err.has_not_leader() {
-                        res_type.set_field_type(ResultType_Type::NotLeader);
-                        res_type.set_leader_info(err.get_not_leader().to_owned());
-                    } else {
-                        error!("{:?}", err);
-                        res_type.set_field_type(ResultType_Type::Other);
-                        res_type.set_msg(format!("engine error: {:?}", err));
-                    }
-                    new_kv.set_res_type(res_type);
+                if let Some(err) = engine::get_request_err(&e) {
+                    let new_kv = StoreHandler::make_not_leader_item(err);
                     new_kvs.push(new_kv);
                     cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
                 } else {
@@ -328,19 +306,8 @@ impl StoreHandler {
                 cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
             }
             Err(e) => {
-                if let StorageError::Engine(EngineError::Request(ref err)) = e {
-                    let mut item = Item::new();
-                    let mut res_type = ResultType::new();
-                    // If has_not_leader then fill first item with NotLeader error and return.
-                    if err.has_not_leader() {
-                        res_type.set_field_type(ResultType_Type::NotLeader);
-                        res_type.set_leader_info(err.get_not_leader().to_owned());
-                    } else {
-                        error!("{:?}", err);
-                        res_type.set_field_type(ResultType_Type::Other);
-                        res_type.set_msg(format!("engine error: {:?}", err));
-                    }
-                    item.set_res_type(res_type);
+                if let Some(err) = engine::get_request_err(&e) {
+                    let item = StoreHandler::make_not_leader_item(err);
                     items.push(item);
                     cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
                 } else {
@@ -367,13 +334,9 @@ impl StoreHandler {
         let mut res_type = ResultType::new();
         if r.is_ok() {
             res_type.set_field_type(ResultType_Type::Ok);
-        } else if r.is_committed() {
+        } else if let Some(commit_ts) = r.get_commit() {
             res_type.set_field_type(ResultType_Type::Committed);
-            if let Some(commit_ts) = r.get_commit() {
-                cmd_cleanup_resp.set_commit_version(commit_ts);
-            } else {
-                warn!("commit_ts not found when is_committed.");
-            }
+            cmd_cleanup_resp.set_commit_version(commit_ts);
         } else if r.is_rolledback() {
             res_type.set_field_type(ResultType_Type::Rolledback);
         } else {
@@ -432,6 +395,22 @@ impl StoreHandler {
         }
 
         Ok(())
+    }
+
+    fn make_not_leader_item(err: ErrorHeader) -> Item {
+        let mut item = Item::new();
+        let mut res_type = ResultType::new();
+        // If has_not_leader then fill first item with NotLeader error and return.
+        if err.has_not_leader() {
+            res_type.set_field_type(ResultType_Type::NotLeader);
+            res_type.set_leader_info(err.get_not_leader().to_owned());
+        } else {
+            error!("{:?}", err);
+            res_type.set_field_type(ResultType_Type::Other);
+            res_type.set_msg(format!("engine error: {:?}", err));
+        }
+        item.set_res_type(res_type);
+        item
     }
 }
 
@@ -595,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn test_not_leader() {
+    fn test_get_not_leader() {
         use kvproto::errorpb::NotLeader;
         let mut leader_info = NotLeader::new();
         leader_info.set_region_id(1);
@@ -606,6 +585,39 @@ mod tests {
         let mut exp_res_type = make_res_type(ResultType_Type::NotLeader);
         exp_res_type.set_leader_info(leader_info.to_owned());
         assert_eq!(exp_res_type, *actual_resp.get_cmd_get_resp().get_res_type());
+    }
+
+    #[test]
+    fn test_scan_not_leader() {
+        use storage::KvPair;
+        use kvproto::errorpb::NotLeader;
+        let mut leader_info = NotLeader::new();
+        leader_info.set_region_id(1);
+        let storage_res: StorageResult<Vec<StorageResult<KvPair>>> =
+            make_not_leader_error(leader_info.to_owned());
+        let actual_resp = StoreHandler::cmd_scan_done(storage_res);
+        assert_eq!(MessageType::CmdScan, actual_resp.get_field_type());
+        let mut exp_res_type = make_res_type(ResultType_Type::NotLeader);
+        exp_res_type.set_leader_info(leader_info.to_owned());
+        let results = actual_resp.get_cmd_scan_resp().get_results();
+        assert!(results.len() >= 1);
+        assert_eq!(exp_res_type, *results[0].get_res_type());
+    }
+
+    #[test]
+    fn test_prewrite_not_leader() {
+        use kvproto::errorpb::NotLeader;
+        let mut leader_info = NotLeader::new();
+        leader_info.set_region_id(1);
+        let storage_res: StorageResult<Vec<StorageResult<()>>> =
+            make_not_leader_error(leader_info.to_owned());
+        let actual_resp = StoreHandler::cmd_prewrite_done(storage_res);
+        assert_eq!(MessageType::CmdPrewrite, actual_resp.get_field_type());
+        let mut exp_res_type = make_res_type(ResultType_Type::NotLeader);
+        exp_res_type.set_leader_info(leader_info.to_owned());
+        let results = actual_resp.get_cmd_prewrite_resp().get_results();
+        assert!(results.len() >= 1);
+        assert_eq!(exp_res_type, *results[0].get_res_type());
     }
 
     fn make_lock_error<T>(key: Vec<u8>, primary: Vec<u8>, ts: u64) -> StorageResult<T> {
