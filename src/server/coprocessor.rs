@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 use mio::Token;
-use storage::{Engine, SnapshotStore, Error as StorageError};
+use storage::{Engine, SnapshotStore};
 use kvproto::kvrpcpb::Context;
 use kvproto::coprocessor::Request;
 use super::{Result, SendCh};
@@ -26,6 +26,7 @@ pub struct CoprocessorHandler {
 
 impl CoprocessorHandler {
     pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> CoprocessorHandler {
+        // TODO: Spawn a new thread for handling requests asynchronously.
         CoprocessorHandler {
             engine: engine,
             ch: ch,
@@ -39,7 +40,7 @@ impl CoprocessorHandler {
 
     #[allow(dead_code)]
     fn new_snapshot<'a>(&'a self, ctx: &Context, start_ts: u64) -> Result<SnapshotStore<'a>> {
-        let snapshot = try!(self.engine.get_snapshot(ctx).map_err(StorageError::from));
+        let snapshot = try!(self.engine.get_snapshot(ctx));
         Ok(SnapshotStore::new(snapshot, start_ts))
     }
 }

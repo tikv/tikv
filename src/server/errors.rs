@@ -21,6 +21,7 @@ use protobuf::ProtobufError;
 
 use util::codec::Error as CodecError;
 use raftstore::Error as RaftServerError;
+use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
 use pd::Error as PdError;
 
@@ -55,6 +56,11 @@ quick_error!{
             description(err.description())
         }
         RaftServer(err: RaftServerError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Engine(err: EngineError) {
             from()
             cause(err)
             description(err.description())
