@@ -843,7 +843,8 @@ impl Peer {
                 CmdType::Seek => self.do_seek(ctx, req),
                 CmdType::Put => self.do_put(ctx, req),
                 CmdType::Delete => self.do_delete(ctx, req),
-                e => Err(box_err!("unsupported command type {:?}", e)),
+                CmdType::Snap => self.do_snap(ctx, req),
+                CmdType::Invalid => Err(box_err!("invalid cmd type, message maybe currupted.")),
             });
 
             resp.set_cmd_type(cmd_type);
@@ -919,6 +920,12 @@ impl Peer {
         let resp = Response::new();
         try!(ctx.wb.delete(&key));
 
+        Ok(resp)
+    }
+
+    fn do_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
+        let mut resp = Response::new();
+        resp.mut_snap().set_region(self.storage.rl().get_region().clone());
         Ok(resp)
     }
 }
