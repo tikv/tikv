@@ -183,7 +183,7 @@ impl Storage {
             info!("storage: [{}] closing.", desc);
             Ok(())
         }));
-        
+
         Ok(Storage {
             tx: tx,
             thread: handle,

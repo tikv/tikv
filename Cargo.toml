@@ -44,6 +44,9 @@ git = "https://github.com/carllerche/bytes"
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
 
+[dependencies.tipb]
+git = "https://github.com/pingcap/tipb.git"
+
 [dev-dependencies]
 env_logger = "0.3"
 

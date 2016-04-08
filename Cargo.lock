@@ -16,6 +16,7 @@ dependencies = [
  "rocksdb 0.3.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
  "uuid 0.1.18 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -260,6 +261,14 @@ dependencies = [
  "kernel32-sys 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "tipb"
+version = "0.0.1"
+source = "git+https://github.com/pingcap/tipb.git#5996e1a5851fec361cc50bf956ac9a608818de99"
+dependencies = [
+ "protobuf 1.0.18 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]
 
 [[package]]
