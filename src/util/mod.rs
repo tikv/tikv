@@ -29,6 +29,7 @@ pub mod logger;
 // TODO: add #[cfg(test)] if we get it compiled.
 pub mod panic_hook;
 pub mod codec;
+pub mod xeval;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
