@@ -19,15 +19,15 @@ use kvproto::coprocessor::Request;
 use super::{Result, SendCh};
 
 #[allow(dead_code)]
-pub struct CoprocessorHandler {
+pub struct SnapshotCoprocessor {
     engine: Arc<Box<Engine>>,
     ch: SendCh,
 }
 
-impl CoprocessorHandler {
-    pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> CoprocessorHandler {
+impl SnapshotCoprocessor {
+    pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> SnapshotCoprocessor {
         // TODO: Spawn a new thread for handling requests asynchronously.
-        CoprocessorHandler {
+        SnapshotCoprocessor {
             engine: engine,
             ch: ch,
         }
