@@ -267,12 +267,12 @@ fn test_multi_server_lost_majority() {
 fn test_multi_node_random_restart() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_random_restart(&mut cluster, count, 100);
+    test_multi_random_restart(&mut cluster, count, 5);
 }
 
 #[test]
 fn test_multi_server_random_restart() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_random_restart(&mut cluster, count, 50);
+    test_multi_random_restart(&mut cluster, count, 5);
 }
