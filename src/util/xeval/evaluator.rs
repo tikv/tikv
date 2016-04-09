@@ -98,20 +98,20 @@ impl Evaluator {
     }
 
     fn eval_null_eq(&self, expr: &Expr) -> Result<Datum> {
-        let (left, right) = try!(self.eval_children(expr));
+        let (left, right) = try!(self.eval_two_children(expr));
         let cmp = try!(left.cmp(&right));
         Ok((cmp == Ordering::Equal).into())
     }
 
     fn cmp_children(&self, expr: &Expr) -> Result<Option<Ordering>> {
-        let (left, right) = try!(self.eval_children(expr));
+        let (left, right) = try!(self.eval_two_children(expr));
         if left == Datum::Null || right == Datum::Null {
             return Ok(None);
         }
         left.cmp(&right).map(Some).map_err(From::from)
     }
 
-    fn eval_children(&self, expr: &Expr) -> Result<(Datum, Datum)> {
+    fn eval_two_children(&self, expr: &Expr) -> Result<(Datum, Datum)> {
         let l = expr.get_children().len();
         if l != 2 {
             return Err(Error::Expr(format!("need 2 operands but got {}", l)));
@@ -123,17 +123,17 @@ impl Evaluator {
     }
 
     fn eval_and(&self, expr: &Expr) -> Result<Datum> {
-        self.eval_children_as_bool(expr)
+        self.eval_two_children_as_bool(expr)
             .map(|(l, r)| (l.unwrap_or(false) && r.unwrap_or(false)).into())
     }
 
     fn eval_or(&self, expr: &Expr) -> Result<Datum> {
-        self.eval_children_as_bool(expr)
+        self.eval_two_children_as_bool(expr)
             .map(|(l, r)| (l.unwrap_or(false) || r.unwrap_or(false)).into())
     }
 
-    fn eval_children_as_bool(&self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
-        let (left, right) = try!(self.eval_children(expr));
+    fn eval_two_children_as_bool(&self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
+        let (left, right) = try!(self.eval_two_children(expr));
         let left_bool = try!(eval_as_bool(&left));
         let right_bool = try!(eval_as_bool(&right));
         Ok((left_bool, right_bool))
