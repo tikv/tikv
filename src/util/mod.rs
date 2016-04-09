@@ -14,7 +14,7 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io::{self, Write};
-use std::net::{ToSocketAddrs, TcpStream};
+use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use time;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rand::{self, ThreadRng};
@@ -131,4 +131,43 @@ pub fn make_std_tcp_conn<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
     let stream = try!(TcpStream::connect(addr));
     try!(stream.set_nodelay(true));
     Ok(stream)
+}
+
+// A helper function to parse SocketAddr for mio.
+// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
+// but it is just ok for "ip:port", not "host:port".
+pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
+    let addrs = try!(addr.to_socket_addrs());
+    Ok(addrs.collect::<Vec<SocketAddr>>()[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{SocketAddr, AddrParseError};
+    use super::*;
+
+    #[test]
+    fn test_to_socket_addr() {
+        let tbls = vec![
+            ("", false),
+            ("127.0.0.1", false),
+            ("localhost", false),
+            ("127.0.0.1:80", true),
+            ("localhost:80", true),
+        ];
+
+        for (addr, ok) in tbls {
+            assert_eq!(to_socket_addr(addr).is_ok(), ok);
+        }
+
+        let tbls = vec![
+            ("localhost:80", false),
+            ("127.0.0.1:80", true),
+        ];
+
+        for (addr, ok) in tbls {
+            let ret: Result<SocketAddr, AddrParseError> = addr.parse();
+            assert_eq!(ret.is_ok(), ok);
+        }
+    }
 }
