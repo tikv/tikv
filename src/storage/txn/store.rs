@@ -15,7 +15,7 @@ use std::sync::Arc;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair, Mutation};
 use storage::{Engine, Snapshot};
-use storage::mvcc::{MvccTxn, SnapshotTxn, Error as MvccError};
+use storage::mvcc::{MvccTxn, MvccSnapshot, Error as MvccError};
 use super::shard_mutex::ShardMutex;
 use super::{Error, Result};
 
@@ -35,9 +35,9 @@ impl TxnStore {
     }
 
     pub fn get(&self, ctx: Context, key: &Key, start_ts: u64) -> Result<Option<Value>> {
-        let _guard = self.shard_mutex.lock(&[key]);
-        let txn = MvccTxn::new(self.engine.as_ref().as_ref(), &ctx, start_ts);
-        Ok(try!(txn.get(key)))
+        let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
+        let snap_store = SnapshotStore::new(snapshot, start_ts);
+        snap_store.get(key)
     }
 
     #[allow(dead_code)]
@@ -45,14 +45,10 @@ impl TxnStore {
                      ctx: Context,
                      keys: &[Key],
                      start_ts: u64)
-                     -> Vec<Result<Option<Value>>> {
-        let txn = MvccTxn::new(self.engine.as_ref().as_ref(), &ctx, start_ts);
-        let mut results = Vec::<_>::with_capacity(keys.len());
-        for k in keys {
-            let _guard = self.shard_mutex.lock(&[k]);
-            results.push(txn.get(k).map_err(Error::from));
-        }
-        results
+                     -> Result<Vec<Result<Option<Value>>>> {
+        let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
+        let snap_store = SnapshotStore::new(snapshot, start_ts);
+        snap_store.batch_get(keys)
     }
 
     pub fn scan(&self,
@@ -61,27 +57,9 @@ impl TxnStore {
                 limit: usize,
                 start_ts: u64)
                 -> Result<Vec<Result<KvPair>>> {
-        let mut results = vec![];
-        let mut key = key;
-        let txn = MvccTxn::new(self.engine.as_ref().as_ref(), &ctx, start_ts);
-        while results.len() < limit {
-            let next_key = match try!(self.engine.seek(&ctx, &key)) {
-                Some((key, _)) => key,
-                None => break,
-            };
-            let _guard = self.shard_mutex.lock(&next_key);
-            key = Key::from_raw(next_key.clone());
-            match txn.get(&key) {
-                Ok(Some(value)) => results.push(Ok((next_key, value))),
-                Ok(None) => {}
-                e @ Err(MvccError::KeyIsLocked { .. }) => {
-                    results.push(Err(Error::from(e.unwrap_err())))
-                }
-                Err(e) => return Err(e.into()),
-            };
-            key = key.encode_ts(u64::max_value());
-        }
-        Ok(results)
+        let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
+        let snap_store = SnapshotStore::new(snapshot, start_ts);
+        snap_store.scan(key, limit)
     }
 
     pub fn prewrite(&self,
@@ -90,12 +68,16 @@ impl TxnStore {
                     primary: Vec<u8>,
                     start_ts: u64)
                     -> Result<Vec<Result<()>>> {
-        let mut results = vec![];
         let _gurad = {
             let locked_keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
             self.shard_mutex.lock(&locked_keys)
         };
-        let mut txn = MvccTxn::new(self.engine.as_ref().as_ref(), &ctx, start_ts);
+
+        let engine = self.engine.as_ref().as_ref();
+        let snapshot = try!(engine.snapshot(&ctx));
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+
+        let mut results = vec![];
         for m in mutations {
             match txn.prewrite(m, &primary) {
                 Ok(_) => results.push(Ok(())),
@@ -114,7 +96,11 @@ impl TxnStore {
                   commit_ts: u64)
                   -> Result<()> {
         let _guard = self.shard_mutex.lock(&keys);
-        let mut txn = MvccTxn::new(self.engine.as_ref().as_ref(), &ctx, start_ts);
+
+        let engine = self.engine.as_ref().as_ref();
+        let snapshot = try!(engine.snapshot(&ctx));
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+
         for k in keys {
             try!(txn.commit(&k, commit_ts));
         }
@@ -130,7 +116,12 @@ impl TxnStore {
                            get_ts: u64)
                            -> Result<Option<Value>> {
         let _guard = self.shard_mutex.lock(&[&key]);
-        let mut txn = MvccTxn::new(self.engine.as_ref().as_ref(), &ctx, lock_ts);
+
+        let engine = self.engine.as_ref().as_ref();
+        let snapshot = try!(engine.snapshot(&ctx));
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, lock_ts);
+
+
         let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
         try!(txn.submit());
         Ok(val)
@@ -138,7 +129,11 @@ impl TxnStore {
 
     pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64) -> Result<()> {
         let _guard = self.shard_mutex.lock(&[&key]);
-        let mut txn = MvccTxn::new(self.engine.as_ref().as_ref(), &ctx, start_ts);
+
+        let engine = self.engine.as_ref().as_ref();
+        let snapshot = try!(engine.snapshot(&ctx));
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+
         try!(txn.rollback(&key));
         try!(txn.submit());
         Ok(())
@@ -146,7 +141,11 @@ impl TxnStore {
 
     pub fn rollback(&self, ctx: Context, keys: Vec<Key>, start_ts: u64) -> Result<()> {
         let _guard = self.shard_mutex.lock(&keys);
-        let mut txn = MvccTxn::new(self.engine.as_ref().as_ref(), &ctx, start_ts);
+
+        let engine = self.engine.as_ref().as_ref();
+        let snapshot = try!(engine.snapshot(&ctx));
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+
         for k in keys {
             try!(txn.rollback(&k));
         }
@@ -157,7 +156,11 @@ impl TxnStore {
     #[allow(dead_code)]
     pub fn rollback_then_get(&self, ctx: Context, key: Key, lock_ts: u64) -> Result<Option<Value>> {
         let _guard = self.shard_mutex.lock(&[&key]);
-        let mut txn = MvccTxn::new(self.engine.as_ref().as_ref(), &ctx, lock_ts);
+
+        let engine = self.engine.as_ref().as_ref();
+        let snapshot = try!(engine.snapshot(&ctx));
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, lock_ts);
+
         let val = try!(txn.rollback_then_get(&key));
         try!(txn.submit());
         Ok(val)
@@ -178,14 +181,23 @@ impl<'a> SnapshotStore<'a> {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let txn = SnapshotTxn::new(self.snapshot.as_ref(), self.start_ts);
+        let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         Ok(try!(txn.get(key)))
+    }
+
+    pub fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
+        let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
+        let mut results = Vec::<_>::with_capacity(keys.len());
+        for k in keys {
+            results.push(txn.get(k).map_err(Error::from));
+        }
+        Ok(results)
     }
 
     pub fn scan(&self, key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         let mut key = key;
-        let txn = SnapshotTxn::new(self.snapshot.as_ref(), self.start_ts);
+        let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
             let next_key = match try!(self.snapshot.seek(&key)) {
                 Some((key, _)) => key,
@@ -647,7 +659,8 @@ mod tests {
     fn test_isolation_multi_inc() {
         const THREAD_NUM: usize = 4;
         const KEY_NUM: usize = 4;
-        const INC_PER_THREAD: usize = 100;
+        // TODO: change to a larger value (e.g 100) after finding a better EngineMemory.
+        const INC_PER_THREAD: usize = 10;
 
         let engine = engine::new_engine(Dsn::Memory).unwrap();
         let store = Arc::new(TxnStore::new(Arc::new(engine)));
