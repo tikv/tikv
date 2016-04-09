@@ -20,7 +20,7 @@ use super::Result;
 /// TODO: handle overflow.
 pub fn bytes_to_int(bytes: &[u8]) -> Result<i64> {
     // trim
-    let mut trimed = bytes.iter().skip_while(|&&b| b == b' ');
+    let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
     let mut negative = false;
     let mut r = 0i64;
     if let Some(&c) = trimed.next() {
@@ -72,6 +72,8 @@ mod test {
         let tests: Vec<(&'static [u8], i64)> = vec![
             (b"0", 0),
             (b" 23a", 23),
+            (b"\t 23a", 23),
+            (b"\r23a", 0),
             (b"1", 1),
             (b"2.1", 2),
             (b"23e10", 23),
