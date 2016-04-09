@@ -20,8 +20,12 @@ pub mod rpc;
 pub mod number;
 pub mod datum;
 pub mod table;
+pub mod convert;
 
 pub use self::datum::Datum;
+
+use std::str::Utf8Error;
+use std::error;
 
 quick_error! {
     #[derive(Debug)]
@@ -35,7 +39,7 @@ quick_error! {
             from()
             cause(err)
             description(err.description())
-            display("unknown error {:?}", err)
+            display("protobuf error {:?}", err)
         }
         KeyLength {description("bad format key(length)")}
         KeyPadding {description("bad format key(padding)")}
@@ -49,6 +53,17 @@ quick_error! {
         }
         Eof {
             description("eof")
+        }
+        Encoding(err: Utf8Error) {
+            from()
+            cause(err)
+            description("enconding failed")
+        }
+        Other(err: Box<error::Error + Sync + Send>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
+            display("unknown error {:?}", err)
         }
     }
 }

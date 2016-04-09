@@ -23,12 +23,12 @@ use protobuf::Message;
 pub use log::LogLevelFilter;
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
-pub mod codec;
 #[macro_use]
 pub mod macros;
 pub mod logger;
 // TODO: add #[cfg(test)] if we get it compiled.
 pub mod panic_hook;
+pub mod codec;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
