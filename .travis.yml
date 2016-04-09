@@ -38,4 +38,4 @@ script:
   - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$rocksdb_dir"
   - export LIBRARY_PATH="$LD_LIBRARY_PATH"
   - ulimit -n 4096
-  - cargo test
+  - cargo test --release
