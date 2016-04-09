@@ -12,7 +12,7 @@
 // limitations under the License.
 
 #![feature(plugin)]
-#![plugin(clippy)]
+#![cfg_attr(feature = "dev", plugin(clippy))]
 
 extern crate tikv;
 extern crate getopts;
