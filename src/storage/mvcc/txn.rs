@@ -76,11 +76,13 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
         }
         // ... or locks at any timestamp.
         if let Some(lock) = meta.get_lock() {
-            return Err(Error::KeyIsLocked {
-                key: key.raw().to_owned(),
-                primary: lock.get_primary_key().to_vec(),
-                ts: lock.get_start_ts(),
-            });
+            if lock.get_start_ts() != self.start_ts {
+                return Err(Error::KeyIsLocked {
+                    key: key.raw().to_owned(),
+                    primary: lock.get_primary_key().to_vec(),
+                    ts: lock.get_start_ts(),
+                });
+            }
         }
 
         let mut lock = MetaLock::new();

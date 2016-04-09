@@ -391,18 +391,10 @@ quick_error! {
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 pub trait MaybeLocked {
-    fn is_locked(&self) -> bool;
     fn get_lock(&self) -> Option<(Vec<u8>, Vec<u8>, u64)>;
 }
 
 impl<T> MaybeLocked for Result<T> {
-    fn is_locked(&self) -> bool {
-        match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { .. }))) => true,
-            _ => false,
-        }
-    }
-
     fn get_lock(&self) -> Option<(Vec<u8>, Vec<u8>, u64)> {
         match *self {
             Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { ref key,
@@ -416,18 +408,10 @@ impl<T> MaybeLocked for Result<T> {
 }
 
 pub trait MaybeComitted {
-    fn is_committed(&self) -> bool;
     fn get_commit(&self) -> Option<u64>;
 }
 
 impl<T> MaybeComitted for Result<T> {
-    fn is_committed(&self) -> bool {
-        match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted { .. }))) => true,
-            _ => false,
-        }
-    }
-
     fn get_commit(&self) -> Option<u64> {
         match *self {
             Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted { commit_ts }))) => {
