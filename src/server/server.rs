@@ -29,6 +29,7 @@ use super::Result;
 use util::HandyRwLock;
 use storage::Storage;
 use super::kv::StoreHandler;
+use super::coprocessor::SnapshotCoprocessor;
 use super::transport::RaftStoreRouter;
 
 const SERVER_TOKEN: Token = Token(1);
@@ -66,6 +67,7 @@ pub struct Server<T: RaftStoreRouter> {
     raft_router: Arc<RwLock<T>>,
 
     store: StoreHandler,
+    coprocessor: SnapshotCoprocessor,
 }
 
 impl<T: RaftStoreRouter> Server<T> {
@@ -85,8 +87,9 @@ impl<T: RaftStoreRouter> Server<T> {
                                  PollOpt::edge()));
 
         let sendch = SendCh::new(event_loop.channel());
-
+        let engine = storage.get_engine();
         let store_handler = StoreHandler::new(storage, sendch.clone());
+        let coprocessor = SnapshotCoprocessor::new(engine, sendch.clone());
 
         let svr = Server {
             listener: listener,
@@ -96,6 +99,7 @@ impl<T: RaftStoreRouter> Server<T> {
             peers: HashMap::new(),
             raft_router: raft_router,
             store: store_handler,
+            coprocessor: coprocessor,
         };
 
         Ok(svr)
@@ -199,6 +203,7 @@ impl<T: RaftStoreRouter> Server<T> {
             }
             MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
             MessageType::KvReq => self.store.on_request(msg.take_kv_req(), token, msg_id),
+            MessageType::CopReq => self.coprocessor.on_request(msg.take_cop_req(), token, msg_id),
             _ => {
                 Err(box_err!("unsupported message {:?} for token {:?} with msg id {}",
                              msg_type,

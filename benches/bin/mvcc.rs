@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use test::BenchSamples;
 use tempdir::TempDir;
 
@@ -26,7 +27,7 @@ use super::print_result;
 fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
     let engine = storage::new_engine(dsn).unwrap();
 
-    let store = TxnStore::new(engine);
+    let store = TxnStore::new(Arc::new(engine));
     let mut ts_generator = 1..;
 
     let mut kvs = KvGenerator::new(100, 1000);
