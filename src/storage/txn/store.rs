@@ -659,6 +659,7 @@ mod tests {
     fn test_isolation_multi_inc() {
         const THREAD_NUM: usize = 4;
         const KEY_NUM: usize = 4;
+        // TODO: change to a larger value (e.g 100) after finding a better EngineMemory.
         const INC_PER_THREAD: usize = 10;
 
         let engine = engine::new_engine(Dsn::Memory).unwrap();

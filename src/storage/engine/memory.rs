@@ -69,6 +69,7 @@ impl Engine for EngineBtree {
     }
 
     fn snapshot(&self, _: &Context) -> Result<Box<Snapshot>> {
+        // TODO: Find a better way to do snapshot.
         let m = self.map.rl();
         Ok(box m.clone())
     }
