@@ -21,6 +21,7 @@ use super::transport_simulate;
 
 use rand;
 use rand::Rng;
+use std::time::Duration;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     test_multi_with_transport_strategy(cluster, vec![]);
@@ -129,7 +130,7 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
 
 }
 
-fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
+fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>, count: usize, iteration: u32) {
     cluster.bootstrap_region().expect("");
     cluster.start();
 
@@ -140,12 +141,35 @@ fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>, count: usiz
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let mut rng = rand::thread_rng();
-    for _ in 1..100 {
+    for _ in 1..iteration {
         let id = 1+rng.gen_range(0, count as u64);
         cluster.stop_node(id);
         cluster.run_node(id);
-        sleep_ms(600);
+        wait_until_node_online(cluster, key);
         assert_eq!(cluster.get(key), Some(value.to_vec()));
+    }
+}
+
+fn wait_until_node_online<T: Simulator>(cluster: &mut Cluster<T>, key: &[u8]) {
+    loop {
+        let region = cluster.get_region(key);
+        let mut succ: bool = true;
+        for peer in region.get_peers() {
+            let find_leader = new_status_request(region.get_id(), peer.clone(), new_region_leader_cmd());
+            let resp = cluster.call_command(find_leader, Duration::from_secs(3));
+            if resp.is_err() {
+                succ = false;
+                break;
+            }
+            if !resp.unwrap().get_status_response().get_region_leader().has_leader() {
+                succ = false;
+                break;
+            }
+        }
+        if succ {
+            break;
+        }
+        sleep_ms(10);
     }
 }
 
@@ -240,17 +264,15 @@ fn test_multi_server_lost_majority() {
 }
 
 #[test]
-#[ignore] // take more then 1 minute to run
 fn test_multi_node_random_restart() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_random_restart(&mut cluster, count);
+    test_multi_random_restart(&mut cluster, count, 100);
 }
 
 #[test]
-#[ignore] // take more then 1 minute to run
 fn test_multi_server_random_restart() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_random_restart(&mut cluster, count);
+    test_multi_random_restart(&mut cluster, count, 50);
 }
