@@ -156,6 +156,15 @@ impl From<bool> for Datum {
     }
 }
 
+impl<T: Into<Datum>> From<Option<T>> for Datum {
+    fn from(opt: Option<T>) -> Datum {
+        match opt {
+            None => Datum::Null,
+            Some(t) => t.into(),
+        }
+    }
+}
+
 impl<'a> From<&'a [u8]> for Datum {
     fn from(data: &'a [u8]) -> Datum {
         Datum::Bytes(data.to_vec())
