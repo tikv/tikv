@@ -187,7 +187,7 @@ impl Storage {
             info!("storage: [{}] closing.", desc);
             Ok(())
         }));
-        
+
         Ok(Storage {
             engine: shared,
             tx: tx,
