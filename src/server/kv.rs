@@ -208,10 +208,7 @@ impl StoreHandler {
                     }
                 } else if let Some((_, primary, ts)) = r.get_lock() {
                     res_type.set_field_type(ResultType_Type::Locked);
-                    let mut lock_info = LockInfo::new();
-                    lock_info.set_primary_lock(primary);
-                    lock_info.set_lock_version(ts);
-                    res_type.set_lock_info(lock_info);
+                    res_type.set_lock_info(make_lock_info(primary, ts));
                 } else {
                     let err_str = format!("storage error: {:?}", e);
                     error!("{}", err_str);
@@ -237,33 +234,18 @@ impl StoreHandler {
             Ok(kvs) => {
                 // convert storage::KvPair to kvrpcpb::Item
                 for result in kvs {
-                    let mut new_kv = Item::new();
-                    let mut res_type = ResultType::new();
-                    if let Ok((ref key, ref value)) = result {
-                        res_type.set_field_type(ResultType_Type::Ok);
-                        new_kv.set_key(key.clone());
-                        new_kv.set_value(value.clone());
-                    } else {
-                        if let Some((key, primary, ts)) = result.get_lock() {
-                            res_type.set_field_type(ResultType_Type::Locked);
-                            let mut lock_info = LockInfo::new();
-                            lock_info.set_primary_lock(primary);
-                            lock_info.set_lock_version(ts);
-                            res_type.set_lock_info(lock_info);
-                            new_kv.set_key(key);
-                        } else {
-                            res_type.set_field_type(ResultType_Type::Retryable);
-                        }
+                    let mut item = make_item(&result);
+                    if let Ok((key, value)) = result {
+                        item.set_key(key);
+                        item.set_value(value);
                     }
-
-                    new_kv.set_res_type(res_type);
-                    new_kvs.push(new_kv);
+                    new_kvs.push(item);
                 }
                 cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
             }
             Err(e) => {
                 if let Some(err) = engine::get_request_err(&e) {
-                    let new_kv = StoreHandler::make_not_leader_item(err);
+                    let new_kv = make_not_leader_item(err);
                     new_kvs.push(new_kv);
                     cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
                 } else {
@@ -286,28 +268,14 @@ impl StoreHandler {
         match results {
             Ok(results) => {
                 for res in results {
-                    let mut item = Item::new();
-                    let mut res_type = ResultType::new();
-                    if res.is_ok() {
-                        res_type.set_field_type(ResultType_Type::Ok);
-                    } else if let Some((key, primary, ts)) = res.get_lock() {
-                        res_type.set_field_type(ResultType_Type::Locked);
-                        let mut lock_info = LockInfo::new();
-                        lock_info.set_primary_lock(primary);
-                        lock_info.set_lock_version(ts);
-                        res_type.set_lock_info(lock_info);
-                        item.set_key(key);
-                    } else {
-                        res_type.set_field_type(ResultType_Type::Retryable);
-                    }
-                    item.set_res_type(res_type);
+                    let item = make_item(&res);
                     items.push(item);
                 }
                 cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
             }
             Err(e) => {
                 if let Some(err) = engine::get_request_err(&e) {
-                    let item = StoreHandler::make_not_leader_item(err);
+                    let item = make_not_leader_item(err);
                     items.push(item);
                     cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
                 } else {
@@ -353,6 +321,9 @@ impl StoreHandler {
         let mut resp = Response::new();
         let mut cmd_commit_get_resp = CmdCommitThenGetResponse::new();
         cmd_commit_get_resp.set_ok(r.is_ok());
+        if let Err(ref e) = r {
+            error!("commit & get error: {}", e);
+        }
         if let Ok(Some(val)) = r {
             cmd_commit_get_resp.set_value(val);
         }
@@ -396,24 +367,46 @@ impl StoreHandler {
 
         Ok(())
     }
-
-    fn make_not_leader_item(err: ErrorHeader) -> Item {
-        let mut item = Item::new();
-        let mut res_type = ResultType::new();
-        // If has_not_leader then fill first item with NotLeader error and return.
-        if err.has_not_leader() {
-            res_type.set_field_type(ResultType_Type::NotLeader);
-            res_type.set_leader_info(err.get_not_leader().to_owned());
-        } else {
-            error!("{:?}", err);
-            res_type.set_field_type(ResultType_Type::Other);
-            res_type.set_msg(format!("engine error: {:?}", err));
-        }
-        item.set_res_type(res_type);
-        item
-    }
 }
 
+fn make_not_leader_item(err: ErrorHeader) -> Item {
+    let mut item = Item::new();
+    let mut res_type = ResultType::new();
+    // If has_not_leader then fill first item with NotLeader error and return.
+    if err.has_not_leader() {
+        res_type.set_field_type(ResultType_Type::NotLeader);
+        res_type.set_leader_info(err.get_not_leader().to_owned());
+    } else {
+        error!("{:?}", err);
+        res_type.set_field_type(ResultType_Type::Other);
+        res_type.set_msg(format!("engine error: {:?}", err));
+    }
+    item.set_res_type(res_type);
+    item
+}
+
+fn make_lock_info(primary: Vec<u8>, version: u64) -> LockInfo {
+    let mut lock_info = LockInfo::new();
+    lock_info.set_primary_lock(primary);
+    lock_info.set_lock_version(version);
+    lock_info
+}
+
+fn make_item<T>(res: &StorageResult<T>) -> Item {
+    let mut item = Item::new();
+    let mut res_type = ResultType::new();
+    if res.is_ok() {
+        res_type.set_field_type(ResultType_Type::Ok);
+    } else if let Some((key, primary, ts)) = res.get_lock() {
+        res_type.set_field_type(ResultType_Type::Locked);
+        res_type.set_lock_info(make_lock_info(primary, ts));
+        item.set_key(key);
+    } else {
+        res_type.set_field_type(ResultType_Type::Retryable);
+    }
+    item.set_res_type(res_type);
+    item
+}
 
 #[cfg(test)]
 mod tests {
