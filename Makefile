@@ -8,6 +8,9 @@ build:
 run:
 	cargo run --features "dev"
 
+release:
+	cargo build --release --bin tikv-server
+
 test:
 	# todo remove ulimit once issue #372 of mio is resolved.
 	ulimit -n 2000 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test --features "dev" -- --nocapture 
