@@ -112,7 +112,7 @@ impl Datum {
             Datum::I64(i) => cmp_f64(i as f64, f),
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F32(ff) => cmp_f64(ff as f64, f),
-            Datum::F64(ff) => cmp_f64(ff as f64, f),
+            Datum::F64(ff) => cmp_f64(ff, f),
             Datum::Bytes(ref bs) => {
                 let ff = try!(convert::bytes_to_f64(bs));
                 cmp_f64(ff, f)
