@@ -232,6 +232,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
             return Err(invalid_resp_type(CmdType::Snap, resp.get_cmd_type()));
         }
         let region = resp.take_snap().take_region();
+        // TODO figure out a way to create snapshot when apply
         let snap = RegionSnapshot::from_raw(self.db.as_ref(), region);
         Ok(box snap)
     }
