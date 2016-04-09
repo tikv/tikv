@@ -300,8 +300,11 @@ pub fn encode_key(buf: &mut [u8], values: &[Datum]) -> Result<usize> {
     encode(buf, values, true)
 }
 
-pub fn encode_value(buf: &mut [u8], values: &[Datum]) -> Result<usize> {
-    encode(buf, values, false)
+pub fn encode_value(values: &[Datum]) -> Result<Vec<u8>> {
+    let mut v = vec![0; approximate_size(values, false)];
+    let written = try!(encode(&mut v, values, false));
+    v.truncate(written);
+    Ok(v)
 }
 
 #[cfg(test)]
@@ -324,10 +327,9 @@ mod test {
             assert_eq!(written, readed);
             assert_eq!(vs, decoded);
 
-            buf = vec![0; approximate_size(&vs, false)];
-            let written = encode_value(&mut buf, &vs).unwrap();
-            let (decoded, readed) = decode(&buf[0..written]).unwrap();
-            assert_eq!(written, readed);
+            buf = encode_value(&vs).unwrap();
+            let (decoded, readed) = decode(&buf).unwrap();
+            assert_eq!(buf.len(), readed);
             assert_eq!(vs, decoded);
         }
     }

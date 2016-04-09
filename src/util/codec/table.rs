@@ -38,20 +38,21 @@ fn append_table_index_prefix(mut buf: &mut [u8], table_id: i64) -> Result<()> {
 }
 
 /// `encode_row_key` encodes the table id and record handle into a byte array.
-pub fn encode_row_key(table_id: i64, encoded_handle: &[u8]) -> Result<Vec<u8>> {
+pub fn encode_row_key(table_id: i64, encoded_handle: &[u8]) -> Vec<u8> {
     let mut key = vec![0; RECORD_ROW_KEY_LEN];
-    try!(append_table_record_prefix(&mut key, table_id));
-    try!((&mut key[PREFIX_LEN..]).write_all(encoded_handle));
-    Ok(key)
+    // can't panic
+    append_table_record_prefix(&mut key, table_id).unwrap();
+    (&mut key[PREFIX_LEN..]).write_all(encoded_handle).unwrap();
+    key
 }
 
 /// `encode_column_key` encodes the table id, row handle and column id into a byte array.
-pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Result<Vec<u8>> {
+pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> {
     let mut key = vec![0; RECORD_ROW_KEY_LEN + ID_LEN];
-    try!(append_table_record_prefix(&mut key, table_id));
-    try!(number::encode_i64(&mut key[PREFIX_LEN..], handle));
-    try!(number::encode_i64(&mut key[RECORD_ROW_KEY_LEN..], column_id));
-    Ok(key)
+    append_table_record_prefix(&mut key, table_id).unwrap();
+    number::encode_i64(&mut key[PREFIX_LEN..], handle).unwrap();
+    number::encode_i64(&mut key[RECORD_ROW_KEY_LEN..], column_id).unwrap();
+    key
 }
 
 /// `decode_handle` decodes the key and gets the handle.
@@ -72,12 +73,12 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
 }
 
 /// `encode_index_seek_key` encodes an index value to byte array.
-pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Result<Vec<u8>> {
+pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<u8> {
     let mut key = vec![0; PREFIX_LEN + ID_LEN + encoded.len()];
-    try!(append_table_index_prefix(&mut key, table_id));
-    try!(number::encode_i64(&mut key[PREFIX_LEN..], idx_id));
-    try!((&mut key[PREFIX_LEN + ID_LEN..]).write_all(encoded));
-    Ok(key)
+    append_table_index_prefix(&mut key, table_id).unwrap();
+    number::encode_i64(&mut key[PREFIX_LEN..], idx_id).unwrap();
+    (&mut key[PREFIX_LEN + ID_LEN..]).write_all(encoded).unwrap();
+    key
 }
 
 // `decode_index_key` decodes datums from an index key.
@@ -98,7 +99,7 @@ mod test {
         for &t in &tests {
             let mut buf = vec![0; 8];
             number::encode_i64(&mut buf, t).unwrap();
-            let k = encode_row_key(1, &buf).unwrap();
+            let k = encode_row_key(1, &buf);
             assert_eq!(t, decode_handle(&k).unwrap());
         }
     }
@@ -108,7 +109,7 @@ mod test {
         let tests = vec![Datum::U64(1), Datum::Bytes(b"123".to_vec()), Datum::I64(-1)];
         let mut buf = vec![0; datum::approximate_size(&tests, true)];
         let written = datum::encode_key(&mut buf, &tests).unwrap();
-        let encoded = encode_index_seek_key(1, 2, &buf[..written]).unwrap();
+        let encoded = encode_index_seek_key(1, 2, &buf[..written]);
         assert_eq!(tests, decode_index_key(&encoded).unwrap());
     }
 }

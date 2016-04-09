@@ -36,3 +36,5 @@ quick_error! {
 
 use std::result;
 pub type Result<T> = result::Result<T, Error>;
+
+pub use self::evaluator::Evaluator;
