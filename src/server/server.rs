@@ -26,7 +26,7 @@ use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::Result;
-use util::HandyRwLock;
+use util::{HandyRwLock, to_socket_addr};
 use storage::Storage;
 use super::kv::StoreHandler;
 use super::coprocessor::SnapshotCoprocessor;
@@ -303,7 +303,7 @@ impl<T: RaftStoreRouter> Server<T> {
     }
 
     fn connect_peer(&mut self, event_loop: &mut EventLoop<Self>, addr: &str) -> Result<Token> {
-        let peer_addr = try!(addr.parse());
+        let peer_addr = try!(to_socket_addr(addr));
         let sock = try!(TcpStream::connect(&peer_addr));
         let token = try!(self.add_new_conn(event_loop, sock, Some(addr.to_string())));
         self.peers.insert(addr.to_owned(), token);
