@@ -68,7 +68,7 @@ impl Engine for EngineBtree {
         Ok(())
     }
 
-    fn get_snapshot(&self, _: &Context) -> Result<Box<Snapshot>> {
+    fn snapshot(&self, _: &Context) -> Result<Box<Snapshot>> {
         unimplemented!();
     }
 }

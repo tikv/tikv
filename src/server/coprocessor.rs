@@ -40,7 +40,7 @@ impl SnapshotCoprocessor {
 
     #[allow(dead_code)]
     fn new_snapshot<'a>(&'a self, ctx: &Context, start_ts: u64) -> Result<SnapshotStore<'a>> {
-        let snapshot = try!(self.engine.get_snapshot(ctx));
+        let snapshot = try!(self.engine.snapshot(ctx));
         Ok(SnapshotStore::new(snapshot, start_ts))
     }
 }

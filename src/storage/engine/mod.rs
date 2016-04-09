@@ -33,7 +33,7 @@ pub trait Engine: Send + Sync + Debug {
     fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
     fn seek(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
-    fn get_snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
+    fn snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
         self.write(ctx, vec![Modify::Put((key, value))])

@@ -78,7 +78,7 @@ impl Engine for EngineRocksdb {
         Ok(())
     }
 
-    fn get_snapshot<'a>(&'a self, _: &Context) -> Result<Box<Snapshot + 'a>> {
+    fn snapshot<'a>(&'a self, _: &Context) -> Result<Box<Snapshot + 'a>> {
         let snapshot = RocksSnapshot::new(&self.db);
         Ok(box snapshot)
     }

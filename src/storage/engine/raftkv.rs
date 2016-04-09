@@ -221,7 +221,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         Ok(())
     }
 
-    fn get_snapshot<'a>(&'a self, _: &Context) -> EngineResult<Box<Snapshot + 'a>> {
+    fn snapshot<'a>(&'a self, _: &Context) -> EngineResult<Box<Snapshot + 'a>> {
         unimplemented!();
     }
 }
