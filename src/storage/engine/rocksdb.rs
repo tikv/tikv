@@ -14,9 +14,10 @@
 use std::fmt::{self, Display, Formatter, Debug};
 use std::error::Error;
 use rocksdb::{DB, Writable, WriteBatch, IteratorMode, Direction};
+use rocksdb::rocksdb::Snapshot as RocksSnapshot;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
-use super::{Engine, Modify, Result};
+use super::{Engine, Snapshot, Modify, Result};
 
 pub struct EngineRocksdb {
     db: DB,
@@ -75,6 +76,27 @@ impl Engine for EngineRocksdb {
             return Err(RocksDBError::new(msg).into_engine_error());
         }
         Ok(())
+    }
+
+    fn snapshot<'a>(&'a self, _: &Context) -> Result<Box<Snapshot + 'a>> {
+        let snapshot = RocksSnapshot::new(&self.db);
+        Ok(box snapshot)
+    }
+}
+
+impl<'a> Snapshot for RocksSnapshot<'a> {
+    fn get(&self, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get {:?}", key);
+        self.get(key.raw())
+            .map(|r| r.map(|v| v.to_vec()))
+            .map_err(|e| RocksDBError::new(e).into_engine_error())
+    }
+
+    fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
+        trace!("RocksSnapshot: seek {:?}", key);
+        let mode = IteratorMode::From(key.raw(), Direction::Forward);
+        let pair = self.iterator(mode).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
+        Ok(pair)
     }
 }
 
