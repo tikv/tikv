@@ -15,8 +15,9 @@
 
 use server::Node;
 use server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
-use raftstore::store::Transport;
+use raftstore::store::{Transport, Peekable};
 use raftstore::errors::Error as RaftServerError;
+use raftstore::coprocessor::RegionSnapshot;
 use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           GetRequest, CmdType, SeekRequest, DeleteRequest, PutRequest};
@@ -30,9 +31,11 @@ use std::sync::mpsc;
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
 use std::result;
+use rocksdb::DB;
 use protobuf::RepeatedField;
 
-use super::{Result as EngineResult, Error as EngineError, Engine, Snapshot, Modify};
+use storage::engine;
+use super::{Engine, Modify, Snapshot};
 use storage::{Key, Value, KvPair};
 
 quick_error! {
@@ -66,11 +69,11 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl From<Error> for EngineError {
-    fn from(e: Error) -> EngineError {
+impl From<Error> for engine::Error {
+    fn from(e: Error) -> engine::Error {
         match e {
-            Error::RequestFailed(e) => EngineError::Request(e),
-            e => EngineError::Other(box e),
+            Error::RequestFailed(e) => engine::Error::Request(e),
+            e => box_err!(e),
         }
     }
 }
@@ -78,15 +81,17 @@ impl From<Error> for EngineError {
 /// RaftKv is a storage engine base on RaftKvServer.
 pub struct RaftKv<T: PdClient + 'static, Trans: Transport + 'static> {
     node: Node<T, Trans>,
+    db: Arc<DB>,
     router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
 
 impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(node: Node<T, Trans>) -> RaftKv<T, Trans> {
+    pub fn new(node: Node<T, Trans>, db: Arc<DB>) -> RaftKv<T, Trans> {
         let router = node.raft_store_router();
         RaftKv {
             node: node,
+            db: db,
             router: router,
         }
     }
@@ -143,6 +148,10 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
     }
 }
 
+fn invalid_resp_type(exp: CmdType, act: CmdType) -> engine::Error {
+    Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!", exp, act)).into()
+}
+
 impl<T: PdClient, Trans: Transport> Debug for RaftKv<T, Trans> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "RaftKv")
@@ -150,7 +159,7 @@ impl<T: PdClient, Trans: Transport> Debug for RaftKv<T, Trans> {
 }
 
 impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
-    fn get(&self, ctx: &Context, key: &Key) -> EngineResult<Option<Value>> {
+    fn get(&self, ctx: &Context, key: &Key) -> engine::Result<Option<Value>> {
         let mut get = GetRequest::new();
         get.set_key(key.raw().clone());
         let mut req = Request::new();
@@ -158,10 +167,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         req.set_get(get);
         let mut resp = try!(self.exec_request(ctx, req));
         if resp.get_cmd_type() != CmdType::Get {
-            return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!",
-                                                      CmdType::Get,
-                                                      resp.get_cmd_type()))
-                           .into());
+            return Err(invalid_resp_type(CmdType::Get, resp.get_cmd_type()));
         }
         let get_resp = resp.mut_get();
         if get_resp.has_value() {
@@ -171,7 +177,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
     }
 
-    fn seek(&self, ctx: &Context, key: &Key) -> EngineResult<Option<KvPair>> {
+    fn seek(&self, ctx: &Context, key: &Key) -> engine::Result<Option<KvPair>> {
         let mut seek = SeekRequest::new();
         seek.set_key(key.raw().clone());
         let mut req = Request::new();
@@ -179,10 +185,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         req.set_seek(seek);
         let mut resp = try!(self.exec_request(ctx, req));
         if resp.get_cmd_type() != CmdType::Seek {
-            return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}",
-                                                      CmdType::Seek,
-                                                      resp.get_cmd_type()))
-                           .into());
+            return Err(invalid_resp_type(CmdType::Seek, resp.get_cmd_type()));
         }
         let seek_resp = resp.mut_seek();
         if seek_resp.has_key() {
@@ -192,7 +195,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
     }
 
-    fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> EngineResult<()> {
+    fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
         if modifies.len() == 0 {
             return Ok(());
         }
@@ -221,7 +224,28 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         Ok(())
     }
 
-    fn snapshot<'a>(&'a self, _: &Context) -> EngineResult<Box<Snapshot + 'a>> {
-        unimplemented!();
+    fn snapshot<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Snapshot + 'a>> {
+        let mut req = Request::new();
+        req.set_cmd_type(CmdType::Snap);
+        let mut resp = try!(self.exec_request(ctx, req));
+        if resp.get_cmd_type() != CmdType::Snap {
+            return Err(invalid_resp_type(CmdType::Snap, resp.get_cmd_type()));
+        }
+        let region = resp.take_snap().take_region();
+        // TODO figure out a way to create snapshot when apply
+        let snap = RegionSnapshot::from_raw(self.db.as_ref(), region);
+        Ok(box snap)
+    }
+}
+
+impl<'a> Snapshot for RegionSnapshot<'a> {
+    fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
+        let v = box_try!(self.get_value(key.raw()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
+        let pair = box_try!(self.seek(key.raw()));
+        Ok(pair)
     }
 }
