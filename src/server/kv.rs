@@ -627,7 +627,9 @@ mod tests {
         use kvproto::errorpb::Error;
         let mut err = Error::new();
         err.set_not_leader(leader_info);
-        Err(engine::Error::Request(err)).map_err(storage::Error::from)
+        Err(engine::Error::Request(err))
+            .map_err(storage::txn::Error::from)
+            .map_err(storage::Error::from)
     }
 
     fn make_res_type(tp: ResultType_Type) -> ResultType {
