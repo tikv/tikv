@@ -22,7 +22,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use storage::{Engine, SnapshotStore, engine, txn, mvcc};
 use kvproto::kvrpcpb::{Context, LockInfo};
 use kvproto::msgpb::{MessageType, Message};
-use kvproto::coprocessor::{Request, Response, KeyRange, ResultType};
+use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb;
 use storage::Key;
 use util::codec::{Datum, table, datum};
@@ -78,15 +78,15 @@ impl From<txn::Error> for Error {
 }
 
 #[allow(dead_code)]
-pub struct SnapshotCoprocessor {
+pub struct SnapshotEndPoint {
     engine: Arc<Box<Engine>>,
     ch: SendCh,
 }
 
-impl SnapshotCoprocessor {
-    pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> SnapshotCoprocessor {
+impl SnapshotEndPoint {
+    pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> SnapshotEndPoint {
         // TODO: Spawn a new thread for handling requests asynchronously.
-        SnapshotCoprocessor {
+        SnapshotEndPoint {
             engine: engine,
             ch: ch,
         }
@@ -100,7 +100,7 @@ impl SnapshotCoprocessor {
 
 type ResponseHandler = Box<Fn(Response) -> ()>;
 
-impl SnapshotCoprocessor {
+impl SnapshotEndPoint {
     pub fn on_request(&self, req: Request, token: Token, msg_id: u64) -> server::Result<()> {
         let ch = self.ch.clone();
         let cb = box move |r| {
@@ -133,28 +133,10 @@ impl SnapshotCoprocessor {
 
     fn on_error(&self, e: Error, cb: ResponseHandler) {
         let mut resp = Response::new();
-        resp.mut_result().set_msg(format!("{}", e));
         match e {
-            Error::Region(mut e) => {
-                // TODO unify error
-                if e.has_not_leader() {
-                    resp.mut_result().set_field_type(ResultType::NotLeader);
-                    resp.mut_result().set_leader_info(e.take_not_leader());
-                } else if e.has_region_not_found() {
-                    resp.mut_result().set_field_type(ResultType::RegionNotFound);
-                    resp.mut_result().set_region_not_found(e.take_region_not_found());
-                } else if e.has_key_not_in_region() {
-                    resp.mut_result().set_field_type(ResultType::KeyNotInRegion);
-                    resp.mut_result().set_not_in_region(e.take_key_not_in_region());
-                } else {
-                    resp.mut_result().set_field_type(ResultType::Other);
-                }
-            }
-            Error::Locked(info) => {
-                resp.mut_result().set_field_type(ResultType::Locked);
-                resp.mut_result().set_lock_info(info);
-            }
-            Error::Other(_) => resp.mut_result().set_field_type(ResultType::Other),
+            Error::Region(e) => resp.set_region_error(e),
+            Error::Locked(info) => resp.set_locked(info),
+            Error::Other(_) => resp.set_other_error(format!("{}", e)),
         }
         cb(resp)
     }
@@ -175,9 +157,8 @@ impl SnapshotCoprocessor {
                 if let Error::Other(_) = e {
                     // should we handle locked here too?
                     sel_resp.set_error(to_pb_error(&e));
-                    resp.mut_result().set_msg(format!("{}", e));
                     // TODO add detail error
-                    resp.mut_result().set_field_type(ResultType::Other);
+                    resp.set_other_error(format!("{}", e));
                 } else {
                     // other error should be handle by ti client.
                     return Err(e);
