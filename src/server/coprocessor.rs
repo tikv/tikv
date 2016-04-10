@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::{result, error};
 use std::thread::{self, JoinHandle};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Sender, Receiver};
 use mio::Token;
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
 use tipb::schema::IndexInfo;
@@ -34,7 +34,7 @@ use server::{self, SendCh, Msg, ConnData};
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
 
-const DEFAULT_ERROR_CODE: i32 = 0;
+const DEFAULT_ERROR_CODE: i32 = 1;
 
 quick_error! {
     #[derive(Debug)]
@@ -94,35 +94,32 @@ enum EndPointMessage {
     Close,
 }
 
+fn poll_messae(engine: Arc<Box<Engine>>, rx: Receiver<EndPointMessage>, ch: SendCh) {
+    info!("EndPoint started.");
+    let end_point = SnapshotEndPoint::new(engine);
+    loop {
+        let msg = rx.recv();
+        if let Err(e) = msg {
+            error!("failed to receive job: {:?}", e);
+            break;
+        }
+        let msg = msg.unwrap();
+        debug!("recv req: {:?}", msg);
+        match msg {
+            EndPointMessage::Job(req, token, msg_id) => {
+                handle_request(req, ch.clone(), token, msg_id, &end_point)
+            }
+            EndPointMessage::Close => break,
+        }
+    }
+    info!("EndPoint closing.");
+}
+
 impl RegionEndPoint {
     pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> RegionEndPoint {
         let (tx, rx) = mpsc::channel();
         let builder = thread::Builder::new().name("EndPoint".to_owned());
-        let handle = builder.spawn(move || {
-                                info!("EndPoint started.");
-                                let end_point = SnapshotEndPoint::new(engine);
-                                loop {
-                                    let msg = rx.recv();
-                                    if let Err(e) = msg {
-                                        error!("failed to receive job: {:?}", e);
-                                        break;
-                                    }
-                                    let msg = msg.unwrap();
-                                    debug!("recv req: {:?}", msg);
-                                    match msg {
-                                        EndPointMessage::Job(req, token, msg_id) => {
-                                            handle_request(req,
-                                                           ch.clone(),
-                                                           token,
-                                                           msg_id,
-                                                           &end_point)
-                                        }
-                                        EndPointMessage::Close => break,
-                                    }
-                                }
-                                info!("EndPoint closing.");
-                            })
-                            .unwrap();
+        let handle = builder.spawn(move || poll_messae(engine, rx, ch)).unwrap();
         RegionEndPoint {
             tx: tx,
             handle: Some(handle),
