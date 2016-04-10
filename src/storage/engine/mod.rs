@@ -83,6 +83,7 @@ quick_error! {
     }
 }
 
+// FIXME: use cause() to find Request::Error recursively.
 pub fn get_request_err(e: &StorageError) -> Option<ErrorHeader> {
     if let StorageError::Txn(txn::Error::Engine(Error::Request(ref err))) = *e {
         return Some(err.to_owned());
