@@ -20,7 +20,7 @@ struct TableInfo {
     t_id: i64,
     c_types: Vec<u8>,
     c_ids: Vec<i64>,
-    indices: Vec<i32>,
+    idx_off: Vec<i32>,
     i_ids: Vec<i64>,
 }
 
@@ -43,11 +43,11 @@ impl TableInfo {
         tb_info
     }
 
-    fn as_pb_index_info(&self, idx_off: i64) -> schema::IndexInfo {
+    fn as_pb_index_info(&self, offset: i64) -> schema::IndexInfo {
         let mut idx_info = schema::IndexInfo::new();
         idx_info.set_table_id(self.t_id);
-        idx_info.set_index_id(idx_off);
-        let col_off = self.indices[idx_off as usize];
+        idx_info.set_index_id(offset);
+        let col_off = self.idx_off[offset as usize];
         let mut c_info = ColumnInfo::new();
         c_info.set_tp(self.c_types[col_off as usize] as i32);
         c_info.set_column_id(self.c_ids[col_off as usize]);
@@ -126,11 +126,11 @@ fn get_row(h: i64, tbl: &TableInfo) -> Vec<(Vec<u8>, Vec<u8>)> {
         let (k, v) = encode_col_kv(tbl.t_id, h, id, v);
         kvs.push((k, v));
     }
-    for (&id, &c_id) in tbl.indices.iter().zip(&tbl.i_ids) {
-        let v = col_values[id as usize].clone();
+    for (&off, &i_id) in tbl.idx_off.iter().zip(&tbl.i_ids) {
+        let v = col_values[off as usize].clone();
 
         let encoded = datum::encode_key(&[v, Datum::I64(h)]).unwrap();
-        let idx_key = table::encode_index_seek_key(tbl.t_id, c_id, &encoded);
+        let idx_key = table::encode_index_seek_key(tbl.t_id, i_id, &encoded);
         kvs.push((idx_key, vec![0]));
     }
     kvs
@@ -180,7 +180,7 @@ fn initial_data(count: i64) -> (Store, SnapshotEndPoint, TableInfo) {
         t_id: 1,
         c_types: vec![TYPE_VAR_CHAR, TYPE_LONG],
         c_ids: vec![3, 4],
-        indices: vec![0],
+        idx_off: vec![0],
         i_ids: vec![5],
     };
     prepare_table_data(&mut store, &tbl, count);
