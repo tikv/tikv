@@ -321,13 +321,11 @@ impl StoreHandler {
         let mut resp = Response::new();
         let mut cmd_commit_get_resp = CmdCommitThenGetResponse::new();
         cmd_commit_get_resp.set_ok(r.is_ok());
-        match r {
-            Ok(Some(val)) => {
-                cmd_commit_get_resp.set_value(val);
-            }
-            Err(ref e) => {
-                error!("commit & get error: {}", e);
-            }
+        if let Err(ref e) = r {
+            error!("commit & get error: {}", e);
+        }
+        if let Ok(Some(val)) = r {
+            cmd_commit_get_resp.set_value(val);
         }
         resp.set_field_type(MessageType::CmdCommitThenGet);
         resp.set_cmd_commit_get_resp(cmd_commit_get_resp);
