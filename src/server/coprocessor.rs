@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::{result, error};
 use mio::Token;
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
-use tipb::schema::{IndexInfo, TableInfo};
+use tipb::schema::IndexInfo;
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 
@@ -29,8 +29,8 @@ use util::codec::{Datum, table, datum};
 use util::xeval::Evaluator;
 use server::{self, SendCh, Msg, ConnData};
 
-const REQ_TYPE_SELECT: i64 = 101;
-const REQ_TYPE_INDEX: i64 = 102;
+pub const REQ_TYPE_SELECT: i64 = 101;
+pub const REQ_TYPE_INDEX: i64 = 102;
 
 quick_error! {
     #[derive(Debug)]
@@ -52,7 +52,7 @@ quick_error! {
     }
 }
 
-type Result<T> = result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
 impl From<engine::Error> for Error {
     fn from(e: engine::Error) -> Error {
@@ -77,30 +77,21 @@ impl From<txn::Error> for Error {
     }
 }
 
-#[allow(dead_code)]
-pub struct SnapshotEndPoint {
-    engine: Arc<Box<Engine>>,
+pub struct RegionEndPoint {
     ch: SendCh,
-}
-
-impl SnapshotEndPoint {
-    pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> SnapshotEndPoint {
-        // TODO: Spawn a new thread for handling requests asynchronously.
-        SnapshotEndPoint {
-            engine: engine,
-            ch: ch,
-        }
-    }
-
-    fn new_snapshot<'a>(&'a self, ctx: &Context, start_ts: u64) -> Result<SnapshotStore<'a>> {
-        let snapshot = try!(self.engine.snapshot(ctx));
-        Ok(SnapshotStore::new(snapshot, start_ts))
-    }
+    end_point: SnapshotEndPoint,
 }
 
 type ResponseHandler = Box<Fn(Response) -> ()>;
 
-impl SnapshotEndPoint {
+impl RegionEndPoint {
+    pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> RegionEndPoint {
+        RegionEndPoint {
+            ch: ch,
+            end_point: SnapshotEndPoint::new(engine),
+        }
+    }
+
     pub fn on_request(&self, req: Request, token: Token, msg_id: u64) -> server::Result<()> {
         let ch = self.ch.clone();
         let cb = box move |r| {
@@ -121,7 +112,7 @@ impl SnapshotEndPoint {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
                 let mut sel = SelectRequest::new();
                 box_try!(sel.merge_from_bytes(req.get_data()));
-                match self.handle_select(req, sel) {
+                match self.end_point.handle_select(req, sel) {
                     Ok(r) => cb(r),
                     Err(e) => self.on_error(e, cb),
                 }
@@ -140,10 +131,28 @@ impl SnapshotEndPoint {
         }
         cb(resp)
     }
+}
 
-    fn handle_select(&self, req: Request, sel: SelectRequest) -> Result<Response> {
+pub struct SnapshotEndPoint {
+    engine: Arc<Box<Engine>>,
+}
+
+impl SnapshotEndPoint {
+    pub fn new(engine: Arc<Box<Engine>>) -> SnapshotEndPoint {
+        // TODO: Spawn a new thread for handling requests asynchronously.
+        SnapshotEndPoint { engine: engine }
+    }
+
+    fn new_snapshot<'a>(&'a self, ctx: &Context, start_ts: u64) -> Result<SnapshotStore<'a>> {
+        let snapshot = try!(self.engine.snapshot(ctx));
+        Ok(SnapshotStore::new(snapshot, start_ts))
+    }
+}
+
+impl SnapshotEndPoint {
+    pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
         let store = try!(self.new_snapshot(req.get_context(), sel.get_start_ts()));
-        let range = encode_key_range(sel.get_table_info(), sel.get_index_info(), req.get_ranges());
+        let range = req.take_ranges().into_vec();
         debug!("scanning range: {:?}", range);
         let res = if req.get_tp() == REQ_TYPE_SELECT {
             get_rows_from_sel(&store, &sel, range)
@@ -177,37 +186,6 @@ fn to_pb_error(err: &Error) -> select::Error {
     e.set_code(1);
     e.set_msg(format!("{}", err));
     e
-}
-
-fn encode_key_range(t_info: &TableInfo,
-                    idx_info: &IndexInfo,
-                    ranges: &[KeyRange])
-                    -> Vec<KeyRange> {
-    let t_id = t_info.get_table_id();
-    let idx_id = idx_info.get_index_id();
-    if idx_id == 0 {
-        ranges.iter()
-              .map(|r| {
-                  let mut new_kr = KeyRange::new();
-                  let mut k = table::encode_row_key(t_id, r.get_start());
-                  new_kr.set_start(k);
-                  k = table::encode_row_key(t_id, r.get_end());
-                  new_kr.set_end(k);
-                  new_kr
-              })
-              .collect()
-    } else {
-        ranges.iter()
-              .map(|r| {
-                  let mut new_kr = KeyRange::new();
-                  let mut k = table::encode_index_seek_key(t_id, idx_id, r.get_start());
-                  new_kr.set_start(k);
-                  k = table::encode_index_seek_key(t_id, idx_id, r.get_end());
-                  new_kr.set_end(k);
-                  new_kr
-              })
-              .collect()
-    }
 }
 
 fn get_rows_from_sel(store: &SnapshotStore,

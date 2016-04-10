@@ -29,7 +29,7 @@ use super::Result;
 use util::{HandyRwLock, to_socket_addr};
 use storage::Storage;
 use super::kv::StoreHandler;
-use super::coprocessor::SnapshotEndPoint;
+use super::coprocessor::RegionEndPoint;
 use super::transport::RaftStoreRouter;
 
 const SERVER_TOKEN: Token = Token(1);
@@ -67,7 +67,7 @@ pub struct Server<T: RaftStoreRouter> {
     raft_router: Arc<RwLock<T>>,
 
     store: StoreHandler,
-    end_point: SnapshotEndPoint,
+    end_point: RegionEndPoint,
 }
 
 impl<T: RaftStoreRouter> Server<T> {
@@ -89,7 +89,7 @@ impl<T: RaftStoreRouter> Server<T> {
         let sendch = SendCh::new(event_loop.channel());
         let engine = storage.get_engine();
         let store_handler = StoreHandler::new(storage, sendch.clone());
-        let end_point = SnapshotEndPoint::new(engine, sendch.clone());
+        let end_point = RegionEndPoint::new(engine, sendch.clone());
 
         let svr = Server {
             listener: listener,
