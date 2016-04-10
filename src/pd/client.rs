@@ -22,6 +22,8 @@ use util::make_std_tcp_conn;
 use protobuf::{self, MessageStatic};
 use super::Result;
 
+const MAX_PD_SEND_RETRY_COUNT: usize = 20;
+
 pub trait TRpcClient: Sync + Send {
     fn send<M, P>(&self, msg_id: u64, message: &M) -> Result<P>
         where M: protobuf::Message,
@@ -73,9 +75,8 @@ impl RpcClientCore {
                                                msg_id: u64,
                                                message: &M)
                                                -> Result<Vec<u8>> {
-        // If we post failed, we should retry other addresses.
-        let n = self.addrs.len();
-        for _ in 0..n {
+        // If we post failed, we should retry.
+        for _ in 0..MAX_PD_SEND_RETRY_COUNT {
             // If no stream, try connect first.
             if self.stream.is_none() {
                 if let Err(e) = self.try_connect() {
@@ -365,10 +366,7 @@ mod tests {
         let client = RpcClient::new(&dsn).unwrap();
 
         for i in 0..10 {
-            if let Err(_) = client.post(i as u64, &msg) {
-                // If failed, next retry must be OK.
-                client.post(i as u64, &msg).unwrap();
-            }
+            client.post(i as u64, &msg).unwrap();
 
             // select a leader randomly
             leader.store(rand::random::<usize>() % 3, Ordering::SeqCst);
