@@ -49,7 +49,7 @@ impl TableInfo {
         idx_info.set_index_id(idx_off);
         let col_off = self.indices[idx_off as usize];
         let mut c_info = ColumnInfo::new();
-        c_info.set_tp(self.c_types[idx_off as usize] as i32);
+        c_info.set_tp(self.c_types[col_off as usize] as i32);
         c_info.set_column_id(self.c_ids[col_off as usize]);
         c_info.set_pk_handle(false);
         idx_info.mut_columns().push(c_info);
