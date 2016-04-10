@@ -272,7 +272,7 @@ fn get_rows_from_range(store: &SnapshotStore,
                 break;
             }
             let (key, _) = try!(res.pop().unwrap());
-            if range.get_end() < &key {
+            if range.get_end() <= &key {
                 break;
             }
             let h = box_try!(table::decode_handle(&key));
@@ -350,7 +350,7 @@ fn get_idx_row_from_range(store: &SnapshotStore,
             return Ok(rows);
         }
         let (key, value) = try!(nk.pop().unwrap());
-        if r.get_end() < &key {
+        if r.get_end() <= &key {
             return Ok(rows);
         }
         let mut datums = box_try!(table::decode_index_key(&key));
