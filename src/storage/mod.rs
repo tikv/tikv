@@ -61,6 +61,12 @@ pub enum Command {
         start_ts: u64,
         callback: Callback<Option<Value>>,
     },
+    BatchGet {
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        callback: Callback<Vec<Result<KvPair>>>,
+    },
     Scan {
         ctx: Context,
         start_key: Key,
@@ -115,6 +121,9 @@ impl fmt::Debug for Command {
         match *self {
             Command::Get { ref key, start_ts, .. } => {
                 write!(f, "kv::command::get {:?} @ {}", key, start_ts)
+            }
+            Command::BatchGet { ref keys, start_ts, .. } => {
+                write!(f, "kv::command_batch_get {} @ {}", keys.len(), start_ts)
             }
             Command::Scan { ref start_key, limit, start_ts, .. } => {
                 write!(f,
@@ -221,6 +230,22 @@ impl Storage {
         let cmd = Command::Get {
             ctx: ctx,
             key: key,
+            start_ts: start_ts,
+            callback: callback,
+        };
+        try!(self.tx.send(Message::Command(cmd)));
+        Ok(())
+    }
+
+    pub fn async_batch_get(&self,
+                           ctx: Context,
+                           keys: Vec<Key>,
+                           start_ts: u64,
+                           callback: Callback<Vec<Result<KvPair>>>)
+                           -> Result<()> {
+        let cmd = Command::BatchGet {
+            ctx: ctx,
+            keys: keys,
             start_ts: start_ts,
             callback: callback,
         };

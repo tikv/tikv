@@ -18,8 +18,8 @@ use protobuf::RepeatedField;
 
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
                        CmdCleanupResponse, CmdRollbackThenGetResponse, CmdCommitThenGetResponse,
-                       Request, Response, MessageType, Item, ResultType, ResultType_Type,
-                       LockInfo, Op};
+                       CmdBatchGetResponse, Request, Response, MessageType, Item, ResultType,
+                       ResultType_Type, LockInfo, Op};
 use kvproto::msgpb;
 use kvproto::errorpb::Error as ErrorHeader;
 use storage::{Storage, Key, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
@@ -159,6 +159,20 @@ impl StoreHandler {
             .map_err(Error::Storage)
     }
 
+    fn on_batch_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
+        if !msg.has_cmd_batch_get_req() {
+            return Err(box_err!("Msg doesn't contain a CmdBatchGetRequest"));
+        }
+        let mut req = msg.take_cmd_batch_get_req();
+        let cb = self.make_cb(StoreHandler::cmd_batch_get_done, token, msg_id);
+        self.store
+            .async_batch_get(msg.take_context(),
+                             req.take_keys().into_iter().map(Key::from_raw).collect(),
+                             req.get_version(),
+                             cb)
+            .map_err(Error::Storage)
+    }
+
     fn make_cb<T: 'static>(&self,
                            f: fn(StorageResult<T>) -> Response,
                            token: Token,
@@ -255,6 +269,37 @@ impl StoreHandler {
         }
         resp.set_cmd_scan_resp(cmd_scan_resp);
 
+        resp
+    }
+
+    fn cmd_batch_get_done(kvs: StorageResult<Vec<StorageResult<KvPair>>>) -> Response {
+        let mut batch_get = CmdBatchGetResponse::new();
+        match kvs {
+            Ok(kvs) => {
+                // convert storage::KvPair to kvrpcpb::Item
+                let mut items = Vec::new();
+                for result in kvs {
+                    let mut item = make_item(&result);
+                    if let Ok((key, value)) = result {
+                        item.set_key(key);
+                        item.set_value(value);
+                    }
+                    items.push(item);
+                }
+                batch_get.set_results(RepeatedField::from_vec(items));
+            }
+            Err(e) => {
+                if let Some(err) = engine::get_request_err(&e) {
+                    batch_get.set_res_type(make_not_leader_item(err).take_res_type());
+                } else {
+                    error!("storage error: {:?}", e);
+                }
+            }
+        }
+
+        let mut resp = Response::new();
+        resp.set_field_type(MessageType::CmdBatchGet);
+        resp.set_cmd_batch_get_resp(batch_get);
         resp
     }
 
@@ -360,6 +405,7 @@ impl StoreHandler {
             MessageType::CmdCleanup => self.on_cleanup(req, token, msg_id),
             MessageType::CmdCommitThenGet => self.on_commit_then_get(req, token, msg_id),
             MessageType::CmdRollbackThenGet => self.on_rollback_then_get(req, token, msg_id),
+            MessageType::CmdBatchGet => self.on_batch_get(req, token, msg_id),
         } {
             // TODO: should we return an error and tell the client later?
             error!("Some error occur err[{:?}]", e);
