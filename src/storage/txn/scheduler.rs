@@ -31,6 +31,22 @@ impl Scheduler {
             Command::Get { ctx, key, start_ts, callback } => {
                 callback(self.store.get(ctx, &key, start_ts).map_err(::storage::Error::from));
             }
+            Command::BatchGet { ctx, keys, start_ts, callback } => {
+                callback(match self.store.batch_get(ctx, &keys, start_ts) {
+                    Ok(results) => {
+                        let mut res = vec![];
+                        for (k, v) in keys.into_iter().zip(results.into_iter()) {
+                            match v {
+                                Ok(Some(x)) => res.push(Ok((k.raw().to_owned(), x))),
+                                Ok(None) => {}
+                                Err(e) => res.push(Err(::storage::Error::from(e))),
+                            }
+                        }
+                        Ok(res)
+                    }
+                    Err(e) => Err(e.into()),
+                });
+            }
             Command::Scan { ctx, start_key, limit, start_ts, callback } => {
                 callback(match self.store.scan(ctx, start_key, limit, start_ts) {
                     Ok(mut results) => {
