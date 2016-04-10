@@ -12,7 +12,7 @@
 // limitations under the License.
 
 #![feature(plugin)]
-#![plugin(clippy)]
+#![cfg_attr(feature = "dev", plugin(clippy))]
 
 extern crate tikv;
 extern crate getopts;
@@ -80,10 +80,10 @@ fn build_raftkv(matches: &Matches,
                                 .unwrap_or_else(|| addr);
 
     let mut node = Node::new(&cfg, pd_client, trans.clone());
-    node.start(engine).unwrap();
+    node.start(engine.clone()).unwrap();
     let raft_router = node.raft_store_router();
 
-    (create_raft_storage(node).unwrap(), raft_router)
+    (create_raft_storage(node, engine).unwrap(), raft_router)
 }
 
 fn get_store_path(matches: &Matches) -> String {

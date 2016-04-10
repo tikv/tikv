@@ -18,14 +18,12 @@ use protobuf::RepeatedField;
 
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
                        CmdCleanupResponse, CmdRollbackThenGetResponse, CmdCommitThenGetResponse,
-                       Request, Response, MessageType, Item, ResultType, ResultType_Type,
-                       LockInfo, Op};
+                       CmdBatchGetResponse, Request, Response, MessageType, Item, ResultType,
+                       ResultType_Type, LockInfo, Op};
 use kvproto::msgpb;
+use kvproto::errorpb::Error as ErrorHeader;
 use storage::{Storage, Key, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
-              Callback};
-use storage::Result as StorageResult;
-use storage::Error as StorageError;
-use storage::EngineError;
+              Callback, Result as StorageResult, engine};
 
 use super::{Result, SendCh, ConnData, Error, Msg};
 
@@ -44,10 +42,10 @@ impl StoreHandler {
 
     fn on_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_get_req() {
-            return Err(box_err!("Msg doesn't contain a CmdGetRequest"));
+            return Err(box_err!("msg doesn't contain a CmdGetRequest"));
         }
         let mut req = msg.take_cmd_get_req();
-        let ctx = req.take_context();
+        let ctx = msg.take_context();
         let cb = self.make_cb(StoreHandler::cmd_get_done, token, msg_id);
         self.store
             .async_get(ctx, Key::from_raw(req.take_key()), req.get_version(), cb)
@@ -56,14 +54,14 @@ impl StoreHandler {
 
     fn on_scan(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_scan_req() {
-            return Err(box_err!("Msg doesn't contain a CmdScanRequest"));
+            return Err(box_err!("msg doesn't contain a CmdScanRequest"));
         }
         let mut req = msg.take_cmd_scan_req();
         let start_key = req.take_start_key();
         debug!("start_key [{:?}]", start_key);
         let cb = self.make_cb(StoreHandler::cmd_scan_done, token, msg_id);
         self.store
-            .async_scan(req.take_context(),
+            .async_scan(msg.take_context(),
                         Key::from_raw(start_key),
                         req.get_limit() as usize,
                         req.get_version(),
@@ -73,7 +71,7 @@ impl StoreHandler {
 
     fn on_prewrite(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_prewrite_req() {
-            return Err(box_err!("Msg doesn't contain a CmdPrewriteRequest"));
+            return Err(box_err!("msg doesn't contain a CmdPrewriteRequest"));
         }
         let mut req = msg.take_cmd_prewrite_req();
         let mutations = req.take_mutations()
@@ -90,7 +88,7 @@ impl StoreHandler {
                            .collect();
         let cb = self.make_cb(StoreHandler::cmd_prewrite_done, token, msg_id);
         self.store
-            .async_prewrite(req.take_context(),
+            .async_prewrite(msg.take_context(),
                             mutations,
                             req.get_primary_lock().to_vec(),
                             req.get_start_version(),
@@ -100,7 +98,7 @@ impl StoreHandler {
 
     fn on_commit(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_commit_req() {
-            return Err(box_err!("Msg doesn't contain a CmdCommitRequest"));
+            return Err(box_err!("msg doesn't contain a CmdCommitRequest"));
         }
         let mut req = msg.take_cmd_commit_req();
         let cb = self.make_cb(StoreHandler::cmd_commit_done, token, msg_id);
@@ -109,7 +107,7 @@ impl StoreHandler {
                       .map(Key::from_raw)
                       .collect();
         self.store
-            .async_commit(req.take_context(),
+            .async_commit(msg.take_context(),
                           keys,
                           req.get_start_version(),
                           req.get_commit_version(),
@@ -119,12 +117,12 @@ impl StoreHandler {
 
     fn on_cleanup(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_cleanup_req() {
-            return Err(box_err!("Msg doesn't contain a CmdCleanupRequest"));
+            return Err(box_err!("msg doesn't contain a CmdCleanupRequest"));
         }
         let mut req = msg.take_cmd_cleanup_req();
         let cb = self.make_cb(StoreHandler::cmd_cleanup_done, token, msg_id);
         self.store
-            .async_cleanup(req.take_context(),
+            .async_cleanup(msg.take_context(),
                            Key::from_raw(req.take_key()),
                            req.get_start_version(),
                            cb)
@@ -133,12 +131,12 @@ impl StoreHandler {
 
     fn on_commit_then_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_commit_get_req() {
-            return Err(box_err!("Msg doesn't contain a CmdCommitThenGetRequest"));
+            return Err(box_err!("msg doesn't contain a CmdCommitThenGetRequest"));
         }
         let cb = self.make_cb(StoreHandler::cmd_commit_get_done, token, msg_id);
         let mut req = msg.take_cmd_commit_get_req();
         self.store
-            .async_commit_then_get(req.take_context(),
+            .async_commit_then_get(msg.take_context(),
                                    Key::from_raw(req.take_key()),
                                    req.get_lock_version(),
                                    req.get_commit_version(),
@@ -149,15 +147,29 @@ impl StoreHandler {
 
     fn on_rollback_then_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_rb_get_req() {
-            return Err(box_err!("Msg doesn't contain a CmdRollbackThenGetRequest"));
+            return Err(box_err!("msg doesn't contain a CmdRollbackThenGetRequest"));
         }
         let mut req = msg.take_cmd_rb_get_req();
         let cb = self.make_cb(StoreHandler::cmd_rollback_get_done, token, msg_id);
         self.store
-            .async_rollback_then_get(req.take_context(),
+            .async_rollback_then_get(msg.take_context(),
                                      Key::from_raw(req.take_key()),
                                      req.get_lock_version(),
                                      cb)
+            .map_err(Error::Storage)
+    }
+
+    fn on_batch_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
+        if !msg.has_cmd_batch_get_req() {
+            return Err(box_err!("msg doesn't contain a CmdBatchGetRequest"));
+        }
+        let mut req = msg.take_cmd_batch_get_req();
+        let cb = self.make_cb(StoreHandler::cmd_batch_get_done, token, msg_id);
+        self.store
+            .async_batch_get(msg.take_context(),
+                             req.take_keys().into_iter().map(Key::from_raw).collect(),
+                             req.get_version(),
+                             cb)
             .map_err(Error::Storage)
     }
 
@@ -199,7 +211,7 @@ impl StoreHandler {
                 }
             }
             Err(ref e) => {
-                if let StorageError::Engine(EngineError::Request(ref err)) = *e {
+                if let Some(err) = engine::get_request_err(&e) {
                     if err.has_not_leader() {
                         res_type.set_field_type(ResultType_Type::NotLeader);
                         res_type.set_leader_info(err.get_not_leader().to_owned());
@@ -208,19 +220,9 @@ impl StoreHandler {
                         res_type.set_field_type(ResultType_Type::Other);
                         res_type.set_msg(format!("engine error: {:?}", err));
                     }
-                } else if r.is_locked() {
-                    if let Some((_, primary, ts)) = r.get_lock() {
-                        res_type.set_field_type(ResultType_Type::Locked);
-                        let mut lock_info = LockInfo::new();
-                        lock_info.set_primary_lock(primary);
-                        lock_info.set_lock_version(ts);
-                        res_type.set_lock_info(lock_info);
-                    } else {
-                        let err_str = "key is locked but primary info not found".to_owned();
-                        error!("{}", err_str);
-                        res_type.set_field_type(ResultType_Type::Other);
-                        res_type.set_msg(err_str);
-                    }
+                } else if let Some((_, primary, ts)) = r.get_lock() {
+                    res_type.set_field_type(ResultType_Type::Locked);
+                    res_type.set_lock_info(make_lock_info(primary, ts));
                 } else {
                     let err_str = format!("storage error: {:?}", e);
                     error!("{}", err_str);
@@ -241,42 +243,63 @@ impl StoreHandler {
         cmd_scan_resp.set_ok(kvs.is_ok());
         resp.set_field_type(MessageType::CmdScan);
 
-        if let Err(e) = kvs {
-            error!("storage error: {:?}", e);
-            resp.set_cmd_scan_resp(cmd_scan_resp);
-            return resp;
-        }
-
-        // convert storage::KvPair to kvrpcpb::Item
         let mut new_kvs = Vec::new();
-        for result in kvs.unwrap() {
-            let mut new_kv = Item::new();
-            let mut res_type = ResultType::new();
-            if let Ok((ref key, ref value)) = result {
-                res_type.set_field_type(ResultType_Type::Ok);
-                new_kv.set_key(key.clone());
-                new_kv.set_value(value.clone());
-            } else {
-                if result.is_locked() {
-                    if let Some((key, primary, ts)) = result.get_lock() {
-                        res_type.set_field_type(ResultType_Type::Locked);
-                        let mut lock_info = LockInfo::new();
-                        lock_info.set_primary_lock(primary);
-                        lock_info.set_lock_version(ts);
-                        res_type.set_lock_info(lock_info);
-                        new_kv.set_key(key);
+        match kvs {
+            Ok(kvs) => {
+                // convert storage::KvPair to kvrpcpb::Item
+                for result in kvs {
+                    let mut item = make_item(&result);
+                    if let Ok((key, value)) = result {
+                        item.set_key(key);
+                        item.set_value(value);
                     }
+                    new_kvs.push(item);
+                }
+                cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
+            }
+            Err(e) => {
+                if let Some(err) = engine::get_request_err(&e) {
+                    let new_kv = make_not_leader_item(err);
+                    new_kvs.push(new_kv);
+                    cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
                 } else {
-                    res_type.set_field_type(ResultType_Type::Retryable);
+                    error!("storage error: {:?}", e);
                 }
             }
+        }
+        resp.set_cmd_scan_resp(cmd_scan_resp);
 
-            new_kv.set_res_type(res_type);
-            new_kvs.push(new_kv);
+        resp
+    }
+
+    fn cmd_batch_get_done(kvs: StorageResult<Vec<StorageResult<KvPair>>>) -> Response {
+        let mut batch_get = CmdBatchGetResponse::new();
+        match kvs {
+            Ok(kvs) => {
+                // convert storage::KvPair to kvrpcpb::Item
+                let mut items = Vec::new();
+                for result in kvs {
+                    let mut item = make_item(&result);
+                    if let Ok((key, value)) = result {
+                        item.set_key(key);
+                        item.set_value(value);
+                    }
+                    items.push(item);
+                }
+                batch_get.set_results(RepeatedField::from_vec(items));
+            }
+            Err(e) => {
+                if let Some(err) = engine::get_request_err(&e) {
+                    batch_get.set_res_type(make_not_leader_item(err).take_res_type());
+                } else {
+                    error!("storage error: {:?}", e);
+                }
+            }
         }
 
-        cmd_scan_resp.set_results(RepeatedField::from_vec(new_kvs));
-        resp.set_cmd_scan_resp(cmd_scan_resp);
+        let mut resp = Response::new();
+        resp.set_field_type(MessageType::CmdBatchGet);
+        resp.set_cmd_batch_get_resp(batch_get);
         resp
     }
 
@@ -284,35 +307,27 @@ impl StoreHandler {
         let mut resp = Response::new();
         let mut cmd_prewrite_resp = CmdPrewriteResponse::new();
         cmd_prewrite_resp.set_ok(results.is_ok());
+        resp.set_field_type(MessageType::CmdPrewrite);
+
         let mut items = vec![];
         match results {
             Ok(results) => {
                 for res in results {
-                    let mut item = Item::new();
-                    let mut res_type = ResultType::new();
-                    if res.is_ok() {
-                        res_type.set_field_type(ResultType_Type::Ok);
-                    } else if let Some((key, primary, ts)) = res.get_lock() {
-                        // Actually items only contain locked item, so `ok` is always false.
-                        res_type.set_field_type(ResultType_Type::Locked);
-                        let mut lock_info = LockInfo::new();
-                        lock_info.set_primary_lock(primary);
-                        lock_info.set_lock_version(ts);
-                        res_type.set_lock_info(lock_info);
-                        item.set_key(key);
-                    } else {
-                        res_type.set_field_type(ResultType_Type::Retryable);
-                    }
-                    item.set_res_type(res_type);
+                    let item = make_item(&res);
                     items.push(item);
                 }
+                cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
             }
             Err(e) => {
-                error!("storage error: {:?}", e);
+                if let Some(err) = engine::get_request_err(&e) {
+                    let item = make_not_leader_item(err);
+                    items.push(item);
+                    cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
+                } else {
+                    error!("storage error: {:?}", e);
+                }
             }
         }
-        cmd_prewrite_resp.set_results(RepeatedField::from_vec(items));
-        resp.set_field_type(MessageType::CmdPrewrite);
         resp.set_cmd_prewrite_resp(cmd_prewrite_resp);
         resp
     }
@@ -332,13 +347,9 @@ impl StoreHandler {
         let mut res_type = ResultType::new();
         if r.is_ok() {
             res_type.set_field_type(ResultType_Type::Ok);
-        } else if r.is_committed() {
+        } else if let Some(commit_ts) = r.get_commit() {
             res_type.set_field_type(ResultType_Type::Committed);
-            if let Some(commit_ts) = r.get_commit() {
-                cmd_cleanup_resp.set_commit_version(commit_ts);
-            } else {
-                warn!("commit_ts not found when is_committed.");
-            }
+            cmd_cleanup_resp.set_commit_version(commit_ts);
         } else if r.is_rolledback() {
             res_type.set_field_type(ResultType_Type::Rolledback);
         } else {
@@ -355,6 +366,9 @@ impl StoreHandler {
         let mut resp = Response::new();
         let mut cmd_commit_get_resp = CmdCommitThenGetResponse::new();
         cmd_commit_get_resp.set_ok(r.is_ok());
+        if let Err(ref e) = r {
+            error!("commit & get error: {}", e);
+        }
         if let Ok(Some(val)) = r {
             cmd_commit_get_resp.set_value(val);
         }
@@ -391,6 +405,7 @@ impl StoreHandler {
             MessageType::CmdCleanup => self.on_cleanup(req, token, msg_id),
             MessageType::CmdCommitThenGet => self.on_commit_then_get(req, token, msg_id),
             MessageType::CmdRollbackThenGet => self.on_rollback_then_get(req, token, msg_id),
+            MessageType::CmdBatchGet => self.on_batch_get(req, token, msg_id),
         } {
             // TODO: should we return an error and tell the client later?
             error!("Some error occur err[{:?}]", e);
@@ -400,6 +415,44 @@ impl StoreHandler {
     }
 }
 
+fn make_not_leader_item(err: ErrorHeader) -> Item {
+    let mut item = Item::new();
+    let mut res_type = ResultType::new();
+    // If has_not_leader then fill first item with NotLeader error and return.
+    if err.has_not_leader() {
+        res_type.set_field_type(ResultType_Type::NotLeader);
+        res_type.set_leader_info(err.get_not_leader().to_owned());
+    } else {
+        error!("{:?}", err);
+        res_type.set_field_type(ResultType_Type::Other);
+        res_type.set_msg(format!("engine error: {:?}", err));
+    }
+    item.set_res_type(res_type);
+    item
+}
+
+fn make_lock_info(primary: Vec<u8>, version: u64) -> LockInfo {
+    let mut lock_info = LockInfo::new();
+    lock_info.set_primary_lock(primary);
+    lock_info.set_lock_version(version);
+    lock_info
+}
+
+fn make_item<T>(res: &StorageResult<T>) -> Item {
+    let mut item = Item::new();
+    let mut res_type = ResultType::new();
+    if res.is_ok() {
+        res_type.set_field_type(ResultType_Type::Ok);
+    } else if let Some((key, primary, ts)) = res.get_lock() {
+        res_type.set_field_type(ResultType_Type::Locked);
+        res_type.set_lock_info(make_lock_info(primary, ts));
+        item.set_key(key);
+    } else {
+        res_type.set_field_type(ResultType_Type::Retryable);
+    }
+    item.set_res_type(res_type);
+    item
+}
 
 #[cfg(test)]
 mod tests {
@@ -560,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn test_not_leader() {
+    fn test_get_not_leader() {
         use kvproto::errorpb::NotLeader;
         let mut leader_info = NotLeader::new();
         leader_info.set_region_id(1);
@@ -571,6 +624,39 @@ mod tests {
         let mut exp_res_type = make_res_type(ResultType_Type::NotLeader);
         exp_res_type.set_leader_info(leader_info.to_owned());
         assert_eq!(exp_res_type, *actual_resp.get_cmd_get_resp().get_res_type());
+    }
+
+    #[test]
+    fn test_scan_not_leader() {
+        use storage::KvPair;
+        use kvproto::errorpb::NotLeader;
+        let mut leader_info = NotLeader::new();
+        leader_info.set_region_id(1);
+        let storage_res: StorageResult<Vec<StorageResult<KvPair>>> =
+            make_not_leader_error(leader_info.to_owned());
+        let actual_resp = StoreHandler::cmd_scan_done(storage_res);
+        assert_eq!(MessageType::CmdScan, actual_resp.get_field_type());
+        let mut exp_res_type = make_res_type(ResultType_Type::NotLeader);
+        exp_res_type.set_leader_info(leader_info.to_owned());
+        let results = actual_resp.get_cmd_scan_resp().get_results();
+        assert!(results.len() >= 1);
+        assert_eq!(exp_res_type, *results[0].get_res_type());
+    }
+
+    #[test]
+    fn test_prewrite_not_leader() {
+        use kvproto::errorpb::NotLeader;
+        let mut leader_info = NotLeader::new();
+        leader_info.set_region_id(1);
+        let storage_res: StorageResult<Vec<StorageResult<()>>> =
+            make_not_leader_error(leader_info.to_owned());
+        let actual_resp = StoreHandler::cmd_prewrite_done(storage_res);
+        assert_eq!(MessageType::CmdPrewrite, actual_resp.get_field_type());
+        let mut exp_res_type = make_res_type(ResultType_Type::NotLeader);
+        exp_res_type.set_leader_info(leader_info.to_owned());
+        let results = actual_resp.get_cmd_prewrite_resp().get_results();
+        assert!(results.len() >= 1);
+        assert_eq!(exp_res_type, *results[0].get_res_type());
     }
 
     fn make_lock_error<T>(key: Vec<u8>, primary: Vec<u8>, ts: u64) -> StorageResult<T> {
@@ -587,7 +673,9 @@ mod tests {
         use kvproto::errorpb::Error;
         let mut err = Error::new();
         err.set_not_leader(leader_info);
-        Err(engine::Error::Request(err)).map_err(storage::Error::from)
+        Err(engine::Error::Request(err))
+            .map_err(storage::txn::Error::from)
+            .map_err(storage::Error::from)
     }
 
     fn make_res_type(tp: ResultType_Type) -> ResultType {

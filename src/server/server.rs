@@ -26,9 +26,10 @@ use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::Result;
-use util::HandyRwLock;
+use util::{HandyRwLock, to_socket_addr};
 use storage::Storage;
 use super::kv::StoreHandler;
+use super::coprocessor::RegionEndPoint;
 use super::transport::RaftStoreRouter;
 
 const SERVER_TOKEN: Token = Token(1);
@@ -66,6 +67,7 @@ pub struct Server<T: RaftStoreRouter> {
     raft_router: Arc<RwLock<T>>,
 
     store: StoreHandler,
+    end_point: RegionEndPoint,
 }
 
 impl<T: RaftStoreRouter> Server<T> {
@@ -85,8 +87,9 @@ impl<T: RaftStoreRouter> Server<T> {
                                  PollOpt::edge()));
 
         let sendch = SendCh::new(event_loop.channel());
-
+        let engine = storage.get_engine();
         let store_handler = StoreHandler::new(storage, sendch.clone());
+        let end_point = RegionEndPoint::new(engine, sendch.clone());
 
         let svr = Server {
             listener: listener,
@@ -96,6 +99,7 @@ impl<T: RaftStoreRouter> Server<T> {
             peers: HashMap::new(),
             raft_router: raft_router,
             store: store_handler,
+            end_point: end_point,
         };
 
         Ok(svr)
@@ -199,6 +203,7 @@ impl<T: RaftStoreRouter> Server<T> {
             }
             MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
             MessageType::KvReq => self.store.on_request(msg.take_kv_req(), token, msg_id),
+            MessageType::CopReq => self.end_point.on_request(msg.take_cop_req(), token, msg_id),
             _ => {
                 Err(box_err!("unsupported message {:?} for token {:?} with msg id {}",
                              msg_type,
@@ -298,7 +303,7 @@ impl<T: RaftStoreRouter> Server<T> {
     }
 
     fn connect_peer(&mut self, event_loop: &mut EventLoop<Self>, addr: &str) -> Result<Token> {
-        let peer_addr = try!(addr.parse());
+        let peer_addr = try!(to_socket_addr(addr));
         let sock = try!(TcpStream::connect(&peer_addr));
         let token = try!(self.add_new_conn(event_loop, sock, Some(addr.to_string())));
         self.peers.insert(addr.to_owned(), token);
@@ -358,10 +363,13 @@ impl<T: RaftStoreRouter> Handler for Server<T> {
         event_loop.shutdown();
     }
 
-    fn tick(&mut self, _: &mut EventLoop<Self>) {
+    fn tick(&mut self, el: &mut EventLoop<Self>) {
         // tick is called in the end of the loop, so if we notify to quit,
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
+        if !el.is_running() {
+            self.end_point.stop();
+        }
     }
 }
 

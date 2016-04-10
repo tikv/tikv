@@ -14,7 +14,7 @@
 mod meta;
 mod txn;
 
-pub use self::txn::MvccTxn;
+pub use self::txn::{MvccTxn, MvccSnapshot};
 
 quick_error! {
     #[derive(Debug)]

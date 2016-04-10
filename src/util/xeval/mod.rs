@@ -11,28 +11,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(plugin)]
-#![feature(test)]
-#![cfg_attr(feature = "dev", plugin(clippy))]
-#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 
-#[macro_use]
-extern crate log;
-extern crate test;
-extern crate mio;
-extern crate rand;
+pub mod evaluator;
 
-mod channel;
+use util::codec;
 
-#[path="../tests/util.rs"]
-mod util;
-
-use test::Bencher;
-
-use util::KvGenerator;
-
-#[bench]
-fn bench_kv_iter(b: &mut Bencher) {
-    let mut g = KvGenerator::new(100, 1000);
-    b.iter(|| g.next());
+quick_error! {
+	#[derive(Debug)]
+	pub enum Error {
+		Codec(e: codec::Error) {
+			from()
+			description("codec failed")
+		}
+		Expr(s: String) {
+			description("invalid expression")
+			display("{}", s)
+		}
+		Eval(s: String) {
+			description("evaluation failed")
+			display("{}", s)
+		}
+	}
 }
+
+use std::result;
+pub type Result<T> = result::Result<T, Error>;
+
+pub use self::evaluator::Evaluator;

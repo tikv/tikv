@@ -3,19 +3,22 @@
 all: format build test
 
 build:
-	cargo build
+	cargo build --features "dev"
 
 run:
-	cargo run
+	cargo run --features "dev"
+
+release:
+	cargo build --release --bin tikv-server
 
 test:
 	# todo remove ulimit once issue #372 of mio is resolved.
-	ulimit -n 2000 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test -- --nocapture
+	ulimit -n 2000 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test --features "dev" -- --nocapture 
 
 bench:
 	# todo remove ulimit once issue #372 of mio is resolved.
-	ulimit -n 4096 && LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench -- --nocapture
-	ulimit -n 4096 && RUST_BACKTRACE=1 cargo run --release --bin bench-tikv
+	ulimit -n 4096 && LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features "dev" -- --nocapture 
+	ulimit -n 4096 && RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "dev"
 
 genprotobuf:
 	cd ./src/proto && protoc --rust_out . *.proto

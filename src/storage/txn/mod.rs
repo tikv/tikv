@@ -16,7 +16,7 @@ mod store;
 mod scheduler;
 
 pub use self::scheduler::Scheduler;
-pub use self::store::TxnStore;
+pub use self::store::{TxnStore, SnapshotStore};
 
 quick_error! {
     #[derive(Debug)]

@@ -23,7 +23,8 @@
 #![feature(panic_handler)]
 #![feature(static_rwlock)]
 #![feature(iter_arith)]
-#![plugin(clippy)]
+#![cfg_attr(feature = "dev", plugin(clippy))]
+#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 
 #[macro_use]
 extern crate log;
@@ -40,6 +41,7 @@ extern crate rocksdb;
 extern crate uuid;
 extern crate kvproto;
 extern crate time;
+extern crate tipb;
 
 #[cfg(test)]
 extern crate env_logger;
