@@ -296,10 +296,6 @@ pub fn encode(buf: &mut [u8], values: &[Datum], comparable: bool) -> Result<usiz
     Ok(idx)
 }
 
-pub fn buffer_encode_key(buf: &mut [u8], values: &[Datum]) -> Result<usize> {
-    encode(buf, values, true)
-}
-
 pub fn encode_key(values: &[Datum]) -> Result<Vec<u8>> {
     let mut buf = vec![0; approximate_size(values, true)];
     let written = try!(encode(&mut buf, values, true));

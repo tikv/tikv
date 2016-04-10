@@ -34,6 +34,8 @@ use server::{self, SendCh, Msg, ConnData};
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
 
+const DEFAULT_ERROR_CODE: i32 = 0;
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -100,12 +102,12 @@ impl RegionEndPoint {
                                 info!("EndPoint started.");
                                 let end_point = SnapshotEndPoint::new(engine);
                                 loop {
-                                    let res = rx.recv();
-                                    if let Err(e) = res {
+                                    let msg = rx.recv();
+                                    if let Err(e) = msg {
                                         error!("failed to receive job: {:?}", e);
                                         break;
                                     }
-                                    let msg = res.unwrap();
+                                    let msg = msg.unwrap();
                                     debug!("recv req: {:?}", msg);
                                     match msg {
                                         EndPointMessage::Job(req, token, msg_id) => {
@@ -208,13 +210,13 @@ impl SnapshotEndPoint {
 
 impl SnapshotEndPoint {
     pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
-        let store = try!(self.new_snapshot(req.get_context(), sel.get_start_ts()));
+        let snap = try!(self.new_snapshot(req.get_context(), sel.get_start_ts()));
         let range = req.take_ranges().into_vec();
         debug!("scanning range: {:?}", range);
         let res = if req.get_tp() == REQ_TYPE_SELECT {
-            get_rows_from_sel(&store, &sel, range)
+            get_rows_from_sel(&snap, &sel, range)
         } else {
-            get_rows_from_idx(&store, &sel, range)
+            get_rows_from_idx(&snap, &sel, range)
         };
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
@@ -240,19 +242,19 @@ impl SnapshotEndPoint {
 
 fn to_pb_error(err: &Error) -> select::Error {
     let mut e = select::Error::new();
-    e.set_code(1);
+    e.set_code(DEFAULT_ERROR_CODE);
     e.set_msg(format!("{}", err));
     e
 }
 
-fn get_rows_from_sel(store: &SnapshotStore,
+fn get_rows_from_sel(snap: &SnapshotStore,
                      sel: &SelectRequest,
                      ranges: Vec<KeyRange>)
                      -> Result<Vec<Row>> {
     let mut eval = Evaluator::default();
     let mut rows = vec![];
     for ran in ranges {
-        let ran_rows = try!(get_rows_from_range(store, sel, ran, &mut eval));
+        let ran_rows = try!(get_rows_from_range(snap, sel, ran, &mut eval));
         rows.extend(ran_rows);
     }
     Ok(rows)
@@ -286,25 +288,25 @@ fn is_point(range: &KeyRange) -> bool {
     range.get_end() == &*prefix_next(range.get_start())
 }
 
-fn get_rows_from_range(store: &SnapshotStore,
+fn get_rows_from_range(snap: &SnapshotStore,
                        sel: &SelectRequest,
                        mut range: KeyRange,
                        eval: &mut Evaluator)
                        -> Result<Vec<Row>> {
     let mut rows = vec![];
     if is_point(&range) {
-        if let None = try!(store.get(&Key::from_raw(range.get_start().to_vec()))) {
+        if let None = try!(snap.get(&Key::from_raw(range.get_start().to_vec()))) {
             return Ok(rows);
         }
         let h = box_try!(table::decode_handle(range.get_start()));
-        if let Some(row) = try!(get_row_by_handle(store, sel, h, eval)) {
+        if let Some(row) = try!(get_row_by_handle(snap, sel, h, eval)) {
             rows.push(row);
         }
     } else {
         let mut seek_key = range.take_start();
         loop {
             trace!("seek {:?}", seek_key);
-            let mut res = try!(store.scan(Key::from_raw(seek_key), 1));
+            let mut res = try!(snap.scan(Key::from_raw(seek_key), 1));
             if res.is_empty() {
                 debug!("no more data to scan.");
                 break;
@@ -315,7 +317,7 @@ fn get_rows_from_range(store: &SnapshotStore,
                 break;
             }
             let h = box_try!(table::decode_handle(&key));
-            if let Some(row) = try!(get_row_by_handle(store, sel, h, eval)) {
+            if let Some(row) = try!(get_row_by_handle(snap, sel, h, eval)) {
                 rows.push(row);
             }
             seek_key = prefix_next(&key);
@@ -324,7 +326,7 @@ fn get_rows_from_range(store: &SnapshotStore,
     Ok(rows)
 }
 
-fn get_row_by_handle(store: &SnapshotStore,
+fn get_row_by_handle(snap: &SnapshotStore,
                      sel: &SelectRequest,
                      h: i64,
                      eval: &mut Evaluator)
@@ -339,7 +341,7 @@ fn get_row_by_handle(store: &SnapshotStore,
         } else {
             let raw_key = table::encode_column_key(tid, h, col.get_column_id());
             let key = Key::from_raw(raw_key);
-            match try!(store.get(&key)) {
+            match try!(snap.get(&key)) {
                 None => return Err(box_err!("key {:?} not exists", key)),
                 Some(bs) => row.mut_data().extend(bs),
             }
@@ -369,19 +371,19 @@ fn get_row_by_handle(store: &SnapshotStore,
     Ok(None)
 }
 
-fn get_rows_from_idx(store: &SnapshotStore,
+fn get_rows_from_idx(snap: &SnapshotStore,
                      sel: &SelectRequest,
                      ranges: Vec<KeyRange>)
                      -> Result<Vec<Row>> {
     let mut rows = vec![];
     for r in ranges {
-        let part = try!(get_idx_row_from_range(store, sel.get_index_info(), r));
+        let part = try!(get_idx_row_from_range(snap, sel.get_index_info(), r));
         rows.extend(part);
     }
     Ok(rows)
 }
 
-fn get_idx_row_from_range(store: &SnapshotStore,
+fn get_idx_row_from_range(snap: &SnapshotStore,
                           info: &IndexInfo,
                           mut r: KeyRange)
                           -> Result<Vec<Row>> {
@@ -389,7 +391,7 @@ fn get_idx_row_from_range(store: &SnapshotStore,
     let mut seek_key = r.take_start();
     loop {
         trace!("seek {:?}", seek_key);
-        let mut nk = try!(store.scan(Key::from_raw(seek_key.clone()), 1));
+        let mut nk = try!(snap.scan(Key::from_raw(seek_key.clone()), 1));
         if nk.is_empty() {
             debug!("no more data to scan");
             return Ok(rows);
