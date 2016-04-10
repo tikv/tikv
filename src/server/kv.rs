@@ -42,7 +42,7 @@ impl StoreHandler {
 
     fn on_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_get_req() {
-            return Err(box_err!("Msg doesn't contain a CmdGetRequest"));
+            return Err(box_err!("msg doesn't contain a CmdGetRequest"));
         }
         let mut req = msg.take_cmd_get_req();
         let ctx = msg.take_context();
@@ -54,7 +54,7 @@ impl StoreHandler {
 
     fn on_scan(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_scan_req() {
-            return Err(box_err!("Msg doesn't contain a CmdScanRequest"));
+            return Err(box_err!("msg doesn't contain a CmdScanRequest"));
         }
         let mut req = msg.take_cmd_scan_req();
         let start_key = req.take_start_key();
@@ -71,7 +71,7 @@ impl StoreHandler {
 
     fn on_prewrite(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_prewrite_req() {
-            return Err(box_err!("Msg doesn't contain a CmdPrewriteRequest"));
+            return Err(box_err!("msg doesn't contain a CmdPrewriteRequest"));
         }
         let mut req = msg.take_cmd_prewrite_req();
         let mutations = req.take_mutations()
@@ -98,7 +98,7 @@ impl StoreHandler {
 
     fn on_commit(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_commit_req() {
-            return Err(box_err!("Msg doesn't contain a CmdCommitRequest"));
+            return Err(box_err!("msg doesn't contain a CmdCommitRequest"));
         }
         let mut req = msg.take_cmd_commit_req();
         let cb = self.make_cb(StoreHandler::cmd_commit_done, token, msg_id);
@@ -117,7 +117,7 @@ impl StoreHandler {
 
     fn on_cleanup(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_cleanup_req() {
-            return Err(box_err!("Msg doesn't contain a CmdCleanupRequest"));
+            return Err(box_err!("msg doesn't contain a CmdCleanupRequest"));
         }
         let mut req = msg.take_cmd_cleanup_req();
         let cb = self.make_cb(StoreHandler::cmd_cleanup_done, token, msg_id);
@@ -131,7 +131,7 @@ impl StoreHandler {
 
     fn on_commit_then_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_commit_get_req() {
-            return Err(box_err!("Msg doesn't contain a CmdCommitThenGetRequest"));
+            return Err(box_err!("msg doesn't contain a CmdCommitThenGetRequest"));
         }
         let cb = self.make_cb(StoreHandler::cmd_commit_get_done, token, msg_id);
         let mut req = msg.take_cmd_commit_get_req();
@@ -147,7 +147,7 @@ impl StoreHandler {
 
     fn on_rollback_then_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_rb_get_req() {
-            return Err(box_err!("Msg doesn't contain a CmdRollbackThenGetRequest"));
+            return Err(box_err!("msg doesn't contain a CmdRollbackThenGetRequest"));
         }
         let mut req = msg.take_cmd_rb_get_req();
         let cb = self.make_cb(StoreHandler::cmd_rollback_get_done, token, msg_id);
@@ -161,7 +161,7 @@ impl StoreHandler {
 
     fn on_batch_get(&self, mut msg: Request, token: Token, msg_id: u64) -> Result<()> {
         if !msg.has_cmd_batch_get_req() {
-            return Err(box_err!("Msg doesn't contain a CmdBatchGetRequest"));
+            return Err(box_err!("msg doesn't contain a CmdBatchGetRequest"));
         }
         let mut req = msg.take_cmd_batch_get_req();
         let cb = self.make_cb(StoreHandler::cmd_batch_get_done, token, msg_id);
