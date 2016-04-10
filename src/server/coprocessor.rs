@@ -144,6 +144,7 @@ impl SnapshotEndPoint {
     fn handle_select(&self, req: Request, sel: SelectRequest) -> Result<Response> {
         let store = try!(self.new_snapshot(req.get_context(), sel.get_start_ts()));
         let range = encode_key_range(sel.get_table_info(), sel.get_index_info(), req.get_ranges());
+        debug!("scanning range: {:?}", range);
         let res = if req.get_tp() == REQ_TYPE_SELECT {
             get_rows_from_sel(&store, &sel, range)
         } else {
@@ -267,12 +268,15 @@ fn get_rows_from_range(store: &SnapshotStore,
     } else {
         let mut seek_key = range.take_start();
         loop {
+            trace!("seek {:?}", seek_key);
             let mut res = try!(store.scan(Key::from_raw(seek_key), 1));
             if res.is_empty() {
+                debug!("no more data to scan.");
                 break;
             }
             let (key, _) = try!(res.pop().unwrap());
             if range.get_end() <= &key {
+                debug!("reach end key: {:?} >= {:?}", key, range.get_end());
                 break;
             }
             let h = box_try!(table::decode_handle(&key));
@@ -310,6 +314,7 @@ fn get_row_by_handle(store: &SnapshotStore,
     if !sel.has_field_where() {
         return Ok(Some(row));
     }
+    trace!("filtering row {:?}", row);
     if !row.get_data().is_empty() {
         let (datums, _) = box_try!(datum::decode(row.get_data()));
         for (c, d) in columns.iter().zip(datums) {
@@ -318,11 +323,14 @@ fn get_row_by_handle(store: &SnapshotStore,
     }
     let res = box_try!(eval.eval(sel.get_field_where()));
     if let Datum::Null = res {
+        trace!("got null, skip.");
         return Ok(None);
     }
     if box_try!(res.as_bool()) {
+        trace!("pass.");
         return Ok(Some(row));
     }
+    trace!("got false, skip.");
     Ok(None)
 }
 
@@ -345,12 +353,15 @@ fn get_idx_row_from_range(store: &SnapshotStore,
     let mut rows = vec![];
     let mut seek_key = r.take_start();
     loop {
+        trace!("seek {:?}", seek_key);
         let mut nk = try!(store.scan(Key::from_raw(seek_key.clone()), 1));
         if nk.is_empty() {
+            debug!("no more data to scan");
             return Ok(rows);
         }
         let (key, value) = try!(nk.pop().unwrap());
         if r.get_end() <= &key {
+            debug!("reach end key: {:?} >= {:?}", key, r.get_end());
             return Ok(rows);
         }
         let mut datums = box_try!(table::decode_index_key(&key));
