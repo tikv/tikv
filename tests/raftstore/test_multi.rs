@@ -130,7 +130,7 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
 
 }
 
-fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>, count: usize, iteration: u32) {
+fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>, node_count: usize, restart_count: u32) {
     cluster.bootstrap_region().expect("");
     cluster.start();
 
@@ -141,35 +141,30 @@ fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>, count: usiz
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let mut rng = rand::thread_rng();
-    for _ in 1..iteration {
-        let id = 1+rng.gen_range(0, count as u64);
+    for _ in 1..restart_count {
+        let id = 1+rng.gen_range(0, node_count as u64);
         cluster.stop_node(id);
         cluster.run_node(id);
-        wait_until_node_online(cluster, key);
+        wait_until_node_online(cluster, id);
         assert_eq!(cluster.get(key), Some(value.to_vec()));
     }
 }
 
-fn wait_until_node_online<T: Simulator>(cluster: &mut Cluster<T>, key: &[u8]) {
+fn wait_until_node_online<T: Simulator>(cluster: &mut Cluster<T>, node_id: u64) {
     loop {
-        let region = cluster.get_region(key);
-        let mut succ: bool = true;
-        for peer in region.get_peers() {
-            let find_leader = new_status_request(region.get_id(), peer.clone(), new_region_leader_cmd());
-            let resp = cluster.call_command(find_leader, Duration::from_secs(3));
-            if resp.is_err() {
-                succ = false;
-                break;
-            }
-            if !resp.unwrap().get_status_response().get_region_leader().has_leader() {
-                succ = false;
-                break;
-            }
+        // leverage the fact that store id is equal node id actually
+        let peer = new_peer(node_id, 0);
+        let find_leader = new_status_request(1, peer.clone(), new_region_leader_cmd());
+        let resp = cluster.call_command(find_leader, Duration::from_secs(3));
+        if resp.is_err() {
+            sleep_ms(10);
+            continue;
         }
-        if succ {
-            break;
+        if !resp.unwrap().get_status_response().get_region_leader().has_leader() {
+            sleep_ms(10);
+            continue;
         }
-        sleep_ms(10);
+        break;
     }
 }
 
