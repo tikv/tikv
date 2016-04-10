@@ -94,7 +94,7 @@ enum EndPointMessage {
     Close,
 }
 
-fn poll_messae(engine: Arc<Box<Engine>>, rx: Receiver<EndPointMessage>, ch: SendCh) {
+fn msg_poller(engine: Arc<Box<Engine>>, rx: Receiver<EndPointMessage>, ch: SendCh) {
     info!("EndPoint started.");
     let end_point = SnapshotEndPoint::new(engine);
     loop {
@@ -119,7 +119,7 @@ impl RegionEndPoint {
     pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> RegionEndPoint {
         let (tx, rx) = mpsc::channel();
         let builder = thread::Builder::new().name("EndPoint".to_owned());
-        let handle = builder.spawn(move || poll_messae(engine, rx, ch)).unwrap();
+        let handle = builder.spawn(move || msg_poller(engine, rx, ch)).unwrap();
         RegionEndPoint {
             tx: tx,
             handle: Some(handle),
