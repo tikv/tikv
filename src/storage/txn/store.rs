@@ -40,7 +40,6 @@ impl TxnStore {
         snap_store.get(key)
     }
 
-    #[allow(dead_code)]
     pub fn batch_get(&self,
                      ctx: Context,
                      keys: &[Key],
