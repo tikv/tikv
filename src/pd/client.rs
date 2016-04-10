@@ -22,7 +22,7 @@ use util::make_std_tcp_conn;
 use protobuf::{self, MessageStatic};
 use super::Result;
 
-const MAX_PD_SEND_RETRY_COUNT: usize = 20;
+const MAX_PD_SEND_RETRY_COUNT: usize = 100;
 
 pub trait TRpcClient: Sync + Send {
     fn send<M, P>(&self, msg_id: u64, message: &M) -> Result<P>
@@ -91,6 +91,8 @@ impl RpcClientCore {
             let (id, data) = match send_msg(&mut stream, msg_id, message) {
                 Err(e) => {
                     warn!("send message to pd failed {:?}", e);
+                    // TODO: figure out a better way to do backoff
+                    thread::sleep(Duration::from_millis(50));
                     continue;
                 }
                 Ok((id, data)) => (id, data),
