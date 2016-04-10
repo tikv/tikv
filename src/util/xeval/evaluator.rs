@@ -20,14 +20,15 @@ use std::cmp::Ordering;
 use tipb::expression::{Expr, ExprType};
 
 /// `Evaluator` evaluates `tipb::Expr`.
+#[derive(Default)]
 pub struct Evaluator {
     // column_id -> column_value
     row: HashMap<i64, Datum>,
 }
 
 impl Evaluator {
-    pub fn new(row: HashMap<i64, Datum>) -> Evaluator {
-        Evaluator { row: row }
+    pub fn insert(&mut self, col_id: i64, datum: Datum) {
+        self.row.insert(col_id, datum);
     }
 
     /// Eval evaluates expr to a Datum.
@@ -246,8 +247,8 @@ mod test {
 			 bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ), ExprType::And), Datum::I64(1)),
         ];
 
-        let row = map![1i64 => Datum::I64(100)];
-        let xevaluator = Evaluator::new(row);
+        let mut xevaluator = Evaluator::default();
+        xevaluator.insert(1, Datum::I64(100));
         for (expr, result) in tests {
             let res = xevaluator.eval(&expr);
             if res.is_err() {

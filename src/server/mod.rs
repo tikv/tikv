@@ -26,7 +26,7 @@ pub mod errors;
 pub mod server;
 mod conn;
 mod kv;
-mod coprocessor;
+pub mod coprocessor;
 pub mod transport;
 pub mod node;
 
