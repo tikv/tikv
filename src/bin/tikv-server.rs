@@ -29,7 +29,7 @@ use std::sync::{Arc, RwLock};
 use getopts::{Options, Matches};
 use log::LogLevelFilter;
 use rocksdb::DB;
-use rocksdb::ffi::{DBCompactionStyle};
+use rocksdb::ffi::DBCompactionStyle;
 use mio::tcp::TcpListener;
 
 use tikv::storage::{Storage, Dsn};
@@ -80,7 +80,7 @@ fn build_raftkv(matches: &Matches,
     opts.create_if_missing(true);
     opts.set_max_open_files(4096);
     opts.set_use_fsync(false);
-    opts.set_bytes_per_sync(8388608);
+    opts.set_bytes_per_sync(8*1024*1024);
     opts.set_disable_data_sync(false);
     opts.set_block_cache_size_mb(4*1024);
     opts.set_table_cache_num_shard_bits(6);
