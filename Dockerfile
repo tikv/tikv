@@ -7,7 +7,7 @@ ADD . /tikv
 RUN cd /tikv && \
     cargo build --release && \
     cp -f target/release/tikv-server /tikv-server && \
-    rm -rf /tikv
+    cargo clean
 
 EXPOSE 20160
 
