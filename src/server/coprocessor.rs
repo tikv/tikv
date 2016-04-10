@@ -412,6 +412,6 @@ fn get_idx_row_from_range(store: &SnapshotStore,
         row.set_handle(handle_data);
         row.set_data(data);
         rows.push(row);
-        seek_key = prefix_next(&seek_key);
+        seek_key = prefix_next(&key);
     }
 }
