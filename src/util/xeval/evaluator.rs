@@ -250,6 +250,7 @@ mod test {
 			(bin_expr(Datum::I64(0), Datum::I64(1), ExprType::And), Datum::I64(0)),
 			(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::And), Datum::I64(1)),
 			(bin_expr(Datum::I64(1), Datum::Null, ExprType::And), Datum::Null),
+			(bin_expr(Datum::Null, Datum::I64(0), ExprType::And), Datum::I64(0)),
 			(bin_expr(Datum::Null, Datum::Null, ExprType::And), Datum::Null),
 			(bin_expr(Datum::I64(0), Datum::I64(0), ExprType::Or), Datum::I64(0)),
 			(bin_expr(Datum::I64(0), Datum::I64(1), ExprType::Or), Datum::I64(1)),
