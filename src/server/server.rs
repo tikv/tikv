@@ -363,10 +363,13 @@ impl<T: RaftStoreRouter> Handler for Server<T> {
         event_loop.shutdown();
     }
 
-    fn tick(&mut self, _: &mut EventLoop<Self>) {
+    fn tick(&mut self, el: &mut EventLoop<Self>) {
         // tick is called in the end of the loop, so if we notify to quit,
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
+        if !el.is_running() {
+            self.end_point.stop();
+        }
     }
 }
 

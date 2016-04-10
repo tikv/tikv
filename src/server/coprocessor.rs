@@ -13,6 +13,8 @@
 
 use std::sync::Arc;
 use std::{result, error};
+use std::thread::{self, JoinHandle};
+use std::sync::mpsc::{self, Sender};
 use mio::Token;
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
 use tipb::schema::IndexInfo;
@@ -78,59 +80,114 @@ impl From<txn::Error> for Error {
 }
 
 pub struct RegionEndPoint {
-    ch: SendCh,
-    end_point: SnapshotEndPoint,
+    tx: Sender<EndPointMessage>,
+    handle: Option<JoinHandle<()>>,
 }
 
 type ResponseHandler = Box<Fn(Response) -> ()>;
 
+#[derive(Debug)]
+enum EndPointMessage {
+    Job(Request, Token, u64),
+    Close,
+}
+
 impl RegionEndPoint {
     pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> RegionEndPoint {
+        let (tx, rx) = mpsc::channel();
+        let builder = thread::Builder::new().name("EndPoint".to_owned());
+        let handle = builder.spawn(move || {
+                                info!("EndPoint started.");
+                                let end_point = SnapshotEndPoint::new(engine);
+                                loop {
+                                    let res = rx.recv();
+                                    if let Err(e) = res {
+                                        error!("failed to receive job: {:?}", e);
+                                        break;
+                                    }
+                                    let msg = res.unwrap();
+                                    debug!("recv req: {:?}", msg);
+                                    match msg {
+                                        EndPointMessage::Job(req, token, msg_id) => {
+                                            handle_request(req,
+                                                           ch.clone(),
+                                                           token,
+                                                           msg_id,
+                                                           &end_point)
+                                        }
+                                        EndPointMessage::Close => break,
+                                    }
+                                }
+                                info!("EndPoint closing.");
+                            })
+                            .unwrap();
         RegionEndPoint {
-            ch: ch,
-            end_point: SnapshotEndPoint::new(engine),
+            tx: tx,
+            handle: Some(handle),
         }
     }
 
     pub fn on_request(&self, req: Request, token: Token, msg_id: u64) -> server::Result<()> {
-        let ch = self.ch.clone();
-        let cb = box move |r| {
-            let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CopResp);
-            resp_msg.set_cop_resp(r);
-            if let Err(e) = ch.send(Msg::WriteData {
-                token: token,
-                data: ConnData::new(msg_id, resp_msg),
-            }) {
-                error!("send cop resp failed with token {:?}, msg id {}, err {:?}",
-                       token,
-                       msg_id,
-                       e);
-            }
-        };
-        match req.get_tp() {
-            REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
-                let mut sel = SelectRequest::new();
-                box_try!(sel.merge_from_bytes(req.get_data()));
-                match self.end_point.handle_select(req, sel) {
-                    Ok(r) => cb(r),
-                    Err(e) => self.on_error(e, cb),
-                }
-                Ok(())
-            }
-            t => Err(box_err!("unsupported tp {}", t)),
-        }
+        box_try!(self.tx.send(EndPointMessage::Job(req, token, msg_id)));
+        Ok(())
     }
 
-    fn on_error(&self, e: Error, cb: ResponseHandler) {
-        let mut resp = Response::new();
-        match e {
-            Error::Region(e) => resp.set_region_error(e),
-            Error::Locked(info) => resp.set_locked(info),
-            Error::Other(_) => resp.set_other_error(format!("{}", e)),
+    pub fn stop(&mut self) {
+        if self.handle.is_none() {
+            return;
         }
-        cb(resp)
+        if let Err(e) = self.tx.send(EndPointMessage::Close) {
+            error!("failed to ask the coprocessor to stop: {:?}", e);
+        }
+        if let Err(e) = self.handle.take().unwrap().join() {
+            error!("failed to stop the coprocessor: {:?}", e);
+        }
     }
+}
+
+fn handle_request(req: Request,
+                  ch: SendCh,
+                  token: Token,
+                  msg_id: u64,
+                  end_point: &SnapshotEndPoint) {
+    let cb = box move |r| {
+        let mut resp_msg = Message::new();
+        resp_msg.set_msg_type(MessageType::CopResp);
+        resp_msg.set_cop_resp(r);
+        if let Err(e) = ch.send(Msg::WriteData {
+            token: token,
+            data: ConnData::new(msg_id, resp_msg),
+        }) {
+            error!("send cop resp failed with token {:?}, msg id {}, err {:?}",
+                   token,
+                   msg_id,
+                   e);
+        }
+    };
+    match req.get_tp() {
+        REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
+            let mut sel = SelectRequest::new();
+            if let Err(e) = sel.merge_from_bytes(req.get_data()) {
+                on_error(box_err!(e), cb);
+                return;
+            }
+            match end_point.handle_select(req, sel) {
+                Ok(r) => cb(r),
+                Err(e) => on_error(e, cb),
+            }
+        }
+        t => on_error(box_err!("unsupported tp {}", t), cb),
+    }
+}
+
+fn on_error(e: Error, cb: ResponseHandler) {
+    let mut resp = Response::new();
+    match e {
+        Error::Region(e) => resp.set_region_error(e),
+        Error::Locked(info) => resp.set_locked(info),
+        Error::Other(_) => resp.set_other_error(format!("{}", e)),
+    }
+    cb(resp)
 }
 
 pub struct SnapshotEndPoint {

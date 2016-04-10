@@ -107,9 +107,8 @@ mod test {
     #[test]
     fn test_index_key_codec() {
         let tests = vec![Datum::U64(1), Datum::Bytes(b"123".to_vec()), Datum::I64(-1)];
-        let mut buf = vec![0; datum::approximate_size(&tests, true)];
-        let written = datum::encode_key(&mut buf, &tests).unwrap();
-        let encoded = encode_index_seek_key(1, 2, &buf[..written]);
+        let buf = datum::encode_key(&tests).unwrap();
+        let encoded = encode_index_seek_key(1, 2, &buf);
         assert_eq!(tests, decode_index_key(&encoded).unwrap());
     }
 }

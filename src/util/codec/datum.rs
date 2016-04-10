@@ -296,8 +296,15 @@ pub fn encode(buf: &mut [u8], values: &[Datum], comparable: bool) -> Result<usiz
     Ok(idx)
 }
 
-pub fn encode_key(buf: &mut [u8], values: &[Datum]) -> Result<usize> {
+pub fn buffer_encode_key(buf: &mut [u8], values: &[Datum]) -> Result<usize> {
     encode(buf, values, true)
+}
+
+pub fn encode_key(values: &[Datum]) -> Result<Vec<u8>> {
+    let mut buf = vec![0; approximate_size(values, true)];
+    let written = try!(encode(&mut buf, values, true));
+    buf.truncate(written);
+    Ok(buf)
 }
 
 pub fn encode_value(values: &[Datum]) -> Result<Vec<u8>> {
@@ -321,10 +328,9 @@ mod test {
 		];
 
         for vs in table.drain(..) {
-            let mut buf = vec![0; approximate_size(&vs, true)];
-            let written = encode_key(&mut buf, &vs).unwrap();
-            let (decoded, readed) = decode(&buf[0..written]).unwrap();
-            assert_eq!(written, readed);
+            let mut buf = encode_key(&vs).unwrap();
+            let (decoded, readed) = decode(&buf).unwrap();
+            assert_eq!(buf.len(), readed);
             assert_eq!(vs, decoded);
 
             buf = encode_value(&vs).unwrap();
