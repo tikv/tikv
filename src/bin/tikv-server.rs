@@ -29,6 +29,7 @@ use std::sync::{Arc, RwLock};
 use getopts::{Options, Matches};
 use log::LogLevelFilter;
 use rocksdb::DB;
+use rocksdb::ffi::{DBCompactionStyle};
 use mio::tcp::TcpListener;
 
 use tikv::storage::{Storage, Dsn};
@@ -68,7 +69,39 @@ fn build_raftkv(matches: &Matches,
     let trans = Arc::new(RwLock::new(ServerTransport::new(cluster_id, ch, pd_client.clone())));
 
     let path = get_store_path(matches);
-    let engine = Arc::new(DB::open_default(&path).unwrap());
+
+    let mut opts = rocksdb::Options::new();
+
+    let mut block_base_opts = rocksdb::BlockBasedOptions::new();
+    block_base_opts.set_block_size(64*1024);
+
+    opts.set_block_based_table_factory(&block_base_opts);
+    opts.increase_parallelism(8);
+    opts.create_if_missing(true);
+    opts.set_max_open_files(4096);
+    opts.set_use_fsync(false);
+    opts.set_bytes_per_sync(8388608);
+    opts.set_disable_data_sync(false);
+    opts.set_block_cache_size_mb(4*1024);
+    opts.set_table_cache_num_shard_bits(6);
+    // parallelism options
+    opts.set_max_background_compactions(6);
+    opts.set_max_background_flushes(2);
+    // flush options
+    opts.set_write_buffer_size(64*1024*1024);
+    opts.set_max_write_buffer_number(4);
+    opts.set_min_write_buffer_number_to_merge(1);
+    // level style compaction
+    opts.set_target_file_size_base(64*1024*1024);
+    // write stalls
+    opts.set_level_zero_slowdown_writes_trigger(16);
+    opts.set_level_zero_stop_writes_trigger(64);
+
+    opts.set_compaction_style(DBCompactionStyle::DBUniversal);
+    opts.set_filter_deletes(false);
+    opts.set_disable_auto_compactions(false);
+
+    let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
 
