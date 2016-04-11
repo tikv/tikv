@@ -130,7 +130,9 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
 
 }
 
-fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>, node_count: usize, restart_count: u32) {
+fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>,
+                                           node_count: usize,
+                                           restart_count: u32) {
     cluster.bootstrap_region().expect("");
     cluster.start();
 
@@ -142,17 +144,20 @@ fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>, node_count:
 
     let mut rng = rand::thread_rng();
     for _ in 1..restart_count {
-        let id = 1+rng.gen_range(0, node_count as u64);
+        let id = 1 + rng.gen_range(0, node_count as u64);
         cluster.stop_node(id);
         cluster.run_node(id);
         wait_until_node_online(cluster, id);
         assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+        // verify whether data is actually being replicated
+        must_get_equal(&cluster.get_engine(id), key, value);
     }
 }
 
 fn wait_until_node_online<T: Simulator>(cluster: &mut Cluster<T>, node_id: u64) {
     loop {
-        // leverage the fact that store id is equal node id actually
+        // leverage the fact that store id is equal to node id actually
         let peer = new_peer(node_id, 0);
         let find_leader = new_status_request(1, peer.clone(), new_region_leader_cmd());
         let resp = cluster.call_command(find_leader, Duration::from_secs(3));
@@ -260,14 +265,14 @@ fn test_multi_server_lost_majority() {
 
 #[test]
 fn test_multi_node_random_restart() {
-    let count = 3;
+    let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_random_restart(&mut cluster, count, 5);
+    test_multi_random_restart(&mut cluster, count, 10);
 }
 
 #[test]
 fn test_multi_server_random_restart() {
-    let count = 3;
+    let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_random_restart(&mut cluster, count, 5);
+    test_multi_random_restart(&mut cluster, count, 10);
 }
