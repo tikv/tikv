@@ -220,9 +220,9 @@ impl StoreHandler {
                         res_type.set_field_type(ResultType_Type::Other);
                         res_type.set_msg(format!("engine error: {:?}", err));
                     }
-                } else if let Some((_, primary, ts)) = r.get_lock() {
+                } else if let Some((key, primary, ts)) = r.get_lock() {
                     res_type.set_field_type(ResultType_Type::Locked);
-                    res_type.set_lock_info(make_lock_info(primary, ts));
+                    res_type.set_lock_info(make_lock_info(primary, ts, key));
                 } else {
                     let err_str = format!("storage error: {:?}", e);
                     error!("{}", err_str);
@@ -431,10 +431,11 @@ fn make_not_leader_item(err: ErrorHeader) -> Item {
     item
 }
 
-fn make_lock_info(primary: Vec<u8>, version: u64) -> LockInfo {
+fn make_lock_info(primary: Vec<u8>, version: u64, key: Vec<u8>) -> LockInfo {
     let mut lock_info = LockInfo::new();
     lock_info.set_primary_lock(primary);
     lock_info.set_lock_version(version);
+    lock_info.set_key(key);
     lock_info
 }
 
@@ -445,7 +446,7 @@ fn make_item<T>(res: &StorageResult<T>) -> Item {
         res_type.set_field_type(ResultType_Type::Ok);
     } else if let Some((key, primary, ts)) = res.get_lock() {
         res_type.set_field_type(ResultType_Type::Locked);
-        res_type.set_lock_info(make_lock_info(primary, ts));
+        res_type.set_lock_info(make_lock_info(primary, ts, key.clone()));
         item.set_key(key);
     } else {
         res_type.set_field_type(ResultType_Type::Retryable);
@@ -559,6 +560,7 @@ mod tests {
         let mut lock_info1 = LockInfo::new();
         lock_info1.set_primary_lock(k1_primary.clone());
         lock_info1.set_lock_version(k1_ts);
+        lock_info1.set_key(k1.clone());
         exp_res_type1.set_lock_info(lock_info1);
         assert_eq!(exp_res_type1, *actual_kvs[1].get_res_type());
         assert_eq!(k1, actual_kvs[1].get_key());
