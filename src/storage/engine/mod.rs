@@ -20,7 +20,7 @@ use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
 mod memory;
-mod rocksdb;
+pub mod rocksdb;
 pub mod raftkv;
 
 #[derive(Debug)]

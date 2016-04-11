@@ -13,7 +13,7 @@
 
 use std::fmt::{self, Display, Formatter, Debug};
 use std::error::Error;
-use rocksdb::{DB, Writable, WriteBatch, IteratorMode, Direction};
+use rocksdb::{DB, Writable, WriteBatch, IteratorMode, Direction, Options};
 use rocksdb::rocksdb::Snapshot as RocksSnapshot;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
@@ -27,6 +27,13 @@ impl EngineRocksdb {
     pub fn new(path: &str) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
         DB::open_default(path)
+            .map(|db| EngineRocksdb { db: db })
+            .map_err(|e| RocksDBError::new(e).into_engine_error())
+    }
+
+    pub fn new_with_option(path: &str, opts: &Options) -> Result<EngineRocksdb> {
+        info!("EngineRocksdb: creating for path {}", path);
+        DB::open(opts, path)
             .map(|db| EngineRocksdb { db: db })
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
