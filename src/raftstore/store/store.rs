@@ -504,7 +504,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let applied_index = peer.storage.rl().applied_index();
             let first_index = peer.storage.rl().first_index();
             if applied_index < first_index {
-                // test if we are just started or applied a snapshot.
+                // Check if we are just started or applied a snapshot.
                 // When starts or after applying a snapshot, we have no logs,
                 // so here the first index = applied index + 1.
                 if first_index != applied_index + 1 {
