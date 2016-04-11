@@ -48,6 +48,8 @@ impl Evaluator {
             ExprType::NullEQ => self.eval_null_eq(expr),
             ExprType::And => self.eval_and(expr),
             ExprType::Or => self.eval_or(expr),
+            ExprType::Not => self.eval_not(expr),
+            ExprType::Like => self.eval_like(expr),
             ExprType::Float32 | ExprType::Float64 => unimplemented!(),
             _ => Ok(Datum::Null),
         }
@@ -144,6 +146,23 @@ impl Evaluator {
         })
     }
 
+    fn eval_not(&self, expr: &Expr) -> Result<Datum> {
+        let children_cnt = expr.get_children().len();
+        if children_cnt != 1 {
+            return Err(Error::Expr(format!("expect 1 operand, got {}", children_cnt)));
+        }
+        let d = try!(self.eval(&expr.get_children()[0]));
+        if d == Datum::Null {
+            return Ok(Datum::Null);
+        }
+        let b = try!(d.as_bool());
+        Ok((!b).into())
+    }
+
+    fn eval_like(&self, _: &Expr) -> Result<Datum> {
+        unimplemented!();
+    }
+
     fn eval_two_children_as_bool(&self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
         let (left, right) = try!(self.eval_two_children(expr));
         let left_bool = try!(eval_as_bool(&left));
@@ -217,6 +236,13 @@ mod test {
         expr
     }
 
+    fn not_expr(value: Datum) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::Not);
+        expr.mut_children().push(datum_expr(value));
+        expr
+    }
+
     // TODO: add more tests.
     #[test]
     fn test_eval() {
@@ -259,6 +285,9 @@ mod test {
 			(bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
 			(bin_expr_r(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
 			 bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ), ExprType::And), Datum::I64(1)),
+            (not_expr(Datum::I64(1)), Datum::I64(0)),
+            (not_expr(Datum::I64(0)), Datum::I64(1)),
+            (not_expr(Datum::Null), Datum::Null),
         ];
 
         let mut xevaluator = Evaluator::default();
