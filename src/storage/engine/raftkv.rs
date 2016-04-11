@@ -26,10 +26,10 @@ use kvproto::kvrpcpb::Context;
 
 use pd::PdClient;
 use uuid::Uuid;
-use std::sync::{Arc, RwLock};
-use std::sync::mpsc;
+use std::sync::{Arc, RwLock, Mutex, Condvar};
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
+use std::time::Duration;
 use std::result;
 use rocksdb::DB;
 use protobuf::RepeatedField;
@@ -37,6 +37,8 @@ use protobuf::RepeatedField;
 use storage::engine;
 use super::{Engine, Modify, Snapshot};
 use storage::{Key, Value, KvPair};
+
+const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 quick_error! {
     #[derive(Debug)]
@@ -63,6 +65,10 @@ quick_error! {
         }
         InvalidRequest(reason: String) {
             description(reason)
+        }
+        Timeout(d: Duration) {
+            description("request timeout")
+            display("timeout after {:?}", d)
         }
     }
 }
@@ -96,20 +102,42 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         }
     }
 
-    fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<RaftCmdResponse> {
-        let (tx, rx) = mpsc::channel();
-        let uuid = req.get_header().get_uuid().to_vec();
-        let l = req.get_requests().len();
+    // TODO: reuse msg code.
+    pub fn call_command(&self, request: RaftCmdRequest) -> Result<RaftCmdResponse> {
+        let resp: Option<RaftCmdResponse> = None;
+        let pair = Arc::new((Mutex::new(resp), Condvar::new()));
+        let pair2 = pair.clone();
+        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
 
-        try!(self.router.rl().send_command(req,
-                                           box move |r| {
-                                               box_try!(tx.send(r));
+        try!(self.router.rl().send_command(request,
+                                           box move |resp| {
+                                               let &(ref lock, ref cvar) = &*pair2;
+                                               let mut v = lock.lock().unwrap();
+                                               *v = Some(resp);
+                                               cvar.notify_one();
                                                Ok(())
                                            }));
 
+        let &(ref lock, ref cvar) = &*pair;
+        let mut v = lock.lock().unwrap();
+        while v.is_none() {
+            let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
+            if timeout_res.timed_out() {
+                return Err(Error::Timeout(timeout));
+            }
+
+            v = resp
+        }
+
+        Ok(v.take().unwrap())
+    }
+
+    fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<RaftCmdResponse> {
+        let uuid = req.get_header().get_uuid().to_vec();
+        let l = req.get_requests().len();
 
         // Only when tx is closed will recv return Err, which should never happen.
-        let mut resp = rx.recv().unwrap();
+        let mut resp = try!(self.call_command(req));
         if resp.get_header().get_uuid() != &*uuid {
             return Err(Error::InvalidResponse("response is not correct!!!".to_owned()));
         }
