@@ -38,6 +38,8 @@ use storage::engine;
 use super::{Engine, Modify, Snapshot};
 use storage::{Key, Value, KvPair};
 
+const DEFAULT_TIMEOUT_SECS: u64 = 5;
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -64,9 +66,9 @@ quick_error! {
         InvalidRequest(reason: String) {
             description(reason)
         }
-        Timeout(sec: Duration) {
+        Timeout(d: Duration) {
             description("request timeout")
-            display("timeout after {:?} secs", sec)
+            display("timeout after {:?}", d)
         }
     }
 }
@@ -105,7 +107,7 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         let resp: Option<RaftCmdResponse> = None;
         let pair = Arc::new((Mutex::new(resp), Condvar::new()));
         let pair2 = pair.clone();
-        let timeout = Duration::from_secs(5);
+        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
 
         try!(self.router.rl().send_command(request,
                                            box move |resp| {
