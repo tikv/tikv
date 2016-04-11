@@ -815,11 +815,13 @@ mod test {
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let s2 = new_storage(&td2);
+        assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
         let wb = WriteBatch::new();
         let res = s2.wl().apply_snapshot(&wb, &snap1).unwrap();
         assert_eq!(res.applied_index, 5);
         assert_eq!(res.last_index, 5);
         assert_eq!(res.truncated_state.get_index(), 5);
         assert_eq!(res.truncated_state.get_term(), 5);
+        assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
     }
 }
