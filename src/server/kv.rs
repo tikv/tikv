@@ -276,6 +276,7 @@ impl StoreHandler {
         let mut batch_get = CmdBatchGetResponse::new();
         match kvs {
             Ok(kvs) => {
+                batch_get.set_res_type(make_ok_result());
                 // convert storage::KvPair to kvrpcpb::Item
                 let mut items = Vec::new();
                 for result in kvs {
@@ -453,6 +454,12 @@ fn make_item<T>(res: &StorageResult<T>) -> Item {
     }
     item.set_res_type(res_type);
     item
+}
+
+fn make_ok_result() -> ResultType {
+    let mut res_type = ResultType::new();
+    res_type.set_field_type(ResultType_Type::Ok);
+    res_type
 }
 
 #[cfg(test)]
