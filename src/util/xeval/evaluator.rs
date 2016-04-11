@@ -125,12 +125,23 @@ impl Evaluator {
 
     fn eval_and(&self, expr: &Expr) -> Result<Datum> {
         self.eval_two_children_as_bool(expr)
-            .map(|(l, r)| (l.unwrap_or(false) && r.unwrap_or(false)).into())
+            .map(|p| {
+                match p {
+                    (Some(true), Some(true)) => true.into(),
+                    (Some(false), _) | (_, Some(false)) => false.into(),
+                    _ => Datum::Null,
+                }
+            })
     }
 
     fn eval_or(&self, expr: &Expr) -> Result<Datum> {
-        self.eval_two_children_as_bool(expr)
-            .map(|(l, r)| (l.unwrap_or(false) || r.unwrap_or(false)).into())
+        self.eval_two_children_as_bool(expr).map(|p| {
+            match p {
+                (Some(true), _) | (_, Some(true)) => true.into(),
+                (Some(false), Some(false)) => false.into(),
+                _ => Datum::Null,
+            }
+        })
     }
 
     fn eval_two_children_as_bool(&self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
@@ -238,11 +249,14 @@ mod test {
 			// logic operation
 			(bin_expr(Datum::I64(0), Datum::I64(1), ExprType::And), Datum::I64(0)),
 			(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::And), Datum::I64(1)),
-			(bin_expr(Datum::I64(1), Datum::Null, ExprType::And), Datum::I64(0)),
+			(bin_expr(Datum::I64(1), Datum::Null, ExprType::And), Datum::Null),
+			(bin_expr(Datum::Null, Datum::I64(0), ExprType::And), Datum::I64(0)),
+			(bin_expr(Datum::Null, Datum::Null, ExprType::And), Datum::Null),
 			(bin_expr(Datum::I64(0), Datum::I64(0), ExprType::Or), Datum::I64(0)),
 			(bin_expr(Datum::I64(0), Datum::I64(1), ExprType::Or), Datum::I64(1)),
 			(bin_expr(Datum::I64(1), Datum::Null, ExprType::Or), Datum::I64(1)),
-			(bin_expr(Datum::Null, Datum::Null, ExprType::Or), Datum::I64(0)),
+			(bin_expr(Datum::Null, Datum::Null, ExprType::Or), Datum::Null),
+			(bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
 			(bin_expr_r(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
 			 bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ), ExprType::And), Datum::I64(1)),
         ];
