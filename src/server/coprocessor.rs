@@ -70,7 +70,7 @@ impl From<engine::Error> for Error {
 impl From<txn::Error> for Error {
     fn from(e: txn::Error) -> Error {
         match e {
-            txn::Error::Mvcc(mvcc::Error::KeyIsLocked { primary, ts, key, .. }) => {
+            txn::Error::Mvcc(mvcc::Error::KeyIsLocked { primary, ts, key }) => {
                 let mut info = LockInfo::new();
                 info.set_primary_lock(primary);
                 info.set_lock_version(ts);
