@@ -290,10 +290,10 @@ impl PeerStorage {
         box_try!(snap_data.write_to_vec(&mut v));
         snapshot.set_data(v);
 
-        debug!("generate snapshot ok for region {}, size {}, key count {}",
-               self.get_region_id(),
-               snap_size,
-               snap_key_cnt);
+        info!("generate snapshot ok for region {}, size {}, key count {}",
+              self.get_region_id(),
+              snap_size,
+              snap_key_cnt);
 
         Ok(snapshot)
     }
