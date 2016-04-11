@@ -67,6 +67,7 @@ pub struct ApplySnapResult {
     pub last_index: u64,
     pub applied_index: u64,
     pub region: metapb::Region,
+    pub truncated_state: RaftTruncatedState,
 }
 
 impl PeerStorage {
@@ -239,6 +240,8 @@ impl PeerStorage {
             }
         }));
 
+        let region_id = region.get_id();
+
         let term = try!(self.term(applied_index));
         let mut snapshot = Snapshot::new();
 
@@ -257,10 +260,23 @@ impl PeerStorage {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region);
 
-        // TODO: maybe we don't need to scan log entries.
+        // Scan everything for this region.
+        let log_prefix = keys::raft_log_prefix(region_id);
         let mut data = vec![];
+        let mut snap_size = 0;
+        let mut snap_key_cnt = 0;
         try!(self.scan_region(&snap,
                               &mut |key, value| {
+                                  if key.starts_with(&log_prefix) {
+                                      // Ignore raft logs.
+                                      // TODO: do more tests for snapshot.
+                                      return Ok(true);
+                                  }
+
+                                  snap_size += key.len();
+                                  snap_size += value.len();
+                                  snap_key_cnt += 1;
+
                                   let mut kv = KeyValue::new();
                                   kv.set_key(key.to_vec());
                                   kv.set_value(value.to_vec());
@@ -274,7 +290,10 @@ impl PeerStorage {
         box_try!(snap_data.write_to_vec(&mut v));
         snapshot.set_data(v);
 
-        debug!("generate snapshot ok for region {}", self.get_region_id());
+        info!("generate snapshot ok for region {}, size {}, key count {}",
+              self.get_region_id(),
+              snap_size,
+              snap_key_cnt);
 
         Ok(snapshot)
     }
@@ -353,12 +372,20 @@ impl PeerStorage {
         let last_index = snap.get_metadata().get_index();
         try!(save_last_index(w, region_id, last_index));
 
+        // The snapshot only contains log which index > applied index, so
+        // here the truncate state's (index, term) is in snapshot metadata.
+        let mut truncated_state = RaftTruncatedState::new();
+        truncated_state.set_index(last_index);
+        truncated_state.set_term(snap.get_metadata().get_term());
+        try!(save_truncated_state(w, region_id, &truncated_state));
+
         debug!("apply snapshot ok for region {}", self.get_region_id());
 
         Ok(ApplySnapResult {
             last_index: last_index,
             applied_index: last_index,
             region: region.clone(),
+            truncated_state: truncated_state,
         })
     }
 
@@ -518,6 +545,7 @@ impl PeerStorage {
         if let Some(res) = apply_snap_res {
             self.set_applied_index(res.applied_index);
             self.set_region(&res.region);
+            self.set_truncated_state(&res.truncated_state);
             return Ok(Some(res.region.clone()));
         }
 
@@ -780,5 +808,29 @@ mod test {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
             }
         }
+    }
+
+    #[test]
+    fn test_storage_apply_snapshot() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut cs = ConfState::new();
+        cs.set_nodes(vec![1, 2, 3]);
+
+        let td1 = TempDir::new("tikv-store-test").unwrap();
+        let s1 = new_storage_from_ents(&td1, &ents);
+        let snap1 = s1.rl().snapshot().unwrap();
+        assert_eq!(s1.rl().truncated_state.get_index(), 3);
+        assert_eq!(s1.rl().truncated_state.get_term(), 3);
+
+        let td2 = TempDir::new("tikv-store-test").unwrap();
+        let s2 = new_storage(&td2);
+        assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
+        let wb = WriteBatch::new();
+        let res = s2.wl().apply_snapshot(&wb, &snap1).unwrap();
+        assert_eq!(res.applied_index, 5);
+        assert_eq!(res.last_index, 5);
+        assert_eq!(res.truncated_state.get_index(), 5);
+        assert_eq!(res.truncated_state.get_term(), 5);
+        assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
     }
 }
