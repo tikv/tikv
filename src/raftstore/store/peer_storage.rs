@@ -263,6 +263,8 @@ impl PeerStorage {
         // Scan everything for this region.
         let log_prefix = keys::raft_log_prefix(region_id);
         let mut data = vec![];
+        let mut snap_size = 0;
+        let mut snap_key_cnt = 0;
         try!(self.scan_region(&snap,
                               &mut |key, value| {
                                   if key.starts_with(&log_prefix) {
@@ -270,6 +272,10 @@ impl PeerStorage {
                                       // TODO: do more tests for snapshot.
                                       return Ok(true);
                                   }
+
+                                  snap_size += key.len();
+                                  snap_size += value.len();
+                                  snap_key_cnt += 1;
 
                                   let mut kv = KeyValue::new();
                                   kv.set_key(key.to_vec());
@@ -284,7 +290,10 @@ impl PeerStorage {
         box_try!(snap_data.write_to_vec(&mut v));
         snapshot.set_data(v);
 
-        debug!("generate snapshot ok for region {}", self.get_region_id());
+        debug!("generate snapshot ok for region {}, size {}, key count {}",
+               self.get_region_id(),
+               snap_size,
+               snap_key_cnt);
 
         Ok(snapshot)
     }
