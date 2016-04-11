@@ -13,10 +13,8 @@
 
 use std::sync::{Arc, RwLock};
 use std::option::Option;
-use std::collections::{HashMap, HashSet, VecDeque, BTreeMap};
+use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::{Box, FnBox};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
 use std::collections::Bound::{Excluded, Unbounded};
 
 use rocksdb::DB;
@@ -39,8 +37,9 @@ use super::{SendCh, Msg, Tick};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
+use super::worker::{SplitCheckRunner, SplitCheckTask, Worker, SnapTask, SnapRunner};
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::PeerStorage;
+use super::peer_storage::SnapState;
 use super::msg::Callback;
 use super::cmd_resp::{self, bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -62,9 +61,8 @@ pub struct Store<T: Transport, C: PdClient> {
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
 
-    split_checking_queue: Arc<RwLock<VecDeque<SplitCheckTask>>>,
-    /// A join handle to split scan thread, currently only for test purpose.
-    split_handle: Option<JoinHandle<()>>,
+    split_check_worker: Worker<SplitCheckTask>,
+    snap_worker: Worker<SnapTask>,
 
     /// A flag indicates whether store has been shutdown.
     stopped: Arc<RwLock<bool>>,
@@ -115,10 +113,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             sendch: sendch,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
-            split_checking_queue: Arc::new(RwLock::new(VecDeque::new())),
+            split_check_worker: Worker::new("split check worker".to_owned()),
+            snap_worker: Worker::new("snapshot worker".to_owned()),
             region_ranges: BTreeMap::new(),
             stopped: Arc::new(RwLock::new(false)),
-            split_handle: None,
             trans: trans,
             pd_client: pd_client,
             peer_cache: Arc::new(RwLock::new(peer_cache)),
@@ -160,12 +158,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_split_region_check_tick(event_loop);
         self.register_replica_check_tick(event_loop);
 
-        let handle = try!(start_split_check(self.split_checking_queue.clone(),
-                                            self.stopped.clone(),
-                                            self.sendch.clone(),
-                                            self.cfg.region_max_size,
-                                            self.cfg.region_split_size));
-        self.split_handle = Some(handle);
+        let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
+                                                       self.cfg.region_max_size,
+                                                       self.cfg.region_split_size);
+        try!(self.split_check_worker.start(split_check_runner));
+
+        try!(self.snap_worker.start(SnapRunner));
 
         try!(event_loop.run(self));
         Ok(())
@@ -204,9 +202,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let mut snap_tasks = vec![];
         for (region_id, peer) in &mut self.region_peers {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(*region_id);
+            // ALERT!!! patern matching won't release lock here.
+            if peer.is_leader() && SnapState::Pending == peer.storage.rl().snap_state {
+                debug!("handling snapshot for {}", region_id);
+                let task = SnapTask::new(peer.storage.clone());
+                debug!("task generated");
+                snap_tasks.push(task);
+                peer.storage.wl().snap_state = SnapState::Generating;
+            }
+        }
+        if !snap_tasks.is_empty() {
+            self.snap_worker.schedule(snap_tasks);
         }
 
         self.register_raft_base_tick(event_loop);
@@ -553,11 +563,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         // TODO: check whether a gc progress has been started.
-        if !self.split_checking_queue.rl().is_empty() {
+        if self.split_check_worker.is_busy() {
             self.register_split_region_check_tick(event_loop);
             return;
         }
-        let mut tasks = VecDeque::new();
+        let mut tasks = Vec::new();
         for (id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
@@ -570,12 +580,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   id,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
-            tasks.push_back(SplitCheckTask::new(&peer.storage.rl()));
+            tasks.push(SplitCheckTask::new(&peer.storage.rl()));
             peer.size_diff_hint = 0;
         }
 
         if !tasks.is_empty() {
-            self.split_checking_queue.wl().append(&mut tasks);
+            self.split_check_worker.schedule(tasks);
         }
 
         self.register_split_region_check_tick(event_loop);
@@ -713,10 +723,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             *self.stopped.wl() = true;
             // TODO: do some close here.
 
-            if let Some(handle) = self.split_handle.take() {
-                if handle.join().is_err() {
-                    error!("failed stop split scan thread!!!");
-                }
+            if let Err(e) = self.split_check_worker.stop() {
+                error!("failed to stop split scan thread: {:?}!!!", e);
+            }
+
+            if let Err(e) = self.snap_worker.stop() {
+                error!("failed to stop snap thread: {:?}!!!", e);
             }
             return;
         }
@@ -788,85 +800,5 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         Ok(resp)
-    }
-}
-
-struct SplitCheckTask {
-    region_id: u64,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
-    engine: Arc<DB>,
-}
-
-impl SplitCheckTask {
-    fn new(ps: &PeerStorage) -> SplitCheckTask {
-        SplitCheckTask {
-            region_id: ps.get_region_id(),
-            start_key: enc_start_key(&ps.region),
-            end_key: enc_end_key(&ps.region),
-            engine: ps.get_engine().clone(),
-        }
-    }
-}
-
-fn new_split_check_result(region_id: u64, split_key: Vec<u8>) -> Msg {
-    Msg::SplitCheckResult {
-        region_id: region_id,
-        split_key: split_key,
-    }
-}
-
-fn start_split_check(tasks: Arc<RwLock<VecDeque<SplitCheckTask>>>,
-                     stopped: Arc<RwLock<bool>>,
-                     ch: SendCh,
-                     region_max_size: u64,
-                     split_size: u64)
-                     -> Result<JoinHandle<()>> {
-    thread::Builder::new()
-        .name("split-check".to_owned())
-        .spawn(move || {
-            loop {
-                let t = tasks.wl().pop_front();
-                if t.is_none() {
-                    // TODO find or implement a concurrent deque instead.
-                    thread::sleep(Duration::from_secs(SPLIT_TASK_PEEK_INTERVAL_SECS));
-                    if *stopped.rl() {
-                        break;
-                    }
-                    continue;
-                }
-                execute_task(t.unwrap(), &ch, region_max_size, split_size);
-            }
-        })
-        .map_err(|e| e.into())
-}
-
-fn execute_task(task: SplitCheckTask, ch: &SendCh, region_max_size: u64, split_size: u64) {
-    debug!("executing task {:?} {:?}", task.start_key, task.end_key);
-    let mut size = 0;
-    let mut split_key = vec![];
-    let res = task.engine.scan(&task.start_key,
-                               &task.end_key,
-                               &mut |k, v| {
-                                   size += k.len() as u64;
-                                   size += v.len() as u64;
-                                   if split_key.is_empty() && size > split_size {
-                                       split_key = k.to_vec();
-                                   }
-                                   Ok(size < region_max_size)
-                               });
-    if let Err(e) = res {
-        error!("failed to scan split key of region {}: {:?}",
-               task.region_id,
-               e);
-        return;
-    }
-    if size < region_max_size {
-        debug!("no need to send for {} < {}", size, region_max_size);
-        return;
-    }
-    let res = ch.send(new_split_check_result(task.region_id, split_key));
-    if let Err(e) = res {
-        warn!("failed to send check result of {}: {}", task.region_id, e);
     }
 }
