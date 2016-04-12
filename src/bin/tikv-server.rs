@@ -55,7 +55,6 @@ fn initial_log(matches: &Matches) {
     util::init_log(log_filter).unwrap();
 }
 
-
 fn build_raftkv(matches: &Matches,
                 ch: SendCh,
                 addr: String)
@@ -68,7 +67,15 @@ fn build_raftkv(matches: &Matches,
     let trans = Arc::new(RwLock::new(ServerTransport::new(cluster_id, ch, pd_client.clone())));
 
     let path = get_store_path(matches);
-    let engine = Arc::new(DB::open_default(&path).unwrap());
+
+    let mut opts = rocksdb::Options::new();
+
+    let mut block_base_opts = rocksdb::BlockBasedOptions::new();
+    block_base_opts.set_block_size(64*1024);
+    opts.set_block_based_table_factory(&block_base_opts);
+    opts.set_target_file_size_base(64*1024*1024);
+
+    let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
 
