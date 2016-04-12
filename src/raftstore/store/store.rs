@@ -220,7 +220,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
         let from = msg.get_from_peer();
         let to = msg.get_to_peer();
-        debug!("handle raft message for region {}, from {} to {}",
+        debug!("handle raft message {:?} for region {}, from {} to {}",
+               msg.get_message().get_msg_type(),
                region_id,
                from.get_id(),
                to.get_id());
