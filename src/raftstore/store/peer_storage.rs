@@ -32,6 +32,7 @@ use super::engine::{Peekable, Iterable, Mutable};
 // so that we can force the follower peer to sync the snapshot first.
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
+const MAX_SNAP_TRY_CNT: u8 = 5;
 
 #[derive(PartialEq, Debug)]
 pub enum SnapState {
@@ -39,6 +40,7 @@ pub enum SnapState {
     Pending,
     Generating,
     Snap(Snapshot),
+    Failed,
 }
 
 pub struct PeerStorage {
@@ -52,6 +54,7 @@ pub struct PeerStorage {
     // 2, a dummy entry for the start point of the empty log.
     pub truncated_state: RaftTruncatedState,
     pub snap_state: SnapState,
+    snap_tried_cnt: u8,
 }
 
 fn storage_error<E>(error: E) -> raft::Error
@@ -88,6 +91,7 @@ impl PeerStorage {
             applied_index: 0,
             truncated_state: RaftTruncatedState::new(),
             snap_state: SnapState::Relax,
+            snap_tried_cnt: 0,
         };
 
         store.last_index = try!(store.load_last_index());
@@ -236,12 +240,22 @@ impl PeerStorage {
     pub fn snapshot(&mut self) -> raft::Result<Snapshot> {
         if let SnapState::Relax = self.snap_state {
             info!("requesting snapshot on {}...", self.get_region_id());
+            self.snap_tried_cnt = 0;
             self.snap_state = SnapState::Pending;
         } else if let SnapState::Snap(_) = self.snap_state {
             match mem::replace(&mut self.snap_state, SnapState::Relax) {
                 SnapState::Snap(s) => return Ok(s),
                 _ => unreachable!(),
             }
+        } else if let SnapState::Failed = self.snap_state {
+            if self.snap_tried_cnt >= MAX_SNAP_TRY_CNT {
+                return Err(raft::Error::Store(box_err!("failed to get snapshot after {} times",
+                                                       self.snap_tried_cnt)));
+            }
+            self.snap_tried_cnt += 1;
+            warn!("snapshot generating failed, retry {} time",
+                  self.snap_tried_cnt);
+            self.snap_state = SnapState::Pending;
         }
         Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable))
     }
