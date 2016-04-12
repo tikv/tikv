@@ -57,8 +57,14 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
                                                     .unwrap_or_default();
 
         let before_state = before_states.get(&id).unwrap();
-        assert!(after_state.get_index() > before_state.get_index());
+        let idx = after_state.get_index();
+        assert!(idx > before_state.get_index());
         assert!(after_state.get_term() > before_state.get_term());
+
+        for i in 0..idx {
+            let key = keys::raft_log_key(1, i);
+            assert!(engine.get(&key).unwrap().is_none());
+        }
     }
 }
 

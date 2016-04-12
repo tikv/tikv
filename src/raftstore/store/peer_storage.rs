@@ -367,15 +367,7 @@ impl PeerStorage {
         }
 
         let term = try!(self.term(compact_index - 1));
-        let start_key = keys::raft_log_key(self.get_region_id(), 0);
-        let end_key = keys::raft_log_key(self.get_region_id(), compact_index);
-
-        try!(self.engine.scan(&start_key,
-                              &end_key,
-                              &mut |key, _| {
-                                  try!(w.delete(key));
-                                  Ok(true)
-                              }));
+        // we don't actually compact the log now, we add an async task to do it.
 
         let mut state = RaftTruncatedState::new();
         state.set_index(compact_index - 1);

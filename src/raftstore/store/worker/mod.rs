@@ -55,12 +55,18 @@ impl<T: Display + Send + Sync + 'static> Worker<T> {
                 let task_str = format!("{}", t);
                 let timer = Instant::now();
                 runner.run(t);
+                // TODO maybe we need a perf logger?
                 info!("task {} takes {:?} to finish.", task_str, timer.elapsed());
             }
         });
         let h = try!(res);
         self.handle = Some(h);
         Ok(())
+    }
+
+    pub fn schedule_one(&self, task: T) {
+        debug!("scheduling task {}", task);
+        self.queue.wl().push_back(task);
     }
 
     pub fn schedule<Iter: IntoIterator<Item = T>>(&self, tasks: Iter) {
@@ -84,6 +90,8 @@ impl<T: Display + Send + Sync + 'static> Worker<T> {
 
 mod snap;
 mod split_check;
+mod compact;
 
 pub use self::snap::{Task as SnapTask, Runner as SnapRunner};
 pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
+pub use self::compact::{Task as CompactTask, Runner as CompactRunner};

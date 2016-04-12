@@ -37,7 +37,8 @@ use super::{SendCh, Msg, Tick};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
-use super::worker::{SplitCheckRunner, SplitCheckTask, Worker, SnapTask, SnapRunner};
+use super::worker::{SplitCheckRunner, SplitCheckTask, Worker, SnapTask, SnapRunner, CompactTask,
+                    CompactRunner};
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::peer_storage::SnapState;
 use super::msg::Callback;
@@ -63,6 +64,7 @@ pub struct Store<T: Transport, C: PdClient> {
 
     split_check_worker: Worker<SplitCheckTask>,
     snap_worker: Worker<SnapTask>,
+    compact_worker: Worker<CompactTask>,
 
     /// A flag indicates whether store has been shutdown.
     stopped: Arc<RwLock<bool>>,
@@ -115,6 +117,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker".to_owned()),
             snap_worker: Worker::new("snapshot worker".to_owned()),
+            compact_worker: Worker::new("compact woker".to_owned()),
             region_ranges: BTreeMap::new(),
             stopped: Arc::new(RwLock::new(false)),
             trans: trans,
@@ -164,6 +167,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         try!(self.split_check_worker.start(split_check_runner));
 
         try!(self.snap_worker.start(SnapRunner));
+
+        try!(self.compact_worker.start(CompactRunner));
 
         try!(event_loop.run(self));
         Ok(())
@@ -345,8 +350,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         }
                     }
                 }
-                ExecResult::CompactLog { .. } => {
-                    // Nothing to do, skip to handle it.
+                ExecResult::CompactLog { ref state } => {
+                    let peer = self.region_peers.get(&region_id).unwrap();
+                    let task = CompactTask::new(&peer.storage.rl(), state.get_index() + 1);
+                    self.compact_worker.schedule_one(task);
                 }
                 ExecResult::SplitRegion { ref left, ref right } => {
                     let new_region_id = right.get_id();
@@ -731,6 +738,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             if let Err(e) = self.snap_worker.stop() {
                 error!("failed to stop snap thread: {:?}!!!", e);
             }
+
+            if let Err(e) = self.compact_worker.stop() {
+                error!("failed to stop compact thread: {:?}!!!", e);
+            }
+
             return;
         }
 
