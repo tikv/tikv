@@ -127,5 +127,5 @@ pub fn bench_engine() {
     printf!("benching tombstone scan with rocksdb\t...\t");
     print_result(bench_tombstone_scan(dsn, None));
     printf!("benching tombstone scan with memory\t...\t");
-    print_result(bench_tombstone_scan(Dsn::Memory));
+    print_result(bench_tombstone_scan(Dsn::Memory, None));
 }
