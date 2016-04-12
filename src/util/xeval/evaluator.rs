@@ -17,6 +17,7 @@ use super::{Result, Error};
 
 use std::collections::HashMap;
 use std::cmp::Ordering;
+use std::ascii::AsciiExt;
 use tipb::expression::{Expr, ExprType};
 
 /// `Evaluator` evaluates `tipb::Expr`.
@@ -159,8 +160,30 @@ impl Evaluator {
         Ok((!b).into())
     }
 
-    fn eval_like(&self, _: &Expr) -> Result<Datum> {
-        unimplemented!();
+    fn eval_like(&self, expr: &Expr) -> Result<Datum> {
+        let (target, pattern) = try!(self.eval_two_children(expr));
+        if Datum::Null == target || Datum::Null == pattern {
+            return Ok(Datum::Null);
+        }
+        let mut target_str = try!(target.into_string());
+        let mut pattern_str = try!(pattern.into_string());
+        if pattern_str.chars().any(|x| x.is_ascii() && x.is_alphabetic()) {
+            target_str = target_str.to_ascii_lowercase();
+            pattern_str = pattern_str.to_ascii_lowercase();
+        }
+        // for now, tidb ensure that the petterns match %?[^_%]*%? will be push down.
+        let len = pattern_str.len();
+        if pattern_str.starts_with('%') {
+            if pattern_str[1..].ends_with('%') {
+                Ok(target_str.contains(&pattern_str[1..len - 1]).into())
+            } else {
+                Ok(target_str.ends_with(&pattern_str[1..]).into())
+            }
+        } else if pattern_str.ends_with('%') {
+            Ok(target_str.starts_with(&pattern_str[..len - 1]).into())
+        } else {
+            Ok(target_str.eq(&pattern_str).into())
+        }
     }
 
     fn eval_two_children_as_bool(&self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
@@ -243,6 +266,16 @@ mod test {
         expr
     }
 
+    fn like_expr(target: &'static str, pattern: &'static str) -> Expr {
+        let target_expr = datum_expr(Datum::Bytes(target.as_bytes().to_vec()));
+        let pattern_expr = datum_expr(Datum::Bytes(pattern.as_bytes().to_vec()));
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::Like);
+        expr.mut_children().push(target_expr);
+        expr.mut_children().push(pattern_expr);
+        expr
+    }
+
     // TODO: add more tests.
     #[test]
     fn test_eval() {
@@ -288,6 +321,18 @@ mod test {
 			(not_expr(Datum::I64(1)), Datum::I64(0)),
 			(not_expr(Datum::I64(0)), Datum::I64(1)),
 			(not_expr(Datum::Null), Datum::Null),
+            // like operation
+            (like_expr("a", ""), Datum::I64(0)),
+            (like_expr("a", "a"), Datum::I64(1)),
+            (like_expr("a", "b"), Datum::I64(0)),
+            (like_expr("aAb", "AaB"), Datum::I64(1)),
+            (like_expr("a", "%"), Datum::I64(1)),
+            (like_expr("aAD", "%d"), Datum::I64(1)),
+            (like_expr("aAeD", "%e"), Datum::I64(0)),
+            (like_expr("aAb", "Aa%"), Datum::I64(1)),
+            (like_expr("abAb", "Aa%"), Datum::I64(0)),
+            (like_expr("aAcb", "%C%"), Datum::I64(1)),
+            (like_expr("aAb", "%C%"), Datum::I64(0)),
         ];
 
         let mut xevaluator = Evaluator::default();
