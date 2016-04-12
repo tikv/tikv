@@ -285,9 +285,9 @@ mod test {
 			(bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
 			(bin_expr_r(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
 			 bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ), ExprType::And), Datum::I64(1)),
-            (not_expr(Datum::I64(1)), Datum::I64(0)),
-            (not_expr(Datum::I64(0)), Datum::I64(1)),
-            (not_expr(Datum::Null), Datum::Null),
+			(not_expr(Datum::I64(1)), Datum::I64(0))
+			(not_expr(Datum::I64(0)), Datum::I64(1)),
+			(not_expr(Datum::Null), Datum::Null),
         ];
 
         let mut xevaluator = Evaluator::default();
