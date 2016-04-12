@@ -292,6 +292,8 @@ impl Peer {
             return Ok(());
         }
 
+        debug!("propose command with uuid {:?}", pending_cmd.uuid);
+
         // We handle change_peer command as ConfChange entry, and others as normal entry.
         if let Some(change_peer) = get_change_peer_cmd(pending_cmd.cmd.as_ref().unwrap()) {
             let data = try!(pending_cmd.cmd.as_ref().unwrap().write_to_bytes());
@@ -413,6 +415,11 @@ impl Peer {
 
         let to_peer_id = to_peer.get_id();
         let to_store_id = to_peer.get_store_id();
+
+        debug!("send raft msg {:?} from {} to {}",
+               msg.get_msg_type(),
+               from_peer.get_id(),
+               to_peer_id);
 
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
@@ -540,6 +547,8 @@ impl Peer {
             error!("apply raft command err {:?}", e);
             (cmd_resp::new_error(e), None)
         });
+
+        debug!("command with uuid {:?} is applied", uuid);
 
         if let Some(mut pending_cmd) = pending_cmd {
             self.coprocessor_host.post_apply(&self.storage.rl(), &cmd, &mut resp);
