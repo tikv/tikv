@@ -43,10 +43,12 @@ impl Runnable<Task> for Runner {
         let start_key = keys::raft_log_key(task.region_id, 0);
         let end_key = keys::raft_log_key(task.region_id, task.compact_idx);
         let w = WriteBatch::new();
+        let mut cnt = 0;
 
         let res = task.engine.scan(&start_key,
                                    &end_key,
                                    &mut |key, _| {
+                                       cnt += 1;
                                        try!(w.delete(key));
                                        Ok(true)
                                    });
@@ -57,5 +59,8 @@ impl Runnable<Task> for Runner {
         if let Err(e) = task.engine.write(w) {
             error!("failed to compact: {:?}", e);
         }
+        info!("{} log entries have been compacted for region {}",
+              cnt,
+              task.region_id);
     }
 }

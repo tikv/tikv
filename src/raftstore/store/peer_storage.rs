@@ -367,7 +367,7 @@ impl PeerStorage {
         }
 
         let term = try!(self.term(compact_index - 1));
-        // we don't actually compact the log now, we add a async task to do it.
+        // we don't actually compact the log now, we add an async task to do it.
 
         let mut state = RaftTruncatedState::new();
         state.set_index(compact_index - 1);
