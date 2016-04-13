@@ -13,6 +13,7 @@
 
 #![feature(plugin)]
 #![feature(test)]
+#![feature(box_syntax)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
@@ -45,6 +46,9 @@ mod server;
 mod pd;
 #[path="../../tests/raftstore/pd_ask.rs"]
 mod pd_ask;
+#[allow(unused)]
+#[path="../../tests/raftstore/transport_simulate.rs"]
+mod transport_simulate;
 
 use test::BenchSamples;
 
