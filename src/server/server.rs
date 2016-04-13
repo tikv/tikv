@@ -309,31 +309,31 @@ impl<T: RaftStoreRouter> Server<T> {
 
     fn connect_peer(&mut self,
                     event_loop: &mut EventLoop<Self>,
-                    peer_addr: SocketAddr,
-                    addr: &str)
+                    sock_addr: SocketAddr,
+                    peer: &str)
                     -> Result<Token> {
-        let sock = try!(TcpStream::connect(&peer_addr));
-        let token = try!(self.add_new_conn(event_loop, sock, Some(addr.to_owned())));
-        self.peers.insert(addr.to_owned(), token);
+        let sock = try!(TcpStream::connect(&sock_addr));
+        let token = try!(self.add_new_conn(event_loop, sock, Some(peer.to_owned())));
+        self.peers.insert(peer.to_owned(), token);
         Ok(token)
     }
 
-    fn resolve_peer(&mut self, addr: String, data: ConnData) {
+    fn resolve_peer(&mut self, peer: String, data: ConnData) {
         // If the address is host:port, resolving the host's IP may
         // block the event loop, so we should use an asynchronous way
         // to resolve the host address and then send again.
-        let peer_addr = addr.clone();
+        let peer_addr = peer.clone();
         let ch = self.sendch.clone();
         let cb = box move |r| {
             if let Err(e) = r {
-                error!("resolve peer {} err {:?}", addr, e);
+                error!("resolve peer {} err {:?}", peer, e);
                 return;
             }
 
             let sock = r.unwrap();
             if let Err(e) = ch.send(Msg::SendPeerSock {
-                sock: sock,
-                addr: addr,
+                sock_addr: sock,
+                peer: peer,
                 data: data,
             }) {
                 error!("send peer sock msg err {:?}", e);
@@ -361,13 +361,13 @@ impl<T: RaftStoreRouter> Server<T> {
 
     fn send_peer_sock(&mut self,
                       event_loop: &mut EventLoop<Self>,
-                      peer_addr: SocketAddr,
-                      addr: String,
+                      sock_addr: SocketAddr,
+                      peer: String,
                       data: ConnData) {
-        let token = match self.connect_peer(event_loop, peer_addr, &addr) {
+        let token = match self.connect_peer(event_loop, sock_addr, &peer) {
             Ok(token) => token,
             Err(e) => {
-                error!("connect peer {} err {:?}", addr, e);
+                error!("connect peer {} err {:?}", peer, e);
                 return;
             }
         };
@@ -399,9 +399,9 @@ impl<T: RaftStoreRouter> Handler for Server<T> {
         match msg {
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
-            Msg::SendPeer { addr, data } => self.send_peer(event_loop, addr, data),
-            Msg::SendPeerSock { sock, addr, data } => {
-                self.send_peer_sock(event_loop, sock, addr, data)
+            Msg::SendPeer { peer, data } => self.send_peer(event_loop, peer, data),
+            Msg::SendPeerSock { sock_addr, peer, data } => {
+                self.send_peer_sock(event_loop, sock_addr, peer, data)
             }
         }
     }
@@ -499,7 +499,7 @@ mod tests {
         msg.set_msg_type(MessageType::Raft);
 
         ch.send(Msg::SendPeer {
-              addr: format!("localhost:{}", port),
+              peer: format!("localhost:{}", port),
               data: ConnData::new(0, msg),
           })
           .unwrap();

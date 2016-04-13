@@ -100,13 +100,13 @@ pub enum Msg {
     },
     // Send data to remote peer with address.
     SendPeer {
-        addr: String,
+        peer: String,
         data: ConnData,
     },
     // Send data to remote peer with parsed socket address.
     SendPeerSock {
-        sock: SocketAddr,
-        addr: String,
+        sock_addr: SocketAddr,
+        peer: String,
         data: ConnData,
     },
 }
