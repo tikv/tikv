@@ -31,6 +31,7 @@ use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
+use super::transport_simulate::{TransportHijack, IdentityTransportHijack, LossPacketHijack};
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -43,7 +44,12 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
+    fn run_node<T: TransportHijack>(&mut self,
+                                    node_id: u64,
+                                    cfg: ServerConfig,
+                                    engine: Arc<DB>,
+                                    trans_hijack: T)
+                                    -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
@@ -101,14 +107,26 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn start(&mut self) {
         for engine in &self.dbs {
-            let node_id = self.sim.wl().run_node(0, self.cfg.clone(), engine.clone());
+            let node_id = self.sim.wl().run_node(0,
+                                                 self.cfg.clone(),
+                                                 engine.clone(),
+                                                 // IdentityTransportHijack);
+                                                 LossPacketHijack(10));
             self.engines.insert(node_id, engine.clone());
         }
     }
 
     pub fn run_node(&mut self, node_id: u64) {
         let engine = self.engines.get(&node_id).unwrap();
-        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
+        self.sim.wl().run_node(node_id,
+                               self.cfg.clone(),
+                               engine.clone(),
+                               IdentityTransportHijack);
+    }
+
+    pub fn run_node_hijack_trans<H: TransportHijack>(&mut self, node_id: u64, hijack_trans: H) {
+        let engine = self.engines.get(&node_id).unwrap();
+        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone(), hijack_trans);
     }
 
     pub fn stop_node(&mut self, node_id: u64) {

@@ -29,7 +29,9 @@ use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
+use tikv::raftstore::store::Transport;
 use super::pd::TestPdClient;
+use super::transport_simulate::TransportHijack;
 use super::pd_ask::run_ask_loop;
 
 pub struct ServerCluster {
@@ -89,7 +91,12 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, cfg: Config, engine: Arc<DB>) -> u64 {
+    fn run_node<T: TransportHijack>(&mut self,
+                                    node_id: u64,
+                                    cfg: Config,
+                                    engine: Arc<DB>,
+                                    trans_hijacker: T)
+                                    -> u64 {
         assert!(node_id == 0 || !self.handles.contains_key(&node_id));
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
@@ -99,14 +106,16 @@ impl Simulator for ServerCluster {
         let trans = Arc::new(RwLock::new(ServerTransport::new(self.cluster_id,
                                                               sendch,
                                                               self.pd_client.clone())));
-
         let mut cfg = cfg;
 
         let listener = bind(&cfg.addr).unwrap();
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
 
-        let mut node = Node::new(&cfg, self.pd_client.clone(), trans.clone());
+        let boxed_trans = trans_hijacker.wrapper(Box::new(trans.clone()));
+        let mut node = Node::new(&cfg,
+                                 self.pd_client.clone(),
+                                 Arc::new(RwLock::new(boxed_trans)));
 
         node.start(engine.clone()).unwrap();
         let router = node.raft_store_router();
