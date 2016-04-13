@@ -31,6 +31,7 @@ use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
+use super::transport_simulate::{Strategy, SimulateTransport};
 
 pub struct ServerCluster {
     cluster_id: u64,
@@ -89,7 +90,12 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, cfg: Config, engine: Arc<DB>) -> u64 {
+    fn run_node(&mut self,
+                node_id: u64,
+                cfg: Config,
+                engine: Arc<DB>,
+                strategy: Vec<Strategy>)
+                -> u64 {
         assert!(node_id == 0 || !self.handles.contains_key(&node_id));
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
@@ -106,7 +112,10 @@ impl Simulator for ServerCluster {
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
 
-        let mut node = Node::new(&cfg, self.pd_client.clone(), trans.clone());
+        let simulate_trans = SimulateTransport::new(strategy, trans.clone());
+        let mut node = Node::new(&cfg,
+                                 self.pd_client.clone(),
+                                 Arc::new(RwLock::new(simulate_trans)));
 
         node.start(engine.clone()).unwrap();
         let router = node.raft_store_router();

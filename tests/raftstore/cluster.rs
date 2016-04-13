@@ -31,6 +31,7 @@ use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
+use super::transport_simulate::Strategy;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -43,7 +44,12 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
+    fn run_node(&mut self,
+                node_id: u64,
+                cfg: ServerConfig,
+                engine: Arc<DB>,
+                strategy: Vec<Strategy>)
+                -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
@@ -100,15 +106,25 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn start(&mut self) {
+        self.start_with_strategy(vec![]);
+    }
+
+    pub fn start_with_strategy(&mut self, strategy: Vec<Strategy>) {
         for engine in &self.dbs {
-            let node_id = self.sim.wl().run_node(0, self.cfg.clone(), engine.clone());
+            let node_id = self.sim
+                              .wl()
+                              .run_node(0, self.cfg.clone(), engine.clone(), strategy.clone());
             self.engines.insert(node_id, engine.clone());
         }
     }
 
     pub fn run_node(&mut self, node_id: u64) {
+        self.run_node_with_strategy(node_id, vec![]);
+    }
+
+    pub fn run_node_with_strategy(&mut self, node_id: u64, strategy: Vec<Strategy>) {
         let engine = self.engines.get(&node_id).unwrap();
-        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
+        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone(), strategy);
     }
 
     pub fn stop_node(&mut self, node_id: u64) {
