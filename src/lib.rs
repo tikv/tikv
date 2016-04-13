@@ -43,9 +43,6 @@ extern crate kvproto;
 extern crate time;
 extern crate tipb;
 
-#[cfg(test)]
-extern crate env_logger;
-
 #[macro_use]
 pub mod util;
 pub mod raft;
