@@ -171,7 +171,7 @@ impl Evaluator {
             target_str = target_str.to_ascii_lowercase();
             pattern_str = pattern_str.to_ascii_lowercase();
         }
-        // for now, tidb ensure that the petterns match %?[^_%]*%? will be push down.
+        // for now, tidb ensures that pattern being pushed down must match ^%?[^\\_%]*%?$.
         let len = pattern_str.len();
         if pattern_str.starts_with('%') {
             if pattern_str[1..].ends_with('%') {
