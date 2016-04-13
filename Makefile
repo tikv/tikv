@@ -1,24 +1,26 @@
+ENABLE_FEATURES ?= dev
+
 .PHONY: all
 
 all: format build test
 
 build:
-	cargo build --features "dev"
+	cargo build --features ${ENABLE_FEATURES}
 
 run:
-	cargo run --features "dev"
+	cargo run --features ${ENABLE_FEATURES}
 
 release:
 	cargo build --release --bin tikv-server
 
 test:
 	# todo remove ulimit once issue #372 of mio is resolved.
-	ulimit -n 2000 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test --features "dev" -- --nocapture 
+	ulimit -n 2000 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test --features ${ENABLE_FEATURES} -- --nocapture 
 
 bench:
 	# todo remove ulimit once issue #372 of mio is resolved.
-	ulimit -n 4096 && LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features "dev" -- --nocapture 
-	ulimit -n 4096 && RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "dev"
+	ulimit -n 4096 && LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features ${ENABLE_FEATURES} -- --nocapture 
+	ulimit -n 4096 && RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features ${ENABLE_FEATURES}
 
 genprotobuf:
 	cd ./src/proto && protoc --rust_out . *.proto
