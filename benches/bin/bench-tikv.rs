@@ -41,6 +41,8 @@ mod node;
 mod server;
 #[path="../../tests/raftstore/pd.rs"]
 mod pd;
+#[path="../../tests/raftstore/transport_simulate.rs"]
+mod transport_simulate;
 #[path="../../tests/raftstore/pd_ask.rs"]
 mod pd_ask;
 
