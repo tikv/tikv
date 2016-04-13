@@ -70,9 +70,9 @@ fn build_raftkv(matches: &Matches,
     let path = get_store_path(matches);
     let mut opts = rocksdb::Options::new();
     let mut block_base_opts = rocksdb::BlockBasedOptions::new();
-    block_base_opts.set_block_size(64*1024);
+    block_base_opts.set_block_size(64 * 1024);
     opts.set_block_based_table_factory(&block_base_opts);
-    opts.set_target_file_size_base(64*1024*1024);
+    opts.set_target_file_size_base(64 * 1024 * 1024);
     opts.create_if_missing(true);
 
     let engine = Arc::new(DB::open(&opts, &path).unwrap());
