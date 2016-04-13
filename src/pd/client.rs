@@ -81,6 +81,8 @@ impl RpcClientCore {
             if self.stream.is_none() {
                 if let Err(e) = self.try_connect() {
                     warn!("connect pd failed {:?}", e);
+                    // TODO: figure out a better way to do backoff
+                    thread::sleep(Duration::from_millis(50));
                     continue;
                 }
             }
