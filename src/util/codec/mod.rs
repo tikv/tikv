@@ -25,6 +25,7 @@ pub mod convert;
 pub use self::datum::Datum;
 
 use std::str::Utf8Error;
+use std::string::FromUtf8Error;
 use std::error;
 
 quick_error! {
@@ -65,6 +66,12 @@ quick_error! {
             description(err.description())
             display("unknown error {:?}", err)
         }
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(err: FromUtf8Error) -> Error {
+        err.utf8_error().into()
     }
 }
 

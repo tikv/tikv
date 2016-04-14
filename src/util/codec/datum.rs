@@ -132,7 +132,7 @@ impl Datum {
         }
     }
 
-    // as_bool converts an interface to a bool.
+    // as_bool converts self to a bool.
     pub fn as_bool(&self) -> Result<bool> {
         let b = match *self {
             Datum::I64(i) => i != 0,
@@ -143,6 +143,19 @@ impl Datum {
             _ => return Err(Error::InvalidDataType(format!("can't convert {:?} to bool", self))),
         };
         Ok(b)
+    }
+
+    /// into_string convert self into a string.
+    pub fn into_string(self) -> Result<String> {
+        let s = match self {
+            Datum::I64(i) => format!("{}", i),
+            Datum::U64(u) => format!("{}", u),
+            Datum::F64(f) => format!("{}", f),
+            Datum::F32(f) => format!("{}", f),
+            Datum::Bytes(bs) => try!(String::from_utf8(bs)),
+            d => return Err(Error::InvalidDataType(format!("can't convert {:?} to string", d))),
+        };
+        Ok(s)
     }
 }
 
