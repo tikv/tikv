@@ -23,7 +23,7 @@ use protobuf;
 use uuid::Uuid;
 
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData};
-use kvproto::raftpb::ConfChangeType;
+use kvproto::raftpb::{ConfChangeType, MessageType};
 use util::HandyRwLock;
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
@@ -244,6 +244,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if !msg.has_region_epoch() {
             error!("missing epoch in raft message, ignore it");
             return Ok(());
+        }
+
+        // Should we need to check other types for stale message?
+        if msg.get_message().get_msg_type() == MessageType::MsgRequestVote {
+            if let Some(peer) = self.region_peers.get(&region_id) {
+                let from_epoch = msg.get_region_epoch();
+                // Is it necessary to check version too?
+                if from_epoch.get_conf_ver() <
+                   peer.storage.rl().region.get_region_epoch().get_conf_ver() {
+                    warn!("RequestVote with a stale epoch {:?}, reject", from_epoch);
+                    return Ok(());
+                }
+            }
         }
 
         if !self.region_peers.contains_key(&region_id) {
