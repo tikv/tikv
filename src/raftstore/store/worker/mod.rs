@@ -10,8 +10,6 @@ use std::sync::mpsc::{self, Sender, Receiver};
 use std::time::Instant;
 use std::result;
 
-const TASK_PEEK_INTERVAL_SECS: u64 = 100;
-
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -59,7 +57,7 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = self.receiver.take().unwrap();
         let counter = self.counter.clone();
-        try!(Builder::new().name(self.name.clone()).spawn(move || {
+        let res = Builder::new().name(self.name.clone()).spawn(move || {
             loop {
                 let t = rx.recv();
                 if t.is_err() {
@@ -74,7 +72,9 @@ impl<T: Display + Send + 'static> Worker<T> {
                 // TODO maybe we need a perf logger?
                 info!("task {} takes {:?} to finish.", task_str, timer.elapsed());
             }
-        }));
+        });
+        let h = try!(res);
+        self.handle = Some(h);
         Ok(())
     }
 
