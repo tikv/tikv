@@ -26,15 +26,15 @@ use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
 use super::Result;
-use util::{HandyRwLock, to_socket_addr};
+use util::HandyRwLock;
 use storage::Storage;
 use super::kv::StoreHandler;
 use super::coprocessor::RegionEndPoint;
 use super::transport::RaftStoreRouter;
+use super::resolve::Resolver;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
-const INVALID_TOKEN: Token = Token(0);
 
 pub fn create_event_loop<T: RaftStoreRouter>() -> Result<EventLoop<Server<T>>> {
     let event_loop = try!(EventLoop::new());
@@ -68,6 +68,8 @@ pub struct Server<T: RaftStoreRouter> {
 
     store: StoreHandler,
     end_point: RegionEndPoint,
+
+    resolver: Resolver,
 }
 
 impl<T: RaftStoreRouter> Server<T> {
@@ -91,6 +93,8 @@ impl<T: RaftStoreRouter> Server<T> {
         let store_handler = StoreHandler::new(storage, sendch.clone());
         let end_point = RegionEndPoint::new(engine, sendch.clone());
 
+        let resolver = try!(Resolver::new());
+
         let svr = Server {
             listener: listener,
             sendch: sendch,
@@ -100,6 +104,7 @@ impl<T: RaftStoreRouter> Server<T> {
             raft_router: raft_router,
             store: store_handler,
             end_point: end_point,
+            resolver: resolver,
         };
 
         Ok(svr)
@@ -216,10 +221,10 @@ impl<T: RaftStoreRouter> Server<T> {
     fn on_raft_command(&mut self, msg: RaftCmdRequest, token: Token, msg_id: u64) -> Result<()> {
         debug!("handle raft command {:?}", msg);
         let ch = self.sendch.clone();
-        let cb = Box::new(move |resp| {
+        let cb = box move |resp| {
             send_raft_cmd_resp(ch, token, msg_id, resp);
             Ok(())
-        });
+        };
 
         let uuid = msg.get_header().get_uuid().to_vec();
         if let Err(e) = self.raft_router.rl().send_command(msg, cb) {
@@ -287,7 +292,7 @@ impl<T: RaftStoreRouter> Server<T> {
         }
     }
 
-    fn writedata(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
+    fn write_data(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
         let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
@@ -302,29 +307,72 @@ impl<T: RaftStoreRouter> Server<T> {
         }
     }
 
-    fn connect_peer(&mut self, event_loop: &mut EventLoop<Self>, addr: &str) -> Result<Token> {
-        let peer_addr = try!(to_socket_addr(addr));
-        let sock = try!(TcpStream::connect(&peer_addr));
-        let token = try!(self.add_new_conn(event_loop, sock, Some(addr.to_string())));
-        self.peers.insert(addr.to_owned(), token);
+    fn connect_peer(&mut self,
+                    event_loop: &mut EventLoop<Self>,
+                    sock_addr: SocketAddr,
+                    peer: &str)
+                    -> Result<Token> {
+        let sock = try!(TcpStream::connect(&sock_addr));
+        let token = try!(self.add_new_conn(event_loop, sock, Some(peer.to_owned())));
+        self.peers.insert(peer.to_owned(), token);
         Ok(token)
     }
 
-    fn sendpeer(&mut self, event_loop: &mut EventLoop<Self>, addr: String, data: ConnData) {
-        // check the corresponding token for peer address.
-        let mut token = self.peers.get(&addr).map_or(INVALID_TOKEN, |t| *t);
-
-        if token == INVALID_TOKEN {
-            match self.connect_peer(event_loop, &addr) {
-                Err(e) => {
-                    error!("connect {:?} err {:?}", addr, e);
-                    return;
-                }
-                Ok(new_token) => token = new_token,
+    fn resolve_peer(&mut self, peer: String, data: ConnData) {
+        // If the address is host:port, resolving the host's IP may
+        // block the event loop, so we should use an asynchronous way
+        // to resolve the host address and then send again.
+        let peer_addr = peer.clone();
+        let ch = self.sendch.clone();
+        let cb = box move |r| {
+            if let Err(e) = r {
+                error!("resolve peer {} err {:?}", peer, e);
+                return;
             }
+
+            let sock = r.unwrap();
+            if let Err(e) = ch.send(Msg::SendPeerSock {
+                sock_addr: sock,
+                peer: peer,
+                data: data,
+            }) {
+                error!("send peer sock msg err {:?}", e);
+            }
+        };
+        if let Err(e) = self.resolver.resolve(peer_addr, cb) {
+            error!("try to resolve err {:?}", e);
+        }
+    }
+
+    fn send_peer(&mut self, event_loop: &mut EventLoop<Self>, addr: String, data: ConnData) {
+        // check the corresponding token for peer address.
+        if let Some(token) = self.peers.get(&addr).cloned() {
+            return self.write_data(event_loop, token, data);
         }
 
-        self.writedata(event_loop, token, data);
+        // If parse ok, the addr is ip:port.
+        if let Ok(peer_addr) = (&addr).parse() {
+            return self.send_peer_sock(event_loop, peer_addr, addr, data);
+        }
+
+        // The addr is not ip:port, we should resolve it first.
+        self.resolve_peer(addr, data);
+    }
+
+    fn send_peer_sock(&mut self,
+                      event_loop: &mut EventLoop<Self>,
+                      sock_addr: SocketAddr,
+                      peer: String,
+                      data: ConnData) {
+        let token = match self.connect_peer(event_loop, sock_addr, &peer) {
+            Ok(token) => token,
+            Err(e) => {
+                error!("connect peer {} err {:?}", peer, e);
+                return;
+            }
+        };
+
+        self.write_data(event_loop, token, data)
     }
 }
 
@@ -350,8 +398,11 @@ impl<T: RaftStoreRouter> Handler for Server<T> {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData { token, data } => self.writedata(event_loop, token, data),
-            Msg::SendPeer { addr, data } => self.sendpeer(event_loop, addr, data),
+            Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
+            Msg::SendPeer { peer, data } => self.send_peer(event_loop, peer, data),
+            Msg::SendPeerSock { sock_addr, peer, data } => {
+                self.send_peer_sock(event_loop, sock_addr, peer, data)
+            }
         }
     }
 
@@ -385,5 +436,77 @@ fn send_raft_cmd_resp(ch: SendCh, token: Token, msg_id: u64, resp: RaftCmdRespon
                token,
                msg_id,
                e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+    use std::sync::{Arc, RwLock, Mutex};
+    use std::sync::mpsc::{self, Sender};
+
+    use mio::tcp::TcpListener;
+
+    use super::*;
+    use super::super::{Msg, ConnData};
+    use super::super::transport::RaftStoreRouter;
+    use storage::{Storage, Dsn};
+    use kvproto::msgpb::{Message, MessageType};
+    use raftstore::Result as RaftStoreResult;
+    use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::store::Callback;
+    use kvproto::raft_cmdpb::RaftCmdRequest;
+
+    struct TestRaftStoreRouter {
+        tx: Mutex<Sender<usize>>,
+    }
+
+    impl RaftStoreRouter for TestRaftStoreRouter {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+            self.tx.lock().unwrap().send(1).unwrap();
+            Ok(())
+        }
+
+        fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
+            self.tx.lock().unwrap().send(1).unwrap();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_peer_resolve() {
+        let addr = "127.0.0.1:0".parse().unwrap();
+        let listener = TcpListener::bind(&addr).unwrap();
+
+        let port = listener.local_addr().unwrap().port();
+
+        let mut event_loop = create_event_loop().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut server = Server::new(&mut event_loop,
+                                     listener,
+                                     Storage::new(Dsn::Memory).unwrap(),
+                                     Arc::new(RwLock::new(TestRaftStoreRouter {
+                                         tx: Mutex::new(tx),
+                                     })))
+                             .unwrap();
+
+        let ch = server.get_sendch();
+        let h = thread::spawn(move || {
+            event_loop.run(&mut server).unwrap();
+        });
+
+        let mut msg = Message::new();
+        msg.set_msg_type(MessageType::Raft);
+
+        ch.send(Msg::SendPeer {
+              peer: format!("localhost:{}", port),
+              data: ConnData::new(0, msg),
+          })
+          .unwrap();
+
+        rx.recv().unwrap();
+
+        ch.send(Msg::Quit).unwrap();
+        h.join().unwrap();
     }
 }
