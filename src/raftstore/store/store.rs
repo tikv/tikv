@@ -164,11 +164,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
                                                        self.cfg.region_split_size);
-        try!(self.split_check_worker.start(split_check_runner));
+        box_try!(self.split_check_worker.start(split_check_runner));
 
-        try!(self.snap_worker.start(SnapRunner));
+        box_try!(self.snap_worker.start(SnapRunner));
 
-        try!(self.compact_worker.start(CompactRunner));
+        box_try!(self.compact_worker.start(CompactRunner));
 
         try!(event_loop.run(self));
         Ok(())
@@ -207,7 +207,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let mut snap_tasks = vec![];
         for (region_id, peer) in &mut self.region_peers {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(*region_id);
@@ -216,12 +215,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 debug!("handling snapshot for {}", region_id);
                 let task = SnapTask::new(peer.storage.clone());
                 debug!("task generated");
-                snap_tasks.push(task);
-                peer.storage.wl().snap_state = SnapState::Generating;
+                match self.snap_worker.schedule(task) {
+                    Err(e) => error!("failed to schedule snap task {}", e),
+                    Ok(_) => peer.storage.wl().snap_state = SnapState::Generating,
+                }
             }
-        }
-        if !snap_tasks.is_empty() {
-            self.snap_worker.schedule(snap_tasks);
         }
 
         self.register_raft_base_tick(event_loop);
@@ -353,7 +351,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::CompactLog { ref state } => {
                     let peer = self.region_peers.get(&region_id).unwrap();
                     let task = CompactTask::new(&peer.storage.rl(), state.get_index() + 1);
-                    self.compact_worker.schedule_one(task);
+                    if let Err(e) = self.compact_worker.schedule(task) {
+                        error!("failed to schedule compact task: {}", e);
+                    }
                 }
                 ExecResult::SplitRegion { ref left, ref right } => {
                     let new_region_id = right.get_id();
@@ -575,7 +575,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.register_split_region_check_tick(event_loop);
             return;
         }
-        let mut tasks = Vec::new();
         for (id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
@@ -588,12 +587,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   id,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
-            tasks.push(SplitCheckTask::new(&peer.storage.rl()));
+            let task = SplitCheckTask::new(&peer.storage.rl());
+            if let Err(e) = self.split_check_worker.schedule(task) {
+                error!("failed to schedule split check: {}", e);
+            }
             peer.size_diff_hint = 0;
-        }
-
-        if !tasks.is_empty() {
-            self.split_check_worker.schedule(tasks);
         }
 
         self.register_split_region_check_tick(event_loop);

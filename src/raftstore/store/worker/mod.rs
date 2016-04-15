@@ -1,17 +1,29 @@
 /// Worker contains all workers that do the expensive job in background.
 
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle, Builder};
-use std::collections::VecDeque;
-use std::time::Duration;
 use std::io;
 use std::fmt::Display;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Sender, Receiver};
 use std::time::Instant;
-
-use util::HandyRwLock;
+use std::result;
 
 const TASK_PEEK_INTERVAL_SECS: u64 = 100;
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Stopped
+        IoError(e: io::Error) {
+            from()
+            display("{}", e)
+        }
+    }
+}
+
+pub type Result<T> = result::Result<T, Error>;
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T);
@@ -20,37 +32,41 @@ pub trait Runnable<T: Display> {
 /// A worker that can schedule time consuming tasks.
 pub struct Worker<T: Display> {
     name: String,
-    queue: Arc<RwLock<VecDeque<T>>>,
+    counter: Arc<AtomicUsize>,
+    sender: Option<Sender<T>>,
+    receiver: Option<Receiver<T>>,
     handle: Option<JoinHandle<()>>,
-    stopped: Arc<RwLock<bool>>,
 }
 
-impl<T: Display + Send + Sync + 'static> Worker<T> {
+impl<T: Display + Send + 'static> Worker<T> {
     pub fn new(name: String) -> Worker<T> {
+        let (tx, rx) = mpsc::channel();
         Worker {
             name: name,
-            queue: Arc::new(RwLock::new(VecDeque::new())),
+            counter: Arc::new(AtomicUsize::new(0)),
+            sender: Some(tx),
+            receiver: Some(rx),
             handle: None,
-            stopped: Arc::new(RwLock::new(false)),
         }
     }
 
-    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, mut runner: R) -> io::Result<()> {
+    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, mut runner: R) -> Result<()> {
         info!("starting working thread: {}", self.name);
-        let stopped = self.stopped.clone();
-        let queue = self.queue.clone();
+        if self.receiver.is_none() {
+            warn!("worker {} has been started.", self.name);
+            return Ok(());
+        }
 
-        let res = Builder::new().name(self.name.clone()).spawn(move || {
+        let rx = self.receiver.take().unwrap();
+        let counter = self.counter.clone();
+        try!(Builder::new().name(self.name.clone()).spawn(move || {
             loop {
-                let t = queue.wl().pop_front();
-                if t.is_none() {
-                    // TODO find or implement a concurrent deque instead.
-                    thread::sleep(Duration::from_millis(TASK_PEEK_INTERVAL_SECS));
-                    if *stopped.rl() {
-                        break;
-                    }
-                    continue;
+                let t = rx.recv();
+                if t.is_err() {
+                    // no more msg will be sent.
+                    return;
                 }
+                counter.fetch_sub(1, Ordering::SeqCst);
                 let t = t.unwrap();
                 let task_str = format!("{}", t);
                 let timer = Instant::now();
@@ -58,29 +74,36 @@ impl<T: Display + Send + Sync + 'static> Worker<T> {
                 // TODO maybe we need a perf logger?
                 info!("task {} takes {:?} to finish.", task_str, timer.elapsed());
             }
-        });
-        let h = try!(res);
-        self.handle = Some(h);
+        }));
         Ok(())
     }
 
-    pub fn schedule_one(&self, task: T) {
+    /// Schedule a task to run.
+    ///
+    /// If the worker is stopped, an error will return.
+    pub fn schedule(&self, task: T) -> Result<()> {
         debug!("scheduling task {}", task);
-        self.queue.wl().push_back(task);
-    }
-
-    pub fn schedule<Iter: IntoIterator<Item = T>>(&self, tasks: Iter) {
-        self.queue.wl().extend(tasks);
-        debug!("after scheduling we have {} pending tasks",
-               self.queue.rl().len());
+        if let Some(tx) = self.sender.as_ref() {
+            // receiver will be closed only when we close the sender first.
+            tx.send(task).unwrap();
+            self.counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        } else {
+            Err(Error::Stopped)
+        }
     }
 
     pub fn is_busy(&self) -> bool {
-        !self.queue.rl().is_empty()
+        self.counter.load(Ordering::SeqCst) > 0
     }
 
     pub fn stop(&mut self) -> thread::Result<()> {
-        *self.stopped.wl() = true;
+        if self.sender.is_none() {
+            return Ok(());
+        }
+        // close sender explictly so the background thread will exit.
+        info!("stoping {}", self.name);
+        drop(self.sender.take().unwrap());
         if let Some(h) = self.handle.take() {
             try!(h.join());
         }
