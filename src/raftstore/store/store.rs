@@ -134,7 +134,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let engine = self.engine.clone();
         try!(engine.scan(start_key,
                          end_key,
-                         &mut |key, value| -> Result<bool> {
+                         &mut |key, value|{
                              let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
                              if suffix != keys::REGION_INFO_SUFFIX {
                                  return Ok(true);
@@ -253,7 +253,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Is it necessary to check version too?
                 if from_epoch.get_conf_ver() <
                    peer.storage.rl().region.get_region_epoch().get_conf_ver() {
-                    warn!("RequestVote with a stale epoch {:?}, reject", from_epoch);
+                    warn!("RequestVote with a stale epoch {:?}, ignore it", from_epoch);
                     return Ok(());
                 }
             }
