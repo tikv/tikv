@@ -100,6 +100,10 @@ impl Simulator for NodeCluster {
 
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
         let store_id = request.get_header().get_peer().get_store_id();
+        if !self.trans.rl().routers.contains_key(&store_id) {
+            return Err(box_err!("missing sender for store {}", store_id));
+        }
+
         let router = self.trans.rl().routers.get(&store_id).cloned().unwrap();
         let ch = router.rl().ch.clone();
         msg::call_command(&ch, request, timeout)

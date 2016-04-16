@@ -320,6 +320,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_ranges.insert(enc_end_key(&region), region.get_id());
         }
 
+        // TODO: split result handling into different functions.
         // handle executing committed log results
         for result in &ready_result.exec_results {
             match *result {
@@ -357,19 +358,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 ExecResult::SplitRegion { ref left, ref right } => {
                     let new_region_id = right.get_id();
+                    if let Some(peer) = self.region_peers.get(&new_region_id) {
+                        // If the store received a raft msg with the new region raft group
+                        // before splitting, it will creates a uninitialized peer.
+                        // We can remove this uninitialized peer directly.
+                        if peer.storage.rl().is_initialized() {
+                            panic!("duplicated region {} for split region", new_region_id);
+                        }
+                    }
+
                     match Peer::create(self, &right) {
                         Err(e) => {
                             error!("create new split region {:?} err {:?}", right, e);
                         }
                         Ok(mut new_peer) => {
-                            if self.region_peers.contains_key(&new_region_id) {
-                                // This is a very serious error, should we close the store here?
-                                // because the raft group can not run correctly
-                                // for this split region.
-                                error!("duplicated region {} for split region", new_region_id);
-                                break;
-                            }
-
                             // If the peer for the region before split is leader,
                             // we can force the new peer for the new split region to campaign
                             // to become the leader too.
