@@ -328,7 +328,8 @@ impl Peer {
         let (mut check_ver, mut check_conf_ver) = (false, false);
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
-                AdminCmdType::CompactLog | AdminCmdType::InvalidAdmin => {}
+                AdminCmdType::CompactLog |
+                AdminCmdType::InvalidAdmin => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
             };

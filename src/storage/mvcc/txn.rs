@@ -21,7 +21,8 @@ use super::{Error, Result};
 
 fn meta_lock_type(mutation: &Mutation) -> MetaLockType {
     match *mutation {
-        Mutation::Put(_) | Mutation::Delete(_) => MetaLockType::ReadWrite,
+        Mutation::Put(_) |
+        Mutation::Delete(_) => MetaLockType::ReadWrite,
         Mutation::Lock(_) => MetaLockType::ReadOnly,
     }
 }

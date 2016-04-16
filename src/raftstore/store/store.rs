@@ -134,7 +134,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let engine = self.engine.clone();
         try!(engine.scan(start_key,
                          end_key,
-                         &mut |key, value| -> Result<bool> {
+                         &mut |key, value|{
                              let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
                              if suffix != keys::REGION_INFO_SUFFIX {
                                  return Ok(true);

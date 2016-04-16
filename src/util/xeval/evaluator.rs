@@ -51,7 +51,8 @@ impl Evaluator {
             ExprType::Or => self.eval_or(expr),
             ExprType::Not => self.eval_not(expr),
             ExprType::Like => self.eval_like(expr),
-            ExprType::Float32 | ExprType::Float64 => unimplemented!(),
+            ExprType::Float32 |
+            ExprType::Float64 => unimplemented!(),
             _ => Ok(Datum::Null),
         }
     }
