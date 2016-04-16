@@ -443,7 +443,8 @@ fn send_raft_cmd_resp(ch: SendCh, token: Token, msg_id: u64, resp: RaftCmdRespon
 mod tests {
     use std::thread;
     use std::sync::{Arc, RwLock, Mutex};
-    use std::sync::mpsc::{self, Sender};
+    use std::sync::mpsc::{self, Sender, TryRecvError};
+    use std::time::Duration;
 
     use mio::tcp::TcpListener;
 
@@ -504,7 +505,15 @@ mod tests {
           })
           .unwrap();
 
-        rx.recv().unwrap();
+        // Sometimes, in may Mac, resolving localhost may fail, this is very strange,
+        // So here we use try_recv and wait a little time to ignore this resolving error.
+        for _ in 0..100 {
+            match rx.try_recv() {
+                Err(TryRecvError::Empty) => thread::sleep(Duration::from_millis(10)),
+                Err(TryRecvError::Disconnected) => panic!("channel is disconnected"),
+                Ok(_) => break,
+            }
+        }
 
         ch.send(Msg::Quit).unwrap();
         h.join().unwrap();
