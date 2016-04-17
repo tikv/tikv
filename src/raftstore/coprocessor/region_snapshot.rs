@@ -134,7 +134,6 @@ mod tests {
     use raftstore::store::PeerStorage;
 
     use super::*;
-    use raftstore::Result;
     use std::sync::Arc;
     use kvproto::metapb::Region;
 
@@ -208,7 +207,7 @@ mod tests {
         let mut data = vec![];
         snap.scan(b"",
                   &[0xFF, 0xFF],
-                  &mut |key, value| -> Result<bool> {
+                  &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       Ok(true)
                   })
@@ -224,7 +223,7 @@ mod tests {
         data.clear();
         snap.scan(b"a2",
                   &[0xFF, 0xFF],
-                  &mut |key, value| -> Result<bool> {
+                  &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       Ok(false)
                   })
@@ -238,7 +237,7 @@ mod tests {
         data.clear();
         snap.scan(b"",
                   &[0xFF, 0xFF],
-                  &mut |key, value| -> Result<bool> {
+                  &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       Ok(true)
                   })
