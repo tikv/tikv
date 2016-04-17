@@ -327,6 +327,8 @@ pub fn encode_value(values: &[Datum]) -> Result<Vec<u8>> {
 mod test {
     use super::*;
     use std::cmp::Ordering;
+    use util::codec::Error;
+    use std::f64;
 
     #[test]
     fn test_datum_codec() {
@@ -353,7 +355,13 @@ mod test {
     fn test_datum_cmp() {
         let tests = vec![
             (Datum::F64(1.0), Datum::F64(1.0), Ordering::Equal),
+            (Datum::F64(1.0), Datum::F64(f64::MAX), Ordering::Less),
+            (Datum::F64(1.0), Datum::F64(f64::MIN), Ordering::Greater),
+            (Datum::F64(1.0), Datum::F64(f64::INFINITY), Ordering::Less),
+            (Datum::F64(1.0), Datum::F64(f64::NEG_INFINITY), Ordering::Greater),
             (Datum::F64(1.0), b"1".as_ref().into(), Ordering::Equal),
+            (Datum::F64(f64::INFINITY), Datum::F64(f64::INFINITY), Ordering::Equal),
+            (Datum::F64(f64::NEG_INFINITY), Datum::F64(f64::NEG_INFINITY), Ordering::Equal),
             (Datum::I64(1), Datum::I64(1), Ordering::Equal),
             (Datum::I64(-1), Datum::I64(1), Ordering::Less),
             (Datum::I64(-1), b"-1".as_ref().into(), Ordering::Equal),
@@ -413,6 +421,22 @@ mod test {
             if rev_ret != rhs.cmp(&lhs).unwrap() {
                 panic!("{:?} should be {:?} to {:?}", rhs, rev_ret, lhs);
             }
+        }
+    }
+
+    #[test]
+    fn test_bad_datum_cmp() {
+        let tests = vec![
+            (Datum::F64(f64::NAN), Datum::F64(1.0)),
+            (Datum::F64(f64::NAN), Datum::F64(f64::INFINITY)),
+            (Datum::F64(f64::NAN), Datum::F64(f64::NEG_INFINITY)),
+        ];
+
+        for (lhs, rhs) in tests {
+            if let Err(Error::InvalidDataType(_)) = lhs.cmp(&rhs) {
+                continue;
+            }
+            panic!("invalid data type error should be thrown! compare {:?} with {:?}", lhs, rhs);
         }
     }
 
