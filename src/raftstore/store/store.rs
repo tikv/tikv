@@ -32,13 +32,13 @@ use protobuf::Message;
 
 use raftstore::{Result, Error};
 use kvproto::metapb;
+use util::worker::{SplitCheckRunner, SplitCheckTask, Worker, SnapTask, SnapRunner, CompactTask,
+                    CompactRunner};
 use super::util;
 use super::{SendCh, Msg, Tick};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
-use super::worker::{SplitCheckRunner, SplitCheckTask, Worker, SnapTask, SnapRunner, CompactTask,
-                    CompactRunner};
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::peer_storage::SnapState;
 use super::msg::Callback;
