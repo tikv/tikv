@@ -16,6 +16,7 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::{Box, FnBox};
 use std::collections::Bound::{Excluded, Unbounded};
+use std::cmp;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopConfig};
@@ -551,13 +552,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 continue;
             }
+            let replicated_idx = peer.raft_group
+                                     .status()
+                                     .progress
+                                     .values()
+                                     .map(|p| p.matched)
+                                     .min()
+                                     .unwrap();
+            let candidate_idx = cmp::min(replicated_idx, applied_index);
 
-            if applied_index - first_index <= self.cfg.raft_log_gc_threshold {
+            if candidate_idx < first_index ||
+               candidate_idx - first_index <= self.cfg.raft_log_gc_threshold {
                 continue;
             }
 
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), applied_index);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), candidate_idx);
 
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
@@ -566,7 +576,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 callback: cb,
             }) {
                 error!("send compact log {} to region {} err {:?}",
-                       applied_index,
+                       candidate_idx,
                        region_id,
                        e);
             }
