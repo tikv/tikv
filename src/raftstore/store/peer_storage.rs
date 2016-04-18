@@ -94,9 +94,11 @@ impl PeerStorage {
             snap_tried_cnt: 0,
         };
 
-        store.last_index = try!(store.load_last_index());
         store.applied_index = try!(store.load_applied_index(store.engine.as_ref()));
         store.truncated_state = try!(store.load_truncated_state());
+        // Get last index depending on truncated state,
+        // so we must load truncated_state before.
+        store.last_index = try!(store.load_last_index());
 
         Ok(store)
     }
