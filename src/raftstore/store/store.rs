@@ -524,12 +524,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             // Leader will replicate the compact log command to followers,
-            // If we use current applied_index (like 10) as the compact index,
-            // when we apply this log, the newest applied_index will be 11,
+            // If we use current replicated_index (like 10) as the compact index,
+            // when we replicate this log, the newest replicated_index will be 11,
             // but we only compact the log to 10, not 11, at that time,
-            // the first index is 10, and applied index is 11, with an extra log,
+            // the first index is 10, and replicated_index is 11, with an extra log,
             // and we will do compact again with compact index 11, in cycles...
-            // So we introduce a threshold, if applied index - first index > threshold,
+            // So we introduce a threshold, if replicated index - first index > threshold,
             // we will try to compact log.
             // raft log entries[..............................................]
             //                  ^                                       ^
