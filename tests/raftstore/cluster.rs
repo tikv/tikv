@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -143,7 +143,11 @@ impl<T: Simulator> Cluster<T> {
                         request: RaftCmdRequest,
                         timeout: Duration)
                         -> Result<RaftCmdResponse> {
-        self.sim.rl().call_command(request, timeout)
+        let t = Instant::now();
+        self.sim
+            .rl()
+            .call_command(request, timeout)
+            .map_err(|e| box_err!("call command failed {:?}, cost {:?}", e, t.elapsed()))
     }
 
     pub fn call_command_on_leader(&mut self,
