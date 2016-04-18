@@ -8,10 +8,11 @@ use kvproto::coprocessor::{Request, KeyRange};
 use tipb::select::{SelectRequest, SelectResponse};
 use tipb::schema::{self, ColumnInfo};
 
-use std::ops::RangeFrom;
 use std::sync::Arc;
 use std::{slice, i64};
 use protobuf::{RepeatedField, Message};
+
+use util::TsGenerator;
 
 const TYPE_VAR_CHAR: u8 = 1;
 const TYPE_LONG: u8 = 2;
@@ -59,7 +60,7 @@ impl TableInfo {
 
 struct Store {
     store: TxnStore,
-    ts_g: RangeFrom<u64>,
+    ts_g: TsGenerator,
     current_ts: u64,
     handles: Vec<Vec<u8>>,
 }
@@ -68,14 +69,14 @@ impl Store {
     fn new(engine: Arc<Box<Engine>>) -> Store {
         Store {
             store: TxnStore::new(engine),
-            ts_g: 1..,
+            ts_g: TsGenerator::new(),
             current_ts: 0,
             handles: vec![],
         }
     }
 
     fn begin(&mut self) {
-        self.current_ts = self.ts_g.next().unwrap();
+        self.current_ts = self.ts_g.gen();
         self.handles.clear();
     }
 
@@ -89,10 +90,7 @@ impl Store {
     fn commit(&mut self) {
         let handles = self.handles.drain(..).map(Key::from_raw).collect();
         self.store
-            .commit(Context::new(),
-                    handles,
-                    self.current_ts,
-                    self.ts_g.next().unwrap())
+            .commit(Context::new(), handles, self.current_ts, self.ts_g.gen())
             .unwrap();
     }
 }
@@ -155,7 +153,7 @@ fn prepare_table_data(store: &mut Store, tbl: &TableInfo, count: i64) {
 fn prepare_sel(store: &mut Store, tbl: &TableInfo) -> Request {
     let mut sel = SelectRequest::new();
     sel.set_table_info(tbl.as_pb_table_info());
-    sel.set_start_ts(store.ts_g.next().unwrap());
+    sel.set_start_ts(store.ts_g.gen());
 
     let mut req = Request::new();
     req.set_tp(REQ_TYPE_SELECT);
@@ -215,7 +213,7 @@ fn test_select() {
 fn prepare_idx(store: &mut Store, tbl: &TableInfo) -> Request {
     let mut sel = SelectRequest::new();
     sel.set_index_info(tbl.as_pb_index_info(0));
-    sel.set_start_ts(store.ts_g.next().unwrap());
+    sel.set_start_ts(store.ts_g.gen());
 
     let mut req = Request::new();
     req.set_tp(REQ_TYPE_INDEX);
