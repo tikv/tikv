@@ -114,10 +114,10 @@ macro_rules! box_err {
 #[macro_export]
 macro_rules! recover_safe {
     ($e:expr) => ({
-        use std::panic::{self, AssertRecoverSafe};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
         use $crate::util::panic_hook;
         panic_hook::mute();
-        let res = panic::recover(AssertRecoverSafe($e));
+        let res = catch_unwind(AssertUnwindSafe($e));
         panic_hook::unmute();
         res
     })
