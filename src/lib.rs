@@ -15,7 +15,7 @@
 #![allow(unused_features)]
 #![feature(test)]
 #![feature(btree_range, collections_bound)]
-#![feature(std_panic, recover)]
+#![feature(recover)]
 #![feature(fnbox)]
 #![feature(plugin)]
 #![feature(box_syntax)]
