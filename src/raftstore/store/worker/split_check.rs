@@ -5,7 +5,7 @@ use rocksdb::DB;
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 
-use super::Runnable;
+use util::worker::Runnable;
 
 /// Split checking task.
 pub struct Task {
