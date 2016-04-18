@@ -5,7 +5,7 @@ use rocksdb::{DB, WriteBatch, Writable};
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 
-use super::Runnable;
+use util::worker::Runnable;
 
 /// Compact task.
 pub struct Task {

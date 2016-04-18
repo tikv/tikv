@@ -32,7 +32,8 @@ use protobuf::Message;
 
 use raftstore::{Result, Error};
 use kvproto::metapb;
-use util::worker::{SplitCheckRunner, SplitCheckTask, Worker, SnapTask, SnapRunner, CompactTask,
+use util::worker::Worker;
+use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner};
 use super::util;
 use super::{SendCh, Msg, Tick};
