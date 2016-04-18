@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
 
-use super::Runnable;
+use util::worker::Runnable;
 
 /// Snapshot generating task.
 pub struct Task {
