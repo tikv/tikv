@@ -16,6 +16,7 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
+#![allow(new_without_default)]
 
 #[macro_use]
 extern crate log;
@@ -29,6 +30,7 @@ extern crate uuid;
 extern crate test;
 extern crate kvproto;
 
+#[allow(dead_code)]
 #[path="../../tests/util.rs"]
 mod test_util;
 #[path="../../tests/raftstore/util.rs"]

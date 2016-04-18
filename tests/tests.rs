@@ -15,6 +15,7 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
+#![allow(new_without_default)]
 
 #[macro_use]
 extern crate log;
@@ -27,6 +28,7 @@ extern crate tempdir;
 extern crate uuid;
 extern crate mio;
 extern crate kvproto;
+extern crate tipb;
 
 mod test_raft;
 mod test_raft_snap;
@@ -34,3 +36,5 @@ mod test_raft_paper;
 mod test_raft_flow_control;
 mod test_raw_node;
 mod raftstore;
+mod coprocessor;
+mod util;
