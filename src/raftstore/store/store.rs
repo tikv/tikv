@@ -16,7 +16,6 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::{Box, FnBox};
 use std::collections::Bound::{Excluded, Unbounded};
-use std::cmp;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopConfig};
@@ -535,23 +534,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // raft log entries[..............................................]
             //                  ^                                       ^
             //                  |-----------------threshold------------ |
-            //              first_index                         applied_index
-            let applied_index = peer.storage.rl().applied_index();
-            let first_index = peer.storage.rl().first_index();
-            if applied_index < first_index {
-                // Check if we are just started or applied a snapshot.
-                // When starts or after applying a snapshot, we have no logs,
-                // so here the first index = applied index + 1.
-                if first_index != applied_index + 1 {
-                    // The peer is leader, so the applied_index can't < first index.
-                    error!("applied_index {} < first_index {} for leader peer {:?} at region {}",
-                           applied_index,
-                           first_index,
-                           peer.peer,
-                           region_id);
-                }
-                continue;
-            }
+            //              first_index                         replicated_index
             let replicated_idx = peer.raft_group
                                      .status()
                                      .progress
@@ -559,15 +542,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                      .map(|p| p.matched)
                                      .min()
                                      .unwrap();
-            let candidate_idx = cmp::min(replicated_idx, applied_index);
+            let first_idx = peer.storage.rl().first_index();
 
-            if candidate_idx < first_index ||
-               candidate_idx - first_index <= self.cfg.raft_log_gc_threshold {
+            if replicated_idx < first_idx ||
+               replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {
                 continue;
             }
 
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), candidate_idx);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), replicated_idx);
 
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
@@ -576,7 +559,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 callback: cb,
             }) {
                 error!("send compact log {} to region {} err {:?}",
-                       candidate_idx,
+                       replicated_idx,
                        region_id,
                        e);
             }
