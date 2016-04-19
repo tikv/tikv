@@ -292,6 +292,8 @@ impl Peer {
             return Ok(());
         }
 
+        debug!("propose command with uuid {:?}", pending_cmd.uuid);
+
         // We handle change_peer command as ConfChange entry, and others as normal entry.
         if let Some(change_peer) = get_change_peer_cmd(pending_cmd.cmd.as_ref().unwrap()) {
             let data = try!(pending_cmd.cmd.as_ref().unwrap().write_to_bytes());
@@ -326,7 +328,8 @@ impl Peer {
         let (mut check_ver, mut check_conf_ver) = (false, false);
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
-                AdminCmdType::CompactLog | AdminCmdType::InvalidAdmin => {}
+                AdminCmdType::CompactLog |
+                AdminCmdType::InvalidAdmin => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
             };
@@ -413,6 +416,11 @@ impl Peer {
 
         let to_peer_id = to_peer.get_id();
         let to_store_id = to_peer.get_store_id();
+
+        debug!("send raft msg {:?} from {} to {}",
+               msg.get_msg_type(),
+               from_peer.get_id(),
+               to_peer_id);
 
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
@@ -540,6 +548,8 @@ impl Peer {
             error!("apply raft command err {:?}", e);
             (cmd_resp::new_error(e), None)
         });
+
+        debug!("command with uuid {:?} is applied", uuid);
 
         if let Some(mut pending_cmd) = pending_cmd {
             self.coprocessor_host.post_apply(&self.storage.rl(), &cmd, &mut resp);
@@ -685,10 +695,10 @@ impl Peer {
         let change_type = request.get_change_type();
         let mut region = self.region();
 
-        warn!("my peer id {}, {:?} {}, epoch: {:?}\n",
+        warn!("my peer id {}, {}, {:?}, epoch: {:?}\n",
+              self.peer_id(),
               peer.get_id(),
               util::conf_change_type_str(&change_type),
-              self.peer.get_id(),
               region.get_region_epoch());
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
@@ -716,9 +726,9 @@ impl Peer {
                 self.peer_cache.wl().insert(peer.get_id(), peer.clone());
                 region.mut_peers().push(peer.clone());
 
-                warn!("my peer id {}, add peer {}, region {:?}",
+                warn!("my peer id {}, add peer {:?}, region {:?}",
                       self.peer_id(),
-                      peer.get_id(),
+                      peer,
                       self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
@@ -843,7 +853,8 @@ impl Peer {
                 CmdType::Seek => self.do_seek(ctx, req),
                 CmdType::Put => self.do_put(ctx, req),
                 CmdType::Delete => self.do_delete(ctx, req),
-                e => Err(box_err!("unsupported command type {:?}", e)),
+                CmdType::Snap => self.do_snap(ctx, req),
+                CmdType::Invalid => Err(box_err!("invalid cmd type, message maybe currupted.")),
             });
 
             resp.set_cmd_type(cmd_type);
@@ -919,6 +930,12 @@ impl Peer {
         let resp = Response::new();
         try!(ctx.wb.delete(&key));
 
+        Ok(resp)
+    }
+
+    fn do_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
+        let mut resp = Response::new();
+        resp.mut_snap().set_region(self.storage.rl().get_region().clone());
         Ok(resp)
     }
 }

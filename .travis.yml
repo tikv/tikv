@@ -37,5 +37,4 @@ install:
 script:
   - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$rocksdb_dir"
   - export LIBRARY_PATH="$LD_LIBRARY_PATH"
-  - cargo update -p clippy
-  - make
+  - ENABLE_FEATURES=default make test

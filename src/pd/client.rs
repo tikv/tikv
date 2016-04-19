@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,6 +22,8 @@ use util::make_std_tcp_conn;
 use protobuf::{self, MessageStatic};
 use super::Result;
 
+const MAX_PD_SEND_RETRY_COUNT: usize = 100;
+
 pub trait TRpcClient: Sync + Send {
     fn send<M, P>(&self, msg_id: u64, message: &M) -> Result<P>
         where M: protobuf::Message,
@@ -30,31 +32,97 @@ pub trait TRpcClient: Sync + Send {
 }
 
 #[derive(Debug)]
+struct RpcClientCore {
+    addrs: Vec<String>,
+    // Try to connect pd with round-robin.
+    next_index: usize,
+    stream: Option<TcpStream>,
+}
+
+fn send_msg<M: protobuf::Message + ?Sized>(stream: &mut TcpStream,
+                                           msg_id: u64,
+                                           message: &M)
+                                           -> Result<(u64, Vec<u8>)> {
+    try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
+    try!(rpc::encode_msg(stream, msg_id, message));
+
+    try!(stream.set_read_timeout(Some(Duration::from_secs(SOCKET_READ_TIMEOUT))));
+    let (id, data) = try!(rpc::decode_data(stream));
+    Ok((id, data))
+}
+
+impl RpcClientCore {
+    fn new(dsn: &str) -> RpcClientCore {
+        let addrs: Vec<String> = dsn.split(',').map(From::from).collect();
+        RpcClientCore {
+            addrs: addrs,
+            next_index: 0,
+            stream: None,
+        }
+    }
+
+    fn try_connect(&mut self) -> Result<()> {
+        let index = self.next_index;
+        self.next_index = (self.next_index + 1) % self.addrs.len();
+
+        let addr = self.addrs.get(index).unwrap();
+        let stream = try!(make_std_tcp_conn(&**addr));
+        self.stream = Some(stream);
+        Ok(())
+    }
+
+    fn post_msg<M: protobuf::Message + ?Sized>(&mut self,
+                                               msg_id: u64,
+                                               message: &M)
+                                               -> Result<Vec<u8>> {
+        // If we post failed, we should retry.
+        for _ in 0..MAX_PD_SEND_RETRY_COUNT {
+            // If no stream, try connect first.
+            if self.stream.is_none() {
+                if let Err(e) = self.try_connect() {
+                    warn!("connect pd failed {:?}", e);
+                    // TODO: figure out a better way to do backoff
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+            }
+
+            let mut stream = self.stream.take().unwrap();
+            // We may send message to a not leader pd, retry.
+
+            let (id, data) = match send_msg(&mut stream, msg_id, message) {
+                Err(e) => {
+                    warn!("send message to pd failed {:?}", e);
+                    // TODO: figure out a better way to do backoff
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                Ok((id, data)) => (id, data),
+            };
+
+            if id != msg_id {
+                return Err(box_err!("pd response msg_id not match, want {}, got {}", msg_id, id));
+            }
+
+            self.stream = Some(stream);
+            return Ok(data);
+        }
+
+        Err(box_err!("post message to pd failed"))
+    }
+}
+
+#[derive(Debug)]
 pub struct RpcClient {
-    stream: Mutex<TcpStream>,
+    core: Mutex<RpcClientCore>,
 }
 
 const SOCKET_READ_TIMEOUT: u64 = 3;
 const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
 impl RpcClient {
-    pub fn new<A: ToSocketAddrs>(addr: A) -> Result<RpcClient> {
-        let stream = try!(make_std_tcp_conn(addr));
-        try!(stream.set_read_timeout(Some(Duration::from_secs(SOCKET_READ_TIMEOUT))));
-        try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
-        Ok(RpcClient { stream: Mutex::new(stream) })
-    }
-
-    fn post_msg<M: protobuf::Message + ?Sized>(&self, msg_id: u64, message: &M) -> Result<Vec<u8>> {
-        // TODO: reconnect if error
-        let mut stream = self.stream.lock().unwrap();
-        try!(rpc::encode_msg(&mut *stream, msg_id, message));
-        let (id, data) = try!(rpc::decode_data(&mut *stream));
-        if id != msg_id {
-            return Err(box_err!("pd response msg_id not match, want {}, got {}", msg_id, id));
-        }
-
-        Ok(data)
+    pub fn new(dsn: &str) -> Result<RpcClient> {
+        Ok(RpcClient { core: Mutex::new(RpcClientCore::new(dsn)) })
     }
 }
 
@@ -64,13 +132,13 @@ impl TRpcClient for RpcClient {
               P: protobuf::Message + MessageStatic
     {
         let mut resp = P::new();
-        let data = try!(self.post_msg(msg_id, message));
+        let data = try!(self.core.lock().unwrap().post_msg(msg_id, message));
         try!(rpc::decode_body(&data, &mut resp));
         Ok(resp)
     }
 
     fn post<M: protobuf::Message + ?Sized>(&self, msg_id: u64, message: &M) -> Result<()> {
-        let _ = try!(self.post_msg(msg_id, message));
+        let _ = try!(self.core.lock().unwrap().post_msg(msg_id, message));
         Ok(())
     }
 }
@@ -162,12 +230,19 @@ impl<C: TRpcClient + 'static> Drop for Client<C> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+    use std::thread;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+
     use super::super::{Result, PdClient};
     use super::*;
     use protobuf;
     use bytes::ByteBuf;
     use util::codec::rpc;
     use kvproto::{metapb, pdpb};
+    use rand;
+    use util::make_std_tcp_conn;
 
     struct MockRpcClient;
 
@@ -242,5 +317,74 @@ mod tests {
         store.set_id(233);
         store.set_address("localhost".to_owned());
         assert!(client.put_store(1, store).is_ok());
+    }
+
+    fn start_pd_server(index: usize,
+                       leader_index: Arc<AtomicUsize>,
+                       quit: Arc<AtomicBool>)
+                       -> (thread::JoinHandle<()>, String) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+
+        let addr = format!("{}", l.local_addr().unwrap());
+
+        let h = thread::spawn(move || {
+            loop {
+                let (mut stream, _) = l.accept().unwrap();
+
+                if quit.load(Ordering::SeqCst) {
+                    return;
+                }
+
+                stream.set_nodelay(true).unwrap();
+
+                let leader = leader_index.load(Ordering::SeqCst);
+                if leader != index {
+                    continue;
+                }
+
+                let (id, data) = rpc::decode_data(&mut stream).unwrap();
+                rpc::encode_data(&mut stream, id, &data).unwrap();
+            }
+        });
+
+        (h, addr)
+    }
+
+    #[test]
+    fn test_rpc_client() {
+        let leader = Arc::new(AtomicUsize::new(0));
+        let quit = Arc::new(AtomicBool::new(false));
+        let mut handlers = vec![];
+        let mut addrs = vec![];
+
+        let count = 3;
+        for i in 0..count {
+            let (h, addr) = start_pd_server(i, leader.clone(), quit.clone());
+            handlers.push(h);
+            addrs.push(addr);
+        }
+
+        let dsn = addrs.join(",");
+
+        let msg = pdpb::Request::new();
+        let client = RpcClient::new(&dsn).unwrap();
+
+        for i in 0..10 {
+            client.post(i as u64, &msg).unwrap();
+
+            // select a leader randomly
+            leader.store(rand::random::<usize>() % 3, Ordering::SeqCst);
+        }
+
+        quit.store(true, Ordering::SeqCst);
+
+        // connect the server so that we can close the thread.
+        for addr in addrs {
+            make_std_tcp_conn(&*addr).unwrap();
+        }
+
+        for h in handlers {
+            h.join().unwrap();
+        }
     }
 }

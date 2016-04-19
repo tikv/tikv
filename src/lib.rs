@@ -15,7 +15,7 @@
 #![allow(unused_features)]
 #![feature(test)]
 #![feature(btree_range, collections_bound)]
-#![feature(std_panic, recover)]
+#![feature(recover)]
 #![feature(fnbox)]
 #![feature(plugin)]
 #![feature(box_syntax)]
@@ -23,7 +23,8 @@
 #![feature(panic_handler)]
 #![feature(static_rwlock)]
 #![feature(iter_arith)]
-#![plugin(clippy)]
+#![cfg_attr(feature = "dev", plugin(clippy))]
+#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 
 #[macro_use]
 extern crate log;
@@ -40,9 +41,7 @@ extern crate rocksdb;
 extern crate uuid;
 extern crate kvproto;
 extern crate time;
-
-#[cfg(test)]
-extern crate env_logger;
+extern crate tipb;
 
 #[macro_use]
 pub mod util;

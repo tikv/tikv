@@ -108,7 +108,7 @@ impl<T: PdClient> Transport for ServerTransport<T> {
         req.set_raft(msg);
 
         if let Err(e) = self.ch.send(Msg::SendPeer {
-            addr: store.get_address().to_owned(),
+            peer: store.get_address().to_owned(),
             data: ConnData::new(self.alloc_msg_id(), req),
         }) {
             return Err(box_err!("send peer to {} err {:?}", store.get_address(), e));

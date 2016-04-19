@@ -15,7 +15,7 @@ use std::{error, result};
 use std::fmt::Debug;
 use self::memory::EngineBtree;
 use self::rocksdb::EngineRocksdb;
-use storage::{Key, Value, KvPair};
+use storage::{Key, Value, KvPair, Error as StorageError, txn};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -33,6 +33,7 @@ pub trait Engine: Send + Sync + Debug {
     fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
     fn seek(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
+    fn snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
         self.write(ctx, vec![Modify::Put((key, value))])
@@ -41,6 +42,11 @@ pub trait Engine: Send + Sync + Debug {
     fn delete(&self, ctx: &Context, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(key)])
     }
+}
+
+pub trait Snapshot {
+    fn get(&self, key: &Key) -> Result<Option<Value>>;
+    fn seek(&self, key: &Key) -> Result<Option<KvPair>>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +81,14 @@ quick_error! {
             display("unknown error {:?}", err)
         }
     }
+}
+
+// FIXME: use cause() to find Request::Error recursively.
+pub fn get_request_err(e: &StorageError) -> Option<ErrorHeader> {
+    if let StorageError::Txn(txn::Error::Engine(Error::Request(ref err))) = *e {
+        return Some(err.to_owned());
+    }
+    None
 }
 
 pub type Result<T> = result::Result<T, Error>;

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::rocksdb::{Snapshot, DBIterator};
+use rocksdb::rocksdb::{Snapshot, DBIterator, DB};
 use raftstore::store::engine::{Iterable, Peekable, DBValue};
 use raftstore::store::keys::{self, enc_end_key};
 use raftstore::store::{util, PeerStorage};
@@ -23,16 +23,21 @@ use kvproto::metapb;
 /// Only data within a region can be accessed.
 pub struct RegionSnapshot<'a> {
     snap: Snapshot<'a>,
-    storage: &'a PeerStorage,
-    region: &'a metapb::Region,
+    region: metapb::Region,
 }
 
 impl<'a> RegionSnapshot<'a> {
     pub fn new(ps: &'a PeerStorage) -> RegionSnapshot<'a> {
         RegionSnapshot {
             snap: ps.raw_snapshot(),
-            storage: ps,
-            region: ps.get_region(),
+            region: ps.get_region().clone(),
+        }
+    }
+
+    pub fn from_raw(db: &'a DB, region: metapb::Region) -> RegionSnapshot<'a> {
+        RegionSnapshot {
+            snap: db.snapshot(),
+            region: region,
         }
     }
 
@@ -48,7 +53,7 @@ impl<'a> RegionSnapshot<'a> {
 
     // Seek the first key >= given key, if no found, return None.
     pub fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let region_end_key = enc_end_key(self.storage.get_region());
+        let region_end_key = enc_end_key(&self.region);
         let pair = self.new_iterator(key)
                        .take_while(|&(ref k, _)| k.as_ref() < &region_end_key)
                        .next()
@@ -65,7 +70,7 @@ impl<'a> RegionSnapshot<'a> {
     pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let region_end_key = enc_end_key(self.storage.get_region());
+        let region_end_key = enc_end_key(&self.region);
         let data_end_key = if end_key.is_empty() {
             region_end_key.clone()
         } else {
@@ -114,7 +119,7 @@ impl<'a> RegionSnapshot<'a> {
 
 impl<'a> Peekable for RegionSnapshot<'a> {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
-        try!(util::check_key_in_region(key, self.region));
+        try!(util::check_key_in_region(key, &self.region));
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
@@ -129,7 +134,6 @@ mod tests {
     use raftstore::store::PeerStorage;
 
     use super::*;
-    use raftstore::Result;
     use std::sync::Arc;
     use kvproto::metapb::Region;
 
@@ -203,7 +207,7 @@ mod tests {
         let mut data = vec![];
         snap.scan(b"",
                   &[0xFF, 0xFF],
-                  &mut |key, value| -> Result<bool> {
+                  &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       Ok(true)
                   })
@@ -219,7 +223,7 @@ mod tests {
         data.clear();
         snap.scan(b"a2",
                   &[0xFF, 0xFF],
-                  &mut |key, value| -> Result<bool> {
+                  &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       Ok(false)
                   })
@@ -233,7 +237,7 @@ mod tests {
         data.clear();
         snap.scan(b"",
                   &[0xFF, 0xFF],
-                  &mut |key, value| -> Result<bool> {
+                  &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       Ok(true)
                   })

@@ -13,7 +13,9 @@
 
 #![feature(plugin)]
 #![feature(test)]
-#![plugin(clippy)]
+#![cfg_attr(feature = "dev", plugin(clippy))]
+#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
+#![allow(new_without_default)]
 
 #[macro_use]
 extern crate log;
@@ -23,6 +25,7 @@ extern crate rand;
 
 mod channel;
 
+#[allow(dead_code)]
 #[path="../tests/util.rs"]
 mod util;
 

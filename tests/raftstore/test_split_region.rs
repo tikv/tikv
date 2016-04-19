@@ -192,3 +192,65 @@ fn test_server_auto_split_region() {
     let mut cluster = new_server_cluster(0, count);
     test_auto_split_region(&mut cluster);
 }
+
+fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+    // We use three nodes for this test.
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+
+    let pd_client = cluster.pd_client.clone();
+    let cluster_id = cluster.id();
+
+    let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
+
+    let a1 = bytes::encode_bytes(b"a1");
+    cluster.put(&a1, b"v1");
+
+    let a3 = bytes::encode_bytes(b"a3");
+    cluster.put(&a3, b"v3");
+
+    // check all nodes apply the logs.
+    for i in 0..3 {
+        let engine = cluster.get_engine(i + 1);
+        util::must_get_equal(&engine, &a1, b"v1");
+        util::must_get_equal(&engine, &a3, b"v3");
+    }
+
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+
+    // Stop a not leader peer
+    let index = (1..4).find(|&x| x != leader.get_store_id()).unwrap();
+    cluster.stop_node(index);
+
+    let a2 = bytes::encode_bytes(b"a20");
+    cluster.split_region(region.get_id(), Some(a2.clone()));
+
+    // When the node starts, the region will try to join the raft group first,
+    // so most of case, the new leader's heartbeat for split region may arrive
+    // before applying the log.
+    cluster.run_node(index);
+
+    // Wait a long time to guarantee node joined.
+    // TODO: we should think a better to check instead of sleep.
+    util::sleep_ms(3000);
+
+    let a4 = bytes::encode_bytes(b"a4");
+    cluster.put(&a4, b"v4");
+
+    assert_eq!(cluster.get(&a4).unwrap(), b"v4".to_vec());
+
+    let engine = cluster.get_engine(index);
+    util::must_get_equal(&engine, &a4, b"v4");
+}
+
+#[test]
+fn test_node_delay_split_region() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_delay_split_region(&mut cluster);
+}
+
+#[test]
+fn test_server_delay_split_region() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_delay_split_region(&mut cluster);
+}

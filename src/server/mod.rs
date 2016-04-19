@@ -13,6 +13,7 @@
 
 use std::thread;
 use std::time::Duration;
+use std::net::SocketAddr;
 
 use bytes::ByteBuf;
 use mio::{self, Token, NotifyError};
@@ -26,8 +27,10 @@ pub mod errors;
 pub mod server;
 mod conn;
 mod kv;
+pub mod coprocessor;
 pub mod transport;
 pub mod node;
+mod resolve;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Result, Error};
@@ -97,7 +100,13 @@ pub enum Msg {
     },
     // Send data to remote peer with address.
     SendPeer {
-        addr: String,
+        peer: String,
+        data: ConnData,
+    },
+    // Send data to remote peer with parsed socket address.
+    SendPeerSock {
+        sock_addr: SocketAddr,
+        peer: String,
         data: ConnData,
     },
 }

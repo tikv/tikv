@@ -12,7 +12,7 @@
 // limitations under the License.
 
 #![feature(plugin)]
-#![plugin(clippy)]
+#![cfg_attr(feature = "dev", plugin(clippy))]
 
 extern crate tikv;
 extern crate getopts;
@@ -68,7 +68,14 @@ fn build_raftkv(matches: &Matches,
     let trans = Arc::new(RwLock::new(ServerTransport::new(cluster_id, ch, pd_client.clone())));
 
     let path = get_store_path(matches);
-    let engine = Arc::new(DB::open_default(&path).unwrap());
+    let mut opts = rocksdb::Options::new();
+    let mut block_base_opts = rocksdb::BlockBasedOptions::new();
+    block_base_opts.set_block_size(64 * 1024);
+    opts.set_block_based_table_factory(&block_base_opts);
+    opts.set_target_file_size_base(64 * 1024 * 1024);
+    opts.create_if_missing(true);
+
+    let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
 
@@ -80,10 +87,10 @@ fn build_raftkv(matches: &Matches,
                                 .unwrap_or_else(|| addr);
 
     let mut node = Node::new(&cfg, pd_client, trans.clone());
-    node.start(engine).unwrap();
+    node.start(engine.clone()).unwrap();
     let raft_router = node.raft_store_router();
 
-    (create_raft_storage(node).unwrap(), raft_router)
+    (create_raft_storage(node, engine).unwrap(), raft_router)
 }
 
 fn get_store_path(matches: &Matches) -> String {

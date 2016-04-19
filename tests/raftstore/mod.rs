@@ -17,6 +17,7 @@ mod node;
 mod server;
 pub mod pd;
 pub mod pd_ask;
+pub mod transport_simulate;
 
 mod test_single;
 mod test_multi;

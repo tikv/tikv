@@ -69,6 +69,11 @@ pub fn new_store_cfg() -> Config {
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 20,
         raft_log_gc_tick_interval: 100,
+        raft_log_gc_threshold: 1,
+        // because our tests may quit very soon, so we take a large
+        // value to avoid pd ask failure.
+        // TODO: should we ignore all mock pd failure?
+        replica_check_tick_interval: 60 * 1000,
         region_check_size_diff: 10000,
         ..Config::default()
     }

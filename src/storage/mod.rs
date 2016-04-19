@@ -15,6 +15,7 @@ use std::boxed::FnBox;
 use std::fmt;
 use std::error;
 use std::thread::{self, JoinHandle};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use self::txn::Scheduler;
 
@@ -23,8 +24,9 @@ pub mod mvcc;
 pub mod txn;
 mod types;
 
-pub use self::engine::{Engine, Dsn, new_engine, Modify, Error as EngineError};
+pub use self::engine::{Engine, Snapshot, Dsn, new_engine, Modify, Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
+pub use self::txn::SnapshotStore;
 pub use self::types::{Key, Value, KvPair};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
@@ -58,6 +60,12 @@ pub enum Command {
         key: Key,
         start_ts: u64,
         callback: Callback<Option<Value>>,
+    },
+    BatchGet {
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        callback: Callback<Vec<Result<KvPair>>>,
     },
     Scan {
         ctx: Context,
@@ -114,6 +122,9 @@ impl fmt::Debug for Command {
             Command::Get { ref key, start_ts, .. } => {
                 write!(f, "kv::command::get {:?} @ {}", key, start_ts)
             }
+            Command::BatchGet { ref keys, start_ts, .. } => {
+                write!(f, "kv::command_batch_get {} @ {}", keys.len(), start_ts)
+            }
             Command::Scan { ref start_key, limit, start_ts, .. } => {
                 write!(f,
                        "kv::command::scan {:?}({}) @ {}",
@@ -159,6 +170,7 @@ impl fmt::Debug for Command {
 }
 
 pub struct Storage {
+    engine: Arc<Box<Engine>>,
     tx: Sender<Message>,
     thread: JoinHandle<Result<()>>,
 }
@@ -166,10 +178,12 @@ pub struct Storage {
 impl Storage {
     pub fn from_engine(engine: Box<Engine>) -> Result<Storage> {
         let desc = format!("{:?}", engine);
-        let mut scheduler = Scheduler::new(engine);
+        let shared = Arc::new(engine);
+        let mut scheduler = Scheduler::new(shared.clone());
 
         let (tx, rx) = mpsc::channel::<Message>();
-        let handle = thread::spawn(move || {
+        let builder = thread::Builder::new().name(format!("storage-{:?}", desc));
+        let handle = box_try!(builder.spawn(move || {
             info!("storage: [{}] started.", desc);
             loop {
                 let msg = try!(rx.recv());
@@ -181,8 +195,10 @@ impl Storage {
             }
             info!("storage: [{}] closing.", desc);
             Ok(())
-        });
+        }));
+
         Ok(Storage {
+            engine: shared,
             tx: tx,
             thread: handle,
         })
@@ -201,6 +217,10 @@ impl Storage {
         Ok(())
     }
 
+    pub fn get_engine(&self) -> Arc<Box<Engine>> {
+        self.engine.clone()
+    }
+
     pub fn async_get(&self,
                      ctx: Context,
                      key: Key,
@@ -210,6 +230,22 @@ impl Storage {
         let cmd = Command::Get {
             ctx: ctx,
             key: key,
+            start_ts: start_ts,
+            callback: callback,
+        };
+        try!(self.tx.send(Message::Command(cmd)));
+        Ok(())
+    }
+
+    pub fn async_batch_get(&self,
+                           ctx: Context,
+                           keys: Vec<Key>,
+                           start_ts: u64,
+                           callback: Callback<Vec<Result<KvPair>>>)
+                           -> Result<()> {
+        let cmd = Command::BatchGet {
+            ctx: ctx,
+            keys: keys,
             start_ts: start_ts,
             callback: callback,
         };
@@ -380,18 +416,10 @@ quick_error! {
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 pub trait MaybeLocked {
-    fn is_locked(&self) -> bool;
     fn get_lock(&self) -> Option<(Vec<u8>, Vec<u8>, u64)>;
 }
 
 impl<T> MaybeLocked for Result<T> {
-    fn is_locked(&self) -> bool {
-        match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { .. }))) => true,
-            _ => false,
-        }
-    }
-
     fn get_lock(&self) -> Option<(Vec<u8>, Vec<u8>, u64)> {
         match *self {
             Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { ref key,
@@ -405,18 +433,10 @@ impl<T> MaybeLocked for Result<T> {
 }
 
 pub trait MaybeComitted {
-    fn is_committed(&self) -> bool;
     fn get_commit(&self) -> Option<u64>;
 }
 
 impl<T> MaybeComitted for Result<T> {
-    fn is_committed(&self) -> bool {
-        match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted { .. }))) => true,
-            _ => false,
-        }
-    }
-
     fn get_commit(&self) -> Option<u64> {
         match *self {
             Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted { commit_ts }))) => {

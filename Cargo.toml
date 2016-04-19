@@ -3,6 +3,10 @@ name = "tikv"
 version = "0.0.1"
 keywords = ["KV", "distributed-systems", "raft"]
 
+[features]
+default = []
+dev = ["clippy"]
+
 [lib]
 name = "tikv"
 
@@ -30,7 +34,7 @@ tempdir = "0.3"
 getopts = "0.2"
 uuid = "0.1"
 time = "0.1"
-clippy = "*"
+clippy = {version = "*", optional = true}
 
 [dependencies.rocksdb]
 git = "https://github.com/ngaut/rust-rocksdb.git"
@@ -44,8 +48,8 @@ git = "https://github.com/carllerche/bytes"
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
 
-[dev-dependencies]
-env_logger = "0.3"
+[dependencies.tipb]
+git = "https://github.com/pingcap/tipb.git"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

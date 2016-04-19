@@ -374,11 +374,10 @@ impl<T> RaftLog<T>
                     _ => panic!(e),
                 }
             }
-            let se = stored_entries.unwrap();
-            if (se.len() as u64) < cmp::min(high, self.unstable.offset) - low {
+            ents = stored_entries.unwrap();
+            if (ents.len() as u64) < cmp::min(high, self.unstable.offset) - low {
                 return Ok(ents);
             }
-            ents = se.to_vec();
         }
 
         if high > self.unstable.offset {
@@ -824,6 +823,7 @@ mod test {
             // test limit
             (half - 1, half + 1, 0, vec![new_entry(half - 1, half - 1)], false),
             (half - 1, half + 1, halfe_size + 1, vec![new_entry(half - 1, half - 1)], false),
+            (half - 2, half + 1, halfe_size + 1, vec![new_entry(half - 2, half - 2)], false),
             (half - 1, half + 1, halfe_size * 2, vec![new_entry(half - 1, half - 1),
                                                       new_entry(half, half)], false),
             (half - 1, half + 2, halfe_size * 3, vec![new_entry(half - 1, half - 1),

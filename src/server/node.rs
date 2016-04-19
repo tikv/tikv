@@ -26,11 +26,11 @@ use super::config::Config;
 use storage::{Storage, Engine, RaftKv};
 use super::transport::ServerRaftStoreRouter;
 
-pub fn create_raft_storage<T, Trans>(node: Node<T, Trans>) -> Result<Storage>
+pub fn create_raft_storage<T, Trans>(node: Node<T, Trans>, db: Arc<DB>) -> Result<Storage>
     where T: PdClient + 'static,
           Trans: Transport + 'static
 {
-    let engine = box RaftKv::new(node);
+    let engine = box RaftKv::new(node, db);
     let store = try!(Storage::from_engine(engine));
     Ok(store)
 }
@@ -203,11 +203,12 @@ impl<T, Trans> Node<T, Trans>
         let ch = store.get_sendch();
         self.ch = Some(ch);
 
-        let h = thread::spawn(move || {
+        let builder = thread::Builder::new().name(format!("raftstore-{}", store_id));
+        let h = try!(builder.spawn(move || {
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);
             };
-        });
+        }));
 
         self.store_handle = Some(h);
         Ok(())

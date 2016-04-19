@@ -15,8 +15,9 @@
 
 use server::Node;
 use server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
-use raftstore::store::Transport;
+use raftstore::store::{Transport, Peekable};
 use raftstore::errors::Error as RaftServerError;
+use raftstore::coprocessor::RegionSnapshot;
 use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           GetRequest, CmdType, SeekRequest, DeleteRequest, PutRequest};
@@ -25,15 +26,19 @@ use kvproto::kvrpcpb::Context;
 
 use pd::PdClient;
 use uuid::Uuid;
-use std::sync::{Arc, RwLock};
-use std::sync::mpsc;
+use std::sync::{Arc, RwLock, Mutex, Condvar};
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
+use std::time::Duration;
 use std::result;
+use rocksdb::DB;
 use protobuf::RepeatedField;
 
-use super::{Result as EngineResult, Error as EngineError, Engine, Modify};
+use storage::engine;
+use super::{Engine, Modify, Snapshot};
 use storage::{Key, Value, KvPair};
+
+const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 quick_error! {
     #[derive(Debug)]
@@ -61,16 +66,20 @@ quick_error! {
         InvalidRequest(reason: String) {
             description(reason)
         }
+        Timeout(d: Duration) {
+            description("request timeout")
+            display("timeout after {:?}", d)
+        }
     }
 }
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl From<Error> for EngineError {
-    fn from(e: Error) -> EngineError {
+impl From<Error> for engine::Error {
+    fn from(e: Error) -> engine::Error {
         match e {
-            Error::RequestFailed(e) => EngineError::Request(e),
-            e => EngineError::Other(box e),
+            Error::RequestFailed(e) => engine::Error::Request(e),
+            e => box_err!(e),
         }
     }
 }
@@ -78,33 +87,57 @@ impl From<Error> for EngineError {
 /// RaftKv is a storage engine base on RaftKvServer.
 pub struct RaftKv<T: PdClient + 'static, Trans: Transport + 'static> {
     node: Node<T, Trans>,
+    db: Arc<DB>,
     router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
 
 impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(node: Node<T, Trans>) -> RaftKv<T, Trans> {
+    pub fn new(node: Node<T, Trans>, db: Arc<DB>) -> RaftKv<T, Trans> {
         let router = node.raft_store_router();
         RaftKv {
             node: node,
+            db: db,
             router: router,
         }
     }
 
-    fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<RaftCmdResponse> {
-        let (tx, rx) = mpsc::channel();
-        let uuid = req.get_header().get_uuid().to_vec();
-        let l = req.get_requests().len();
+    // TODO: reuse msg code.
+    pub fn call_command(&self, request: RaftCmdRequest) -> Result<RaftCmdResponse> {
+        let resp: Option<RaftCmdResponse> = None;
+        let pair = Arc::new((Mutex::new(resp), Condvar::new()));
+        let pair2 = pair.clone();
+        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
 
-        try!(self.router.rl().send_command(req,
-                                           box move |r| {
-                                               box_try!(tx.send(r));
+        try!(self.router.rl().send_command(request,
+                                           box move |resp| {
+                                               let &(ref lock, ref cvar) = &*pair2;
+                                               let mut v = lock.lock().unwrap();
+                                               *v = Some(resp);
+                                               cvar.notify_one();
                                                Ok(())
                                            }));
 
+        let &(ref lock, ref cvar) = &*pair;
+        let mut v = lock.lock().unwrap();
+        while v.is_none() {
+            let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
+            if timeout_res.timed_out() {
+                return Err(Error::Timeout(timeout));
+            }
+
+            v = resp
+        }
+
+        Ok(v.take().unwrap())
+    }
+
+    fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<RaftCmdResponse> {
+        let uuid = req.get_header().get_uuid().to_vec();
+        let l = req.get_requests().len();
 
         // Only when tx is closed will recv return Err, which should never happen.
-        let mut resp = rx.recv().unwrap();
+        let mut resp = try!(self.call_command(req));
         if resp.get_header().get_uuid() != &*uuid {
             return Err(Error::InvalidResponse("response is not correct!!!".to_owned()));
         }
@@ -143,6 +176,10 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
     }
 }
 
+fn invalid_resp_type(exp: CmdType, act: CmdType) -> engine::Error {
+    Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!", exp, act)).into()
+}
+
 impl<T: PdClient, Trans: Transport> Debug for RaftKv<T, Trans> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "RaftKv")
@@ -150,7 +187,7 @@ impl<T: PdClient, Trans: Transport> Debug for RaftKv<T, Trans> {
 }
 
 impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
-    fn get(&self, ctx: &Context, key: &Key) -> EngineResult<Option<Value>> {
+    fn get(&self, ctx: &Context, key: &Key) -> engine::Result<Option<Value>> {
         let mut get = GetRequest::new();
         get.set_key(key.raw().clone());
         let mut req = Request::new();
@@ -158,10 +195,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         req.set_get(get);
         let mut resp = try!(self.exec_request(ctx, req));
         if resp.get_cmd_type() != CmdType::Get {
-            return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!",
-                                                      CmdType::Get,
-                                                      resp.get_cmd_type()))
-                           .into());
+            return Err(invalid_resp_type(CmdType::Get, resp.get_cmd_type()));
         }
         let get_resp = resp.mut_get();
         if get_resp.has_value() {
@@ -171,7 +205,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
     }
 
-    fn seek(&self, ctx: &Context, key: &Key) -> EngineResult<Option<KvPair>> {
+    fn seek(&self, ctx: &Context, key: &Key) -> engine::Result<Option<KvPair>> {
         let mut seek = SeekRequest::new();
         seek.set_key(key.raw().clone());
         let mut req = Request::new();
@@ -179,10 +213,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         req.set_seek(seek);
         let mut resp = try!(self.exec_request(ctx, req));
         if resp.get_cmd_type() != CmdType::Seek {
-            return Err(Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}",
-                                                      CmdType::Seek,
-                                                      resp.get_cmd_type()))
-                           .into());
+            return Err(invalid_resp_type(CmdType::Seek, resp.get_cmd_type()));
         }
         let seek_resp = resp.mut_seek();
         if seek_resp.has_key() {
@@ -192,7 +223,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
     }
 
-    fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> EngineResult<()> {
+    fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
         if modifies.len() == 0 {
             return Ok(());
         }
@@ -219,5 +250,30 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
         try!(self.exec_requests(ctx, reqs));
         Ok(())
+    }
+
+    fn snapshot<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Snapshot + 'a>> {
+        let mut req = Request::new();
+        req.set_cmd_type(CmdType::Snap);
+        let mut resp = try!(self.exec_request(ctx, req));
+        if resp.get_cmd_type() != CmdType::Snap {
+            return Err(invalid_resp_type(CmdType::Snap, resp.get_cmd_type()));
+        }
+        let region = resp.take_snap().take_region();
+        // TODO figure out a way to create snapshot when apply
+        let snap = RegionSnapshot::from_raw(self.db.as_ref(), region);
+        Ok(box snap)
+    }
+}
+
+impl<'a> Snapshot for RegionSnapshot<'a> {
+    fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
+        let v = box_try!(self.get_value(key.raw()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
+        let pair = box_try!(self.seek(key.raw()));
+        Ok(pair)
     }
 }

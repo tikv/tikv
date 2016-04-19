@@ -18,7 +18,7 @@ use std::fmt::{self, Formatter, Debug};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
 use util::HandyRwLock;
-use super::{Engine, Modify, Result};
+use super::{Engine, Snapshot, Modify, Result};
 
 pub struct EngineBtree {
     map: RwLock<BTreeMap<Vec<u8>, Value>>,
@@ -66,5 +66,24 @@ impl Engine for EngineBtree {
             }
         }
         Ok(())
+    }
+
+    fn snapshot(&self, _: &Context) -> Result<Box<Snapshot>> {
+        // TODO: Find a better way to do snapshot.
+        let m = self.map.rl();
+        Ok(box m.clone())
+    }
+}
+
+impl Snapshot for BTreeMap<Vec<u8>, Value> {
+    fn get(&self, key: &Key) -> Result<Option<Value>> {
+        trace!("SnapshotBTree: get {:?}", key);
+        Ok(self.get(key.raw()).cloned())
+    }
+
+    fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
+        trace!("SnapshotBTree: seek {:?}", key);
+        let mut iter = self.range::<Vec<u8>, Vec<u8>>(Included(key.raw()), Unbounded);
+        Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
     }
 }

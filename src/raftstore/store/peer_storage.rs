@@ -13,10 +13,10 @@
 
 use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::vec::Vec;
-use std::error;
+use std::{error, mem};
 
 use rocksdb::{DB, WriteBatch, Writable};
-use rocksdb::rocksdb::Snapshot as RocksDBSnapshot;
+use rocksdb::rocksdb::Snapshot as RocksDbSnapshot;
 use protobuf::{self, Message};
 
 use kvproto::metapb;
@@ -32,6 +32,16 @@ use super::engine::{Peekable, Iterable, Mutable};
 // so that we can force the follower peer to sync the snapshot first.
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
+const MAX_SNAP_TRY_CNT: u8 = 5;
+
+#[derive(PartialEq, Debug)]
+pub enum SnapState {
+    Relax,
+    Pending,
+    Generating,
+    Snap(Snapshot),
+    Failed,
+}
 
 pub struct PeerStorage {
     engine: Arc<DB>,
@@ -43,6 +53,8 @@ pub struct PeerStorage {
     // 1, a truncated state preceded the first log entry.
     // 2, a dummy entry for the start point of the empty log.
     pub truncated_state: RaftTruncatedState,
+    pub snap_state: SnapState,
+    snap_tried_cnt: u8,
 }
 
 fn storage_error<E>(error: E) -> raft::Error
@@ -67,6 +79,7 @@ pub struct ApplySnapResult {
     pub last_index: u64,
     pub applied_index: u64,
     pub region: metapb::Region,
+    pub truncated_state: RaftTruncatedState,
 }
 
 impl PeerStorage {
@@ -77,11 +90,15 @@ impl PeerStorage {
             last_index: 0,
             applied_index: 0,
             truncated_state: RaftTruncatedState::new(),
+            snap_state: SnapState::Relax,
+            snap_tried_cnt: 0,
         };
 
-        store.last_index = try!(store.load_last_index());
         store.applied_index = try!(store.load_applied_index(store.engine.as_ref()));
         store.truncated_state = try!(store.load_truncated_state());
+        // Get last index depending on truncated state,
+        // so we must load truncated_state before.
+        store.last_index = try!(store.load_last_index());
 
         Ok(store)
     }
@@ -218,65 +235,31 @@ impl PeerStorage {
         &self.region
     }
 
-    pub fn raw_snapshot(&self) -> RocksDBSnapshot {
+    pub fn raw_snapshot(&self) -> RocksDbSnapshot {
         self.engine.snapshot()
     }
 
-    pub fn snapshot(&self) -> raft::Result<Snapshot> {
-        debug!("begin to generate a snapshot for region {}",
-               self.get_region_id());
-
-        // TODO: time snapshot process
-
-        let snap = self.engine.snapshot();
-        let applied_index = try!(self.load_applied_index(&snap));
-        let region: metapb::Region = try!(snap.get_msg::<metapb::Region>(
-                                            &keys::region_info_key(self.get_region_id())).
-        and_then(|res| {
-            match res {
-                None => Err(box_err!("could not find region info")),
-                Some(region) => Ok(region),
+    pub fn snapshot(&mut self) -> raft::Result<Snapshot> {
+        if let SnapState::Relax = self.snap_state {
+            info!("requesting snapshot on {}...", self.get_region_id());
+            self.snap_tried_cnt = 0;
+            self.snap_state = SnapState::Pending;
+        } else if let SnapState::Snap(_) = self.snap_state {
+            match mem::replace(&mut self.snap_state, SnapState::Relax) {
+                SnapState::Snap(s) => return Ok(s),
+                _ => unreachable!(),
             }
-        }));
-
-        let term = try!(self.term(applied_index));
-        let mut snapshot = Snapshot::new();
-
-        // Set snapshot metadata.
-        snapshot.mut_metadata().set_index(applied_index);
-        snapshot.mut_metadata().set_term(term);
-
-        let mut conf_state = ConfState::new();
-        for p in region.get_peers() {
-            conf_state.mut_nodes().push(p.get_id());
+        } else if let SnapState::Failed = self.snap_state {
+            if self.snap_tried_cnt >= MAX_SNAP_TRY_CNT {
+                return Err(raft::Error::Store(box_err!("failed to get snapshot after {} times",
+                                                       self.snap_tried_cnt)));
+            }
+            self.snap_tried_cnt += 1;
+            warn!("snapshot generating failed, retry {} time",
+                  self.snap_tried_cnt);
+            self.snap_state = SnapState::Pending;
         }
-
-        snapshot.mut_metadata().set_conf_state(conf_state);
-
-        // Set snapshot data.
-        let mut snap_data = RaftSnapshotData::new();
-        snap_data.set_region(region);
-
-        // TODO: maybe we don't need to scan log entries.
-        let mut data = vec![];
-        try!(self.scan_region(&snap,
-                              &mut |key, value| {
-                                  let mut kv = KeyValue::new();
-                                  kv.set_key(key.to_vec());
-                                  kv.set_value(value.to_vec());
-                                  data.push(kv);
-                                  Ok(true)
-                              }));
-
-        snap_data.set_data(protobuf::RepeatedField::from_vec(data));
-
-        let mut v = vec![];
-        box_try!(snap_data.write_to_vec(&mut v));
-        snapshot.set_data(v);
-
-        debug!("generate snapshot ok for region {}", self.get_region_id());
-
-        Ok(snapshot)
+        Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable))
     }
 
     // Append the given entries to the raft log using previous last index or self.last_index.
@@ -353,12 +336,20 @@ impl PeerStorage {
         let last_index = snap.get_metadata().get_index();
         try!(save_last_index(w, region_id, last_index));
 
+        // The snapshot only contains log which index > applied index, so
+        // here the truncate state's (index, term) is in snapshot metadata.
+        let mut truncated_state = RaftTruncatedState::new();
+        truncated_state.set_index(last_index);
+        truncated_state.set_term(snap.get_metadata().get_term());
+        try!(save_truncated_state(w, region_id, &truncated_state));
+
         debug!("apply snapshot ok for region {}", self.get_region_id());
 
         Ok(ApplySnapResult {
             last_index: last_index,
             applied_index: last_index,
             region: region.clone(),
+            truncated_state: truncated_state,
         })
     }
 
@@ -378,15 +369,7 @@ impl PeerStorage {
         }
 
         let term = try!(self.term(compact_index - 1));
-        let start_key = keys::raft_log_key(self.get_region_id(), 0);
-        let end_key = keys::raft_log_key(self.get_region_id(), compact_index);
-
-        try!(self.engine.scan(&start_key,
-                              &end_key,
-                              &mut |key, _| {
-                                  try!(w.delete(key));
-                                  Ok(true)
-                              }));
+        // we don't actually compact the log now, we add an async task to do it.
 
         let mut state = RaftTruncatedState::new();
         state.set_index(compact_index - 1);
@@ -461,7 +444,7 @@ impl PeerStorage {
     // [region raft start, region raft end) -> saving raft entries, applied index, etc.
     // [region meta start, region meta end) -> saving region meta information except raft.
     // [region data start, region data end) -> saving region data.
-    fn region_key_ranges(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+    pub fn region_key_ranges(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
         let (start_key, end_key) = (enc_start_key(self.get_region()),
                                     enc_end_key(self.get_region()));
 
@@ -518,11 +501,87 @@ impl PeerStorage {
         if let Some(res) = apply_snap_res {
             self.set_applied_index(res.applied_index);
             self.set_region(&res.region);
+            self.set_truncated_state(&res.truncated_state);
             return Ok(Some(res.region.clone()));
         }
 
         Ok(None)
     }
+}
+
+pub fn do_snapshot(snap: &RocksDbSnapshot,
+                   region_id: u64,
+                   ranges: Vec<(Vec<u8>, Vec<u8>)>,
+                   applied_idx: u64,
+                   term: u64)
+                   -> raft::Result<Snapshot> {
+    debug!("begin to generate a snapshot for region {}", region_id);
+
+    let region: metapb::Region = try!(snap.get_msg(&keys::region_info_key(region_id))
+                                          .and_then(|res| {
+                                              match res {
+                                                  None => {
+                                                      Err(box_err!("could not find region info"))
+                                                  }
+                                                  Some(region) => Ok(region),
+                                              }
+                                          }));
+
+    let mut snapshot = Snapshot::new();
+
+    // Set snapshot metadata.
+    snapshot.mut_metadata().set_index(applied_idx);
+    snapshot.mut_metadata().set_term(term);
+
+    let mut conf_state = ConfState::new();
+    for p in region.get_peers() {
+        conf_state.mut_nodes().push(p.get_id());
+    }
+
+    snapshot.mut_metadata().set_conf_state(conf_state);
+
+    // Set snapshot data.
+    let mut snap_data = RaftSnapshotData::new();
+    snap_data.set_region(region);
+
+    // Scan everything except raft logs for this region.
+    let log_prefix = keys::raft_log_prefix(region_id);
+    let mut data = vec![];
+    let mut snap_size = 0;
+    let mut snap_key_cnt = 0;
+    for (begin, end) in ranges {
+        try!(snap.scan(&begin,
+                       &end,
+                       &mut |key, value| {
+                           if key.starts_with(&log_prefix) {
+                               // Ignore raft logs.
+                               // TODO: do more tests for snapshot.
+                               return Ok(true);
+                           }
+                           snap_size += key.len();
+                           snap_size += value.len();
+                           snap_key_cnt += 1;
+
+                           let mut kv = KeyValue::new();
+                           kv.set_key(key.to_vec());
+                           kv.set_value(value.to_vec());
+                           data.push(kv);
+                           Ok(true)
+                       }));
+    }
+
+    snap_data.set_data(protobuf::RepeatedField::from_vec(data));
+
+    let mut v = vec![];
+    box_try!(snap_data.write_to_vec(&mut v));
+    snapshot.set_data(v);
+
+    info!("generate snapshot ok for region {}, size {}, key count {}",
+          region_id,
+          snap_size,
+          snap_key_cnt);
+
+    Ok(snapshot)
 }
 
 pub fn save_hard_state<T: Mutable>(w: &T, region_id: u64, state: &HardState) -> Result<()> {
@@ -584,7 +643,7 @@ impl Storage for RaftStorage {
     }
 
     fn snapshot(&self) -> raft::Result<Snapshot> {
-        self.rl().snapshot()
+        self.wl().snapshot()
     }
 }
 
@@ -593,7 +652,7 @@ mod test {
     use super::*;
     use std::sync::*;
     use rocksdb::*;
-    use kvproto::raftpb::{Entry, ConfState};
+    use kvproto::raftpb::{Entry, ConfState, Snapshot};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
@@ -717,6 +776,16 @@ mod test {
         }
     }
 
+    fn get_snap(s: &RaftStorage) -> Snapshot {
+        let engine = s.rl().get_engine();
+        let raw_snap = engine.snapshot();
+        let region_id = s.rl().get_region_id();
+        let key_ranges = s.rl().region_key_ranges();
+        let applied_id = s.rl().load_applied_index(&raw_snap).unwrap();
+        let term = s.rl().term(applied_id).unwrap();
+        do_snapshot(&raw_snap, region_id, key_ranges, applied_id, term).unwrap()
+    }
+
     #[test]
     fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
@@ -725,14 +794,27 @@ mod test {
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let s = new_storage_from_ents(&td, &ents);
-        let snap = s.rl().snapshot().unwrap();
+        let snap = s.wl().snapshot();
+        let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
+        assert_eq!(snap.unwrap_err(), unavailable);
+        assert_eq!(s.wl().snap_state, SnapState::Pending);
+
+        s.wl().snap_state = SnapState::Generating;
+        assert_eq!(s.wl().snapshot().unwrap_err(), unavailable);
+        assert_eq!(s.rl().snap_state, SnapState::Generating);
+
+        let snap = get_snap(&s);
         assert_eq!(snap.get_metadata().get_index(), 5);
         assert_eq!(snap.get_metadata().get_term(), 5);
         assert!(!snap.get_data().is_empty());
+
         let mut data = RaftSnapshotData::new();
         protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).expect("");
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
+
+        s.wl().snap_state = SnapState::Snap(snap.clone());
+        assert_eq!(s.wl().snapshot(), Ok(snap));
     }
 
     #[test]
@@ -780,5 +862,29 @@ mod test {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
             }
         }
+    }
+
+    #[test]
+    fn test_storage_apply_snapshot() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut cs = ConfState::new();
+        cs.set_nodes(vec![1, 2, 3]);
+
+        let td1 = TempDir::new("tikv-store-test").unwrap();
+        let s1 = new_storage_from_ents(&td1, &ents);
+        let snap1 = get_snap(&s1);
+        assert_eq!(s1.rl().truncated_state.get_index(), 3);
+        assert_eq!(s1.rl().truncated_state.get_term(), 3);
+
+        let td2 = TempDir::new("tikv-store-test").unwrap();
+        let s2 = new_storage(&td2);
+        assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
+        let wb = WriteBatch::new();
+        let res = s2.wl().apply_snapshot(&wb, &snap1).unwrap();
+        assert_eq!(res.applied_index, 5);
+        assert_eq!(res.last_index, 5);
+        assert_eq!(res.truncated_state.get_index(), 5);
+        assert_eq!(res.truncated_state.get_term(), 5);
+        assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
     }
 }
