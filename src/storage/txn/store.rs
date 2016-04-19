@@ -16,6 +16,7 @@ use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair, Mutation};
 use storage::{Engine, Snapshot};
 use storage::mvcc::{MvccTxn, MvccSnapshot, Error as MvccError};
+use util::codec::bytes;
 use super::shard_mutex::ShardMutex;
 use super::{Error, Result};
 
@@ -59,6 +60,17 @@ impl TxnStore {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
         let snap_store = SnapshotStore::new(snapshot, start_ts);
         snap_store.scan(key, limit)
+    }
+
+    pub fn reverse_scan(&self,
+                        ctx: Context,
+                        key: Key,
+                        limit: usize,
+                        start_ts: u64)
+                        -> Result<Vec<Result<KvPair>>> {
+        let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
+        let snap_store = SnapshotStore::new(snapshot, start_ts);
+        snap_store.reverse_scan(key, limit)
     }
 
     pub fn prewrite(&self,
@@ -211,7 +223,30 @@ impl<'a> SnapshotStore<'a> {
                 }
                 Err(e) => return Err(e.into()),
             };
-            key = key.encode_ts(u64::max_value());
+            key = key.seek_key();
+        }
+        Ok(results)
+    }
+
+    pub fn reverse_scan(&self, key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
+        let mut results = vec![];
+        let mut key = key;
+        let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
+        while results.len() < limit {
+            let next_key = match try!(self.snapshot.reverse_seek(&key)) {
+                Some((key, _)) => try!(bytes::decode_bytes(&key)).0,
+                None => break,
+            };
+            key = Key::from_raw(bytes::encode_bytes(&next_key));
+            match txn.get(&key) {
+                Ok(Some(value)) => results.push(Ok((key.raw().clone(), value))),
+                Ok(None) => {}
+                e @ Err(MvccError::KeyIsLocked { .. }) => {
+                    results.push(Err(Error::from(e.unwrap_err())))
+                }
+                Err(e) => return Err(e.into()),
+            };
+            key = key.reverse_seek_key();
         }
         Ok(results)
     }
@@ -236,6 +271,11 @@ mod tests {
                    limit: usize,
                    ts: u64,
                    expect: Vec<Option<(&[u8], &[u8])>>);
+        fn reverse_scan_ok(&self,
+                           start_key: &[u8],
+                           limit: usize,
+                           ts: u64,
+                           expect: Vec<Option<(&[u8], &[u8])>>);
         fn prewrite_ok(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64);
         fn prewrite_err(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64);
         fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64);
@@ -292,6 +332,26 @@ mod tests {
                    expect: Vec<Option<(&[u8], &[u8])>>) {
             let key_address = make_key(start_key);
             let result = self.scan(Context::new(), key_address, limit, ts).unwrap();
+            let result: Vec<Option<KvPair>> = result.into_iter()
+                                                    .map(Result::ok)
+                                                    .collect();
+            let expect: Vec<Option<KvPair>> = expect.into_iter()
+                                                    .map(|x| {
+                                                        x.map(|(k, v)| {
+                                                            (bytes::encode_bytes(k), v.to_vec())
+                                                        })
+                                                    })
+                                                    .collect();
+            assert_eq!(result, expect);
+        }
+
+        fn reverse_scan_ok(&self,
+                           start_key: &[u8],
+                           limit: usize,
+                           ts: u64,
+                           expect: Vec<Option<(&[u8], &[u8])>>) {
+            let key_address = make_key(start_key);
+            let result = self.reverse_scan(Context::new(), key_address, limit, ts).unwrap();
             let result: Vec<Option<KvPair>> = result.into_iter()
                                                     .map(Result::ok)
                                                     .collect();
@@ -453,13 +513,45 @@ mod tests {
                           3,
                           10,
                           vec![Some((b"C", b"C10")), Some((b"E", b"E10"))]);
-
             store.scan_ok(b"C",
                           4,
                           10,
                           vec![Some((b"C", b"C10")), Some((b"E", b"E10"))]);
             store.scan_ok(b"F", 1, 10, vec![]);
 
+            store.reverse_scan_ok(b"F", 0, 10, vec![]);
+            store.reverse_scan_ok(b"F", 1, 10, vec![Some((b"E", b"E10"))]);
+            store.reverse_scan_ok(b"F",
+                                  2,
+                                  10,
+                                  vec![Some((b"E", b"E10")), Some((b"C", b"C10"))]);
+            store.reverse_scan_ok(b"F",
+                                  3,
+                                  10,
+                                  vec![Some((b"E", b"E10")),
+                                       Some((b"C", b"C10")),
+                                       Some((b"A", b"A10"))]);
+            store.reverse_scan_ok(b"F",
+                                  4,
+                                  10,
+                                  vec![Some((b"E", b"E10")),
+                                       Some((b"C", b"C10")),
+                                       Some((b"A", b"A10"))]);
+            store.reverse_scan_ok(b"F",
+                                  3,
+                                  10,
+                                  vec![Some((b"E", b"E10")),
+                                       Some((b"C", b"C10")),
+                                       Some((b"A", b"A10"))]);
+            store.reverse_scan_ok(b"D",
+                                  3,
+                                  10,
+                                  vec![Some((b"C", b"C10")), Some((b"A", b"A10"))]);
+            store.reverse_scan_ok(b"C",
+                                  4,
+                                  10,
+                                  vec![Some((b"C", b"C10")), Some((b"A", b"A10"))]);
+            store.reverse_scan_ok(b"0", 1, 10, vec![]);
         };
         check_v10();
 
@@ -481,6 +573,22 @@ mod tests {
                           20,
                           vec![Some((b"C", b"C10")), Some((b"D", b"D20")), Some((b"E", b"E10"))]);
             store.scan_ok(b"D\x00", 1, 20, vec![Some((b"E", b"E10"))]);
+
+            store.reverse_scan_ok(b"F",
+                                  5,
+                                  20,
+                                  vec![Some((b"E", b"E10")),
+                                       Some((b"D", b"D20")),
+                                       Some((b"C", b"C10")),
+                                       Some((b"B", b"B20")),
+                                       Some((b"A", b"A10"))]);
+            store.reverse_scan_ok(b"C",
+                                  5,
+                                  20,
+                                  vec![Some((b"C", b"C10")),
+                                       Some((b"B", b"B20")),
+                                       Some((b"A", b"A10"))]);
+            store.reverse_scan_ok(b"AAA", 1, 20, vec![Some((b"A", b"A10"))]);
         };
         check_v10();
         check_v20();
@@ -496,6 +604,18 @@ mod tests {
                           vec![Some((b"B", b"B20")), Some((b"C", b"C10")), Some((b"E", b"E10"))]);
             store.scan_ok(b"A", 1, 30, vec![Some((b"B", b"B20"))]);
             store.scan_ok(b"C\x00", 5, 30, vec![Some((b"E", b"E10"))]);
+
+            store.reverse_scan_ok(b"F",
+                                  5,
+                                  30,
+                                  vec![Some((b"E", b"E10")),
+                                       Some((b"C", b"C10")),
+                                       Some((b"B", b"B20"))]);
+            store.reverse_scan_ok(b"D", 1, 30, vec![Some((b"C", b"C10"))]);
+            store.reverse_scan_ok(b"DD",
+                                  5,
+                                  30,
+                                  vec![Some((b"C", b"C10")), Some((b"B", b"B20"))]);
         };
         check_v10();
         check_v20();
@@ -515,6 +635,18 @@ mod tests {
                           5,
                           100,
                           vec![Some((b"C", b"C40")), Some((b"D", b"D40")), Some((b"E", b"E10"))]);
+            store.reverse_scan_ok(b"F",
+                                  5,
+                                  40,
+                                  vec![Some((b"E", b"E10")),
+                                       Some((b"D", b"D40")),
+                                       Some((b"C", b"C40"))]);
+            store.reverse_scan_ok(b"F",
+                                  5,
+                                  100,
+                                  vec![Some((b"E", b"E10")),
+                                       Some((b"D", b"D40")),
+                                       Some((b"C", b"C40"))]);
         };
         check_v10();
         check_v20();

@@ -32,6 +32,7 @@ pub enum Modify {
 pub trait Engine: Send + Sync + Debug {
     fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
     fn seek(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
+    fn reverse_seek(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
     fn snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
 
@@ -47,6 +48,7 @@ pub trait Engine: Send + Sync + Debug {
 pub trait Snapshot {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn seek(&self, key: &Key) -> Result<Option<KvPair>>;
+    fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -107,6 +109,7 @@ mod tests {
         get_put(e.as_ref());
         batch(e.as_ref());
         seek(e.as_ref());
+        reverse_seek(e.as_ref());
     }
 
     #[test]
@@ -117,6 +120,7 @@ mod tests {
         get_put(e.as_ref());
         batch(e.as_ref());
         seek(e.as_ref());
+        reverse_seek(e.as_ref());
     }
 
     fn must_put<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
@@ -138,6 +142,11 @@ mod tests {
 
     fn assert_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
         let (k, v) = engine.seek(&Context::new(), &make_key(key)).unwrap().unwrap();
+        assert_eq!((k, &v as &[u8]), (bytes::encode_bytes(pair.0), pair.1));
+    }
+
+    fn assert_reverse_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
+        let (k, v) = engine.reverse_seek(&Context::new(), &make_key(key)).unwrap().unwrap();
         assert_eq!((k, &v as &[u8]), (bytes::encode_bytes(pair.0), pair.1));
     }
 
@@ -172,6 +181,19 @@ mod tests {
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
         assert_eq!(engine.seek(&Context::new(), &make_key(b"z\x00")).unwrap(),
+                   None);
+        must_delete(engine, b"x");
+        must_delete(engine, b"z");
+    }
+
+    fn reverse_seek<T: Engine + ?Sized>(engine: &T) {
+        must_put(engine, b"x", b"1");
+        assert_reverse_seek(engine, b"x", (b"x", b"1"));
+        assert_reverse_seek(engine, b"y", (b"x", b"1"));
+        must_put(engine, b"z", b"2");
+        assert_reverse_seek(engine, b"y", (b"x", b"1"));
+        assert_reverse_seek(engine, b"z\x00", (b"z", b"2"));
+        assert_eq!(engine.reverse_seek(&Context::new(), &make_key(b"a")).unwrap(),
                    None);
         must_delete(engine, b"x");
         must_delete(engine, b"z");

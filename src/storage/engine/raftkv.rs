@@ -223,6 +223,10 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
     }
 
+    fn reverse_seek(&self, _: &Context, _: &Key) -> engine::Result<Option<KvPair>> {
+        unimplemented!();
+    }
+
     fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
         if modifies.len() == 0 {
             return Ok(());
@@ -275,5 +279,9 @@ impl<'a> Snapshot for RegionSnapshot<'a> {
     fn seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
         let pair = box_try!(self.seek(key.raw()));
         Ok(pair)
+    }
+
+    fn reverse_seek(&self, _: &Key) -> engine::Result<Option<KvPair>> {
+        unimplemented!();
     }
 }
