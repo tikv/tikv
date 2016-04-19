@@ -330,7 +330,15 @@ impl Peer {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
                 AdminCmdType::InvalidAdmin => {}
-                AdminCmdType::Split => check_ver = true,
+                AdminCmdType::Split => {
+                    // For split, we must check conf version too.
+                    // Let's consider following case:
+                    // log 10 is remove itself for region 1, but log 11 is split region 1,
+                    // if we don't check conf version here, we will split failed because
+                    // region 1 is removed after log 10 applied.
+                    check_ver = true;
+                    check_conf_ver = true
+                }
                 AdminCmdType::ChangePeer => check_conf_ver = true,
             };
         } else {
