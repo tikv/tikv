@@ -90,6 +90,9 @@ pub struct Peer {
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
     pub current_term: u64,
+    // if we remove ourself in ChangePeer remove, we should set this flag, then
+    // any following committed logs in same Ready should be applied failed.
+    penging_remove: bool,
 }
 
 impl Peer {
@@ -181,6 +184,7 @@ impl Peer {
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             current_term: 0,
+            penging_remove: false,
         };
 
         peer.load_all_coprocessors();
@@ -330,15 +334,7 @@ impl Peer {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
                 AdminCmdType::InvalidAdmin => {}
-                AdminCmdType::Split => {
-                    // For split, we must check conf version too.
-                    // Let's consider following case:
-                    // log 10 is remove itself for region 1, but log 11 is split region 1,
-                    // if we don't check conf version here, we will split failed because
-                    // region 1 is removed after log 10 applied.
-                    check_ver = true;
-                    check_conf_ver = true
-                }
+                AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
             };
         } else {
@@ -583,6 +579,11 @@ impl Peer {
                       index: u64,
                       req: &RaftCmdRequest)
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
+        if self.penging_remove {
+            return Err(box_err!("handle removing peer {} before, ignore apply",
+                                self.peer.get_id()));
+        }
+
         let last_applied_index = self.storage.rl().applied_index();
         if last_applied_index >= index {
             return Err(box_err!("applied index moved backwards, {} >= {}",
@@ -743,6 +744,12 @@ impl Peer {
                 if !exists {
                     error!("remove missing peer {:?} from store {}", peer, store_id);
                     return Err(box_err!("remove missing peer {:?} from store {}", peer, store_id));
+                }
+
+                if self.peer_id() == peer.get_id() {
+                    // Remove ourself, we will destroy all region data later.
+                    // So we need not to apply following logs.
+                    self.penging_remove = true;
                 }
 
                 // Remove this peer from cache.

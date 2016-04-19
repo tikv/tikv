@@ -358,7 +358,6 @@ fn test_server_auto_adjust_replica() {
 
 fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     // disable auto compact log.
-    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 10000;
     cluster.cfg.store_cfg.raft_log_gc_threshold = 10000;
 
     let r1 = cluster.bootstrap_conf_change();
@@ -396,14 +395,16 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
                                             new_change_peer_cmd(ConfChangeType::RemoveNode,
                                                                 new_peer(1, 1)));
     change_peer.mut_header().set_peer(new_peer(1, 1));
-    // ignore error
+    // ignore error, we just want to send this command to peer (1, 1),
+    // and know that it can't be executed because we have only one peer,
+    // so here will return timeout error, we should ignore it.
     let _ = cluster.call_command(change_peer, Duration::from_millis(1));
 
     let engine1 = cluster.get_engine(1);
     let index = engine1.get_u64(&keys::raft_applied_index_key(r1)).unwrap().unwrap();
     let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
     compact_log.mut_header().set_peer(new_peer(1, 1));
-    // ignore error
+    // ignore error, see comment above.
     let _ = cluster.call_command(compact_log, Duration::from_millis(1));
 
     cluster.run_node(2);

@@ -364,13 +364,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     }
                 }
                 ExecResult::CompactLog { ref state } => {
-                    // CompactLog doesn't check epoch, so we may handle this after ChangePeer
-                    // removing ourself.
-                    if let Some(peer) = self.region_peers.get(&region_id) {
-                        let task = CompactTask::new(&peer.storage.rl(), state.get_index() + 1);
-                        if let Err(e) = self.compact_worker.schedule(task) {
-                            error!("failed to schedule compact task: {}", e);
-                        }
+                    let peer = self.region_peers.get(&region_id).unwrap();
+                    let task = CompactTask::new(&peer.storage.rl(), state.get_index() + 1);
+                    if let Err(e) = self.compact_worker.schedule(task) {
+                        error!("failed to schedule compact task: {}", e);
                     }
                 }
                 ExecResult::SplitRegion { ref left, ref right } => {
