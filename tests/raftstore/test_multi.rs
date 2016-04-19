@@ -19,6 +19,10 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::transport_simulate;
 
+use rand;
+use rand::Rng;
+use std::time::Duration;
+
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     test_multi_with_transport_strategy(cluster, vec![]);
 }
@@ -126,6 +130,57 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
 
 }
 
+fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>,
+                                           node_count: usize,
+                                           restart_count: u32) {
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+
+    let (key, value) = (b"a1", b"v1");
+
+    assert_eq!(cluster.get(key), None);
+    cluster.put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+    let mut rng = rand::thread_rng();
+    for _ in 1..restart_count {
+        let id = 1 + rng.gen_range(0, node_count as u64);
+        cluster.stop_node(id);
+        cluster.run_node(id);
+        wait_until_node_online(cluster, id);
+        assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+        // verify whether data is actually being replicated
+        must_get_equal(&cluster.get_engine(id), key, value);
+
+        let (k, v) = (b"a2", b"v2");
+        // assert_eq!(cluster.get(k), None);
+        cluster.put(k, v);
+        assert_eq!(cluster.get(k), Some(v.to_vec()));
+        cluster.delete(k);
+        assert_eq!(cluster.get(k), None);
+    }
+}
+
+fn wait_until_node_online<T: Simulator>(cluster: &mut Cluster<T>, node_id: u64) {
+    for _ in 0..200 {
+        // leverage the fact that store id is equal to node id actually
+        let peer = new_peer(node_id, 0);
+        let find_leader = new_status_request(1, peer, new_region_leader_cmd());
+        let resp = cluster.call_command(find_leader, Duration::from_secs(3));
+        if resp.is_err() {
+            sleep_ms(10);
+            continue;
+        }
+        if !resp.unwrap().get_status_response().get_region_leader().has_leader() {
+            sleep_ms(10);
+            continue;
+        }
+        return;
+    }
+    assert!(false);
+}
+
 #[test]
 fn test_multi_node_base() {
     let count = 5;
@@ -214,4 +269,18 @@ fn test_multi_server_lost_majority() {
         let mut cluster = new_server_cluster(0, count);
         test_multi_lost_majority(&mut cluster, count)
     }
+}
+
+#[test]
+fn test_multi_node_random_restart() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_random_restart(&mut cluster, count, 10);
+}
+
+#[test]
+fn test_multi_server_random_restart() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_multi_random_restart(&mut cluster, count, 10);
 }
