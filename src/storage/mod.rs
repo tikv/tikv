@@ -415,51 +415,6 @@ quick_error! {
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
-pub trait MaybeLocked {
-    fn get_lock(&self) -> Option<(Vec<u8>, Vec<u8>, u64)>;
-}
-
-impl<T> MaybeLocked for Result<T> {
-    fn get_lock(&self) -> Option<(Vec<u8>, Vec<u8>, u64)> {
-        match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { ref key,
-                                                                       ref primary,
-                                                                       ts }))) => {
-                Some((key.to_owned(), primary.to_owned(), ts))
-            }
-            _ => None,
-        }
-    }
-}
-
-pub trait MaybeComitted {
-    fn get_commit(&self) -> Option<u64>;
-}
-
-impl<T> MaybeComitted for Result<T> {
-    fn get_commit(&self) -> Option<u64> {
-        match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyCommitted { commit_ts }))) => {
-                Some(commit_ts)
-            }
-            _ => None,
-        }
-    }
-}
-
-pub trait MaybeRolledback {
-    fn is_rolledback(&self) -> bool;
-}
-
-impl<T> MaybeRolledback for Result<T> {
-    fn is_rolledback(&self) -> bool {
-        match *self {
-            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::AlreadyRolledback))) => true,
-            _ => false,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
