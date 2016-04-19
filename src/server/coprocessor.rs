@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::{result, error};
 use std::thread::{self, JoinHandle};
 use std::sync::mpsc::{self, Sender, Receiver};
+use std::time::Instant;
 use mio::Token;
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
 use tipb::schema::IndexInfo;
@@ -106,9 +107,12 @@ fn msg_poller(engine: Arc<Box<Engine>>, rx: Receiver<EndPointMessage>, ch: SendC
         }
         let msg = msg.unwrap();
         debug!("recv req: {:?}", msg);
+        let timer = Instant::now();
         match msg {
             EndPointMessage::Job(req, token, msg_id) => {
-                handle_request(req, ch.clone(), token, msg_id, &end_point)
+                let res = handle_request(req, ch.clone(), token, msg_id, &end_point);
+                debug!("request {:?}/{} takes {:?}", token, msg_id, timer.elapsed());
+                res
             }
             EndPointMessage::Close => break,
         }
