@@ -355,3 +355,82 @@ fn test_server_auto_adjust_replica() {
     let mut cluster = new_server_cluster(0, count);
     test_auto_adjust_replica(&mut cluster);
 }
+
+fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
+    // disable auto compact log.
+    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 10000;
+    cluster.cfg.store_cfg.raft_log_gc_threshold = 10000;
+
+    let r1 = cluster.bootstrap_conf_change();
+    cluster.start();
+
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
+
+    // 1, stop node 2
+    // 2, add data to guarantee leader has more logs
+    // 3, stop node 3
+    // 4, remove leader itself and force compact log
+    // 5, start node 2 again, so that we can commit log and apply.
+    // For this scenario, peer 1 will do remove itself and then compact log
+    // in the same ready result loop.
+    cluster.stop_node(2);
+
+    cluster.put(b"a1", b"v1");
+
+    let engine1 = cluster.get_engine(1);
+    let engine3 = cluster.get_engine(3);
+    must_get_equal(&engine1, b"a1", b"v1");
+    must_get_equal(&engine3, b"a1", b"v1");
+
+    cluster.stop_node(3);
+
+    let epoch = cluster.pd_client
+                       .rl()
+                       .get_region_by_id(cluster.id(), 1)
+                       .unwrap()
+                       .get_region_epoch()
+                       .clone();
+    let mut change_peer = new_admin_request(r1,
+                                            &epoch,
+                                            new_change_peer_cmd(ConfChangeType::RemoveNode,
+                                                                new_peer(1, 1)));
+    change_peer.mut_header().set_peer(new_peer(1, 1));
+    // ignore error
+    let _ = cluster.call_command(change_peer, Duration::from_millis(1));
+
+    let engine1 = cluster.get_engine(1);
+    let index = engine1.get_u64(&keys::raft_applied_index_key(r1)).unwrap().unwrap();
+    let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
+    compact_log.mut_header().set_peer(new_peer(1, 1));
+    // ignore error
+    let _ = cluster.call_command(compact_log, Duration::from_millis(1));
+
+    cluster.run_node(2);
+    cluster.run_node(3);
+
+    sleep_ms(2000);
+
+    let detail = cluster.region_detail(r1, 2);
+
+    cluster.pd_client.wl().change_peer(cluster.id(), detail.get_region().clone()).unwrap();
+
+    cluster.reset_leader_of_region(r1);
+    cluster.put(b"a3", b"v3");
+
+    // TODO: add split after removing itself test later.
+}
+
+#[test]
+fn test_node_after_remove_itself() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    test_after_remove_itself(&mut cluster);
+}
+
+#[test]
+fn test_server_after_remove_itself() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    test_after_remove_itself(&mut cluster);
+}
