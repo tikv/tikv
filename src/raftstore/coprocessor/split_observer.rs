@@ -20,8 +20,11 @@ use protobuf::RepeatedField;
 use std::result::Result as StdResult;
 
 /// `SplitObserver` adjusts the split key so that it won't seperate
-/// the data of a row into two region.
+/// the data of a row into two region. It adjusts the key according
+/// to the key format of `TiDB`.
 pub struct SplitObserver;
+
+const VERSION_LENGTH: usize = 8;
 
 type Result<T> = StdResult<T, String>;
 
@@ -32,23 +35,24 @@ impl SplitObserver {
         }
         let mut key = split.get_split_key().to_vec();
 
-        // format of a key is TABLE_PREFIX + table_id + TABLE_ROW_MARK + handle or
-        // TABLE_PREFIX + table_id + TABLE_INDEX_MARK
-
-        if !key.starts_with(table::TABLE_PREFIX) || key.len() < table::PREFIX_LEN + table::ID_LEN {
-            // bypass non-data key.
+        if key.len() < VERSION_LENGTH {
+            // bypass non-mvcc key.
             return Ok(());
         }
+
+        // format of a key is TABLE_PREFIX + table_id + TABLE_ROW_MARK + handle + column_id
+        // + version or TABLE_PREFIX + table_id + TABLE_INDEX_MARK + index_id + values + version
+        // or meta_key + version
+
         let table_prefix_len = table::TABLE_PREFIX.len() + table::ID_LEN;
-        if key[table_prefix_len..].starts_with(table::RECORD_PREFIX_SEP) {
-            // truncate to handle
+        if key.starts_with(table::TABLE_PREFIX) && key.len() > table::PREFIX_LEN + table::ID_LEN &&
+           key[table_prefix_len..].starts_with(table::RECORD_PREFIX_SEP) {
+            // row key, truncate to handle
             key.truncate(table::PREFIX_LEN + table::ID_LEN);
-        } else if key[table_prefix_len..].starts_with(table::INDEX_PREFIX_SEP) {
-            // it's an index key, just remove the tailing version_id.
-            let key_len = key.len();
-            key.truncate(key_len - 8);
         } else {
-            return Err(format!("key {:?} is not a valid key", key));
+            // index key or meta key, just remove the tailing version.
+            let key_len = key.len();
+            key.truncate(key_len - VERSION_LENGTH);
         }
         split.set_split_key(key);
         Ok(())
@@ -109,7 +113,6 @@ mod test {
     use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
     use util::codec::{datum, table, Datum, number};
     use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
-    use std::io::Write;
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
@@ -158,15 +161,14 @@ mod test {
         assert!(resp.is_ok());
         assert!(!req.has_split(), "only split req should be handle.");
 
-        req = new_split_request(b"test-1234567890abcdefg");
-        let resp = observer.pre_admin(&mut ctx, &mut req);
-        assert!(resp.is_err(), "invalid split should be prevented");
+        req = new_split_request(b"test");
+        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        assert_eq!(req.get_split().get_split_key(), b"test");
 
-        let mut key = Vec::with_capacity(100);
-        key.write(table::TABLE_PREFIX).unwrap();
+        let mut key = b"db:1\x00\x00\x00\x00\x00\x00\x00\x00".to_vec();
         req = new_split_request(&key);
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
-        assert_eq!(req.get_split().get_split_key(), &*key);
+        assert_eq!(req.get_split().get_split_key(), b"db:1");
 
         key = new_row_key(1, 2, 0, 0);
         req = new_split_request(&key);

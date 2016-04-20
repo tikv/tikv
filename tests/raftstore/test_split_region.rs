@@ -24,7 +24,6 @@ use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
-use tikv::util::codec::bytes;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -40,32 +39,33 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
 
-    let a1 = bytes::encode_bytes(b"a1");
-    cluster.put(&a1, b"v1");
+    let a1 = b"a1";
+    cluster.put(a1, b"v1");
 
-    let a3 = bytes::encode_bytes(b"a3");
-    cluster.put(&a3, b"v3");
+    let a2 = b"a2";
 
-    let a2 = bytes::encode_bytes(b"a2");
+    let a3 = b"a3";
+    cluster.put(a3, b"v3");
+
     // Split with a2, so a1 must in left, and a3 in right.
-    cluster.split_region(region.get_id(), Some(a2.clone()));
+    cluster.split_region(region.get_id(), Some(a2.to_vec()));
 
-    let left = pd_client.rl().get_region(cluster_id, &a1).unwrap();
-    let right = pd_client.rl().get_region(cluster_id, &a3).unwrap();
+    let left = pd_client.rl().get_region(cluster_id, a1).unwrap();
+    let right = pd_client.rl().get_region(cluster_id, a3).unwrap();
 
     assert_eq!(region.get_id(), left.get_id());
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(left.get_end_key(), right.get_start_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
 
-    cluster.put(&a1, b"vv1");
-    assert_eq!(cluster.get(&a1).unwrap(), b"vv1".to_vec());
+    cluster.put(a1, b"vv1");
+    assert_eq!(cluster.get(a1).unwrap(), b"vv1".to_vec());
 
-    cluster.put(&a3, b"vv3");
-    assert_eq!(cluster.get(&a3).unwrap(), b"vv3".to_vec());
+    cluster.put(a3, b"vv3");
+    assert_eq!(cluster.get(a3).unwrap(), b"vv3".to_vec());
 
     let epoch = left.get_region_epoch().clone();
-    let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(&a3)]);
+    let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(a3)]);
     let region_id = left.get_id();
     let resp = cluster.call_command_on_leader(region_id, get, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error());
@@ -95,7 +95,7 @@ fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>,
     let mut rng = rand::thread_rng();
     let mut max_key = vec![];
     while len < limit {
-        let key = bytes::encode_bytes(&range.next().unwrap().to_string().into_bytes());
+        let key = range.next().unwrap().to_string().into_bytes();
         let mut value = vec![0; 64];
         rng.fill_bytes(&mut value);
         cluster.put(&key, &value);
@@ -203,17 +203,17 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
 
-    let a1 = bytes::encode_bytes(b"a1");
-    cluster.put(&a1, b"v1");
+    let a1 = b"a1";
+    cluster.put(a1, b"v1");
 
-    let a3 = bytes::encode_bytes(b"a3");
-    cluster.put(&a3, b"v3");
+    let a3 = b"a3";
+    cluster.put(a3, b"v3");
 
     // check all nodes apply the logs.
     for i in 0..3 {
         let engine = cluster.get_engine(i + 1);
-        util::must_get_equal(&engine, &a1, b"v1");
-        util::must_get_equal(&engine, &a3, b"v3");
+        util::must_get_equal(&engine, a1, b"v1");
+        util::must_get_equal(&engine, a3, b"v3");
     }
 
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
@@ -222,8 +222,8 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let index = (1..4).find(|&x| x != leader.get_store_id()).unwrap();
     cluster.stop_node(index);
 
-    let a2 = bytes::encode_bytes(b"a20");
-    cluster.split_region(region.get_id(), Some(a2.clone()));
+    let a2 = b"a20";
+    cluster.split_region(region.get_id(), Some(a2.to_vec()));
 
     // When the node starts, the region will try to join the raft group first,
     // so most of case, the new leader's heartbeat for split region may arrive
@@ -234,13 +234,13 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // TODO: we should think a better to check instead of sleep.
     util::sleep_ms(3000);
 
-    let a4 = bytes::encode_bytes(b"a4");
-    cluster.put(&a4, b"v4");
+    let a4 = b"a4";
+    cluster.put(a4, b"v4");
 
-    assert_eq!(cluster.get(&a4).unwrap(), b"v4".to_vec());
+    assert_eq!(cluster.get(a4).unwrap(), b"v4".to_vec());
 
     let engine = cluster.get_engine(index);
-    util::must_get_equal(&engine, &a4, b"v4");
+    util::must_get_equal(&engine, a4, b"v4");
 }
 
 #[test]
