@@ -27,7 +27,7 @@ pub enum Strategy {
     Delay(u64),
 }
 
-trait Filter: Send + Sync {
+pub trait Filter: Send + Sync {
     // in a SimulateTransport, if any filter's before return true, msg will be discard
     fn before(&mut self, msg: &RaftMessage) -> bool;
     // with after provided, one can change the return value arbitrarily

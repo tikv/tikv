@@ -21,7 +21,7 @@ use std::io::ErrorKind;
 
 use rocksdb::DB;
 
-use super::cluster::{Simulator, Cluster};
+use super::cluster::{Simulator, Cluster, TransportFilterable};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
@@ -32,7 +32,7 @@ use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
-use super::transport_simulate::{Strategy, SimulateTransport};
+use super::transport_simulate::{Strategy, SimulateTransport, Filter};
 
 pub struct ServerCluster {
     cluster_id: u64,
@@ -204,6 +204,11 @@ impl Simulator for ServerCluster {
 
         Ok(())
     }
+}
+
+impl TransportFilterable for ServerCluster {
+    fn add_trans_filter(&mut self, node_id: u64, filter: Box<Filter>) {}
+    fn del_trans_filter(&mut self, node_id: u64) {}
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
