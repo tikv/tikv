@@ -43,7 +43,7 @@ impl ChannelTransport {
 }
 
 impl Transport for ChannelTransport {
-    fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+    fn send(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         let to_store = msg.get_to_peer().get_store_id();
 
         match self.routers.get(&to_store) {
@@ -119,7 +119,7 @@ impl Simulator for NodeCluster {
     }
 
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        self.trans.rl().send(msg)
+        self.trans.wl().send(msg)
     }
 }
 

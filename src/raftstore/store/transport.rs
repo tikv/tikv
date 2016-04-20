@@ -17,5 +17,5 @@ use raftstore::Result;
 
 // Transports message between different raft peers.
 pub trait Transport: Send + Sync {
-    fn send(&self, msg: RaftMessage) -> Result<()>;
+    fn send(&mut self, msg: RaftMessage) -> Result<()>;
 }
