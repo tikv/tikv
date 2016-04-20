@@ -12,59 +12,45 @@
 // limitations under the License.
 
 use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
+use util::codec::table;
 
 use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
                           AdminCmdType};
 use protobuf::RepeatedField;
-use util::codec::bytes;
 use std::result::Result as StdResult;
 
 /// `SplitObserver` adjusts the split key so that it won't seperate
 /// the data of a row into two region.
 pub struct SplitObserver;
 
-pub const TABLE_PREFIX: &'static [u8] = b"t";
-pub const TABLE_ROW_MARK: &'static [u8] = b"_r";
-
 type Result<T> = StdResult<T, String>;
 
 impl SplitObserver {
-    fn extract_sql_key(&self, split: &SplitRequest) -> Result<Vec<u8>> {
+    fn on_split(&mut self, _: &mut ObserverContext, split: &mut SplitRequest) -> Result<()> {
         if !split.has_split_key() {
             return Err("split key is expected!".to_owned());
         }
-        let split_key = split.get_split_key();
-        bytes::decode_bytes(split_key)
-            .map_err(|e| format!("invalid key {:?}: {}", split_key, e))
-            .map(|r| r.0)
-    }
-
-    fn on_split(&mut self, _: &mut ObserverContext, split: &mut SplitRequest) -> Result<()> {
-        let key = try!(self.extract_sql_key(split));
+        let mut key = split.get_split_key().to_vec();
 
         // format of a key is TABLE_PREFIX + table_id + TABLE_ROW_MARK + handle or
         // TABLE_PREFIX + table_id + TABLE_INDEX_MARK
 
-        if !key.starts_with(TABLE_PREFIX) {
-            // if it's not a data key, just split.
+        if !key.starts_with(table::TABLE_PREFIX) || key.len() < table::PREFIX_LEN + table::ID_LEN {
+            // bypass non-data key.
             return Ok(());
         }
-        // table id is a u64 and we only care about row data.
-        let mark_index = TABLE_PREFIX.len() + 8;
-        let new_key: &[u8];
-        if key.len() > mark_index && key[mark_index..].starts_with(TABLE_ROW_MARK) {
-            // handle is a u64 too.
-            let expected_len = TABLE_PREFIX.len() + 8 + TABLE_ROW_MARK.len() + 8;
-            if key.len() < expected_len {
-                return Err(format!("invalid key {:?}; len should be at least {}",
-                                   key,
-                                   expected_len));
-            }
-            new_key = &key[..expected_len];
+        let table_prefix_len = table::TABLE_PREFIX.len() + table::ID_LEN;
+        if key[table_prefix_len..].starts_with(table::RECORD_PREFIX_SEP) {
+            // truncate to handle
+            key.truncate(table::PREFIX_LEN + table::ID_LEN);
+        } else if key[table_prefix_len..].starts_with(table::INDEX_PREFIX_SEP) {
+            // it's an index key, just remove the tailing version_id.
+            let key_len = key.len();
+            key.truncate(key_len - 8);
         } else {
-            new_key = &key;
+            return Err(format!("key {:?} is not a valid key", key));
         }
-        split.set_split_key(bytes::encode_bytes(new_key));
+        split.set_split_key(key);
         Ok(())
     }
 }
@@ -84,7 +70,10 @@ impl RegionObserver for SplitObserver {
                           corrupted!"
                              .to_owned()));
         }
-        box_try!(self.on_split(ctx, req.mut_split()));
+        if let Err(e) = self.on_split(ctx, req.mut_split()) {
+            error!("failed to handle split req: {:?}", e);
+            return Err(box_err!(e));
+        }
         Ok(())
     }
 
@@ -118,7 +107,7 @@ mod test {
     use raftstore::coprocessor::RegionObserver;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
-    use util::codec::bytes;
+    use util::codec::{datum, table, Datum, number};
     use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
     use std::io::Write;
 
@@ -136,32 +125,22 @@ mod test {
         req
     }
 
-    fn new_row_key(table_id: u64, row_id: u64, column_id: u64, version_id: u64) -> Vec<u8> {
-        new_key(table_id, row_id, TABLE_ROW_MARK, column_id, version_id)
-    }
-
-    fn new_index_key(table_id: u64, row_id: u64, column_id: u64, version_id: u64) -> Vec<u8> {
-        new_key(table_id, row_id, b"_i", column_id, version_id)
-    }
-
-    fn new_key(table_id: u64,
-               row_id: u64,
-               mark: &[u8],
-               column_id: u64,
-               version_id: u64)
-               -> Vec<u8> {
-        let mut key = Vec::with_capacity(100);
-        key.write(TABLE_PREFIX).unwrap();
-        key.write_u64::<BigEndian>(table_id).unwrap();
-        key.write(mark).unwrap();
-        key.write_u64::<BigEndian>(row_id).unwrap();
+    fn new_row_key(table_id: i64, row_id: i64, column_id: u64, version_id: u64) -> Vec<u8> {
+        let mut buf = vec![0; 8];
+        number::encode_i64(&mut buf, row_id).unwrap();
+        let mut key = table::encode_row_key(table_id, &buf);
         if column_id > 0 {
             key.write_u64::<BigEndian>(column_id).unwrap();
         }
-        key = bytes::encode_bytes(&key);
-        if version_id > 0 {
-            key.write_u64::<BigEndian>(version_id).unwrap();
-        }
+        key.write_u64::<BigEndian>(version_id).unwrap();
+        key
+    }
+
+    fn new_index_key(table_id: i64, idx_id: i64, datums: &[Datum], version_id: u64) -> Vec<u8> {
+        let mut key = table::encode_index_seek_key(table_id,
+                                                   idx_id,
+                                                   &datum::encode_key(datums).unwrap());
+        key.write_u64::<BigEndian>(version_id).unwrap();
         key
     }
 
@@ -179,20 +158,19 @@ mod test {
         assert!(resp.is_ok());
         assert!(!req.has_split(), "only split req should be handle.");
 
-        req = new_split_request(b"test");
+        req = new_split_request(b"test-1234567890abcdefg");
         let resp = observer.pre_admin(&mut ctx, &mut req);
         assert!(resp.is_err(), "invalid split should be prevented");
 
         let mut key = Vec::with_capacity(100);
-        key.write(TABLE_PREFIX).unwrap();
-        key = bytes::encode_bytes(&key);
+        key.write(table::TABLE_PREFIX).unwrap();
         req = new_split_request(&key);
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*key);
 
         key = new_row_key(1, 2, 0, 0);
         req = new_split_request(&key);
-        let mut expect_key = key;
+        let mut expect_key = key[..key.len() - 8].to_vec();
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
@@ -206,16 +184,22 @@ mod test {
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
-        key = new_index_key(1, 2, 0, 0);
+        key = new_index_key(1, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 0);
         req = new_split_request(&key);
-        expect_key = key;
+        expect_key = key[..key.len() - 8].to_vec();
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
-        key = new_index_key(1, 2, 1, 5);
+        key = new_index_key(1, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 5);
         req = new_split_request(&key);
-        let expect_key = new_index_key(1, 2, 1, 0);
-        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
+        observer.pre_admin(&mut ctx, &mut req).unwrap();
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
+
+        let key = b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\
+                    \x82\x7f\x80\x00\x00\x00\x00\x00\x00\xd3";
+        let expect_key = b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f";
+        req = new_split_request(key);
+        observer.pre_admin(&mut ctx, &mut req).unwrap();
+        assert_eq!(req.get_split().get_split_key(), expect_key);
     }
 }

@@ -243,7 +243,7 @@ fn test_index() {
     assert_eq!(sel_resp.get_rows().len(), count as usize);
     let mut handles = vec![];
     for row in sel_resp.get_rows() {
-        let datums = datum::decode(row.get_handle()).unwrap().0;
+        let datums = datum::decode(row.get_handle()).unwrap();
         assert_eq!(datums.len(), 1);
         if let Datum::I64(h) = datums[0] {
             handles.push(h);
