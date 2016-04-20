@@ -15,6 +15,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io::{self, Write};
 use std::fmt::{self, Formatter, Display};
+use std::slice;
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use time;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -163,6 +164,14 @@ impl<'a> Display for HexDisplay<'a> {
 
 pub fn hex(data: &[u8]) -> HexDisplay {
     HexDisplay { data: data }
+}
+
+/// Convert a borrow to a slice.
+pub fn as_slice<T>(t: &T) -> &[T] {
+    unsafe {
+        let ptr = t as *const T;
+        slice::from_raw_parts(ptr, 1)
+    }
 }
 
 #[cfg(test)]

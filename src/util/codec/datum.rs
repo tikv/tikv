@@ -132,9 +132,9 @@ impl Datum {
         }
     }
 
-    // as_bool converts self to a bool.
-    pub fn as_bool(&self) -> Result<bool> {
-        let b = match *self {
+    // into_bool converts self to a bool.
+    pub fn into_bool(self) -> Result<bool> {
+        let b = match self {
             Datum::I64(i) => i != 0,
             Datum::U64(u) => u != 0,
             Datum::F32(f) => f.round() != 0f32,
@@ -442,7 +442,7 @@ mod test {
             (b"abc".as_ref().into(), false),
         ];
         for (d, b) in tests {
-            if d.as_bool().unwrap() ^ b {
+            if d.clone().into_bool().unwrap() ^ b {
                 panic!("expect {:?} to be {}", d, b);
             }
         }
