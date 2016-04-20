@@ -34,7 +34,7 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::Worker;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
-                    CompactRunner};
+                    CompactRunner, PdRunner, PdTask};
 use super::util;
 use super::{SendCh, Msg, Tick};
 use super::keys::{self, enc_start_key, enc_end_key};
@@ -50,7 +50,7 @@ type Key = Vec<u8>;
 
 const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
 
-pub struct Store<T: Transport, C: PdClient> {
+pub struct Store<T: Transport, C: PdClient + 'static> {
     cluster_meta: metapb::Cluster,
     cfg: Config,
     ident: StoreIdent,
@@ -66,6 +66,7 @@ pub struct Store<T: Transport, C: PdClient> {
     split_check_worker: Worker<SplitCheckTask>,
     snap_worker: Worker<SnapTask>,
     compact_worker: Worker<CompactTask>,
+    pd_worker: Worker<PdTask>,
 
     /// A flag indicates whether store has been shutdown.
     stopped: Arc<RwLock<bool>>,
@@ -118,7 +119,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker".to_owned()),
             snap_worker: Worker::new("snapshot worker".to_owned()),
-            compact_worker: Worker::new("compact woker".to_owned()),
+            compact_worker: Worker::new("compact worker".to_owned()),
+            pd_worker: Worker::new("pd worker".to_owned()),
             region_ranges: BTreeMap::new(),
             stopped: Arc::new(RwLock::new(false)),
             trans: trans,
@@ -170,6 +172,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.snap_worker.start(SnapRunner));
 
         box_try!(self.compact_worker.start(CompactRunner));
+
+        let pd_runner = PdRunner::new(self.cluster_meta.get_id(), self.pd_client.clone());
+        box_try!(self.pd_worker.start(pd_runner));
 
         try!(event_loop.run(self));
         Ok(())
@@ -625,12 +630,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         let key = keys::origin_key(&split_key);
         let peer = p.unwrap();
-        if let Err(e) = self.pd_client
-                            .rl()
-                            .ask_split(self.cluster_meta.get_id(),
-                                       peer.region(),
-                                       key,
-                                       peer.peer.clone()) {
+        let task = PdTask::AskSplit {
+            region: peer.region(),
+            split_key: key.to_vec(),
+            peer: peer.peer.clone(),
+        };
+        if let Err(e) = self.pd_worker.schedule(task) {
             error!("failed to notify pd to split region {} at {:?}: {}",
                    region_id,
                    split_key,
@@ -660,11 +665,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("peer count {} != max_peer_number {}, notifying pd",
                   peer_count,
                   max_count);
-            if let Err(e) = self.pd_client
-                                .rl()
-                                .ask_change_peer(self.cluster_meta.get_id(),
-                                                 peer.region(),
-                                                 peer.peer.clone()) {
+            let task = PdTask::AskChangePeer {
+                region: peer.region(),
+                peer: peer.peer.clone(),
+            };
+            if let Err(e) = self.pd_worker.schedule(task) {
                 error!("failed to notify pd: {}", e);
             }
         }
@@ -755,6 +760,10 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
             if let Err(e) = self.compact_worker.stop() {
                 error!("failed to stop compact thread: {:?}!!!", e);
+            }
+
+            if let Err(e) = self.pd_worker.stop() {
+                error!("failed to stop pd thread: {:?}!!!", e);
             }
 
             return;
