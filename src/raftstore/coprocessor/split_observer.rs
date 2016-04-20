@@ -129,7 +129,7 @@ mod test {
     }
 
     fn new_row_key(table_id: i64, row_id: i64, column_id: u64, version_id: u64) -> Vec<u8> {
-        let mut buf = vec![0; 8];
+        let mut buf = vec![0; table::ID_LEN];
         number::encode_i64(&mut buf, row_id).unwrap();
         let mut key = table::encode_row_key(table_id, &buf);
         if column_id > 0 {
