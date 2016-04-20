@@ -542,15 +542,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                      .map(|p| p.matched)
                                      .min()
                                      .unwrap();
+            let applied_idx = peer.storage.rl().applied_index();
             let first_idx = peer.storage.rl().first_index();
-
-            if replicated_idx < first_idx ||
+            let compact_idx;
+            if applied_idx > first_idx && applied_idx - first_idx >= self.cfg.raft_log_gc_limit {
+                compact_idx = applied_idx;
+            } else if replicated_idx < first_idx ||
                replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {
                 continue;
+            } else {
+                compact_idx = replicated_idx;
             }
 
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), replicated_idx);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx);
 
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
@@ -559,7 +564,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 callback: cb,
             }) {
                 error!("send compact log {} to region {} err {:?}",
-                       replicated_idx,
+                       compact_idx,
                        region_id,
                        e);
             }

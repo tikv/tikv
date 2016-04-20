@@ -135,7 +135,8 @@ impl<T: Simulator> Cluster<T> {
                                   mut request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
-        request.mut_header().set_peer(self.leader_of_region(region_id).unwrap());
+        let leader = self.leader_of_region(region_id).unwrap();
+        request.mut_header().set_peer(leader);
         self.call_command(request, timeout)
     }
 
