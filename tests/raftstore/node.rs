@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use rocksdb::DB;
 
-use super::cluster::{Simulator, Cluster};
+use super::cluster::{Simulator, Cluster, TransportFilterable};
 use tikv::server::Node;
 use tikv::raftstore::store::{Transport, msg};
 use kvproto::raft_cmdpb::*;
@@ -30,7 +30,7 @@ use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
-use super::transport_simulate::{Strategy, SimulateTransport};
+use super::transport_simulate::{Strategy, SimulateTransport, Filter};
 
 pub struct ChannelTransport {
     pub routers: HashMap<u64, Arc<RwLock<ServerRaftStoreRouter>>>,
@@ -121,6 +121,11 @@ impl Simulator for NodeCluster {
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         self.trans.rl().send(msg)
     }
+}
+
+impl TransportFilterable for NodeCluster {
+    fn add_trans_filter(&mut self, node_id: u64, filter: Box<Filter>) {}
+    fn del_trans_filter(&mut self, node_id: u64) {}
 }
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {

@@ -23,7 +23,7 @@ use rocksdb::{DB, WriteBatch, Writable};
 use tempdir::TempDir;
 use uuid::Uuid;
 use protobuf;
-use super::cluster::{Cluster, Simulator};
+use super::cluster::{Cluster, Simulator, TransportFilterable};
 
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
@@ -244,8 +244,8 @@ pub fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
     db.write(wb).expect("");
 }
 
-pub fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>,
-                                     initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
+pub fn prepare_cluster<T: Simulator + TransportFilterable>(cluster: &mut Cluster<T>,
+                                                           initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
     cluster.bootstrap_region().expect("");
     cluster.start();
     for engine in cluster.engines.values() {

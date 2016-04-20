@@ -31,7 +31,7 @@ use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
-use super::transport_simulate::Strategy;
+use super::transport_simulate::{Strategy, SimulateTransport, Filter};
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -56,7 +56,12 @@ pub trait Simulator {
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()>;
 }
 
-pub struct Cluster<T: Simulator> {
+pub trait TransportFilterable {
+    fn add_trans_filter(&mut self, node_id: u64, filter: Box<Filter>);
+    fn del_trans_filter(&mut self, node_id: u64);
+}
+
+pub struct Cluster<T: Simulator + TransportFilterable> {
     pub cfg: ServerConfig,
     leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
@@ -69,7 +74,17 @@ pub struct Cluster<T: Simulator> {
     pub pd_client: Arc<RwLock<TestPdClient>>,
 }
 
-impl<T: Simulator> Cluster<T> {
+fn add_trans_filter<T: TransportFilterable>(this: &mut Arc<RwLock<T>>,
+                                            node_id: u64,
+                                            filter: Box<Filter>) {
+    this.wl().add_trans_filter(node_id, filter);
+}
+
+fn del_trans_filter<T: TransportFilterable>(this: &mut Arc<RwLock<T>>, node_id: u64) {
+    this.wl().del_trans_filter(node_id);
+}
+
+impl<T: Simulator + TransportFilterable> Cluster<T> {
     // Create the default Store cluster.
     pub fn new(id: u64,
                count: usize,
@@ -458,9 +473,37 @@ impl<T: Simulator> Cluster<T> {
         assert!(status_resp.has_region_detail());
         status_resp.take_region_detail()
     }
+
+    pub fn partition(&mut self) {
+        let node_ids = self.sim.rl().get_node_ids();
+        let (one, other) = partition_split(node_ids);
+        for node_id in one {
+            let filter = new_the_filter();
+            add_trans_filter(&mut self.sim, node_id, filter);
+        }
+        for node_id in other {
+            let filter = new_the_filter();
+            add_trans_filter(&mut self.sim, node_id, filter);
+        }
+    }
+
+    pub fn heal_partition(&mut self) {
+        let node_ids = self.sim.rl().get_node_ids();
+        for node_id in node_ids {
+            del_trans_filter(&mut self.sim, node_id);
+        }
+    }
 }
 
-impl<T: Simulator> Drop for Cluster<T> {
+fn partition_split(node_ids: HashSet<u64>) -> (HashSet<u64>, HashSet<u64>) {
+    unimplemented!();
+}
+
+fn new_the_filter() -> Box<Filter> {
+    unimplemented!();
+}
+
+impl<T: Simulator + TransportFilterable> Drop for Cluster<T> {
     fn drop(&mut self) {
         self.shutdown();
     }
