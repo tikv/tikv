@@ -44,6 +44,10 @@ impl Key {
     pub fn reverse_seek_key(&self) -> Key {
         let mut encoded = self.0.clone();
         let len = encoded.len();
+        // It won't overflow since for a encoded key, last char will be the the PADDING_MARK, which
+        // will be not less than '0xFF - 8'.
+        // TODO: This is not elegant without doubt. We may re-arrange key layout to make it easier
+        // to do reverse seek.
         encoded[len - 1] -= 1u8;
         Key(encoded)
     }
