@@ -31,7 +31,9 @@ pub enum Modify {
 
 pub trait Engine: Send + Sync + Debug {
     fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
+    /// Seeks for the first kv pair that is greater than or equals key.
     fn seek(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
+    /// Seeks for the last kv pair that is less than key.
     fn reverse_seek(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
     fn snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
@@ -47,7 +49,9 @@ pub trait Engine: Send + Sync + Debug {
 
 pub trait Snapshot {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
+    /// seeks for the first kv pair that is greater than or equals key.
     fn seek(&self, key: &Key) -> Result<Option<KvPair>>;
+    /// seeks for the last kv pair that is less than key.
     fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>>;
 }
 
@@ -150,6 +154,10 @@ mod tests {
         assert_eq!((k, &v as &[u8]), (bytes::encode_bytes(pair.0), pair.1));
     }
 
+    fn assert_reverse_seek_none<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
+        assert!(engine.reverse_seek(&Context::new(), &make_key(key)).unwrap().is_none());
+    }
+
     fn get_put<T: Engine + ?Sized>(engine: &T) {
         assert_none(engine, b"x");
         must_put(engine, b"x", b"1");
@@ -188,13 +196,12 @@ mod tests {
 
     fn reverse_seek<T: Engine + ?Sized>(engine: &T) {
         must_put(engine, b"x", b"1");
-        assert_reverse_seek(engine, b"x", (b"x", b"1"));
+        assert_reverse_seek_none(engine, b"x");
         assert_reverse_seek(engine, b"y", (b"x", b"1"));
         must_put(engine, b"z", b"2");
-        assert_reverse_seek(engine, b"y", (b"x", b"1"));
+        assert_reverse_seek(engine, b"z", (b"x", b"1"));
         assert_reverse_seek(engine, b"z\x00", (b"z", b"2"));
-        assert_eq!(engine.reverse_seek(&Context::new(), &make_key(b"a")).unwrap(),
-                   None);
+        assert_reverse_seek_none(engine, b"x");
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }

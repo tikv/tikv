@@ -34,23 +34,6 @@ impl Key {
         encoded.write_u64::<BigEndian>(ts).unwrap();
         Key(encoded)
     }
-
-    /// Returns a key that can be used for `seek` next key.
-    pub fn seek_key(&self) -> Key {
-        self.encode_ts(u64::max_value())
-    }
-
-    /// Returns a key that can be used for `reverse_seek` next key.
-    pub fn reverse_seek_key(&self) -> Key {
-        let mut encoded = self.0.clone();
-        let len = encoded.len();
-        // It won't overflow since for an encoded key, last char will be the the PADDING_MARK, which
-        // will be not less than '0xFF - 8'.
-        // TODO: This is not elegant without doubt. We may re-arrange key layout to make it easier
-        // to do reverse seek.
-        encoded[len - 1] -= 1u8;
-        Key(encoded)
-    }
 }
 
 impl Hash for Key {

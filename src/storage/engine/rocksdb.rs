@@ -62,7 +62,7 @@ impl Engine for EngineRocksdb {
         if !iter.valid() {
             iter = self.db.iterator(IteratorMode::End);
         }
-        let pair = iter.skip_while(|&(ref k, _)| k.as_ref() > key.raw())
+        let pair = iter.skip_while(|&(ref k, _)| k.as_ref() >= key.raw())
                        .next()
                        .map(|(k, v)| (k.into_vec(), v.into_vec()));
         Ok(pair)
@@ -121,7 +121,7 @@ impl<'a> Snapshot for RocksSnapshot<'a> {
         if !iter.valid() {
             iter = self.iterator(IteratorMode::End);
         }
-        let pair = iter.skip_while(|&(ref k, _)| k.as_ref() > key.raw())
+        let pair = iter.skip_while(|&(ref k, _)| k.as_ref() >= key.raw())
                        .next()
                        .map(|(k, v)| (k.into_vec(), v.into_vec()));
         Ok(pair)

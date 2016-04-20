@@ -223,7 +223,7 @@ impl<'a> SnapshotStore<'a> {
                 }
                 Err(e) => return Err(e.into()),
             };
-            key = key.seek_key();
+            key = key.encode_ts(u64::max_value());
         }
         Ok(results)
     }
@@ -234,19 +234,18 @@ impl<'a> SnapshotStore<'a> {
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
             let next_key = match try!(self.snapshot.reverse_seek(&key)) {
-                Some((key, _)) => try!(bytes::decode_bytes(&key)).0,
+                Some((key, _)) => try!(bytes::extract_encoded_bytes(&key)).0.to_owned(),
                 None => break,
             };
-            key = Key::from_raw(bytes::encode_bytes(&next_key));
+            key = Key::from_raw(next_key);
             match txn.get(&key) {
-                Ok(Some(value)) => results.push(Ok((key.raw().clone(), value))),
+                Ok(Some(value)) => results.push(Ok((key.raw().to_owned(), value))),
                 Ok(None) => {}
                 e @ Err(MvccError::KeyIsLocked { .. }) => {
                     results.push(Err(Error::from(e.unwrap_err())))
                 }
                 Err(e) => return Err(e.into()),
             };
-            key = key.reverse_seek_key();
         }
         Ok(results)
     }
@@ -547,10 +546,7 @@ mod tests {
                                   3,
                                   10,
                                   vec![Some((b"C", b"C10")), Some((b"A", b"A10"))]);
-            store.reverse_scan_ok(b"C",
-                                  4,
-                                  10,
-                                  vec![Some((b"C", b"C10")), Some((b"A", b"A10"))]);
+            store.reverse_scan_ok(b"C", 4, 10, vec![Some((b"A", b"A10"))]);
             store.reverse_scan_ok(b"0", 1, 10, vec![]);
         };
         check_v10();
@@ -582,7 +578,7 @@ mod tests {
                                        Some((b"C", b"C10")),
                                        Some((b"B", b"B20")),
                                        Some((b"A", b"A10"))]);
-            store.reverse_scan_ok(b"C",
+            store.reverse_scan_ok(b"C\x00",
                                   5,
                                   20,
                                   vec![Some((b"C", b"C10")),
@@ -611,8 +607,8 @@ mod tests {
                                   vec![Some((b"E", b"E10")),
                                        Some((b"C", b"C10")),
                                        Some((b"B", b"B20"))]);
-            store.reverse_scan_ok(b"D", 1, 30, vec![Some((b"C", b"C10"))]);
-            store.reverse_scan_ok(b"DD",
+            store.reverse_scan_ok(b"D\x00", 1, 30, vec![Some((b"C", b"C10"))]);
+            store.reverse_scan_ok(b"D\x00",
                                   5,
                                   30,
                                   vec![Some((b"C", b"C10")), Some((b"B", b"B20"))]);

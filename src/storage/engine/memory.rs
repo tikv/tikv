@@ -13,7 +13,7 @@
 
 use std::sync::RwLock;
 use std::collections::BTreeMap;
-use std::collections::Bound::{Included, Unbounded};
+use std::collections::Bound::{Included, Excluded, Unbounded};
 use std::fmt::{self, Formatter, Debug};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
@@ -54,7 +54,7 @@ impl Engine for EngineBtree {
     fn reverse_seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
         trace!("EngineBtree: rev_seek {:?}", key);
         let m = self.map.rl();
-        let iter = m.range::<Vec<u8>, Vec<u8>>(Unbounded, Included(key.raw()));
+        let iter = m.range::<Vec<u8>, Vec<u8>>(Unbounded, Excluded(key.raw()));
         Ok(iter.last().map(|(k, v)| (k.clone(), v.clone())))
     }
 
@@ -96,7 +96,7 @@ impl Snapshot for BTreeMap<Vec<u8>, Value> {
 
     fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>> {
         trace!("SnapshotBTree: rev_seek {:?}", key);
-        let iter = self.range::<Vec<u8>, Vec<u8>>(Unbounded, Included(key.raw()));
+        let iter = self.range::<Vec<u8>, Vec<u8>>(Unbounded, Excluded(key.raw()));
         Ok(iter.last().map(|(k, v)| (k.clone(), v.clone())))
     }
 }
