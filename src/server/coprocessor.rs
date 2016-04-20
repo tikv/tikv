@@ -110,9 +110,8 @@ fn msg_poller(engine: Arc<Box<Engine>>, rx: Receiver<EndPointMessage>, ch: SendC
         let timer = Instant::now();
         match msg {
             EndPointMessage::Job(req, token, msg_id) => {
-                let res = handle_request(req, ch.clone(), token, msg_id, &end_point);
+                handle_request(req, ch.clone(), token, msg_id, &end_point);
                 debug!("request {:?}/{} takes {:?}", token, msg_id, timer.elapsed());
-                res
             }
             EndPointMessage::Close => break,
         }

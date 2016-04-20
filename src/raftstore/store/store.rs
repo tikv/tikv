@@ -710,18 +710,17 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         let t = Instant::now();
+        let msg_str = format!("{:?}", msg);
         match msg {
             Msg::RaftMessage(data) => {
                 if let Err(e) = self.on_raft_message(data) {
                     error!("handle raft message err: {:?}", e);
                 }
-                debug!("handle raftmessage takes {:?}", t.elapsed());
             }
             Msg::RaftCmd { request, callback } => {
                 if let Err(e) = self.propose_raft_command(request, callback) {
                     error!("propose raft command err: {:?}", e);
                 }
-                debug!("handle raftcmd takes {:?}", t.elapsed());
             }
             Msg::Quit => {
                 info!("receive quit message");
@@ -730,9 +729,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SplitCheckResult { region_id, split_key } => {
                 info!("split check of {} complete.", region_id);
                 self.on_split_check_result(region_id, split_key);
-                debug!("handle split check result takes {:?}", t.elapsed());
             }
         }
+        debug!("handle {:?} takes {:?}", msg_str, t.elapsed());
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
