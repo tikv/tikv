@@ -17,7 +17,7 @@ use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use super::transport_simulate;
+use super::transport_simulate::Strategy;
 
 use rand;
 use rand::Rng;
@@ -28,7 +28,7 @@ fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_multi_with_transport_strategy<T: Simulator>(cluster: &mut Cluster<T>,
-                                                    strategy: Vec<transport_simulate::Strategy>) {
+                                                    strategy: Vec<Strategy>) {
     // init_log();
 
     // test a cluster with five nodes [1, 5], only one region (region 1).
@@ -192,15 +192,14 @@ fn test_multi_node_base() {
 fn test_multi_node_latency() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![transport_simulate::Strategy::Delay(10)]);
+    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::Delay(10)]);
 }
 
 #[test]
 fn test_multi_node_drop_packet() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster,
-                                       vec![transport_simulate::Strategy::DropPacket(40)]);
+    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::DropPacket(40)]);
 }
 
 #[test]
@@ -214,15 +213,14 @@ fn test_multi_server_base() {
 fn test_multi_server_latency() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![transport_simulate::Strategy::Delay(10)]);
+    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::Delay(10)]);
 }
 
 #[test]
 fn test_multi_server_drop_packet() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster,
-                                       vec![transport_simulate::Strategy::DropPacket(40)]);
+    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::DropPacket(40)]);
 }
 
 #[test]

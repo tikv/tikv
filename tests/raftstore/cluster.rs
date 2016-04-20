@@ -26,12 +26,12 @@ use super::util::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raftpb::ConfChangeType;
-use kvproto::raft_serverpb;
+use kvproto::raft_serverpb::RaftMessage;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
-use super::transport_simulate::{Strategy, SimulateTransport, Filter};
+use super::transport_simulate::{Strategy, Filter};
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -53,15 +53,13 @@ pub trait Simulator {
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
-    fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()>;
+    fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
+
+    fn push_trans_filter(&mut self, node_id: u64, filter: Box<Filter>);
+    fn pop_trans_filter(&mut self, node_id: u64);
 }
 
-pub trait TransportFilterable {
-    fn add_trans_filter(&mut self, node_id: u64, filter: Box<Filter>);
-    fn del_trans_filter(&mut self, node_id: u64);
-}
-
-pub struct Cluster<T: Simulator + TransportFilterable> {
+pub struct Cluster<T: Simulator> {
     pub cfg: ServerConfig,
     leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
@@ -74,17 +72,7 @@ pub struct Cluster<T: Simulator + TransportFilterable> {
     pub pd_client: Arc<RwLock<TestPdClient>>,
 }
 
-fn add_trans_filter<T: TransportFilterable>(this: &mut Arc<RwLock<T>>,
-                                            node_id: u64,
-                                            filter: Box<Filter>) {
-    this.wl().add_trans_filter(node_id, filter);
-}
-
-fn del_trans_filter<T: TransportFilterable>(this: &mut Arc<RwLock<T>>, node_id: u64) {
-    this.wl().del_trans_filter(node_id);
-}
-
-impl<T: Simulator + TransportFilterable> Cluster<T> {
+impl<T: Simulator> Cluster<T> {
     // Create the default Store cluster.
     pub fn new(id: u64,
                count: usize,
@@ -149,7 +137,7 @@ impl<T: Simulator + TransportFilterable> Cluster<T> {
         self.engines.get(&node_id).unwrap().clone()
     }
 
-    pub fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+    pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         self.sim.rl().send_raft_msg(msg)
     }
 
@@ -474,36 +462,65 @@ impl<T: Simulator + TransportFilterable> Cluster<T> {
         status_resp.take_region_detail()
     }
 
-    pub fn partition(&mut self) {
-        let node_ids = self.sim.rl().get_node_ids();
-        let (one, other) = partition_split(node_ids);
-        for node_id in one {
-            let filter = new_the_filter();
-            add_trans_filter(&mut self.sim, node_id, filter);
+    pub fn partition(&mut self, s1: &HashSet<u64>, s2: &HashSet<u64>) {
+        for node_id in s1 {
+            let filter = new_partition_filter(s2);
+            self.sim.wl().push_trans_filter(*node_id, filter);
         }
-        for node_id in other {
-            let filter = new_the_filter();
-            add_trans_filter(&mut self.sim, node_id, filter);
+        for node_id in s2 {
+            let filter = new_partition_filter(s1);
+            self.sim.wl().push_trans_filter(*node_id, filter);
         }
     }
 
-    pub fn heal_partition(&mut self) {
-        let node_ids = self.sim.rl().get_node_ids();
-        for node_id in node_ids {
-            del_trans_filter(&mut self.sim, node_id);
+    pub fn heal_partition(&mut self, s1: &HashSet<u64>, s2: &HashSet<u64>) {
+        for node_id in s1 {
+            self.sim.wl().pop_trans_filter(*node_id);
+        }
+        for node_id in s2 {
+            self.sim.wl().pop_trans_filter(*node_id);
         }
     }
 }
 
-fn partition_split(node_ids: HashSet<u64>) -> (HashSet<u64>, HashSet<u64>) {
-    unimplemented!();
+fn partition_simple_split(node_ids: &HashSet<u64>) -> (HashSet<u64>, HashSet<u64>) {
+    let size = node_ids.len() / 2;
+    let mut one = HashSet::new();
+    let mut other = HashSet::new();
+    let mut i = 0;
+    for node_id in node_ids.iter() {
+        if i < size {
+            one.insert(*node_id);
+        } else {
+            other.insert(*node_id);
+        }
+        i = i + 1;
+    }
+    (one, other)
 }
 
-fn new_the_filter() -> Box<Filter> {
-    unimplemented!();
+struct PartitionFilter {
+    node_ids: HashSet<u64>,
 }
 
-impl<T: Simulator + TransportFilterable> Drop for Cluster<T> {
+impl Filter for PartitionFilter {
+    fn before(&self, msg: &RaftMessage) -> bool {
+        if self.node_ids.contains(&msg.get_to_peer().get_store_id()) {
+            return true;
+        }
+        false
+    }
+    fn after(&self, r: Result<()>) -> Result<()> {
+        r
+    }
+}
+
+fn new_partition_filter(node_ids: &HashSet<u64>) -> Box<Filter> {
+    let ids = node_ids.clone();
+    Box::new(PartitionFilter { node_ids: ids })
+}
+
+impl<T: Simulator> Drop for Cluster<T> {
     fn drop(&mut self) {
         self.shutdown();
     }

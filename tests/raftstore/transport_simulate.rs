@@ -99,6 +99,14 @@ impl<T: Transport> SimulateTransport<T> {
             trans: trans,
         }
     }
+
+    pub fn push(&mut self, filter: Box<Filter>) {
+        self.filters.push(filter);
+    }
+
+    pub fn pop(&mut self) {
+        self.filters.pop();
+    }
 }
 
 impl<T: Transport> Transport for SimulateTransport<T> {
