@@ -91,7 +91,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
         lock.set_primary_key(primary.to_vec());
         lock.set_start_ts(self.start_ts);
         meta.set_lock(lock);
-        let modify = Modify::Put((key.clone(), meta.to_bytes()));
+        let modify = Modify::Put((key.encode_ts(0), meta.to_bytes()));
         self.writes.push(modify);
 
         if let Mutation::Put((_, ref value)) = mutation {
@@ -103,7 +103,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
 
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
         let mut meta = try!(self.snapshot.load_meta(key));
-        self.commit_impl(commit_ts, key.clone(), &mut meta)
+        self.commit_impl(commit_ts, key.encode_ts(0), &mut meta)
     }
 
     fn commit_impl(&mut self, commit_ts: u64, meta_key: Key, meta: &mut Meta) -> Result<()> {
@@ -136,13 +136,13 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
                            get_ts: u64)
                            -> Result<Option<Value>> {
         let mut meta = try!(self.snapshot.load_meta(key));
-        try!(self.commit_impl(commit_ts, key.clone(), &mut meta));
+        try!(self.commit_impl(commit_ts, key.encode_ts(0), &mut meta));
         self.snapshot.get_impl(key, &meta, get_ts)
     }
 
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
         let mut meta = try!(self.snapshot.load_meta(key));
-        self.rollback_impl(key, key.clone(), &mut meta)
+        self.rollback_impl(key, key.encode_ts(0), &mut meta)
     }
 
     fn rollback_impl(&mut self, key: &Key, meta_key: Key, meta: &mut Meta) -> Result<()> {
@@ -168,7 +168,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
 
     pub fn rollback_then_get(&mut self, key: &Key) -> Result<Option<Value>> {
         let mut meta = try!(self.snapshot.load_meta(key));
-        try!(self.rollback_impl(key, key.clone(), &mut meta));
+        try!(self.rollback_impl(key, key.encode_ts(0), &mut meta));
         self.snapshot.get_impl(key, &meta, self.start_ts)
     }
 }
@@ -193,7 +193,7 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
     }
 
     fn load_meta(&self, key: &Key) -> Result<Meta> {
-        let meta = match try!(self.snapshot.get(key)) {
+        let meta = match try!(self.snapshot.get(&key.encode_ts(0))) {
             Some(x) => try!(Meta::parse(&x)),
             None => Meta::new(),
         };
@@ -259,7 +259,10 @@ mod tests {
         must_get_none(engine.as_ref(), b"x", 23);
 
         // insert bad format data
-        engine.put(&Context::new(), make_key(b"y"), b"dummy".to_vec()).unwrap();
+        engine.put(&Context::new(),
+                   make_key(b"y").encode_ts(0),
+                   b"dummy".to_vec())
+              .unwrap();
         must_get_err(engine.as_ref(), b"y", 100);
     }
 

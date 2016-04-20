@@ -12,11 +12,12 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::mem;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair, Mutation};
 use storage::{Engine, Snapshot};
 use storage::mvcc::{MvccTxn, MvccSnapshot, Error as MvccError};
-use util::codec::bytes;
+use util::codec;
 use super::shard_mutex::ShardMutex;
 use super::{Error, Result};
 
@@ -210,13 +211,12 @@ impl<'a> SnapshotStore<'a> {
         let mut key = key;
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
-            let next_key = match try!(self.snapshot.seek(&key)) {
-                Some((key, _)) => key,
+            key = match try!(self.snapshot.seek(&key)) {
+                Some((k, _)) => try!(extract_key(&k)),
                 None => break,
             };
-            key = Key::from_raw(next_key.clone());
             match txn.get(&key) {
-                Ok(Some(value)) => results.push(Ok((next_key, value))),
+                Ok(Some(value)) => results.push(Ok((key.raw().to_owned(), value))),
                 Ok(None) => {}
                 e @ Err(MvccError::KeyIsLocked { .. }) => {
                     results.push(Err(Error::from(e.unwrap_err())))
@@ -233,11 +233,10 @@ impl<'a> SnapshotStore<'a> {
         let mut key = key;
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
-            let next_key = match try!(self.snapshot.reverse_seek(&key)) {
-                Some((key, _)) => try!(bytes::extract_encoded_bytes(&key)).0.to_owned(),
+            key = match try!(self.snapshot.reverse_seek(&key)) {
+                Some((k, _)) => try!(extract_key(&k)),
                 None => break,
             };
-            key = Key::from_raw(next_key);
             match txn.get(&key) {
                 Ok(Some(value)) => results.push(Ok((key.raw().to_owned(), value))),
                 Ok(None) => {}
@@ -249,6 +248,15 @@ impl<'a> SnapshotStore<'a> {
         }
         Ok(results)
     }
+}
+
+/// `extract_key` discards the 8 bytes mvcc version, returns the real key.
+fn extract_key(key: &[u8]) -> Result<Key> {
+    let len = key.len();
+    if len < mem::size_of::<u64>() {
+        return Err(codec::Error::KeyLength.into());
+    }
+    Ok(Key::from_raw(key[..len - mem::size_of::<u64>()].to_owned()))
 }
 
 #[cfg(test)]
@@ -451,7 +459,7 @@ mod tests {
         let engine = engine::new_engine(Dsn::Memory).unwrap();
         let store = TxnStore::new(Arc::new(engine));
 
-        store.put_ok(b"secondary", b"s-0", 0, 1);
+        store.put_ok(b"secondary", b"s-0", 1, 2);
         store.prewrite_ok(vec![Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
                                Mutation::Put((make_key(b"secondary"), b"s-5".to_vec()))],
                           b"primary",
@@ -467,7 +475,7 @@ mod tests {
         let engine = engine::new_engine(Dsn::Memory).unwrap();
         let store = TxnStore::new(Arc::new(engine));
 
-        store.put_ok(b"secondary", b"s-0", 0, 1);
+        store.put_ok(b"secondary", b"s-0", 1, 2);
         store.prewrite_ok(vec![Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
                                Mutation::Put((make_key(b"secondary"), b"s-5".to_vec()))],
                           b"primary",
@@ -662,7 +670,7 @@ mod tests {
 
     impl Oracle {
         fn new() -> Oracle {
-            Oracle { ts: AtomicUsize::new(0) }
+            Oracle { ts: AtomicUsize::new(1) }
         }
 
         fn get_ts(&self) -> u64 {

@@ -83,32 +83,6 @@ pub fn decode_bytes(data: &[u8]) -> Result<(Vec<u8>, usize)> {
     Err(Error::KeyLength)
 }
 
-/// `extract_encoded_bytes` extracts encoded bytes from the buffer, without decoding.
-pub fn extract_encoded_bytes(data: &[u8]) -> Result<(&[u8], usize)> {
-    let mut len: usize = 0;
-    for chunk in data.chunks(ENC_GROUP_SIZE + 1) {
-        if chunk.len() != ENC_GROUP_SIZE + 1 {
-            return Err(Error::KeyLength);
-        }
-        len += ENC_GROUP_SIZE + 1;
-
-        let (marker, bytes) = chunk.split_last().unwrap();
-        let pad_size = (ENC_MARKER - *marker) as usize;
-        if pad_size == 0 {
-            continue;
-        }
-        if pad_size > ENC_GROUP_SIZE {
-            return Err(Error::KeyPadding);
-        }
-        let (_, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
-        if padding.iter().any(|x| *x != 0) {
-            return Err(Error::KeyPadding);
-        }
-        return Ok((&data[0..len], len));
-    }
-    Err(Error::KeyLength)
-}
-
 /// `encode_compact_bytes` joins bytes with its length into a byte slice. It is more
 /// efficient in both space and time compare to `encode_bytes`. Note that the encoded
 /// result is not memcomparable.
