@@ -17,13 +17,11 @@ pub mod errors;
 mod client;
 mod protocol;
 pub use self::errors::{Result, Error};
-pub use self::client::{TRpcClient, RpcClient, Client};
+pub use self::client::RpcClient;
 
-pub type PdRpcClient = Client<RpcClient>;
-
-pub fn new_rpc_client(addr: &str) -> Result<PdRpcClient> {
+pub fn new_rpc_client(addr: &str) -> Result<RpcClient> {
     let client = try!(RpcClient::new(addr));
-    Ok(try!(Client::new(client)))
+    Ok(client)
 }
 
 use kvproto::metapb;

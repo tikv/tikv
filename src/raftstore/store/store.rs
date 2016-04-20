@@ -662,10 +662,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if peer_count == max_count {
                 continue;
             }
+            let mut change_type = ConfChangeType::AddNode;
+            if peer_count > max_count {
+                change_type = ConfChangeType::RemoveNode;
+            }
             info!("peer count {} != max_peer_number {}, notifying pd",
                   peer_count,
                   max_count);
             let task = PdTask::AskChangePeer {
+                change_type: change_type,
                 region: peer.region(),
                 peer: peer.peer.clone(),
             };

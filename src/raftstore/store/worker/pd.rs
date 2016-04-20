@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::fmt::{self, Formatter, Display};
 
 use kvproto::metapb;
+use kvproto::raftpb;
 
 use util::HandyRwLock;
 use util::worker::Runnable;
@@ -25,6 +26,7 @@ use pd::PdClient;
 #[allow(enum_variant_names)]
 pub enum Task {
     AskChangePeer {
+        change_type: raftpb::ConfChangeType,
         region: metapb::Region,
         peer: metapb::Peer,
     },
@@ -39,8 +41,15 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::AskChangePeer { .. } => write!(f, "ask change peer"),
-            Task::AskSplit { .. } => write!(f, "ask split"),
+            Task::AskChangePeer { ref change_type, ref region, .. } => {
+                write!(f, "ask {:?} for region {}", change_type, region.get_id())
+            }
+            Task::AskSplit { ref region, ref split_key, .. } => {
+                write!(f,
+                       "ask split region {} with key {:?}",
+                       region.get_id(),
+                       split_key)
+            }
         }
     }
 }
@@ -64,7 +73,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         debug!("executing task {}", task);
 
         let res = match task {
-            Task::AskChangePeer { region, peer } => {
+            Task::AskChangePeer { region, peer, .. } => {
+                // TODO: We may add change_type in pd protocol later.
                 self.pd_client.rl().ask_change_peer(self.cluster_id, region, peer)
             }
             Task::AskSplit { region, split_key, peer } => {

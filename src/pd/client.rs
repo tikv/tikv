@@ -13,23 +13,20 @@
 
 use std::net::TcpStream;
 use std::time::Duration;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Sender};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use util::codec::rpc;
 use util::make_std_tcp_conn;
-use protobuf::{self, MessageStatic};
+use protobuf::MessageStatic;
+
+use kvproto::pdpb::{Request, Response};
+
 use super::Result;
 
 const MAX_PD_SEND_RETRY_COUNT: usize = 100;
-
-pub trait TRpcClient: Sync + Send {
-    fn send<M, P>(&self, msg_id: u64, message: &M) -> Result<P>
-        where M: protobuf::Message,
-              P: protobuf::Message + MessageStatic;
-    fn post<M: protobuf::Message + ?Sized>(&self, msg_id: u64, message: &M) -> Result<()>;
-}
+const SOCKET_READ_TIMEOUT: u64 = 3;
+const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
 #[derive(Debug)]
 struct RpcClientCore {
@@ -39,16 +36,14 @@ struct RpcClientCore {
     stream: Option<TcpStream>,
 }
 
-fn send_msg<M: protobuf::Message + ?Sized>(stream: &mut TcpStream,
-                                           msg_id: u64,
-                                           message: &M)
-                                           -> Result<(u64, Vec<u8>)> {
+fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u64, Response)> {
     try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
     try!(rpc::encode_msg(stream, msg_id, message));
 
     try!(stream.set_read_timeout(Some(Duration::from_secs(SOCKET_READ_TIMEOUT))));
-    let (id, data) = try!(rpc::decode_data(stream));
-    Ok((id, data))
+    let mut resp = Response::new();
+    let id = try!(rpc::decode_msg(stream, &mut resp));
+    Ok((id, resp))
 }
 
 impl RpcClientCore {
@@ -71,10 +66,7 @@ impl RpcClientCore {
         Ok(())
     }
 
-    fn post_msg<M: protobuf::Message + ?Sized>(&mut self,
-                                               msg_id: u64,
-                                               message: &M)
-                                               -> Result<Vec<u8>> {
+    fn send(&mut self, msg_id: u64, req: &Request) -> Result<Response> {
         // If we post failed, we should retry.
         for _ in 0..MAX_PD_SEND_RETRY_COUNT {
             // If no stream, try connect first.
@@ -90,14 +82,14 @@ impl RpcClientCore {
             let mut stream = self.stream.take().unwrap();
             // We may send message to a not leader pd, retry.
 
-            let (id, data) = match send_msg(&mut stream, msg_id, message) {
+            let (id, resp) = match send_msg(&mut stream, msg_id, req) {
                 Err(e) => {
                     warn!("send message to pd failed {:?}", e);
                     // TODO: figure out a better way to do backoff
                     thread::sleep(Duration::from_millis(50));
                     continue;
                 }
-                Ok((id, data)) => (id, data),
+                Ok((id, resp)) => (id, resp),
             };
 
             if id != msg_id {
@@ -105,126 +97,36 @@ impl RpcClientCore {
             }
 
             self.stream = Some(stream);
-            return Ok(data);
+
+            return Ok(resp);
         }
 
-        Err(box_err!("post message to pd failed"))
+        Err(box_err!("send message to pd failed"))
     }
 }
 
 #[derive(Debug)]
 pub struct RpcClient {
+    msg_id: AtomicUsize,
     core: Mutex<RpcClientCore>,
 }
 
-const SOCKET_READ_TIMEOUT: u64 = 3;
-const SOCKET_WRITE_TIMEOUT: u64 = 3;
-
 impl RpcClient {
     pub fn new(dsn: &str) -> Result<RpcClient> {
-        Ok(RpcClient { core: Mutex::new(RpcClientCore::new(dsn)) })
-    }
-}
-
-impl TRpcClient for RpcClient {
-    fn send<M, P>(&self, msg_id: u64, message: &M) -> Result<P>
-        where M: protobuf::Message,
-              P: protobuf::Message + MessageStatic
-    {
-        let mut resp = P::new();
-        let data = try!(self.core.lock().unwrap().post_msg(msg_id, message));
-        try!(rpc::decode_body(&data, &mut resp));
-        Ok(resp)
-    }
-
-    fn post<M: protobuf::Message + ?Sized>(&self, msg_id: u64, message: &M) -> Result<()> {
-        let _ = try!(self.core.lock().unwrap().post_msg(msg_id, message));
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-enum Msg {
-    Rpc(u64, Box<protobuf::Message + Send>),
-    Quit,
-}
-
-pub struct Client<C: TRpcClient + 'static> {
-    msg_id: AtomicUsize,
-    rpc_client: Arc<C>,
-    tx: Mutex<Sender<Msg>>,
-    handle: Option<JoinHandle<()>>,
-}
-
-impl<C: TRpcClient + 'static> Client<C> {
-    pub fn new(rpc_client: C) -> Result<Client<C>> {
-        let shared = Arc::new(rpc_client);
-        let (tx, rx) = mpsc::channel();
-        let handle = {
-            let rpc_client = shared.clone();
-            try!(thread::Builder::new()
-                     .name("pd-client background worker".to_owned())
-                     .spawn(move || {
-                         info!("pd-client background worker starting");
-                         while let Msg::Rpc(msg_id, msg) = rx.recv().unwrap() {
-                             if let Err(e) = rpc_client.post(msg_id, msg.as_ref()) {
-                                 error!("pd post error: {}", e);
-                             } else {
-                                 debug!("pd post done: {}", msg_id);
-                             }
-                         }
-                         info!("pd-client background worker closing");
-                     }))
-        };
-        Ok(Client {
+        Ok(RpcClient {
             msg_id: AtomicUsize::new(0),
-            rpc_client: shared.clone(),
-            tx: Mutex::new(tx),
-            handle: Some(handle),
+            core: Mutex::new(RpcClientCore::new(dsn)),
         })
     }
 
-    fn close(&mut self) {
-        if let Err(e) = self.clone_tx().send(Msg::Quit) {
-            error!("failed to send quit message to pd-client background worker: {}",
-                   e);
-        }
-        let handle = self.handle.take().unwrap();
-        if handle.join().is_err() {
-            error!("failed to wait pd-client background worker quit");
-        }
-        info!("pd-client closed.");
-    }
-
-    pub fn send<M, P>(&self, message: &M) -> Result<P>
-        where M: protobuf::Message,
-              P: protobuf::Message + MessageStatic
-    {
-        let id = self.alloc_msg_id();
-        self.rpc_client.send(id, message)
-    }
-
-    pub fn post<M: protobuf::Message + Send>(&self, message: M) -> Result<()> {
-        let id = self.alloc_msg_id();
-        if let Err(e) = self.clone_tx().send(Msg::Rpc(id, box message)) {
-            return Err(box_err!(format!("SendError: {:?}", e)));
-        }
-        Ok(())
+    pub fn send(&self, req: &Request) -> Result<Response> {
+        let msg_id = self.alloc_msg_id();;
+        let resp = try!(self.core.lock().unwrap().send(msg_id, req));
+        Ok(resp)
     }
 
     fn alloc_msg_id(&self) -> u64 {
         self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
-    }
-
-    fn clone_tx(&self) -> Sender<Msg> {
-        let tx = self.tx.lock().unwrap();
-        tx.clone()
-    }
-}
-
-impl<C: TRpcClient + 'static> Drop for Client<C> {
-    fn drop(&mut self) {
-        self.close()
     }
 }
 
@@ -235,89 +137,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
-    use super::super::{Result, PdClient};
     use super::*;
-    use protobuf;
-    use bytes::ByteBuf;
     use util::codec::rpc;
-    use kvproto::{metapb, pdpb};
+    use kvproto::pdpb;
     use rand;
     use util::make_std_tcp_conn;
-
-    struct MockRpcClient;
-
-    impl MockRpcClient {
-        fn reply(&self, req: &pdpb::Request) -> pdpb::Response {
-            assert!(req.has_header());
-            let header = req.get_header();
-            let (uuid, cluster_id) = (header.get_uuid(), header.get_cluster_id());
-
-            let mut resp = pdpb::Response::new();
-            let mut header = pdpb::ResponseHeader::new();
-            header.set_uuid(uuid.to_vec());
-            header.set_cluster_id(cluster_id);
-
-            match req.get_cmd_type() {
-                pdpb::CommandType::AllocId => {
-                    let mut alloc = pdpb::AllocIdResponse::new();
-                    alloc.set_id(42);
-                    resp.set_alloc_id(alloc);
-                }
-                pdpb::CommandType::PutMeta => {
-                    let meta = req.get_put_meta();
-                    if meta.get_meta_type() == pdpb::MetaType::StoreType {
-                        let store = meta.get_store();
-                        assert_eq!(store.get_id(), 233);
-                        assert_eq!(store.get_address(), "localhost");
-                    }
-                }
-                _ => {
-                    let mut err = pdpb::Error::new();
-                    err.set_message(String::from("I've got a bad feeling about this"));
-                    header.set_error(err);
-                }
-            }
-
-            resp.set_header(header);
-            resp.set_cmd_type(req.get_cmd_type());
-            resp
-        }
-    }
-
-    impl TRpcClient for MockRpcClient {
-        fn send<M, P>(&self, msg_id: u64, message: &M) -> Result<P>
-            where M: protobuf::Message,
-                  P: protobuf::Message + Default
-        {
-            let mut buf = ByteBuf::mut_with_capacity(128);
-            rpc::encode_msg(&mut buf, msg_id, message).unwrap();
-            let mut req = pdpb::Request::new();
-            rpc::decode_msg(&mut buf.flip(), &mut req).unwrap();
-
-            let resp = self.reply(&req);
-            let mut buf = ByteBuf::mut_with_capacity(128);
-            rpc::encode_msg(&mut buf, msg_id, &resp).unwrap();
-            let mut msg = P::default();
-            rpc::decode_msg(&mut buf.flip(), &mut msg).unwrap();
-            Ok(msg)
-        }
-
-        fn post<M: protobuf::Message + ?Sized>(&self, _: u64, _: &M) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn test_pd_client() {
-        let mut client = Client::new(MockRpcClient).unwrap();
-        assert_eq!(client.alloc_id().unwrap(), 42u64);
-        assert!(client.is_cluster_bootstrapped(1).is_err());
-
-        let mut store = metapb::Store::new();
-        store.set_id(233);
-        store.set_address("localhost".to_owned());
-        assert!(client.put_store(1, store).is_ok());
-    }
 
     fn start_pd_server(index: usize,
                        leader_index: Arc<AtomicUsize>,
@@ -369,8 +193,8 @@ mod tests {
         let msg = pdpb::Request::new();
         let client = RpcClient::new(&dsn).unwrap();
 
-        for i in 0..10 {
-            client.post(i as u64, &msg).unwrap();
+        for _ in 0..10 {
+            client.send(&msg).unwrap();
 
             // select a leader randomly
             leader.store(rand::random::<usize>() % 3, Ordering::SeqCst);
