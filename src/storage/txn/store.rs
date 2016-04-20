@@ -12,12 +12,10 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::mem;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair, Mutation};
 use storage::{Engine, Snapshot};
 use storage::mvcc::{MvccTxn, MvccSnapshot, Error as MvccError};
-use util::codec;
 use super::shard_mutex::ShardMutex;
 use super::{Error, Result};
 
@@ -212,7 +210,7 @@ impl<'a> SnapshotStore<'a> {
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
             key = match try!(self.snapshot.seek(&key)) {
-                Some((k, _)) => try!(extract_key(&k)),
+                Some((k, _)) => try!(Key::from_raw(k).truncate_ts()),
                 None => break,
             };
             match txn.get(&key) {
@@ -234,7 +232,7 @@ impl<'a> SnapshotStore<'a> {
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
             key = match try!(self.snapshot.reverse_seek(&key)) {
-                Some((k, _)) => try!(extract_key(&k)),
+                Some((k, _)) => try!(Key::from_raw(k).truncate_ts()),
                 None => break,
             };
             match txn.get(&key) {
@@ -248,15 +246,6 @@ impl<'a> SnapshotStore<'a> {
         }
         Ok(results)
     }
-}
-
-/// `extract_key` discards the 8 bytes mvcc version, returns the real key.
-fn extract_key(key: &[u8]) -> Result<Key> {
-    let len = key.len();
-    if len < mem::size_of::<u64>() {
-        return Err(codec::Error::KeyLength.into());
-    }
-    Ok(Key::from_raw(key[..len - mem::size_of::<u64>()].to_owned()))
 }
 
 #[cfg(test)]
