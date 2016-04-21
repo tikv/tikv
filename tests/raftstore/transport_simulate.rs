@@ -78,26 +78,26 @@ impl Filter for FilterOutOfOrder {
 }
 
 pub struct SimulateTransport<T: Transport> {
-    filters: Vec<Box<Filter>>,
+    filters: Vec<RwLock<Box<Filter>>>,
     trans: Arc<RwLock<T>>,
 }
 
 impl<T: Transport> SimulateTransport<T> {
     pub fn new(strategy: Vec<Strategy>, trans: Arc<RwLock<T>>) -> SimulateTransport<T> {
-        let mut filters: Vec<Box<Filter>> = vec![];
+        let mut filters: Vec<RwLock<Box<Filter>>> = vec![];
         for s in strategy {
             match s {
                 DropPacket(rate) => {
-                    filters.push(box FilterDropPacket {
+                    filters.push(RwLock::new(box FilterDropPacket {
                         rate: rate,
                         drop: false,
-                    });
+                    }));
                 }
                 Delay(latency) => {
-                    filters.push(box FilterDelay { duration: latency });
+                    filters.push(RwLock::new(box FilterDelay { duration: latency }));
                 }
                 OutOfOrder => {
-                    filters.push(box FilterOutOfOrder);
+                    filters.push(RwLock::new(box FilterOutOfOrder));
                 }
             }
         }
@@ -110,10 +110,10 @@ impl<T: Transport> SimulateTransport<T> {
 }
 
 impl<T: Transport> Transport for SimulateTransport<T> {
-    fn send(&mut self, msg: RaftMessage) -> Result<()> {
+    fn send(&self, msg: RaftMessage) -> Result<()> {
         let mut discard = false;
-        for strategy in &mut self.filters {
-            if strategy.before(&msg) {
+        for strategy in &self.filters {
+            if strategy.write().unwrap().before(&msg) {
                 discard = true;
             }
         }
@@ -123,8 +123,8 @@ impl<T: Transport> Transport for SimulateTransport<T> {
             res = self.trans.write().unwrap().send(msg);
         }
 
-        for strategy in self.filters.iter_mut().rev() {
-            res = strategy.after(res);
+        for strategy in self.filters.iter().rev() {
+            res = strategy.write().unwrap().after(res);
         }
 
         res
