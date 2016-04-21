@@ -250,11 +250,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(peer) = self.region_peers.get(&region_id) {
             let from_epoch = msg.get_region_epoch();
             let conf_ver = peer.storage.rl().region.get_region_epoch().get_conf_ver();
-            let not_exist = util::find_peer(&peer.storage.rl().region, from.get_store_id())
-                                .is_none();
-            // Is it necessary to check version too?
+            let version = peer.storage.rl().region.get_region_epoch().get_version();
             // Should we need to check RequestVote even peer in this region too?
-            if from_epoch.get_conf_ver() < conf_ver && not_exist {
+            if (from_epoch.get_conf_ver() < conf_ver || from_epoch.get_version() < version) &&
+               util::find_peer(&peer.storage.rl().region, from.get_store_id()).is_none() {
+
                 warn!("RequestVote with a stale epoch {:?}, ignore it", from_epoch);
                 return Ok(());
             }
