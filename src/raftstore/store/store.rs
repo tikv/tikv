@@ -16,6 +16,7 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::{Box, FnBox};
 use std::collections::Bound::{Excluded, Unbounded};
+use std::time::Instant;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopConfig};
@@ -230,10 +231,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     // using entry().or_insert() instead, but we can't use this because creating peer
     // may fail, so we allow map_entry.
     #[allow(map_entry)]
-    fn on_raft_message(&mut self, msg: RaftMessage) -> Result<()> {
+    fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-        let from = msg.get_from_peer();
-        let to = msg.get_to_peer();
+        let from = msg.take_from_peer();
+        let to = msg.take_to_peer();
         debug!("handle raft message {:?} for region {}, from {} to {}",
                msg.get_message().get_msg_type(),
                region_id,
@@ -265,8 +266,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
         }
 
-        self.peer_cache.wl().insert(from.get_id(), from.clone());
-        self.peer_cache.wl().insert(to.get_id(), to.clone());
+        self.peer_cache.wl().insert(from.get_id(), from);
+        self.peer_cache.wl().insert(to.get_id(), to);
 
         // Check if we can accept the snapshot
         // TODO: we need to inject failure or re-order network packet to test the situtain
@@ -289,8 +290,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-
-        try!(peer.raft_group.step(msg.get_message().clone()));
+        let timer = Instant::now();
+        try!(peer.raft_group.step(msg.take_message()));
+        debug!("step takes {:?}", timer.elapsed());
 
         // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
@@ -707,6 +709,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Message = Msg;
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
+        let t = Instant::now();
+        let msg_str = format!("{:?}", msg);
         match msg {
             Msg::RaftMessage(data) => {
                 if let Err(e) = self.on_raft_message(data) {
@@ -727,15 +731,18 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_split_check_result(region_id, split_key);
             }
         }
+        debug!("handle {:?} takes {:?}", msg_str, t.elapsed());
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
+        let t = Instant::now();
         match timeout {
             Tick::Raft => self.on_raft_base_tick(event_loop),
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::ReplicaCheck => self.on_replica_check_tick(event_loop),
         }
+        debug!("handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -758,11 +765,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             return;
         }
 
+        let t = Instant::now();
         // We handle raft ready in event loop.
         if let Err(e) = self.on_raft_ready() {
             // TODO: should we panic here or shutdown the store?
             error!("handle raft ready err: {:?}", e);
         }
+        debug!("handle raft ready takes {:?}", t.elapsed());
     }
 }
 

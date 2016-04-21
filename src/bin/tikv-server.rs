@@ -28,7 +28,7 @@ use std::sync::{Arc, RwLock};
 
 use getopts::{Options, Matches};
 use log::LogLevelFilter;
-use rocksdb::DB;
+use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
 use mio::tcp::TcpListener;
 
 use tikv::storage::{Storage, Dsn};
@@ -68,10 +68,11 @@ fn build_raftkv(matches: &Matches,
     let trans = Arc::new(RwLock::new(ServerTransport::new(cluster_id, ch, pd_client.clone())));
 
     let path = get_store_path(matches);
-    let mut opts = rocksdb::Options::new();
-    let mut block_base_opts = rocksdb::BlockBasedOptions::new();
+    let mut opts = RocksdbOptions::new();
+    let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(64 * 1024);
     opts.set_block_based_table_factory(&block_base_opts);
+    opts.compression(DBCompressionType::DBNo);
     opts.set_target_file_size_base(64 * 1024 * 1024);
     opts.create_if_missing(true);
 
