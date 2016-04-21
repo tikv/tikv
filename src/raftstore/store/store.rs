@@ -245,7 +245,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        // If we receive a message which peer is not in current region and
+        // If we receive a message whose sender peer is not in current region and
         // epoch is stale, we can ignore it.
         if let Some(peer) = self.region_peers.get(&region_id) {
             let from_epoch = msg.get_region_epoch();
