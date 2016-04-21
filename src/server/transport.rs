@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use raftstore::store::{Msg as StoreMsg, Transport, Callback, SendCh};
@@ -19,8 +18,6 @@ use raftstore::Result as RaftStoreResult;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use pd::PdClient;
-use util::HandyRwLock;
 use super::{SendCh as ServerSendCh, Msg, ConnData};
 
 
@@ -74,19 +71,14 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 }
 
-pub struct ServerTransport<T: PdClient> {
-    cluster_id: u64,
-
-    pd_client: Arc<RwLock<T>>,
+pub struct ServerTransport {
     ch: ServerSendCh,
     msg_id: AtomicUsize,
 }
 
-impl<T: PdClient> ServerTransport<T> {
-    pub fn new(cluster_id: u64, ch: ServerSendCh, pd_client: Arc<RwLock<T>>) -> ServerTransport<T> {
+impl ServerTransport {
+    pub fn new(ch: ServerSendCh) -> ServerTransport {
         ServerTransport {
-            cluster_id: cluster_id,
-            pd_client: pd_client.clone(),
             ch: ch,
             msg_id: AtomicUsize::new(1),
         }
@@ -97,21 +89,19 @@ impl<T: PdClient> ServerTransport<T> {
     }
 }
 
-impl<T: PdClient> Transport for ServerTransport<T> {
+impl Transport for ServerTransport {
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
-
-        let store = try!(self.pd_client.rl().get_store(self.cluster_id, to_store_id));
 
         let mut req = Message::new();
         req.set_msg_type(MessageType::Raft);
         req.set_raft(msg);
 
-        if let Err(e) = self.ch.send(Msg::SendPeer {
-            peer: store.get_address().to_owned(),
+        if let Err(e) = self.ch.send(Msg::SendStore {
+            store_id: to_store_id,
             data: ConnData::new(self.alloc_msg_id(), req),
         }) {
-            return Err(box_err!("send peer to {} err {:?}", store.get_address(), e));
+            return Err(box_err!("send data to store {} err {:?}", to_store_id, e));
         }
         Ok(())
     }

@@ -24,15 +24,16 @@ use super::{Result, ConnData};
 use super::server::Server;
 use util::codec::rpc;
 use super::transport::RaftStoreRouter;
+use super::resolve::StoreAddrResolver;
 
 pub struct Conn {
     pub sock: TcpStream,
     pub token: Token,
     pub interest: EventSet,
 
-    // peer_addr is for remote peer address, we only set this
-    // when we connect to the remote peer.
-    pub peer_addr: Option<String>,
+    // store id is for remote store, we only set this
+    // when we connect to the remote store.
+    pub store_id: Option<u64>,
 
     // message header
     last_msg_id: u64,
@@ -68,7 +69,7 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 
 
 impl Conn {
-    pub fn new(sock: TcpStream, token: Token, peer_addr: Option<String>) -> Conn {
+    pub fn new(sock: TcpStream, token: Token, store_id: Option<u64>) -> Conn {
         Conn {
             sock: sock,
             token: token,
@@ -77,20 +78,22 @@ impl Conn {
             payload: None,
             res: VecDeque::new(),
             last_msg_id: 0,
-            peer_addr: peer_addr,
+            store_id: store_id,
         }
     }
 
-    pub fn reregister<T: RaftStoreRouter>(&mut self,
-                                          event_loop: &mut EventLoop<Server<T>>)
-                                          -> Result<()> {
+    pub fn reregister<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
         try!(event_loop.reregister(&self.sock, self.token, self.interest, PollOpt::edge()));
         Ok(())
     }
 
-    pub fn read<T: RaftStoreRouter>(&mut self,
-                                    _: &mut EventLoop<Server<T>>)
-                                    -> Result<Vec<ConnData>> {
+    pub fn read<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
         let mut bufs = vec![];
 
         loop {
@@ -142,9 +145,10 @@ impl Conn {
         Ok(buf.remaining())
     }
 
-    pub fn write<T: RaftStoreRouter>(&mut self,
-                                     event_loop: &mut EventLoop<Server<T>>)
-                                     -> Result<()> {
+    pub fn write<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
         while !self.res.is_empty() {
             let remaining = try!(self.write_buf());
 
@@ -161,15 +165,18 @@ impl Conn {
         self.reregister(event_loop)
     }
 
-    pub fn append_write_buf<T: RaftStoreRouter>(&mut self,
-                                                event_loop: &mut EventLoop<Server<T>>,
-                                                msg: ConnData)
-                                                -> Result<()> {
+    pub fn append_write_buf<T, S>(&mut self,
+                                  event_loop: &mut EventLoop<Server<T, S>>,
+                                  msg: ConnData)
+                                  -> Result<()>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
         // Now we just push data to a write buffer and register writable for later writing.
         // Later we can write data directly, if meet WOUNDBLOCK error(don't write all data OK),
         // we can register writable at that time.
         // We must also check `socket is not connected` error too, when we connect to a remote
-        // peer, mio puts this socket in event loop immediately, but this socket may not be
+        // store, mio puts this socket in event loop immediately, but this socket may not be
         // connected at that time, so we must register writable too for this case.
         self.res.push_back(msg.encode_to_buf());
 
