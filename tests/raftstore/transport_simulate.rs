@@ -18,6 +18,7 @@ use rand;
 use std::sync::{Arc, RwLock};
 
 use super::util::*;
+use tikv::util::{HandyRwLock};
 use self::Strategy::*;
 
 #[derive(Clone)]
@@ -113,18 +114,18 @@ impl<T: Transport> Transport for SimulateTransport<T> {
     fn send(&self, msg: RaftMessage) -> Result<()> {
         let mut discard = false;
         for strategy in &self.filters {
-            if strategy.write().unwrap().before(&msg) {
+            if strategy.wl().before(&msg) {
                 discard = true;
             }
         }
 
         let mut res = Ok(());
         if !discard {
-            res = self.trans.write().unwrap().send(msg);
+            res = self.trans.rl().send(msg);
         }
 
         for strategy in self.filters.iter().rev() {
-            res = strategy.write().unwrap().after(res);
+            res = strategy.wl().after(res);
         }
 
         res
