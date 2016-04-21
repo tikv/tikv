@@ -375,7 +375,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     // in the same ready result loop.
     cluster.stop_node(2);
 
-    cluster.put(b"a1", b"v1");
+    cluster.must_put(b"a1", b"v1");
 
     let engine1 = cluster.get_engine(1);
     let engine3 = cluster.get_engine(3);
@@ -417,7 +417,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.pd_client.wl().change_peer(cluster.id(), detail.get_region().clone()).unwrap();
 
     cluster.reset_leader_of_region(r1);
-    cluster.put(b"a3", b"v3");
+    cluster.must_put(b"a3", b"v3");
 
     // TODO: add split after removing itself test later.
 }
