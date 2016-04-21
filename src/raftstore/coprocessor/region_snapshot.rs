@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::rocksdb::{Snapshot, DBIterator, DB};
-use raftstore::store::engine::{Iterable, Peekable, DBValue};
+use rocksdb::rocksdb::{Snapshot, DBIterator, DB, DBVector};
+use raftstore::store::engine::{Iterable, Peekable};
 use raftstore::store::keys::{self, enc_end_key};
 use raftstore::store::{util, PeerStorage};
 use raftstore::Result;
@@ -55,9 +55,9 @@ impl<'a> RegionSnapshot<'a> {
     pub fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let region_end_key = enc_end_key(&self.region);
         let pair = self.new_iterator(key)
-                       .take_while(|&(ref k, _)| k.as_ref() < &region_end_key)
+                       .take_while(|&(k, _)| k < &region_end_key)
                        .next()
-                       .map(|(k, v)| (keys::origin_key(&k).to_vec(), v.into_vec()));
+                       .map(|(k, v)| (keys::origin_key(k).to_vec(), v.to_vec()));
         Ok(pair)
     }
 
@@ -79,11 +79,11 @@ impl<'a> RegionSnapshot<'a> {
         let it = self.new_iterator(start_key);
 
         for (key, value) in it {
-            if key.as_ref() >= &data_end_key || key.as_ref() >= &region_end_key {
+            if key >= &data_end_key || key >= &region_end_key {
                 break;
             }
 
-            let r = try!(f(keys::origin_key(&key), value.as_ref()));
+            let r = try!(f(keys::origin_key(key), value));
             if !r {
                 break;
             }
@@ -118,7 +118,7 @@ impl<'a> RegionSnapshot<'a> {
 }
 
 impl<'a> Peekable for RegionSnapshot<'a> {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
+    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
         try!(util::check_key_in_region(key, &self.region));
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
