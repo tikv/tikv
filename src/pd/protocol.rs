@@ -42,8 +42,8 @@ impl<T: TRpcClient + 'static> super::PdClient for Client<T> {
         Ok(resp.get_is_bootstrapped().get_bootstrapped())
     }
 
-    fn alloc_id(&mut self) -> Result<u64> {
-        let mut req = new_request(0, pdpb::CommandType::AllocId);
+    fn alloc_id(&mut self, cluster_id: u64) -> Result<u64> {
+        let mut req = new_request(cluster_id, pdpb::CommandType::AllocId);
         req.set_alloc_id(pdpb::AllocIdRequest::new());
 
         let resp = try!(self.send(&req));

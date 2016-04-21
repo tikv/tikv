@@ -170,7 +170,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 fn new_conf_change_peer(store: &metapb::Store,
                         pd_client: &Arc<RwLock<TestPdClient>>)
                         -> metapb::Peer {
-    let peer_id = pd_client.wl().alloc_id().unwrap();
+    let peer_id = pd_client.wl().alloc_id(0).unwrap();
     new_peer(store.get_id(), peer_id)
 }
 
