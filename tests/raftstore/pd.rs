@@ -152,6 +152,7 @@ impl Cluster {
 }
 
 pub struct TestPdClient {
+    // TODO: use only one cluster later.
     clusters: HashMap<u64, Cluster>,
 
     base_id: u64,
@@ -226,7 +227,8 @@ impl PdClient for TestPdClient {
         Ok(self.clusters.contains_key(&cluster_id))
     }
 
-    fn alloc_id(&mut self) -> Result<u64> {
+    // We don't care cluster id here, so any value like 0 in tests is ok.
+    fn alloc_id(&mut self, _: u64) -> Result<u64> {
         self.base_id += 1;
         Ok(self.base_id)
     }

@@ -20,6 +20,7 @@ const RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
 const RAFT_MAX_INFLIGHT_MSGS: usize = 256;
 const RAFT_LOG_GC_INTERVAL: u64 = 10000;
 const RAFT_LOG_GC_THRESHOLD: u64 = 10000;
+const RAFT_LOG_GC_LIMIT: u64 = 100000;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
 const REPLICA_CHECK_TICK_INTERVAL: u64 = 4 * 1000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
@@ -36,10 +37,11 @@ pub struct Config {
     pub raft_max_inflight_msgs: usize,
 
     // Interval to gc unnecessary raft log (ms).
-    // If the log is
     pub raft_log_gc_tick_interval: u64,
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
+    // When entry count exceed this value, gc will be forced trigger.
+    pub raft_log_gc_limit: u64,
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: u64,
@@ -65,6 +67,7 @@ impl Default for Config {
             raft_max_inflight_msgs: RAFT_MAX_INFLIGHT_MSGS,
             raft_log_gc_tick_interval: RAFT_LOG_GC_INTERVAL,
             raft_log_gc_threshold: RAFT_LOG_GC_THRESHOLD,
+            raft_log_gc_limit: RAFT_LOG_GC_LIMIT,
             split_region_check_tick_interval: SPLIT_REGION_CHECK_TICK_INTERVAL,
             replica_check_tick_interval: REPLICA_CHECK_TICK_INTERVAL,
             region_max_size: REGION_MAX_SIZE,

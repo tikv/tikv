@@ -34,11 +34,11 @@ use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct Status {
-    id: u64,
+    pub id: u64,
     pub hs: HardState,
-    ss: SoftState,
-    applied: u64,
-    progress: HashMap<u64, Progress>,
+    pub ss: SoftState,
+    pub applied: u64,
+    pub progress: HashMap<u64, Progress>,
 }
 
 impl Status {

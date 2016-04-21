@@ -12,7 +12,9 @@
 // limitations under the License.
 
 use std::hash::{Hash, Hasher};
+use std::mem;
 use byteorder::{BigEndian, WriteBytesExt};
+use util::codec;
 
 pub type Value = Vec<u8>;
 pub type KvPair = (Vec<u8>, Value);
@@ -33,6 +35,14 @@ impl Key {
         let mut encoded = self.0.clone();
         encoded.write_u64::<BigEndian>(ts).unwrap();
         Key(encoded)
+    }
+
+    pub fn truncate_ts(&self) -> Result<Key, codec::Error> {
+        let len = self.0.len();
+        if len < mem::size_of::<u64>() {
+            return Err(codec::Error::KeyLength);
+        }
+        Ok(Key::from_raw(self.0[..len - mem::size_of::<u64>()].to_owned()))
     }
 }
 

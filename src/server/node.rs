@@ -143,8 +143,13 @@ impl<T, Trans> Node<T, Trans>
         Ok(store_id)
     }
 
+    fn alloc_id(&self) -> Result<u64> {
+        let id = try!(self.pd_client.wl().alloc_id(self.cluster_id));
+        Ok(id)
+    }
+
     fn bootstrap_store(&self, engine: &DB) -> Result<u64> {
-        let store_id = try!(self.pd_client.wl().alloc_id());
+        let store_id = try!(self.alloc_id());
         debug!("alloc store id {} ", store_id);
 
         try!(store::bootstrap_store(engine, self.cluster_id, store_id));
@@ -153,12 +158,12 @@ impl<T, Trans> Node<T, Trans>
     }
 
     fn bootstrap_first_region(&self, engine: &DB, store_id: u64) -> Result<metapb::Region> {
-        let region_id = try!(self.pd_client.wl().alloc_id());
+        let region_id = try!(self.alloc_id());
         info!("alloc first region id {} for cluster {}, store {}",
               region_id,
               self.cluster_id,
               store_id);
-        let peer_id = try!(self.pd_client.wl().alloc_id());
+        let peer_id = try!(self.alloc_id());
         info!("alloc first peer id {} for first region {}",
               peer_id,
               region_id);

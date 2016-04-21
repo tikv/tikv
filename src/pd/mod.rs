@@ -53,7 +53,7 @@ pub trait PdClient: Send + Sync {
     fn is_cluster_bootstrapped(&self, cluster_id: u64) -> Result<bool>;
 
     // Allocate a unique positive id.
-    fn alloc_id(&mut self) -> Result<u64>;
+    fn alloc_id(&mut self, cluster_id: u64) -> Result<u64>;
 
     // When the store starts, or some store information changed, it
     // uses put_store to inform pd.

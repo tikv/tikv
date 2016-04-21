@@ -155,7 +155,8 @@ impl<T: Simulator> Cluster<T> {
                                   mut request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
-        request.mut_header().set_peer(self.leader_of_region(region_id).unwrap());
+        let leader = self.leader_of_region(region_id).unwrap();
+        request.mut_header().set_peer(leader);
         self.call_command(request, timeout)
     }
 
@@ -420,12 +421,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
-        let new_region_id = self.pd_client.wl().alloc_id().unwrap();
+        let new_region_id = self.pd_client.wl().alloc_id(0).unwrap();
         let region = self.pd_client.rl().get_region_by_id(self.id(), region_id).unwrap();
         let peer_count = region.get_peers().len();
         let mut peer_ids: Vec<u64> = vec![];
         for _ in 0..peer_count {
-            let peer_id = self.pd_client.wl().alloc_id().unwrap();
+            let peer_id = self.pd_client.wl().alloc_id(0).unwrap();
             peer_ids.push(peer_id);
         }
 

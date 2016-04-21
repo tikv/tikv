@@ -16,6 +16,7 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::{Box, FnBox};
 use std::collections::Bound::{Excluded, Unbounded};
+use std::time::Instant;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopConfig};
@@ -235,10 +236,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     // using entry().or_insert() instead, but we can't use this because creating peer
     // may fail, so we allow map_entry.
     #[allow(map_entry)]
-    fn on_raft_message(&mut self, msg: RaftMessage) -> Result<()> {
+    fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-        let from = msg.get_from_peer();
-        let to = msg.get_to_peer();
+        let from = msg.take_from_peer();
+        let to = msg.take_to_peer();
         debug!("handle raft message {:?} for region {}, from {} to {}",
                msg.get_message().get_msg_type(),
                region_id,
@@ -270,8 +271,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
         }
 
-        self.peer_cache.wl().insert(from.get_id(), from.clone());
-        self.peer_cache.wl().insert(to.get_id(), to.clone());
+        self.peer_cache.wl().insert(from.get_id(), from);
+        self.peer_cache.wl().insert(to.get_id(), to);
 
         // Check if we can accept the snapshot
         // TODO: we need to inject failure or re-order network packet to test the situtain
@@ -294,8 +295,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-
-        try!(peer.raft_group.step(msg.get_message().clone()));
+        let timer = Instant::now();
+        try!(peer.raft_group.step(msg.take_message()));
+        debug!("step takes {:?}", timer.elapsed());
 
         // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
@@ -529,40 +531,38 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             // Leader will replicate the compact log command to followers,
-            // If we use current applied_index (like 10) as the compact index,
-            // when we apply this log, the newest applied_index will be 11,
+            // If we use current replicated_index (like 10) as the compact index,
+            // when we replicate this log, the newest replicated_index will be 11,
             // but we only compact the log to 10, not 11, at that time,
-            // the first index is 10, and applied index is 11, with an extra log,
+            // the first index is 10, and replicated_index is 11, with an extra log,
             // and we will do compact again with compact index 11, in cycles...
-            // So we introduce a threshold, if applied index - first index > threshold,
+            // So we introduce a threshold, if replicated index - first index > threshold,
             // we will try to compact log.
             // raft log entries[..............................................]
             //                  ^                                       ^
             //                  |-----------------threshold------------ |
-            //              first_index                         applied_index
-            let applied_index = peer.storage.rl().applied_index();
-            let first_index = peer.storage.rl().first_index();
-            if applied_index < first_index {
-                // Check if we are just started or applied a snapshot.
-                // When starts or after applying a snapshot, we have no logs,
-                // so here the first index = applied index + 1.
-                if first_index != applied_index + 1 {
-                    // The peer is leader, so the applied_index can't < first index.
-                    error!("applied_index {} < first_index {} for leader peer {:?} at region {}",
-                           applied_index,
-                           first_index,
-                           peer.peer,
-                           region_id);
-                }
+            //              first_index                         replicated_index
+            let replicated_idx = peer.raft_group
+                                     .status()
+                                     .progress
+                                     .values()
+                                     .map(|p| p.matched)
+                                     .min()
+                                     .unwrap();
+            let applied_idx = peer.storage.rl().applied_index();
+            let first_idx = peer.storage.rl().first_index();
+            let compact_idx;
+            if applied_idx > first_idx && applied_idx - first_idx >= self.cfg.raft_log_gc_limit {
+                compact_idx = applied_idx;
+            } else if replicated_idx < first_idx ||
+               replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {
                 continue;
-            }
-
-            if applied_index - first_index <= self.cfg.raft_log_gc_threshold {
-                continue;
+            } else {
+                compact_idx = replicated_idx;
             }
 
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), applied_index);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx);
 
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
@@ -571,7 +571,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 callback: cb,
             }) {
                 error!("send compact log {} to region {} err {:?}",
-                       applied_index,
+                       compact_idx,
                        region_id,
                        e);
             }
@@ -626,6 +626,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let p = self.region_peers.get(&region_id);
         if p.is_none() || !p.unwrap().is_leader() {
             // region on this store is no longer leader, skipped.
+            info!("{} doesn't exist or is not leader, skip.", region_id);
             return;
         }
         let key = keys::origin_key(&split_key);
@@ -719,6 +720,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Message = Msg;
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
+        let t = Instant::now();
+        let msg_str = format!("{:?}", msg);
         match msg {
             Msg::RaftMessage(data) => {
                 if let Err(e) = self.on_raft_message(data) {
@@ -739,15 +742,18 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_split_check_result(region_id, split_key);
             }
         }
+        debug!("handle {:?} takes {:?}", msg_str, t.elapsed());
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
+        let t = Instant::now();
         match timeout {
             Tick::Raft => self.on_raft_base_tick(event_loop),
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::ReplicaCheck => self.on_replica_check_tick(event_loop),
         }
+        debug!("handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -774,11 +780,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             return;
         }
 
+        let t = Instant::now();
         // We handle raft ready in event loop.
         if let Err(e) = self.on_raft_ready() {
             // TODO: should we panic here or shutdown the store?
             error!("handle raft ready err: {:?}", e);
         }
+        debug!("handle raft ready takes {:?}", t.elapsed());
     }
 }
 

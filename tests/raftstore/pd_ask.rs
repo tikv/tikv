@@ -100,7 +100,7 @@ impl<T: Simulator> AskHandler<T> {
             }
 
             let store = &stores[pos.unwrap()];
-            let peer_id = self.pd_client.wl().alloc_id().unwrap();
+            let peer_id = self.pd_client.wl().alloc_id(0).unwrap();
             let peer = new_peer(store.get_id(), peer_id);
             (ConfChangeType::AddNode, peer)
         };
@@ -133,10 +133,10 @@ impl<T: Simulator> AskHandler<T> {
             return;
         }
 
-        let new_region_id = self.pd_client.wl().alloc_id().unwrap();
+        let new_region_id = self.pd_client.wl().alloc_id(0).unwrap();
         let mut peer_ids: Vec<u64> = vec![];
         for _ in 0..region.get_peers().len() {
-            let peer_id = self.pd_client.wl().alloc_id().unwrap();
+            let peer_id = self.pd_client.wl().alloc_id(0).unwrap();
             peer_ids.push(peer_id);
         }
 
