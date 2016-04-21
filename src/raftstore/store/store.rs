@@ -255,7 +255,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if (from_epoch.get_conf_ver() < conf_ver || from_epoch.get_version() < version) &&
                util::find_peer(&peer.storage.rl().region, from.get_store_id()).is_none() {
 
-                warn!("RequestVote with a stale epoch {:?}, ignore it", from_epoch);
+                warn!("raft message {:?} is stale {:?}, ignore it",
+                      msg.get_message().get_msg_type(),
+                      from_epoch);
                 return Ok(());
             }
         }
