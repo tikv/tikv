@@ -4,12 +4,13 @@ use tikv::util::codec::{table, Datum, datum, number};
 use tikv::storage::{Dsn, Mutation, Key};
 use tikv::storage::engine::{self, Engine};
 use tikv::storage::txn::TxnStore;
+use tikv::util;
 use kvproto::coprocessor::{Request, KeyRange};
 use tipb::select::{SelectRequest, SelectResponse};
 use tipb::schema::{self, ColumnInfo};
 
 use std::sync::Arc;
-use std::{slice, i64};
+use std::i64;
 use protobuf::{RepeatedField, Message};
 
 use util::TsGenerator;
@@ -109,11 +110,7 @@ fn gen_values(h: i64, tbl: &TableInfo) -> Vec<Datum> {
 
 fn encode_col_kv(t_id: i64, h: i64, c_id: i64, v: &Datum) -> (Vec<u8>, Vec<u8>) {
     let key = table::encode_column_key(t_id, h, c_id);
-    let vs = unsafe {
-        let rp = v as *const Datum;
-        slice::from_raw_parts(rp, 1)
-    };
-    let val = datum::encode_value(vs).unwrap();
+    let val = datum::encode_value(util::as_slice(v)).unwrap();
     (key, val)
 }
 

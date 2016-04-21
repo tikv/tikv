@@ -24,14 +24,10 @@ use tipb::expression::{Expr, ExprType};
 #[derive(Default)]
 pub struct Evaluator {
     // column_id -> column_value
-    row: HashMap<i64, Datum>,
+    pub row: HashMap<i64, Datum>,
 }
 
 impl Evaluator {
-    pub fn insert(&mut self, col_id: i64, datum: Datum) {
-        self.row.insert(col_id, datum);
-    }
-
     /// Eval evaluates expr to a Datum.
     pub fn eval(&self, expr: &Expr) -> Result<Datum> {
         match expr.get_tp() {
@@ -157,7 +153,7 @@ impl Evaluator {
         if d == Datum::Null {
             return Ok(Datum::Null);
         }
-        let b = try!(d.as_bool());
+        let b = try!(d.into_bool());
         Ok((!b).into())
     }
 
@@ -189,19 +185,18 @@ impl Evaluator {
 
     fn eval_two_children_as_bool(&self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
         let (left, right) = try!(self.eval_two_children(expr));
-        let left_bool = try!(eval_as_bool(&left));
-        let right_bool = try!(eval_as_bool(&right));
+        let left_bool = try!(eval_into_bool(left));
+        let right_bool = try!(eval_into_bool(right));
         Ok((left_bool, right_bool))
     }
 }
 
-
-/// eval datum as bool, if expr is Null, then None is return.
-fn eval_as_bool(datum: &Datum) -> Result<Option<bool>> {
-    if *datum == Datum::Null {
+/// eval datum into bool, if expr is Null, then None is return.
+fn eval_into_bool(datum: Datum) -> Result<Option<bool>> {
+    if datum == Datum::Null {
         Ok(None)
     } else {
-        let b = try!(datum.as_bool());
+        let b = try!(datum.into_bool());
         Ok(Some(b))
     }
 }
@@ -337,7 +332,7 @@ mod test {
         ];
 
         let mut xevaluator = Evaluator::default();
-        xevaluator.insert(1, Datum::I64(100));
+        xevaluator.row.insert(1, Datum::I64(100));
         for (expr, result) in tests {
             let res = xevaluator.eval(&expr);
             if res.is_err() {
