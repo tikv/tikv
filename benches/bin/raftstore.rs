@@ -12,8 +12,6 @@
 // limitations under the License.
 
 use test::BenchSamples;
-use rocksdb::Writable;
-
 use test_util::*;
 use util::*;
 use cluster::*;
@@ -42,7 +40,7 @@ fn bench_set<T: Simulator>(mut cluster: Cluster<T>, value_size: usize) -> BenchS
 
     bench!{
             let (k, v) = kvs.next().unwrap();
-            cluster.put(&k, &v)
+            cluster.must_put(&k, &v)
     }
 }
 
@@ -72,7 +70,7 @@ fn bench_seek<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
 
     bench!{
             let k = keys.next().unwrap();
-            cluster.seek(&k)
+            cluster.must_seek(&k)
     }
 }
 
@@ -87,7 +85,7 @@ fn bench_delete<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
 
     bench!{
             let k = keys.next().unwrap();
-            cluster.delete(&k)
+            cluster.must_delete(&k)
     }
 }
 

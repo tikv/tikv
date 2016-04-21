@@ -38,7 +38,7 @@ fn test_multi_with_transport_strategy<T: Simulator>(cluster: &mut Cluster<T>,
 
     let (key, value) = (b"a1", b"v1");
 
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let check_res = cluster.check_quorum(|engine| {
@@ -49,7 +49,7 @@ fn test_multi_with_transport_strategy<T: Simulator>(cluster: &mut Cluster<T>,
     });
     assert!(check_res);
 
-    cluster.delete(key);
+    cluster.must_delete(key);
     assert_eq!(cluster.get(key), None);
 
     let check_res = cluster.check_quorum(|engine| {
@@ -66,7 +66,7 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let (key1, value1) = (b"a1", b"v1");
 
-    cluster.put(key1, value1);
+    cluster.must_put(key1, value1);
 
     let last_leader = cluster.leader_of_region(1).unwrap();
     cluster.stop_node(last_leader.get_store_id());
@@ -80,8 +80,8 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let (key2, value2) = (b"a2", b"v2");
 
-    cluster.put(key2, value2);
-    cluster.delete(key1);
+    cluster.must_put(key2, value2);
+    cluster.must_delete(key1);
     must_get_none(&cluster.engines[&last_leader.get_store_id()], key2);
     must_get_equal(&cluster.engines[&last_leader.get_store_id()], key1, value1);
 
@@ -100,7 +100,7 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     let (key, value) = (b"a1", b"v1");
 
     assert_eq!(cluster.get(key), None);
-    cluster.put(key, value);
+    cluster.must_put(key, value);
 
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
@@ -139,7 +139,7 @@ fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>,
     let (key, value) = (b"a1", b"v1");
 
     assert_eq!(cluster.get(key), None);
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let mut rng = rand::thread_rng();
@@ -155,9 +155,9 @@ fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>,
 
         let (k, v) = (b"a2", b"v2");
         // assert_eq!(cluster.get(k), None);
-        cluster.put(k, v);
+        cluster.must_put(k, v);
         assert_eq!(cluster.get(k), Some(v.to_vec()));
-        cluster.delete(k);
+        cluster.must_delete(k);
         assert_eq!(cluster.get(k), None);
     }
 }

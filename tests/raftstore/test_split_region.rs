@@ -40,12 +40,12 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
 
     let a1 = b"a1";
-    cluster.put(a1, b"v1");
+    cluster.must_put(a1, b"v1");
 
     let a2 = b"a2";
 
     let a3 = b"a3";
-    cluster.put(a3, b"v3");
+    cluster.must_put(a3, b"v3");
 
     // Split with a2, so a1 must in left, and a3 in right.
     cluster.split_region(region.get_id(), Some(a2.to_vec()));
@@ -58,10 +58,10 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(left.get_end_key(), right.get_start_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
 
-    cluster.put(a1, b"vv1");
+    cluster.must_put(a1, b"vv1");
     assert_eq!(cluster.get(a1).unwrap(), b"vv1".to_vec());
 
-    cluster.put(a3, b"vv3");
+    cluster.must_put(a3, b"vv3");
     assert_eq!(cluster.get(a3).unwrap(), b"vv3".to_vec());
 
     let epoch = left.get_region_epoch().clone();
@@ -98,7 +98,7 @@ fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>,
         let key = range.next().unwrap().to_string().into_bytes();
         let mut value = vec![0; 64];
         rng.fill_bytes(&mut value);
-        cluster.put(&key, &value);
+        cluster.must_put(&key, &value);
         // plus 1 for the extra encoding prefix
         len += key.len() as u64 + 1;
         len += value.len() as u64;
@@ -204,10 +204,10 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
 
     let a1 = b"a1";
-    cluster.put(a1, b"v1");
+    cluster.must_put(a1, b"v1");
 
     let a3 = b"a3";
-    cluster.put(a3, b"v3");
+    cluster.must_put(a3, b"v3");
 
     // check all nodes apply the logs.
     for i in 0..3 {
@@ -235,7 +235,7 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     util::sleep_ms(3000);
 
     let a4 = b"a4";
-    cluster.put(a4, b"v4");
+    cluster.must_put(a4, b"v4");
 
     assert_eq!(cluster.get(a4).unwrap(), b"v4".to_vec());
 
