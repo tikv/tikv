@@ -13,9 +13,9 @@
 
 use uuid::Uuid;
 use kvproto::{metapb, pdpb};
-use super::{Error, Result, TRpcClient, Client};
+use super::{Error, Result, RpcClient};
 
-impl<T: TRpcClient + 'static> super::PdClient for Client<T> {
+impl super::PdClient for RpcClient {
     fn bootstrap_cluster(&mut self,
                          cluster_id: u64,
                          store: metapb::Store,
@@ -115,7 +115,9 @@ impl<T: TRpcClient + 'static> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::AskChangePeer);
         req.set_ask_change_peer(ask_change_peer);
 
-        self.post(req)
+        let resp = try!(self.send(&req));
+        try!(check_resp(&resp));
+        Ok(())
     }
 
     fn ask_split(&self,
@@ -132,7 +134,9 @@ impl<T: TRpcClient + 'static> super::PdClient for Client<T> {
         let mut req = new_request(cluster_id, pdpb::CommandType::AskSplit);
         req.set_ask_split(ask_split);
 
-        self.post(req)
+        let resp = try!(self.send(&req));
+        try!(check_resp(&resp));
+        Ok(())
     }
 }
 
