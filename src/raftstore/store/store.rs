@@ -23,7 +23,7 @@ use protobuf;
 use uuid::Uuid;
 
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData};
-use kvproto::raftpb::{ConfChangeType, MessageType};
+use kvproto::raftpb::ConfChangeType;
 use util::HandyRwLock;
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
@@ -245,18 +245,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        // Should we need to check other types for stale message?
-        if msg.get_message().get_msg_type() == MessageType::MsgRequestVote {
-            if let Some(peer) = self.region_peers.get(&region_id) {
-                let from_epoch = msg.get_region_epoch();
-                // Is it necessary to check version too?
-                if from_epoch.get_conf_ver() <
-                   peer.storage.rl().region.get_region_epoch().get_conf_ver() {
-                    warn!("RequestVote with a stale epoch {:?}, ignore it", from_epoch);
-                    return Ok(());
-                }
+        // If we receive a message which peer is not in current region and
+        // epoch is stale, we can ignore it.
+        if let Some(peer) = self.region_peers.get(&region_id) {
+            let from_epoch = msg.get_region_epoch();
+            let conf_ver = peer.storage.rl().region.get_region_epoch().get_conf_ver();
+            let not_exist = util::find_peer(&peer.storage.rl().region, from.get_store_id())
+                                .is_none();
+            // Is it necessary to check version too?
+            // Should we need to check RequestVote even peer in this region too?
+            if from_epoch.get_conf_ver() < conf_ver && not_exist {
+                warn!("RequestVote with a stale epoch {:?}, ignore it", from_epoch);
+                return Ok(());
             }
         }
+
 
         if !self.region_peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self, region_id, msg.get_region_epoch(), to.get_id()));

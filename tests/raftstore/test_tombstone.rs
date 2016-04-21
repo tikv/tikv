@@ -79,7 +79,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let region_status = new_status_request(1, new_peer(2, 2), new_region_leader_cmd());
     let resp = cluster.call_command(region_status, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().get_error().has_region_not_found(),
-            "region must not found");
+            format!("region must not found, but got {:?}", resp));
 }
 
 #[test]
