@@ -14,6 +14,7 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io::{self, Write};
+use std::fmt::{self, Formatter, Display};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use time;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -141,6 +142,27 @@ pub fn make_std_tcp_conn<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
 pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
     let addrs = try!(addr.to_socket_addrs());
     Ok(addrs.collect::<Vec<SocketAddr>>()[0])
+}
+
+/// A struct to make byte array format more friendly.
+///
+/// Remove this once issue [33127](https://github.com/rust-lang/rust/issues/33127) is resolved.
+pub struct HexDisplay<'a> {
+    data: &'a [u8],
+}
+
+impl<'a> Display for HexDisplay<'a> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        try!(write!(f, "0x"));
+        for &b in self.data {
+            try!(write!(f, "{:02X}", b));
+        }
+        Ok(())
+    }
+}
+
+pub fn hex(data: &[u8]) -> HexDisplay {
+    HexDisplay { data: data }
 }
 
 #[cfg(test)]
