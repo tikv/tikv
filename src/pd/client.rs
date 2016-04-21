@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn test_pd_client() {
         let mut client = Client::new(MockRpcClient).unwrap();
-        assert_eq!(client.alloc_id(1).unwrap(), 42u64);
+        assert_eq!(client.alloc_id(1).unwrap(), 42);
         assert!(client.is_cluster_bootstrapped(1).is_err());
 
         let mut store = metapb::Store::new();
