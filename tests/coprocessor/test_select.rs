@@ -70,7 +70,7 @@ impl Store {
         Store {
             store: TxnStore::new(engine),
             ts_g: TsGenerator::new(),
-            current_ts: 0,
+            current_ts: 1,
             handles: vec![],
         }
     }
