@@ -24,6 +24,7 @@ use std::{env, str, u64};
 use getopts::Options;
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::metapb::Region;
 use kvproto::raftpb::Entry;
 use rocksdb::DB;
 use tikv::util::hex;
@@ -50,6 +51,7 @@ fn main() {
                 "set the region id",
                 "required when getting raft message");
     opts.optflag("h", "help", "print this help menu");
+    opts.optflag("", "info", "print the region info");
     opts.optopt("i", "index", "set the raft log index", "");
     opts.optopt("k", "key", "set the query raw key, in hex format", "");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
@@ -67,6 +69,8 @@ fn main() {
         dump_raw_value(db, key.unwrap());
     } else if idx.is_some() {
         dump_raft_log_entry(db, region.unwrap(), idx.unwrap());
+    } else if matches.opt_present("info") {
+        dump_region_info(db, region.unwrap());
     } else {
         panic!("currently only random key-value and raft log entry query are supported.");
     }
@@ -94,10 +98,18 @@ fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
 
     let idx_key = keys::raft_log_key(region_id, idx);
     println!("idx_key: {}", hex(&idx_key));
-    let mut ent = db.get_msg::<Entry>(&idx_key).unwrap().unwrap();
+    let mut ent: Entry = db.get_msg(&idx_key).unwrap().unwrap();
     let data = ent.take_data();
     println!("entry {:?}", ent);
     let mut msg = RaftCmdRequest::new();
     msg.merge_from_bytes(&data).unwrap();
     println!("msg {:?}", msg);
+}
+
+fn dump_region_info(db: DB, region_id_str: String) {
+    let region_id = u64::from_str_radix(&region_id_str, 10).unwrap();
+    let region_info_key = keys::region_info_key(region_id);
+    println!("info_key: {}", hex(&region_info_key));
+    let region: Option<Region> = db.get_msg(&region_info_key).unwrap();
+    println!("info: {:?}", region);
 }
