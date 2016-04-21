@@ -14,6 +14,7 @@
 use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::vec::Vec;
 use std::{error, mem};
+use std::time::Instant;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use rocksdb::rocksdb::Snapshot as RocksDbSnapshot;
@@ -144,7 +145,7 @@ impl PeerStorage {
         })
     }
 
-    pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
+    fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
         if low > high {
             return Err(storage_error(format!("low: {} is greater that high: {}", low, high)));
         } else if low <= self.truncated_state.get_index() {
@@ -154,7 +155,11 @@ impl PeerStorage {
                                              high,
                                              self.last_index)));
         }
+        Ok(())
+    }
 
+    pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
+        try!(self.check_range(low, high));
         let mut ents = vec![];
         let mut total_size: u64 = 0;
         let mut next_index = low;
@@ -196,26 +201,14 @@ impl PeerStorage {
     }
 
     pub fn term(&self, idx: u64) -> raft::Result<u64> {
-        match self.entries(idx, idx + 1, 0) {
-            Err(e @ RaftError::Store(StorageError::Compacted)) => {
-                // Maybe the dummy entry.
-                if self.truncated_state.get_index() == idx {
-                    return Ok(self.truncated_state.get_term());
-                }
-                Err(e)
-
-            }
-            Err(e) => Err(e),
-            Ok(ents) => {
-                if ents.is_empty() {
-                    // We can't get empty entries,
-                    // maybe we have something wrong in entries function.
-                    error!("get empty entries");
-                    Err(RaftError::Store(StorageError::Unavailable))
-                } else {
-                    Ok(ents[0].get_term())
-                }
-            }
+        if idx == self.truncated_state.get_index() {
+            return Ok(self.truncated_state.get_term());
+        }
+        try!(self.check_range(idx, idx + 1));
+        let key = keys::raft_log_key(self.get_region_id(), idx);
+        match try!(self.engine.get_msg::<Entry>(&key)) {
+            Some(entry) => Ok(entry.get_term()),
+            None => Err(RaftError::Store(StorageError::Unavailable)),
         }
     }
 
@@ -296,8 +289,8 @@ impl PeerStorage {
 
     // Apply the peer with given snapshot.
     pub fn apply_snapshot<T: Mutable>(&self, w: &T, snap: &Snapshot) -> Result<ApplySnapResult> {
-        debug!("begin to apply snapshot for region {}",
-               self.get_region_id());
+        info!("begin to apply snapshot for region {}",
+              self.get_region_id());
 
         let mut snap_data = RaftSnapshotData::new();
         try!(snap_data.merge_from_bytes(snap.get_data()));
@@ -314,19 +307,20 @@ impl PeerStorage {
         if region.get_id() != region_id {
             return Err(box_err!("mismatch region id {} != {}", region_id, region.get_id()));
         }
-
+        let mut timer = Instant::now();
         // Delete everything in the region for this peer.
         try!(self.scan_region(self.engine.as_ref(),
                               &mut |key, _| {
                                   try!(w.delete(key));
                                   Ok(true)
                               }));
-
+        info!("clean old data takes {:?}", timer.elapsed());
+        timer = Instant::now();
         // Write the snapshot into the region.
         for kv in snap_data.get_data() {
             try!(w.put(kv.get_key(), kv.get_value()));
         }
-
+        info!("apply new data takes {:?}", timer.elapsed());
         // Restore the hard state
         match hard_state {
             None => try!(w.delete(&hard_state_key)),
@@ -343,7 +337,7 @@ impl PeerStorage {
         truncated_state.set_term(snap.get_metadata().get_term());
         try!(save_truncated_state(w, region_id, &truncated_state));
 
-        debug!("apply snapshot ok for region {}", self.get_region_id());
+        info!("apply snapshot ok for region {}", self.get_region_id());
 
         Ok(ApplySnapResult {
             last_index: last_index,
