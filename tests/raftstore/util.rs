@@ -185,8 +185,13 @@ pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
     cmd.mut_split().set_new_region_id(new_region_id);
     cmd.mut_split().set_new_peer_ids(peer_ids);
     cmd
+}
 
-
+pub fn new_compact_log_cmd(index: u64) -> AdminRequest {
+    let mut cmd = AdminRequest::new();
+    cmd.set_cmd_type(AdminCmdType::CompactLog);
+    cmd.mut_compact_log().set_compact_index(index);
+    cmd
 }
 
 pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
