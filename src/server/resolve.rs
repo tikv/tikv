@@ -48,6 +48,8 @@ pub struct Runner<T: PdClient> {
 
 impl<T: PdClient> Runner<T> {
     fn resolve(&self, store_id: u64) -> Result<SocketAddr> {
+        // TODO: cache store address for some time so that we can use it
+        // even pd is down.
         let store = try!(self.pd_client.rl().get_store(self.cluster_id, store_id));
 
         let addr = store.get_address();

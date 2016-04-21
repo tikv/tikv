@@ -30,7 +30,7 @@ use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
-
+use raft::SnapshotStatus;
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::Worker;
@@ -687,6 +687,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.register_replica_check_tick(event_loop);
     }
+
+    fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
+        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+            peer.raft_group.report_snapshot(to_peer_id, status)
+        }
+    }
 }
 
 fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
@@ -745,6 +751,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SplitCheckResult { region_id, split_key } => {
                 info!("split check of {} complete.", region_id);
                 self.on_split_check_result(region_id, split_key);
+            }
+            Msg::ReportSnapshot { region_id, to_peer_id, status } => {
+                self.on_report_snapshot(region_id, to_peer_id, status);
             }
         }
         debug!("handle {:?} takes {:?}", msg_str, t.elapsed());

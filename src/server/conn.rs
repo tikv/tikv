@@ -14,6 +14,7 @@
 use std::vec::Vec;
 use std::collections::VecDeque;
 use std::option::Option;
+use std::boxed::{Box, FnBox};
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
@@ -25,6 +26,8 @@ use super::server::Server;
 use util::codec::rpc;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
+
+pub type OnWriteComplete = Box<FnBox(bool) + Send>;
 
 pub struct Conn {
     pub sock: TcpStream,
@@ -43,6 +46,8 @@ pub struct Conn {
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
+
+    write_complete: Option<OnWriteComplete>,
 }
 
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
@@ -79,6 +84,7 @@ impl Conn {
             res: VecDeque::new(),
             last_msg_id: 0,
             store_id: store_id,
+            write_complete: None,
         }
     }
 
@@ -160,18 +166,33 @@ impl Conn {
             self.res.pop_front();
         }
 
-        // no data for writing, remove writable.
+        // no data for writing, remove writable
         self.interest.remove(EventSet::writable());
-        self.reregister(event_loop)
+        try!(self.reregister(event_loop));
+
+        self.on_write_complete(true);
+        Ok(())
+    }
+
+    pub fn on_write_complete(&mut self, r: bool) {
+        if self.write_complete.is_none() {
+            return;
+        }
+
+        let cb = self.write_complete.take().unwrap();
+        cb.call_box((r,));
     }
 
     pub fn append_write_buf<T, S>(&mut self,
                                   event_loop: &mut EventLoop<Server<T, S>>,
-                                  msg: ConnData)
+                                  msg: ConnData,
+                                  cb: Option<OnWriteComplete>)
                                   -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
+        self.write_complete = cb;
+
         // Now we just push data to a write buffer and register writable for later writing.
         // Later we can write data directly, if meet WOUNDBLOCK error(don't write all data OK),
         // we can register writable at that time.
