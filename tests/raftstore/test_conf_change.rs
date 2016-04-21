@@ -404,7 +404,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     let index = engine1.get_u64(&keys::raft_applied_index_key(r1)).unwrap().unwrap();
     let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
     compact_log.mut_header().set_peer(new_peer(1, 1));
-    // ignore error, see comment above.
+    // ignore error, see above comment.
     let _ = cluster.call_command(compact_log, Duration::from_millis(1));
 
     cluster.run_node(2);
