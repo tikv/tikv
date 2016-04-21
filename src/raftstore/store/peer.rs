@@ -30,7 +30,7 @@ use raft::{self, RawNode, SnapshotStatus};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use util::HandyRwLock;
+use util::{hex, HandyRwLock};
 use pd::PdClient;
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage};
@@ -774,7 +774,7 @@ impl Peer {
         let mut region = self.region();
         try!(util::check_key_in_region(split_key, &region));
 
-        info!("split at {:?}", split_key);
+        info!("split at {}", hex(split_key));
 
         // TODO: check new region id validation.
         let new_region_id = split_req.get_new_region_id();

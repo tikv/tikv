@@ -30,6 +30,7 @@ use kvproto::errorpb;
 use storage::Key;
 use util::codec::{Datum, table, datum};
 use util::xeval::Evaluator;
+use util::hex;
 use server::{self, SendCh, Msg, ConnData};
 
 pub const REQ_TYPE_SELECT: i64 = 101;
@@ -306,7 +307,7 @@ fn get_rows_from_range(snap: &SnapshotStore,
     } else {
         let mut seek_key = range.take_start();
         loop {
-            trace!("seek {:?}", seek_key);
+            trace!("seek {}", hex(&seek_key));
             let t = Instant::now();
             let mut res = try!(snap.scan(Key::from_raw(seek_key), 1));
             trace!("scan takes {:?}", t.elapsed());
@@ -316,7 +317,7 @@ fn get_rows_from_range(snap: &SnapshotStore,
             }
             let (key, _) = try!(res.pop().unwrap());
             if range.get_end() <= &key {
-                debug!("reach end key: {:?} >= {:?}", key, range.get_end());
+                debug!("reach end key: {} >= {}", hex(&key), hex(range.get_end()));
                 break;
             }
             let h = box_try!(table::decode_handle(&key));
@@ -345,7 +346,7 @@ fn get_row_by_handle(snap: &SnapshotStore,
             let raw_key = table::encode_column_key(tid, h, col.get_column_id());
             let key = Key::from_raw(raw_key);
             match try!(snap.get(&key)) {
-                None => return Err(box_err!("key {:?} not exists", key)),
+                None => return Err(box_err!("key {} not exists", key)),
                 Some(bs) => row.mut_data().extend(bs),
             }
         }
@@ -393,7 +394,7 @@ fn get_idx_row_from_range(snap: &SnapshotStore,
     let mut rows = vec![];
     let mut seek_key = r.take_start();
     loop {
-        trace!("seek {:?}", seek_key);
+        trace!("seek {}", hex(&seek_key));
         let t = Instant::now();
         let mut nk = try!(snap.scan(Key::from_raw(seek_key.clone()), 1));
         trace!("scan takes {:?}", t.elapsed());
@@ -403,7 +404,7 @@ fn get_idx_row_from_range(snap: &SnapshotStore,
         }
         let (key, value) = try!(nk.pop().unwrap());
         if r.get_end() <= &key {
-            debug!("reach end key: {:?} >= {:?}", key, r.get_end());
+            debug!("reach end key: {} >= {}", hex(&key), hex(r.get_end()));
             return Ok(rows);
         }
         let mut datums = box_try!(table::decode_index_key(&key));

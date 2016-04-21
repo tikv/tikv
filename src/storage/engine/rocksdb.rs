@@ -17,6 +17,7 @@ use rocksdb::{DB, Writable, WriteBatch, IteratorMode, Direction};
 use rocksdb::rocksdb::Snapshot as RocksSnapshot;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
+use util::hex;
 use super::{Engine, Snapshot, Modify, Result};
 
 pub struct EngineRocksdb {
@@ -40,7 +41,7 @@ impl Debug for EngineRocksdb {
 
 impl Engine for EngineRocksdb {
     fn get(&self, _: &Context, key: &Key) -> Result<Option<Value>> {
-        trace!("EngineRocksdb: get {:?}", key);
+        trace!("EngineRocksdb: get {}", key);
         self.db
             .get(key.raw())
             .map(|r| r.map(|v| v.to_vec()))
@@ -48,14 +49,14 @@ impl Engine for EngineRocksdb {
     }
 
     fn seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
-        trace!("EngineRocksdb: seek {:?}", key);
+        trace!("EngineRocksdb: seek {}", key);
         let mode = IteratorMode::From(key.raw(), Direction::Forward);
         let pair = self.db.iterator(mode).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
         Ok(pair)
     }
 
     fn reverse_seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
-        trace!("EngineRocksdb: seek {:?}", key);
+        trace!("EngineRocksdb: seek {}", key);
         let mut iter = self.db.iterator(IteratorMode::From(key.raw(), Direction::Reverse));
         // iter will be positioned at `key` or the kv pair after it. If no such key exists, we need
         // locate it to the end.
@@ -73,13 +74,13 @@ impl Engine for EngineRocksdb {
         for rev in batch {
             match rev {
                 Modify::Delete(k) => {
-                    trace!("EngineRocksdb: delete {:?}", k);
+                    trace!("EngineRocksdb: delete {}", k);
                     if let Err(msg) = wb.delete(k.raw()) {
                         return Err(RocksDBError::new(msg).into_engine_error());
                     }
                 }
                 Modify::Put((k, v)) => {
-                    trace!("EngineRocksdb: put {:?},{:?}", k, v);
+                    trace!("EngineRocksdb: put {},{}", k, hex(&v));
                     if let Err(msg) = wb.put(k.raw(), &v) {
                         return Err(RocksDBError::new(msg).into_engine_error());
                     }
@@ -100,21 +101,21 @@ impl Engine for EngineRocksdb {
 
 impl<'a> Snapshot for RocksSnapshot<'a> {
     fn get(&self, key: &Key) -> Result<Option<Value>> {
-        trace!("RocksSnapshot: get {:?}", key);
+        trace!("RocksSnapshot: get {}", key);
         self.get(key.raw())
             .map(|r| r.map(|v| v.to_vec()))
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 
     fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("RocksSnapshot: seek {:?}", key);
+        trace!("RocksSnapshot: seek {}", key);
         let mode = IteratorMode::From(key.raw(), Direction::Forward);
         let pair = self.iterator(mode).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
         Ok(pair)
     }
 
     fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("RocksSnapshot: seek {:?}", key);
+        trace!("RocksSnapshot: seek {}", key);
         let mut iter = self.iterator(IteratorMode::From(key.raw(), Direction::Reverse));
         // iter will be positioned at `key` or the kv pair after it. If no such key exists, we need
         // locate it to the end.

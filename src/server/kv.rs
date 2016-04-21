@@ -24,7 +24,7 @@ use kvproto::msgpb;
 use kvproto::errorpb::Error as ErrorHeader;
 use storage::{Storage, Key, Value, KvPair, Mutation, MaybeLocked, MaybeComitted, MaybeRolledback,
               Callback, Result as StorageResult, engine};
-
+use util::hex;
 use super::{Result, SendCh, ConnData, Error, Msg};
 
 pub struct StoreHandler {
@@ -58,7 +58,7 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_scan_req();
         let start_key = req.take_start_key();
-        debug!("start_key [{:?}]", start_key);
+        debug!("start_key [{}]", hex(&start_key));
         let cb = self.make_cb(StoreHandler::cmd_scan_done, token, msg_id);
         self.store
             .async_scan(msg.take_context(),
