@@ -119,7 +119,7 @@ impl Simulator for NodeCluster {
     }
 
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        self.trans.wl().send(msg)
+        self.trans.rl().send(msg)
     }
 }
 
