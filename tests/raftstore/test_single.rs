@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use super::cluster::{Cluster, Simulator};
-use tikv::raftstore::store::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
@@ -26,7 +25,7 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
         let key = k.as_bytes();
         let value = v.as_bytes();
-        cluster.put(key, value);
+        cluster.must_put(key, value);
         let v = cluster.get(key);
         assert_eq!(v, Some(value.to_vec()));
     }
@@ -35,7 +34,7 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
         let (k, v) = (format!("key{}", i), format!("value{}", i + 1));
         let key = k.as_bytes();
         let value = v.as_bytes();
-        cluster.put(key, value);
+        cluster.must_put(key, value);
         let v = cluster.get(key);
         assert_eq!(v, Some(value.to_vec()));
     }
@@ -49,7 +48,7 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
         let key = k.as_bytes();
         let value = v.as_bytes();
-        cluster.put(key, value);
+        cluster.must_put(key, value);
         let v = cluster.get(key);
         assert_eq!(v, Some(value.to_vec()));
     }
@@ -57,7 +56,7 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     for i in 1..1000 {
         let k = format!("key{}", i);
         let key = k.as_bytes();
-        cluster.delete(key);
+        cluster.must_delete(key);
         assert!(cluster.get(key).is_none());
     }
 }
@@ -70,13 +69,13 @@ fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
         let key = k.as_bytes();
         let value = v.as_bytes();
-        cluster.put(key, value);
+        cluster.must_put(key, value);
     }
 
     for i in 0..100 {
         let k = format!("key{:03}", i);
         let key = k.as_bytes();
-        let (k, v) = cluster.seek(key).unwrap();
+        let (k, v) = cluster.must_seek(key).unwrap();
         assert_eq!(k, b"key100");
         assert_eq!(v, b"value100");
     }
@@ -85,7 +84,7 @@ fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
         let key = k.as_bytes();
         let value = v.as_bytes();
-        let (sk, sv) = cluster.seek(key).unwrap();
+        let (sk, sv) = cluster.must_seek(key).unwrap();
         assert_eq!(sk, key);
         assert_eq!(sv, value);
     }
@@ -93,10 +92,10 @@ fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
     for i in 200..300 {
         let k = format!("key{}", i);
         let key = k.as_bytes();
-        assert!(cluster.seek(key).is_none());
+        assert!(cluster.must_seek(key).is_none());
     }
 
-    assert!(cluster.seek(b"key2").is_none(),
+    assert!(cluster.must_seek(b"key2").is_none(),
             "seek should follow binary order");
 }
 

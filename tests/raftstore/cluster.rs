@@ -361,7 +361,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn put(&mut self, key: &[u8], value: &[u8]) {
+    pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
         let resp = self.request(key, vec![new_put_cmd(key, value)], Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -370,7 +370,7 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
     }
 
-    pub fn seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    pub fn must_seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
         let resp = self.request(key, vec![new_seek_cmd(key)], Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -385,7 +385,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn delete(&mut self, key: &[u8]) {
+    pub fn must_delete(&mut self, key: &[u8]) {
         let resp = self.request(key, vec![new_delete_cmd(key)], Duration::from_secs(3));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);

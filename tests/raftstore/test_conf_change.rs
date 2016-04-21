@@ -36,7 +36,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Now region 1 only has peer (1, 1, 1);
     let (key, value) = (b"a1", b"v1");
 
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
@@ -45,7 +45,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
 
     let (key, value) = (b"a2", b"v2");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     // now peer 2 must have v1 and v2;
@@ -92,7 +92,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2));
 
     let (key, value) = (b"a3", b"v3");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     // now peer 3 must have v1, v2 and v3
     let engine_3 = cluster.get_engine(3);
@@ -134,7 +134,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Force update a2 to check whether peer 2 added ok and received the snapshot.
     let (key, value) = (b"a2", b"v2");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
@@ -152,7 +152,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(3, 3));
 
     let (key, value) = (b"a4", b"v4");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     // now peer 4 in store 2 must have v1, v2, v3, v4, we check v1 and v4 here.
     let engine_2 = cluster.get_engine(2);
@@ -196,7 +196,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Now the first store has first region. others have none.
 
     let (key, value) = (b"a1", b"v1");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let peer2 = new_conf_change_peer(&stores[1], &pd_client);
@@ -206,7 +206,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.change_peer(region_id, ConfChangeType::AddNode, peer2.clone());
 
     let (key, value) = (b"a2", b"v2");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     // now peer 2 must have v1 and v2;
@@ -220,7 +220,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.change_peer(region_id, ConfChangeType::RemoveNode, peer2.clone());
 
     let (key, value) = (b"a3", b"v3");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     // now peer 3 must have v1, v2 and v3
     let engine_3 = cluster.get_engine(peer3.get_store_id());
@@ -238,7 +238,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.change_peer(region_id, ConfChangeType::RemoveNode, peer3.clone());
 
     let (key, value) = (b"a4", b"v4");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     // now peer4 must have v1, v2, v3, v4, we check v1 and v4 here.
     let engine_2 = cluster.get_engine(peer4.get_store_id());
@@ -315,7 +315,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     wait_till_reach_count(pd_client.clone(), cluster_id, region_id, 5);
 
     let (key, value) = (b"a1", b"v1");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     region = pd_client.rl().get_region_by_id(cluster_id, region_id).unwrap();

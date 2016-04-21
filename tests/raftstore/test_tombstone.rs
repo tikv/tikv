@@ -33,7 +33,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
 
     let (key, value) = (b"a1", b"v1");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
@@ -51,7 +51,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     // After new leader is elected, the change peer must be finished.
     cluster.leader_of_region(1).unwrap();
     let (key, value) = (b"a3", b"v3");
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
