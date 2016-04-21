@@ -37,7 +37,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, c
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
-use tikv::pd::{new_rpc_client, PdRpcClient};
+use tikv::pd::{new_rpc_client, RpcClient};
 
 const MEM_DSN: &'static str = "mem";
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -61,7 +61,7 @@ fn build_raftkv(matches: &Matches,
                 ch: SendCh,
                 cluster_id: u64,
                 addr: String,
-                pd_client: Arc<RwLock<PdRpcClient>>)
+                pd_client: Arc<RwLock<RpcClient>>)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
