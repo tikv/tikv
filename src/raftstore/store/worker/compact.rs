@@ -13,12 +13,12 @@
 
 use raftstore::store::{PeerStorage, keys};
 use raftstore::store::engine::Iterable;
+use util::worker::Runnable;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
-
-use util::worker::Runnable;
+use std::error;
 
 /// Compact task.
 pub struct Task {
@@ -46,34 +46,52 @@ impl Display for Task {
     }
 }
 
+quick_error! {
+    #[derive(Debug)]
+    enum Error {
+        Other(err: Box<error::Error + Sync + Send>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
+            display("compact failed {:?}", err)
+        }
+    }
+}
+
 pub struct Runner;
 
-impl Runner {}
+impl Runner {
+    fn compact(&mut self, task: Task) -> Result<u64, Error> {
+        let start_key = keys::raft_log_key(task.region_id, 0);
+        let mut first_idx = task.compact_idx;
+        if let Some((k, _)) = box_try!(task.engine.seek(&start_key)) {
+            first_idx = box_try!(keys::raft_log_index(&k));
+        }
+        if first_idx >= task.compact_idx {
+            info!("no need to compact");
+            return Ok(0);
+        }
+        let w = WriteBatch::new();
+        for idx in first_idx..task.compact_idx {
+            let key = keys::raft_log_key(task.region_id, idx);
+            box_try!(w.delete(&key));
+        }
+        box_try!(task.engine.write(w));
+        Ok(task.compact_idx - first_idx)
+    }
+}
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         debug!("executing task {}", task);
-        let start_key = keys::raft_log_key(task.region_id, 0);
-        let end_key = keys::raft_log_key(task.region_id, task.compact_idx);
-        let w = WriteBatch::new();
-        let mut cnt = 0;
-
-        let res = task.engine.scan(&start_key,
-                                   &end_key,
-                                   &mut |key, _| {
-                                       cnt += 1;
-                                       try!(w.delete(key));
-                                       Ok(true)
-                                   });
-        if let Err(e) = res {
-            error!("failed to scan to compact index: {:?}", e);
-            return;
+        let region_id = task.region_id;
+        match self.compact(task) {
+            Err(e) => error!("failed to compact: {:?}", e),
+            Ok(n) => {
+                info!("{} log entries have been compacted for region {}",
+                      n,
+                      region_id)
+            }
         }
-        if let Err(e) = task.engine.write(w) {
-            error!("failed to compact: {:?}", e);
-        }
-        info!("{} log entries have been compacted for region {}",
-              cnt,
-              task.region_id);
     }
 }
