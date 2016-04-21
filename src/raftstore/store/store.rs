@@ -524,40 +524,38 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             // Leader will replicate the compact log command to followers,
-            // If we use current applied_index (like 10) as the compact index,
-            // when we apply this log, the newest applied_index will be 11,
+            // If we use current replicated_index (like 10) as the compact index,
+            // when we replicate this log, the newest replicated_index will be 11,
             // but we only compact the log to 10, not 11, at that time,
-            // the first index is 10, and applied index is 11, with an extra log,
+            // the first index is 10, and replicated_index is 11, with an extra log,
             // and we will do compact again with compact index 11, in cycles...
-            // So we introduce a threshold, if applied index - first index > threshold,
+            // So we introduce a threshold, if replicated index - first index > threshold,
             // we will try to compact log.
             // raft log entries[..............................................]
             //                  ^                                       ^
             //                  |-----------------threshold------------ |
-            //              first_index                         applied_index
-            let applied_index = peer.storage.rl().applied_index();
-            let first_index = peer.storage.rl().first_index();
-            if applied_index < first_index {
-                // Check if we are just started or applied a snapshot.
-                // When starts or after applying a snapshot, we have no logs,
-                // so here the first index = applied index + 1.
-                if first_index != applied_index + 1 {
-                    // The peer is leader, so the applied_index can't < first index.
-                    error!("applied_index {} < first_index {} for leader peer {:?} at region {}",
-                           applied_index,
-                           first_index,
-                           peer.peer,
-                           region_id);
-                }
+            //              first_index                         replicated_index
+            let replicated_idx = peer.raft_group
+                                     .status()
+                                     .progress
+                                     .values()
+                                     .map(|p| p.matched)
+                                     .min()
+                                     .unwrap();
+            let applied_idx = peer.storage.rl().applied_index();
+            let first_idx = peer.storage.rl().first_index();
+            let compact_idx;
+            if applied_idx > first_idx && applied_idx - first_idx >= self.cfg.raft_log_gc_limit {
+                compact_idx = applied_idx;
+            } else if replicated_idx < first_idx ||
+               replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {
                 continue;
-            }
-
-            if applied_index - first_index <= self.cfg.raft_log_gc_threshold {
-                continue;
+            } else {
+                compact_idx = replicated_idx;
             }
 
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), applied_index);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx);
 
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
@@ -566,7 +564,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 callback: cb,
             }) {
                 error!("send compact log {} to region {} err {:?}",
-                       applied_index,
+                       compact_idx,
                        region_id,
                        e);
             }
