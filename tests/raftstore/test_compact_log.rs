@@ -42,7 +42,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
         let key = k.as_bytes();
         let value = v.as_bytes();
-        cluster.put(key, value);
+        cluster.must_put(key, value);
         let v = cluster.get(key);
         assert_eq!(v, Some(value.to_vec()));
     }
@@ -73,7 +73,7 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
     cluster.start();
 
-    cluster.put(b"a1", b"v1");
+    cluster.must_put(b"a1", b"v1");
 
     let mut before_states = HashMap::new();
 
@@ -91,7 +91,7 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     for i in 1..300 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
-        cluster.put(&k, &v);
+        cluster.must_put(&k, &v);
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
     }
@@ -113,7 +113,7 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     for i in 300..600 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
-        cluster.put(&k, &v);
+        cluster.must_put(&k, &v);
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
     }
