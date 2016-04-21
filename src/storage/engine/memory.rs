@@ -17,7 +17,7 @@ use std::collections::Bound::{Included, Excluded, Unbounded};
 use std::fmt::{self, Formatter, Debug};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
-use util::HandyRwLock;
+use util::{hex, HandyRwLock};
 use super::{Engine, Snapshot, Modify, Result};
 
 pub struct EngineBtree {
@@ -39,20 +39,20 @@ impl Debug for EngineBtree {
 
 impl Engine for EngineBtree {
     fn get(&self, _: &Context, key: &Key) -> Result<Option<Value>> {
-        trace!("EngineBtree: get {:?}", key);
+        trace!("EngineBtree: get {}", key);
         let m = self.map.rl();
         Ok(m.get(key.raw()).cloned())
     }
 
     fn seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
-        trace!("EngineBtree: seek {:?}", key);
+        trace!("EngineBtree: seek {}", key);
         let m = self.map.rl();
         let mut iter = m.range::<Vec<u8>, Vec<u8>>(Included(key.raw()), Unbounded);
         Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
     }
 
     fn reverse_seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
-        trace!("EngineBtree: rev_seek {:?}", key);
+        trace!("EngineBtree: rev_seek {}", key);
         let m = self.map.rl();
         let iter = m.range::<Vec<u8>, Vec<u8>>(Unbounded, Excluded(key.raw()));
         Ok(iter.last().map(|(k, v)| (k.clone(), v.clone())))
@@ -63,11 +63,11 @@ impl Engine for EngineBtree {
         for rev in batch {
             match rev {
                 Modify::Delete(k) => {
-                    trace!("EngineBtree: delete {:?}", k);
+                    trace!("EngineBtree: delete {}", k);
                     m.remove(k.raw());
                 }
                 Modify::Put((k, v)) => {
-                    trace!("EngineBtree: put {:?},{:?}", k, v);
+                    trace!("EngineBtree: put {},{}", k, hex(&v));
                     m.insert(k.raw().clone(), v);
                 }
             }
@@ -84,18 +84,18 @@ impl Engine for EngineBtree {
 
 impl Snapshot for BTreeMap<Vec<u8>, Value> {
     fn get(&self, key: &Key) -> Result<Option<Value>> {
-        trace!("SnapshotBTree: get {:?}", key);
+        trace!("SnapshotBTree: get {}", key);
         Ok(self.get(key.raw()).cloned())
     }
 
     fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("SnapshotBTree: seek {:?}", key);
+        trace!("SnapshotBTree: seek {}", key);
         let mut iter = self.range::<Vec<u8>, Vec<u8>>(Included(key.raw()), Unbounded);
         Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
     }
 
     fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("SnapshotBTree: rev_seek {:?}", key);
+        trace!("SnapshotBTree: rev_seek {}", key);
         let iter = self.range::<Vec<u8>, Vec<u8>>(Unbounded, Excluded(key.raw()));
         Ok(iter.last().map(|(k, v)| (k.clone(), v.clone())))
     }

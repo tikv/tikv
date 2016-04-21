@@ -13,8 +13,9 @@
 
 use std::hash::{Hash, Hasher};
 use std::mem;
+use std::fmt::{self, Formatter, Display};
 use byteorder::{BigEndian, WriteBytesExt};
-use util::codec;
+use util::{hex, codec};
 
 pub type Value = Vec<u8>;
 pub type KvPair = (Vec<u8>, Value);
@@ -49,6 +50,12 @@ impl Key {
 impl Hash for Key {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.raw().hash(state)
+    }
+}
+
+impl Display for Key {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", hex(&self.0))
     }
 }
 

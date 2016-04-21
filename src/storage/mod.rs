@@ -120,14 +120,14 @@ impl fmt::Debug for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Command::Get { ref key, start_ts, .. } => {
-                write!(f, "kv::command::get {:?} @ {}", key, start_ts)
+                write!(f, "kv::command::get {} @ {}", key, start_ts)
             }
             Command::BatchGet { ref keys, start_ts, .. } => {
                 write!(f, "kv::command_batch_get {} @ {}", keys.len(), start_ts)
             }
             Command::Scan { ref start_key, limit, start_ts, .. } => {
                 write!(f,
-                       "kv::command::scan {:?}({}) @ {}",
+                       "kv::command::scan {}({}) @ {}",
                        start_key,
                        limit,
                        start_ts)
@@ -154,7 +154,7 @@ impl fmt::Debug for Command {
                        get_ts)
             }
             Command::Cleanup { ref key, start_ts, .. } => {
-                write!(f, "kv::command::cleanup {:?} @ {}", key, start_ts)
+                write!(f, "kv::command::cleanup {} @ {}", key, start_ts)
             }
             Command::Rollback { ref keys, start_ts, .. } => {
                 write!(f,
@@ -163,7 +163,7 @@ impl fmt::Debug for Command {
                        start_ts)
             }
             Command::RollbackThenGet { ref key, lock_ts, .. } => {
-                write!(f, "kv::rollback_then_get {:?} @ {}", key, lock_ts)
+                write!(f, "kv::rollback_then_get {} @ {}", key, lock_ts)
             }
         }
     }

@@ -20,7 +20,7 @@ use kvproto::pdpb::{self, CommandType};
 use kvproto::raftpb::ConfChangeType;
 
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
+use tikv::util::{hex, HandyRwLock};
 
 use super::pd::TestPdClient;
 use super::cluster::Simulator;
@@ -129,7 +129,9 @@ impl<T: Simulator> AskHandler<T> {
                          .unwrap();
         if &*split_key <= region.get_start_key() ||
            (!region.get_end_key().is_empty() && &*split_key >= region.get_end_key()) {
-            error!("invalid split key {:?} for region {:?}", split_key, region);
+            error!("invalid split key {} for region {:?}",
+                   hex(&split_key),
+                   region);
             return;
         }
 
