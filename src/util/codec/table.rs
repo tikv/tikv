@@ -16,12 +16,12 @@ use std::io::Write;
 
 use super::{number, Result, Error, Datum, datum};
 
-const ID_LEN: usize = 8;
-const PREFIX_LEN: usize = 1 + ID_LEN /*table_id*/ + 2;
-const RECORD_ROW_KEY_LEN: usize = PREFIX_LEN + ID_LEN;
-const TABLE_PREFIX: &'static [u8] = b"t";
-const RECORD_PREFIX_SEP: &'static [u8] = b"_r";
-const INDEX_PREFIX_SEP: &'static [u8] = b"_i";
+pub const ID_LEN: usize = 8;
+pub const PREFIX_LEN: usize = 1 + ID_LEN /*table_id*/ + 2;
+pub const RECORD_ROW_KEY_LEN: usize = PREFIX_LEN + ID_LEN;
+pub const TABLE_PREFIX: &'static [u8] = b"t";
+pub const RECORD_PREFIX_SEP: &'static [u8] = b"_r";
+pub const INDEX_PREFIX_SEP: &'static [u8] = b"_i";
 
 fn append_table_record_prefix(mut buf: &mut [u8], table_id: i64) -> Result<()> {
     try!(buf.write_all(TABLE_PREFIX));
@@ -83,7 +83,7 @@ pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<
 
 // `decode_index_key` decodes datums from an index key.
 pub fn decode_index_key(encoded: &[u8]) -> Result<Vec<Datum>> {
-    datum::decode(&encoded[PREFIX_LEN + ID_LEN..]).map(|o| o.0)
+    datum::decode(&encoded[PREFIX_LEN + ID_LEN..])
 }
 
 #[cfg(test)]

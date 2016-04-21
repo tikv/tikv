@@ -307,7 +307,9 @@ fn get_rows_from_range(snap: &SnapshotStore,
         let mut seek_key = range.take_start();
         loop {
             trace!("seek {:?}", seek_key);
+            let t = Instant::now();
             let mut res = try!(snap.scan(Key::from_raw(seek_key), 1));
+            trace!("scan takes {:?}", t.elapsed());
             if res.is_empty() {
                 debug!("no more data to scan.");
                 break;
@@ -354,7 +356,7 @@ fn get_row_by_handle(snap: &SnapshotStore,
     }
     trace!("filtering row {:?}", row);
     if !row.get_data().is_empty() {
-        let (datums, _) = box_try!(datum::decode(row.get_data()));
+        let datums = box_try!(datum::decode(row.get_data()));
         for (c, d) in columns.iter().zip(datums) {
             eval.insert(c.get_column_id(), d);
         }
@@ -392,7 +394,9 @@ fn get_idx_row_from_range(snap: &SnapshotStore,
     let mut seek_key = r.take_start();
     loop {
         trace!("seek {:?}", seek_key);
+        let t = Instant::now();
         let mut nk = try!(snap.scan(Key::from_raw(seek_key.clone()), 1));
+        trace!("scan takes {:?}", t.elapsed());
         if nk.is_empty() {
             debug!("no more data to scan");
             return Ok(rows);
