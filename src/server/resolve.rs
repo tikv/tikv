@@ -11,85 +11,103 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread::{self, JoinHandle};
-use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, RwLock};
 use std::boxed::{Box, FnBox};
 use std::net::SocketAddr;
-use std::io;
+use std::fmt::{self, Formatter, Display};
 
 use super::Result;
-use util;
+use util::{self, HandyRwLock};
+use util::worker::{Runnable, Worker};
+use pd::PdClient;
 
-pub type Callback = Box<FnBox(io::Result<SocketAddr>) + Send>;
+pub type Callback = Box<FnBox(Result<SocketAddr>) + Send>;
 
-enum Msg {
-    Peer {
-        addr: String,
-        cb: Callback,
-    },
-    Quit,
+// StoreAddrResolver resolves the store address.
+pub trait StoreAddrResolver {
+    // Resolve resolves the store address asynchronously.
+    fn resolve(&self, store_id: u64, cb: Callback) -> Result<()>;
 }
 
-pub struct Resolver {
-    tx: Sender<Msg>,
-    h: Option<JoinHandle<()>>,
+/// Snapshot generating task.
+struct Task {
+    store_id: u64,
+    cb: Callback,
 }
 
-impl Resolver {
-    pub fn new() -> Result<Resolver> {
-        let (tx, rx) = mpsc::channel();
-        let builder = thread::Builder::new().name("host-resolver".to_owned());
-        let h = try!(builder.spawn(move || {
-            while let Ok(Msg::Peer { addr, cb }) = rx.recv() {
-                let resp = util::to_socket_addr(&*addr);
-                cb.call_box((resp,));
-            }
-        }));
-
-        Ok(Resolver {
-            tx: tx,
-            h: Some(h),
-        })
+impl Display for Task {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "resolve store {} address", self.store_id)
     }
+}
 
-    pub fn resolve(&self, addr: String, cb: Callback) -> Result<()> {
-        self.tx
-            .send(Msg::Peer {
-                addr: addr,
-                cb: cb,
-            })
-            .unwrap();
+pub struct Runner<T: PdClient> {
+    cluster_id: u64,
+    pd_client: Arc<RwLock<T>>,
+}
+
+impl<T: PdClient> Runner<T> {
+    fn resolve(&self, store_id: u64) -> Result<SocketAddr> {
+        let store = try!(self.pd_client.rl().get_store(self.cluster_id, store_id));
+
+        let addr = store.get_address();
+        let sock = try!(util::to_socket_addr(addr));
+        Ok(sock)
+    }
+}
+
+impl<T: PdClient> Runnable<Task> for Runner<T> {
+    fn run(&mut self, task: Task) {
+        let store_id = task.store_id;
+        let resp = self.resolve(store_id);
+        task.cb.call_box((resp,))
+    }
+}
+
+pub struct PdStoreAddrResolver {
+    worker: Worker<Task>,
+}
+
+impl PdStoreAddrResolver {
+    pub fn new<T>(cluster_id: u64, pd_client: Arc<RwLock<T>>) -> Result<PdStoreAddrResolver>
+        where T: PdClient + 'static
+    {
+        let mut r = PdStoreAddrResolver {
+            worker: Worker::new("store address resolve worker".to_owned()),
+        };
+
+        let runner = Runner {
+            cluster_id: cluster_id,
+            pd_client: pd_client,
+        };
+        box_try!(r.worker.start(runner));
+        Ok(r)
+    }
+}
+
+impl StoreAddrResolver for PdStoreAddrResolver {
+    fn resolve(&self, store_id: u64, cb: Callback) -> Result<()> {
+        let task = Task {
+            store_id: store_id,
+            cb: cb,
+        };
+        box_try!(self.worker.schedule(task));
         Ok(())
     }
 }
 
-impl Drop for Resolver {
+impl Drop for PdStoreAddrResolver {
     fn drop(&mut self) {
-        if let Err(e) = self.tx.send(Msg::Quit) {
-            error!("try to quit host resolver thread err {:?}", e);
-            return;
-        }
-
-        let h = self.h.take().unwrap();
-        if let Err(e) = h.join() {
-            error!("join host resolver thread err {:?}", e);
+        if let Err(e) = self.worker.stop() {
+            error!("failed to stop store address resolve thread: {:?}!!!", e);
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::mpsc;
-    use super::*;
+pub struct MockStoreAddrResolver;
 
-    #[test]
-    fn test_resolver() {
-        let (tx, rx) = mpsc::channel();
-        let r = Resolver::new().unwrap();
-        let cb = box move |r| {
-            tx.send(r).unwrap();
-        };
-        r.resolve("localhost:80".to_owned(), cb).unwrap();
-        rx.recv().unwrap().unwrap();
+impl StoreAddrResolver for MockStoreAddrResolver {
+    fn resolve(&self, _: u64, _: Callback) -> Result<()> {
+        unimplemented!();
     }
 }

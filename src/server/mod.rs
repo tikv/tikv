@@ -30,13 +30,14 @@ mod kv;
 pub mod coprocessor;
 pub mod transport;
 pub mod node;
-mod resolve;
+pub mod resolve;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Result, Error};
 pub use self::server::{Server, create_event_loop, bind};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
+pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver, MockStoreAddrResolver};
 
 const MAX_SEND_RETRY_CNT: i32 = 20;
 
@@ -98,15 +99,15 @@ pub enum Msg {
         token: Token,
         data: ConnData,
     },
-    // Send data to remote peer with address.
-    SendPeer {
-        peer: String,
+    // Send data to remote store.
+    SendStore {
+        store_id: u64,
         data: ConnData,
     },
     // Send data to remote peer with parsed socket address.
-    SendPeerSock {
+    SendStoreSock {
+        store_id: u64,
         sock_addr: SocketAddr,
-        peer: String,
         data: ConnData,
     },
 }
