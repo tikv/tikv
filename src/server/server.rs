@@ -31,12 +31,15 @@ use storage::Storage;
 use super::kv::StoreHandler;
 use super::coprocessor::RegionEndPoint;
 use super::transport::RaftStoreRouter;
-use super::resolve::Resolver;
+use super::resolve::StoreAddrResolver;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 
-pub fn create_event_loop<T: RaftStoreRouter>() -> Result<EventLoop<Server<T>>> {
+pub fn create_event_loop<T, S>() -> Result<EventLoop<Server<T, S>>>
+    where T: RaftStoreRouter,
+          S: StoreAddrResolver
+{
     let event_loop = try!(EventLoop::new());
     Ok(event_loop)
 }
@@ -47,7 +50,7 @@ pub fn bind(addr: &str) -> Result<TcpListener> {
     Ok(listener)
 }
 
-pub struct Server<T: RaftStoreRouter> {
+pub struct Server<T: RaftStoreRouter, S: StoreAddrResolver> {
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
     // In our raft server, a client with token 1 sends a raft command, we will
@@ -61,18 +64,19 @@ pub struct Server<T: RaftStoreRouter> {
     conn_token_counter: usize,
     sendch: SendCh,
 
-    // addr -> Token
-    peers: HashMap<String, Token>,
+    // store id -> Token
+    // This is for communicating with other raft stores.
+    store_tokens: HashMap<u64, Token>,
 
     raft_router: Arc<RwLock<T>>,
 
     store: StoreHandler,
     end_point: RegionEndPoint,
 
-    resolver: Resolver,
+    resolver: S,
 }
 
-impl<T: RaftStoreRouter> Server<T> {
+impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // Create a server with already initialized engines.
     // Now some tests use 127.0.0.1:0 but we need real listening
     // address in Node before creating the Server, so we first
@@ -81,8 +85,9 @@ impl<T: RaftStoreRouter> Server<T> {
     pub fn new(event_loop: &mut EventLoop<Self>,
                listener: TcpListener,
                storage: Storage,
-               raft_router: Arc<RwLock<T>>)
-               -> Result<Server<T>> {
+               raft_router: Arc<RwLock<T>>,
+               resolver: S)
+               -> Result<Server<T, S>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
                                  EventSet::readable(),
@@ -93,14 +98,12 @@ impl<T: RaftStoreRouter> Server<T> {
         let store_handler = StoreHandler::new(storage, sendch.clone());
         let end_point = RegionEndPoint::new(engine, sendch.clone());
 
-        let resolver = try!(Resolver::new());
-
         let svr = Server {
             listener: listener,
             sendch: sendch,
             conns: HashMap::new(),
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
-            peers: HashMap::new(),
+            store_tokens: HashMap::new(),
             raft_router: raft_router,
             store: store_handler,
             end_point: end_point,
@@ -131,9 +134,9 @@ impl<T: RaftStoreRouter> Server<T> {
         let conn = self.conns.remove(&token);
         match conn {
             Some(conn) => {
-                // if connected to remote peer, remove this too.
-                if let Some(addr) = conn.peer_addr {
-                    self.peers.remove(&addr);
+                // if connected to remote store, remove this too.
+                if let Some(store_id) = conn.store_id {
+                    self.store_tokens.remove(&store_id);
                 }
 
                 if let Err(e) = event_loop.deregister(&conn.sock) {
@@ -149,7 +152,7 @@ impl<T: RaftStoreRouter> Server<T> {
     fn add_new_conn(&mut self,
                     event_loop: &mut EventLoop<Self>,
                     sock: TcpStream,
-                    peer_addr: Option<String>)
+                    store_id: Option<u64>)
                     -> Result<Token> {
         let new_token = Token(self.conn_token_counter);
         self.conn_token_counter += 1;
@@ -163,7 +166,7 @@ impl<T: RaftStoreRouter> Server<T> {
                                  EventSet::readable() | EventSet::hup(),
                                  PollOpt::edge()));
 
-        let conn = Conn::new(sock, new_token, peer_addr);
+        let conn = Conn::new(sock, new_token, store_id);
         self.conns.insert(new_token, conn);
 
         Ok(new_token)
@@ -307,67 +310,64 @@ impl<T: RaftStoreRouter> Server<T> {
         }
     }
 
-    fn connect_peer(&mut self,
-                    event_loop: &mut EventLoop<Self>,
-                    sock_addr: SocketAddr,
-                    peer: &str)
-                    -> Result<Token> {
+    fn connect_store(&mut self,
+                     event_loop: &mut EventLoop<Self>,
+                     store_id: u64,
+                     sock_addr: SocketAddr)
+                     -> Result<Token> {
+        // We may already create the connection before.
+        if let Some(token) = self.store_tokens.get(&store_id).cloned() {
+            warn!("token already exists for store {}, reuse", store_id);
+            return Ok(token);
+        }
+
         let sock = try!(TcpStream::connect(&sock_addr));
-        let token = try!(self.add_new_conn(event_loop, sock, Some(peer.to_owned())));
-        self.peers.insert(peer.to_owned(), token);
+        let token = try!(self.add_new_conn(event_loop, sock, Some(store_id)));
+        self.store_tokens.insert(store_id, token);
         Ok(token)
     }
 
-    fn resolve_peer(&mut self, peer: String, data: ConnData) {
-        // If the address is host:port, resolving the host's IP may
-        // block the event loop, so we should use an asynchronous way
-        // to resolve the host address and then send again.
-        let peer_addr = peer.clone();
+    fn resolve_store(&mut self, store_id: u64, data: ConnData) {
         let ch = self.sendch.clone();
         let cb = box move |r| {
             if let Err(e) = r {
-                error!("resolve peer {} err {:?}", peer, e);
+                error!("resolve store {} err {:?}", store_id, e);
                 return;
             }
 
-            let sock = r.unwrap();
-            if let Err(e) = ch.send(Msg::SendPeerSock {
-                sock_addr: sock,
-                peer: peer,
+            let addr = r.unwrap();
+            if let Err(e) = ch.send(Msg::SendStoreSock {
+                store_id: store_id,
+                sock_addr: addr,
                 data: data,
             }) {
-                error!("send peer sock msg err {:?}", e);
+                error!("send store sock msg err {:?}", e);
             }
         };
-        if let Err(e) = self.resolver.resolve(peer_addr, cb) {
+        if let Err(e) = self.resolver.resolve(store_id, cb) {
             error!("try to resolve err {:?}", e);
         }
     }
 
-    fn send_peer(&mut self, event_loop: &mut EventLoop<Self>, addr: String, data: ConnData) {
-        // check the corresponding token for peer address.
-        if let Some(token) = self.peers.get(&addr).cloned() {
+    fn send_store(&mut self, event_loop: &mut EventLoop<Self>, store_id: u64, data: ConnData) {
+        // check the corresponding token for store.
+        if let Some(token) = self.store_tokens.get(&store_id).cloned() {
             return self.write_data(event_loop, token, data);
         }
 
-        // If parse ok, the addr is ip:port.
-        if let Ok(peer_addr) = (&addr).parse() {
-            return self.send_peer_sock(event_loop, peer_addr, addr, data);
-        }
-
-        // The addr is not ip:port, we should resolve it first.
-        self.resolve_peer(addr, data);
+        // No connection, resolve the store address and then send it.
+        self.resolve_store(store_id, data);
     }
 
-    fn send_peer_sock(&mut self,
-                      event_loop: &mut EventLoop<Self>,
-                      sock_addr: SocketAddr,
-                      peer: String,
-                      data: ConnData) {
-        let token = match self.connect_peer(event_loop, sock_addr, &peer) {
+    fn send_store_sock(&mut self,
+                       event_loop: &mut EventLoop<Self>,
+                       store_id: u64,
+                       sock_addr: SocketAddr,
+                       data: ConnData) {
+        let token = match self.connect_store(event_loop, store_id, sock_addr) {
             Ok(token) => token,
             Err(e) => {
-                error!("connect peer {} err {:?}", peer, e);
+                error!("connect store {} err {:?}", store_id, e);
                 return;
             }
         };
@@ -376,7 +376,7 @@ impl<T: RaftStoreRouter> Server<T> {
     }
 }
 
-impl<T: RaftStoreRouter> Handler for Server<T> {
+impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
     type Timeout = Msg;
     type Message = Msg;
 
@@ -399,9 +399,9 @@ impl<T: RaftStoreRouter> Handler for Server<T> {
         match msg {
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
-            Msg::SendPeer { peer, data } => self.send_peer(event_loop, peer, data),
-            Msg::SendPeerSock { sock_addr, peer, data } => {
-                self.send_peer_sock(event_loop, sock_addr, peer, data)
+            Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
+            Msg::SendStoreSock { store_id, sock_addr, data } => {
+                self.send_store_sock(event_loop, store_id, sock_addr, data)
             }
         }
     }
@@ -443,20 +443,32 @@ fn send_raft_cmd_resp(ch: SendCh, token: Token, msg_id: u64, resp: RaftCmdRespon
 mod tests {
     use std::thread;
     use std::sync::{Arc, RwLock, Mutex};
-    use std::sync::mpsc::{self, Sender, TryRecvError};
-    use std::time::Duration;
+    use std::sync::mpsc::{self, Sender};
+    use std::net::SocketAddr;
 
     use mio::tcp::TcpListener;
 
     use super::*;
-    use super::super::{Msg, ConnData};
+    use super::super::{Msg, ConnData, Result};
     use super::super::transport::RaftStoreRouter;
+    use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::{Storage, Dsn};
     use kvproto::msgpb::{Message, MessageType};
     use raftstore::Result as RaftStoreResult;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::Callback;
     use kvproto::raft_cmdpb::RaftCmdRequest;
+
+    struct MockResolver {
+        addr: SocketAddr,
+    }
+
+    impl StoreAddrResolver for MockResolver {
+        fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
+            cb.call_box((Ok(self.addr),));
+            Ok(())
+        }
+    }
 
     struct TestRaftStoreRouter {
         tx: Mutex<Sender<usize>>,
@@ -479,7 +491,7 @@ mod tests {
         let addr = "127.0.0.1:0".parse().unwrap();
         let listener = TcpListener::bind(&addr).unwrap();
 
-        let port = listener.local_addr().unwrap().port();
+        let resolver = MockResolver { addr: listener.local_addr().unwrap() };
 
         let mut event_loop = create_event_loop().unwrap();
         let (tx, rx) = mpsc::channel();
@@ -488,7 +500,8 @@ mod tests {
                                      Storage::new(Dsn::Memory).unwrap(),
                                      Arc::new(RwLock::new(TestRaftStoreRouter {
                                          tx: Mutex::new(tx),
-                                     })))
+                                     })),
+                                     resolver)
                              .unwrap();
 
         let ch = server.get_sendch();
@@ -499,21 +512,13 @@ mod tests {
         let mut msg = Message::new();
         msg.set_msg_type(MessageType::Raft);
 
-        ch.send(Msg::SendPeer {
-              peer: format!("localhost:{}", port),
+        ch.send(Msg::SendStore {
+              store_id: 1,
               data: ConnData::new(0, msg),
           })
           .unwrap();
 
-        // Sometimes, in may Mac, resolving localhost may fail, this is very strange,
-        // So here we use try_recv and wait a little time to ignore this resolving error.
-        for _ in 0..100 {
-            match rx.try_recv() {
-                Err(TryRecvError::Empty) => thread::sleep(Duration::from_millis(10)),
-                Err(TryRecvError::Disconnected) => panic!("channel is disconnected"),
-                Ok(_) => break,
-            }
-        }
+        rx.recv().unwrap();
 
         ch.send(Msg::Quit).unwrap();
         h.join().unwrap();

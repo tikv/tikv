@@ -22,7 +22,7 @@ use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
-use tikv::server::{Node, Config, create_raft_storage};
+use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::Result;
 use tikv::util::codec::rpc;
 use tikv::util::make_std_tcp_conn;
@@ -102,9 +102,8 @@ impl Simulator for ServerCluster {
         // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop().unwrap();
         let sendch = SendCh::new(event_loop.channel());
-        let trans = Arc::new(RwLock::new(ServerTransport::new(self.cluster_id,
-                                                              sendch,
-                                                              self.pd_client.clone())));
+        let resolver = PdStoreAddrResolver::new(self.cluster_id, self.pd_client.clone()).unwrap();
+        let trans = Arc::new(RwLock::new(ServerTransport::new(sendch)));
 
         let mut cfg = cfg;
 
@@ -125,7 +124,7 @@ impl Simulator for ServerCluster {
 
         let store = create_raft_storage(node, engine).unwrap();
 
-        let mut server = Server::new(&mut event_loop, listener, store, router).unwrap();
+        let mut server = Server::new(&mut event_loop, listener, store, router, resolver).unwrap();
 
         let ch = server.get_sendch();
 

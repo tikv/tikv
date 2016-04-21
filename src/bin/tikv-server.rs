@@ -36,7 +36,8 @@ use tikv::util::{self, logger};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
-use tikv::pd::new_rpc_client;
+use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
+use tikv::pd::{new_rpc_client, PdRpcClient};
 
 const MEM_DSN: &'static str = "mem";
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -58,14 +59,11 @@ fn initial_log(matches: &Matches) {
 
 fn build_raftkv(matches: &Matches,
                 ch: SendCh,
-                addr: String)
+                cluster_id: u64,
+                addr: String,
+                pd_client: Arc<RwLock<PdRpcClient>>)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>) {
-    let pd_addr = matches.opt_str("pd").expect("raftkv needs pd client");
-    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
-    let id = matches.opt_str("I").expect("raftkv requires cluster id");
-    let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
-
-    let trans = Arc::new(RwLock::new(ServerTransport::new(cluster_id, ch, pd_client.clone())));
+    let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
     let path = get_store_path(matches);
     let mut opts = RocksdbOptions::new();
@@ -111,7 +109,12 @@ fn get_store_path(matches: &Matches) -> String {
 fn run_local_server(listener: TcpListener, store: Storage) {
     let mut event_loop = create_event_loop().unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
-    let mut svr = Server::new(&mut event_loop, listener, store, router).unwrap();
+    let mut svr = Server::new(&mut event_loop,
+                              listener,
+                              store,
+                              router,
+                              MockStoreAddrResolver)
+                      .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
@@ -119,10 +122,20 @@ fn run_raft_server(listener: TcpListener, matches: &Matches) {
     let mut event_loop = create_event_loop().unwrap();
     let ch = SendCh::new(event_loop.channel());
 
+    let id = matches.opt_str("I").expect("raftkv requires cluster id");
+    let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
+
+    let pd_addr = matches.opt_str("pd").expect("raftkv needs pd client");
+    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
+    let resolver = PdStoreAddrResolver::new(cluster_id, pd_client.clone()).unwrap();
+
     let (store, raft_router) = build_raftkv(&matches,
                                             ch,
-                                            format!("{}", listener.local_addr().unwrap()));
-    let mut svr = Server::new(&mut event_loop, listener, store, raft_router).unwrap();
+                                            cluster_id,
+                                            format!("{}", listener.local_addr().unwrap()),
+                                            pd_client);
+
+    let mut svr = Server::new(&mut event_loop, listener, store, raft_router, resolver).unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
