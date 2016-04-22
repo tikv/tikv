@@ -207,14 +207,9 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn push_trans_filter(&mut self, node_id: u64, filter: Box<Filter>) {
+    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>) {
         let trans = self.simulate_trans.get(&node_id).unwrap();
-        trans.wl().push(filter);
-    }
-
-    fn pop_trans_filter(&mut self, node_id: u64) {
-        let trans = self.simulate_trans.get(&node_id).unwrap();
-        trans.wl().pop();
+        trans.wl().set_filters(filters);
     }
 }
 

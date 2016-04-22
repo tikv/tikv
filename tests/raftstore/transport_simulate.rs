@@ -94,12 +94,8 @@ impl<T: Transport> SimulateTransport<T> {
         }
     }
 
-    pub fn push(&mut self, filter: Box<Filter>) {
-        self.filters.push(filter);
-    }
-
-    pub fn pop(&mut self) {
-        self.filters.pop();
+    pub fn set_filters(&mut self, filters: Vec<Box<Filter>>) {
+        self.filters = filters;
     }
 }
 

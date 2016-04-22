@@ -71,7 +71,7 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    cluster.heal_partition(&s1, &s2);
+    cluster.reset_transport_hooks();
     cluster.must_delete(key);
 
     let (s1, s2) = split_leader_with_minority(leader, 5);

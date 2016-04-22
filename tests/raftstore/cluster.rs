@@ -54,9 +54,7 @@ pub trait Simulator {
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
-
-    fn push_trans_filter(&mut self, node_id: u64, filter: Box<Filter>);
-    fn pop_trans_filter(&mut self, node_id: u64);
+    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -468,23 +466,22 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
+    // NOTE: if you have set transport hook before, call this function will clear them
     pub fn partition(&mut self, s1: &HashSet<u64>, s2: &HashSet<u64>) {
         for node_id in s1 {
             let filter = new_partition_filter(s2);
-            self.sim.wl().push_trans_filter(*node_id, filter);
+            self.sim.rl().hook_transport(*node_id, vec![filter]);
         }
         for node_id in s2 {
             let filter = new_partition_filter(s1);
-            self.sim.wl().push_trans_filter(*node_id, filter);
+            self.sim.wl().hook_transport(*node_id, vec![filter]);
         }
     }
 
-    pub fn heal_partition(&mut self, s1: &HashSet<u64>, s2: &HashSet<u64>) {
-        for node_id in s1 {
-            self.sim.wl().pop_trans_filter(*node_id);
-        }
-        for node_id in s2 {
-            self.sim.wl().pop_trans_filter(*node_id);
+    pub fn reset_transport_hooks(&mut self) {
+        let sim = &self.sim.rl();
+        for node_id in sim.get_node_ids() {
+            sim.hook_transport(node_id, vec![]);
         }
     }
 }
