@@ -167,7 +167,7 @@ impl Peer {
             max_size_per_msg: cfg.raft_max_size_per_msg,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
-            check_quorum: false,
+            check_quorum: true,
         };
 
         let raft_group = try!(RawNode::new(&raft_cfg, storage.clone(), &[]));
