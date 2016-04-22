@@ -37,7 +37,7 @@ fn test_partition_stale_read<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     let (k, v) = (b"k1", b"v1");
-    cluster.put(k, v);
+    cluster.must_put(k, v);
     assert_eq!(cluster.get(k), Some(v.to_vec()));
 
     let region_id = cluster.get_region_id(k);
@@ -48,7 +48,7 @@ fn test_partition_stale_read<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.partition(&s1, &s2);
 
     let v2 = b"v2";
-    cluster.put(k, v2);
+    cluster.must_put(k, v2);
     if let Some(v) = cluster.get(k) {
         assert_eq!(v, v2);
     }
@@ -59,7 +59,7 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     let (key, value) = (b"k1", b"v1");
-    cluster.delete(key);
+    cluster.must_delete(key);
 
     let region_id = cluster.get_region_id(key);
     let peer = cluster.leader_of_region(region_id).unwrap();
@@ -68,15 +68,15 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     let (s1, s2) = split_leader_with_majority(leader, 5);
     cluster.partition(&s1, &s2);
 
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     cluster.heal_partition(&s1, &s2);
-    cluster.delete(key);
+    cluster.must_delete(key);
 
     let (s1, s2) = split_leader_with_minority(leader, 5);
     cluster.partition(&s1, &s2);
-    cluster.put(key, value);
+    cluster.must_put(key, value);
     if let Some(_) = cluster.get(key) {
         assert!(false);
     }
@@ -97,11 +97,11 @@ fn test_server_partition_stale_read() {
 #[test]
 fn test_node_partition_write() {
     let mut cluster = new_node_cluster(0, 5);
-    test_partition_stale_read(&mut cluster);
+    test_partition_write(&mut cluster);
 }
 
 #[test]
 fn test_server_partition_write() {
     let mut cluster = new_server_cluster(0, 5);
-    test_partition_stale_read(&mut cluster);
+    test_partition_write(&mut cluster);
 }
