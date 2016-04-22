@@ -184,7 +184,6 @@ impl Conn {
         self.interest.remove(EventSet::writable());
         try!(self.reregister(event_loop));
 
-
         if self.on_write_complete.is_some() {
             let cb = self.on_write_complete.take().unwrap();
             cb.call_box(());
