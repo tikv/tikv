@@ -17,6 +17,9 @@ name = "tikv-server"
 name = "bench-tikv"
 path = "benches/bin/bench-tikv.rs"
 
+[[bin]]
+name = "tikv-dump"
+
 [[test]]
 name = "tests"
 
