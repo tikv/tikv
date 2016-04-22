@@ -30,7 +30,7 @@ use super::Result;
 use util::HandyRwLock;
 use storage::Storage;
 use super::kv::StoreHandler;
-use super::coprocessor::RegionEndPoint;
+use super::coprocessor::EndPointHost;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use raft::SnapshotStatus;
@@ -73,7 +73,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     raft_router: Arc<RwLock<T>>,
 
     store: StoreHandler,
-    end_point: RegionEndPoint,
+    end_point: EndPointHost,
 
     resolver: S,
 }
@@ -98,7 +98,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let sendch = SendCh::new(event_loop.channel());
         let engine = storage.get_engine();
         let store_handler = StoreHandler::new(storage, sendch.clone());
-        let end_point = RegionEndPoint::new(engine, sendch.clone());
+        let end_point = EndPointHost::new(engine, sendch.clone());
 
         let svr = Server {
             listener: listener,
@@ -215,7 +215,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
             MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
             MessageType::KvReq => self.store.on_request(msg.take_kv_req(), token, msg_id),
-            MessageType::CopReq => self.end_point.on_request(msg.take_cop_req(), token, msg_id),
+            MessageType::CopReq => {
+                self.end_point.on_request(msg.take_cop_req(), token, msg_id);
+                Ok(())
+            }
             _ => {
                 Err(box_err!("unsupported message {:?} for token {:?} with msg id {}",
                              msg_type,
@@ -495,13 +498,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         event_loop.shutdown();
     }
 
-    fn tick(&mut self, el: &mut EventLoop<Self>) {
+    fn tick(&mut self, _: &mut EventLoop<Self>) {
         // tick is called in the end of the loop, so if we notify to quit,
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
-        if !el.is_running() {
-            self.end_point.stop();
-        }
+        // if !el.is_running() {
+        // }
+
     }
 }
 
