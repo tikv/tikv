@@ -14,6 +14,7 @@
 use std::vec::Vec;
 use std::collections::VecDeque;
 use std::option::Option;
+use std::boxed::{Box, FnBox};
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
@@ -25,6 +26,9 @@ use super::server::Server;
 use util::codec::rpc;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
+
+pub type OnClose = Box<FnBox() + Send>;
+pub type OnWriteComplete = Box<FnBox() + Send>;
 
 pub struct Conn {
     pub sock: TcpStream,
@@ -43,6 +47,9 @@ pub struct Conn {
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
+
+    on_close: Option<OnClose>,
+    on_write_complete: Option<OnWriteComplete>,
 }
 
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
@@ -79,7 +86,20 @@ impl Conn {
             res: VecDeque::new(),
             last_msg_id: 0,
             store_id: store_id,
+            on_write_complete: None,
+            on_close: None,
         }
+    }
+
+    pub fn close(&mut self) {
+        if self.on_close.is_some() {
+            let cb = self.on_close.take().unwrap();
+            cb.call_box(());
+        }
+    }
+
+    pub fn set_close_callback(&mut self, cb: Option<OnClose>) {
+        self.on_close = cb
     }
 
     pub fn reregister<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
@@ -160,14 +180,23 @@ impl Conn {
             self.res.pop_front();
         }
 
-        // no data for writing, remove writable.
+        // no data for writing, remove writable
         self.interest.remove(EventSet::writable());
-        self.reregister(event_loop)
+        try!(self.reregister(event_loop));
+
+        if self.on_write_complete.is_some() {
+            let cb = self.on_write_complete.take().unwrap();
+            cb.call_box(());
+        }
+
+        Ok(())
     }
+
 
     pub fn append_write_buf<T, S>(&mut self,
                                   event_loop: &mut EventLoop<Server<T, S>>,
-                                  msg: ConnData)
+                                  msg: ConnData,
+                                  cb: Option<OnWriteComplete>)
                                   -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
@@ -185,8 +214,10 @@ impl Conn {
             // if registered, we can only remove this flag when
             // writing all data in writable function.
             self.interest.insert(EventSet::writable());
-            return self.reregister(event_loop);
+            try!(self.reregister(event_loop));
         }
+
+        self.on_write_complete = cb;
 
         Ok(())
     }

@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::option::Option;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
 use std::net::SocketAddr;
 
@@ -24,7 +25,7 @@ use raftstore::store::{cmd_resp, Transport};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
-use super::conn::Conn;
+use super::conn::{Conn, OnWriteComplete};
 use super::Result;
 use util::HandyRwLock;
 use storage::Storage;
@@ -32,6 +33,7 @@ use super::kv::StoreHandler;
 use super::coprocessor::RegionEndPoint;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
+use raft::SnapshotStatus;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
@@ -50,7 +52,7 @@ pub fn bind(addr: &str) -> Result<TcpListener> {
     Ok(listener)
 }
 
-pub struct Server<T: RaftStoreRouter, S: StoreAddrResolver> {
+pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
     // In our raft server, a client with token 1 sends a raft command, we will
@@ -133,7 +135,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn remove_conn(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         let conn = self.conns.remove(&token);
         match conn {
-            Some(conn) => {
+            Some(mut conn) => {
                 // if connected to remote store, remove this too.
                 if let Some(store_id) = conn.store_id {
                     self.store_tokens.remove(&store_id);
@@ -142,6 +144,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 if let Err(e) = event_loop.deregister(&conn.sock) {
                     error!("deregister conn err {:?}", e);
                 }
+
+                conn.close();
             }
             None => {
                 warn!("missing connection for token {}", token.as_usize());
@@ -295,19 +299,33 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
     }
 
-    fn write_data(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
+    fn write_data(&mut self,
+                  event_loop: &mut EventLoop<Self>,
+                  token: Token,
+                  data: ConnData,
+                  cb: Option<OnWriteComplete>) {
         let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
             }
-            Some(conn) => conn.append_write_buf(event_loop, data),
+            Some(conn) => conn.append_write_buf(event_loop, data, cb),
         };
 
         if let Err(e) = res {
             warn!("handle write data err {:?}, remove", e);
             self.remove_conn(event_loop, token);
         }
+    }
+
+    fn try_connect(&mut self,
+                   event_loop: &mut EventLoop<Self>,
+                   sock_addr: SocketAddr,
+                   store_id_opt: Option<u64>)
+                   -> Result<Token> {
+        let sock = try!(TcpStream::connect(&sock_addr));
+        let token = try!(self.add_new_conn(event_loop, sock, store_id_opt));
+        Ok(token)
     }
 
     fn connect_store(&mut self,
@@ -321,8 +339,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             return Ok(token);
         }
 
-        let sock = try!(TcpStream::connect(&sock_addr));
-        let token = try!(self.add_new_conn(event_loop, sock, Some(store_id)));
+        let token = try!(self.try_connect(event_loop, sock_addr, Some(store_id)));
         self.store_tokens.insert(store_id, token);
         Ok(token)
     }
@@ -350,13 +367,26 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn send_store(&mut self, event_loop: &mut EventLoop<Self>, store_id: u64, data: ConnData) {
+        if data.is_snapshot() {
+            return self.send_snapshot(event_loop, store_id, data);
+        }
+
         // check the corresponding token for store.
         if let Some(token) = self.store_tokens.get(&store_id).cloned() {
-            return self.write_data(event_loop, token, data);
+            return self.write_data(event_loop, token, data, None);
         }
 
         // No connection, resolve the store address and then send it.
         self.resolve_store(store_id, data);
+    }
+
+    fn send_snapshot(&mut self, _: &mut EventLoop<Self>, store_id: u64, data: ConnData) {
+        // We use another connection to avoid blocking other
+        // raft messages when sending huge snapshot.
+        // Now we create the connection every time and close it after sending
+        // successfully.
+        // TODO: re-use the cached snapshot connection if exists.
+        self.resolve_store(store_id, data)
     }
 
     fn send_store_sock(&mut self,
@@ -364,6 +394,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                        store_id: u64,
                        sock_addr: SocketAddr,
                        data: ConnData) {
+        if data.is_snapshot() {
+            return self.send_snapshot_sock(event_loop, store_id, sock_addr, data);
+        }
+
         let token = match self.connect_store(event_loop, store_id, sock_addr) {
             Ok(token) => token,
             Err(e) => {
@@ -372,7 +406,53 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
         };
 
-        self.write_data(event_loop, token, data)
+        self.write_data(event_loop, token, data, None)
+    }
+
+    fn send_snapshot_sock(&mut self,
+                          event_loop: &mut EventLoop<Self>,
+                          store_id: u64,
+                          sock_addr: SocketAddr,
+                          data: ConnData) {
+        let token = match self.try_connect(event_loop, sock_addr, None) {
+            Ok(token) => token,
+            Err(e) => {
+                error!("connect store {} err {:?}", store_id, e);
+                return;
+            }
+        };
+
+        let region_id = data.msg.get_raft().get_region_id();
+        let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
+
+        let reporter = Arc::new(SnapshotReporter {
+            router: self.raft_router.clone(),
+            ch: self.sendch.clone(),
+            store_id: store_id,
+            region_id: region_id,
+            to_peer_id: to_peer_id,
+            token: token,
+            reported: AtomicBool::new(false),
+        });
+
+        if let Some(conn) = self.conns.get_mut(&token) {
+            let reporter = reporter.clone();
+            conn.set_close_callback(Some(box move || {
+                reporter.report(SnapshotStatus::Failure);
+            }));
+        };
+
+        self.write_data(event_loop,
+                        token,
+                        data,
+                        Some(box move || {
+                            reporter.report(SnapshotStatus::Finish);
+                        }))
+    }
+
+    fn on_snap_token(&mut self, event_loop: &mut EventLoop<Self>, _: u64, token: Token) {
+        // Now we close every snapshot connection after sending successfully.
+        self.remove_conn(event_loop, token);
     }
 }
 
@@ -398,11 +478,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
+            Msg::WriteData { token, data } => self.write_data(event_loop, token, data, None),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::SendStoreSock { store_id, sock_addr, data } => {
                 self.send_store_sock(event_loop, store_id, sock_addr, data)
             }
+            Msg::SnapToken { store_id, token } => self.on_snap_token(event_loop, store_id, token),
         }
     }
 
@@ -439,6 +520,44 @@ fn send_raft_cmd_resp(ch: SendCh, token: Token, msg_id: u64, resp: RaftCmdRespon
     }
 }
 
+struct SnapshotReporter<T: RaftStoreRouter + 'static> {
+    router: Arc<RwLock<T>>,
+    ch: SendCh,
+    store_id: u64,
+    region_id: u64,
+    to_peer_id: u64,
+    token: Token,
+
+    reported: AtomicBool,
+}
+
+impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
+    pub fn report(&self, status: SnapshotStatus) {
+        // return directly if already reported.
+        if self.reported.compare_and_swap(false, true, Ordering::Relaxed) {
+            return;
+        }
+
+        if let Err(e) = self.router
+                            .rl()
+                            .report_snapshot(self.region_id, self.to_peer_id, status) {
+            error!("report snapshot to peer {} with region {} err {:?}",
+                   self.to_peer_id,
+                   self.region_id,
+                   e);
+        }
+
+
+        if let Err(e) = self.ch.send(Msg::SnapToken {
+            store_id: self.store_id,
+            token: self.token,
+        }) {
+            error!("send snap token for later use err {:?}", e);
+        }
+
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -458,6 +577,7 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::Callback;
     use kvproto::raft_cmdpb::RaftCmdRequest;
+    use raft::SnapshotStatus;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -483,6 +603,10 @@ mod tests {
         fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
             self.tx.lock().unwrap().send(1).unwrap();
             Ok(())
+        }
+
+        fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) -> RaftStoreResult<()> {
+            unimplemented!();
         }
     }
 

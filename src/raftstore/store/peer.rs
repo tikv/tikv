@@ -26,7 +26,7 @@ use kvproto::raftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
-use raft::{self, RawNode, SnapshotStatus};
+use raft::{self, RawNode};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -390,14 +390,11 @@ impl Peer {
                                        msg: &raftpb::Message,
                                        trans: &Arc<RwLock<T>>)
                                        -> Result<()> {
-        let msg_type = msg.get_msg_type();
-
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         send_msg.set_message(msg.clone());
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-        let mut snap_status = SnapshotStatus::Finish;
         let mut unreachable = false;
 
         let from_peer = match self.get_peer_from_cache(msg.get_from()) {
@@ -439,16 +436,10 @@ impl Peer {
                   e);
 
             unreachable = true;
-            snap_status = SnapshotStatus::Failure;
         }
 
         if unreachable {
             self.raft_group.report_unreachable(to_peer_id);
-        }
-
-        if msg_type == raftpb::MessageType::MsgSnapshot {
-            // TODO: report status until receiving ack, error or timeout.
-            self.raft_group.report_snapshot(to_peer_id, snap_status);
         }
 
         Ok(())

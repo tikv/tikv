@@ -21,6 +21,7 @@ use protobuf::Message;
 
 use kvproto::msgpb;
 use util::codec::rpc;
+use kvproto::raftpb::MessageType;
 
 pub mod config;
 pub mod errors;
@@ -89,6 +90,14 @@ impl ConnData {
 
         buf.flip()
     }
+
+    pub fn is_snapshot(&self) -> bool {
+        if !self.msg.has_raft() {
+            return false;
+        }
+
+        self.msg.get_raft().get_message().get_msg_type() == MessageType::MsgSnapshot
+    }
 }
 
 pub enum Msg {
@@ -109,6 +118,10 @@ pub enum Msg {
         store_id: u64,
         sock_addr: SocketAddr,
         data: ConnData,
+    },
+    SnapToken {
+        store_id: u64,
+        token: Token,
     },
 }
 
