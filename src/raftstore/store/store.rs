@@ -464,7 +464,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(peer) => peer,
         };
 
-        bind_term(&mut resp, peer.current_term);
+        bind_term(&mut resp, peer.term());
 
         if !peer.is_leader() {
             bind_error(&mut resp,
@@ -834,7 +834,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         resp.set_status_response(response);
         // Bind peer current term here.
         if let Some(peer) = self.region_peers.get(&region_id) {
-            bind_term(&mut resp, peer.current_term);
+            bind_term(&mut resp, peer.term());
         }
         Ok(resp)
     }
