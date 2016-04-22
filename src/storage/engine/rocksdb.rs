@@ -51,7 +51,7 @@ impl Engine for EngineRocksdb {
     fn seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
         trace!("EngineRocksdb: seek {}", key);
         let mode = IteratorMode::From(key.raw(), Direction::Forward);
-        let pair = self.db.iterator(mode).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
+        let pair = self.db.iterator(mode).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
         Ok(pair)
     }
 
@@ -63,9 +63,9 @@ impl Engine for EngineRocksdb {
         if !iter.valid() {
             iter = self.db.iterator(IteratorMode::End);
         }
-        let pair = iter.skip_while(|&(ref k, _)| k.as_ref() >= key.raw())
+        let pair = iter.skip_while(|&(k, _)| k >= key.raw())
                        .next()
-                       .map(|(k, v)| (k.into_vec(), v.into_vec()));
+                       .map(|(k, v)| (k.to_vec(), v.to_vec()));
         Ok(pair)
     }
 
@@ -110,7 +110,7 @@ impl<'a> Snapshot for RocksSnapshot<'a> {
     fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
         trace!("RocksSnapshot: seek {}", key);
         let mode = IteratorMode::From(key.raw(), Direction::Forward);
-        let pair = self.iterator(mode).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
+        let pair = self.iterator(mode).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
         Ok(pair)
     }
 
@@ -122,9 +122,9 @@ impl<'a> Snapshot for RocksSnapshot<'a> {
         if !iter.valid() {
             iter = self.iterator(IteratorMode::End);
         }
-        let pair = iter.skip_while(|&(ref k, _)| k.as_ref() >= key.raw())
+        let pair = iter.skip_while(|&(k, _)| k >= key.raw())
                        .next()
-                       .map(|(k, v)| (k.into_vec(), v.into_vec()));
+                       .map(|(k, v)| (k.to_vec(), v.to_vec()));
         Ok(pair)
     }
 }

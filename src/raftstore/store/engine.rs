@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::option::Option;
-use std::ops::Deref;
 
 use rocksdb::{DB, Writable, DBIterator, Direction, IteratorMode, DBVector, WriteBatch};
 use rocksdb::rocksdb::Snapshot;
@@ -27,23 +26,8 @@ pub fn new_engine(path: &str) -> Result<DB> {
     Ok(db)
 }
 
-pub enum DBValue {
-    DBVector(DBVector),
-    Box(Box<[u8]>),
-}
-
-impl Deref for DBValue {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        match *self {
-            DBValue::DBVector(ref v) => v,
-            DBValue::Box(ref v) => v,
-        }
-    }
-}
-
 pub trait Peekable {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>>;
+    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>>;
 
     fn get_msg<M>(&self, key: &[u8]) -> Result<Option<M>>
         where M: protobuf::Message + protobuf::MessageStatic
@@ -95,11 +79,11 @@ pub trait Iterable {
         let it = self.new_iterator(start_key);
 
         for (key, value) in it {
-            if key.as_ref() >= end_key {
+            if key >= end_key {
                 break;
             }
 
-            let r = try!(f(key.as_ref(), value.as_ref()));
+            let r = try!(f(key, value));
             if !r {
                 break;
             }
@@ -110,15 +94,15 @@ pub trait Iterable {
 
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let pair = self.new_iterator(key).next().map(|(k, v)| (k.into_vec(), v.into_vec()));
+        let pair = self.new_iterator(key).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
         Ok(pair)
     }
 }
 
 impl Peekable for DB {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
+    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
         let v = try!(self.get(key));
-        Ok(v.map(DBValue::DBVector))
+        Ok(v)
     }
 }
 
@@ -129,9 +113,9 @@ impl Iterable for DB {
 }
 
 impl<'a> Peekable for Snapshot<'a> {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBValue>> {
+    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
         let v = try!(self.get(key));
-        Ok(v.map(DBValue::DBVector))
+        Ok(v)
     }
 }
 
