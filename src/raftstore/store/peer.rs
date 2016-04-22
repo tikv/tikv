@@ -26,7 +26,7 @@ use kvproto::raftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
-use raft::{self, RawNode};
+use raft::{self, RawNode, StateRole};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -81,7 +81,6 @@ pub struct Peer {
     engine: Arc<DB>,
     pub peer: metapb::Peer,
     region_id: u64,
-    leader_id: u64,
     pub raft_group: RawNode<RaftStorage>,
     pub storage: Arc<RaftStorage>,
     pub pending_cmds: HashMap<Uuid, PendingCmd>,
@@ -89,7 +88,6 @@ pub struct Peer {
     coprocessor_host: CoprocessorHost,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
-    pub current_term: u64,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     penging_remove: bool,
@@ -176,14 +174,12 @@ impl Peer {
             engine: store.engine(),
             peer: util::new_peer(store_id, peer_id),
             region_id: region.get_id(),
-            leader_id: raft::INVALID_ID,
             storage: storage,
             raft_group: raft_group,
             pending_cmds: HashMap::new(),
             peer_cache: store.peer_cache(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
-            current_term: 0,
             penging_remove: false,
         };
 
@@ -244,11 +240,11 @@ impl Peer {
     }
 
     pub fn leader_id(&self) -> u64 {
-        self.leader_id
+        self.raft_group.raft.leader_id
     }
 
     pub fn is_leader(&self) -> bool {
-        self.leader_id == self.peer_id()
+        self.raft_group.raft.state == StateRole::Leader
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self,
@@ -263,14 +259,6 @@ impl Peer {
                self.region_id);
 
         let ready = self.raft_group.ready();
-
-        if let Some(ref ss) = ready.ss {
-            self.leader_id = ss.leader_id;
-        }
-
-        if let Some(ref hs) = ready.hs {
-            self.current_term = hs.get_term();
-        }
 
         let applied_region = try!(self.storage.wl().handle_raft_ready(&ready));
 
@@ -556,7 +544,7 @@ impl Peer {
                 let cb = pending_cmd.cb.take().unwrap();
                 // Bind uuid here.
                 cmd_resp::bind_uuid(&mut resp, uuid);
-                cmd_resp::bind_term(&mut resp, self.current_term);
+                cmd_resp::bind_term(&mut resp, self.term());
                 if let Err(e) = cb.call_box((resp,)) {
                     error!("callback err {:?}", e);
                 }
@@ -564,6 +552,10 @@ impl Peer {
         }
 
         Ok(exec_result)
+    }
+
+    pub fn term(&self) -> u64 {
+        self.raft_group.raft.term
     }
 
     fn apply_raft_cmd(&mut self,
