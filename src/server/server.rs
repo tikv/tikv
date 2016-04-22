@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::option::Option;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
 use std::net::SocketAddr;
 
@@ -144,9 +145,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                     error!("deregister conn err {:?}", e);
                 }
 
-                // We may meet some error and close the connection,
-                // so try to call on_write_complete with false here.
-                conn.on_write_complete(false);
+                conn.close();
             }
             None => {
                 warn!("missing connection for token {}", token.as_usize());
@@ -423,37 +422,31 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
         };
 
-        let router = self.raft_router.clone();
         let region_id = data.msg.get_raft().get_region_id();
         let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
-        let ch = self.sendch.clone();
+
+        let reporter = Arc::new(SnapshotReporter {
+            router: self.raft_router.clone(),
+            ch: self.sendch.clone(),
+            store_id: store_id,
+            region_id: region_id,
+            to_peer_id: to_peer_id,
+            token: token,
+            reported: AtomicBool::new(false),
+        });
+
+        if let Some(conn) = self.conns.get_mut(&token) {
+            let reporter = reporter.clone();
+            conn.set_close_callback(Some(box move || {
+                reporter.report(SnapshotStatus::Failure);
+            }));
+        };
+
         self.write_data(event_loop,
                         token,
                         data,
-                        Some(box move |r: bool| {
-                            let mut status = SnapshotStatus::Finish;
-                            if !r {
-                                status = SnapshotStatus::Failure;
-                            }
-
-                            if let Err(e) = router.rl()
-                                                  .report_snapshot(region_id, to_peer_id, status) {
-                                error!("report snapshot to peer {} with region {} err {:?}",
-                                       to_peer_id,
-                                       region_id,
-                                       e);
-                            }
-
-                            // If failed, we have closed the snapshot connection before,
-                            // so won't use this token again.
-                            if r {
-                                if let Err(e) = ch.send(Msg::SnapToken {
-                                    store_id: store_id,
-                                    token: token,
-                                }) {
-                                    error!("send snap token for later use err {:?}", e);
-                                }
-                            }
+                        Some(box move || {
+                            reporter.report(SnapshotStatus::Finish);
                         }))
     }
 
@@ -524,6 +517,44 @@ fn send_raft_cmd_resp(ch: SendCh, token: Token, msg_id: u64, resp: RaftCmdRespon
                token,
                msg_id,
                e);
+    }
+}
+
+struct SnapshotReporter<T: RaftStoreRouter + 'static> {
+    router: Arc<RwLock<T>>,
+    ch: SendCh,
+    store_id: u64,
+    region_id: u64,
+    to_peer_id: u64,
+    token: Token,
+
+    reported: AtomicBool,
+}
+
+impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
+    pub fn report(&self, status: SnapshotStatus) {
+        // return directly if already reported.
+        if self.reported.compare_and_swap(false, true, Ordering::Relaxed) {
+            return;
+        }
+
+        if let Err(e) = self.router
+                            .rl()
+                            .report_snapshot(self.region_id, self.to_peer_id, status) {
+            error!("report snapshot to peer {} with region {} err {:?}",
+                   self.to_peer_id,
+                   self.region_id,
+                   e);
+        }
+
+
+        if let Err(e) = self.ch.send(Msg::SnapToken {
+            store_id: self.store_id,
+            token: self.token,
+        }) {
+            error!("send snap token for later use err {:?}", e);
+        }
+
     }
 }
 
