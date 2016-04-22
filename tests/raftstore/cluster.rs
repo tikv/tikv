@@ -467,13 +467,13 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // NOTE: if you have set transport hook before, call this function will clear them
-    pub fn partition(&mut self, s1: &HashSet<u64>, s2: &HashSet<u64>) {
-        for node_id in s1 {
-            let filter = new_partition_filter(s2);
+    pub fn partition(&mut self, s1: Arc<HashSet<u64>>, s2: Arc<HashSet<u64>>) {
+        for node_id in s1.as_ref() {
+            let filter = new_partition_filter(s2.clone());
             self.sim.rl().hook_transport(*node_id, vec![filter]);
         }
-        for node_id in s2 {
-            let filter = new_partition_filter(s1);
+        for node_id in s2.as_ref() {
+            let filter = new_partition_filter(s1.clone());
             self.sim.wl().hook_transport(*node_id, vec![filter]);
         }
     }
@@ -486,24 +486,8 @@ impl<T: Simulator> Cluster<T> {
     }
 }
 
-fn partition_simple_split(node_ids: &HashSet<u64>) -> (HashSet<u64>, HashSet<u64>) {
-    let size = node_ids.len() / 2;
-    let mut one = HashSet::new();
-    let mut other = HashSet::new();
-    let mut i = 0;
-    for node_id in node_ids.iter() {
-        if i < size {
-            one.insert(*node_id);
-        } else {
-            other.insert(*node_id);
-        }
-        i = i + 1;
-    }
-    (one, other)
-}
-
 struct PartitionFilter {
-    node_ids: HashSet<u64>,
+    node_ids: Arc<HashSet<u64>>,
 }
 
 impl Filter for PartitionFilter {
@@ -518,7 +502,7 @@ impl Filter for PartitionFilter {
     }
 }
 
-fn new_partition_filter(node_ids: &HashSet<u64>) -> Box<Filter> {
+fn new_partition_filter(node_ids: Arc<HashSet<u64>>) -> Box<Filter> {
     let ids = node_ids.clone();
     Box::new(PartitionFilter { node_ids: ids })
 }
