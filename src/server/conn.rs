@@ -48,8 +48,8 @@ pub struct Conn {
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
 
-    close_cb: Option<OnClose>,
-    write_complete_cb: Option<OnWriteComplete>,
+    on_close: Option<OnClose>,
+    on_write_complete: Option<OnWriteComplete>,
 }
 
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
@@ -86,20 +86,20 @@ impl Conn {
             res: VecDeque::new(),
             last_msg_id: 0,
             store_id: store_id,
-            write_complete_cb: None,
-            close_cb: None,
+            on_write_complete: None,
+            on_close: None,
         }
     }
 
     pub fn close(&mut self) {
-        if self.close_cb.is_some() {
-            let cb = self.close_cb.take().unwrap();
+        if self.on_close.is_some() {
+            let cb = self.on_close.take().unwrap();
             cb.call_box(());
         }
     }
 
     pub fn set_close_callback(&mut self, cb: Option<OnClose>) {
-        self.close_cb = cb
+        self.on_close = cb
     }
 
     pub fn reregister<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
@@ -185,8 +185,8 @@ impl Conn {
         try!(self.reregister(event_loop));
 
 
-        if self.write_complete_cb.is_some() {
-            let cb = self.write_complete_cb.take().unwrap();
+        if self.on_write_complete.is_some() {
+            let cb = self.on_write_complete.take().unwrap();
             cb.call_box(());
         }
 
@@ -218,7 +218,7 @@ impl Conn {
             try!(self.reregister(event_loop));
         }
 
-        self.write_complete_cb = cb;
+        self.on_write_complete = cb;
 
         Ok(())
     }
