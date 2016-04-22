@@ -41,7 +41,7 @@ pub struct ServerCluster {
     handles: HashMap<u64, thread::JoinHandle<()>>,
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
-    simulate_trans: HashMap<u64, Arc<RwLock<SimulateTransport<ServerTransport<TestPdClient>>>>>,
+    simulate_trans: HashMap<u64, Arc<RwLock<SimulateTransport<ServerTransport>>>>,
 
     msg_id: AtomicUsize,
     pd_client: Arc<RwLock<TestPdClient>>,
