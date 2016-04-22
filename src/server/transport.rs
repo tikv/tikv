@@ -18,15 +18,23 @@ use raftstore::Result as RaftStoreResult;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
+use raft::SnapshotStatus;
 use super::{SendCh as ServerSendCh, Msg, ConnData};
 
 
-pub trait RaftStoreRouter {
+pub trait RaftStoreRouter: Send + Sync {
     // Send RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     // Send RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()>;
+
+    // Report sending snapshot status.
+    fn report_snapshot(&self,
+                       region_id: u64,
+                       to_peer_id: u64,
+                       status: SnapshotStatus)
+                       -> RaftStoreResult<()>;
 }
 
 pub struct ServerRaftStoreRouter {
@@ -65,6 +73,20 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         try!(self.ch.send(StoreMsg::RaftCmd {
             request: req,
             callback: cb,
+        }));
+
+        Ok(())
+    }
+
+    fn report_snapshot(&self,
+                       region_id: u64,
+                       to_peer_id: u64,
+                       status: SnapshotStatus)
+                       -> RaftStoreResult<()> {
+        try!(self.ch.send(StoreMsg::ReportSnapshot {
+            region_id: region_id,
+            to_peer_id: to_peer_id,
+            status: status,
         }));
 
         Ok(())
@@ -117,6 +139,10 @@ impl RaftStoreRouter for MockRaftStoreRouter {
     }
 
     fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
+        unimplemented!();
+    }
+
+    fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }
