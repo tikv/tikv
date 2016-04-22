@@ -61,6 +61,7 @@ quick_error! {
 pub struct Runner;
 
 impl Runner {
+    /// Do the compact job and return the count of log compacted.
     fn compact(&mut self, task: Task) -> Result<u64, Error> {
         let start_key = keys::raft_log_key(task.region_id, 0);
         let mut first_idx = task.compact_idx;
@@ -71,12 +72,12 @@ impl Runner {
             info!("no need to compact");
             return Ok(0);
         }
-        let w = WriteBatch::new();
+        let wb = WriteBatch::new();
         for idx in first_idx..task.compact_idx {
             let key = keys::raft_log_key(task.region_id, idx);
-            box_try!(w.delete(&key));
+            box_try!(wb.delete(&key));
         }
-        box_try!(task.engine.write(w));
+        box_try!(task.engine.write(wb));
         Ok(task.compact_idx - first_idx)
     }
 }
