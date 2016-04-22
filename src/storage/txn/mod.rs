@@ -36,7 +36,6 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        TxnNotFound {description("txn not found")}
     }
 }
 

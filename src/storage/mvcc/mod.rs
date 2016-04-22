@@ -46,7 +46,6 @@ quick_error! {
         TxnLockNotFound {description("txn lock not found")}
         WriteConflict {description("write conflict")}
         KeyVersion {description("bad format key(version)")}
-        AlreadyRolledback {description("txn already rolled back")}
     }
 }
 
