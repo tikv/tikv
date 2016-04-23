@@ -24,7 +24,7 @@ use mio::tcp::{TcpListener, TcpStream};
 use raftstore::store::{cmd_resp, Transport};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::msgpb::{MessageType, Message};
-use super::{Msg, SendCh, ConnData};
+use super::{Msg, SendCh, ConnData, Tick};
 use super::conn::{Conn, OnWriteComplete};
 use super::Result;
 use util::HandyRwLock;
@@ -37,6 +37,7 @@ use raft::SnapshotStatus;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
+const SNAPSHOT_CONN_TIMEOUT: u64 = 30000;
 
 pub fn create_event_loop<T, S>() -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
@@ -451,13 +452,25 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn on_snap_token(&mut self, event_loop: &mut EventLoop<Self>, _: u64, token: Token) {
-        // Now we close every snapshot connection after sending successfully.
+        // We use new connection for every snapshot, and will close it after sending OK.
+        // But we can't close it here directly, because we can't guarantee that
+        // the socket data is sent to remote successfully. So we wait some time and
+        // then close it.
+        // TODO: we should use a better way to do this. 
+        if let Err(e) = event_loop.timeout_ms(Tick::GcConn { token: token },
+                                              SNAPSHOT_CONN_TIMEOUT) {
+            error!("register gc token {:?} err {:?}, remove directly", token, e);
+            self.remove_conn(event_loop, token);
+        }
+    }
+
+    fn on_gc_conn(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         self.remove_conn(event_loop, token);
     }
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
-    type Timeout = Msg;
+    type Timeout = Tick;
     type Message = Msg;
 
     fn ready(&mut self, event_loop: &mut EventLoop<Self>, token: Token, events: EventSet) {
@@ -487,8 +500,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         }
     }
 
-    fn timeout(&mut self, _: &mut EventLoop<Self>, _: Msg) {
-        // nothing to do now.
+    fn timeout(&mut self, event_loop: &mut EventLoop<Self>, tick: Tick) {
+        match tick {
+            Tick::GcConn { token } => self.on_gc_conn(event_loop, token),
+        }
     }
 
     fn interrupted(&mut self, event_loop: &mut EventLoop<Self>) {

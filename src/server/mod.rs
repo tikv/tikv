@@ -125,6 +125,12 @@ pub enum Msg {
     },
 }
 
+pub enum Tick {
+    GcConn {
+        token: Token,
+    },
+}
+
 #[derive(Debug)]
 pub struct SendCh {
     ch: mio::Sender<Msg>,
