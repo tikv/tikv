@@ -222,9 +222,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 debug!("handling snapshot for {}", region_id);
                 let task = SnapTask::new(peer.storage.clone());
                 debug!("task generated");
-                match self.snap_worker.schedule(task) {
-                    Err(e) => error!("failed to schedule snap task {}", e),
-                    Ok(_) => peer.storage.wl().snap_state = SnapState::Generating,
+                peer.storage.wl().snap_state = SnapState::Generating;
+                if let Err(e) = self.snap_worker.schedule(task) {
+                    error!("failed to schedule snap task {}", e);
+                    peer.storage.wl().snap_state = SnapState::Failed;
                 }
             }
         }
@@ -690,6 +691,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+            info!("report to snapshot {} for {} {:?}",
+                  to_peer_id,
+                  region_id,
+                  status);
             peer.raft_group.report_snapshot(to_peer_id, status)
         }
     }
