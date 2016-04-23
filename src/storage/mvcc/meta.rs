@@ -13,8 +13,13 @@
 
 use std::slice::Iter;
 use protobuf::core::Message;
+use protobuf::RepeatedField;
 use kvproto::mvccpb::{Meta as PbMeta, MetaItem, MetaLock};
 use super::Result;
+
+pub const META_SPLIT_SIZE: usize = 128;
+pub const META_RESERVE_SIZE: usize = 32;
+pub const FIRST_META_INDEX: u64 = 0;
 
 #[derive(Debug)]
 pub struct Meta {
@@ -69,11 +74,37 @@ impl Meta {
     pub fn push_item(&mut self, item: MetaItem) {
         self.pb.mut_items().insert(0, item);
     }
+
+    pub fn next_index(&self) -> Option<u64> {
+        match self.pb.get_next() {
+            0 => None,
+            x => Some(x),
+        }
+    }
+
+    pub fn split(&mut self) -> Option<(Meta, u64)> {
+        if self.pb.get_items().len() < META_SPLIT_SIZE {
+            return None;
+        }
+        let items = self.pb.take_items();
+        let (latest, old) = items.split_at(META_RESERVE_SIZE);
+        let index = self.pb.get_next();
+        let next_index = index + 1;
+
+        self.pb.set_items(RepeatedField::from_slice(latest));
+        self.pb.set_next(next_index);
+
+        let mut new_meta = Meta::new();
+        new_meta.pb.set_items(RepeatedField::from_slice(old));
+        new_meta.pb.set_next(index);
+
+        Some((new_meta, next_index))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Meta;
+    use super::*;
     use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 
     #[test]
@@ -128,5 +159,26 @@ mod tests {
 
         meta.clear_lock();
         assert!(meta.get_lock().is_none());
+    }
+
+    #[test]
+    fn test_meta_split() {
+        let mut meta = Meta::new();
+        let mut ts = 1u64..;
+        for _ in 0..META_SPLIT_SIZE - 1 {
+            let mut item = MetaItem::new();
+            item.set_start_ts(ts.next().unwrap());
+            item.set_commit_ts(ts.next().unwrap());
+            meta.push_item(item);
+        }
+        assert!(meta.split().is_none());
+
+        let mut item = MetaItem::new();
+        item.set_start_ts(ts.next().unwrap());
+        item.set_commit_ts(ts.next().unwrap());
+        meta.push_item(item);
+
+        let (_, index) = meta.split().unwrap();
+        assert_eq!(index, 1);
     }
 }
