@@ -71,6 +71,11 @@ fn build_raftkv(matches: &Matches,
     block_base_opts.set_block_size(64 * 1024);
     opts.set_block_based_table_factory(&block_base_opts);
     opts.compression(DBCompressionType::DBNo);
+    opts.set_write_buffer_size(64 * 1024 * 1024);
+    opts.set_max_write_buffer_number(5);
+    opts.set_min_write_buffer_number_to_merge(2);
+    opts.set_max_background_compactions(3);
+    opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
     opts.set_target_file_size_base(64 * 1024 * 1024);
     opts.create_if_missing(true);
 
