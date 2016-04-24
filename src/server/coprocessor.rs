@@ -14,8 +14,6 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::{result, error};
-use std::thread::{self, JoinHandle};
-use std::sync::mpsc::{self, Sender, Receiver};
 use std::time::Instant;
 use mio::Token;
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
@@ -23,6 +21,7 @@ use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
+use threadpool::ThreadPool;
 
 use storage::{Engine, SnapshotStore, engine, txn, mvcc};
 use kvproto::kvrpcpb::{Context, LockInfo};
@@ -33,12 +32,17 @@ use storage::Key;
 use util::codec::{Datum, table, datum, number};
 use util::xeval::Evaluator;
 use util::{as_slice, hex};
-use server::{self, SendCh, Msg, ConnData};
+use server::{SendCh, Msg, ConnData};
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
 
 const DEFAULT_ERROR_CODE: i32 = 1;
+
+// TODO: make this number configurable.
+const DEFAULT_POOL_SIZE: usize = 8;
+
+const SLOW_QUERY_ELAPSED_SECS: u64 = 1;
 
 quick_error! {
     #[derive(Debug)]
@@ -86,105 +90,38 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub struct RegionEndPoint {
-    tx: Sender<EndPointMessage>,
-    handle: Option<JoinHandle<()>>,
+pub struct EndPointHost {
+    snap_endpoint: Arc<TiDbEndPoint>,
+    pool: ThreadPool,
+    ch: SendCh,
+}
+
+impl EndPointHost {
+    pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> EndPointHost {
+        EndPointHost {
+            snap_endpoint: Arc::new(TiDbEndPoint::new(engine)),
+            pool: ThreadPool::new(DEFAULT_POOL_SIZE),
+            ch: ch,
+        }
+    }
+
+    pub fn on_request(&self, req: Request, token: Token, msg_id: u64) {
+        let end_point = self.snap_endpoint.clone();
+        let ch = self.ch.clone();
+        self.pool.execute(move || {
+            let timer = Instant::now();
+            end_point.handle_request(req, token, msg_id, ch);
+            let elapsed = timer.elapsed();
+            if elapsed.as_secs() >= SLOW_QUERY_ELAPSED_SECS {
+                info!("slow request {:?}/{} takes {:?}", token, msg_id, elapsed);
+            } else {
+                trace!("request {:?}/{} takes {:?}", token, msg_id, timer.elapsed());
+            }
+        });
+    }
 }
 
 type ResponseHandler = Box<Fn(Response) -> ()>;
-
-#[derive(Debug)]
-enum EndPointMessage {
-    Job(Request, Token, u64),
-    Close,
-}
-
-fn msg_poller(engine: Arc<Box<Engine>>, rx: Receiver<EndPointMessage>, ch: SendCh) {
-    info!("EndPoint started.");
-    let end_point = SnapshotEndPoint::new(engine);
-    loop {
-        let msg = rx.recv();
-        if let Err(e) = msg {
-            error!("failed to receive job: {:?}", e);
-            break;
-        }
-        let msg = msg.unwrap();
-        debug!("recv req: {:?}", msg);
-        let timer = Instant::now();
-        match msg {
-            EndPointMessage::Job(req, token, msg_id) => {
-                handle_request(req, ch.clone(), token, msg_id, &end_point);
-                debug!("request {:?}/{} takes {:?}", token, msg_id, timer.elapsed());
-            }
-            EndPointMessage::Close => break,
-        }
-    }
-    info!("EndPoint closing.");
-}
-
-impl RegionEndPoint {
-    pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> RegionEndPoint {
-        let (tx, rx) = mpsc::channel();
-        let builder = thread::Builder::new().name("EndPoint".to_owned());
-        let handle = builder.spawn(move || msg_poller(engine, rx, ch)).unwrap();
-        RegionEndPoint {
-            tx: tx,
-            handle: Some(handle),
-        }
-    }
-
-    pub fn on_request(&self, req: Request, token: Token, msg_id: u64) -> server::Result<()> {
-        box_try!(self.tx.send(EndPointMessage::Job(req, token, msg_id)));
-        Ok(())
-    }
-
-    pub fn stop(&mut self) {
-        if self.handle.is_none() {
-            return;
-        }
-        if let Err(e) = self.tx.send(EndPointMessage::Close) {
-            error!("failed to ask the coprocessor to stop: {:?}", e);
-        }
-        if let Err(e) = self.handle.take().unwrap().join() {
-            error!("failed to stop the coprocessor: {:?}", e);
-        }
-    }
-}
-
-fn handle_request(req: Request,
-                  ch: SendCh,
-                  token: Token,
-                  msg_id: u64,
-                  end_point: &SnapshotEndPoint) {
-    let cb = box move |r| {
-        let mut resp_msg = Message::new();
-        resp_msg.set_msg_type(MessageType::CopResp);
-        resp_msg.set_cop_resp(r);
-        if let Err(e) = ch.send(Msg::WriteData {
-            token: token,
-            data: ConnData::new(msg_id, resp_msg),
-        }) {
-            error!("send cop resp failed with token {:?}, msg id {}, err {:?}",
-                   token,
-                   msg_id,
-                   e);
-        }
-    };
-    match req.get_tp() {
-        REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
-            let mut sel = SelectRequest::new();
-            if let Err(e) = sel.merge_from_bytes(req.get_data()) {
-                on_error(box_err!(e), cb);
-                return;
-            }
-            match end_point.handle_select(req, sel) {
-                Ok(r) => cb(r),
-                Err(e) => on_error(e, cb),
-            }
-        }
-        t => on_error(box_err!("unsupported tp {}", t), cb),
-    }
-}
 
 fn on_error(e: Error, cb: ResponseHandler) {
     let mut resp = Response::new();
@@ -196,14 +133,14 @@ fn on_error(e: Error, cb: ResponseHandler) {
     cb(resp)
 }
 
-pub struct SnapshotEndPoint {
+pub struct TiDbEndPoint {
     engine: Arc<Box<Engine>>,
 }
 
-impl SnapshotEndPoint {
-    pub fn new(engine: Arc<Box<Engine>>) -> SnapshotEndPoint {
+impl TiDbEndPoint {
+    pub fn new(engine: Arc<Box<Engine>>) -> TiDbEndPoint {
         // TODO: Spawn a new thread for handling requests asynchronously.
-        SnapshotEndPoint { engine: engine }
+        TiDbEndPoint { engine: engine }
     }
 
     fn new_snapshot<'a>(&'a self, ctx: &Context, start_ts: u64) -> Result<SnapshotStore<'a>> {
@@ -212,7 +149,38 @@ impl SnapshotEndPoint {
     }
 }
 
-impl SnapshotEndPoint {
+impl TiDbEndPoint {
+    fn handle_request(&self, req: Request, token: Token, msg_id: u64, ch: SendCh) {
+        let cb = box move |r| {
+            let mut resp_msg = Message::new();
+            resp_msg.set_msg_type(MessageType::CopResp);
+            resp_msg.set_cop_resp(r);
+            if let Err(e) = ch.send(Msg::WriteData {
+                token: token,
+                data: ConnData::new(msg_id, resp_msg),
+            }) {
+                error!("send cop resp failed with token {:?}, msg id {}, err {:?}",
+                       token,
+                       msg_id,
+                       e);
+            }
+        };
+        match req.get_tp() {
+            REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
+                let mut sel = SelectRequest::new();
+                if let Err(e) = sel.merge_from_bytes(req.get_data()) {
+                    on_error(box_err!(e), cb);
+                    return;
+                }
+                match self.handle_select(req, sel) {
+                    Ok(r) => cb(r),
+                    Err(e) => on_error(e, cb),
+                }
+            }
+            t => on_error(box_err!("unsupported tp {}", t), cb),
+        }
+    }
+
     pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
         let snap = try!(self.new_snapshot(req.get_context(), sel.get_start_ts()));
         let mut ctx = try!(SelectContext::new(sel, snap));
