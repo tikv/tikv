@@ -119,10 +119,6 @@ pub enum Msg {
         sock_addr: SocketAddr,
         data: ConnData,
     },
-    SnapToken {
-        store_id: u64,
-        token: Token,
-    },
 }
 
 #[derive(Debug)]

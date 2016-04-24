@@ -110,10 +110,9 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn start_with_strategy(&mut self, strategy: Vec<Strategy>) {
+        let mut sim = self.sim.wl();
         for engine in &self.dbs {
-            let node_id = self.sim
-                              .wl()
-                              .run_node(0, self.cfg.clone(), engine.clone(), strategy.clone());
+            let node_id = sim.run_node(0, self.cfg.clone(), engine.clone(), strategy.clone());
             self.engines.insert(node_id, engine.clone());
         }
     }
@@ -413,8 +412,8 @@ impl<T: Simulator> Cluster<T> {
                                             new_change_peer_cmd(change_type, peer));
         let resp = self.call_command_on_leader(region_id, change_peer, Duration::from_secs(3))
                        .unwrap();
-        assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCmdType::ChangePeer);
+        assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::ChangePeer,
+                format!("{:?}", resp));
 
         let region = resp.get_admin_response().get_change_peer().get_region();
         self.pd_client.wl().change_peer(self.id(), region.clone()).unwrap();

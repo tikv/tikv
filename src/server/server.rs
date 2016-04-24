@@ -19,11 +19,12 @@ use std::boxed::Box;
 use std::net::SocketAddr;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
-use mio::tcp::{TcpListener, TcpStream};
+use mio::tcp::{TcpListener, TcpStream, Shutdown};
 
 use raftstore::store::{cmd_resp, Transport};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::msgpb::{MessageType, Message};
+use kvproto::raftpb::MessageType as RaftMessageType;
 use super::{Msg, SendCh, ConnData};
 use super::conn::{Conn, OnWriteComplete};
 use super::Result;
@@ -136,6 +137,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let conn = self.conns.remove(&token);
         match conn {
             Some(mut conn) => {
+                debug!("remove connection token {:?}", token);
                 // if connected to remote store, remove this too.
                 if let Some(store_id) = conn.store_id {
                     self.store_tokens.remove(&store_id);
@@ -204,12 +206,22 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let msg_type = msg.get_msg_type();
         match msg_type {
             MessageType::Raft => {
+                let msg_type = msg.get_raft().get_message().get_msg_type();
                 if let Err(e) = self.raft_router.rl().send_raft_msg(msg.take_raft()) {
                     // Should we return error to let outer close this connection later?
                     error!("send raft message for token {:?} with msg id {} err {:?}",
                            token,
                            msg_id,
                            e);
+                }
+                if msg_type == RaftMessageType::MsgSnapshot {
+                    // Now we use new connection for every snapshot sending,
+                    // but it is not safe to close the connection after sending OK,
+                    // so we close it here after receiving whole snapshot.
+                    // We use shutdown here for a graceful close.
+                    if let Some(conn) = self.conns.get(&token) {
+                        try!(conn.sock.shutdown(Shutdown::Write));
+                    }
                 }
                 Ok(())
             }
@@ -427,11 +439,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
         let reporter = Arc::new(SnapshotReporter {
             router: self.raft_router.clone(),
-            ch: self.sendch.clone(),
-            store_id: store_id,
             region_id: region_id,
             to_peer_id: to_peer_id,
-            token: token,
             reported: AtomicBool::new(false),
         });
 
@@ -448,11 +457,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                         Some(box move || {
                             reporter.report(SnapshotStatus::Finish);
                         }))
-    }
-
-    fn on_snap_token(&mut self, event_loop: &mut EventLoop<Self>, _: u64, token: Token) {
-        // Now we close every snapshot connection after sending successfully.
-        self.remove_conn(event_loop, token);
     }
 }
 
@@ -483,7 +487,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             Msg::SendStoreSock { store_id, sock_addr, data } => {
                 self.send_store_sock(event_loop, store_id, sock_addr, data)
             }
-            Msg::SnapToken { store_id, token } => self.on_snap_token(event_loop, store_id, token),
         }
     }
 
@@ -522,11 +525,8 @@ fn send_raft_cmd_resp(ch: SendCh, token: Token, msg_id: u64, resp: RaftCmdRespon
 
 struct SnapshotReporter<T: RaftStoreRouter + 'static> {
     router: Arc<RwLock<T>>,
-    ch: SendCh,
-    store_id: u64,
     region_id: u64,
     to_peer_id: u64,
-    token: Token,
 
     reported: AtomicBool,
 }
@@ -538,6 +538,12 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
             return;
         }
 
+        debug!("send snapshot to {} for {} {:?}",
+               self.to_peer_id,
+               self.region_id,
+               status);
+
+
         if let Err(e) = self.router
                             .rl()
                             .report_snapshot(self.region_id, self.to_peer_id, status) {
@@ -546,15 +552,6 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
                    self.region_id,
                    e);
         }
-
-
-        if let Err(e) = self.ch.send(Msg::SnapToken {
-            store_id: self.store_id,
-            token: self.token,
-        }) {
-            error!("send snap token for later use err {:?}", e);
-        }
-
     }
 }
 

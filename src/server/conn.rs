@@ -61,6 +61,10 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
     unsafe {
         // header is not full read, we will try read more.
         if let Some(n) = try!(r.try_read(buf.mut_bytes())) {
+            if n == 0 {
+                // 0 means remote has closed the socket.
+                return Err(box_err!("remote has closed the connection"));
+            }
             buf.advance(n)
         }
     }
