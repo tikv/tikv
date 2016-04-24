@@ -42,6 +42,8 @@ const DEFAULT_ERROR_CODE: i32 = 1;
 // TODO: make this number configurable.
 const DEFAULT_POOL_SIZE: usize = 8;
 
+const SLOW_QUERY_ELAPSED_SECS: u64 = 1;
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -109,7 +111,12 @@ impl EndPointHost {
         self.pool.execute(move || {
             let timer = Instant::now();
             end_point.handle_request(req, token, msg_id, ch);
-            debug!("request {:?}/{} takes {:?}", token, msg_id, timer.elapsed());
+            let elapsed = timer.elapsed();
+            if elapsed.as_secs() >= SLOW_QUERY_ELAPSED_SECS {
+                info!("slow request {:?}/{} takes {:?}", token, msg_id, elapsed);
+            } else {
+                trace!("request {:?}/{} takes {:?}", token, msg_id, timer.elapsed());
+            }
         });
     }
 }
