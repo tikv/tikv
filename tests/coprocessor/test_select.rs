@@ -168,7 +168,7 @@ fn prepare_sel(store: &mut Store, tbl: &TableInfo) -> Request {
     req
 }
 
-fn initial_data(count: i64) -> (Store, SnapshotEndPoint, TableInfo) {
+fn initial_data(count: i64) -> (Store, TiDbEndPoint, TableInfo) {
     let engine = Arc::new(engine::new_engine(Dsn::Memory).unwrap());
     let mut store = Store::new(engine.clone());
     let tbl = TableInfo {
@@ -180,7 +180,7 @@ fn initial_data(count: i64) -> (Store, SnapshotEndPoint, TableInfo) {
     };
     prepare_table_data(&mut store, &tbl, count);
 
-    let end_point = SnapshotEndPoint::new(engine);
+    let end_point = TiDbEndPoint::new(engine);
     (store, end_point, tbl)
 }
 
