@@ -223,10 +223,6 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
     }
 
-    fn reverse_seek(&self, _: &Context, _: &Key) -> engine::Result<Option<KvPair>> {
-        unimplemented!();
-    }
-
     fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
         if modifies.len() == 0 {
             return Ok(());
