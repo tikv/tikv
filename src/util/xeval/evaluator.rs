@@ -220,10 +220,10 @@ impl Evaluator {
 
     fn decode_value_list(&mut self, value_list_expr: &Expr) -> Result<&Vec<Datum>> {
         let p = value_list_expr as *const Expr as isize;
-        let encoded = try!(self.cached_value_list
+        let decoded = try!(self.cached_value_list
                                .entry(p)
                                .or_try_insert_with(|| datum::decode(value_list_expr.get_val())));
-        Ok(encoded)
+        Ok(decoded)
     }
 }
 
