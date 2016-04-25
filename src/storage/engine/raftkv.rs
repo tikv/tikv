@@ -104,7 +104,7 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
 
     // TODO: reuse msg code.
     pub fn call_command(&self, request: RaftCmdRequest) -> Result<RaftCmdResponse> {
-        let resp: Option<RaftCmdResponse> = None;
+        let resp = None;
         let pair = Arc::new((Mutex::new(resp), Condvar::new()));
         let pair2 = pair.clone();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
