@@ -53,7 +53,7 @@ impl Filter for FilterDropPacket {
     }
     fn after(&mut self, x: Result<()>) -> Result<()> {
         if self.drop {
-            return Err(Error::Timeout("make by FilterDropPacket in SimulateTransport".to_string()));
+            return Err(Error::Timeout("drop by FilterDropPacket in SimulateTransport".to_string()));
         }
         x
     }
