@@ -41,8 +41,7 @@ threadpool = "1.0.0"
 clippy = {version = "*", optional = true}
 
 [dependencies.rocksdb]
-git = "https://github.com/busyjay/rust-rocksdb.git"
-branch = "busyjay/add-base-size-opt"
+git = "https://github.com/ngaut/rust-rocksdb.git"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"
