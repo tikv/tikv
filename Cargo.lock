@@ -12,7 +12,7 @@ dependencies = [
  "protobuf 1.0.18 (git+https://github.com/stepancheg/rust-protobuf.git)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
- "rocksdb 0.3.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
+ "rocksdb 0.3.0 (git+https://github.com/busyjay/rust-rocksdb.git?branch=busyjay/add-base-size-opt)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "threadpool 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -92,7 +92,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#32e680547071fcf42f67c8ded334ccfd6b1c1323"
+source = "git+https://github.com/busyjay/rust-rocksdb.git?branch=busyjay/add-base-size-opt#ab9214e81598cc1d1f784e41ae47f4a739a4989e"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -186,10 +186,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#32e680547071fcf42f67c8ded334ccfd6b1c1323"
+source = "git+https://github.com/busyjay/rust-rocksdb.git?branch=busyjay/add-base-size-opt#ab9214e81598cc1d1f784e41ae47f4a739a4989e"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
- "librocksdb_sys 0.1.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
+ "librocksdb_sys 0.1.0 (git+https://github.com/busyjay/rust-rocksdb.git?branch=busyjay/add-base-size-opt)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
