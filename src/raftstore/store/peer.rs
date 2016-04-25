@@ -414,8 +414,7 @@ impl Peer {
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
 
-        let trans = trans.rl();
-        if let Err(e) = trans.send(send_msg) {
+        if let Err(e) = trans.rl().send(send_msg) {
             warn!("region {} with peer {:?} failed to send msg to {} in store {}, err: {:?}",
                   self.region_id,
                   self.peer,
