@@ -302,7 +302,8 @@ impl<T: Simulator> Cluster<T> {
 
         let err = err.get_not_leader();
         if !err.has_leader() {
-            return false;
+            self.reset_leader_of_region(region_id);
+            return true;
         }
         self.leaders.insert(region_id, err.get_leader().clone());
         true
