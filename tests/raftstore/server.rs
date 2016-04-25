@@ -34,13 +34,15 @@ use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
 use super::transport_simulate::{Strategy, SimulateTransport, Filter};
 
+type SimulateServerTransport = SimulateTransport<ServerTransport>;
+
 pub struct ServerCluster {
     cluster_id: u64,
     senders: HashMap<u64, SendCh>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
-    simulate_trans: HashMap<u64, Arc<RwLock<SimulateTransport<ServerTransport>>>>,
+    sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
 
     msg_id: AtomicUsize,
     pd_client: Arc<RwLock<TestPdClient>>,
@@ -53,7 +55,7 @@ impl ServerCluster {
             senders: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
-            simulate_trans: HashMap::new(),
+            sim_trans: HashMap::new(),
             conns: Mutex::new(HashMap::new()),
             msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
@@ -114,9 +116,8 @@ impl Simulator for ServerCluster {
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
 
-        let simulate_trans = SimulateTransport::new(strategy, trans.clone());
-        let trans_final = Arc::new(RwLock::new(simulate_trans));
-        let mut node = Node::new(&cfg, self.pd_client.clone(), trans_final.clone());
+        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(strategy, trans.clone())));
+        let mut node = Node::new(&cfg, self.pd_client.clone(), simulate_trans.clone());
 
         node.start(engine.clone()).unwrap();
         let router = node.raft_store_router();
@@ -124,7 +125,7 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
 
-        self.simulate_trans.insert(node_id, trans_final);
+        self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
 
         let mut server = Server::new(&mut event_loop, listener, store, router, resolver).unwrap();
@@ -208,7 +209,7 @@ impl Simulator for ServerCluster {
     }
 
     fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>) {
-        let trans = self.simulate_trans.get(&node_id).unwrap();
+        let trans = self.sim_trans.get(&node_id).unwrap();
         trans.wl().set_filters(filters);
     }
 }

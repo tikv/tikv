@@ -53,13 +53,14 @@ impl Transport for ChannelTransport {
     }
 }
 
+type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 
 pub struct NodeCluster {
     cluster_id: u64,
     trans: Arc<RwLock<ChannelTransport>>,
     pd_client: Arc<RwLock<TestPdClient>>,
-    nodes: HashMap<u64, Node<TestPdClient, SimulateTransport<ChannelTransport>>>,
-    simulate_trans: HashMap<u64, Arc<RwLock<SimulateTransport<ChannelTransport>>>>,
+    nodes: HashMap<u64, Node<TestPdClient, SimulateChannelTransport>>,
+    simulate_trans: HashMap<u64, Arc<RwLock<SimulateChannelTransport>>>,
 }
 
 impl NodeCluster {

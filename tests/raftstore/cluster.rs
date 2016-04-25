@@ -466,7 +466,7 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
-    // NOTE: if you have set transport hook before, call this function will clear them
+    // NOTE: if you have set transport hooks before, call this function will overwrite them
     pub fn partition(&mut self, s1: Arc<HashSet<u64>>, s2: Arc<HashSet<u64>>) {
         for node_id in s1.as_ref() {
             let filter = new_partition_filter(s2.clone());
@@ -492,10 +492,7 @@ struct PartitionFilter {
 
 impl Filter for PartitionFilter {
     fn before(&self, msg: &RaftMessage) -> bool {
-        if self.node_ids.contains(&msg.get_to_peer().get_store_id()) {
-            return true;
-        }
-        false
+        self.node_ids.contains(&msg.get_to_peer().get_store_id())
     }
     fn after(&self, r: Result<()>) -> Result<()> {
         r
