@@ -18,7 +18,7 @@ use kvproto::mvccpb::{Meta as PbMeta, MetaItem, MetaLock};
 use super::Result;
 
 pub const META_SPLIT_SIZE: usize = 128;
-pub const META_RESERVE_SIZE: usize = 32;
+pub const META_RESERVE_SIZE: usize = 20;
 pub const FIRST_META_INDEX: u64 = 0;
 
 #[derive(Debug)]
@@ -86,16 +86,16 @@ impl Meta {
         if self.pb.get_items().len() < META_SPLIT_SIZE {
             return None;
         }
-        let items = self.pb.take_items();
-        let (latest, old) = items.split_at(META_RESERVE_SIZE);
+        let mut items = self.pb.take_items().into_vec();
+        let new_items = items.split_off(META_RESERVE_SIZE);
         let index = self.pb.get_next();
         let next_index = index + 1;
 
-        self.pb.set_items(RepeatedField::from_slice(latest));
+        self.pb.set_items(RepeatedField::from_vec(items));
         self.pb.set_next(next_index);
 
         let mut new_meta = Meta::new();
-        new_meta.pb.set_items(RepeatedField::from_slice(old));
+        new_meta.pb.set_items(RepeatedField::from_vec(new_items));
         new_meta.pb.set_next(index);
 
         Some((new_meta, next_index))
