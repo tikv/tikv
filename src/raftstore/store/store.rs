@@ -22,7 +22,7 @@ use mio::{self, EventLoop, EventLoopConfig};
 use protobuf;
 use uuid::Uuid;
 
-use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData};
+use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData, RaftTruncatedState};
 use kvproto::raftpb::ConfChangeType;
 use util::{HandyRwLock, SlowTimer};
 use pd::PdClient;
@@ -339,92 +339,107 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
+    fn on_ready_change_peer(&mut self,
+                            region_id: u64,
+                            change_type: ConfChangeType,
+                            peer: metapb::Peer) {
+        // We only care remove itself now.
+        if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
+            warn!("destory peer {:?} for region {}", peer, region_id);
+            // The remove peer is in the same store.
+            // TODO: should we check None here?
+            // Can we destroy it in another thread later?
+            let mut p = self.region_peers.remove(&region_id).unwrap();
+            let end_key = enc_end_key(&p.region());
+            if let Err(e) = p.destroy() {
+                error!("destroy peer {:?} for region {} in store {} err {:?}",
+                       peer,
+                       region_id,
+                       self.store_id(),
+                       e);
+            } else {
+                if self.region_ranges.remove(&end_key).is_none() {
+                    panic!("Remove region, peer {:?}, region {} in store {}",
+                           peer,
+                           region_id,
+                           self.store_id());
+
+                }
+            }
+        }
+    }
+
+    fn on_ready_compact_log(&mut self, region_id: u64, state: RaftTruncatedState) {
+        let peer = self.region_peers.get(&region_id).unwrap();
+        let task = CompactTask::new(&peer.storage.rl(), state.get_index() + 1);
+        if let Err(e) = self.compact_worker.schedule(task) {
+            error!("failed to schedule compact task: {}", e);
+        }
+    }
+
+    fn on_ready_split_region(&mut self,
+                             region_id: u64,
+                             left: metapb::Region,
+                             right: metapb::Region) {
+        let new_region_id = right.get_id();
+        if let Some(peer) = self.region_peers.get(&new_region_id) {
+            // If the store received a raft msg with the new region raft group
+            // before splitting, it will creates a uninitialized peer.
+            // We can remove this uninitialized peer directly.
+            if peer.storage.rl().is_initialized() {
+                panic!("duplicated region {} for split region", new_region_id);
+            }
+        }
+
+        match Peer::create(self, &right) {
+            Err(e) => {
+                error!("create new split region {:?} err {:?}", right, e);
+            }
+            Ok(mut new_peer) => {
+                // If the peer for the region before split is leader,
+                // we can force the new peer for the new split region to campaign
+                // to become the leader too.
+                let is_leader = self.region_peers.get(&region_id).unwrap().is_leader();
+                if is_leader && right.get_peers().len() > 1 {
+                    if let Err(e) = new_peer.raft_group.campaign() {
+                        error!("peer {:?} campaigns for region {} err {:?}",
+                               new_peer.peer,
+                               new_region_id,
+                               e);
+                    }
+                }
+
+                // Insert new regions and validation
+                if self.region_ranges
+                       .insert(enc_end_key(&left), left.get_id())
+                       .is_some() {
+                    panic!("region should not exist, {:?}", left);
+                }
+                if self.region_ranges
+                       .insert(enc_end_key(&right), new_region_id)
+                       .is_none() {
+                    panic!("region should exist, {:?}", right);
+                }
+                self.region_peers.insert(new_region_id, new_peer);
+            }
+        }
+
+    }
+
     fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
         if let Some(region) = ready_result.snap_applied_region {
             self.region_ranges.insert(enc_end_key(&region), region.get_id());
         }
 
-        // TODO: split result handling into different functions.
         // handle executing committed log results
-        for result in &ready_result.exec_results {
-            match *result {
-                ExecResult::ChangePeer { ref change_type, ref peer, .. } => {
-                    // We only care remove itself now.
-                    if *change_type == ConfChangeType::RemoveNode &&
-                       peer.get_store_id() == self.store_id() {
-                        warn!("destory peer {:?} for region {}", peer, region_id);
-                        // The remove peer is in the same store.
-                        // TODO: should we check None here?
-                        // Can we destroy it in another thread later?
-                        let mut p = self.region_peers.remove(&region_id).unwrap();
-                        let end_key = enc_end_key(&p.region());
-                        if let Err(e) = p.destroy() {
-                            error!("destroy peer {:?} for region {} in store {} err {:?}",
-                                   peer,
-                                   region_id,
-                                   self.store_id(),
-                                   e);
-                        } else {
-                            if self.region_ranges.remove(&end_key).is_none() {
-                                panic!("Remove region, peer {:?}, region {} in store {}",
-                                       peer,
-                                       region_id,
-                                       self.store_id());
-
-                            }
-                        }
-                    }
+        for result in ready_result.exec_results {
+            match result {
+                ExecResult::ChangePeer { change_type, peer, .. } => {
+                    self.on_ready_change_peer(region_id, change_type, peer)
                 }
-                ExecResult::CompactLog { ref state } => {
-                    let peer = self.region_peers.get(&region_id).unwrap();
-                    let task = CompactTask::new(&peer.storage.rl(), state.get_index() + 1);
-                    if let Err(e) = self.compact_worker.schedule(task) {
-                        error!("failed to schedule compact task: {}", e);
-                    }
-                }
-                ExecResult::SplitRegion { ref left, ref right } => {
-                    let new_region_id = right.get_id();
-                    if let Some(peer) = self.region_peers.get(&new_region_id) {
-                        // If the store received a raft msg with the new region raft group
-                        // before splitting, it will creates a uninitialized peer.
-                        // We can remove this uninitialized peer directly.
-                        if peer.storage.rl().is_initialized() {
-                            panic!("duplicated region {} for split region", new_region_id);
-                        }
-                    }
-
-                    match Peer::create(self, &right) {
-                        Err(e) => {
-                            error!("create new split region {:?} err {:?}", right, e);
-                        }
-                        Ok(mut new_peer) => {
-                            // If the peer for the region before split is leader,
-                            // we can force the new peer for the new split region to campaign
-                            // to become the leader too.
-                            let is_leader = self.region_peers.get(&region_id).unwrap().is_leader();
-                            if is_leader && right.get_peers().len() > 1 {
-                                if let Err(e) = new_peer.raft_group.campaign() {
-                                    error!("peer {:?} campaigns for region {} err {:?}",
-                                           new_peer.peer,
-                                           new_region_id,
-                                           e);
-                                }
-                            }
-
-                            // Insert new regions and validation
-                            if self.region_ranges
-                                   .insert(enc_end_key(left), left.get_id())
-                                   .is_some() {
-                                panic!("region should not exist, {:?}", left);
-                            }
-                            if self.region_ranges
-                                   .insert(enc_end_key(right), new_region_id)
-                                   .is_none() {
-                                panic!("region should exist, {:?}", right);
-                            }
-                            self.region_peers.insert(new_region_id, new_peer);
-                        }
-                    }
+                ExecResult::CompactLog { state } => self.on_ready_compact_log(region_id, state),
+                ExecResult::SplitRegion { left, right } => {
+                    self.on_ready_split_region(region_id, left, right)
                 }
             }
         }
