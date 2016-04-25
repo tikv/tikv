@@ -51,13 +51,6 @@ impl Engine for EngineBtree {
         Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
     }
 
-    fn reverse_seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
-        trace!("EngineBtree: rev_seek {}", key);
-        let m = self.map.rl();
-        let iter = m.range::<Vec<u8>, Vec<u8>>(Unbounded, Excluded(key.raw()));
-        Ok(iter.last().map(|(k, v)| (k.clone(), v.clone())))
-    }
-
     fn write(&self, _: &Context, batch: Vec<Modify>) -> Result<()> {
         let mut m = self.map.wl();
         for rev in batch {
