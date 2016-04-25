@@ -468,11 +468,11 @@ impl<T: Simulator> Cluster<T> {
 
     // NOTE: if you have set transport hooks before, call this function will overwrite them
     pub fn partition(&mut self, s1: Arc<HashSet<u64>>, s2: Arc<HashSet<u64>>) {
-        for node_id in s1.as_ref() {
+        for node_id in s1.iter() {
             let filter = new_partition_filter(s2.clone());
             self.sim.rl().hook_transport(*node_id, vec![RwLock::new(filter)]);
         }
-        for node_id in s2.as_ref() {
+        for node_id in s2.iter() {
             let filter = new_partition_filter(s1.clone());
             self.sim.wl().hook_transport(*node_id, vec![RwLock::new(filter)]);
         }
