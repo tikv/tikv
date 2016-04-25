@@ -32,6 +32,7 @@ use storage::Key;
 use util::codec::{Datum, table, datum, number};
 use util::xeval::Evaluator;
 use util::{as_slice, hex};
+use util::SlowTimer;
 use server::{SendCh, Msg, ConnData};
 
 pub const REQ_TYPE_SELECT: i64 = 101;
@@ -41,8 +42,6 @@ const DEFAULT_ERROR_CODE: i32 = 1;
 
 // TODO: make this number configurable.
 const DEFAULT_POOL_SIZE: usize = 8;
-
-const SLOW_QUERY_ELAPSED_SECS: u64 = 1;
 
 quick_error! {
     #[derive(Debug)]
@@ -109,14 +108,13 @@ impl EndPointHost {
         let end_point = self.snap_endpoint.clone();
         let ch = self.ch.clone();
         self.pool.execute(move || {
-            let timer = Instant::now();
+            let timer = SlowTimer::new();
             end_point.handle_request(req, token, msg_id, ch);
-            let elapsed = timer.elapsed();
-            if elapsed.as_secs() >= SLOW_QUERY_ELAPSED_SECS {
-                info!("slow request {:?}/{} takes {:?}", token, msg_id, elapsed);
-            } else {
-                trace!("request {:?}/{} takes {:?}", token, msg_id, timer.elapsed());
-            }
+            slow_log!(timer,
+                      "request {:?}/{} takes {:?}",
+                      token,
+                      msg_id,
+                      timer.elapsed());
         });
     }
 }

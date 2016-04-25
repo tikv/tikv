@@ -18,7 +18,7 @@ use rand;
 use std::sync::{Arc, RwLock};
 
 use super::util::*;
-use tikv::util::{HandyRwLock};
+use tikv::util::HandyRwLock;
 use self::Strategy::*;
 
 #[derive(Clone)]

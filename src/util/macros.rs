@@ -122,3 +122,14 @@ macro_rules! recover_safe {
         res
     })
 }
+
+/// Log slow operations with warn!, otherwise, use trace!.
+macro_rules! slow_log {
+    ($t:expr, $($arg:tt)*) => {{
+        if $t.is_slow() {
+            warn!($($arg)*);
+        } else {
+            trace!($($arg)*);
+        }
+    }}
+}

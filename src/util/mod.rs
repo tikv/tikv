@@ -17,6 +17,7 @@ use std::io::{self, Write};
 use std::fmt::{self, Formatter, Display};
 use std::slice;
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
+use std::time::{Duration, Instant};
 use time;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rand::{self, ThreadRng};
@@ -171,6 +172,48 @@ pub fn as_slice<T>(t: &T) -> &[T] {
     unsafe {
         let ptr = t as *const T;
         slice::from_raw_parts(ptr, 1)
+    }
+}
+
+pub struct SlowTimer {
+    slow_time: Duration,
+    t: Instant,
+}
+
+impl SlowTimer {
+    pub fn new() -> SlowTimer {
+        SlowTimer::default()
+    }
+
+    pub fn from(slow_time: Duration) -> SlowTimer {
+        SlowTimer {
+            slow_time: slow_time,
+            t: Instant::now(),
+        }
+    }
+
+    pub fn from_secs(secs: u64) -> SlowTimer {
+        SlowTimer::from(Duration::from_secs(secs))
+    }
+
+    pub fn from_millis(millis: u64) -> SlowTimer {
+        SlowTimer::from(Duration::from_millis(millis))
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        self.t.elapsed()
+    }
+
+    pub fn is_slow(&self) -> bool {
+        self.elapsed() >= self.slow_time
+    }
+}
+
+const DEFAULT_SLOW_SECS: u64 = 1;
+
+impl Default for SlowTimer {
+    fn default() -> SlowTimer {
+        SlowTimer::from_secs(DEFAULT_SLOW_SECS)
     }
 }
 
