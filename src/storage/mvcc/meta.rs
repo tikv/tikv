@@ -77,7 +77,7 @@ impl Meta {
 
     pub fn next_index(&self) -> Option<u64> {
         match self.pb.get_next() {
-            0 => None,
+            0 => None, // 0 means no more Meta.
             x => Some(x),
         }
     }
@@ -105,6 +105,7 @@ impl Meta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::RangeFrom;
     use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 
     #[test]
@@ -165,20 +166,30 @@ mod tests {
     fn test_meta_split() {
         let mut meta = Meta::new();
         let mut ts = 1u64..;
-        for _ in 0..META_SPLIT_SIZE - 1 {
+
+        push_item_n(&mut meta, &mut ts, META_SPLIT_SIZE - 1);
+        assert!(meta.split().is_none());
+        assert_eq!(meta.next_index(), None);
+
+        push_item_n(&mut meta, &mut ts, 1);
+        let (meta1, index) = meta.split().unwrap();
+        assert_eq!(index, 1);
+        assert_eq!(meta.next_index(), Some(1));
+        assert_eq!(meta1.next_index(), None);
+
+        push_item_n(&mut meta, &mut ts, META_SPLIT_SIZE);
+        let (meta2, index) = meta.split().unwrap();
+        assert_eq!(index, 2);
+        assert_eq!(meta.next_index(), Some(2));
+        assert_eq!(meta2.next_index(), Some(1));
+    }
+
+    fn push_item_n(meta: &mut Meta, ts: &mut RangeFrom<u64>, n: usize) {
+        for _ in 0..n {
             let mut item = MetaItem::new();
             item.set_start_ts(ts.next().unwrap());
             item.set_commit_ts(ts.next().unwrap());
             meta.push_item(item);
         }
-        assert!(meta.split().is_none());
-
-        let mut item = MetaItem::new();
-        item.set_start_ts(ts.next().unwrap());
-        item.set_commit_ts(ts.next().unwrap());
-        meta.push_item(item);
-
-        let (_, index) = meta.split().unwrap();
-        assert_eq!(index, 1);
     }
 }
