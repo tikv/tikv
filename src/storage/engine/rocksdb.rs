@@ -55,20 +55,6 @@ impl Engine for EngineRocksdb {
         Ok(pair)
     }
 
-    fn reverse_seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
-        trace!("EngineRocksdb: seek {}", key);
-        let mut iter = self.db.iterator(IteratorMode::From(key.raw(), Direction::Reverse));
-        // iter will be positioned at `key` or the kv pair after it. If no such key exists, we need
-        // locate it to the end.
-        if !iter.valid() {
-            iter = self.db.iterator(IteratorMode::End);
-        }
-        let pair = iter.skip_while(|&(k, _)| k >= key.raw())
-                       .next()
-                       .map(|(k, v)| (k.to_vec(), v.to_vec()));
-        Ok(pair)
-    }
-
     fn write(&self, _: &Context, batch: Vec<Modify>) -> Result<()> {
         let wb = WriteBatch::new();
         for rev in batch {
