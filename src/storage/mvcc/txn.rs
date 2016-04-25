@@ -16,7 +16,7 @@ use storage::{Key, Value, Mutation};
 use storage::engine::{Engine, Snapshot, Modify};
 use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 use kvproto::kvrpcpb::Context;
-use super::meta::Meta;
+use super::meta::{Meta, FIRST_META_INDEX};
 use super::{Error, Result};
 
 fn meta_lock_type(mutation: &Mutation) -> MetaLockType {
@@ -62,13 +62,22 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
         Ok(())
     }
 
+    fn write_meta(&mut self, key: &Key, meta: &mut Meta) {
+        if let Some((split_meta, index)) = meta.split() {
+            let modify = Modify::Put((key.encode_ts(index), split_meta.to_bytes()));
+            self.writes.push(modify);
+        }
+        let modify = Modify::Put((key.encode_ts(FIRST_META_INDEX), meta.to_bytes()));
+        self.writes.push(modify);
+    }
+
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.snapshot.get(key)
     }
 
     pub fn prewrite(&mut self, mutation: Mutation, primary: &[u8]) -> Result<()> {
         let key = mutation.key();
-        let mut meta = try!(self.snapshot.load_meta(key));
+        let mut meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
         // Abort on writes after our start timestamp ...
         if let Some(latest) = meta.iter_items().nth(0) {
             if latest.get_commit_ts() >= self.start_ts {
@@ -91,8 +100,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
         lock.set_primary_key(primary.to_vec());
         lock.set_start_ts(self.start_ts);
         meta.set_lock(lock);
-        let modify = Modify::Put((key.encode_ts(0), meta.to_bytes()));
-        self.writes.push(modify);
+        self.write_meta(&key, &mut meta);
 
         if let Mutation::Put((_, ref value)) = mutation {
             let value_key = key.encode_ts(self.start_ts);
@@ -102,11 +110,13 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
     }
 
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
-        let mut meta = try!(self.snapshot.load_meta(key));
-        self.commit_impl(commit_ts, key.encode_ts(0), &mut meta)
+        let mut meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
+        try!(self.commit_impl(commit_ts, &mut meta));
+        self.write_meta(key, &mut meta);
+        Ok(())
     }
 
-    fn commit_impl(&mut self, commit_ts: u64, meta_key: Key, meta: &mut Meta) -> Result<()> {
+    fn commit_impl(&mut self, commit_ts: u64, meta: &mut Meta) -> Result<()> {
         let lock_type = match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => lock.get_field_type(),
             _ => {
@@ -125,8 +135,6 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
             meta.push_item(item);
         }
         meta.clear_lock();
-        let modify = Modify::Put((meta_key, meta.to_bytes()));
-        self.writes.push(modify);
         Ok(())
     }
 
@@ -135,17 +143,21 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
                            commit_ts: u64,
                            get_ts: u64)
                            -> Result<Option<Value>> {
-        let mut meta = try!(self.snapshot.load_meta(key));
-        try!(self.commit_impl(commit_ts, key.encode_ts(0), &mut meta));
-        self.snapshot.get_impl(key, &meta, get_ts)
+        let mut meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
+        try!(self.commit_impl(commit_ts, &mut meta));
+        let res = try!(self.snapshot.get_impl(key, &meta, get_ts));
+        self.write_meta(key, &mut meta);
+        Ok(res)
     }
 
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
-        let mut meta = try!(self.snapshot.load_meta(key));
-        self.rollback_impl(key, key.encode_ts(0), &mut meta)
+        let mut meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
+        try!(self.rollback_impl(key, &mut meta));
+        self.write_meta(key, &mut meta);
+        Ok(())
     }
 
-    fn rollback_impl(&mut self, key: &Key, meta_key: Key, meta: &mut Meta) -> Result<()> {
+    fn rollback_impl(&mut self, key: &Key, meta: &mut Meta) -> Result<()> {
         match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => {
                 let value_key = key.encode_ts(lock.get_start_ts());
@@ -161,15 +173,15 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
             }
         }
         meta.clear_lock();
-        let modify = Modify::Put((meta_key, meta.to_bytes()));
-        self.writes.push(modify);
         Ok(())
     }
 
     pub fn rollback_then_get(&mut self, key: &Key) -> Result<Option<Value>> {
-        let mut meta = try!(self.snapshot.load_meta(key));
-        try!(self.rollback_impl(key, key.encode_ts(0), &mut meta));
-        self.snapshot.get_impl(key, &meta, self.start_ts)
+        let mut meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
+        try!(self.rollback_impl(key, &mut meta));
+        let res = try!(self.snapshot.get_impl(key, &meta, self.start_ts));
+        self.write_meta(key, &mut meta);
+        Ok(res)
     }
 }
 
@@ -192,8 +204,8 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
         }
     }
 
-    fn load_meta(&self, key: &Key) -> Result<Meta> {
-        let meta = match try!(self.snapshot.get(&key.encode_ts(0))) {
+    fn load_meta(&self, key: &Key, index: u64) -> Result<Meta> {
+        let meta = match try!(self.snapshot.get(&key.encode_ts(index))) {
             Some(x) => try!(Meta::parse(&x)),
             None => Meta::new(),
         };
@@ -201,13 +213,13 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let meta = try!(self.load_meta(key));
-        self.get_impl(key, &meta, self.start_ts.to_owned())
+        let meta = try!(self.load_meta(key, FIRST_META_INDEX));
+        self.get_impl(key, &meta, self.start_ts)
     }
 
-    fn get_impl(&self, key: &Key, meta: &Meta, ts: u64) -> Result<Option<Value>> {
+    fn get_impl(&self, key: &Key, first_meta: &Meta, ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
-        if let Some(lock) = meta.get_lock() {
+        if let Some(lock) = first_meta.get_lock() {
             if lock.get_start_ts() <= ts {
                 // There is a pending lock. Client should wait or clean it.
                 return Err(Error::KeyIsLocked {
@@ -218,13 +230,23 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
             }
         }
         // Find the latest write below our start timestamp.
-        match meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
-            Some(x) => {
-                let data_key = key.encode_ts(x.get_start_ts());
-                Ok(try!(self.snapshot.get(&data_key)))
-            }
-            None => Ok(None),
+        if let Some(x) = first_meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
+            let data_key = key.encode_ts(x.get_start_ts());
+            return Ok(try!(self.snapshot.get(&data_key)));
         }
+        let mut next = first_meta.next_index();
+        loop {
+            let meta = match next {
+                Some(x) => try!(self.load_meta(key, x)),
+                None => break,
+            };
+            if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
+                let data_key = key.encode_ts(x.get_start_ts());
+                return Ok(try!(self.snapshot.get(&data_key)));
+            }
+            next = meta.next_index();
+        }
+        Ok(None)
     }
 }
 
@@ -351,6 +373,18 @@ mod tests {
         must_prewrite_put(engine.as_ref(), b"x", b"x15", b"x", 15);
         must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
         must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
+    }
+
+    #[test]
+    fn test_mvcc_txn_meta_split() {
+        let engine = engine::new_engine(Dsn::Memory).unwrap();
+        for i in 1u64..300 {
+            let val = format!("x{}", i);
+            must_prewrite_put(engine.as_ref(), b"x", val.as_bytes(), b"x", 5 * i);
+            must_commit(engine.as_ref(), b"x", 5 * i, 5 * i + 1)
+        }
+        must_get(engine.as_ref(), b"x", 9, b"x1");
+        must_get_none(engine.as_ref(), b"x", 5);
     }
 
     fn must_get<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64, expect: &[u8]) {
