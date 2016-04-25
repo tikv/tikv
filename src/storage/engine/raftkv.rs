@@ -281,7 +281,8 @@ impl<'a> Snapshot for RegionSnapshot<'a> {
         Ok(pair)
     }
 
-    fn reverse_seek(&self, _: &Key) -> engine::Result<Option<KvPair>> {
-        unimplemented!();
+    fn reverse_seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
+        let pair = box_try!(self.reverse_seek(key.raw()));
+        Ok(pair)
     }
 }
