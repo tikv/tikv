@@ -16,7 +16,6 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::{Box, FnBox};
 use std::collections::Bound::{Excluded, Unbounded};
-use std::time::Instant;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopConfig};
@@ -25,7 +24,7 @@ use uuid::Uuid;
 
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData};
 use kvproto::raftpb::ConfChangeType;
-use util::HandyRwLock;
+use util::{HandyRwLock, SlowTimer};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -301,9 +300,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let timer = Instant::now();
+        let timer = SlowTimer::new();
         try!(peer.raft_group.step(msg.take_message()));
-        debug!("step takes {:?}", timer.elapsed());
+        slow_log!(timer, "step takes {:?}", timer.elapsed());
 
         // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
@@ -736,7 +735,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Message = Msg;
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
-        let t = Instant::now();
+        let t = SlowTimer::new();
         let msg_str = format!("{:?}", msg);
         match msg {
             Msg::RaftMessage(data) => {
@@ -761,18 +760,18 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_report_snapshot(region_id, to_peer_id, status);
             }
         }
-        debug!("handle {:?} takes {:?}", msg_str, t.elapsed());
+        slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
-        let t = Instant::now();
+        let t = SlowTimer::new();
         match timeout {
             Tick::Raft => self.on_raft_base_tick(event_loop),
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::ReplicaCheck => self.on_replica_check_tick(event_loop),
         }
-        debug!("handle timeout {:?} takes {:?}", timeout, t.elapsed());
+        slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -799,13 +798,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             return;
         }
 
-        let t = Instant::now();
+        let t = SlowTimer::new();
         // We handle raft ready in event loop.
         if let Err(e) = self.on_raft_ready() {
             // TODO: should we panic here or shutdown the store?
             error!("handle raft ready err: {:?}", e);
         }
-        debug!("handle raft ready takes {:?}", t.elapsed());
+        slow_log!(t, "handle raft ready takes {:?}", t.elapsed());
     }
 }
 
