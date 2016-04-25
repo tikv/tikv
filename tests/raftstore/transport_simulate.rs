@@ -18,7 +18,7 @@ use rand;
 use std::sync::{Arc, RwLock};
 
 use super::util::*;
-use tikv::util::{HandyRwLock};
+use tikv::util::HandyRwLock;
 use self::Strategy::*;
 
 #[derive(Clone)]
@@ -30,14 +30,14 @@ pub enum Strategy {
 
 trait Filter: Send + Sync {
     // in a SimulateTransport, if any filter's before return true, msg will be discard
-    fn before(&mut self, msg: &RaftMessage) -> bool;
+    fn before(&self, msg: &RaftMessage) -> bool;
     // with after provided, one can change the return value arbitrarily
-    fn after(&mut self, Result<()>) -> Result<()>;
+    // dropped indicates whether we discard the message
+    fn after(&self, dropped: bool, Result<()>) -> Result<()>;
 }
 
 struct FilterDropPacket {
     rate: u32,
-    drop: bool,
 }
 
 struct FilterDelay {
@@ -47,58 +47,54 @@ struct FilterDelay {
 struct FilterOutOfOrder;
 
 impl Filter for FilterDropPacket {
-    fn before(&mut self, _: &RaftMessage) -> bool {
-        self.drop = rand::random::<u32>() % 100u32 < self.rate;
-        self.drop
+    fn before(&self, _: &RaftMessage) -> bool {
+        rand::random::<u32>() % 100u32 < self.rate
     }
-    fn after(&mut self, x: Result<()>) -> Result<()> {
-        if self.drop {
-            return Err(Error::Timeout("drop by FilterDropPacket in SimulateTransport".to_string()));
+    fn after(&self, dropped: bool, x: Result<()>) -> Result<()> {
+        if dropped {
+            return Err(Error::Timeout("make by FilterDropPacket in SimulateTransport".to_string()));
         }
         x
     }
 }
 
 impl Filter for FilterDelay {
-    fn before(&mut self, _: &RaftMessage) -> bool {
+    fn before(&self, _: &RaftMessage) -> bool {
         sleep_ms(self.duration);
         false
     }
-    fn after(&mut self, x: Result<()>) -> Result<()> {
+    fn after(&self, _: bool, x: Result<()>) -> Result<()> {
         x
     }
 }
 
 impl Filter for FilterOutOfOrder {
-    fn before(&mut self, _: &RaftMessage) -> bool {
+    fn before(&self, _: &RaftMessage) -> bool {
         unimplemented!()
     }
-    fn after(&mut self, _: Result<()>) -> Result<()> {
+    fn after(&self, _: bool, _: Result<()>) -> Result<()> {
         unimplemented!()
     }
 }
 
 pub struct SimulateTransport<T: Transport> {
-    filters: Vec<RwLock<Box<Filter>>>,
+    filters: Vec<Box<Filter>>,
     trans: Arc<RwLock<T>>,
 }
 
 impl<T: Transport> SimulateTransport<T> {
     pub fn new(strategy: Vec<Strategy>, trans: Arc<RwLock<T>>) -> SimulateTransport<T> {
-        let mut filters: Vec<RwLock<Box<Filter>>> = vec![];
+        let mut filters: Vec<Box<Filter>> = vec![];
         for s in strategy {
             match s {
                 DropPacket(rate) => {
-                    filters.push(RwLock::new(box FilterDropPacket {
-                        rate: rate,
-                        drop: false,
-                    }));
+                    filters.push(box FilterDropPacket { rate: rate });
                 }
                 Delay(latency) => {
-                    filters.push(RwLock::new(box FilterDelay { duration: latency }));
+                    filters.push(box FilterDelay { duration: latency });
                 }
                 OutOfOrder => {
-                    filters.push(RwLock::new(box FilterOutOfOrder));
+                    filters.push(box FilterOutOfOrder);
                 }
             }
         }
@@ -114,7 +110,7 @@ impl<T: Transport> Transport for SimulateTransport<T> {
     fn send(&self, msg: RaftMessage) -> Result<()> {
         let mut discard = false;
         for strategy in &self.filters {
-            if strategy.wl().before(&msg) {
+            if strategy.before(&msg) {
                 discard = true;
             }
         }
@@ -125,7 +121,7 @@ impl<T: Transport> Transport for SimulateTransport<T> {
         }
 
         for strategy in self.filters.iter().rev() {
-            res = strategy.wl().after(res);
+            res = strategy.after(discard, res);
         }
 
         res
