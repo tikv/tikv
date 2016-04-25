@@ -856,4 +856,18 @@ mod tests {
             inc_multi(&store, &oracle, 100);
         });
     }
+
+    #[bench]
+    fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
+        let dir = TempDir::new("rocksdb_test").unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap())).unwrap();
+        let store = TxnStore::new(Arc::new(engine));
+        let oracle = Oracle::new();
+
+        b.iter(|| {
+            for _ in 0..100 {
+                store.put_ok(b"key", b"value", oracle.get_ts(), oracle.get_ts());
+            }
+        });
+    }
 }
