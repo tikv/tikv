@@ -94,7 +94,7 @@ impl<T: Transport> SimulateTransport<T> {
         }
     }
 
-    pub fn set_filters(&mut self, filters: Vec<Box<Filter>>) {
+    pub fn set_filters(&mut self, filters: Vec<RwLock<Box<Filter>>>) {
         self.filters = filters;
     }
 }

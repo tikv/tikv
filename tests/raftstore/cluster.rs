@@ -54,7 +54,7 @@ pub trait Simulator {
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
-    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>);
+    fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -470,11 +470,11 @@ impl<T: Simulator> Cluster<T> {
     pub fn partition(&mut self, s1: Arc<HashSet<u64>>, s2: Arc<HashSet<u64>>) {
         for node_id in s1.as_ref() {
             let filter = new_partition_filter(s2.clone());
-            self.sim.rl().hook_transport(*node_id, vec![filter]);
+            self.sim.rl().hook_transport(*node_id, vec![RwLock::new(filter)]);
         }
         for node_id in s2.as_ref() {
             let filter = new_partition_filter(s1.clone());
-            self.sim.wl().hook_transport(*node_id, vec![filter]);
+            self.sim.wl().hook_transport(*node_id, vec![RwLock::new(filter)]);
         }
     }
 
@@ -488,20 +488,28 @@ impl<T: Simulator> Cluster<T> {
 
 struct PartitionFilter {
     node_ids: Arc<HashSet<u64>>,
+    drop: bool,
 }
 
 impl Filter for PartitionFilter {
-    fn before(&self, msg: &RaftMessage) -> bool {
-        self.node_ids.contains(&msg.get_to_peer().get_store_id())
+    fn before(&mut self, msg: &RaftMessage) -> bool {
+        self.drop = self.node_ids.contains(&msg.get_to_peer().get_store_id());
+        self.drop
     }
-    fn after(&self, r: Result<()>) -> Result<()> {
+    fn after(&mut self, r: Result<()>) -> Result<()> {
+        if self.drop {
+            return Err(Error::Timeout("drop by PartitionPacket in SimulateTransport".to_string()));
+        }
         r
     }
 }
 
 fn new_partition_filter(node_ids: Arc<HashSet<u64>>) -> Box<Filter> {
     let ids = node_ids.clone();
-    Box::new(PartitionFilter { node_ids: ids })
+    Box::new(PartitionFilter {
+        node_ids: ids,
+        drop: false,
+    })
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
