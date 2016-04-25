@@ -18,14 +18,13 @@ use rand;
 use std::sync::{Arc, RwLock};
 
 use super::util::*;
-use tikv::util::{HandyRwLock};
+use tikv::util::HandyRwLock;
 use self::Strategy::*;
 
 #[derive(Clone)]
 pub enum Strategy {
     DropPacket(u32),
     Delay(u64),
-    OutOfOrder,
 }
 
 trait Filter: Send + Sync {
@@ -43,8 +42,6 @@ struct FilterDropPacket {
 struct FilterDelay {
     duration: u64,
 }
-
-struct FilterOutOfOrder;
 
 impl Filter for FilterDropPacket {
     fn before(&mut self, _: &RaftMessage) -> bool {
@@ -69,15 +66,6 @@ impl Filter for FilterDelay {
     }
 }
 
-impl Filter for FilterOutOfOrder {
-    fn before(&mut self, _: &RaftMessage) -> bool {
-        unimplemented!()
-    }
-    fn after(&mut self, _: Result<()>) -> Result<()> {
-        unimplemented!()
-    }
-}
-
 pub struct SimulateTransport<T: Transport> {
     filters: Vec<RwLock<Box<Filter>>>,
     trans: Arc<RwLock<T>>,
@@ -96,9 +84,6 @@ impl<T: Transport> SimulateTransport<T> {
                 }
                 Delay(latency) => {
                     filters.push(RwLock::new(box FilterDelay { duration: latency }));
-                }
-                OutOfOrder => {
-                    filters.push(RwLock::new(box FilterOutOfOrder));
                 }
             }
         }
