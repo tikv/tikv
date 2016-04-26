@@ -423,6 +423,7 @@ mod test {
             (in_expr(Datum::I64(1), vec![Datum::I64(2), Datum::Null]), Datum::Null),
             (in_expr(Datum::Null, vec![Datum::I64(1), Datum::Null]), Datum::Null),
             (in_expr(Datum::I64(2), vec![Datum::I64(1), Datum::Null]), Datum::Null),
+            (in_expr(Datum::I64(2), vec![]), Datum::I64(0)),
             (in_expr(b"abc".as_ref().into(), vec![b"abc".as_ref().into(),
              b"ab".as_ref().into()]), Datum::I64(1)),
             (in_expr(b"abc".as_ref().into(), vec![b"aba".as_ref().into(),
