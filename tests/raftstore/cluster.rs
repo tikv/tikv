@@ -152,23 +152,14 @@ impl<T: Simulator> Cluster<T> {
                                   mut request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
-        let mut retry = 0;
-        loop {
-            match self.leader_of_region(region_id) {
-                Some(leader) => {
-                    request.mut_header().set_peer(leader);
-                    return self.call_command(request, timeout);
-                }
-                None => {
-                    retry += 1;
-                    if retry > 200 {
-                        return Err(Error::Timeout("can't get leader of region after retry 200 \
-                                                   times"
-                                                      .to_string()));
-                    }
-                }
+        for _ in 0..200 {
+            if let Some(leader) = self.leader_of_region(region_id) {
+                request.mut_header().set_peer(leader);
+                return self.call_command(request, timeout);
             }
+            sleep_ms(10);
         }
+        Err(Error::Timeout("can't get leader of region after retry 200 times".to_string()))
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
@@ -346,13 +337,11 @@ impl<T: Simulator> Cluster<T> {
                     }
                     return resp;
                 }
-                Err(e) => {
-                    if let Error::Timeout(_) = e {
-                        warn!("call command timeout, let's retry");
-                        continue;
-                    }
-                    panic!("call_command() return an error we can't handle: {:?}", e);
+                Err(Error::Timeout(_)) => {
+                    warn!("call command timeout, let's retry");
+                    continue;
                 }
+                Err(e) => panic!("call_command() return an error we can't handle: {:?}", e),
             }
         }
     }
