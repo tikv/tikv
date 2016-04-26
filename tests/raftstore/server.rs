@@ -17,14 +17,15 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
+use std::io::ErrorKind;
 
 use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
-use tikv::raftstore::Result;
-use tikv::util::codec::rpc;
+use tikv::raftstore::{Error, Result};
+use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
@@ -167,7 +168,16 @@ impl Simulator for ServerCluster {
 
         conn.set_read_timeout(Some(timeout)).unwrap();
         let mut resp_msg = Message::new();
-        let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg));
+        let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg).map_err(|e| {
+            if let CodecError::Io(ref err) = e {
+                // For unix, read timeout returns WouldBlock but windows returns TimedOut.
+                if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut {
+                    return Error::Timeout(format!("{:?}", err));
+                }
+            }
+
+            Error::Codec(e)
+        }));
 
         self.pool_put(addr, conn);
 
