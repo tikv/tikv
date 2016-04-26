@@ -148,16 +148,17 @@ impl<T: Simulator> Cluster<T> {
     pub fn call_command_on_leader(&mut self,
                                   region_id: u64,
                                   mut request: RaftCmdRequest,
-                                  timeout: Duration)
+                                  timeout: Duration,
+                                  retry_cnt: u64)
                                   -> Result<RaftCmdResponse> {
-        for _ in 0..200 {
+        for _ in 0..retry_cnt {
             if let Some(leader) = self.leader_of_region(region_id) {
                 request.mut_header().set_peer(leader);
                 return self.call_command(request, timeout);
             }
             sleep_ms(10);
         }
-        Err(Error::Timeout("can't get leader of region after retry 200 times".to_string()))
+        Err(Error::Other(box_err!("can't get leader of region after {} retry", retry_cnt)))
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
@@ -319,7 +320,7 @@ impl<T: Simulator> Cluster<T> {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
-            let result = self.call_command_on_leader(region_id, req, timeout);
+            let result = self.call_command_on_leader(region_id, req, timeout, 300);
             if let Err(Error::Timeout(_)) = result {
                 warn!("call command timeout, let's retry");
                 continue;
@@ -416,7 +417,7 @@ impl<T: Simulator> Cluster<T> {
         let change_peer = new_admin_request(region_id,
                                             &epoch,
                                             new_change_peer_cmd(change_type, peer));
-        let resp = self.call_command_on_leader(region_id, change_peer, Duration::from_secs(3))
+        let resp = self.call_command_on_leader(region_id, change_peer, Duration::from_secs(3), 300)
                        .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::ChangePeer,
                 format!("{:?}", resp));
@@ -439,7 +440,8 @@ impl<T: Simulator> Cluster<T> {
         let split = new_admin_request(region_id,
                                       region.get_region_epoch(),
                                       new_split_region_cmd(split_key, new_region_id, peer_ids));
-        let resp = self.call_command_on_leader(region_id, split, Duration::from_secs(3)).unwrap();
+        let resp = self.call_command_on_leader(region_id, split, Duration::from_secs(3), 300)
+                       .unwrap();
 
         assert_eq!(resp.get_admin_response().get_cmd_type(),
                    AdminCmdType::Split);
