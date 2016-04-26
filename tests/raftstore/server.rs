@@ -26,7 +26,7 @@ use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
 use tikv::util::codec::{Error as CodecError, rpc};
-use tikv::util::make_std_tcp_conn;
+use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
