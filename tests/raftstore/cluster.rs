@@ -152,10 +152,21 @@ impl<T: Simulator> Cluster<T> {
                                   mut request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
+        let mut retry = 0;
         loop {
-            if let Some(leader) = self.leader_of_region(region_id) {
-                request.mut_header().set_peer(leader);
-                return self.call_command(request, timeout);
+            match self.leader_of_region(region_id) {
+                Some(leader) => {
+                    request.mut_header().set_peer(leader);
+                    return self.call_command(request, timeout);
+                }
+                None => {
+                    retry += 1;
+                    if retry > 200 {
+                        return Err(Error::Timeout("can't get leader of region after retry 200 \
+                                                   times"
+                                                      .to_string()));
+                    }
+                }
             }
         }
     }
@@ -298,13 +309,13 @@ impl<T: Simulator> Cluster<T> {
 
         let err = resp.get_header().get_error();
         if !err.has_not_leader() {
-            self.reset_leader_of_region(region_id);
-            return true;
+            return false;
         }
 
         let err = err.get_not_leader();
         if !err.has_leader() {
-            return false;
+            self.reset_leader_of_region(region_id);
+            return true;
         }
         self.leaders.insert(region_id, err.get_leader().clone());
         true
@@ -315,7 +326,7 @@ impl<T: Simulator> Cluster<T> {
                    reqs: Vec<Request>,
                    timeout: Duration)
                    -> RaftCmdResponse {
-        let mut try_cnt = 5;
+        let mut try_cnt = 1;
         loop {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
@@ -327,7 +338,7 @@ impl<T: Simulator> Cluster<T> {
                         if self.refresh_leader_if_needed(&resp, region_id) {
                             warn!("seems leader changed, let's retry");
                             continue;
-                        } else if try_cnt == 1 && resp.get_header().get_error().has_stale_epoch() {
+                        } else if try_cnt <= 5 && resp.get_header().get_error().has_stale_epoch() {
                             warn!("seems split, let's retry");
                             try_cnt += 1;
                             continue;
@@ -340,7 +351,7 @@ impl<T: Simulator> Cluster<T> {
                         warn!("call command timeout, let's retry");
                         continue;
                     }
-                    assert!(false);
+                    panic!("call_command() return an error we can't handle: {:?}", e);
                 }
             }
         }
