@@ -30,7 +30,6 @@ use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 #[macro_use]
 pub mod macros;
 pub mod logger;
-// TODO: add #[cfg(test)] if we get it compiled.
 pub mod panic_hook;
 pub mod worker;
 pub mod codec;

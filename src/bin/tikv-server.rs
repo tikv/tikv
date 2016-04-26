@@ -32,7 +32,7 @@ use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionTyp
 use mio::tcp::TcpListener;
 
 use tikv::storage::{Storage, Dsn};
-use tikv::util::{self, logger};
+use tikv::util::{self, logger, panic_hook};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
@@ -185,6 +185,8 @@ fn main() {
     let listener = bind(&addr).unwrap();
 
     let dsn_name = matches.opt_str("S").unwrap_or_else(|| MEM_DSN.to_owned());
+
+    panic_hook::set_exit_hook();
 
     match dsn_name.as_ref() {
         MEM_DSN => {
