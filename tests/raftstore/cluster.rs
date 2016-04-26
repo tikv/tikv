@@ -317,8 +317,7 @@ impl<T: Simulator> Cluster<T> {
                    reqs: Vec<Request>,
                    timeout: Duration)
                    -> RaftCmdResponse {
-        let mut try_cnt = 1;
-        loop {
+        for _ in 0..200 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
@@ -329,9 +328,8 @@ impl<T: Simulator> Cluster<T> {
                         if self.refresh_leader_if_needed(&resp, region_id) {
                             warn!("seems leader changed, let's retry");
                             continue;
-                        } else if try_cnt <= 5 && resp.get_header().get_error().has_stale_epoch() {
+                        } else if resp.get_header().get_error().has_stale_epoch() {
                             warn!("seems split, let's retry");
-                            try_cnt += 1;
                             continue;
                         }
                     }
@@ -344,6 +342,7 @@ impl<T: Simulator> Cluster<T> {
                 Err(e) => panic!("call_command() return an error we can't handle: {:?}", e),
             }
         }
+        panic!("request failed after retry for 200 times");
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
