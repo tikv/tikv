@@ -23,8 +23,8 @@ use rocksdb::DB;
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
-use tikv::raftstore::Result;
-use tikv::util::codec::rpc;
+use tikv::raftstore::{Error, Result};
+use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
@@ -167,7 +167,21 @@ impl Simulator for ServerCluster {
 
         conn.set_read_timeout(Some(timeout)).unwrap();
         let mut resp_msg = Message::new();
-        let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg));
+        let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg).map_err(|e| {
+            if let CodecError::Io(ref err) = e {
+                // If read timeout, the error will throw "Resource temporarily unavailable",
+                // we check this message and then convert the error to Timeout so that outer
+                // can handle timeout consistently.
+                // Different system may return different code. maybe we should check error code
+                // 11 and 35 later.
+                let s = format!("{:?}", err);
+                if s.contains("Resource temporarily unavailable") {
+                    return Error::Timeout(s);
+                }
+            }
+
+            Error::Codec(e)
+        }));
 
         self.pool_put(addr, conn);
 
