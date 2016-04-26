@@ -104,31 +104,6 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"a1");
     must_get_none(&engine_2, b"a2");
 
-    let epoch = cluster.pd_client
-                       .rl()
-                       .get_region_by_id(cluster.id(), 1)
-                       .unwrap()
-                       .get_region_epoch()
-                       .clone();
-    let change_peer = new_admin_request(1,
-                                        &epoch,
-                                        new_change_peer_cmd(ConfChangeType::RemoveNode,
-                                                            new_peer(2, 2)));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().has_error(),
-            "we can't remove same peer twice");
-
-    let change_peer = new_admin_request(1,
-                                        &stale_epoch,
-                                        new_change_peer_cmd(ConfChangeType::RemoveNode,
-                                                            new_peer(3, 3)));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().has_error(),
-            "We can't change peer with stale epoch");
-
-    // peer 3 must exist
-    must_get_equal(&engine_3, b"a3", b"v3");
-
     // add peer 2 then remove it again.
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
 
