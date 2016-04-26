@@ -18,7 +18,7 @@ use std::fmt::{self, Formatter, Display};
 use std::collections::HashMap;
 
 use super::Result;
-use util::{self, HandyRwLock};
+use util::{self, HandyRwLock, TryInsertWith};
 use util::worker::{Runnable, Worker};
 use pd::PdClient;
 
@@ -55,21 +55,22 @@ impl<T: PdClient> Runner<T> {
         // If we use docker and use host for store address, the real IP
         // may be changed after service restarts, so here we just cache
         // pd result and use to_socket_addr to get real socket address.
-        let sock = try!(util::to_socket_addr(&*addr));
+        let sock = try!(util::to_socket_addr(addr));
         Ok(sock)
     }
 
-    fn get_address(&mut self, store_id: u64) -> Result<String> {
+    fn get_address(&mut self, store_id: u64) -> Result<&str> {
         // TODO: do we need re-update the cache sometimes?
         // Store address may be changed?
-        if let Some(addr) = self.store_addrs.get(&store_id).cloned() {
-            return Ok(addr);
-        }
+        let pd_client = self.pd_client.clone();
+        let cluster_id = self.cluster_id;
+        let s = try!(self.store_addrs.entry(store_id).or_try_insert_with(|| {
+            pd_client.rl()
+                     .get_store(cluster_id, store_id)
+                     .map(|s| s.get_address().to_owned())
+        }));
 
-        let store = try!(self.pd_client.rl().get_store(self.cluster_id, store_id));
-        let addr = store.get_address().to_owned();
-        self.store_addrs.insert(store_id, addr.clone());
-        Ok(addr)
+        Ok(s)
     }
 }
 
