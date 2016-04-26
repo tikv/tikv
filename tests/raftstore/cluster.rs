@@ -142,9 +142,7 @@ impl<T: Simulator> Cluster<T> {
                         request: RaftCmdRequest,
                         timeout: Duration)
                         -> Result<RaftCmdResponse> {
-        self.sim
-            .rl()
-            .call_command(request, timeout)
+        self.sim.rl().call_command(request, timeout)
     }
 
     pub fn call_command_on_leader(&mut self,
@@ -322,25 +320,21 @@ impl<T: Simulator> Cluster<T> {
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
             let result = self.call_command_on_leader(region_id, req, timeout);
-            match result {
-                Ok(resp) => {
-                    if resp.get_header().has_error() {
-                        if self.refresh_leader_if_needed(&resp, region_id) {
-                            warn!("seems leader changed, let's retry");
-                            continue;
-                        } else if resp.get_header().get_error().has_stale_epoch() {
-                            warn!("seems split, let's retry");
-                            continue;
-                        }
-                    }
-                    return resp;
-                }
-                Err(Error::Timeout(_)) => {
-                    warn!("call command timeout, let's retry");
+            if let Err(Error::Timeout(_)) = result {
+                warn!("call command timeout, let's retry");
+                continue;
+            }
+            let resp = result.unwrap();
+            if resp.get_header().has_error() {
+                if self.refresh_leader_if_needed(&resp, region_id) {
+                    warn!("seems leader changed, let's retry");
+                    continue;
+                } else if resp.get_header().get_error().has_stale_epoch() {
+                    warn!("seems split, let's retry");
                     continue;
                 }
-                Err(e) => panic!("call_command() return an error we can't handle: {:?}", e),
             }
+            return resp;
         }
         panic!("request failed after retry for 10 times");
     }
