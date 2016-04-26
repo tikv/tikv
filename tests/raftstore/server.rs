@@ -107,6 +107,12 @@ impl Simulator for ServerCluster {
 
         let mut cfg = cfg;
 
+        // Now we cache the store address, so here we should re-use last
+        // listening address for the same store.
+        if let Some(addr) = self.addrs.get(&node_id) {
+            cfg.addr = format!("{}", addr)
+        }
+
         let listener = bind(&cfg.addr).unwrap();
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
@@ -142,7 +148,11 @@ impl Simulator for ServerCluster {
     fn stop_node(&mut self, node_id: u64) {
         let h = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
-        self.addrs.remove(&node_id).unwrap();
+        let addr = self.addrs.get(&node_id).unwrap();
+        self.conns
+            .lock()
+            .unwrap()
+            .remove(addr);
 
         ch.send(Msg::Quit).unwrap();
         h.join().unwrap();

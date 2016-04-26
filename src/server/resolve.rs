@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::boxed::{Box, FnBox};
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
+use std::collections::HashMap;
 
 use super::Result;
 use util::{self, HandyRwLock};
@@ -44,17 +45,31 @@ impl Display for Task {
 pub struct Runner<T: PdClient> {
     cluster_id: u64,
     pd_client: Arc<RwLock<T>>,
+    addrs: HashMap<u64, String>,
 }
 
 impl<T: PdClient> Runner<T> {
-    fn resolve(&self, store_id: u64) -> Result<SocketAddr> {
-        // TODO: cache store address for some time so that we can use it
-        // even pd is down.
-        let store = try!(self.pd_client.rl().get_store(self.cluster_id, store_id));
+    fn resolve(&mut self, store_id: u64) -> Result<SocketAddr> {
+        let addr = try!(self.get_address(store_id));
 
-        let addr = store.get_address();
-        let sock = try!(util::to_socket_addr(addr));
+        // If we use docker and use host for store address, the real IP
+        // may be changed after service restarts, so here we just cache
+        // pd result and use to_socket_addr to get real socket address.
+        let sock = try!(util::to_socket_addr(&*addr));
         Ok(sock)
+    }
+
+    fn get_address(&mut self, store_id: u64) -> Result<String> {
+        // TODO: do we need re-update the cache sometimes?
+        // Store address may be changed?
+        if let Some(addr) = self.addrs.get(&store_id).cloned() {
+            return Ok(addr);
+        }
+
+        let store = try!(self.pd_client.rl().get_store(self.cluster_id, store_id));
+        let addr = store.get_address().to_owned();
+        self.addrs.insert(store_id, addr.clone());
+        Ok(addr)
     }
 }
 
@@ -81,6 +96,7 @@ impl PdStoreAddrResolver {
         let runner = Runner {
             cluster_id: cluster_id,
             pd_client: pd_client,
+            addrs: HashMap::new(),
         };
         box_try!(r.worker.start(runner));
         Ok(r)
