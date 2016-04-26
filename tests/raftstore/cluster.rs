@@ -15,12 +15,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rocksdb::DB;
 use tempdir::TempDir;
 
-use tikv::raftstore::Result;
+use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
 use super::util::*;
 use kvproto::raft_cmdpb::*;
@@ -142,11 +142,7 @@ impl<T: Simulator> Cluster<T> {
                         request: RaftCmdRequest,
                         timeout: Duration)
                         -> Result<RaftCmdResponse> {
-        let t = Instant::now();
-        self.sim
-            .rl()
-            .call_command(request, timeout)
-            .map_err(|e| box_err!("call command failed {:?}, cost {:?}", e, t.elapsed()))
+        self.sim.rl().call_command(request, timeout)
     }
 
     pub fn call_command_on_leader(&mut self,
@@ -154,9 +150,14 @@ impl<T: Simulator> Cluster<T> {
                                   mut request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
-        let leader = self.leader_of_region(region_id).unwrap();
-        request.mut_header().set_peer(leader);
-        self.call_command(request, timeout)
+        for _ in 0..200 {
+            if let Some(leader) = self.leader_of_region(region_id) {
+                request.mut_header().set_peer(leader);
+                return self.call_command(request, timeout);
+            }
+            sleep_ms(10);
+        }
+        Err(Error::Timeout("can't get leader of region after retry 200 times".to_string()))
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
@@ -302,7 +303,8 @@ impl<T: Simulator> Cluster<T> {
 
         let err = err.get_not_leader();
         if !err.has_leader() {
-            return false;
+            self.reset_leader_of_region(region_id);
+            return true;
         }
         self.leaders.insert(region_id, err.get_leader().clone());
         true
@@ -313,24 +315,28 @@ impl<T: Simulator> Cluster<T> {
                    reqs: Vec<Request>,
                    timeout: Duration)
                    -> RaftCmdResponse {
-        let mut try_cnt = 1;
-        loop {
+        for _ in 0..10 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
-            let resp = self.call_command_on_leader(region_id, req, timeout).unwrap();
+            let result = self.call_command_on_leader(region_id, req, timeout);
+            if let Err(Error::Timeout(_)) = result {
+                warn!("call command timeout, let's retry");
+                continue;
+            }
+            let resp = result.unwrap();
             if resp.get_header().has_error() {
                 if self.refresh_leader_if_needed(&resp, region_id) {
                     warn!("seems leader changed, let's retry");
                     continue;
-                } else if try_cnt == 1 && resp.get_header().get_error().has_stale_epoch() {
+                } else if resp.get_header().get_error().has_stale_epoch() {
                     warn!("seems split, let's retry");
-                    try_cnt += 1;
                     continue;
                 }
             }
             return resp;
         }
+        panic!("request failed after retry for 10 times");
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
