@@ -317,7 +317,7 @@ impl<T: Simulator> Cluster<T> {
                    reqs: Vec<Request>,
                    timeout: Duration)
                    -> RaftCmdResponse {
-        for _ in 0..200 {
+        for _ in 0..10 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
@@ -342,7 +342,7 @@ impl<T: Simulator> Cluster<T> {
                 Err(e) => panic!("call_command() return an error we can't handle: {:?}", e),
             }
         }
-        panic!("request failed after retry for 200 times");
+        panic!("request failed after retry for 10 times");
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
