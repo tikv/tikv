@@ -17,6 +17,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
+use std::io::ErrorKind;
 
 use rocksdb::DB;
 
@@ -169,14 +170,10 @@ impl Simulator for ServerCluster {
         let mut resp_msg = Message::new();
         let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg).map_err(|e| {
             if let CodecError::Io(ref err) = e {
-                // If read timeout, the error will throw "Resource temporarily unavailable",
-                // we check this message and then convert the error to Timeout so that outer
-                // can handle timeout consistently.
-                // Different system may return different code. maybe we should check error code
-                // 11 and 35 later.
-                let s = format!("{:?}", err);
-                if s.contains("Resource temporarily unavailable") {
-                    return Error::Timeout(s);
+                // For unix, read timeout returns WouldBlock but windows returns TimedOut,
+                // but should we check windows here?
+                if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut {
+                    return Error::Timeout(format!("{:?}", err));
                 }
             }
 
