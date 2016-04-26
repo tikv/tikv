@@ -7,8 +7,9 @@ use std::io;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender, Receiver};
-use std::time::Instant;
 use std::result;
+
+use util::SlowTimer;
 
 quick_error! {
     #[derive(Debug)]
@@ -67,10 +68,12 @@ impl<T: Display + Send + 'static> Worker<T> {
                 counter.fetch_sub(1, Ordering::SeqCst);
                 let t = t.unwrap();
                 let task_str = format!("{}", t);
-                let timer = Instant::now();
+                let timer = SlowTimer::new();
                 runner.run(t);
-                // TODO maybe we need a perf logger?
-                info!("task {} takes {:?} to finish.", task_str, timer.elapsed());
+                slow_log!(timer,
+                          "task {} takes {:?} to finish.",
+                          task_str,
+                          timer.elapsed());
             }
         });
         let h = try!(res);
