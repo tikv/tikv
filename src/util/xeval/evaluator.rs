@@ -12,7 +12,8 @@
 // limitations under the License.
 
 
-use util::codec::{number, Datum};
+use util::codec::{number, Datum, datum};
+use util::TryInsertWith;
 use super::{Result, Error};
 
 use std::collections::HashMap;
@@ -25,11 +26,13 @@ use tipb::expression::{Expr, ExprType};
 pub struct Evaluator {
     // column_id -> column_value
     pub row: HashMap<i64, Datum>,
+    // expr pointer -> value list
+    cached_value_list: HashMap<isize, Vec<Datum>>,
 }
 
 impl Evaluator {
     /// Eval evaluates expr to a Datum.
-    pub fn eval(&self, expr: &Expr) -> Result<Datum> {
+    pub fn eval(&mut self, expr: &Expr) -> Result<Datum> {
         match expr.get_tp() {
             ExprType::Int64 => self.eval_int(expr),
             ExprType::Uint64 => self.eval_uint(expr),
@@ -49,6 +52,7 @@ impl Evaluator {
             ExprType::Like => self.eval_like(expr),
             ExprType::Float32 |
             ExprType::Float64 => unimplemented!(),
+            ExprType::In => self.eval_in(expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -68,43 +72,43 @@ impl Evaluator {
         self.row.get(&i).cloned().ok_or_else(|| Error::Eval(format!("column {} not found", i)))
     }
 
-    fn eval_lt(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_lt(&mut self, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c < Ordering::Equal).into())
     }
 
-    fn eval_le(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_le(&mut self, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c <= Ordering::Equal).into())
     }
 
-    fn eval_eq(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_eq(&mut self, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c == Ordering::Equal).into())
     }
 
-    fn eval_ne(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_ne(&mut self, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c != Ordering::Equal).into())
     }
 
-    fn eval_ge(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_ge(&mut self, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c >= Ordering::Equal).into())
     }
 
-    fn eval_gt(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_gt(&mut self, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c > Ordering::Equal).into())
     }
 
-    fn eval_null_eq(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_null_eq(&mut self, expr: &Expr) -> Result<Datum> {
         let (left, right) = try!(self.eval_two_children(expr));
         let cmp = try!(left.cmp(&right));
         Ok((cmp == Ordering::Equal).into())
     }
 
-    fn cmp_children(&self, expr: &Expr) -> Result<Option<Ordering>> {
+    fn cmp_children(&mut self, expr: &Expr) -> Result<Option<Ordering>> {
         let (left, right) = try!(self.eval_two_children(expr));
         if left == Datum::Null || right == Datum::Null {
             return Ok(None);
@@ -112,7 +116,7 @@ impl Evaluator {
         left.cmp(&right).map(Some).map_err(From::from)
     }
 
-    fn eval_two_children(&self, expr: &Expr) -> Result<(Datum, Datum)> {
+    fn eval_two_children(&mut self, expr: &Expr) -> Result<(Datum, Datum)> {
         let l = expr.get_children().len();
         if l != 2 {
             return Err(Error::Expr(format!("need 2 operands but got {}", l)));
@@ -123,7 +127,7 @@ impl Evaluator {
         Ok((left, right))
     }
 
-    fn eval_and(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_and(&mut self, expr: &Expr) -> Result<Datum> {
         self.eval_two_children_as_bool(expr)
             .map(|p| {
                 match p {
@@ -134,7 +138,7 @@ impl Evaluator {
             })
     }
 
-    fn eval_or(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_or(&mut self, expr: &Expr) -> Result<Datum> {
         self.eval_two_children_as_bool(expr).map(|p| {
             match p {
                 (Some(true), _) | (_, Some(true)) => true.into(),
@@ -144,7 +148,7 @@ impl Evaluator {
         })
     }
 
-    fn eval_not(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_not(&mut self, expr: &Expr) -> Result<Datum> {
         let children_cnt = expr.get_children().len();
         if children_cnt != 1 {
             return Err(Error::Expr(format!("expect 1 operand, got {}", children_cnt)));
@@ -157,7 +161,7 @@ impl Evaluator {
         Ok((!b).into())
     }
 
-    fn eval_like(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_like(&mut self, expr: &Expr) -> Result<Datum> {
         let (target, pattern) = try!(self.eval_two_children(expr));
         if Datum::Null == target || Datum::Null == pattern {
             return Ok(Datum::Null);
@@ -183,11 +187,43 @@ impl Evaluator {
         }
     }
 
-    fn eval_two_children_as_bool(&self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
+    fn eval_two_children_as_bool(&mut self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
         let (left, right) = try!(self.eval_two_children(expr));
         let left_bool = try!(eval_into_bool(left));
         let right_bool = try!(eval_into_bool(right));
         Ok((left_bool, right_bool))
+    }
+
+    fn eval_in(&mut self, expr: &Expr) -> Result<Datum> {
+        if expr.get_children().len() != 2 {
+            return Err(Error::Expr(format!("IN need 2 operand, got {}",
+                                           expr.get_children().len())));
+        }
+        let children = expr.get_children();
+        let target = try!(self.eval(&children[0]));
+        if let Datum::Null = target {
+            return Ok(target);
+        }
+        let value_list_expr = &children[1];
+        if value_list_expr.get_tp() != ExprType::ValueList {
+            return Err(Error::Expr("the second children should be value list type".to_owned()));
+        }
+        let decoded = try!(self.decode_value_list(value_list_expr));
+        if try!(check_in(target, decoded)) {
+            return Ok(true.into());
+        }
+        if decoded.first().map_or(false, |d| *d == Datum::Null) {
+            return Ok(Datum::Null);
+        }
+        Ok(false.into())
+    }
+
+    fn decode_value_list(&mut self, value_list_expr: &Expr) -> Result<&Vec<Datum>> {
+        let p = value_list_expr as *const Expr as isize;
+        let decoded = try!(self.cached_value_list
+                               .entry(p)
+                               .or_try_insert_with(|| datum::decode(value_list_expr.get_val())));
+        Ok(decoded)
     }
 }
 
@@ -201,10 +237,28 @@ fn eval_into_bool(datum: Datum) -> Result<Option<bool>> {
     }
 }
 
+/// Check if `target` is in `value_list`.
+fn check_in(target: Datum, value_list: &[Datum]) -> Result<bool> {
+    let mut err = None;
+    let pos = value_list.binary_search_by(|d| {
+        match d.cmp(&target) {
+            Ok(ord) => ord,
+            Err(e) => {
+                err = Some(e);
+                Ordering::Less
+            }
+        }
+    });
+    if let Some(e) = err {
+        return Err(e.into());
+    }
+    Ok(pos.is_ok())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use util::codec::{Datum, number};
+    use util::codec::{Datum, number, datum};
 
     use tipb::expression::{Expr, ExprType};
     use protobuf::RepeatedField;
@@ -344,6 +398,50 @@ mod test {
                        expr,
                        result,
                        res);
+            }
+        }
+    }
+
+    fn in_expr(target: Datum, mut list: Vec<Datum>) -> Expr {
+        let target_expr = datum_expr(target);
+        list.sort_by(|l, r| l.cmp(r).unwrap());
+        let val = datum::encode_value(&list).unwrap();
+        let mut list_expr = Expr::new();
+        list_expr.set_tp(ExprType::ValueList);
+        list_expr.set_val(val);
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::In);
+        expr.mut_children().push(target_expr);
+        expr.mut_children().push(list_expr);
+        expr
+    }
+
+    #[test]
+    fn test_where_in() {
+        let cases = vec![
+            (in_expr(Datum::I64(1), vec![Datum::I64(1), Datum::I64(2)]), Datum::I64(1)),
+            (in_expr(Datum::I64(1), vec![Datum::I64(2), Datum::Null]), Datum::Null),
+            (in_expr(Datum::Null, vec![Datum::I64(1), Datum::Null]), Datum::Null),
+            (in_expr(Datum::I64(2), vec![Datum::I64(1), Datum::Null]), Datum::Null),
+            (in_expr(Datum::I64(2), vec![]), Datum::I64(0)),
+            (in_expr(b"abc".as_ref().into(), vec![b"abc".as_ref().into(),
+             b"ab".as_ref().into()]), Datum::I64(1)),
+            (in_expr(b"abc".as_ref().into(), vec![b"aba".as_ref().into(),
+             b"bab".as_ref().into()]), Datum::I64(0)),
+        ];
+
+        let mut eval = Evaluator::default();
+        for (expr, expect_res) in cases {
+            let res = eval.eval(&expr);
+            if res.is_err() {
+                panic!("failed to execute {:?}: {:?}", expr, res);
+            }
+            let res = res.unwrap();
+            if res != expect_res {
+                panic!("wrong result {:?}, expect {:?} while executing {:?}",
+                       res,
+                       expect_res,
+                       expr);
             }
         }
     }
