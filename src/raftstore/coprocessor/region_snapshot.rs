@@ -45,7 +45,6 @@ impl<'a> RegionSnapshot<'a> {
         }
     }
 
-    // TODO: return TakeWhile instead.
     fn new_iterator(&'a self, start_key: &[u8]) -> Box<Iterator<Item = Kv> + 'a> {
         let scan_start_key = if start_key < self.region.get_start_key() {
             keys::data_key(self.region.get_start_key())
