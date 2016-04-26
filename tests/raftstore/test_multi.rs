@@ -200,7 +200,7 @@ fn test_multi_node_drop_packet() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
     test_multi_with_transport_strategy(&mut cluster,
-                                       vec![transport_simulate::Strategy::DropPacket(40)]);
+                                       vec![transport_simulate::Strategy::DropPacket(30)]);
 }
 
 #[test]
