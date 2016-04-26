@@ -18,6 +18,7 @@ use std::fmt::{self, Formatter, Display};
 use std::slice;
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
+use std::collections::hash_map::Entry;
 use time;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rand::{self, ThreadRng};
@@ -214,6 +215,23 @@ const DEFAULT_SLOW_SECS: u64 = 1;
 impl Default for SlowTimer {
     fn default() -> SlowTimer {
         SlowTimer::from_secs(DEFAULT_SLOW_SECS)
+    }
+}
+
+/// `TryInsertWith` is a helper trait for `Entry` to accept a failable closure.
+pub trait TryInsertWith<'a, V, E> {
+    fn or_try_insert_with<F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>;
+}
+
+impl<'a, T: 'a, V: 'a, E> TryInsertWith<'a, V, E> for Entry<'a, T, V> {
+    fn or_try_insert_with<F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E> {
+        match self {
+            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Vacant(e) => {
+                let v = try!(default());
+                Ok(e.insert(v))
+            }
+        }
     }
 }
 
