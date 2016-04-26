@@ -20,7 +20,6 @@ use std::time::Duration;
 use std::io::ErrorKind;
 
 use rocksdb::DB;
-
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
