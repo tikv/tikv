@@ -170,8 +170,7 @@ impl Simulator for ServerCluster {
         let mut resp_msg = Message::new();
         let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg).map_err(|e| {
             if let CodecError::Io(ref err) = e {
-                // For unix, read timeout returns WouldBlock but windows returns TimedOut,
-                // but should we check windows here?
+                // For unix, read timeout returns WouldBlock but windows returns TimedOut.
                 if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut {
                     return Error::Timeout(format!("{:?}", err));
                 }
