@@ -15,6 +15,7 @@
 use std::panic::{self, PanicInfo};
 use std::cell::RefCell;
 use std::sync::StaticRwLock;
+use std::process;
 
 
 /// A simple panic hook that allows skiping printing stacktrace conditionaly.
@@ -70,4 +71,13 @@ fn track_hook(p: &PanicInfo) {
             }
         }
     });
+}
+
+/// Exit the whole process when panic.
+pub fn set_exit_hook() {
+    let orig_hook = panic::take_hook();
+    panic::set_hook(box move |info: &PanicInfo| {
+        orig_hook(info);
+        process::exit(1);
+    })
 }
