@@ -30,7 +30,7 @@ use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
-use super::transport_simulate::{Strategy, SimulateTransport};
+use super::transport_simulate::{Strategy, SimulateTransport, Filter};
 
 pub struct ChannelTransport {
     pub routers: HashMap<u64, Arc<RwLock<ServerRaftStoreRouter>>>,
@@ -53,12 +53,14 @@ impl Transport for ChannelTransport {
     }
 }
 
+type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 
 pub struct NodeCluster {
     cluster_id: u64,
     trans: Arc<RwLock<ChannelTransport>>,
     pd_client: Arc<RwLock<TestPdClient>>,
-    nodes: HashMap<u64, Node<TestPdClient, SimulateTransport<ChannelTransport>>>,
+    nodes: HashMap<u64, Node<TestPdClient, SimulateChannelTransport>>,
+    simulate_trans: HashMap<u64, Arc<RwLock<SimulateChannelTransport>>>,
 }
 
 impl NodeCluster {
@@ -68,6 +70,7 @@ impl NodeCluster {
             trans: ChannelTransport::new(),
             pd_client: pd_client,
             nodes: HashMap::new(),
+            simulate_trans: HashMap::new(),
         }
     }
 }
@@ -82,9 +85,8 @@ impl Simulator for NodeCluster {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
         let simulate_trans = SimulateTransport::new(strategy, self.trans.clone());
-        let mut node = Node::new(&cfg,
-                                 self.pd_client.clone(),
-                                 Arc::new(RwLock::new(simulate_trans)));
+        let trans = Arc::new(RwLock::new(simulate_trans));
+        let mut node = Node::new(&cfg, self.pd_client.clone(), trans.clone());
 
         node.start(engine).unwrap();
         assert!(node_id == 0 || node_id == node.id());
@@ -92,6 +94,7 @@ impl Simulator for NodeCluster {
         let node_id = node.id();
         self.trans.wl().routers.insert(node_id, node.raft_store_router());
         self.nodes.insert(node_id, node);
+        self.simulate_trans.insert(node_id, trans);
 
         node_id
     }
@@ -120,6 +123,11 @@ impl Simulator for NodeCluster {
 
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         self.trans.rl().send(msg)
+    }
+
+    fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>) {
+        let trans = self.simulate_trans.get(&node_id).unwrap();
+        trans.wl().set_filters(filters);
     }
 }
 

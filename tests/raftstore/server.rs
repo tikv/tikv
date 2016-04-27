@@ -20,19 +20,20 @@ use std::time::Duration;
 use std::io::ErrorKind;
 
 use rocksdb::DB;
-
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
 use tikv::util::codec::{Error as CodecError, rpc};
-use tikv::util::make_std_tcp_conn;
+use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
-use super::transport_simulate::{Strategy, SimulateTransport};
+use super::transport_simulate::{Strategy, SimulateTransport, Filter};
+
+type SimulateServerTransport = SimulateTransport<ServerTransport>;
 
 pub struct ServerCluster {
     cluster_id: u64,
@@ -40,6 +41,7 @@ pub struct ServerCluster {
     handles: HashMap<u64, thread::JoinHandle<()>>,
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
+    sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
 
     msg_id: AtomicUsize,
     pd_client: Arc<RwLock<TestPdClient>>,
@@ -52,6 +54,7 @@ impl ServerCluster {
             senders: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
+            sim_trans: HashMap::new(),
             conns: Mutex::new(HashMap::new()),
             msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
@@ -118,10 +121,8 @@ impl Simulator for ServerCluster {
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
 
-        let simulate_trans = SimulateTransport::new(strategy, trans.clone());
-        let mut node = Node::new(&cfg,
-                                 self.pd_client.clone(),
-                                 Arc::new(RwLock::new(simulate_trans)));
+        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(strategy, trans.clone())));
+        let mut node = Node::new(&cfg, self.pd_client.clone(), simulate_trans.clone());
 
         node.start(engine.clone()).unwrap();
         let router = node.raft_store_router();
@@ -129,6 +130,7 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
 
+        self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
 
         let mut server = Server::new(&mut event_loop, listener, store, router, resolver).unwrap();
@@ -213,6 +215,11 @@ impl Simulator for ServerCluster {
         self.pool_put(addr, conn);
 
         Ok(())
+    }
+
+    fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>) {
+        let trans = self.sim_trans.get(&node_id).unwrap();
+        trans.wl().set_filters(filters);
     }
 }
 
