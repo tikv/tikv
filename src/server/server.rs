@@ -350,7 +350,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                      -> Result<Token> {
         // We may already create the connection before.
         if let Some(token) = self.store_tokens.get(&store_id).cloned() {
-            warn!("token already exists for store {}, reuse", store_id);
+            debug!("token already exists for store {}, reuse", store_id);
             return Ok(token);
         }
 
