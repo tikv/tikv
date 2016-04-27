@@ -110,11 +110,14 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn start_with_strategy(&mut self, strategy: Vec<Strategy>) {
-        let mut sim = self.sim.wl();
         for engine in &self.dbs {
-            let node_id = sim.run_node(0, self.cfg.clone(), engine.clone(), strategy.clone());
+            let node_id = self.sim
+                              .wl()
+                              .run_node(0, self.cfg.clone(), engine.clone(), strategy.clone());
             self.engines.insert(node_id, engine.clone());
         }
+        // Wait a little time to let raft do election first.
+        sleep_ms(200)
     }
 
     pub fn run_node(&mut self, node_id: u64) {
@@ -157,7 +160,7 @@ impl<T: Simulator> Cluster<T> {
             }
             sleep_ms(10);
         }
-        Err(Error::Timeout("can't get leader of region after retry 200 times".to_string()))
+        Err(box_err!("can't get leader of region"))
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
