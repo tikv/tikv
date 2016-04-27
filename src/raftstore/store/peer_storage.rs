@@ -110,11 +110,10 @@ impl PeerStorage {
 
     pub fn initial_state(&mut self) -> raft::Result<RaftState> {
         let initialized = self.is_initialized();
-        let res: Option<HardState> = try!(self.engine
-                                              .get_msg(&keys::raft_hard_state_key(
-                                                self.get_region_id())));
+        let hs = try!(self.engine
+                          .get_msg(&keys::raft_hard_state_key(self.get_region_id())));
 
-        let (mut hard_state, found) = res.map_or((HardState::new(), false), |e| (e, true));
+        let (mut hard_state, found) = hs.map_or((HardState::new(), false), |e| (e, true));
 
         if !found {
             if initialized {
