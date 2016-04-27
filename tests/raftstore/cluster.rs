@@ -170,10 +170,10 @@ impl<T: Simulator> Cluster<T> {
                 if resp.get_header().has_error() && retry_cnt < 10 {
                     retry_cnt += 1;
                     if self.refresh_leader_if_needed(&resp, region_id) {
-                        println!("seems leader changed, let's retry");
+                        warn!("seems leader changed, let's retry");
                         continue;
                     } else if resp.get_header().get_error().has_stale_epoch() {
-                        println!("seems split, let's retry");
+                        warn!("seems split, let's retry");
                         continue;
                     }
                 }
