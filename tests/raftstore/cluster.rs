@@ -166,24 +166,21 @@ impl<T: Simulator> Cluster<T> {
         let mut retry_cnt = 0;
         loop {
             let result = self.naive_call_command_on_leader(region_id, request.clone(), timeout);
-            match result {
-                Ok(resp) => {
-                    if resp.get_header().has_error() && retry_cnt < 10 {
-                        retry_cnt += 1;
-                        if self.refresh_leader_if_needed(&resp, region_id) {
-                            println!("seems leader changed, let's retry");
-                            continue;
-                        } else if resp.get_header().get_error().has_stale_epoch() {
-                            println!("seems split, let's retry");
-                            continue;
-                        }
+            if let Ok(resp) = result {
+                if resp.get_header().has_error() && retry_cnt < 10 {
+                    retry_cnt += 1;
+                    if self.refresh_leader_if_needed(&resp, region_id) {
+                        println!("seems leader changed, let's retry");
+                        continue;
+                    } else if resp.get_header().get_error().has_stale_epoch() {
+                        println!("seems split, let's retry");
+                        continue;
                     }
-                    return Ok(resp);
                 }
-                _ => {
-                    return result;
-                }
-            };
+                return Ok(resp);
+            } else {
+                return result;
+            }
         }
     }
 
