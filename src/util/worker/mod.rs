@@ -104,7 +104,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         if self.sender.is_none() {
             return Ok(());
         }
-        // close sender explictly so the background thread will exit.
+        // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.name);
         drop(self.sender.take().unwrap());
         if let Some(h) = self.handle.take() {

@@ -210,7 +210,7 @@ impl<T> RaftLog<T>
             return;
         }
         if self.committed < idx || idx < self.applied {
-            panic!("applied({}) is out of range [prev_applied({}), commited({})",
+            panic!("applied({}) is out of range [prev_applied({}), committed({})",
                    idx,
                    self.applied,
                    self.committed)
