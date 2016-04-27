@@ -597,7 +597,7 @@ fn test_follower_commit_entry() {
         r.step(m).expect("");
 
         if r.raft_log.committed != commit {
-            panic!("#{}: comitted = {}, want {}",
+            panic!("#{}: committed = {}, want {}",
                    i,
                    r.raft_log.committed,
                    commit);

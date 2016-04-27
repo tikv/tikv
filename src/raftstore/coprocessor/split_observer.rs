@@ -19,7 +19,7 @@ use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Re
 use protobuf::RepeatedField;
 use std::result::Result as StdResult;
 
-/// `SplitObserver` adjusts the split key so that it won't seperate
+/// `SplitObserver` adjusts the split key so that it won't separate
 /// the data of a row into two region. It adjusts the key according
 /// to the key format of `TiDB`.
 pub struct SplitObserver;

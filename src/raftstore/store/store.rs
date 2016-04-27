@@ -345,7 +345,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             peer: metapb::Peer) {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
-            warn!("destory peer {:?} for region {}", peer, region_id);
+            warn!("destroy peer {:?} for region {}", peer, region_id);
             // The remove peer is in the same store.
             // TODO: should we check None here?
             // Can we destroy it in another thread later?
