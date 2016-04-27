@@ -136,29 +136,27 @@ fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>,
     cluster.bootstrap_region().expect("");
     cluster.start();
 
-    let (key, value) = (b"a1", b"v1");
+    let mut rng = rand::thread_rng();
+    let key = b"a1";
+    let mut value = [0u8; 5];
 
     assert_eq!(cluster.get(key), None);
-    cluster.must_put(key, value);
-    assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let mut rng = rand::thread_rng();
     for _ in 1..restart_count {
+        rng.fill_bytes(&mut value);
+        cluster.must_put(key, &value);
+        assert_eq!(cluster.get(key), Some(value.to_vec()));
+
         let id = 1 + rng.gen_range(0, node_count as u64);
         cluster.stop_node(id);
         cluster.run_node(id);
         wait_until_node_online(cluster, id);
-        assert_eq!(cluster.get(key), Some(value.to_vec()));
 
         // verify whether data is actually being replicated
-        must_get_equal(&cluster.get_engine(id), key, value);
+        must_get_equal(&cluster.get_engine(id), key, &value);
 
-        let (k, v) = (b"a2", b"v2");
-        // assert_eq!(cluster.get(k), None);
-        cluster.must_put(k, v);
-        assert_eq!(cluster.get(k), Some(v.to_vec()));
-        cluster.must_delete(k);
-        assert_eq!(cluster.get(k), None);
+        cluster.must_delete(key);
+        assert_eq!(cluster.get(key), None);
     }
 }
 
