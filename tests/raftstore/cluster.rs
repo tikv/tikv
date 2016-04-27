@@ -26,12 +26,12 @@ use super::util::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raftpb::ConfChangeType;
-use kvproto::raft_serverpb;
+use kvproto::raft_serverpb::RaftMessage;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
-use super::transport_simulate::Strategy;
+use super::transport_simulate::{Strategy, Filter};
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -53,7 +53,8 @@ pub trait Simulator {
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
-    fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()>;
+    fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
+    fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -134,7 +135,7 @@ impl<T: Simulator> Cluster<T> {
         self.engines.get(&node_id).unwrap().clone()
     }
 
-    pub fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+    pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         self.sim.rl().send_raft_msg(msg)
     }
 
@@ -464,6 +465,51 @@ impl<T: Simulator> Cluster<T> {
         assert!(status_resp.has_region_detail());
         status_resp.take_region_detail()
     }
+
+    // NOTE: if you have set transport hooks before, call this function will overwrite them
+    pub fn partition(&mut self, s1: Arc<HashSet<u64>>, s2: Arc<HashSet<u64>>) {
+        for node_id in s1.iter() {
+            let filter = new_partition_filter(s2.clone());
+            self.sim.rl().hook_transport(*node_id, vec![RwLock::new(filter)]);
+        }
+        for node_id in s2.iter() {
+            let filter = new_partition_filter(s1.clone());
+            self.sim.wl().hook_transport(*node_id, vec![RwLock::new(filter)]);
+        }
+    }
+
+    pub fn reset_transport_hooks(&mut self) {
+        let sim = &self.sim.rl();
+        for node_id in sim.get_node_ids() {
+            sim.hook_transport(node_id, vec![]);
+        }
+    }
+}
+
+struct PartitionFilter {
+    node_ids: Arc<HashSet<u64>>,
+    drop: bool,
+}
+
+impl Filter for PartitionFilter {
+    fn before(&mut self, msg: &RaftMessage) -> bool {
+        self.drop = self.node_ids.contains(&msg.get_to_peer().get_store_id());
+        self.drop
+    }
+    fn after(&mut self, r: Result<()>) -> Result<()> {
+        if self.drop {
+            return Err(Error::Timeout("drop by PartitionPacket in SimulateTransport".to_string()));
+        }
+        r
+    }
+}
+
+fn new_partition_filter(node_ids: Arc<HashSet<u64>>) -> Box<Filter> {
+    let ids = node_ids.clone();
+    Box::new(PartitionFilter {
+        node_ids: ids,
+        drop: false,
+    })
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
