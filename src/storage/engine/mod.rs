@@ -77,6 +77,7 @@ quick_error! {
         Request(err: ErrorHeader) {
             from()
             description("request to underhook engine failed")
+            display("{:?}", err)
         }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
