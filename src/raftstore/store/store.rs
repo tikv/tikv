@@ -43,7 +43,7 @@ use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::peer_storage::SnapState;
 use super::msg::Callback;
-use super::cmd_resp::{self, bind_uuid, bind_term, bind_error};
+use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 
 type Key = Vec<u8>;
@@ -462,11 +462,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
-            resp = match self.execute_status_command(msg) {
-                Err(e) => cmd_resp::new_error(e),
-                Ok(resp) => resp,
+            match self.execute_status_command(msg) {
+                Err(e) => bind_error(&mut resp, e),
+                Ok(status_resp) => resp = status_resp,
             };
-            bind_uuid(&mut resp, uuid);
             return cb.call_box((resp,));
         }
 
@@ -494,11 +493,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return cb.call_box((resp,));
         }
 
-        if peer.pending_cmds.contains_key(&uuid) {
-            bind_error(&mut resp, box_err!("duplicated uuid {:?}", uuid));
-            return cb.call_box((resp,));
-        }
-
         // Notice:
         // Here means the peer is leader, it can still step down to follower later,
         // but it doesn't matter, if the peer is not leader, the proposing command
@@ -509,21 +503,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // for read-only, if we don't care stale read, we can
         // execute these commands immediately in leader.
 
-        let mut pending_cmd = PendingCmd {
+        let pending_cmd = PendingCmd {
             uuid: uuid,
-            cb: None,
+            cb: cb,
             cmd: Some(msg),
         };
-
-        if let Err(e) = peer.propose_pending_cmd(&mut pending_cmd) {
-            bind_error(&mut resp, e);
-            return cb.call_box((resp,));
-        };
-
-        // Keep the callback in pending_cmd so that we can call it later
-        // after command applied.
-        pending_cmd.cb = Some(cb);
-        peer.pending_cmds.insert(uuid, pending_cmd);
+        try!(peer.propose(pending_cmd, resp));
 
         self.pending_raft_groups.insert(region_id);
 

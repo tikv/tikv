@@ -68,6 +68,13 @@ pub fn new_error(err: Error) -> RaftCmdResponse {
     resp
 }
 
+pub fn err_resp(e: Error, uuid: Uuid, term: u64) -> RaftCmdResponse {
+    let mut resp = new_error(e);
+    bind_term(&mut resp, term);
+    bind_uuid(&mut resp, uuid);
+    resp
+}
+
 pub fn message_error<E>(err: E) -> RaftCmdResponse
     where E: Into<Box<error::Error + Send + Sync>>
 {
