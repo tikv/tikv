@@ -67,7 +67,16 @@ impl<T: PdClient> Runner<T> {
         let s = try!(self.store_addrs.entry(store_id).or_try_insert_with(|| {
             pd_client.rl()
                      .get_store(cluster_id, store_id)
-                     .map(|s| s.get_address().to_owned())
+                     .and_then(|s| {
+                         let addr = s.get_address().to_owned();
+                         // In some tests, we use empty address for store first,
+                         // so we should ignore here.
+                         // TODO: we may remove this check after we refactor the test.
+                         if addr.len() == 0 {
+                             return Err(box_err!("invalid empty address for store {}", store_id));
+                         }
+                         Ok(addr)
+                     })
         }));
 
         Ok(s)
