@@ -146,19 +146,45 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().call_command(request, timeout)
     }
 
+    fn naive_call_command_on_leader(&mut self,
+                                    region_id: u64,
+                                    mut request: RaftCmdRequest,
+                                    timeout: Duration)
+                                    -> Result<RaftCmdResponse> {
+        if let Some(leader) = self.leader_of_region(region_id) {
+            request.mut_header().set_peer(leader);
+            return self.call_command(request, timeout);
+        }
+        Err(box_err!("can't get leader of region"))
+    }
+
     pub fn call_command_on_leader(&mut self,
                                   region_id: u64,
-                                  mut request: RaftCmdRequest,
+                                  request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
-        for _ in 0..200 {
-            if let Some(leader) = self.leader_of_region(region_id) {
-                request.mut_header().set_peer(leader);
-                return self.call_command(request, timeout);
-            }
-            sleep_ms(10);
+        let mut retry_cnt = 0;
+        loop {
+            let result = self.naive_call_command_on_leader(region_id, request.clone(), timeout);
+            match result {
+                Ok(resp) => {
+                    if resp.get_header().has_error() && retry_cnt < 10 {
+                        retry_cnt += 1;
+                        if self.refresh_leader_if_needed(&resp, region_id) {
+                            println!("seems leader changed, let's retry");
+                            continue;
+                        } else if resp.get_header().get_error().has_stale_epoch() {
+                            println!("seems split, let's retry");
+                            continue;
+                        }
+                    }
+                    return Ok(resp);
+                }
+                _ => {
+                    return result;
+                }
+            };
         }
-        Err(Error::Timeout("can't get leader of region after retry 200 times".to_string()))
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
@@ -325,17 +351,7 @@ impl<T: Simulator> Cluster<T> {
                 warn!("call command timeout, let's retry");
                 continue;
             }
-            let resp = result.unwrap();
-            if resp.get_header().has_error() {
-                if self.refresh_leader_if_needed(&resp, region_id) {
-                    warn!("seems leader changed, let's retry");
-                    continue;
-                } else if resp.get_header().get_error().has_stale_epoch() {
-                    warn!("seems split, let's retry");
-                    continue;
-                }
-            }
-            return resp;
+            return result.unwrap();
         }
         panic!("request failed after retry for 10 times");
     }
