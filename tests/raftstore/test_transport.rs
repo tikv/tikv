@@ -15,11 +15,11 @@ use std::sync::Arc;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use super::util::{must_get_equal, sleep_ms};
+use super::util::must_get_equal;
 use super::test_multi::wait_until_node_online;
 use std::collections::HashSet;
 
-fn split_leader_with_majority(leader: u64, count: u64) -> (HashSet<u64>, HashSet<u64>) {
+fn leader_in_majority_split(leader: u64, count: u64) -> (HashSet<u64>, HashSet<u64>) {
     if leader <= (count + 1) / 2 {
         ((1..count / 2 + 2).collect(), (count / 2 + 2..count + 1).collect())
     } else {
@@ -27,13 +27,18 @@ fn split_leader_with_majority(leader: u64, count: u64) -> (HashSet<u64>, HashSet
     }
 }
 
-fn split_leader_with_minority(leader: u64, count: u64) -> (HashSet<u64>, HashSet<u64>) {
+fn leader_in_minority_split(leader: u64, count: u64) -> (HashSet<u64>, HashSet<u64>) {
     let mut vec: Vec<u64> = (1..count + 1).collect();
     vec.swap(0, (leader - 1) as usize);
     let ucount = count as usize;
-    let s1: HashSet<_> = vec[0..(ucount - 1) / 2].into_iter().cloned().collect();
-    let s2: HashSet<_> = vec[(ucount - 1) / 2..ucount].into_iter().cloned().collect();
+    let s1 = vec[0..(ucount - 1) / 2].into_iter().cloned().collect();
+    let s2 = vec[(ucount - 1) / 2..ucount].into_iter().cloned().collect();
     (s1, s2)
+}
+
+fn get_region_leader_id<T: Simulator>(cluster: &mut Cluster<T>, region_id: u64) -> u64 {
+    let peer = cluster.leader_of_region(region_id).unwrap();
+    peer.get_store_id()
 }
 
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
@@ -41,26 +46,23 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
     cluster.start();
 
     let (key, value) = (b"k1", b"v1");
-    cluster.must_delete(key);
-
     let region_id = cluster.get_region_id(key);
-    let peer = cluster.leader_of_region(region_id).unwrap();
-    let leader = peer.get_store_id();
+    let leader = get_region_leader_id(cluster, region_id);
 
-    // leader partition with majority doesn't affect write/read
-    let (s1, s2) = split_leader_with_majority(leader, count);
+    // leader in majority, partition doesn't affect write/read
+    let (s1, s2) = leader_in_majority_split(leader, count);
     cluster.partition(Arc::new(s1), Arc::new(s2));
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
+    assert_eq!(get_region_leader_id(cluster, region_id), leader);
     cluster.reset_transport_hooks();
 
-    // if leader partition with minority, new leader should be elected
-    let (s1, s2) = split_leader_with_minority(leader, count);
+    // partition happended and leader in minority, new leader should be elected
+    let (s1, s2) = leader_in_minority_split(leader, count);
     cluster.partition(Arc::new(s1), Arc::new(s2));
     cluster.must_put(key, b"v2");
     assert_eq!(cluster.get(key), Some(b"v2".to_vec()));
-    cluster.must_delete(key);
-    assert_eq!(cluster.get(key), None);
+    assert!(get_region_leader_id(cluster, region_id) != leader);
 
     // when network recover, old leader should sync data
     cluster.reset_transport_hooks();
