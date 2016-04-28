@@ -390,7 +390,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         // No connection, try to resolve it.
         if self.store_resolving.contains(&store_id) {
             // If we are resolving the address, drop the message here.
-            warn!("store {} address is being resolved, drop msg", store_id);
+            warn!("store {} address is being resolved, drop msg {}",
+                  store_id,
+                  data);
             return;
         }
 
