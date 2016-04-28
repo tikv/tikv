@@ -114,12 +114,10 @@ pub enum Msg {
         data: ConnData,
     },
     // Resolve store address result.
-    // The data is not None only for sending snapshot data,
-    // other message data is be kept in pending send list.
     ResolveResult {
         store_id: u64,
         sock_addr: Result<SocketAddr>,
-        data: Option<ConnData>,
+        data: ConnData,
     },
 }
 
