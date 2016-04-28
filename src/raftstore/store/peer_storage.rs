@@ -113,7 +113,7 @@ impl PeerStorage {
         let hs = try!(self.engine
                           .get_msg(&keys::raft_hard_state_key(self.get_region_id())));
 
-        let (mut hard_state, found) = hs.map_or((HardState::new(), false), |e| (e, true));
+        let (mut hard_state, found) = hs.map_or((HardState::new(), false), |s| (s, true));
 
         if !found {
             if initialized {
