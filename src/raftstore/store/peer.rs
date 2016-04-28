@@ -406,8 +406,9 @@ impl Peer {
         let to_peer_id = to_peer.get_id();
         let to_store_id = to_peer.get_store_id();
 
-        debug!("send raft msg {:?} from {} to {}",
+        debug!("send raft msg {:?}[size: {}] from {} to {}",
                msg.get_msg_type(),
+               msg.compute_size(),
                from_peer.get_id(),
                to_peer_id);
 
