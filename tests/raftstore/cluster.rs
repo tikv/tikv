@@ -146,19 +146,37 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().call_command(request, timeout)
     }
 
+    fn call_command_on_leader_once(&mut self,
+                                   region_id: u64,
+                                   mut request: RaftCmdRequest,
+                                   timeout: Duration)
+                                   -> Result<RaftCmdResponse> {
+        if let Some(leader) = self.leader_of_region(region_id) {
+            request.mut_header().set_peer(leader);
+            return self.call_command(request, timeout);
+        }
+        Err(box_err!("can't get leader of region"))
+    }
+
     pub fn call_command_on_leader(&mut self,
                                   region_id: u64,
-                                  mut request: RaftCmdRequest,
+                                  request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
-        for _ in 0..200 {
-            if let Some(leader) = self.leader_of_region(region_id) {
-                request.mut_header().set_peer(leader);
-                return self.call_command(request, timeout);
+        let mut retry_cnt = 0;
+        loop {
+            let result = self.call_command_on_leader_once(region_id, request.clone(), timeout);
+            if result.is_err() {
+                return result;
             }
-            sleep_ms(10);
+            let resp = result.unwrap();
+            if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
+                retry_cnt += 1;
+                warn!("seems leader changed, let's retry");
+                continue;
+            }
+            return Ok(resp);
         }
-        Err(Error::Timeout("can't get leader of region after retry 200 times".to_string()))
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
@@ -321,19 +339,16 @@ impl<T: Simulator> Cluster<T> {
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
             let result = self.call_command_on_leader(region_id, req, timeout);
+
             if let Err(Error::Timeout(_)) = result {
                 warn!("call command timeout, let's retry");
                 continue;
             }
+
             let resp = result.unwrap();
-            if resp.get_header().has_error() {
-                if self.refresh_leader_if_needed(&resp, region_id) {
-                    warn!("seems leader changed, let's retry");
-                    continue;
-                } else if resp.get_header().get_error().has_stale_epoch() {
-                    warn!("seems split, let's retry");
-                    continue;
-                }
+            if resp.get_header().get_error().has_stale_epoch() {
+                warn!("seems split, let's retry");
+                continue;
             }
             return resp;
         }
