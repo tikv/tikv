@@ -35,6 +35,8 @@ pub trait RaftStoreRouter: Send + Sync {
                        to_peer_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()>;
+
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()>;
 }
 
 pub struct ServerRaftStoreRouter {
@@ -91,6 +93,15 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
         Ok(())
     }
+
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
+        try!(self.ch.send(StoreMsg::ReportUnreachable {
+            region_id: region_id,
+            to_peer_id: to_peer_id,
+        }));
+
+        Ok(())
+    }
 }
 
 pub struct ServerTransport {
@@ -143,6 +154,10 @@ impl RaftStoreRouter for MockRaftStoreRouter {
     }
 
     fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) -> RaftStoreResult<()> {
+        unimplemented!();
+    }
+
+    fn report_unreachable(&self, _: u64, _: u64) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }
