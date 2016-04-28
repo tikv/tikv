@@ -28,7 +28,7 @@
 #![allow(dead_code)]
 use std::cmp;
 use raft::storage::Storage;
-use rand;
+use rand::{self, Rng};
 use kvproto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
 use protobuf::repeated::RepeatedField;
 use raft::progress::{Progress, Inflights, ProgressState};
@@ -173,6 +173,12 @@ pub struct Raft<T: Storage> {
 
     heartbeat_timeout: usize,
     election_timeout: usize,
+
+    // randomized_election_timeout is a random number between
+    // [election_timeout, 2 * election_timeout - 1]. It gets reset
+    // when raft changes its state to follower or candidate.
+    randomized_election_timeout: usize,
+
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
     pub allow_step: bool,
@@ -230,6 +236,7 @@ impl<T: Storage> Raft<T> {
             allow_step: true,
             vote: Default::default(),
             heartbeat_elapsed: Default::default(),
+            randomized_election_timeout: 0,
         };
         for p in peers {
             r.prs.insert(*p, new_progress(1, r.max_inflight));
@@ -466,6 +473,7 @@ impl<T: Storage> Raft<T> {
         self.leader_id = INVALID_ID;
         self.election_elapsed = 0;
         self.heartbeat_elapsed = 0;
+        self.reset_randomized_election_timeout();
 
         self.votes = HashMap::new();
         let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
@@ -1163,15 +1171,15 @@ impl<T: Storage> Raft<T> {
     }
 
     // is_election_timeout returns true if self.election_elapsed is greater than the
-    // randomized election timeout in (electiontimeout, 2 * electiontimeout - 1).
+    // randomized election timeout in [electiontimeout, 2 * electiontimeout - 1].
     // Otherwise, it returns false.
     pub fn is_election_timeout(&self) -> bool {
-        if self.election_elapsed < self.election_timeout {
-            return false;
-        }
-        let d = self.election_elapsed - self.election_timeout;
-        let p = rand::random::<u32>() as f64 / u32::max_value() as f64;
-        d > ((self.election_timeout - 1) as f64 * p).round() as usize
+        self.election_elapsed >= self.randomized_election_timeout
+    }
+
+    pub fn reset_randomized_election_timeout(&mut self) {
+        self.randomized_election_timeout = self.election_timeout +
+                                           rand::thread_rng().gen_range(0, self.election_timeout)
     }
 
     // check_quorum_active returns true if the quorum is active from
