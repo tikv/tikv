@@ -70,6 +70,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     // store id -> Token
     // This is for communicating with other raft stores.
     store_tokens: HashMap<u64, Token>,
+    store_pending_msgs: HashMap<u64, Vec<ConnData>>,
 
     raft_router: Arc<RwLock<T>>,
 
@@ -107,6 +108,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             conns: HashMap::new(),
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             store_tokens: HashMap::new(),
+            store_pending_msgs: HashMap::new(),
             raft_router: raft_router,
             store: store_handler,
             end_point: end_point,
@@ -359,18 +361,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         Ok(token)
     }
 
-    fn resolve_store(&mut self, store_id: u64, data: ConnData) {
+    fn resolve_store(&mut self, store_id: u64, data: Option<ConnData>) {
         let ch = self.sendch.clone();
         let cb = box move |r| {
-            if let Err(e) = r {
-                error!("resolve store {} err {:?}", store_id, e);
-                return;
-            }
-
-            let addr = r.unwrap();
-            if let Err(e) = ch.send(Msg::SendStoreSock {
+            if let Err(e) = ch.send(Msg::ResolveResult {
                 store_id: store_id,
-                sock_addr: addr,
+                sock_addr: r,
                 data: data,
             }) {
                 error!("send store sock msg err {:?}", e);
@@ -391,8 +387,21 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             return self.write_data(event_loop, token, data, None);
         }
 
-        // No connection, resolve the store address and then send it.
-        self.resolve_store(store_id, data);
+        // No connection, append to pending list, resolve the store address,
+        // and then send it.
+        let need_resolve;
+        {
+            let pending_msgs = self.store_pending_msgs.entry(store_id).or_insert_with(Vec::new);
+            need_resolve = pending_msgs.is_empty();
+
+            // TODO: log a warning if we have too many pending messages,
+            // or drop the message here directly?
+            pending_msgs.push(data);
+        }
+
+        if need_resolve {
+            self.resolve_store(store_id, None);
+        }
     }
 
     fn send_snapshot(&mut self, _: &mut EventLoop<Self>, store_id: u64, data: ConnData) {
@@ -400,18 +409,46 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         // raft messages when sending huge snapshot.
         // Now we create the connection every time and close it after sending
         // successfully.
-        // TODO: re-use the cached snapshot connection if exists.
-        self.resolve_store(store_id, data)
+        self.resolve_store(store_id, Some(data))
     }
 
-    fn send_store_sock(&mut self,
-                       event_loop: &mut EventLoop<Self>,
-                       store_id: u64,
-                       sock_addr: SocketAddr,
-                       data: ConnData) {
-        if data.is_snapshot() {
-            return self.send_snapshot_sock(event_loop, store_id, sock_addr, data);
+    fn on_resolve_failed(&mut self,
+                         store_id: u64,
+                         sock_addr: Result<SocketAddr>,
+                         data: Option<ConnData>) {
+        let e = sock_addr.unwrap_err();
+        warn!("resolve store {} address failed {:?}", store_id, e);
+
+        if !data.is_some() {
+            // clear pending list
+            self.store_pending_msgs.remove(&store_id).unwrap();
         }
+
+        // TODO: report snapshot failure or unreachable error to raft.
+    }
+
+    fn on_resolve_result(&mut self,
+                         event_loop: &mut EventLoop<Self>,
+                         store_id: u64,
+                         sock_addr: Result<SocketAddr>,
+                         data: Option<ConnData>) {
+        if sock_addr.is_err() {
+            // Resolve failed.
+            return self.on_resolve_failed(store_id, sock_addr, data);
+        }
+
+        let sock_addr = sock_addr.unwrap();
+        if data.is_some() {
+            return self.send_snapshot_sock(event_loop, store_id, sock_addr, data.unwrap());
+        }
+
+        let pending_msgs = match self.store_pending_msgs.remove(&store_id) {
+            None => {
+                error!("no pending message for store {}", store_id);
+                return;
+            }
+            Some(msgs) => msgs,
+        };
 
         let token = match self.connect_store(event_loop, store_id, sock_addr) {
             Ok(token) => token,
@@ -421,7 +458,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
         };
 
-        self.write_data(event_loop, token, data, None)
+        for data in pending_msgs {
+            self.write_data(event_loop, token, data, None)
+        }
     }
 
     fn send_snapshot_sock(&mut self,
@@ -487,8 +526,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data, None),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
-            Msg::SendStoreSock { store_id, sock_addr, data } => {
-                self.send_store_sock(event_loop, store_id, sock_addr, data)
+            Msg::ResolveResult { store_id, sock_addr, data } => {
+                self.on_resolve_result(event_loop, store_id, sock_addr, data)
             }
         }
     }

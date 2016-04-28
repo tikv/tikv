@@ -113,11 +113,13 @@ pub enum Msg {
         store_id: u64,
         data: ConnData,
     },
-    // Send data to remote peer with parsed socket address.
-    SendStoreSock {
+    // Resolve store address result.
+    // The data is not None only for sending snapshot data,
+    // other message data is be kept in pending send list.
+    ResolveResult {
         store_id: u64,
-        sock_addr: SocketAddr,
-        data: ConnData,
+        sock_addr: Result<SocketAddr>,
+        data: Option<ConnData>,
     },
 }
 
