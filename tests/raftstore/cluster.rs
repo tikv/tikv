@@ -146,11 +146,11 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().call_command(request, timeout)
     }
 
-    fn naive_call_command_on_leader(&mut self,
-                                    region_id: u64,
-                                    mut request: RaftCmdRequest,
-                                    timeout: Duration)
-                                    -> Result<RaftCmdResponse> {
+    fn call_command_on_leader_directly(&mut self,
+                                       region_id: u64,
+                                       mut request: RaftCmdRequest,
+                                       timeout: Duration)
+                                       -> Result<RaftCmdResponse> {
         if let Some(leader) = self.leader_of_region(region_id) {
             request.mut_header().set_peer(leader);
             return self.call_command(request, timeout);
@@ -165,15 +165,12 @@ impl<T: Simulator> Cluster<T> {
                                   -> Result<RaftCmdResponse> {
         let mut retry_cnt = 0;
         loop {
-            let result = self.naive_call_command_on_leader(region_id, request.clone(), timeout);
+            let result = self.call_command_on_leader_directly(region_id, request.clone(), timeout);
             if let Ok(resp) = result {
                 if resp.get_header().has_error() && retry_cnt < 10 {
                     retry_cnt += 1;
                     if self.refresh_leader_if_needed(&resp, region_id) {
                         warn!("seems leader changed, let's retry");
-                        continue;
-                    } else if resp.get_header().get_error().has_stale_epoch() {
-                        warn!("seems split, let's retry");
                         continue;
                     }
                 }
@@ -344,11 +341,18 @@ impl<T: Simulator> Cluster<T> {
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
             let result = self.call_command_on_leader(region_id, req, timeout);
+
             if let Err(Error::Timeout(_)) = result {
                 warn!("call command timeout, let's retry");
                 continue;
             }
-            return result.unwrap();
+
+            let resp = result.unwrap();
+            if resp.get_header().get_error().has_stale_epoch() {
+                warn!("seems split, let's retry");
+                continue;
+            }
+            return resp;
         }
         panic!("request failed after retry for 10 times");
     }
