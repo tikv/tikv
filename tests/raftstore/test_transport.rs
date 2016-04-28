@@ -65,7 +65,7 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
     // when network recover, old leader should sync data
     cluster.reset_transport_hooks();
     wait_until_node_online(cluster, leader);
-    must_get_equal(cluster.get_engine(), key, b"v2".to_vec());
+    must_get_equal(&cluster.get_engine(leader), key, b"v2");
 }
 
 #[test]
