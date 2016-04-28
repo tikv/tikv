@@ -167,12 +167,10 @@ impl<T: Simulator> Cluster<T> {
         loop {
             let result = self.call_command_on_leader_once(region_id, request.clone(), timeout);
             if let Ok(resp) = result {
-                if resp.get_header().has_error() && retry_cnt < 10 {
+                if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
                     retry_cnt += 1;
-                    if self.refresh_leader_if_needed(&resp, region_id) {
-                        warn!("seems leader changed, let's retry");
-                        continue;
-                    }
+                    warn!("seems leader changed, let's retry");
+                    continue;
                 }
                 return Ok(resp);
             } else {
