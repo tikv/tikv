@@ -910,9 +910,10 @@ fn test_commit() {
 fn test_is_election_timeout() {
     let tests = vec![
         (5, 0f64, false),
-        (13, 0.3, true),
-        (15, 0.5, true),
-        (18, 0.8, true),
+        (10, 0.1, true),
+        (13, 0.4, true),
+        (15, 0.6, true),
+        (18, 0.9, true),
         (20, 1.0, false),
     ];
 
@@ -921,6 +922,7 @@ fn test_is_election_timeout() {
         sm.election_elapsed = elapse;
         let mut c = 0;
         for _ in 0..10000 {
+            sm.reset_randomized_election_timeout();
             if sm.is_election_timeout() {
                 c += 1;
             }
