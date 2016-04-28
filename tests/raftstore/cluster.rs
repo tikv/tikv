@@ -166,16 +166,16 @@ impl<T: Simulator> Cluster<T> {
         let mut retry_cnt = 0;
         loop {
             let result = self.call_command_on_leader_once(region_id, request.clone(), timeout);
-            if let Ok(resp) = result {
-                if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
-                    retry_cnt += 1;
-                    warn!("seems leader changed, let's retry");
-                    continue;
-                }
-                return Ok(resp);
-            } else {
+            if result.is_err() {
                 return result;
             }
+            let resp = result.unwrap();
+            if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
+                retry_cnt += 1;
+                warn!("seems leader changed, let's retry");
+                continue;
+            }
+            return Ok(resp);
         }
     }
 
