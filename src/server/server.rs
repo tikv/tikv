@@ -406,13 +406,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         // No connection, try to resolve it.
         if self.store_resolving.contains(&store_id) {
             // If we are resolving the address, drop the message here.
-            warn!("store {} address is being resolved, drop msg {}",
-                  store_id,
-                  data);
+            debug!("store {} address is being resolved, drop msg {}",
+                   store_id,
+                   data);
             self.report_unreachable(data);
             return;
         }
 
+        info!("begin to resolve store {} address", store_id);
         self.store_resolving.insert(store_id);
         self.resolve_store(store_id, data);
     }
@@ -447,6 +448,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
 
         let sock_addr = sock_addr.unwrap();
+        info!("resolve store {} address ok, addr {}", store_id, sock_addr);
+
         if data.is_snapshot() {
             return self.send_snapshot_sock(event_loop, store_id, sock_addr, data);
         }
