@@ -146,11 +146,11 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().call_command(request, timeout)
     }
 
-    fn call_command_on_leader_directly(&mut self,
-                                       region_id: u64,
-                                       mut request: RaftCmdRequest,
-                                       timeout: Duration)
-                                       -> Result<RaftCmdResponse> {
+    fn call_command_on_leader_once(&mut self,
+                                   region_id: u64,
+                                   mut request: RaftCmdRequest,
+                                   timeout: Duration)
+                                   -> Result<RaftCmdResponse> {
         if let Some(leader) = self.leader_of_region(region_id) {
             request.mut_header().set_peer(leader);
             return self.call_command(request, timeout);
@@ -165,7 +165,7 @@ impl<T: Simulator> Cluster<T> {
                                   -> Result<RaftCmdResponse> {
         let mut retry_cnt = 0;
         loop {
-            let result = self.call_command_on_leader_directly(region_id, request.clone(), timeout);
+            let result = self.call_command_on_leader_once(region_id, request.clone(), timeout);
             if let Ok(resp) = result {
                 if resp.get_header().has_error() && retry_cnt < 10 {
                     retry_cnt += 1;
