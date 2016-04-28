@@ -14,6 +14,7 @@
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
 use std::thread;
+use std::collections::HashSet;
 
 use tikv::raftstore::store::*;
 use kvproto::raftpb::ConfChangeType;
@@ -24,6 +25,7 @@ use tikv::util::HandyRwLock;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
+use super::test_multi::wait_until_node_online;
 use super::util::*;
 use super::pd::TestPdClient;
 
@@ -434,4 +436,52 @@ fn test_server_after_remove_itself() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
     test_after_remove_itself(&mut cluster);
+}
+
+fn test_tombstone_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+    let r1 = cluster.bootstrap_conf_change();
+    cluster.start();
+
+    // test steps:
+    // 1. peer 1,2,3; 1 is leader
+    // 2. peer 3 partition
+    // 3. conf change, remove peer 3
+    // 4. partition recover
+    // leader 1 won't appendlog to peer 3 because it's removed from cluster
+    // peer 3 requestvote for leader because it don't know it's removed
+    // will this disrupts cluster?
+    // 5. pd decide to add peer 4 for region, which use the same store as peer 3
+    // will peer 4 join and bring stale data to cluster?
+
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
+
+    let (key, value) = (b"k1", b"v1");
+    cluster.must_put(key, value);
+
+    let (s1, s2) = ([1, 2].iter().cloned().collect(), [3].iter().cloned().collect());
+    cluster.partition(Arc::new(s1), Arc::new(s2));
+
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(3, 3));
+    cluster.reset_transport_hooks();
+
+    let detail1 = cluster.region_detail(1, 1);
+    for peer in detail1.get_region().get_peers() {
+        assert!(peer.get_store_id() != 3);
+    }
+
+    let detail2 = cluster.region_detail(1, 3);
+    let mut stores: HashSet<_> = [1, 2, 3].iter().cloned().collect();
+    for peer in detail2.get_region().get_peers() {
+        assert!(stores.remove(&peer.get_store_id()));
+    }
+    assert_eq!(stores.len(), 0);
+    assert!(detail2.get_region().get_region_epoch().get_conf_ver() <
+            detail1.get_region().get_region_epoch().get_conf_ver());
+
+    cluster.must_put(key, b"v2");
+
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
+    wait_until_node_online(cluster, 3);
+    must_get_equal(&cluster.get_engine(3), key, b"v2");
 }

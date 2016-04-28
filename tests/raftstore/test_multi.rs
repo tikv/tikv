@@ -160,7 +160,7 @@ fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>,
     }
 }
 
-fn wait_until_node_online<T: Simulator>(cluster: &mut Cluster<T>, node_id: u64) {
+pub fn wait_until_node_online<T: Simulator>(cluster: &mut Cluster<T>, node_id: u64) {
     for _ in 0..200 {
         // leverage the fact that store id is equal to node id actually
         let peer = new_peer(node_id, 0);
