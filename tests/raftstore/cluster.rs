@@ -158,7 +158,7 @@ impl<T: Simulator> Cluster<T> {
             }
             sleep_ms(10);
         }
-        Err(Error::Timeout("can't get leader of region after retry 200 times".to_string()))
+        Err(Error::Other(box_err!("can't get leader of region after retry 200 times")))
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
