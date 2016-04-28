@@ -14,14 +14,15 @@
 use std::thread;
 use std::time::Duration;
 use std::net::SocketAddr;
+use std::fmt::{self, Formatter, Display};
 
 use bytes::ByteBuf;
 use mio::{self, Token, NotifyError};
 use protobuf::Message;
 
-use kvproto::msgpb;
+use kvproto::msgpb::{self, MessageType};
 use util::codec::rpc;
-use kvproto::raftpb::MessageType;
+use kvproto::raftpb::MessageType as RaftMessageType;
 
 pub mod config;
 pub mod errors;
@@ -96,7 +97,42 @@ impl ConnData {
             return false;
         }
 
-        self.msg.get_raft().get_message().get_msg_type() == MessageType::MsgSnapshot
+        self.msg.get_raft().get_message().get_msg_type() == RaftMessageType::MsgSnapshot
+    }
+}
+
+impl Display for ConnData {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self.msg.get_msg_type() {
+            MessageType::Cmd => write!(f, "[{}] raft command request", self.msg_id),
+            MessageType::CmdResp => write!(f, "[{}] raft command response", self.msg_id),
+            MessageType::Raft => {
+                let from_peer = self.msg.get_raft().get_from_peer();
+                let to_peer = self.msg.get_raft().get_to_peer();
+                let msg_type = self.msg.get_raft().get_message().get_msg_type();
+                write!(f,
+                       "[{}] raft {:?} from {:?} to {:?}",
+                       self.msg_id,
+                       msg_type,
+                       from_peer.get_id(),
+                       to_peer.get_id())
+            }
+            MessageType::KvReq => {
+                write!(f,
+                       "[{}] kv command request {:?}",
+                       self.msg_id,
+                       self.msg.get_kv_req().get_field_type())
+            }
+            MessageType::KvResp => {
+                write!(f,
+                       "[{}] kv command resposne {:?}",
+                       self.msg_id,
+                       self.msg.get_kv_resp().get_field_type())
+            }
+            MessageType::CopReq => write!(f, "[{}] coprocessor request", self.msg_id),
+            MessageType::CopResp => write!(f, "[{}] coprocessor response", self.msg_id),
+            MessageType::None => write!(f, "[{}] invalid message", self.msg_id),
+        }
     }
 }
 
@@ -113,10 +149,10 @@ pub enum Msg {
         store_id: u64,
         data: ConnData,
     },
-    // Send data to remote peer with parsed socket address.
-    SendStoreSock {
+    // Resolve store address result.
+    ResolveResult {
         store_id: u64,
-        sock_addr: SocketAddr,
+        sock_addr: Result<SocketAddr>,
         data: ConnData,
     },
 }

@@ -712,6 +712,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.raft_group.report_snapshot(to_peer_id, status)
         }
     }
+
+    fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
+        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+            peer.raft_group.report_unreachable(to_peer_id);
+        }
+    }
 }
 
 fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
@@ -773,6 +779,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             }
             Msg::ReportSnapshot { region_id, to_peer_id, status } => {
                 self.on_report_snapshot(region_id, to_peer_id, status);
+            }
+            Msg::ReportUnreachable { region_id, to_peer_id } => {
+                self.on_unreachable(region_id, to_peer_id);
             }
         }
         slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());
