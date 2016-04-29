@@ -44,8 +44,8 @@ impl Engine for EngineBtree {
         Ok(m.get(key.raw()).cloned())
     }
 
-    fn seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
-        trace!("EngineBtree: seek {}", key);
+    fn scan(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
+        trace!("EngineBtree: scan {}", key);
         let m = self.map.rl();
         let mut iter = m.range::<Vec<u8>, Vec<u8>>(Included(key.raw()), Unbounded);
         Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
@@ -81,14 +81,14 @@ impl Snapshot for BTreeMap<Vec<u8>, Value> {
         Ok(self.get(key.raw()).cloned())
     }
 
-    fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("SnapshotBTree: seek {}", key);
+    fn scan(&self, key: &Key) -> Result<Option<KvPair>> {
+        trace!("SnapshotBTree: scan {}", key);
         let mut iter = self.range::<Vec<u8>, Vec<u8>>(Included(key.raw()), Unbounded);
         Ok(iter.next().map(|(k, v)| (k.clone(), v.clone())))
     }
 
-    fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("SnapshotBTree: rev_seek {}", key);
+    fn reverse_scan(&self, key: &Key) -> Result<Option<KvPair>> {
+        trace!("SnapshotBTree: rev_scan {}", key);
         let iter = self.range::<Vec<u8>, Vec<u8>>(Unbounded, Excluded(key.raw()));
         Ok(iter.last().map(|(k, v)| (k.clone(), v.clone())))
     }

@@ -32,7 +32,7 @@ pub enum Modify {
 pub trait Engine: Send + Sync + Debug {
     fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
     /// Seeks for the first kv pair that is greater than or equals key.
-    fn seek(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
+    fn scan(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
     fn snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
 
@@ -47,10 +47,10 @@ pub trait Engine: Send + Sync + Debug {
 
 pub trait Snapshot {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
-    /// seeks for the first kv pair that is greater than or equals key.
-    fn seek(&self, key: &Key) -> Result<Option<KvPair>>;
-    /// seeks for the last kv pair that is less than key.
-    fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>>;
+    /// scans for the first kv pair that is greater than or equals key.
+    fn scan(&self, key: &Key) -> Result<Option<KvPair>>;
+    /// scans for the last kv pair that is less than key.
+    fn reverse_scan(&self, key: &Key) -> Result<Option<KvPair>>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -103,7 +103,7 @@ mod tests {
         let e = new_engine(Dsn::Memory).unwrap();
         get_put(e.as_ref());
         batch(e.as_ref());
-        seek(e.as_ref());
+        scan(e.as_ref());
     }
 
     #[test]
@@ -113,7 +113,7 @@ mod tests {
 
         get_put(e.as_ref());
         batch(e.as_ref());
-        seek(e.as_ref());
+        scan(e.as_ref());
     }
 
     fn must_put<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
@@ -133,8 +133,8 @@ mod tests {
         assert_eq!(engine.get(&Context::new(), &make_key(key)).unwrap(), None);
     }
 
-    fn assert_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
-        let (k, v) = engine.seek(&Context::new(), &make_key(key)).unwrap().unwrap();
+    fn assert_scan<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
+        let (k, v) = engine.scan(&Context::new(), &make_key(key)).unwrap().unwrap();
         assert_eq!((k, &v as &[u8]), (bytes::encode_bytes(pair.0), pair.1));
     }
 
@@ -161,14 +161,14 @@ mod tests {
         assert_none(engine, b"y");
     }
 
-    fn seek<T: Engine + ?Sized>(engine: &T) {
+    fn scan<T: Engine + ?Sized>(engine: &T) {
         must_put(engine, b"x", b"1");
-        assert_seek(engine, b"x", (b"x", b"1"));
-        assert_seek(engine, b"a", (b"x", b"1"));
+        assert_scan(engine, b"x", (b"x", b"1"));
+        assert_scan(engine, b"a", (b"x", b"1"));
         must_put(engine, b"z", b"2");
-        assert_seek(engine, b"y", (b"z", b"2"));
-        assert_seek(engine, b"x\x00", (b"z", b"2"));
-        assert_eq!(engine.seek(&Context::new(), &make_key(b"z\x00")).unwrap(),
+        assert_scan(engine, b"y", (b"z", b"2"));
+        assert_scan(engine, b"x\x00", (b"z", b"2"));
+        assert_eq!(engine.scan(&Context::new(), &make_key(b"z\x00")).unwrap(),
                    None);
         must_delete(engine, b"x");
         must_delete(engine, b"z");
