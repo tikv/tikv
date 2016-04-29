@@ -31,7 +31,6 @@ path = "benches/benches.rs"
 log = "0.3"
 byteorder = "0.4"
 rand = "0.3"
-mio = "0.5"
 quick-error = "0.2"
 tempdir = "0.3"
 getopts = "0.2"
@@ -54,6 +53,9 @@ git = "https://github.com/pingcap/kvproto"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
+
+[dependencies.mio]
+git = "https://github.com/carllerche/mio.git"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

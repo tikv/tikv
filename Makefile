@@ -14,11 +14,11 @@ release:
 	cargo build --release --bin tikv-server
 
 test:
-	# todo remove ulimit once issue #372 of mio is resolved.
+	# Default Mac OSX `ulimit -n` is 256, too small. 
 	ulimit -n 2000 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test --features ${ENABLE_FEATURES} -- --nocapture 
 
 bench:
-	# todo remove ulimit once issue #372 of mio is resolved.
+	# Default Mac OSX `ulimit -n` is 256, too small. 
 	ulimit -n 4096 && LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features ${ENABLE_FEATURES} -- --nocapture 
 	ulimit -n 4096 && RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features ${ENABLE_FEATURES}
 
