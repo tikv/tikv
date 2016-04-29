@@ -77,7 +77,7 @@ pub struct ReadyResult {
 #[derive(Default)]
 struct PendingCmdQueue {
     normals: VecDeque<PendingCmd>,
-    conf_changes: Option<PendingCmd>,
+    conf_change: Option<PendingCmd>,
     pending_uuids: HashSet<Uuid>,
 }
 
@@ -104,14 +104,14 @@ impl PendingCmdQueue {
     }
 
     fn take_conf_change(&mut self) -> Option<PendingCmd> {
-        let cmd = self.conf_changes.take();
+        let cmd = self.conf_change.take();
         self.remove(&cmd);
         cmd
     }
 
     fn set_conf_change(&mut self, cmd: PendingCmd) {
         self.pending_uuids.insert(cmd.uuid);
-        self.conf_changes = Some(cmd);
+        self.conf_change = Some(cmd);
     }
 }
 
