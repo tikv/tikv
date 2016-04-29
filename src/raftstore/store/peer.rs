@@ -92,24 +92,24 @@ impl PendingCmdQueue {
         }
     }
 
-    pub fn pop_normal(&mut self) -> Option<PendingCmd> {
+    fn pop_normal(&mut self) -> Option<PendingCmd> {
         let cmd = self.normals.pop_front();
         self.remove(&cmd);
         cmd
     }
 
-    pub fn append_normal(&mut self, cmd: PendingCmd) {
+    fn append_normal(&mut self, cmd: PendingCmd) {
         self.pending_uuids.insert(cmd.uuid);
         self.normals.push_back(cmd);
     }
 
-    pub fn take_conf_change(&mut self) -> Option<PendingCmd> {
+    fn take_conf_change(&mut self) -> Option<PendingCmd> {
         let cmd = self.conf_changes.take();
         self.remove(&cmd);
         cmd
     }
 
-    pub fn set_conf_change(&mut self, cmd: PendingCmd) {
+    fn set_conf_change(&mut self, cmd: PendingCmd) {
         self.pending_uuids.insert(cmd.uuid);
         self.conf_changes = Some(cmd);
     }
@@ -334,7 +334,7 @@ impl Peer {
             if self.raft_group.raft.pending_conf {
                 return Err(box_err!("there is a pending conf change, try later."));
             }
-            if let Some(cmd) = self.pending_cmds.conf_changes.take() {
+            if let Some(cmd) = self.pending_cmds.take_conf_change() {
                 self.notify_not_leader(cmd);
             }
 
@@ -571,7 +571,7 @@ impl Peer {
 
     fn find_cb(&mut self, uuid: Uuid, cmd: &RaftCmdRequest) -> Option<Callback> {
         if get_change_peer_cmd(cmd).is_some() {
-            if let Some(cmd) = self.pending_cmds.conf_changes.take() {
+            if let Some(cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
                     return Some(cmd.cb);
                 } else {
@@ -609,7 +609,6 @@ impl Peer {
         debug!("command with uuid {:?} is applied", uuid);
 
         if cb.is_none() {
-            warn!("pending command callback for entry {} is None", index);
             return Ok(exec_result);
         }
 
