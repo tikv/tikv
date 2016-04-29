@@ -16,7 +16,6 @@ use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::must_get_equal;
-use super::test_multi::wait_until_node_online;
 use std::collections::HashSet;
 
 fn leader_in_majority_split(leader: u64, count: u64) -> (HashSet<u64>, HashSet<u64>) {
@@ -63,10 +62,11 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
     cluster.must_put(key, b"v2");
     assert_eq!(cluster.get(key), Some(b"v2".to_vec()));
     assert!(get_region_leader_id(cluster, region_id) != leader);
+    cluster.must_put(b"k2", b"v2");
 
     // when network recover, old leader should sync data
     cluster.reset_transport_hooks();
-    wait_until_node_online(cluster, leader);
+    must_get_equal(&cluster.get_engine(leader), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(leader), key, b"v2");
 }
 
