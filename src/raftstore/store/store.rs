@@ -506,9 +506,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let pending_cmd = PendingCmd {
             uuid: uuid,
             cb: cb,
-            cmd: Some(msg),
         };
-        try!(peer.propose(pending_cmd, resp));
+        try!(peer.propose(pending_cmd, msg, resp));
 
         self.pending_raft_groups.insert(region_id);
 

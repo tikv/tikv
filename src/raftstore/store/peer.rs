@@ -44,8 +44,6 @@ use super::engine::{Peekable, Iterable, Mutable};
 pub struct PendingCmd {
     pub uuid: Uuid,
     pub cb: Callback,
-    // Sometimes we should re-propose pending command (only ConfChnage).
-    pub cmd: Option<RaftCmdRequest>,
 }
 
 #[derive(Debug)]
@@ -79,7 +77,7 @@ pub struct ReadyResult {
 #[derive(Default)]
 struct PendingCmdQueue {
     normals: VecDeque<PendingCmd>,
-    conf_changes: VecDeque<PendingCmd>,
+    conf_changes: Option<PendingCmd>,
     pending_uuids: HashSet<Uuid>,
 }
 
@@ -88,7 +86,7 @@ impl PendingCmdQueue {
         self.pending_uuids.contains(uuid)
     }
 
-    pub fn remove(&mut self, cmd: &Option<PendingCmd>) {
+    fn remove(&mut self, cmd: &Option<PendingCmd>) {
         if let Some(ref cmd) = *cmd {
             self.pending_uuids.remove(&cmd.uuid);
         }
@@ -105,20 +103,15 @@ impl PendingCmdQueue {
         self.normals.push_back(cmd);
     }
 
-    pub fn pop_conf_change(&mut self) -> Option<PendingCmd> {
-        let cmd = self.conf_changes.pop_front();
+    pub fn take_conf_change(&mut self) -> Option<PendingCmd> {
+        let cmd = self.conf_changes.take();
         self.remove(&cmd);
         cmd
     }
 
-    pub fn append_conf_change(&mut self, cmd: PendingCmd) {
+    pub fn set_conf_change(&mut self, cmd: PendingCmd) {
         self.pending_uuids.insert(cmd.uuid);
-        self.conf_changes.push_back(cmd);
-    }
-
-    pub fn prepend_conf_change(&mut self, cmd: PendingCmd) {
-        self.pending_uuids.insert(cmd.uuid);
-        self.conf_changes.push_front(cmd);
+        self.conf_changes = Some(cmd);
     }
 }
 
@@ -320,24 +313,38 @@ impl Peer {
         }))
     }
 
-    pub fn propose(&mut self, mut cmd: PendingCmd, mut err_resp: RaftCmdResponse) -> Result<()> {
+    pub fn propose(&mut self,
+                   cmd: PendingCmd,
+                   req: RaftCmdRequest,
+                   mut err_resp: RaftCmdResponse)
+                   -> Result<()> {
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
             return cmd.cb.call_box((err_resp,));
         }
+
         debug!("propose command with uuid {:?}", cmd.uuid);
-        if get_change_peer_cmd(cmd.cmd.as_ref().unwrap()).is_some() {
-            if !self.raft_group.raft.pending_conf {
-                // there must be no pending conf changes.
-                assert!(self.pending_cmds.conf_changes.is_empty(),
-                        "pending_conf is false, but we still have pending conf changes.");
-                if let Err(e) = self.propose_conf_change(cmd.cmd.take().unwrap()) {
-                    cmd_resp::bind_error(&mut err_resp, e);
-                    return cmd.cb.call_box((err_resp,));
-                }
+
+        if let Err(e) = self.check_epoch(&req) {
+            cmd_resp::bind_error(&mut err_resp, e);
+            return cmd.cb.call_box((err_resp,));
+        }
+
+        if get_change_peer_cmd(&req).is_some() {
+            if self.raft_group.raft.pending_conf {
+                return Err(box_err!("there is a pending conf change, try later."));
             }
-            self.pending_cmds.append_conf_change(cmd);
-        } else if let Err(e) = self.propose_normal(cmd.cmd.take().unwrap()) {
+            if let Some(cmd) = self.pending_cmds.conf_changes.take() {
+                self.notify_not_leader(cmd);
+            }
+
+            if let Err(e) = self.propose_conf_change(req) {
+                cmd_resp::bind_error(&mut err_resp, e);
+                return cmd.cb.call_box((err_resp,));
+            }
+
+            self.pending_cmds.set_conf_change(cmd);
+        } else if let Err(e) = self.propose_normal(req) {
             cmd_resp::bind_error(&mut err_resp, e);
             return cmd.cb.call_box((err_resp,));
         } else {
@@ -346,9 +353,21 @@ impl Peer {
         Ok(())
     }
 
+    /// Call the callback of `cmd` that leadership may have been changed.
+    ///
+    /// Please note that, `NotLeader` here doesn't mean that currently this
+    /// peer is not leader.
+    fn notify_not_leader(&self, cmd: PendingCmd) {
+        let leader = self.get_peer_from_cache(self.leader_id());
+        let not_leader = Error::NotLeader(self.region_id, leader);
+        let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
+        if let Err(e) = cmd.cb.call_box((resp,)) {
+            error!("failed to clean stale callback of {}: {:?}", cmd.uuid, e);
+        }
+    }
+
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
         // TODO: validate request for unexpected changes.
-        try!(self.check_epoch(&cmd));
 
         try!(self.coprocessor_host.pre_propose(&self.storage.rl(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
@@ -510,23 +529,6 @@ impl Peer {
         Ok(results)
     }
 
-    fn repropose_conf_change(&mut self) {
-        while let Some(mut cc) = self.pending_cmds.pop_conf_change() {
-            let res = self.propose_conf_change(cc.cmd.take().unwrap());
-            if res.is_ok() {
-                self.pending_cmds.prepend_conf_change(cc);
-                break;
-            }
-            let e = res.unwrap_err();
-            let mut resp = cmd_resp::new_error(e);
-            cmd_resp::bind_uuid(&mut resp, cc.uuid);
-            cmd_resp::bind_term(&mut resp, self.term());
-            if let Err(e) = cc.cb.call_box((resp,)) {
-                error!("failed to repropose conf change {}: {:?}", cc.uuid, e);
-            }
-        }
-    }
-
     fn handle_raft_entry_normal(&mut self, entry: &raftpb::Entry) -> Result<Option<ExecResult>> {
         let index = entry.get_index();
         let data = entry.get_data();
@@ -563,34 +565,31 @@ impl Peer {
         };
 
         self.raft_group.apply_conf_change(conf_change);
-        self.repropose_conf_change();
 
         res
     }
 
-    fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
-        let is_conf_change = get_change_peer_cmd(cmd).is_some();
-        loop {
-            let cmd = if is_conf_change {
-                self.pending_cmds.pop_conf_change()
-            } else {
-                self.pending_cmds.pop_normal()
-            };
-            if cmd.is_none() {
-                return None;
+    fn find_cb(&mut self, uuid: Uuid, cmd: &RaftCmdRequest) -> Option<Callback> {
+        if get_change_peer_cmd(cmd).is_some() {
+            if let Some(cmd) = self.pending_cmds.conf_changes.take() {
+                if cmd.uuid == uuid {
+                    return Some(cmd.cb);
+                } else {
+                    self.notify_not_leader(cmd);
+                }
             }
-            let head = cmd.unwrap();
+            return None;
+        }
+        while let Some(head) = self.pending_cmds.pop_normal() {
             if head.uuid == uuid {
                 return Some(head.cb);
             }
-            assert!(!self.is_leader(), "leader should not have stale callback.");
-            let leader = self.get_peer_from_cache(self.leader_id());
-            let not_leader = Error::NotLeader(self.region_id, leader);
-            let resp = cmd_resp::err_resp(not_leader, head.uuid, term);
-            if let Err(e) = head.cb.call_box((resp,)) {
-                error!("failed to clean stale callback of {}: {:?}", uuid, e);
-            }
+            // because of the lack of original RaftCmdRequest, so we
+            // skip calling coprocessor here.
+            // TODO: call coprocessor with uuid instead.
+            self.notify_not_leader(head);
         }
+        None
     }
 
     fn process_raft_cmd(&mut self, index: u64, cmd: RaftCmdRequest) -> Result<Option<ExecResult>> {
@@ -600,9 +599,7 @@ impl Peer {
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
 
-        let term = self.term();
-
-        let cb = self.find_cb(uuid, term, &cmd);
+        let cb = self.find_cb(uuid, &cmd);
 
         let (mut resp, exec_result) = self.apply_raft_cmd(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);
@@ -611,19 +608,20 @@ impl Peer {
 
         debug!("command with uuid {:?} is applied", uuid);
 
-        match cb {
-            Some(cb) => {
-                self.coprocessor_host.post_apply(&self.storage.rl(), &cmd, &mut resp);
-                // TODO: if we have exec_result, maybe we should return this callback too. Outer
-                // store will call it after handing exec result.
-                // Bind uuid here.
-                cmd_resp::bind_uuid(&mut resp, uuid);
-                cmd_resp::bind_term(&mut resp, term);
-                if let Err(e) = cb.call_box((resp,)) {
-                    error!("callback err {:?}", e);
-                }
-            }
-            None => warn!("pending command callback for entry {} is None", index),
+        if cb.is_none() {
+            warn!("pending command callback for entry {} is None", index);
+            return Ok(exec_result);
+        }
+
+        let cb = cb.unwrap();
+        self.coprocessor_host.post_apply(&self.storage.rl(), &cmd, &mut resp);
+        // TODO: if we have exec_result, maybe we should return this callback too. Outer
+        // store will call it after handing exec result.
+        // Bind uuid here.
+        cmd_resp::bind_uuid(&mut resp, uuid);
+        cmd_resp::bind_term(&mut resp, self.term());
+        if let Err(e) = cb.call_box((resp,)) {
+            error!("callback err {:?}", e);
         }
 
         Ok(exec_result)
