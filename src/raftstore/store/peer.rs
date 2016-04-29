@@ -78,17 +78,17 @@ pub struct ReadyResult {
 struct PendingCmdQueue {
     normals: VecDeque<PendingCmd>,
     conf_change: Option<PendingCmd>,
-    pending_uuids: HashSet<Uuid>,
+    uuids: HashSet<Uuid>,
 }
 
 impl PendingCmdQueue {
     pub fn contains(&self, uuid: &Uuid) -> bool {
-        self.pending_uuids.contains(uuid)
+        self.uuids.contains(uuid)
     }
 
     fn remove(&mut self, cmd: &Option<PendingCmd>) {
         if let Some(ref cmd) = *cmd {
-            self.pending_uuids.remove(&cmd.uuid);
+            self.uuids.remove(&cmd.uuid);
         }
     }
 
@@ -99,7 +99,7 @@ impl PendingCmdQueue {
     }
 
     fn append_normal(&mut self, cmd: PendingCmd) {
-        self.pending_uuids.insert(cmd.uuid);
+        self.uuids.insert(cmd.uuid);
         self.normals.push_back(cmd);
     }
 
@@ -110,7 +110,7 @@ impl PendingCmdQueue {
     }
 
     fn set_conf_change(&mut self, cmd: PendingCmd) {
-        self.pending_uuids.insert(cmd.uuid);
+        self.uuids.insert(cmd.uuid);
         self.conf_change = Some(cmd);
     }
 }
