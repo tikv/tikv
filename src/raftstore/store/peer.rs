@@ -335,6 +335,10 @@ impl Peer {
                 return Err(box_err!("there is a pending conf change, try later."));
             }
             if let Some(cmd) = self.pending_cmds.take_conf_change() {
+                // if it loses leader ship before confchange is replicated, there may be
+                // a stale pending conf change before next conf change is applied. If it
+                // becomes leader again with the stale pending conf change, will enter
+                // this block, so we notify leadership may have changed.
                 self.notify_not_leader(cmd);
             }
 
@@ -584,8 +588,8 @@ impl Peer {
             if head.uuid == uuid {
                 return Some(head.cb);
             }
-            // because of the lack of original RaftCmdRequest, so we
-            // skip calling coprocessor here.
+            // because of the lack of original RaftCmdRequest, we skip calling
+            // coprocessor here.
             // TODO: call coprocessor with uuid instead.
             self.notify_not_leader(head);
         }
