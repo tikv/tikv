@@ -48,8 +48,8 @@ impl Engine for EngineRocksdb {
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 
-    fn seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
-        trace!("EngineRocksdb: seek {}", key);
+    fn scan(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
+        trace!("EngineRocksdb: scan {}", key);
         let mode = IteratorMode::From(key.raw(), Direction::Forward);
         let pair = self.db.iterator(mode).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
         Ok(pair)
@@ -93,15 +93,15 @@ impl<'a> Snapshot for RocksSnapshot<'a> {
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 
-    fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("RocksSnapshot: seek {}", key);
+    fn scan(&self, key: &Key) -> Result<Option<KvPair>> {
+        trace!("RocksSnapshot: scan {}", key);
         let mode = IteratorMode::From(key.raw(), Direction::Forward);
         let pair = self.iterator(mode).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
         Ok(pair)
     }
 
-    fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("RocksSnapshot: seek {}", key);
+    fn reverse_scan(&self, key: &Key) -> Result<Option<KvPair>> {
+        trace!("RocksSnapshot: scan {}", key);
         let mut iter = self.iterator(IteratorMode::From(key.raw(), Direction::Reverse));
         // iter will be positioned at `key` or the kv pair after it. If no such key exists, we need
         // locate it to the end.

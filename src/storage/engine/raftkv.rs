@@ -205,19 +205,19 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         }
     }
 
-    fn seek(&self, ctx: &Context, key: &Key) -> engine::Result<Option<KvPair>> {
-        let mut seek = SeekRequest::new();
-        seek.set_key(key.raw().clone());
+    fn scan(&self, ctx: &Context, key: &Key) -> engine::Result<Option<KvPair>> {
+        let mut scan = SeekRequest::new();
+        scan.set_key(key.raw().clone());
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Seek);
-        req.set_seek(seek);
+        req.set_seek(scan);
         let mut resp = try!(self.exec_request(ctx, req));
         if resp.get_cmd_type() != CmdType::Seek {
             return Err(invalid_resp_type(CmdType::Seek, resp.get_cmd_type()));
         }
-        let seek_resp = resp.mut_seek();
-        if seek_resp.has_key() {
-            Ok(Some((seek_resp.take_key(), seek_resp.take_value())))
+        let scan_resp = resp.mut_seek();
+        if scan_resp.has_key() {
+            Ok(Some((scan_resp.take_key(), scan_resp.take_value())))
         } else {
             Ok(None)
         }
@@ -272,12 +272,12 @@ impl<'a> Snapshot for RegionSnapshot<'a> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
+    fn scan(&self, key: &Key) -> engine::Result<Option<KvPair>> {
         let pair = box_try!(self.seek(key.raw()));
         Ok(pair)
     }
 
-    fn reverse_seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
+    fn reverse_scan(&self, key: &Key) -> engine::Result<Option<KvPair>> {
         let pair = box_try!(self.reverse_seek(key.raw()));
         Ok(pair)
     }

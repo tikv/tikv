@@ -209,7 +209,7 @@ impl<'a> SnapshotStore<'a> {
         let mut key = key;
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
-            key = match try!(self.snapshot.seek(&key)) {
+            key = match try!(self.snapshot.scan(&key)) {
                 Some((k, _)) => try!(Key::from_raw(k).truncate_ts()),
                 None => break,
             };
@@ -231,7 +231,7 @@ impl<'a> SnapshotStore<'a> {
         let mut key = key;
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
-            key = match try!(self.snapshot.reverse_seek(&key)) {
+            key = match try!(self.snapshot.reverse_scan(&key)) {
                 Some((k, _)) => try!(Key::from_raw(k).truncate_ts()),
                 None => break,
             };
