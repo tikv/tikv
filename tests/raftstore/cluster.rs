@@ -179,12 +179,36 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
+        // For some tests, we stop the node but pd still has this information,
+        // and we must skip this.
+        if !self.sim.rl().get_node_ids().contains(&store_id) {
+            return None;
+        }
+
+        // To get region leader, we don't care real peer id, so use 0 instead.
+        let peer = new_peer(store_id, 0);
+        let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
+        let mut resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
+        let mut region_leader = resp.take_status_response().take_region_leader();
+        // NOTE: node id can't be 0.
+        if self.sim.rl().get_node_ids().contains(&region_leader.get_leader().get_store_id()) {
+            Some(region_leader.take_leader())
+        } else {
+            None
+        }
+    }
+
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
         if let Some(l) = self.leaders.get(&region_id) {
-            return Some(l.clone());
+            // leader may be stopped in some tests.
+            if self.sim.rl().get_node_ids().contains(&l.get_store_id()) {
+                return Some(l.clone());
+            }
         }
+        self.reset_leader_of_region(region_id);
         let mut leader = None;
-        let mut retry_cnt = 200;
+        let mut retry_cnt = 500;
 
         let stores = self.pd_client.rl().get_stores(self.id()).unwrap();
         let node_ids: HashSet<u64> = self.sim.rl().get_node_ids();
@@ -193,24 +217,12 @@ impl<T: Simulator> Cluster<T> {
             count = 0;
             leader = None;
             for store in &stores {
-                // For some tests, we stop the node but pd still has this information,
-                // and we must skip this.
-                if !node_ids.contains(&store.get_id()) {
-                    continue;
-                }
-
-                // To get region leader, we don't care real peer id, so use 0 instead.
-                let peer = new_peer(store.get_id(), 0);
-                let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-                let resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
-                let region_leader = resp.get_status_response().get_region_leader();
-                if region_leader.has_leader() &&
-                   (leader.is_none() || leader.as_ref().unwrap() == region_leader.get_leader()) {
-                    debug!("found leader {:?} from {}",
-                           region_leader.get_leader(),
-                           store.get_id());
+                let l = self.query_leader(store.get_id(), region_id);
+                if leader.is_none() {
+                    leader = l;
+                    count = 1;
+                } else if l == leader {
                     count += 1;
-                    leader = Some(region_leader.get_leader().clone());
                 }
             }
             sleep_ms(10);
