@@ -102,7 +102,7 @@ fn get_store_path(matches: &Matches) -> String {
         return MEM_ROCKSDB.to_owned();
     }
 
-    let path = &path.expect("should use specific path");
+    let path = &path.unwrap();
     let p = Path::new(path);
     if p.exists() && p.is_file() {
         panic!("{} is not a directory!", path);
@@ -172,7 +172,7 @@ fn main() {
                 "/tmp/tikv/store");
     opts.optopt("S",
                 "dsn",
-                "set which dsn to use, default is rocksdb",
+                "set which dsn to use, warning: default is memory",
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
     opts.optopt("", "pd", "set pd address", "host:port");
