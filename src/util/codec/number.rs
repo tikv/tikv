@@ -142,8 +142,7 @@ mod test {
     use std::fmt::Debug;
     use protobuf::CodedOutputStream;
 
-    type TestCodecPair<T> = (Box<Fn(&mut [u8], T) -> Result<()>>,
-                             Box<Fn(&[u8]) -> Result<T>>);
+    type TestCodecPair<T> = (Box<Fn(&mut [u8], T) -> Result<()>>, Box<Fn(&[u8]) -> Result<T>>);
 
     const U64_TESTS: &'static [u64] = &[i64::MIN as u64,
                                         i64::MAX as u64,

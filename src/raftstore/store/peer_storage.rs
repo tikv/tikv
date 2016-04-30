@@ -442,10 +442,8 @@ impl PeerStorage {
                                     enc_end_key(self.get_region()));
 
         let region_id = self.get_region_id();
-        vec![(keys::region_raft_prefix(region_id),
-              keys::region_raft_prefix(region_id + 1)),
-             (keys::region_meta_prefix(region_id),
-              keys::region_meta_prefix(region_id + 1)),
+        vec![(keys::region_raft_prefix(region_id), keys::region_raft_prefix(region_id + 1)),
+             (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1)),
              (start_key, end_key)]
 
     }
