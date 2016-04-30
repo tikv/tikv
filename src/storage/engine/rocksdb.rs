@@ -23,6 +23,7 @@ use super::{Engine, MEM_ROCKSDB, Snapshot, Modify, Result};
 
 
 
+#[allow(dead_code)]
 pub struct EngineRocksdb {
     db: DB,
     // only use for memory mode
@@ -30,7 +31,6 @@ pub struct EngineRocksdb {
 }
 
 impl EngineRocksdb {
-    #![allow(dead_code)]
     pub fn new(path: &str) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
         // memory mode
