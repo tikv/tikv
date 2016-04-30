@@ -31,7 +31,7 @@ use log::LogLevelFilter;
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
 use mio::tcp::TcpListener;
 
-use tikv::storage::{Storage, Dsn};
+use tikv::storage::{Storage, Dsn, MEM_ROCKSDB};
 use tikv::util::{self, logger, panic_hook};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
@@ -97,9 +97,13 @@ fn build_raftkv(matches: &Matches,
 }
 
 fn get_store_path(matches: &Matches) -> String {
-    let path = matches.opt_str("s").expect("need store path, but none is specified!");
+    let path = matches.opt_str("s");
+    if path.is_none() {
+        return MEM_ROCKSDB.to_owned();
+    }
 
-    let p = Path::new(&path);
+    let path = &path.expect("should use specific path");
+    let p = Path::new(path);
     if p.exists() && p.is_file() {
         panic!("{} is not a directory!", path);
     }
@@ -168,8 +172,8 @@ fn main() {
                 "/tmp/tikv/store");
     opts.optopt("S",
                 "dsn",
-                "set which dsn to use, default is mem",
-                "dsn: mem, rocksdb, raftkv");
+                "set which dsn to use, default is rocksdb",
+                "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
     opts.optopt("", "pd", "set pd address", "host:port");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
@@ -183,7 +187,7 @@ fn main() {
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
 
-    let dsn_name = matches.opt_str("S").unwrap();
+    let dsn_name = matches.opt_str("S").unwrap_or_else(|| ROCKSDB_DSN.to_owned());
 
     panic_hook::set_exit_hook();
 

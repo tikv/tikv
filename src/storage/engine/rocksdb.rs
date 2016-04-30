@@ -18,17 +18,41 @@ use rocksdb::rocksdb::Snapshot as RocksSnapshot;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
 use util::hex;
-use super::{Engine, Snapshot, Modify, Result};
+use tempdir::TempDir;
+use super::{Engine, MEM_ROCKSDB, Snapshot, Modify, Result};
+
+
 
 pub struct EngineRocksdb {
     db: DB,
+    // only use for memory mode
+    temp_dir: Option<TempDir>,
 }
 
 impl EngineRocksdb {
     pub fn new(path: &str) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
+        // memory mode
+        if path == MEM_ROCKSDB {
+            let td = TempDir::new("rocksdb-mem-mode").unwrap();
+            error!("{:?}", td.path());
+            return DB::open_default(td.path().to_str().unwrap())
+                       .map(|db| {
+                           EngineRocksdb {
+                               db: db,
+                               temp_dir: Some(td),
+                           }
+                       })
+                       .map_err(|e| RocksDBError::new(e).into_engine_error());
+        }
+
         DB::open_default(path)
-            .map(|db| EngineRocksdb { db: db })
+            .map(|db| {
+                EngineRocksdb {
+                    db: db,
+                    temp_dir: None,
+                }
+            })
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 }

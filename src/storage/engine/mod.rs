@@ -17,10 +17,11 @@ use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value, KvPair};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
-use tempdir::TempDir;
 
 mod rocksdb;
 pub mod raftkv;
+
+pub const MEM_ROCKSDB: &'static str = "memory";
 
 #[derive(Debug)]
 pub enum Modify {
@@ -57,16 +58,6 @@ pub enum Dsn<'a> {
     RocksDBPath(&'a str),
     RaftKv,
 }
-
-pub fn temp_path() -> String {
-    TempDir::new("tests")
-        .unwrap()
-        .path()
-        .to_str()
-        .unwrap()
-        .to_string()
-}
-
 
 // Now we only support RocksDB.
 pub fn new_engine(dsn: Dsn) -> Result<Box<Engine>> {
