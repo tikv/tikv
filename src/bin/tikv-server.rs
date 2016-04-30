@@ -39,7 +39,6 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
 use tikv::pd::{new_rpc_client, RpcClient};
 
-const MEM_DSN: &'static str = "mem";
 const ROCKSDB_DSN: &'static str = "rocksdb";
 const RAFTKV_DSN: &'static str = "raftkv";
 
@@ -184,15 +183,11 @@ fn main() {
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
 
-    let dsn_name = matches.opt_str("S").unwrap_or_else(|| MEM_DSN.to_owned());
+    let dsn_name = matches.opt_str("S").unwrap();
 
     panic_hook::set_exit_hook();
 
     match dsn_name.as_ref() {
-        MEM_DSN => {
-            let store = Storage::new(Dsn::Memory).unwrap();
-            run_local_server(listener, store);
-        }
         ROCKSDB_DSN => {
             let path = get_store_path(&matches);
             let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();

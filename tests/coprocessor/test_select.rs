@@ -2,7 +2,7 @@ use tikv::server::coprocessor::*;
 use kvproto::kvrpcpb::Context;
 use tikv::util::codec::{table, Datum, datum, number};
 use tikv::storage::{Dsn, Mutation, Key};
-use tikv::storage::engine::{self, Engine};
+use tikv::storage::engine::{self, Engine, temp_path};
 use tikv::storage::txn::TxnStore;
 use tikv::util;
 use kvproto::coprocessor::{Request, KeyRange};
@@ -169,7 +169,7 @@ fn prepare_sel(store: &mut Store, tbl: &TableInfo) -> Request {
 }
 
 fn initial_data(count: i64) -> (Store, TiDbEndPoint, TableInfo) {
-    let engine = Arc::new(engine::new_engine(Dsn::Memory).unwrap());
+    let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(&temp_path())).unwrap());
     let mut store = Store::new(engine.clone());
     let tbl = TableInfo {
         t_id: 1,

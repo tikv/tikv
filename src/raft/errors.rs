@@ -91,7 +91,8 @@ impl cmp::PartialEq for StorageError {
         match (self, other) {
             (&StorageError::Compacted, &StorageError::Compacted) => true,
             (&StorageError::Unavailable, &StorageError::Unavailable) => true,
-            (&StorageError::SnapshotOutOfDate, &StorageError::SnapshotOutOfDate) => true,
+            (&StorageError::SnapshotOutOfDate,
+             &StorageError::SnapshotOutOfDate) => true,
             (&StorageError::SnapshotTemporarilyUnavailable,
              &StorageError::SnapshotTemporarilyUnavailable) => true,
             _ => false,
