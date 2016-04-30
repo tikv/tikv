@@ -673,7 +673,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut server = Server::new(&mut event_loop,
                                      listener,
-                                     Storage::new(Dsn::RocksDBPath(&MEM_ROCKSDB)).unwrap(),
+                                     Storage::new(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap(),
                                      Arc::new(RwLock::new(TestRaftStoreRouter {
                                          tx: Mutex::new(tx),
                                      })),
