@@ -19,6 +19,7 @@ use kvproto::raftpb;
 
 use util::HandyRwLock;
 use util::worker::Runnable;
+use util::hex;
 use pd::PdClient;
 
 // Use an asynchronous thread to tell pd something.
@@ -46,9 +47,9 @@ impl Display for Task {
             }
             Task::AskSplit { ref region, ref split_key, .. } => {
                 write!(f,
-                       "ask split region {} with key {:?}",
+                       "ask split region {} with key {}",
                        region.get_id(),
-                       split_key)
+                       hex(&split_key))
             }
         }
     }
@@ -70,7 +71,7 @@ impl<T: PdClient> Runner<T> {
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
-        debug!("executing task {}", task);
+        info!("executing task {}", task);
 
         let res = match task {
             Task::AskChangePeer { region, peer, .. } => {
