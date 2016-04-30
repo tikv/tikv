@@ -1165,7 +1165,7 @@ impl<T: Storage> Raft<T> {
         self.vote = hs.get_vote();
     }
 
-    // is_election_timeout returns true if self.election_elapsed is greater than the
+    // is_election_timeout returns true if self.election_elapsed is not less than the
     // randomized election timeout in [electiontimeout, 2 * electiontimeout - 1].
     // Otherwise, it returns false.
     pub fn is_election_timeout(&self) -> bool {
