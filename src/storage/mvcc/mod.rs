@@ -15,7 +15,7 @@ mod meta;
 mod txn;
 
 pub use self::txn::{MvccTxn, MvccSnapshot};
-use util::pretty;
+use util::escape;
 
 quick_error! {
     #[derive(Debug)]
@@ -37,7 +37,7 @@ quick_error! {
         }
         KeyIsLocked {key: Vec<u8>, primary: Vec<u8>, ts: u64} {
             description("key is locked (backoff or cleanup)")
-            display("key is locked (backoff or cleanup) {}-{}@{}", pretty(key), pretty(primary), ts)
+            display("key is locked (backoff or cleanup) {}-{}@{}", escape(key), escape(primary), ts)
         }
         AlreadyCommitted {commit_ts: u64} {
             description("txn already committed")

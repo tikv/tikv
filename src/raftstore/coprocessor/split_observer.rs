@@ -13,7 +13,7 @@
 
 use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
 use util::codec::table;
-use util::pretty;
+use util::escape;
 
 use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
                           AdminCmdType};
@@ -58,8 +58,8 @@ impl SplitObserver {
 
         let region_start_key = ctx.snap.get_region().get_start_key();
         info!("checking region_start_key {}, split key {}",
-              pretty(region_start_key),
-              pretty(&*key));
+              escape(region_start_key),
+              escape(&*key));
         if &*key <= region_start_key {
             return Err("no need to split".to_owned());
         }

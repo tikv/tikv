@@ -14,8 +14,8 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io::{self, Write};
-use std::fmt::{self, Formatter, Display};
 use std::slice;
+use std::ascii;
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
 use std::collections::hash_map::Entry;
@@ -146,46 +146,21 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
     Ok(addrs.collect::<Vec<SocketAddr>>()[0])
 }
 
-/// A struct to make byte array format more friendly.
-pub struct PrettyDispaly<'a> {
-    data: &'a [u8],
-}
-
-
-
-impl<'a> Display for PrettyDispaly<'a> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let mut buf = String::new();
-        print_bytes_to(self.data, &mut buf);
-        write!(f, "{}", buf).unwrap();
-        Ok(())
-    }
-}
-
-/// for printing the same format with protobuf
-/// original implementation 
-/// https://github.com/stepancheg/rust-protobuf/blob/8e19c644c7d744c79d7bc097a0861baccecf586b/src/lib/text_format.rs#L8
-fn print_bytes_to(bytes: &[u8], buf: &mut String) {
-    buf.push('"');
-    for &b in bytes.iter() {
-        if b < 0x20 || b >= 0x7f {
-            buf.push('\\');
-            buf.push((b'0' + ((b >> 6) & 3)) as char);
-            buf.push((b'0' + ((b >> 3) & 7)) as char);
-            buf.push((b'0' + (b & 7)) as char);
-        } else if b == b'"' {
-            buf.push_str("\\\"");
-        } else if b == b'\\' {
-            buf.push_str("\\\\");
-        } else {
-            buf.push(b as char);
-        }
-    }
-    buf.push('"');
-}
-
-pub fn pretty(data: &[u8]) -> PrettyDispaly {
-    PrettyDispaly { data: data }
+/// A function to escape a byte array to a readable ascii string.
+///
+/// # Examples
+///
+/// ```
+/// use tikv::util::escape;
+///
+/// assert_eq!("ab", escape(b"ab"));
+/// assert_eq!("a\\r\\n\\t \\'\\\"\\\\", escape(b"a\r\n\t '\"\\"));
+/// assert_eq!("\\xe2\\x9d\\xa4\\xf0\\x9f\\x90\\xb7", escape("❤🐷".as_bytes()));
+/// ```
+///
+pub fn escape(data: &[u8]) -> String {
+    let escaped = data.iter().flat_map(|&ch| ascii::escape_default(ch)).collect();
+    unsafe { String::from_utf8_unchecked(escaped) }
 }
 
 /// Convert a borrow to a slice.

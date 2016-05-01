@@ -13,7 +13,7 @@
 
 use raftstore::store::{PeerStorage, keys, SendCh, Msg};
 use raftstore::store::engine::Iterable;
-use util::pretty;
+use util::escape;
 
 use rocksdb::DB;
 use std::sync::Arc;
@@ -65,8 +65,8 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         debug!("executing task {} {}",
-               pretty(&task.start_key),
-               pretty(&task.end_key));
+               escape(&task.start_key),
+               escape(&task.end_key));
         let mut size = 0;
         let mut split_key = vec![];
         let res = task.engine.scan(&task.start_key,
