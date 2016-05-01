@@ -15,6 +15,7 @@ use super::{RegionObserver, ObserverContext, Result};
 
 use raftstore::store::PeerStorage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::metapb;
 
 struct ObserverEntry {
     priority: u32,
@@ -54,8 +55,12 @@ impl CoprocessorHost {
     }
 
     /// Call all prepose hook until bypass is set to true.
-    pub fn pre_propose(&mut self, ps: &PeerStorage, req: &mut RaftCmdRequest) -> Result<()> {
-        let ctx = ObserverContext::new(ps);
+    pub fn pre_propose(&mut self,
+                       ps: &PeerStorage,
+                       region: metapb::Region,
+                       req: &mut RaftCmdRequest)
+                       -> Result<()> {
+        let ctx = ObserverContext::new(ps, Some(region));
         if req.has_admin_request() {
             self.execute_pre_hook(ctx,
                                   req.mut_admin_request(),
@@ -101,7 +106,7 @@ impl CoprocessorHost {
                       ps: &PeerStorage,
                       req: &RaftCmdRequest,
                       resp: &mut RaftCmdResponse) {
-        let ctx = ObserverContext::new(ps);
+        let ctx = ObserverContext::new(ps, None);
         if req.has_admin_request() {
             self.execute_post_hook(ctx,
                                    req.get_admin_request(),

@@ -153,14 +153,37 @@ pub struct HexDisplay<'a> {
     data: &'a [u8],
 }
 
+
+
 impl<'a> Display for HexDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        try!(write!(f, "0x"));
-        for &b in self.data {
-            try!(write!(f, "{:02X}", b));
-        }
+        let mut buf = String::new();
+        print_bytes_to(self.data, &mut buf);
+        write!(f, "{}", buf).unwrap();
         Ok(())
     }
+}
+
+/// for printing the same format with protobuf
+/// original implementation 
+/// https://github.com/stepancheg/rust-protobuf/blob/8e19c644c7d744c79d7bc097a0861baccecf586b/src/lib/text_format.rs#L8
+fn print_bytes_to(bytes: &[u8], buf: &mut String) {
+    buf.push('"');
+    for &b in bytes.iter() {
+        if b < 0x20 || b >= 0x7f {
+            buf.push('\\');
+            buf.push((b'0' + ((b >> 6) & 3)) as char);
+            buf.push((b'0' + ((b >> 3) & 7)) as char);
+            buf.push((b'0' + (b & 7)) as char);
+        } else if b == b'"' {
+            buf.push_str("\\\"");
+        } else if b == b'\\' {
+            buf.push_str("\\\\");
+        } else {
+            buf.push(b as char);
+        }
+    }
+    buf.push('"');
 }
 
 pub fn hex(data: &[u8]) -> HexDisplay {

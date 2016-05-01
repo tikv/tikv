@@ -639,6 +639,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("{} doesn't exist or is not leader, skip.", region_id);
             return;
         }
+
         let key = keys::origin_key(&split_key);
         let peer = p.unwrap();
         let task = PdTask::AskSplit {
@@ -646,6 +647,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             split_key: key.to_vec(),
             peer: peer.peer.clone(),
         };
+
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("failed to notify pd to split region {} at {:?}: {}",
                    region_id,

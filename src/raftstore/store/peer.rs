@@ -372,8 +372,8 @@ impl Peer {
 
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
         // TODO: validate request for unexpected changes.
-
-        try!(self.coprocessor_host.pre_propose(&self.storage.rl(), &mut cmd));
+        let region = self.region();
+        try!(self.coprocessor_host.pre_propose(&self.storage.rl(), region, &mut cmd));
         let data = try!(cmd.write_to_bytes());
         try!(self.raft_group.propose(data));
         Ok(())
@@ -737,9 +737,9 @@ impl Peer {
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let request = ctx.req.get_admin_request();
         let cmd_type = request.get_cmd_type();
-        info!("execute admin command {:?} at region {}",
+        info!("execute admin command {:?} at region {:?}",
               request,
-              self.region_id);
+              self.region());
 
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
@@ -849,7 +849,7 @@ impl Peer {
         let mut region = self.region();
         try!(util::check_key_in_region(split_key, &region));
 
-        info!("split at {}", hex(split_key));
+        info!("split at key: {}, region: {:?}", hex(split_key), region);
 
         // TODO: check new region id validation.
         let new_region_id = split_req.get_new_region_id();
