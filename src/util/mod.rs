@@ -149,13 +149,13 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
 /// A struct to make byte array format more friendly.
 ///
 /// Remove this once issue [33127](https://github.com/rust-lang/rust/issues/33127) is resolved.
-pub struct HexDisplay<'a> {
+pub struct PrettyDispaly<'a> {
     data: &'a [u8],
 }
 
 
 
-impl<'a> Display for HexDisplay<'a> {
+impl<'a> Display for PrettyDispaly<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let mut buf = String::new();
         print_bytes_to(self.data, &mut buf);
@@ -186,8 +186,8 @@ fn print_bytes_to(bytes: &[u8], buf: &mut String) {
     buf.push('"');
 }
 
-pub fn hex(data: &[u8]) -> HexDisplay {
-    HexDisplay { data: data }
+pub fn pretty(data: &[u8]) -> PrettyDispaly {
+    PrettyDispaly { data: data }
 }
 
 /// Convert a borrow to a slice.

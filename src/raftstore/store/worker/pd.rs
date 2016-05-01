@@ -19,7 +19,7 @@ use kvproto::raftpb;
 
 use util::HandyRwLock;
 use util::worker::Runnable;
-use util::hex;
+use util::pretty;
 use pd::PdClient;
 
 // Use an asynchronous thread to tell pd something.
@@ -49,7 +49,7 @@ impl Display for Task {
                 write!(f,
                        "ask split region {} with key {}",
                        region.get_id(),
-                       hex(&split_key))
+                       pretty(&split_key))
             }
         }
     }

@@ -17,7 +17,7 @@ use std::collections::Bound::{Included, Excluded, Unbounded};
 use std::fmt::{self, Formatter, Debug};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
-use util::{hex, HandyRwLock};
+use util::{pretty, HandyRwLock};
 use super::{Engine, Snapshot, Modify, Result};
 
 pub struct EngineBtree {
@@ -60,7 +60,7 @@ impl Engine for EngineBtree {
                     m.remove(k.raw());
                 }
                 Modify::Put((k, v)) => {
-                    trace!("EngineBtree: put {},{}", k, hex(&v));
+                    trace!("EngineBtree: put {},{}", k, pretty(&v));
                     m.insert(k.raw().clone(), v);
                 }
             }

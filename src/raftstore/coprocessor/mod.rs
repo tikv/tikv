@@ -22,7 +22,6 @@ pub use self::dispatcher::{CoprocessorHost, Registry};
 use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
 use protobuf::RepeatedField;
 use raftstore::store::PeerStorage;
-use kvproto::metapb;
 
 pub use self::error::{Error, Result};
 
@@ -40,16 +39,13 @@ pub struct ObserverContext<'a> {
     pub snap: RegionSnapshot<'a>,
     /// Whether to bypass following observer hook.
     pub bypass: bool,
-    /// region information
-    pub region: Option<metapb::Region>,
 }
 
 impl<'a> ObserverContext<'a> {
-    pub fn new(peer: &'a PeerStorage, region: Option<metapb::Region>) -> ObserverContext<'a> {
+    pub fn new(peer: &'a PeerStorage) -> ObserverContext<'a> {
         ObserverContext {
             snap: RegionSnapshot::new(&peer),
             bypass: false,
-            region: region,
         }
     }
 }

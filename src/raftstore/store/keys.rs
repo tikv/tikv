@@ -16,7 +16,7 @@ use std::vec::Vec;
 use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
 
 use raftstore::Result;
-use util::hex;
+use util::pretty;
 use kvproto::metapb::Region;
 use std::mem;
 
@@ -95,7 +95,7 @@ pub fn raft_log_index(key: &[u8]) -> Result<u64> {
     let expect_key_len = REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>() +
                          mem::size_of::<u8>() + mem::size_of::<u64>();
     if key.len() != expect_key_len {
-        return Err(box_err!("key {} is not a valid raft log key", hex(key)));
+        return Err(box_err!("key {} is not a valid raft log key", pretty(key)));
     }
     Ok(BigEndian::read_u64(&key[expect_key_len - mem::size_of::<u64>()..]))
 }
@@ -133,11 +133,11 @@ fn make_region_meta_key(region_id: u64, suffix: u8) -> Vec<u8> {
 // Decode region meta key, return the region key and meta suffix type.
 pub fn decode_region_meta_key(key: &[u8]) -> Result<(u64, u8)> {
     if REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>() + mem::size_of::<u8>() != key.len() {
-        return Err(box_err!("invalid region meta key length for key {}", hex(key)));
+        return Err(box_err!("invalid region meta key length for key {}", pretty(key)));
     }
 
     if !key.starts_with(REGION_META_PREFIX_KEY) {
-        return Err(box_err!("invalid region meta prefix for key {}", hex(key)));
+        return Err(box_err!("invalid region meta prefix for key {}", pretty(key)));
     }
 
     let region_id =
@@ -168,7 +168,7 @@ pub fn region_tombstone_key(region_id: u64) -> Vec<u8> {
 pub fn validate_data_key(key: &[u8]) -> Result<()> {
     if !key.starts_with(DATA_PREFIX_KEY) {
         return Err(box_err!("invalid data key {}, must start with {}",
-                            hex(key),
+                            pretty(key),
                             DATA_PREFIX));
     }
 

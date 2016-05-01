@@ -15,7 +15,7 @@
 use std::io::Write;
 
 use super::{number, Result, Error, Datum, datum};
-use util::hex;
+use util::pretty;
 
 pub const ID_LEN: usize = 8;
 pub const PREFIX_LEN: usize = 1 + ID_LEN /*table_id*/ + 2;
@@ -60,7 +60,7 @@ pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> 
 pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     if !encoded.starts_with(TABLE_PREFIX) {
         return Err(Error::InvalidDataType(format!("record key expected, but got {}",
-                                                  hex(encoded))));
+                                                  pretty(encoded))));
     }
 
     let mut remaining = &encoded[TABLE_PREFIX.len()..];
@@ -68,7 +68,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
 
     if !remaining[ID_LEN..].starts_with(RECORD_PREFIX_SEP) {
         return Err(Error::InvalidDataType(format!("record key expected, but got {}",
-                                                  hex(encoded))));
+                                                  pretty(encoded))));
     }
 
     remaining = &remaining[ID_LEN + RECORD_PREFIX_SEP.len()..];

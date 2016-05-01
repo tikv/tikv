@@ -27,7 +27,7 @@ use storage::Error as StorageError;
 use storage::txn::Error as TxnError;
 use storage::mvcc::Error as MvccError;
 use storage::engine::Error as EngineError;
-use util::hex;
+use util::pretty;
 
 use super::{Result, SendCh, ConnData, Error, Msg};
 
@@ -62,7 +62,7 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_scan_req();
         let start_key = req.take_start_key();
-        debug!("start_key [{}]", hex(&start_key));
+        debug!("start_key [{}]", pretty(&start_key));
         let cb = self.make_cb(StoreHandler::cmd_scan_done, token, msg_id);
         self.store
             .async_scan(msg.take_context(),

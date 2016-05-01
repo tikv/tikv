@@ -26,7 +26,7 @@ use raft;
 use kvproto::metapb;
 
 use super::coprocessor::Error as CopError;
-use util::hex;
+use util::pretty;
 
 quick_error!{
     #[derive(Debug)]
@@ -46,7 +46,7 @@ quick_error!{
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             description("key is not in region")
             display("key {} is not in region key range [{}, {}) for region {}",
-                hex(key), hex(region.get_start_key()), hex(region.get_end_key()), region.get_id())
+                pretty(key), pretty(region.get_start_key()), pretty(region.get_end_key()), region.get_id())
         }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
@@ -55,15 +55,15 @@ quick_error!{
             display("{:?}", err)
         }
 
-        // Following is for From other errors.
+// Following is for From other errors.
         Io(err: io::Error) {
             from()
             cause(err)
             description(err.description())
             display("Io {}", err)
         }
-        // RocksDb uses plain string as the error.
-        // Maybe other libs use this too?
+// RocksDb uses plain string as the error.
+// Maybe other libs use this too?
         RocksDb(msg: String) {
             from()
             description("RocksDb error")

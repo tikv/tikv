@@ -13,7 +13,7 @@
 
 use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
 use util::codec::table;
-use util::hex;
+use util::pretty;
 
 use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
                           AdminCmdType};
@@ -56,10 +56,10 @@ impl SplitObserver {
             key.truncate(key_len - VERSION_LENGTH);
         }
 
-        let region_start_key = ctx.region.as_ref().unwrap().get_start_key();
+        let region_start_key = ctx.snap.get_region().get_start_key();
         info!("checking region_start_key {}, split key {}",
-              hex(region_start_key),
-              hex(&*key));
+              pretty(region_start_key),
+              pretty(&*key));
         if &*key <= region_start_key {
             return Err("no need to split".to_owned());
         }

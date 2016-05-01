@@ -17,7 +17,7 @@ use rocksdb::{DB, Writable, WriteBatch, IteratorMode, Direction};
 use rocksdb::rocksdb::Snapshot as RocksSnapshot;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
-use util::hex;
+use util::pretty;
 use super::{Engine, Snapshot, Modify, Result};
 
 pub struct EngineRocksdb {
@@ -66,7 +66,7 @@ impl Engine for EngineRocksdb {
                     }
                 }
                 Modify::Put((k, v)) => {
-                    trace!("EngineRocksdb: put {},{}", k, hex(&v));
+                    trace!("EngineRocksdb: put {},{}", k, pretty(&v));
                     if let Err(msg) = wb.put(k.raw(), &v) {
                         return Err(RocksDBError::new(msg).into_engine_error());
                     }

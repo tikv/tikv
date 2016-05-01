@@ -27,7 +27,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
 use kvproto::raftpb::Entry;
 use rocksdb::DB;
-use tikv::util::hex;
+use tikv::util::pretty;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::Peekable;
 
@@ -53,7 +53,7 @@ fn main() {
     opts.optflag("h", "help", "print this help menu");
     opts.optflag("", "info", "print the region info");
     opts.optopt("i", "index", "set the raft log index", "");
-    opts.optopt("k", "key", "set the query raw key, in hex format", "");
+    opts.optopt("k", "key", "set the query raw key, in pretty format", "");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);
@@ -89,7 +89,7 @@ fn dump_raw_value(db: DB, mut key_str: String) {
         key.push(b);
     }
     let value = db.get_value(&key).unwrap();
-    println!("value: {:?}", value.map(|v| format!("{}", hex(&v))));
+    println!("value: {:?}", value.map(|v| format!("{}", pretty(&v))));
 }
 
 fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
@@ -97,7 +97,7 @@ fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
     let idx = u64::from_str_radix(&idx_str, 10).unwrap();
 
     let idx_key = keys::raft_log_key(region_id, idx);
-    println!("idx_key: {}", hex(&idx_key));
+    println!("idx_key: {}", pretty(&idx_key));
     let mut ent: Entry = db.get_msg(&idx_key).unwrap().unwrap();
     let data = ent.take_data();
     println!("entry {:?}", ent);
@@ -109,7 +109,7 @@ fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
 fn dump_region_info(db: DB, region_id_str: String) {
     let region_id = u64::from_str_radix(&region_id_str, 10).unwrap();
     let region_info_key = keys::region_info_key(region_id);
-    println!("info_key: {}", hex(&region_info_key));
+    println!("info_key: {}", pretty(&region_info_key));
     let region: Option<Region> = db.get_msg(&region_info_key).unwrap();
     println!("info: {:?}", region);
 }

@@ -30,7 +30,7 @@ use raft::{self, RawNode, StateRole};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use util::{hex, HandyRwLock};
+use util::{pretty, HandyRwLock};
 use pd::PdClient;
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage};
@@ -372,8 +372,7 @@ impl Peer {
 
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
         // TODO: validate request for unexpected changes.
-        let region = self.region();
-        try!(self.coprocessor_host.pre_propose(&self.storage.rl(), region, &mut cmd));
+        try!(self.coprocessor_host.pre_propose(&self.storage.rl(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
         try!(self.raft_group.propose(data));
         Ok(())
@@ -847,9 +846,13 @@ impl Peer {
 
         let split_key = split_req.get_split_key();
         let mut region = self.region();
+        if split_key <= region.get_start_key() {
+            return Err(box_err!("invalid split request: {:?}", split_req));
+        }
+
         try!(util::check_key_in_region(split_key, &region));
 
-        info!("split at key: {}, region: {:?}", hex(split_key), region);
+        info!("split at key: {}, region: {:?}", pretty(split_key), region);
 
         // TODO: check new region id validation.
         let new_region_id = split_req.get_new_region_id();
