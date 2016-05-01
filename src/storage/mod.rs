@@ -24,8 +24,7 @@ pub mod mvcc;
 pub mod txn;
 mod types;
 
-pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify,
-                       Error as EngineError};
+pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::SnapshotStore;
 pub use self::types::{Key, Value, KvPair};

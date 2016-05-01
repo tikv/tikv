@@ -21,7 +21,8 @@ use kvproto::errorpb::Error as ErrorHeader;
 mod rocksdb;
 pub mod raftkv;
 
-pub const TEMP_DIR: &'static str = "temp-dir";
+// only used for rocksdb without persistent.
+pub const TEMP_DIR: &'static str = "";
 
 #[derive(Debug)]
 pub enum Modify {
