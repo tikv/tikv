@@ -255,11 +255,11 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use super::MvccTxn;
     use storage::{make_key, Mutation};
-    use storage::engine::{self, Engine, Dsn, MEM_ROCKSDB};
+    use storage::engine::{self, Engine, Dsn, TEMP_DIR};
 
     #[test]
     fn test_mvcc_txn_read() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
 
         must_get_none(engine.as_ref(), b"x", 1);
 
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_prewrite() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         // Key is locked.
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_commit_ok() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         must_prewrite_put(engine.as_ref(), b"x", b"x10", b"x", 10);
         must_commit(engine.as_ref(), b"x", 10, 15);
         // commit should be idempotent
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_commit_err() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
 
         // Not prewrite yet
         must_commit_err(engine.as_ref(), b"x", 1, 2);
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_commit_then_get() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_commit_then_get(engine.as_ref(), b"x", 5, 10, 15, b"x5");
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_rollback(engine.as_ref(), b"x", 5);
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback_err() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_commit(engine.as_ref(), b"x", 5, 10);
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback_then_get() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_commit(engine.as_ref(), b"x", 5, 10);
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_meta_split() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         for i in 1u64..300 {
             let val = format!("x{}", i);
             must_prewrite_put(engine.as_ref(), b"x", val.as_bytes(), b"x", 5 * i);

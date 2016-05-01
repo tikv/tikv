@@ -24,7 +24,7 @@ pub mod mvcc;
 pub mod txn;
 mod types;
 
-pub use self::engine::{Engine, Snapshot, Dsn, MEM_ROCKSDB, new_engine, Modify,
+pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify,
                        Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::SnapshotStore;
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = Storage::new(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_get(Context::new(), make_key(b"x"), 100, expect_get_none()).unwrap();
         storage.async_prewrite(Context::new(),
                                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let storage = Storage::new(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_prewrite(Context::new(),
                                vec![
             Mutation::Put((make_key(b"a"), b"aa".to_vec())),
@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let storage = Storage::new(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_prewrite(Context::new(),
                                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                                b"x".to_vec(),

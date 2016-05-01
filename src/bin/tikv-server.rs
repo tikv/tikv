@@ -31,7 +31,7 @@ use log::LogLevelFilter;
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
 use mio::tcp::TcpListener;
 
-use tikv::storage::{Storage, Dsn, MEM_ROCKSDB};
+use tikv::storage::{Storage, Dsn, TEMP_DIR};
 use tikv::util::{self, logger, panic_hook};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
@@ -99,7 +99,7 @@ fn build_raftkv(matches: &Matches,
 fn get_store_path(matches: &Matches) -> String {
     let path = matches.opt_str("s");
     if path.is_none() {
-        return MEM_ROCKSDB.to_owned();
+        return TEMP_DIR.to_owned();
     }
 
     let path = &path.unwrap();
@@ -172,7 +172,7 @@ fn main() {
                 "/tmp/tikv/store");
     opts.optopt("S",
                 "dsn",
-                "set which dsn to use, warning: default is memory",
+                "set which dsn to use, warning: default is rocksdb without persistent",
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
     opts.optopt("", "pd", "set pd address", "host:port");

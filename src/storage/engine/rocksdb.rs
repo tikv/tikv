@@ -19,7 +19,7 @@ use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
 use util::hex;
 use tempdir::TempDir;
-use super::{Engine, MEM_ROCKSDB, Snapshot, Modify, Result};
+use super::{Engine, TEMP_DIR, Snapshot, Modify, Result};
 
 
 
@@ -34,7 +34,7 @@ impl EngineRocksdb {
     pub fn new(path: &str) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
         // memory mode
-        if path == MEM_ROCKSDB {
+        if path == TEMP_DIR {
             let td = TempDir::new("rocksdb-mem-mode").unwrap();
             return DB::open_default(td.path().to_str().unwrap())
                        .map(|db| {

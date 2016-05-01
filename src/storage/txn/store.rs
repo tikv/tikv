@@ -253,7 +253,7 @@ mod tests {
     use super::*;
     use kvproto::kvrpcpb::Context;
     use storage::{Mutation, Key, KvPair, make_key};
-    use storage::engine::{self, Dsn, MEM_ROCKSDB};
+    use storage::engine::{self, Dsn, TEMP_DIR};
     use util::codec::bytes;
 
     trait TxnStoreAssert {
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_txn_store_get() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = TxnStore::new(Arc::new(engine));
 
         // not exist
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_txn_store_delete() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = TxnStore::new(Arc::new(engine));
 
         store.put_ok(b"x", b"x5-10", 5, 10);
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_txn_store_cleanup_rollback() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = TxnStore::new(Arc::new(engine));
 
         store.put_ok(b"secondary", b"s-0", 1, 2);
@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn test_txn_store_cleanup_commit() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = TxnStore::new(Arc::new(engine));
 
         store.put_ok(b"secondary", b"s-0", 1, 2);
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_txn_store_scan() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = TxnStore::new(Arc::new(engine));
 
         // ver10: A(10) - B(_) - C(10) - D(_) - E(10)
@@ -708,7 +708,7 @@ mod tests {
         const THREAD_NUM: usize = 4;
         const INC_PER_THREAD: usize = 100;
 
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = Arc::new(TxnStore::new(Arc::new(engine)));
         let oracle = Arc::new(Oracle::new());
         let punch_card = Arc::new(Mutex::new(vec![false; THREAD_NUM * INC_PER_THREAD]));
@@ -785,7 +785,7 @@ mod tests {
         const KEY_NUM: usize = 4;
         const INC_PER_THREAD: usize = 100;
 
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = Arc::new(TxnStore::new(Arc::new(engine)));
         let oracle = Arc::new(Oracle::new());
 
@@ -811,7 +811,7 @@ mod tests {
 
     #[bench]
     fn bench_txn_store_rocksdb_inc(b: &mut Bencher) {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = TxnStore::new(Arc::new(engine));
         let oracle = Oracle::new();
 
@@ -822,7 +822,7 @@ mod tests {
 
     #[bench]
     fn bench_txn_store_rocksdb_inc_x100(b: &mut Bencher) {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = TxnStore::new(Arc::new(engine));
         let oracle = Oracle::new();
 
@@ -833,7 +833,7 @@ mod tests {
 
     #[bench]
     fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
-        let engine = engine::new_engine(Dsn::RocksDBPath(MEM_ROCKSDB)).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         let store = TxnStore::new(Arc::new(engine));
         let oracle = Oracle::new();
 
