@@ -53,7 +53,7 @@ fn main() {
     opts.optflag("h", "help", "print this help menu");
     opts.optflag("", "info", "print the region info");
     opts.optopt("i", "index", "set the raft log index", "");
-    opts.optopt("k", "key", "set the query raw key, in pretty format", "");
+    opts.optopt("k", "key", "set the query raw key, in hex format", "");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);

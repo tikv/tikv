@@ -415,16 +415,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if self.region_ranges
                        .insert(enc_end_key(&left), left.get_id())
                        .is_some() {
-                    panic!("region should not exist, {:?}, region ranges {:?}",
-                           left,
-                           self.region_ranges);
+                    panic!("region should not exist, {:?}", left);
                 }
                 if self.region_ranges
                        .insert(enc_end_key(&right), new_region_id)
                        .is_none() {
-                    panic!("region should exist, {:?}, region ranges: {:?}",
-                           right,
-                           self.region_ranges);
+                    panic!("region should exist, {:?}", right);
                 }
                 self.region_peers.insert(new_region_id, new_peer);
             }

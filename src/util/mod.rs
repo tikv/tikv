@@ -147,8 +147,6 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
 }
 
 /// A struct to make byte array format more friendly.
-///
-/// Remove this once issue [33127](https://github.com/rust-lang/rust/issues/33127) is resolved.
 pub struct PrettyDispaly<'a> {
     data: &'a [u8],
 }
