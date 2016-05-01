@@ -24,13 +24,16 @@ pub fn find_peer(region: &metapb::Region, store_id: u64) -> bool {
     region.get_store_ids().iter().any(|&id| id == store_id)
 }
 
-pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<u64> {
-    match region.get_store_ids()
-                .iter()
-                .position(|&id| id == store_id) {
-        None => None,
-        Some(index) => Some(region.mut_store_ids().remove(index)),
+pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> bool {
+    if let Some(index) = region.get_store_ids()
+                               .iter()
+                               .position(|&id| id == store_id) {
+
+        region.mut_store_ids().remove(index);
+        return true;
     }
+
+    false
 }
 
 pub fn get_uuid_from_req(cmd: &RaftCmdRequest) -> Option<Uuid> {
@@ -69,8 +72,8 @@ mod tests {
         assert!(find_peer(&region, 1));
         assert!(!find_peer(&region, 10));
 
-        assert!(remove_peer(&mut region, 1).is_some());
-        assert!(remove_peer(&mut region, 1).is_none());
+        assert!(remove_peer(&mut region, 1));
+        assert!(!remove_peer(&mut region, 1));
         assert!(!find_peer(&region, 1));
 
     }

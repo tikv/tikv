@@ -472,7 +472,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         bind_term(&mut resp, peer.term());
 
         if !peer.is_leader() {
-            bind_error(&mut resp, Error::NotLeader(region_id, peer.leader_id()));
+            bind_error(&mut resp,
+                       Error::NotLeader(region_id, peer.leader_store_id()));
             return cb.call_box((resp,));
         }
 
@@ -835,7 +836,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = try!(self.mut_target_peer(&request));
 
         let mut resp = StatusResponse::new();
-        if let Some(leader) = peer.leader_id() {
+        if let Some(leader) = peer.leader_store_id() {
             resp.mut_region_leader().set_leader_store_id(leader);
         }
 
@@ -850,7 +851,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         let mut resp = StatusResponse::new();
         resp.mut_region_detail().set_region(peer.region());
-        if let Some(leader) = peer.leader_id() {
+        if let Some(leader) = peer.leader_store_id() {
             resp.mut_region_detail().set_leader_store_id(leader);
         }
 

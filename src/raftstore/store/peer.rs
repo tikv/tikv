@@ -267,7 +267,7 @@ impl Peer {
         self.raft_group.status()
     }
 
-    pub fn leader_id(&self) -> Option<u64> {
+    pub fn leader_store_id(&self) -> Option<u64> {
         if self.raft_group.raft.has_leader() {
             return Some(self.raft_group.raft.leader_id);
         }
@@ -356,7 +356,7 @@ impl Peer {
     /// Please note that, `NotLeader` here doesn't mean that currently this
     /// peer is not leader.
     fn notify_not_leader(&self, cmd: PendingCmd) {
-        let leader = self.leader_id();
+        let leader = self.leader_store_id();
         let not_leader = Error::NotLeader(self.region_id, leader);
         let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
         if let Err(e) = cmd.cb.call_box((resp,)) {
@@ -726,15 +726,12 @@ impl Peer {
               util::conf_change_type_str(&change_type),
               region.get_region_epoch());
 
-        // TODO: we should need more check, like peer validation, duplicated id, etc.
-        let exists = util::find_peer(&region, store_id);
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
-
         region.mut_region_epoch().set_conf_ver(conf_ver);
 
         match change_type {
             raftpb::ConfChangeType::AddNode => {
-                if exists {
+                if util::find_peer(&region, store_id) {
                     error!("my peer store id {}, can't add duplicated store {}, region \
                             {:?}",
                            self.store_id(),
@@ -751,7 +748,7 @@ impl Peer {
                       self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
-                if !exists {
+                if !util::remove_peer(&mut region, store_id) {
                     error!("remove missing store {}", store_id);
                     return Err(box_err!("remove missing store {}", store_id));
                 }
@@ -761,8 +758,6 @@ impl Peer {
                     // So we need not to apply following logs.
                     self.penging_remove = true;
                 }
-
-                util::remove_peer(&mut region, store_id).unwrap();
 
                 warn!("my peer store {}, remove {}, region:{:?}",
                       self.store_id(),
