@@ -84,7 +84,7 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         before_states.insert(id, state);
     }
 
-    let leader = cluster.leader_of_region(1).unwrap().get_id();
+    let leader = cluster.leader_of_region(1).unwrap();
     let to_stop = leader % cluster.engines.len() as u64 + 1;
     cluster.stop_node(to_stop);
 

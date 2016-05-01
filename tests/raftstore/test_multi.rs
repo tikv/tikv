@@ -69,7 +69,7 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key1, value1);
 
     let last_leader = cluster.leader_of_region(1).unwrap();
-    cluster.stop_node(last_leader.get_store_id());
+    cluster.stop_node(last_leader);
 
     sleep_ms(800);
     cluster.reset_leader_of_region(1);
@@ -82,14 +82,14 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(key2, value2);
     cluster.must_delete(key1);
-    must_get_none(&cluster.engines[&last_leader.get_store_id()], key2);
-    must_get_equal(&cluster.engines[&last_leader.get_store_id()], key1, value1);
+    must_get_none(&cluster.engines[&last_leader], key2);
+    must_get_equal(&cluster.engines[&last_leader], key1, value1);
 
     // week up
-    cluster.run_node(last_leader.get_store_id());
+    cluster.run_node(last_leader);
 
-    must_get_equal(&cluster.engines[&last_leader.get_store_id()], key2, value2);
-    must_get_none(&cluster.engines[&last_leader.get_store_id()], key1);
+    must_get_equal(&cluster.engines[&last_leader], key2, value2);
+    must_get_none(&cluster.engines[&last_leader], key1);
 }
 
 
@@ -119,8 +119,8 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
         cluster.stop_node(i);
     }
     if let Some(leader) = cluster.leader_of_region(1) {
-        if leader.get_store_id() >= half + 1 {
-            cluster.stop_node(leader.get_store_id());
+        if leader >= half + 1 {
+            cluster.stop_node(leader);
         }
     }
     cluster.reset_leader_of_region(1);
@@ -163,14 +163,13 @@ fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>,
 fn wait_until_node_online<T: Simulator>(cluster: &mut Cluster<T>, node_id: u64) {
     for _ in 0..200 {
         // leverage the fact that store id is equal to node id actually
-        let peer = new_peer(node_id, 0);
-        let find_leader = new_status_request(1, peer, new_region_leader_cmd());
-        let resp = cluster.call_command(find_leader, Duration::from_secs(3));
+        let find_leader = new_status_request(1, new_region_leader_cmd());
+        let resp = cluster.call_command(node_id, find_leader, Duration::from_secs(3));
         if resp.is_err() {
             sleep_ms(10);
             continue;
         }
-        if !resp.unwrap().get_status_response().get_region_leader().has_leader() {
+        if !resp.unwrap().get_status_response().get_region_leader().has_leader_store_id() {
             sleep_ms(10);
             continue;
         }

@@ -155,7 +155,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let middle_key = left.get_end_key();
     let leader = cluster.leader_of_region(left.get_id()).unwrap();
-    let store_id = leader.get_store_id();
+    let store_id = leader;
     let mut size = 0;
     cluster.engines[&store_id]
         .scan(&data_key(b""),
@@ -219,7 +219,7 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
 
     // Stop a not leader peer
-    let index = (1..4).find(|&x| x != leader.get_store_id()).unwrap();
+    let index = (1..4).find(|&x| x != leader).unwrap();
     cluster.stop_node(index);
 
     let a2 = b"a20";

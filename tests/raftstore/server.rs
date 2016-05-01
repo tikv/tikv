@@ -165,8 +165,11 @@ impl Simulator for ServerCluster {
         self.senders.keys().cloned().collect()
     }
 
-    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
-        let store_id = request.get_header().get_peer().get_store_id();
+    fn call_command(&self,
+                    store_id: u64,
+                    request: RaftCmdRequest,
+                    timeout: Duration)
+                    -> Result<RaftCmdResponse> {
         let addr = self.addrs.get(&store_id).unwrap();
         let mut conn = self.pool_get(addr).unwrap();
 
@@ -200,7 +203,7 @@ impl Simulator for ServerCluster {
     }
 
     fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
-        let store_id = raft_msg.get_to_peer().get_store_id();
+        let store_id = raft_msg.get_message().get_to();
         let addr = self.addrs.get(&store_id).unwrap();
 
         let mut msg = Message::new();

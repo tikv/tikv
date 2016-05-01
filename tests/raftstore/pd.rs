@@ -103,8 +103,8 @@ impl Cluster {
             return Err(box_err!("region {:?} doesn't exist", region));
         }
 
-        for peer in region.get_peers() {
-            let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
+        for id in region.get_store_ids() {
+            let store = self.stores.get_mut(&id).unwrap();
             store.region_ids.insert(region.get_id());
         }
 
@@ -134,8 +134,8 @@ impl Cluster {
         assert!(self.region_id_keys.insert(left.get_id(), left_end_key.clone()).is_some());
         assert!(self.region_id_keys.insert(right.get_id(), right_end_key.clone()).is_none());
 
-        for peer in right.get_peers() {
-            let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
+        for id in right.get_store_ids() {
+            let store = self.stores.get_mut(&id).unwrap();
             store.region_ids.insert(right.get_id());
         }
 
@@ -257,14 +257,14 @@ impl PdClient for TestPdClient {
     fn ask_change_peer(&self,
                        cluster_id: u64,
                        region: metapb::Region,
-                       leader: metapb::Peer)
+                       leader_store_id: u64)
                        -> Result<()> {
         try!(self.get_cluster(cluster_id));
         let mut req = pdpb::Request::new();
         req.mut_header().set_cluster_id(cluster_id);
         req.set_cmd_type(pdpb::CommandType::AskChangePeer);
         req.mut_ask_change_peer().set_region(region);
-        req.mut_ask_change_peer().set_leader(leader);
+        req.mut_ask_change_peer().set_leader_store_id(leader_store_id);
 
         self.ask_tx.lock().unwrap().send(req).unwrap();
 
@@ -275,14 +275,14 @@ impl PdClient for TestPdClient {
                  cluster_id: u64,
                  region: metapb::Region,
                  split_key: &[u8],
-                 leader: metapb::Peer)
+                 leader_store_id: u64)
                  -> Result<()> {
         try!(self.get_cluster(cluster_id));
         let mut req = pdpb::Request::new();
         req.mut_header().set_cluster_id(cluster_id);
         req.set_cmd_type(pdpb::CommandType::AskSplit);
         req.mut_ask_split().set_region(region);
-        req.mut_ask_split().set_leader(leader);
+        req.mut_ask_split().set_leader_store_id(leader_store_id);
         req.mut_ask_split().set_split_key(split_key.to_vec());
 
         self.ask_tx.lock().unwrap().send(req).unwrap();

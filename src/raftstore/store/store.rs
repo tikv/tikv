@@ -74,8 +74,6 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
 
     trans: Arc<RwLock<T>>,
     pd_client: Arc<RwLock<C>>,
-
-    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -108,8 +106,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let sendch = SendCh::new(event_loop.channel());
 
-        let peer_cache = HashMap::new();
-
         Ok(Store {
             cluster_meta: cluster_meta,
             cfg: cfg,
@@ -126,7 +122,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             stopped: Arc::new(RwLock::new(false)),
             trans: trans,
             pd_client: pd_client,
-            peer_cache: Arc::new(RwLock::new(peer_cache)),
         })
     }
 
@@ -201,10 +196,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &self.cfg
     }
 
-    pub fn peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
-        self.peer_cache.clone()
-    }
-
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
@@ -239,13 +230,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     #[allow(map_entry)]
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-        let from = msg.take_from_peer();
-        let to = msg.take_to_peer();
+        let from_store_id = msg.get_message().get_from();
+        let to_store_id = msg.get_message().get_to();
         debug!("handle raft message {:?} for region {}, from {} to {}",
                msg.get_message().get_msg_type(),
                region_id,
-               from.get_id(),
-               to.get_id());
+               from_store_id,
+               to_store_id);
+
+        if to_store_id != self.store_id() {
+            warn!("mismatch store {} != {}, ignore it",
+                  to_store_id,
+                  self.store_id());
+        }
 
         if !msg.has_region_epoch() {
             error!("missing epoch in raft message, ignore it");
@@ -260,7 +257,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let version = peer.storage.rl().region.get_region_epoch().get_version();
 
             if (from_epoch.get_conf_ver() < conf_ver || from_epoch.get_version() < version) &&
-               util::find_peer(&peer.storage.rl().region, from.get_store_id()).is_none() {
+               !util::find_peer(&peer.storage.rl().region, from_store_id) {
 
                 warn!("raft message {:?} is stale {:?}, ignore it",
                       msg.get_message().get_msg_type(),
@@ -271,14 +268,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
 
         if !self.region_peers.contains_key(&region_id) {
-            let peer = try!(Peer::replicate(self, region_id, msg.get_region_epoch(), to.get_id()));
+            let peer = try!(Peer::replicate(self, region_id, msg.get_region_epoch()));
             // We don't have start_key of the region, so there is no need to insert into
             // region_ranges
             self.region_peers.insert(region_id, peer);
         }
-
-        self.peer_cache.wl().insert(from.get_id(), from);
-        self.peer_cache.wl().insert(to.get_id(), to);
 
         // Check if we can accept the snapshot
         // TODO: we need to inject failure or re-order network packet to test the situtain
@@ -343,27 +337,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_change_peer(&mut self,
                             region_id: u64,
                             change_type: ConfChangeType,
-                            peer: metapb::Peer) {
+                            store_id: u64) {
         // We only care remove itself now.
-        if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
-            warn!("destroy peer {:?} for region {}", peer, region_id);
+        if change_type == ConfChangeType::RemoveNode && store_id == self.store_id() {
+            warn!("destroy peer {:?} for region {}", store_id, region_id);
             // The remove peer is in the same store.
             // TODO: should we check None here?
             // Can we destroy it in another thread later?
             let mut p = self.region_peers.remove(&region_id).unwrap();
             let end_key = enc_end_key(&p.region());
             if let Err(e) = p.destroy() {
-                error!("destroy peer {:?} for region {} in store {} err {:?}",
-                       peer,
+                error!("destroy peer {} for region {} err {:?}",
+                       store_id,
                        region_id,
-                       self.store_id(),
                        e);
             } else {
                 if self.region_ranges.remove(&end_key).is_none() {
-                    panic!("Remove region, peer {:?}, region {} in store {}",
-                           peer,
-                           region_id,
-                           self.store_id());
+                    panic!("Remove region, peer {}, region {}", store_id, region_id);
 
                 }
             }
@@ -401,10 +391,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // we can force the new peer for the new split region to campaign
                 // to become the leader too.
                 let is_leader = self.region_peers.get(&region_id).unwrap().is_leader();
-                if is_leader && right.get_peers().len() > 1 {
+                if is_leader && right.get_store_ids().len() > 1 {
                     if let Err(e) = new_peer.raft_group.campaign() {
-                        error!("peer {:?} campaigns for region {} err {:?}",
-                               new_peer.peer,
+                        error!("peer {} campaigns for region {} err {:?}",
+                               new_peer.store_id(),
                                new_region_id,
                                e);
                     }
@@ -435,8 +425,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // handle executing committed log results
         for result in ready_result.exec_results {
             match result {
-                ExecResult::ChangePeer { change_type, peer, .. } => {
-                    self.on_ready_change_peer(region_id, change_type, peer)
+                ExecResult::ChangePeer { change_type, store_id, .. } => {
+                    self.on_ready_change_peer(region_id, change_type, store_id)
                 }
                 ExecResult::CompactLog { state } => self.on_ready_compact_log(region_id, state),
                 ExecResult::SplitRegion { left, right } => {
@@ -482,15 +472,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         bind_term(&mut resp, peer.term());
 
         if !peer.is_leader() {
-            bind_error(&mut resp,
-                       Error::NotLeader(region_id, peer.get_peer_from_cache(peer.leader_id())));
-            return cb.call_box((resp,));
-        }
-
-        let peer_id = msg.get_header().get_peer().get_id();
-        if peer.peer_id() != peer_id {
-            bind_error(&mut resp,
-                       box_err!("mismatch peer id {} != {}", peer.peer_id(), peer_id));
+            bind_error(&mut resp, Error::NotLeader(region_id, peer.leader_id()));
             return cb.call_box((resp,));
         }
 
@@ -567,7 +549,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx);
+            let request = new_compact_log_request(region_id, compact_idx);
 
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
@@ -639,7 +621,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let task = PdTask::AskSplit {
             region: peer.region(),
             split_key: key.to_vec(),
-            peer: peer.peer.clone(),
+            leader_store_id: peer.store_id(),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("failed to notify pd to split region {} at {:?}: {}",
@@ -663,7 +645,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
 
-            let peer_count = peer.region().get_peers().len();
+            let peer_count = peer.region().get_store_ids().len();
             let max_count = self.cluster_meta.get_max_peer_number() as usize;
             if peer_count == max_count {
                 continue;
@@ -678,7 +660,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let task = PdTask::AskChangePeer {
                 change_type: change_type,
                 region: peer.region(),
-                peer: peer.peer.clone(),
+                leader_store_id: peer.store_id(),
             };
             if let Err(e) = self.pd_worker.schedule(task) {
                 error!("failed to notify pd: {}", e);
@@ -688,19 +670,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_replica_check_tick(event_loop);
     }
 
-    fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
+    fn on_report_snapshot(&mut self, region_id: u64, to_store_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             info!("report to snapshot {} for {} {:?}",
-                  to_peer_id,
+                  to_store_id,
                   region_id,
                   status);
-            peer.raft_group.report_snapshot(to_peer_id, status)
+            peer.raft_group.report_snapshot(to_store_id, status)
         }
     }
 
-    fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
+    fn on_unreachable(&mut self, region_id: u64, to_store_id: u64) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
-            peer.raft_group.report_unreachable(to_peer_id);
+            peer.raft_group.report_unreachable(to_store_id);
         }
     }
 }
@@ -721,13 +703,9 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
               .map_err(|e| box_err!("register timer err: {:?}", e))
 }
 
-fn new_compact_log_request(region_id: u64,
-                           peer: metapb::Peer,
-                           compact_index: u64)
-                           -> RaftCmdRequest {
+fn new_compact_log_request(region_id: u64, compact_index: u64) -> RaftCmdRequest {
     let mut request = RaftCmdRequest::new();
     request.mut_header().set_region_id(region_id);
-    request.mut_header().set_peer(peer);
     request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
     let mut admin = AdminRequest::new();
@@ -763,11 +741,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("split check of {} complete.", region_id);
                 self.on_split_check_result(region_id, split_key);
             }
-            Msg::ReportSnapshot { region_id, to_peer_id, status } => {
-                self.on_report_snapshot(region_id, to_peer_id, status);
+            Msg::ReportSnapshot { region_id, to_store_id, status } => {
+                self.on_report_snapshot(region_id, to_store_id, status);
             }
-            Msg::ReportUnreachable { region_id, to_peer_id } => {
-                self.on_unreachable(region_id, to_peer_id);
+            Msg::ReportUnreachable { region_id, to_store_id } => {
+                self.on_unreachable(region_id, to_store_id);
             }
         }
         slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());
@@ -857,8 +835,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = try!(self.mut_target_peer(&request));
 
         let mut resp = StatusResponse::new();
-        if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
-            resp.mut_region_leader().set_leader(leader);
+        if let Some(leader) = peer.leader_id() {
+            resp.mut_region_leader().set_leader_store_id(leader);
         }
 
         Ok(resp)
@@ -872,8 +850,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         let mut resp = StatusResponse::new();
         resp.mut_region_detail().set_region(peer.region());
-        if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
-            resp.mut_region_detail().set_leader(leader);
+        if let Some(leader) = peer.leader_id() {
+            resp.mut_region_detail().set_leader_store_id(leader);
         }
 
         Ok(resp)

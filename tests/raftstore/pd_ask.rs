@@ -64,7 +64,7 @@ impl<T: Simulator> AskHandler<T> {
     fn handle_change_peer(&mut self, req: pdpb::Request) {
         let cluster_id = req.get_header().get_cluster_id();
         let region = req.get_ask_change_peer().get_region();
-        let leader = req.get_ask_change_peer().get_leader();
+        let leader_store_id = req.get_ask_change_peer().get_leader_store_id();
         // because region may change at this point, we should use
         // latest region info instead. TODO: update leader too.
         let region = self.pd_client
@@ -74,24 +74,24 @@ impl<T: Simulator> AskHandler<T> {
 
         let meta = self.pd_client.rl().get_cluster_meta(cluster_id).unwrap();
         let max_peer_number = meta.get_max_peer_number() as usize;
-        let peer_number = region.get_peers().len();
+        let peer_number = region.get_store_ids().len();
         if max_peer_number == peer_number {
             return;
         }
 
-        let (conf_change_type, peer) = if max_peer_number < peer_number {
+        let (conf_change_type, store_id) = if max_peer_number < peer_number {
             // Find first follower.
-            let pos = region.get_peers()
+            let pos = region.get_store_ids()
                             .iter()
-                            .position(|x| x.get_id() != leader.get_id())
+                            .position(|&id| id != leader_store_id)
                             .unwrap();
-            (ConfChangeType::RemoveNode, region.get_peers()[pos].clone())
+            (ConfChangeType::RemoveNode, region.get_store_ids()[pos])
         } else {
             // Choose first store which all peers are not in.
             let stores = self.pd_client.rl().get_stores(cluster_id).unwrap();
             let pos = stores.iter().position(|store| {
                 let store_id = store.get_id();
-                region.get_peers().iter().all(|x| x.get_store_id() != store_id)
+                region.get_store_ids().iter().all(|&id| id != store_id)
             });
 
             if pos.is_none() {
@@ -100,16 +100,16 @@ impl<T: Simulator> AskHandler<T> {
             }
 
             let store = &stores[pos.unwrap()];
-            let peer_id = self.pd_client.wl().alloc_id(0).unwrap();
-            let peer = new_peer(store.get_id(), peer_id);
-            (ConfChangeType::AddNode, peer)
+            (ConfChangeType::AddNode, store.get_id())
         };
 
-        let mut change_peer = new_admin_request(region.get_id(),
-                                                region.get_region_epoch(),
-                                                new_change_peer_cmd(conf_change_type, peer));
-        change_peer.mut_header().set_peer(leader.clone());
-        let resp = self.sim.wl().call_command(change_peer, Duration::from_secs(3)).unwrap();
+        let change_peer = new_admin_request(region.get_id(),
+                                            region.get_region_epoch(),
+                                            new_change_peer_cmd(conf_change_type, store_id));
+        let resp = self.sim
+                       .wl()
+                       .call_command(leader_store_id, change_peer, Duration::from_secs(3))
+                       .unwrap();
         assert!(!resp.get_header().has_error(), format!("{:?}", resp));
         assert_eq!(resp.get_admin_response().get_cmd_type(),
                    AdminCmdType::ChangePeer);
@@ -121,7 +121,7 @@ impl<T: Simulator> AskHandler<T> {
     fn handle_split(&mut self, req: pdpb::Request) {
         let cluster_id = req.get_header().get_cluster_id();
         let region = req.get_ask_split().get_region();
-        let leader = req.get_ask_split().get_leader();
+        let leader_store_id = req.get_ask_split().get_leader_store_id();
         let split_key = req.get_ask_split().get_split_key().to_vec();
         let region = self.pd_client
                          .rl()
@@ -136,19 +136,15 @@ impl<T: Simulator> AskHandler<T> {
         }
 
         let new_region_id = self.pd_client.wl().alloc_id(0).unwrap();
-        let mut peer_ids: Vec<u64> = vec![];
-        for _ in 0..region.get_peers().len() {
-            let peer_id = self.pd_client.wl().alloc_id(0).unwrap();
-            peer_ids.push(peer_id);
-        }
 
-        let mut split = new_admin_request(region.get_id(),
-                                          region.get_region_epoch(),
-                                          new_split_region_cmd(Some(split_key),
-                                                               new_region_id,
-                                                               peer_ids));
-        split.mut_header().set_peer(leader.clone());
-        let resp = self.sim.wl().call_command(split, Duration::from_secs(3)).unwrap();
+
+        let split = new_admin_request(region.get_id(),
+                                      region.get_region_epoch(),
+                                      new_split_region_cmd(Some(split_key), new_region_id));
+        let resp = self.sim
+                       .wl()
+                       .call_command(leader_store_id, split, Duration::from_secs(3))
+                       .unwrap();
 
         assert!(!resp.get_header().has_error(), format!("{:?}", resp));
         assert_eq!(resp.get_admin_response().get_cmd_type(),
