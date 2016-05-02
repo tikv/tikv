@@ -112,7 +112,8 @@ impl Simulator for ServerCluster {
         let mut cfg = cfg;
 
         // Now we cache the store address, so here we should re-use last
-        // listening address for the same store.
+        // listening address for the same store. Maybe we should enable
+        // reuse_socket?
         if let Some(addr) = self.addrs.get(&node_id) {
             cfg.addr = format!("{}", addr)
         }

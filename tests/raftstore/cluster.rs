@@ -107,7 +107,15 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn start(&mut self) {
-        self.start_with_strategy(vec![]);
+        if self.engines.is_empty() {
+            self.start_with_strategy(vec![]);
+        } else {
+            // recover from last shutdown.
+            let node_ids: Vec<u64> = self.engines.keys().cloned().collect();
+            for node_id in node_ids {
+                self.run_node(node_id);
+            }
+        }
     }
 
     pub fn start_with_strategy(&mut self, strategy: Vec<Strategy>) {
