@@ -13,6 +13,7 @@
 
 use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
 use util::codec::table;
+use util::escape;
 
 use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
                           AdminCmdType};
@@ -29,7 +30,7 @@ const VERSION_LENGTH: usize = 8;
 type Result<T> = StdResult<T, String>;
 
 impl SplitObserver {
-    fn on_split(&mut self, _: &mut ObserverContext, split: &mut SplitRequest) -> Result<()> {
+    fn on_split(&mut self, ctx: &mut ObserverContext, split: &mut SplitRequest) -> Result<()> {
         if !split.has_split_key() {
             return Err("split key is expected!".to_owned());
         }
@@ -54,6 +55,15 @@ impl SplitObserver {
             let key_len = key.len();
             key.truncate(key_len - VERSION_LENGTH);
         }
+
+        let region_start_key = ctx.snap.get_region().get_start_key();
+        info!("checking region_start_key {}, split key {}",
+              escape(region_start_key),
+              escape(&key));
+        if &*key <= region_start_key {
+            return Err("no need to split".to_owned());
+        }
+
         split.set_split_key(key);
         Ok(())
     }
