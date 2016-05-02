@@ -15,9 +15,10 @@ use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use kvproto::raft_cmdpb::AdminCmdType;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::pdpb::{self, CommandType};
 use kvproto::raftpb::ConfChangeType;
+use kvproto::metapb::Peer;
 
 use tikv::pd::PdClient;
 use tikv::util::{escape, HandyRwLock};
@@ -66,7 +67,7 @@ impl<T: Simulator> AskHandler<T> {
         let region = req.get_ask_change_peer().get_region();
         let leader = req.get_ask_change_peer().get_leader();
         // because region may change at this point, we should use
-        // latest region info instead. TODO: update leader too.
+        // latest region info instead.
         let region = self.pd_client
                          .rl()
                          .get_region_by_id(cluster_id, region.get_id())
@@ -105,17 +106,29 @@ impl<T: Simulator> AskHandler<T> {
             (ConfChangeType::AddNode, peer)
         };
 
-        let mut change_peer = new_admin_request(region.get_id(),
-                                                region.get_region_epoch(),
-                                                new_change_peer_cmd(conf_change_type, peer));
-        change_peer.mut_header().set_peer(leader.clone());
-        let resp = self.sim.wl().call_command(change_peer, Duration::from_secs(3)).unwrap();
-        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
-        assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCmdType::ChangePeer);
-
+        let change_peer = new_admin_request(region.get_id(),
+                                            region.get_region_epoch(),
+                                            new_change_peer_cmd(conf_change_type, peer));
+        let resp = self.call_command(change_peer, leader.clone());
+        if resp.is_none() {
+            return;
+        }
+        let resp = resp.unwrap();
         let region = resp.get_admin_response().get_change_peer().get_region();
         self.pd_client.wl().change_peer(cluster_id, region.clone()).unwrap();
+    }
+
+    fn call_command(&self, mut req: RaftCmdRequest, leader: Peer) -> Option<RaftCmdResponse> {
+        req.mut_header().set_peer(leader.clone());
+        let req_type = req.get_admin_request().get_cmd_type();
+        let resp = self.sim.wl().call_command(req, Duration::from_secs(3)).unwrap();
+        if resp.get_header().has_error() && resp.get_header().get_error().has_not_leader() {
+            // ignore not leader error, as the client will retry anyway.
+            return None;
+        }
+        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
+        assert_eq!(resp.get_admin_response().get_cmd_type(), req_type);
+        Some(resp)
     }
 
     fn handle_split(&mut self, req: pdpb::Request) {
@@ -142,18 +155,16 @@ impl<T: Simulator> AskHandler<T> {
             peer_ids.push(peer_id);
         }
 
-        let mut split = new_admin_request(region.get_id(),
-                                          region.get_region_epoch(),
-                                          new_split_region_cmd(Some(split_key),
-                                                               new_region_id,
-                                                               peer_ids));
-        split.mut_header().set_peer(leader.clone());
-        let resp = self.sim.wl().call_command(split, Duration::from_secs(3)).unwrap();
-
-        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
-        assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCmdType::Split);
-
+        let split = new_admin_request(region.get_id(),
+                                      region.get_region_epoch(),
+                                      new_split_region_cmd(Some(split_key),
+                                                           new_region_id,
+                                                           peer_ids));
+        let resp = self.call_command(split, leader.clone());
+        if resp.is_none() {
+            return;
+        }
+        let resp = resp.unwrap();
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
 

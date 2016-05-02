@@ -104,6 +104,10 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     cluster.shutdown();
+
+    // avoid TIMEWAIT
+    sleep_ms(500);
+
     cluster.start();
 
     assert_eq!(cluster.get(key), Some(value.to_vec()));
