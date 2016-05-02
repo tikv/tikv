@@ -161,8 +161,8 @@ pub fn escape(data: &[u8]) -> String {
     let mut escaped = Vec::with_capacity(data.len() * 4);
     for &c in data {
         match c {
-            b'\'' => escaped.extend(b"\\'"),
-            b'"' => escaped.extend(b"\\\""),
+            b'\'' => escaped.extend_from_slice(b"\\'"),
+            b'"' => escaped.extend_from_slice(b"\\\""),
             b'\x20'...b'\x7e' => escaped.push(c),
             _ => {
                 escaped.push(b'\\');

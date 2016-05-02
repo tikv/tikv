@@ -66,8 +66,7 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let epoch = left.get_region_epoch().clone();
     let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(a3)]);
-    let region_id = left.get_id();
-    let resp = cluster.call_command_on_leader(region_id, get, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
 }
@@ -173,8 +172,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let epoch = left.get_region_epoch().clone();
     let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(&max_key)]);
-    let region_id = left.get_id();
-    let resp = cluster.call_command_on_leader(region_id, get, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
 }
