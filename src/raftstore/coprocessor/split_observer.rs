@@ -59,7 +59,7 @@ impl SplitObserver {
         let region_start_key = ctx.snap.get_region().get_start_key();
         info!("checking region_start_key {}, split key {}",
               escape(region_start_key),
-              escape(&*key));
+              escape(&key));
         if &*key <= region_start_key {
             return Err("no need to split".to_owned());
         }
