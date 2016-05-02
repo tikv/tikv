@@ -31,7 +31,7 @@ use kvproto::errorpb;
 use storage::Key;
 use util::codec::{Datum, table, datum, number};
 use util::xeval::Evaluator;
-use util::{as_slice, pretty};
+use util::{as_slice, escape};
 use util::SlowTimer;
 use server::{SendCh, Msg, ConnData};
 
@@ -320,7 +320,7 @@ impl<'a> SelectContext<'a> {
         } else {
             let mut seek_key = range.take_start();
             loop {
-                trace!("seek {}", pretty(&seek_key));
+                trace!("seek {}", escape(&seek_key));
                 let timer = Instant::now();
                 let mut res = try!(self.snap.scan(Key::from_raw(seek_key), 1));
                 trace!("scan takes {:?}", timer.elapsed());
@@ -331,8 +331,8 @@ impl<'a> SelectContext<'a> {
                 let (key, _) = try!(res.pop().unwrap());
                 if range.get_end() <= &key {
                     debug!("reach end key: {} >= {}",
-                           pretty(&key),
-                           pretty(range.get_end()));
+                           escape(&key),
+                           escape(range.get_end()));
                     break;
                 }
                 let h = box_try!(table::decode_handle(&key));
@@ -414,7 +414,7 @@ impl<'a> SelectContext<'a> {
         let info = self.sel.get_index_info();
         let mut seek_key = r.take_start();
         loop {
-            trace!("seek {}", pretty(&seek_key));
+            trace!("seek {}", escape(&seek_key));
             let timer = Instant::now();
             let mut nk = try!(self.snap.scan(Key::from_raw(seek_key.clone()), 1));
             trace!("scan takes {:?}", timer.elapsed());
@@ -424,7 +424,7 @@ impl<'a> SelectContext<'a> {
             }
             let (key, value) = try!(nk.pop().unwrap());
             if r.get_end() <= &key {
-                debug!("reach end key: {} >= {}", pretty(&key), pretty(r.get_end()));
+                debug!("reach end key: {} >= {}", escape(&key), escape(r.get_end()));
                 return Ok(rows);
             }
             let mut datums = box_try!(table::decode_index_key(&key));
