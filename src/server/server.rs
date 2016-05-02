@@ -28,7 +28,7 @@ use kvproto::raftpb::MessageType as RaftMessageType;
 use super::{Msg, SendCh, ConnData};
 use super::conn::{Conn, OnWriteComplete};
 use super::Result;
-use util::HandyRwLock;
+use util::{HandyRwLock, SlowTimer};
 use storage::Storage;
 use super::kv::StoreHandler;
 use super::coprocessor::EndPointHost;
@@ -363,7 +363,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn resolve_store(&mut self, store_id: u64, data: ConnData) {
         let ch = self.sendch.clone();
+        let t = SlowTimer::new();
         let cb = box move |r| {
+            slow_log!(t, "resolve store {} takes {:?}", store_id, t.elapsed());
             if let Err(e) = ch.send(Msg::ResolveResult {
                 store_id: store_id,
                 sock_addr: r,
