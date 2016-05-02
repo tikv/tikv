@@ -66,7 +66,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
                                         &epoch,
                                         new_change_peer_cmd(ConfChangeType::AddNode,
                                                             new_peer(2, 2)));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't add same peer twice");
 
@@ -78,7 +78,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
                                         &stale_epoch,
                                         new_change_peer_cmd(ConfChangeType::AddNode,
                                                             new_peer(5, 5)));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "We can't change peer with stale epoch");
 
@@ -114,7 +114,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
                                         &epoch,
                                         new_change_peer_cmd(ConfChangeType::RemoveNode,
                                                             new_peer(2, 2)));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't remove same peer twice");
 
@@ -122,7 +122,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
                                         &stale_epoch,
                                         new_change_peer_cmd(ConfChangeType::RemoveNode,
                                                             new_peer(3, 3)));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "We can't change peer with stale epoch");
 
