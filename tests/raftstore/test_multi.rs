@@ -21,8 +21,6 @@ use super::transport_simulate::Strategy;
 
 use rand;
 use rand::Rng;
-use std::time::Duration;
-use std::thread;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     test_multi_with_transport_strategy(cluster, vec![]);
@@ -108,7 +106,7 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.shutdown();
 
     // avoid TIMEWAIT
-    thread::sleep(Duration::from_millis(500));
+    sleep_ms(500);
 
     cluster.start();
 
