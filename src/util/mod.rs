@@ -33,6 +33,7 @@ pub mod panic_hook;
 pub mod worker;
 pub mod codec;
 pub mod xeval;
+pub mod event;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {

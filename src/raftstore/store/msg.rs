@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::boxed::{Box, FnBox};
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::Arc;
 use std::fmt;
 use std::time::Duration;
 
@@ -23,6 +23,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
+use util::event::Event;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) -> Result<()> + Send>;
 
@@ -88,40 +89,28 @@ impl fmt::Debug for Msg {
 }
 
 // Send the request and wait the response until timeout.
-// Use Condvar to support call timeout. if timeout, return None.
 // We should know that even timeout happens, the command may still
 // be handled in store later.
 pub fn call_command(sendch: &SendCh,
                     request: RaftCmdRequest,
                     timeout: Duration)
                     -> Result<RaftCmdResponse> {
-    let resp: Option<RaftCmdResponse> = None;
-    let pair = Arc::new((Mutex::new(resp), Condvar::new()));
-    let pair2 = pair.clone();
+    let finished = Arc::new(Event::new());
+    let finished2 = finished.clone();
 
     try!(sendch.send(Msg::RaftCmd {
         request: request,
         callback: box move |resp| {
-            let &(ref lock, ref cvar) = &*pair2;
-            let mut v = lock.lock().unwrap();
-            *v = Some(resp);
-            cvar.notify_one();
+            finished2.set(resp);
             Ok(())
         },
     }));
 
-    let &(ref lock, ref cvar) = &*pair;
-    let mut v = lock.lock().unwrap();
-    while v.is_none() {
-        let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
-        if timeout_res.timed_out() {
-            return Err(Error::Timeout(format!("request timeout for {:?}", timeout)));
-        }
-
-        v = resp
+    if finished.wait_set(Some(timeout)) {
+        return Ok(finished.take().unwrap());
     }
 
-    Ok(v.take().unwrap())
+    Err(Error::Timeout(format!("request timeout for {:?}", timeout)))
 }
 
 
