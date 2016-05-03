@@ -192,12 +192,6 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn query_leader(&self, store_id: u64, region_id: u64) -> Option<u64> {
-        // For some tests, we stop the node but pd still has this information,
-        // and we must skip this.
-        if !self.sim.rl().get_node_ids().contains(&store_id) {
-            return None;
-        }
-
         let find_leader = new_status_request(region_id, new_region_leader_cmd());
         let mut resp = self.call_command(store_id, find_leader, Duration::from_secs(3)).unwrap();
         let region_leader = resp.take_status_response().take_region_leader();
@@ -220,17 +214,27 @@ impl<T: Simulator> Cluster<T> {
         let mut leader = None;
         let mut retry_cnt = 500;
 
-        let stores = self.pd_client.rl().get_stores(self.id()).unwrap();
+        let store_ids = self.pd_client
+                            .rl()
+                            .get_region_by_id(self.id(), region_id)
+                            .unwrap()
+                            .take_store_ids();
         let node_ids: HashSet<u64> = self.sim.rl().get_node_ids();
         let mut count = 0;
-        while (leader.is_none() || count < node_ids.len()) && retry_cnt > 0 {
+        while (leader.is_none() || count < store_ids.len()) && retry_cnt > 0 {
             count = 0;
             leader = None;
-            for store in &stores {
-                let l = self.query_leader(store.get_id(), region_id);
+            for store_id in &store_ids {
+                // For some tests, we stop the node but pd still has this information,
+                // and we must skip this.
+                if !node_ids.contains(&store_id) {
+                    count += 1;
+                    continue;
+                }
+                let l = self.query_leader(*store_id, region_id);
                 if leader.is_none() {
                     leader = l;
-                    count = 1;
+                    count += 1;
                 } else if l == leader {
                     count += 1;
                 }
