@@ -907,7 +907,7 @@ fn test_commit() {
 }
 
 #[test]
-fn test_is_election_timeout() {
+fn test_pass_election_timeout() {
     let tests = vec![
         (5, 0f64, false),
         (10, 0.1, true),
@@ -923,7 +923,7 @@ fn test_is_election_timeout() {
         let mut c = 0;
         for _ in 0..10000 {
             sm.reset_randomized_election_timeout();
-            if sm.is_election_timeout() {
+            if sm.pass_election_timeout() {
                 c += 1;
             }
         }
@@ -932,7 +932,7 @@ fn test_is_election_timeout() {
             got = (got * 10.0 + 0.5).floor() / 10.0;
         }
         if (got - wprobability).abs() > 0.000001 {
-            panic!("#{}: possibility = {}, want {}", i, got, wprobability);
+            panic!("#{}: probability = {}, want {}", i, got, wprobability);
         }
     }
 }
