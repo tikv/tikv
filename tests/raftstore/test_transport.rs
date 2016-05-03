@@ -35,25 +35,20 @@ fn leader_in_minority_split(leader: u64, count: u64) -> (HashSet<u64>, HashSet<u
     (s1, s2)
 }
 
-fn get_region_leader_id<T: Simulator>(cluster: &mut Cluster<T>, region_id: u64) -> u64 {
-    let peer = cluster.leader_of_region(region_id).unwrap();
-    peer.get_store_id()
-}
-
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
     cluster.bootstrap_region().expect("");
     cluster.start();
 
     let (key, value) = (b"k1", b"v1");
     let region_id = cluster.get_region_id(key);
-    let leader = get_region_leader_id(cluster, region_id);
+    let leader = cluster.leader_of_region(region_id).unwrap();
 
     // leader in majority, partition doesn't affect write/read
     let (s1, s2) = leader_in_majority_split(leader, count);
     cluster.partition(Arc::new(s1), Arc::new(s2));
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
-    assert_eq!(get_region_leader_id(cluster, region_id), leader);
+    assert_eq!(cluster.leader_of_region(region_id).unwrap(), leader);
     cluster.reset_transport_hooks();
 
     // partition happended and leader in minority, new leader should be elected
@@ -61,7 +56,7 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
     cluster.partition(Arc::new(s1), Arc::new(s2));
     cluster.must_put(key, b"v2");
     assert_eq!(cluster.get(key), Some(b"v2".to_vec()));
-    assert!(get_region_leader_id(cluster, region_id) != leader);
+    assert!(cluster.leader_of_region(region_id).unwrap() != leader);
     cluster.must_put(b"k2", b"v2");
 
     // when network recover, old leader should sync data
