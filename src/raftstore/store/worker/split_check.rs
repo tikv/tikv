@@ -11,19 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::{PeerStorage, keys, SendCh, Msg};
-use raftstore::store::engine::Iterable;
-use util::escape;
-
-use rocksdb::DB;
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 
+use rocksdb::DB;
+
+use kvproto::metapb::RegionEpoch;
+use raftstore::store::{PeerStorage, keys, SendCh, Msg};
+use raftstore::store::engine::Iterable;
+use util::escape;
 use util::worker::Runnable;
 
 /// Split checking task.
 pub struct Task {
     region_id: u64,
+    epoch: RegionEpoch,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     engine: Arc<DB>,
@@ -33,6 +35,7 @@ impl Task {
     pub fn new(ps: &PeerStorage) -> Task {
         Task {
             region_id: ps.get_region_id(),
+            epoch: ps.get_region().get_region_epoch().clone(),
             start_key: keys::enc_start_key(&ps.region),
             end_key: keys::enc_end_key(&ps.region),
             engine: ps.get_engine().clone(),
@@ -89,16 +92,17 @@ impl Runnable<Task> for Runner {
             debug!("no need to send for {} < {}", size, self.region_max_size);
             return;
         }
-        let res = self.ch.send(new_split_check_result(task.region_id, split_key));
+        let res = self.ch.send(new_split_check_result(task.region_id, task.epoch, split_key));
         if let Err(e) = res {
             warn!("failed to send check result of {}: {}", task.region_id, e);
         }
     }
 }
 
-fn new_split_check_result(region_id: u64, split_key: Vec<u8>) -> Msg {
+fn new_split_check_result(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> Msg {
     Msg::SplitCheckResult {
         region_id: region_id,
+        epoch: epoch,
         split_key: split_key,
     }
 }
