@@ -26,7 +26,7 @@ use kvproto::kvrpcpb::Context;
 
 use pd::PdClient;
 use uuid::Uuid;
-use std::sync::{Arc, RwLock, Mutex, Condvar};
+use std::sync::{Arc, RwLock};
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
 use std::time::Duration;
@@ -36,6 +36,7 @@ use protobuf::RepeatedField;
 
 use storage::engine;
 use super::{Engine, Modify, Snapshot};
+use util::event::Event;
 use storage::{Key, Value, KvPair};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -104,32 +105,21 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
 
     // TODO: reuse msg code.
     pub fn call_command(&self, request: RaftCmdRequest) -> Result<RaftCmdResponse> {
-        let resp = None;
-        let pair = Arc::new((Mutex::new(resp), Condvar::new()));
-        let pair2 = pair.clone();
+        let finished = Arc::new(Event::new());
+        let finished2 = finished.clone();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
 
         try!(self.router.rl().send_command(request,
                                            box move |resp| {
-                                               let &(ref lock, ref cvar) = &*pair2;
-                                               let mut v = lock.lock().unwrap();
-                                               *v = Some(resp);
-                                               cvar.notify_one();
+                                               finished2.set(resp);
                                                Ok(())
                                            }));
 
-        let &(ref lock, ref cvar) = &*pair;
-        let mut v = lock.lock().unwrap();
-        while v.is_none() {
-            let (resp, timeout_res) = cvar.wait_timeout(v, timeout).unwrap();
-            if timeout_res.timed_out() {
-                return Err(Error::Timeout(timeout));
-            }
-
-            v = resp
+        if finished.wait_timeout(Some(timeout)) {
+            return Ok(finished.take().unwrap());
         }
 
-        Ok(v.take().unwrap())
+        Err(Error::Timeout(timeout))
     }
 
     fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<RaftCmdResponse> {
