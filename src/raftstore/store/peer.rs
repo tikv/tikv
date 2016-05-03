@@ -163,7 +163,9 @@ impl Peer {
                        from_epoch,
                        region_epoch);
                 // We receive a stale message and we can't re-create the peer with the peer id.
-                return Err(box_err!("peer {} already destroyed", store_id));
+                return Err(box_err!("peer {} for region {} already destroyed",
+                                    store_id,
+                                    region_id));
             }
         }
 
