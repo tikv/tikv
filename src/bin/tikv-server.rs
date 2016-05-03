@@ -20,14 +20,15 @@ extern crate getopts;
 extern crate log;
 extern crate rocksdb;
 extern crate mio;
+extern crate toml;
 
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
+use std::io::prelude::Read;
 
 use getopts::{Options, Matches};
-use log::LogLevelFilter;
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
 use mio::tcp::TcpListener;
 
@@ -47,16 +48,18 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
-fn initial_log(matches: &Matches) {
-    let log_filter = match matches.opt_str("L") {
-        Some(level) => logger::get_level_by_string(&level),
-        None => LogLevelFilter::Info,
-    };
-    util::init_log(log_filter).unwrap();
+fn initial_log(matches: &Matches, config: &toml::Value) {
+    let level = matches.opt_str("L").unwrap_or_else(|| {
+        match config.lookup("server.log") {
+            Some(v) => v.as_str().unwrap_or("info").to_owned(),
+            None => "info".to_owned(),
+        }
+    });
+    util::init_log(logger::get_level_by_string(&level)).unwrap();
 }
 
-
 fn build_raftkv(matches: &Matches,
+                config: &toml::Value,
                 ch: SendCh,
                 cluster_id: u64,
                 addr: String,
@@ -64,7 +67,7 @@ fn build_raftkv(matches: &Matches,
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
-    let path = get_store_path(matches);
+    let path = get_store_path(matches, config);
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(64 * 1024);
@@ -86,8 +89,22 @@ fn build_raftkv(matches: &Matches,
 
     // Set advertise address for outer node and client use.
     // If no advertise listening address set, use the associated listening address.
-    cfg.advertise_addr = matches.opt_str("advertise-addr")
-                                .unwrap_or_else(|| addr);
+    cfg.advertise_addr = matches.opt_str("advertise-addr").unwrap_or_else(|| {
+        match config.lookup("server.advertise-addr") {
+            Some(v) => {
+                v.as_str()
+                 .unwrap_or_else(|| {
+                     info!("mlfromed advertise-addr, use addr: {}", addr);
+                     &*addr // String -> &str
+                 })
+                 .to_owned()
+            }
+            None => {
+                info!("unspecified advertise-addr, use addr: {}", addr);
+                addr
+            }
+        }
+    });
 
     let mut node = Node::new(&cfg, pd_client, trans.clone());
     node.start(engine.clone()).unwrap();
@@ -96,14 +113,23 @@ fn build_raftkv(matches: &Matches,
     (create_raft_storage(node, engine).unwrap(), raft_router)
 }
 
-fn get_store_path(matches: &Matches) -> String {
-    let path = matches.opt_str("s");
-    if path.is_none() {
-        return TEMP_DIR.to_owned();
-    }
+fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
+    let path = match matches.opt_str("s") {
+        Some(path) => path,
+        None => {
+            match config.lookup("server.store") {
+                Some(v) => {
+                    match v.as_str() {
+                        Some(s) => s.to_owned(),
+                        None => return TEMP_DIR.to_owned(),
+                    }
+                }
+                None => return TEMP_DIR.to_owned(),
+            }
+        }
+    };
 
-    let path = &path.unwrap();
-    let p = Path::new(path);
+    let p = Path::new(&path);
     if p.exists() && p.is_file() {
         panic!("{} is not a directory!", path);
     }
@@ -126,18 +152,29 @@ fn run_local_server(listener: TcpListener, store: Storage) {
     svr.run(&mut event_loop).unwrap();
 }
 
-fn run_raft_server(listener: TcpListener, matches: &Matches) {
+fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value) {
     let mut event_loop = create_event_loop().unwrap();
     let ch = SendCh::new(event_loop.channel());
 
-    let id = matches.opt_str("I").expect("raftkv requires cluster id");
+    let id = matches.opt_str("I").unwrap_or_else(|| {
+        match config.lookup("raft.cluster-id") {
+            Some(v) => v.as_integer().expect("raftkv requires cluster id").to_string(),
+            None => panic!("raftkv requires cluster id"),
+        }
+    });
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
 
-    let pd_addr = matches.opt_str("pd").expect("raftkv needs pd client");
+    let pd_addr = matches.opt_str("pd").unwrap_or_else(|| {
+        match config.lookup("server.pd") {
+            Some(v) => v.as_str().expect("raftkv needs pd client").to_owned(),
+            None => panic!("raftkv needs pd client"),
+        }
+    });
     let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
     let resolver = PdStoreAddrResolver::new(cluster_id, pd_client.clone()).unwrap();
 
     let (store, raft_router) = build_raftkv(&matches,
+                                            config,
                                             ch,
                                             cluster_id,
                                             format!("{}", listener.local_addr().unwrap()),
@@ -164,8 +201,7 @@ fn main() {
                 "set log level",
                 "log level: trace, debug, info, warn, error, off");
     opts.optflag("h", "help", "print this help menu");
-    // TODO: support loading config file
-    // opts.optopt("C", "config", "set configuration file", "file path");
+    opts.optopt("C", "config", "set configuration file", "file path");
     opts.optopt("s",
                 "store",
                 "set the path to rocksdb directory",
@@ -181,24 +217,66 @@ fn main() {
         print_usage(&program, opts);
         return;
     }
-    initial_log(&matches);
 
-    let addr = matches.opt_str("A").unwrap_or_else(|| DEFAULT_LISTENING_ADDR.to_owned());
+    let config = match matches.opt_str("C") {
+        Some(path) => {
+            let mut config_file = fs::File::open(&path).expect("config open filed");
+            let mut s = String::new();
+            config_file.read_to_string(&mut s).expect("config read filed");
+            toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
+        }
+        // Empty value, lookup() always return `None`.
+        None => toml::Value::Integer(0),
+    };
+
+    initial_log(&matches, &config);
+
+    let addr = matches.opt_str("A").unwrap_or_else(|| {
+        match config.lookup("server.addr") {
+            Some(v) => {
+                v.as_str()
+                 .unwrap_or_else(|| {
+                     info!("malformed addr, use default: {}", DEFAULT_LISTENING_ADDR);
+                     DEFAULT_LISTENING_ADDR
+                 })
+                 .to_owned()
+            }
+            None => {
+                info!("unspecified addr, use default: {}", DEFAULT_LISTENING_ADDR);
+                DEFAULT_LISTENING_ADDR.to_owned()
+            }
+        }
+    });
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
 
-    let dsn_name = matches.opt_str("S").unwrap_or_else(|| ROCKSDB_DSN.to_owned());
+    let dsn_name = matches.opt_str("S").unwrap_or_else(|| {
+        match config.lookup("server.dsn") {
+            Some(v) => {
+                v.as_str()
+                 .unwrap_or_else(|| {
+                     info!("malformed dsn, use default: {}", ROCKSDB_DSN);
+                     ROCKSDB_DSN
+                 })
+                 .to_owned()
+            }
+            None => {
+                info!("unspecified dsn, use default: {}", ROCKSDB_DSN);
+                ROCKSDB_DSN.to_owned()
+            }
+        }
+    });
 
     panic_hook::set_exit_hook();
 
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
-            let path = get_store_path(&matches);
+            let path = get_store_path(&matches, &config);
             let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();
             run_local_server(listener, store);
         }
         RAFTKV_DSN => {
-            run_raft_server(listener, &matches);
+            run_raft_server(listener, &matches, &config);
         }
         n => panic!("unrecognized dns name: {}", n),
     };
