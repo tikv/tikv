@@ -195,7 +195,7 @@ fn test_nonleader_start_election(state: StateRole) {
         _ => panic!("Only non-leader role is accepted."),
     }
 
-    for _ in 0..2 * et {
+    for _ in 1..2 * et {
         r.tick()
     }
 
@@ -422,7 +422,7 @@ fn test_nonleaders_election_timeout_nonconfict(state: StateRole) {
         }
     }
 
-    assert!(conflicts as f64 / 1000.0 <= 0.4);
+    assert!(conflicts as f64 / 1000.0 <= 0.3);
 }
 
 // test_leader_start_replication tests that when receiving client proposals,
@@ -815,7 +815,7 @@ fn test_vote_request() {
         r.step(m).expect("");
         r.read_messages();
 
-        for _ in 0..r.get_election_timeout() * 2 {
+        for _ in 1..r.get_election_timeout() * 2 {
             r.tick_election();
         }
 
