@@ -115,7 +115,7 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
                                                Ok(())
                                            }));
 
-        if finished.wait_set(Some(timeout)) {
+        if finished.wait_timeout(Some(timeout)) {
             return Ok(finished.take().unwrap());
         }
 

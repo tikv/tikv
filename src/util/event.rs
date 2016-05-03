@@ -46,7 +46,7 @@ impl<T> Event<T> {
         self.m.lock().unwrap().is_some()
     }
 
-    /// Take the inner value and wait up all other waiting-take threads.
+    /// Take the inner value and wait up all other waiting-clear threads.
     pub fn take(&self) -> Option<T> {
         let mut l = self.m.lock().unwrap();
         let t = l.take();
@@ -57,7 +57,7 @@ impl<T> Event<T> {
     /// Wait till this event is set.
     ///
     /// If it's set before timeout, true is returned; otherwise return false.
-    pub fn wait_set(&self, timeout: Option<Duration>) -> bool {
+    pub fn wait_timeout(&self, timeout: Option<Duration>) -> bool {
         self.wait(true, timeout)
     }
 
@@ -88,7 +88,7 @@ impl<T> Event<T> {
     /// Wait for set status to be clear.
     ///
     /// If it's clear before timeout, true is returned; otherwise return false.
-    pub fn wait_take(&self, timeout: Option<Duration>) -> bool {
+    pub fn wait_clear(&self, timeout: Option<Duration>) -> bool {
         self.wait(false, timeout)
     }
 }
@@ -111,30 +111,30 @@ mod test {
             thread::sleep(Duration::from_millis(200));
             e2.set(4);
             let set_time = Instant::now();
-            e2.wait_take(None);
+            e2.wait_clear(None);
             assert!(set_time.elapsed() > Duration::from_millis(100));
         });
 
         assert!(!e.is_set());
         let start_time = Instant::now();
-        assert!(!e.wait_set(Some(Duration::from_millis(100))));
+        assert!(!e.wait_timeout(Some(Duration::from_millis(100))));
         assert!(start_time.elapsed() >= Duration::from_millis(100));
-        assert!(e.wait_set(None));
+        assert!(e.wait_timeout(None));
         assert!(start_time.elapsed() >= Duration::from_millis(200));
         assert!(e.is_set());
 
         let past_time = start_time.elapsed();
-        e.wait_set(None);
+        e.wait_timeout(None);
         assert!(start_time.elapsed() - past_time < Duration::from_millis(1));
 
-        assert!(!e.wait_take(Some(Duration::from_millis(100))));
+        assert!(!e.wait_clear(Some(Duration::from_millis(100))));
         assert!(start_time.elapsed() - past_time >= Duration::from_millis(100));
 
         let v = e.apply(|s| *s);
 
         assert_eq!(e.take(), v);
         assert!(!e.is_set());
-        assert!(!e.wait_set(Some(Duration::from_millis(100))));
+        assert!(!e.wait_timeout(Some(Duration::from_millis(100))));
         assert!(start_time.elapsed() - past_time >= Duration::from_millis(100));
 
         h.join().unwrap();
