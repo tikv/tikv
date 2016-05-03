@@ -13,15 +13,16 @@
 
 use std::{error, result};
 use std::fmt::Debug;
-use self::memory::EngineBtree;
 use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value, KvPair};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
-mod memory;
 mod rocksdb;
 pub mod raftkv;
+
+// only used for rocksdb without persistent.
+pub const TEMP_DIR: &'static str = "";
 
 #[derive(Debug)]
 pub enum Modify {
@@ -55,15 +56,13 @@ pub trait Snapshot {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Dsn<'a> {
-    Memory,
     RocksDBPath(&'a str),
     RaftKv,
 }
 
-// Now we only support Memory and RocksDB.
+// Now we only support RocksDB.
 pub fn new_engine(dsn: Dsn) -> Result<Box<Engine>> {
     match dsn {
-        Dsn::Memory => Ok(Box::new(EngineBtree::new())),
         Dsn::RocksDBPath(path) => {
             EngineRocksdb::new(path).map(|engine| -> Box<Engine> { Box::new(engine) })
         }
@@ -97,14 +96,6 @@ mod tests {
     use storage::make_key;
     use util::codec::bytes;
     use kvproto::kvrpcpb::Context;
-
-    #[test]
-    fn memory() {
-        let e = new_engine(Dsn::Memory).unwrap();
-        get_put(e.as_ref());
-        batch(e.as_ref());
-        seek(e.as_ref());
-    }
 
     #[test]
     fn rocksdb() {
