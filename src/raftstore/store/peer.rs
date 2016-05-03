@@ -627,23 +627,26 @@ impl Peer {
         peer_storage::save_applied_index(&wb, self.region_id, index)
             .expect("save applied index must not fail");
 
+        // Commit write and change storage fields atomically.
+        // Lock here to guarantee generating snapshot sees a consistent view data.
+        let mut storage = self.storage.wl();
         match self.engine
                   .write(wb) {
             Ok(_) => {
-                self.storage.wl().set_applied_index(index);
+                storage.set_applied_index(index);
 
                 if let Some(ref exec_result) = exec_result {
                     match *exec_result {
                         ExecResult::ChangePeer { ref region, .. } => {
-                            self.storage.wl().set_region(region);
+                            storage.set_region(region);
                         }
                         ExecResult::CompactLog { ref state } => {
-                            self.storage.wl().set_truncated_state(state);
+                            storage.set_truncated_state(state);
                             // TODO: we can set exec_result to None, because outer store
                             // doesn't need it.
                         }
                         ExecResult::SplitRegion { ref left, .. } => {
-                            self.storage.wl().set_region(left);
+                            storage.set_region(left);
                         }
                     }
                 };
