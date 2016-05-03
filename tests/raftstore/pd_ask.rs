@@ -15,12 +15,12 @@ use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use kvproto::raft_cmdpb::AdminCmdType;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::pdpb::{self, CommandType};
 use kvproto::raftpb::ConfChangeType;
 
 use tikv::pd::PdClient;
-use tikv::util::{hex, HandyRwLock};
+use tikv::util::{escape, HandyRwLock};
 
 use super::pd::TestPdClient;
 use super::cluster::Simulator;
@@ -66,7 +66,7 @@ impl<T: Simulator> AskHandler<T> {
         let region = req.get_ask_change_peer().get_region();
         let leader_store_id = req.get_ask_change_peer().get_leader_store_id();
         // because region may change at this point, we should use
-        // latest region info instead. TODO: update leader too.
+        // latest region info instead.
         let region = self.pd_client
                          .rl()
                          .get_region_by_id(cluster_id, region.get_id())
@@ -106,16 +106,25 @@ impl<T: Simulator> AskHandler<T> {
         let change_peer = new_admin_request(region.get_id(),
                                             region.get_region_epoch(),
                                             new_change_peer_cmd(conf_change_type, store_id));
-        let resp = self.sim
-                       .wl()
-                       .call_command(leader_store_id, change_peer, Duration::from_secs(3))
-                       .unwrap();
-        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
-        assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCmdType::ChangePeer);
-
+        let resp = self.call_command(change_peer, leader_store_id);
+        if resp.is_none() {
+            return;
+        }
+        let resp = resp.unwrap();
         let region = resp.get_admin_response().get_change_peer().get_region();
         self.pd_client.wl().change_peer(cluster_id, region.clone()).unwrap();
+    }
+
+    fn call_command(&self, req: RaftCmdRequest, store_id: u64) -> Option<RaftCmdResponse> {
+        let req_type = req.get_admin_request().get_cmd_type();
+        let resp = self.sim.wl().call_command(store_id, req, Duration::from_secs(3)).unwrap();
+        if resp.get_header().has_error() && resp.get_header().get_error().has_not_leader() {
+            // ignore not leader error, as the client will retry anyway.
+            return None;
+        }
+        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
+        assert_eq!(resp.get_admin_response().get_cmd_type(), req_type);
+        Some(resp)
     }
 
     fn handle_split(&mut self, req: pdpb::Request) {
@@ -130,26 +139,20 @@ impl<T: Simulator> AskHandler<T> {
         if &*split_key <= region.get_start_key() ||
            (!region.get_end_key().is_empty() && &*split_key >= region.get_end_key()) {
             error!("invalid split key {} for region {:?}",
-                   hex(&split_key),
+                   escape(&split_key),
                    region);
             return;
         }
 
         let new_region_id = self.pd_client.wl().alloc_id(0).unwrap();
-
-
         let split = new_admin_request(region.get_id(),
                                       region.get_region_epoch(),
                                       new_split_region_cmd(Some(split_key), new_region_id));
-        let resp = self.sim
-                       .wl()
-                       .call_command(leader_store_id, split, Duration::from_secs(3))
-                       .unwrap();
-
-        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
-        assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCmdType::Split);
-
+        let resp = self.call_command(split, leader_store_id);
+        if resp.is_none() {
+            return;
+        }
+        let resp = resp.unwrap();
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
 

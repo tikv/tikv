@@ -63,7 +63,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(epoch.get_conf_ver() > 1);
 
     let change_peer = new_admin_request(1, &epoch, new_change_peer_cmd(ConfChangeType::AddNode, 2));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't add same peer twice");
 
@@ -74,7 +74,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let change_peer = new_admin_request(1,
                                         &stale_epoch,
                                         new_change_peer_cmd(ConfChangeType::AddNode, 5));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "We can't change peer with stale epoch");
 
@@ -110,14 +110,14 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let change_peer = new_admin_request(1,
                                         &epoch,
                                         new_change_peer_cmd(ConfChangeType::RemoveNode, 2));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "we can't remove same peer twice");
 
     let change_peer = new_admin_request(1,
                                         &stale_epoch,
                                         new_change_peer_cmd(ConfChangeType::RemoveNode, 3));
-    let resp = cluster.call_command_on_leader(1, change_peer, Duration::from_secs(3)).unwrap();
+    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error(),
             "We can't change peer with stale epoch");
 

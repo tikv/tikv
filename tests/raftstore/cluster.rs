@@ -111,7 +111,15 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn start(&mut self) {
-        self.start_with_strategy(vec![]);
+        if self.engines.is_empty() {
+            self.start_with_strategy(vec![]);
+        } else {
+            // recover from last shutdown.
+            let node_ids: Vec<u64> = self.engines.keys().cloned().collect();
+            for node_id in node_ids {
+                self.run_node(node_id);
+            }
+        }
     }
 
     pub fn start_with_strategy(&mut self, strategy: Vec<Strategy>) {
@@ -152,10 +160,10 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn call_command_on_leader_once(&mut self,
-                                   region_id: u64,
                                    request: RaftCmdRequest,
                                    timeout: Duration)
                                    -> Result<RaftCmdResponse> {
+        let region_id = request.get_header().get_region_id();
         if let Some(leader) = self.leader_of_region(region_id) {
             return self.call_command(leader, request, timeout);
         }
@@ -163,13 +171,13 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn call_command_on_leader(&mut self,
-                                  region_id: u64,
                                   request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
         let mut retry_cnt = 0;
+        let region_id = request.get_header().get_region_id();
         loop {
-            let result = self.call_command_on_leader_once(region_id, request.clone(), timeout);
+            let result = self.call_command_on_leader_once(request.clone(), timeout);
             if result.is_err() {
                 return result;
             }
@@ -183,12 +191,34 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    fn query_leader(&self, store_id: u64, region_id: u64) -> Option<u64> {
+        // For some tests, we stop the node but pd still has this information,
+        // and we must skip this.
+        if !self.sim.rl().get_node_ids().contains(&store_id) {
+            return None;
+        }
+
+        let find_leader = new_status_request(region_id, new_region_leader_cmd());
+        let mut resp = self.call_command(store_id, find_leader, Duration::from_secs(3)).unwrap();
+        let region_leader = resp.take_status_response().take_region_leader();
+        // NOTE: node id can't be 0.
+        if self.sim.rl().get_node_ids().contains(&region_leader.get_leader_store_id()) {
+            Some(region_leader.get_leader_store_id())
+        } else {
+            None
+        }
+    }
+
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<u64> {
         if let Some(l) = self.leaders.get(&region_id) {
-            return Some(*l);
+            // leader may be stopped in some tests.
+            if self.sim.rl().get_node_ids().contains(&l) {
+                return Some(*l);
+            }
         }
+        self.reset_leader_of_region(region_id);
         let mut leader = None;
-        let mut retry_cnt = 200;
+        let mut retry_cnt = 500;
 
         let stores = self.pd_client.rl().get_stores(self.id()).unwrap();
         let node_ids: HashSet<u64> = self.sim.rl().get_node_ids();
@@ -197,25 +227,12 @@ impl<T: Simulator> Cluster<T> {
             count = 0;
             leader = None;
             for store in &stores {
-                // For some tests, we stop the node but pd still has this information,
-                // and we must skip this.
-                if !node_ids.contains(&store.get_id()) {
-                    continue;
-                }
-
-
-                let find_leader = new_status_request(region_id, new_region_leader_cmd());
-                let resp = self.call_command(store.get_id(), find_leader, Duration::from_secs(3))
-                               .unwrap();
-                let region_leader = resp.get_status_response().get_region_leader();
-                if region_leader.has_leader_store_id() &&
-                   (leader.is_none() ||
-                    *leader.as_ref().unwrap() == region_leader.get_leader_store_id()) {
-                    debug!("found leader {:?} from {}",
-                           region_leader.get_leader_store_id(),
-                           store.get_id());
+                let l = self.query_leader(store.get_id(), region_id);
+                if leader.is_none() {
+                    leader = l;
+                    count = 1;
+                } else if l == leader {
                     count += 1;
-                    leader = Some(region_leader.get_leader_store_id());
                 }
             }
             sleep_ms(10);
@@ -341,7 +358,7 @@ impl<T: Simulator> Cluster<T> {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
-            let result = self.call_command_on_leader(region_id, req, timeout);
+            let result = self.call_command_on_leader(req, timeout);
 
             if let Err(Error::Timeout(_)) = result {
                 warn!("call command timeout, let's retry");
@@ -432,7 +449,7 @@ impl<T: Simulator> Cluster<T> {
         let change_peer = new_admin_request(region_id,
                                             &epoch,
                                             new_change_peer_cmd(change_type, store_id));
-        let resp = self.call_command_on_leader(region_id, change_peer, Duration::from_secs(3))
+        let resp = self.call_command_on_leader(change_peer, Duration::from_secs(3))
                        .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::ChangePeer,
                 format!("{:?}", resp));
@@ -449,7 +466,7 @@ impl<T: Simulator> Cluster<T> {
         let split = new_admin_request(region_id,
                                       region.get_region_epoch(),
                                       new_split_region_cmd(split_key, new_region_id));
-        let resp = self.call_command_on_leader(region_id, split, Duration::from_secs(3)).unwrap();
+        let resp = self.call_command_on_leader(split, Duration::from_secs(3)).unwrap();
 
         assert_eq!(resp.get_admin_response().get_cmd_type(),
                    AdminCmdType::Split);

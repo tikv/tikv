@@ -26,7 +26,7 @@ use raft;
 use kvproto::metapb;
 
 use super::coprocessor::Error as CopError;
-use util::hex;
+use util::escape;
 
 quick_error!{
     #[derive(Debug)]
@@ -46,7 +46,10 @@ quick_error!{
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             description("key is not in region")
             display("key {} is not in region key range [{}, {}) for region {}",
-                hex(key), hex(region.get_start_key()), hex(region.get_end_key()), region.get_id())
+                    escape(key),
+                    escape(region.get_start_key()),
+                    escape(region.get_end_key()),
+                    region.get_id())
         }
         Other(err: Box<error::Error + Sync + Send>) {
             from()

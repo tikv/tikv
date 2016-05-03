@@ -17,18 +17,36 @@ use rocksdb::{DB, Writable, WriteBatch, IteratorMode, Direction};
 use rocksdb::rocksdb::Snapshot as RocksSnapshot;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair};
-use util::hex;
-use super::{Engine, Snapshot, Modify, Result};
+use util::escape;
+use super::{Engine, Snapshot, Modify, TEMP_DIR, Result};
+use tempdir::TempDir;
 
+
+#[allow(dead_code)]
 pub struct EngineRocksdb {
     db: DB,
+    // only use for memory mode
+    temp_dir: Option<TempDir>,
 }
 
 impl EngineRocksdb {
     pub fn new(path: &str) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
-        DB::open_default(path)
-            .map(|db| EngineRocksdb { db: db })
+        let (path, temp_dir) = match path {
+            TEMP_DIR => {
+                let td = TempDir::new("temp-rocksdb").unwrap();
+                (td.path().to_str().unwrap().to_owned(), Some(td))
+            }
+            _ => (path.to_owned(), None),
+        };
+
+        DB::open_default(&path)
+            .map(|db| {
+                EngineRocksdb {
+                    db: db,
+                    temp_dir: temp_dir,
+                }
+            })
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 }
@@ -66,7 +84,7 @@ impl Engine for EngineRocksdb {
                     }
                 }
                 Modify::Put((k, v)) => {
-                    trace!("EngineRocksdb: put {},{}", k, hex(&v));
+                    trace!("EngineRocksdb: put {},{}", k, escape(&v));
                     if let Err(msg) = wb.put(k.raw(), &v) {
                         return Err(RocksDBError::new(msg).into_engine_error());
                     }

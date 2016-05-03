@@ -625,6 +625,7 @@ mod tests {
     use raftstore::store::Callback;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use raft::SnapshotStatus;
+    use storage::engine::TEMP_DIR;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -672,7 +673,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut server = Server::new(&mut event_loop,
                                      listener,
-                                     Storage::new(Dsn::Memory).unwrap(),
+                                     Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                                      Arc::new(RwLock::new(TestRaftStoreRouter {
                                          tx: Mutex::new(tx),
                                      })),

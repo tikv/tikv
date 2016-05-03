@@ -75,6 +75,4 @@ pub fn bench_engine() {
     let dsn = Dsn::RocksDBPath(path.path().to_str().unwrap());
     printf!("benching tombstone scan with rocksdb\t...\t");
     print_result(bench_tombstone_scan(dsn));
-    printf!("benching tombstone scan with memory\t...\t");
-    print_result(bench_tombstone_scan(Dsn::Memory));
 }
