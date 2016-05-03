@@ -35,9 +35,9 @@ impl EngineRocksdb {
         let (path, temp_dir) = match path {
             TEMP_DIR => {
                 let td = TempDir::new("temp-rocksdb").unwrap();
-                (String::from(td.path().to_str().unwrap()), Some(td))
+                (td.path().to_str().unwrap().to_owned(), Some(td))
             }
-            _ => (String::from(path), None),
+            _ => (path.to_owned(), None),
         };
 
         DB::open_default(&path)
