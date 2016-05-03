@@ -32,12 +32,12 @@ impl<T> Event<T> {
     ///
     /// If the event is not set yet, None is returned; otherwise
     /// applied result is returned.
-    pub fn apply<U, F: Fn(&T) -> U>(&self, f: F) -> Option<U> {
+    pub fn apply<U, F: Fn(&mut T) -> U>(&self, f: F) -> Option<U> {
         if self.m.lock().unwrap().is_none() {
             return None;
         }
-        let l = self.m.lock().unwrap();
-        let res = f(l.as_ref().unwrap());
+        let mut l = self.m.lock().unwrap();
+        let res = f(l.as_mut().unwrap());
         Some(res)
     }
 
