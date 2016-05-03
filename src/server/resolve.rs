@@ -264,7 +264,7 @@ impl PdStoreAddrResolver {
 
         let mut worker = try!(PdResolveWorker::new(cluster_id, pd_client, ch.clone()));
 
-        let builder = Builder::new().name("store address resolve worker".to_owned());
+        let builder = Builder::new().name("store address resolver".to_owned());
         let h = try!(builder.spawn(move || {
             event_loop.timeout((), Duration::from_millis(ARES_PROCESS_TIMEOUT))
                       .expect("must register ares process timeout");
