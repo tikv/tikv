@@ -52,14 +52,18 @@ pub trait Simulator {
                 -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
-    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
+    fn call_command(&self,
+                    store_id: u64,
+                    request: RaftCmdRequest,
+                    timeout: Duration)
+                    -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>);
 }
 
 pub struct Cluster<T: Simulator> {
     pub cfg: ServerConfig,
-    leaders: HashMap<u64, metapb::Peer>,
+    leaders: HashMap<u64, u64>,
     paths: Vec<TempDir>,
     dbs: Vec<Arc<DB>>,
 
@@ -148,20 +152,20 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn call_command(&self,
+                        store_id: u64,
                         request: RaftCmdRequest,
                         timeout: Duration)
                         -> Result<RaftCmdResponse> {
-        self.sim.rl().call_command(request, timeout)
+        self.sim.rl().call_command(store_id, request, timeout)
     }
 
     fn call_command_on_leader_once(&mut self,
-                                   mut request: RaftCmdRequest,
+                                   request: RaftCmdRequest,
                                    timeout: Duration)
                                    -> Result<RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
         if let Some(leader) = self.leader_of_region(region_id) {
-            request.mut_header().set_peer(leader);
-            return self.call_command(request, timeout);
+            return self.call_command(leader, request, timeout);
         }
         Err(box_err!("can't get leader of region"))
     }
@@ -187,31 +191,29 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
+    fn query_leader(&self, store_id: u64, region_id: u64) -> Option<u64> {
         // For some tests, we stop the node but pd still has this information,
         // and we must skip this.
         if !self.sim.rl().get_node_ids().contains(&store_id) {
             return None;
         }
 
-        // To get region leader, we don't care real peer id, so use 0 instead.
-        let peer = new_peer(store_id, 0);
-        let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-        let mut resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
-        let mut region_leader = resp.take_status_response().take_region_leader();
+        let find_leader = new_status_request(region_id, new_region_leader_cmd());
+        let mut resp = self.call_command(store_id, find_leader, Duration::from_secs(3)).unwrap();
+        let region_leader = resp.take_status_response().take_region_leader();
         // NOTE: node id can't be 0.
-        if self.sim.rl().get_node_ids().contains(&region_leader.get_leader().get_store_id()) {
-            Some(region_leader.take_leader())
+        if self.sim.rl().get_node_ids().contains(&region_leader.get_leader_store_id()) {
+            Some(region_leader.get_leader_store_id())
         } else {
             None
         }
     }
 
-    pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
+    pub fn leader_of_region(&mut self, region_id: u64) -> Option<u64> {
         if let Some(l) = self.leaders.get(&region_id) {
             // leader may be stopped in some tests.
-            if self.sim.rl().get_node_ids().contains(&l.get_store_id()) {
-                return Some(l.clone());
+            if self.sim.rl().get_node_ids().contains(&l) {
+                return Some(*l);
             }
         }
         self.reset_leader_of_region(region_id);
@@ -244,9 +246,8 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.get(&region_id).cloned()
     }
 
-    // Multiple nodes with fixed node id, like node 1, 2, .. 5,
-    // First region 1 is in all stores with peer 1, 2, .. 5.
-    // Peer 1 is in node 1, store 1, etc.
+    // Multiple stores with fixed store id, like store 1, 2, .. 5,
+    // First region 1 is in all stores.
     pub fn bootstrap_region(&mut self) -> Result<()> {
         for (id, engine) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
@@ -261,8 +262,7 @@ impl<T: Simulator> Cluster<T> {
         region.mut_region_epoch().set_conf_ver(1);
 
         for (&id, engine) in &self.engines {
-            let peer = new_peer(id, id);
-            region.mut_peers().push(peer.clone());
+            region.mut_store_ids().push(id);
             bootstrap_store(&engine, self.id(), id).unwrap();
         }
 
@@ -287,7 +287,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        let region = bootstrap_region(self.engines.get(&node_id).unwrap(), 1, 1, 1).unwrap();
+        let region = bootstrap_region(self.engines.get(&node_id).unwrap(), 1, 1).unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid
@@ -341,11 +341,11 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let err = err.get_not_leader();
-        if !err.has_leader() {
+        if !err.has_leader_store_id() {
             self.reset_leader_of_region(region_id);
             return true;
         }
-        self.leaders.insert(region_id, err.get_leader().clone());
+        self.leaders.insert(region_id, err.get_leader_store_id());
         true
     }
 
@@ -444,14 +444,11 @@ impl<T: Simulator> Cluster<T> {
             .clone()
     }
 
-    pub fn change_peer(&mut self,
-                       region_id: u64,
-                       change_type: ConfChangeType,
-                       peer: metapb::Peer) {
+    pub fn change_peer(&mut self, region_id: u64, change_type: ConfChangeType, store_id: u64) {
         let epoch = self.get_region_epoch(region_id);
         let change_peer = new_admin_request(region_id,
                                             &epoch,
-                                            new_change_peer_cmd(change_type, peer));
+                                            new_change_peer_cmd(change_type, store_id));
         let resp = self.call_command_on_leader(change_peer, Duration::from_secs(3))
                        .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::ChangePeer,
@@ -464,17 +461,11 @@ impl<T: Simulator> Cluster<T> {
     pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
         let new_region_id = self.pd_client.wl().alloc_id(0).unwrap();
         let region = self.pd_client.rl().get_region_by_id(self.id(), region_id).unwrap();
-        let peer_count = region.get_peers().len();
-        let mut peer_ids: Vec<u64> = vec![];
-        for _ in 0..peer_count {
-            let peer_id = self.pd_client.wl().alloc_id(0).unwrap();
-            peer_ids.push(peer_id);
-        }
 
         // TODO: use region instead of region_id
         let split = new_admin_request(region_id,
                                       region.get_region_epoch(),
-                                      new_split_region_cmd(split_key, new_region_id, peer_ids));
+                                      new_split_region_cmd(split_key, new_region_id));
         let resp = self.call_command_on_leader(split, Duration::from_secs(3)).unwrap();
 
         assert_eq!(resp.get_admin_response().get_cmd_type(),
@@ -486,11 +477,10 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client.wl().split_region(self.id(), left.clone(), right.clone()).unwrap();
     }
 
-    pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {
+    pub fn region_detail(&mut self, region_id: u64, store_id: u64) -> RegionDetailResponse {
         let status_cmd = new_region_detail_cmd();
-        let peer = new_peer(peer_id, peer_id);
-        let req = new_status_request(region_id, peer, status_cmd);
-        let resp = self.call_command(req, Duration::from_secs(3));
+        let req = new_status_request(region_id, status_cmd);
+        let resp = self.call_command(store_id, req, Duration::from_secs(3));
         assert!(resp.is_ok(), format!("{:?}", resp));
 
         let mut resp = resp.unwrap();
@@ -528,7 +518,7 @@ struct PartitionFilter {
 
 impl Filter for PartitionFilter {
     fn before(&mut self, msg: &RaftMessage) -> bool {
-        self.drop = self.node_ids.contains(&msg.get_to_peer().get_store_id());
+        self.drop = self.node_ids.contains(&msg.get_message().get_to());
         self.drop
     }
     fn after(&mut self, r: Result<()>) -> Result<()> {

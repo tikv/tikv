@@ -44,7 +44,7 @@ impl ChannelTransport {
 
 impl Transport for ChannelTransport {
     fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        let to_store = msg.get_to_peer().get_store_id();
+        let to_store = msg.get_message().get_to();
 
         match self.routers.get(&to_store) {
             Some(h) => h.rl().send_raft_msg(msg),
@@ -110,8 +110,11 @@ impl Simulator for NodeCluster {
         self.nodes.keys().cloned().collect()
     }
 
-    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
-        let store_id = request.get_header().get_peer().get_store_id();
+    fn call_command(&self,
+                    store_id: u64,
+                    request: RaftCmdRequest,
+                    timeout: Duration)
+                    -> Result<RaftCmdResponse> {
         if !self.trans.rl().routers.contains_key(&store_id) {
             return Err(box_err!("missing sender for store {}", store_id));
         }
