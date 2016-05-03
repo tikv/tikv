@@ -141,7 +141,7 @@ impl Transport for ServerTransport {
 }
 
 
-// MockRaftStoreRouter is used for Memory and RocksDB to pass compile.
+// MockRaftStoreRouter is used for passing compile.
 pub struct MockRaftStoreRouter;
 
 impl RaftStoreRouter for MockRaftStoreRouter {
