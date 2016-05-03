@@ -168,7 +168,7 @@ impl<T, Trans> Node<T, Trans>
               peer_id,
               region_id);
 
-        let region = try!(store::bootstrap_region(engine, store_id, region_id, peer_id));
+        let region = try!(store::bootstrap_region(engine, store_id, region_id));
         Ok(region)
     }
 

@@ -265,7 +265,7 @@ impl<T: Storage> Raft<T> {
         self.raft_log.get_store()
     }
 
-    fn has_leader(&self) -> bool {
+    pub fn has_leader(&self) -> bool {
         self.leader_id != INVALID_ID
     }
 

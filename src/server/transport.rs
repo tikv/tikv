@@ -32,11 +32,11 @@ pub trait RaftStoreRouter: Send + Sync {
     // Report sending snapshot status.
     fn report_snapshot(&self,
                        region_id: u64,
-                       to_peer_id: u64,
+                       to_store_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()>;
 
-    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()>;
+    fn report_unreachable(&self, region_id: u64, to_store_id: u64) -> RaftStoreResult<()>;
 }
 
 pub struct ServerRaftStoreRouter {
@@ -51,27 +51,16 @@ impl ServerRaftStoreRouter {
             ch: ch,
         }
     }
-
-    fn check_store(&self, store_id: u64) -> RaftStoreResult<()> {
-        if store_id != self.store_id {
-            return Err(box_err!("invalid store {} != {}", store_id, self.store_id));
-        }
-        Ok(())
-    }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        try!(self.check_store(msg.get_to_peer().get_store_id()));
-
         try!(self.ch.send(StoreMsg::RaftMessage(msg)));
 
         Ok(())
     }
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        try!(self.check_store(req.get_header().get_peer().get_store_id()));
-
         try!(self.ch.send(StoreMsg::RaftCmd {
             request: req,
             callback: cb,
@@ -82,22 +71,22 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn report_snapshot(&self,
                        region_id: u64,
-                       to_peer_id: u64,
+                       to_store_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()> {
         try!(self.ch.send(StoreMsg::ReportSnapshot {
             region_id: region_id,
-            to_peer_id: to_peer_id,
+            to_store_id: to_store_id,
             status: status,
         }));
 
         Ok(())
     }
 
-    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
+    fn report_unreachable(&self, region_id: u64, to_store_id: u64) -> RaftStoreResult<()> {
         try!(self.ch.send(StoreMsg::ReportUnreachable {
             region_id: region_id,
-            to_peer_id: to_peer_id,
+            to_store_id: to_store_id,
         }));
 
         Ok(())
@@ -124,7 +113,7 @@ impl ServerTransport {
 
 impl Transport for ServerTransport {
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        let to_store_id = msg.get_to_peer().get_store_id();
+        let to_store_id = msg.get_message().get_to();
 
         let mut req = Message::new();
         req.set_msg_type(MessageType::Raft);

@@ -29,12 +29,12 @@ pub enum Task {
     AskChangePeer {
         change_type: raftpb::ConfChangeType,
         region: metapb::Region,
-        peer: metapb::Peer,
+        leader_store_id: u64,
     },
     AskSplit {
         region: metapb::Region,
         split_key: Vec<u8>,
-        peer: metapb::Peer,
+        leader_store_id: u64,
     },
 }
 
@@ -74,12 +74,12 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         info!("executing task {}", task);
 
         let res = match task {
-            Task::AskChangePeer { region, peer, .. } => {
+            Task::AskChangePeer { region, leader_store_id, .. } => {
                 // TODO: We may add change_type in pd protocol later.
-                self.pd_client.rl().ask_change_peer(self.cluster_id, region, peer)
+                self.pd_client.rl().ask_change_peer(self.cluster_id, region, leader_store_id)
             }
-            Task::AskSplit { region, split_key, peer } => {
-                self.pd_client.rl().ask_split(self.cluster_id, region, &split_key, peer)
+            Task::AskSplit { region, split_key, leader_store_id } => {
+                self.pd_client.rl().ask_split(self.cluster_id, region, &split_key, leader_store_id)
             }
         };
 
