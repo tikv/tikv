@@ -32,24 +32,19 @@ pub struct EngineRocksdb {
 impl EngineRocksdb {
     pub fn new(path: &str) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
-        // memory mode
-        if path == TEMP_DIR {
-            let td = TempDir::new("rocksdb-mem-mode").unwrap();
-            return DB::open_default(td.path().to_str().unwrap())
-                       .map(|db| {
-                           EngineRocksdb {
-                               db: db,
-                               temp_dir: Some(td),
-                           }
-                       })
-                       .map_err(|e| RocksDBError::new(e).into_engine_error());
-        }
+        let (path, temp_dir) = match path {
+            TEMP_DIR => {
+                let td = TempDir::new("temp-rocksdb").unwrap();
+                (String::from(td.path().to_str().unwrap()), Some(td))
+            }
+            _ => (String::from(path), None),
+        };
 
-        DB::open_default(path)
+        DB::open_default(&path)
             .map(|db| {
                 EngineRocksdb {
                     db: db,
-                    temp_dir: None,
+                    temp_dir: temp_dir,
                 }
             })
             .map_err(|e| RocksDBError::new(e).into_engine_error())
