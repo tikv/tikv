@@ -16,9 +16,10 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::{Box, FnBox};
 use std::collections::Bound::{Excluded, Unbounded};
+use std::time::Duration;
 
 use rocksdb::DB;
-use mio::{self, EventLoop, EventLoopConfig};
+use mio::{self, EventLoop, EventLoopBuilder};
 use protobuf;
 use uuid::Uuid;
 
@@ -43,7 +44,7 @@ use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::peer_storage::SnapState;
 use super::msg::Callback;
-use super::cmd_resp::{self, bind_uuid, bind_term, bind_error};
+use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 
 type Key = Vec<u8>;
@@ -82,9 +83,9 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
           C: PdClient
 {
     // We use base raft tick as the event loop timer tick.
-    let mut event_cfg = EventLoopConfig::new();
-    event_cfg.timer_tick_ms(cfg.raft_base_tick_interval);
-    let event_loop = try!(EventLoop::configured(event_cfg));
+    let mut builder = EventLoopBuilder::new();
+    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval));
+    let event_loop = try!(builder.build());
     Ok(event_loop)
 }
 
@@ -410,6 +411,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
 
                 // Insert new regions and validation
+                info!("insert new regions left: {:?}, right:{:?}", left, right);
                 if self.region_ranges
                        .insert(enc_end_key(&left), left.get_id())
                        .is_some() {
@@ -462,11 +464,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
-            resp = match self.execute_status_command(msg) {
-                Err(e) => cmd_resp::new_error(e),
-                Ok(resp) => resp,
+            match self.execute_status_command(msg) {
+                Err(e) => bind_error(&mut resp, e),
+                Ok(status_resp) => resp = status_resp,
             };
-            bind_uuid(&mut resp, uuid);
             return cb.call_box((resp,));
         }
 
@@ -494,11 +495,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return cb.call_box((resp,));
         }
 
-        if peer.pending_cmds.contains_key(&uuid) {
-            bind_error(&mut resp, box_err!("duplicated uuid {:?}", uuid));
-            return cb.call_box((resp,));
-        }
-
         // Notice:
         // Here means the peer is leader, it can still step down to follower later,
         // but it doesn't matter, if the peer is not leader, the proposing command
@@ -509,21 +505,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // for read-only, if we don't care stale read, we can
         // execute these commands immediately in leader.
 
-        let mut pending_cmd = PendingCmd {
+        let pending_cmd = PendingCmd {
             uuid: uuid,
-            cb: None,
-            cmd: Some(msg),
+            cb: cb,
         };
-
-        if let Err(e) = peer.propose_pending_cmd(&mut pending_cmd) {
-            bind_error(&mut resp, e);
-            return cb.call_box((resp,));
-        };
-
-        // Keep the callback in pending_cmd so that we can call it later
-        // after command applied.
-        pending_cmd.cb = Some(cb);
-        peer.pending_cmds.insert(uuid, pending_cmd);
+        try!(peer.propose(pending_cmd, msg, resp));
 
         self.pending_raft_groups.insert(region_id);
 
@@ -649,6 +635,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("{} doesn't exist or is not leader, skip.", region_id);
             return;
         }
+
         let key = keys::origin_key(&split_key);
         let peer = p.unwrap();
         let task = PdTask::AskSplit {
@@ -656,6 +643,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             split_key: key.to_vec(),
             peer: peer.peer.clone(),
         };
+
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("failed to notify pd to split region {} at {:?}: {}",
                    region_id,
@@ -712,6 +700,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.raft_group.report_snapshot(to_peer_id, status)
         }
     }
+
+    fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
+        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+            peer.raft_group.report_unreachable(to_peer_id);
+        }
+    }
 }
 
 fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
@@ -726,7 +720,8 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
                                              -> Result<mio::Timeout> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
-    event_loop.timeout_ms(tick, delay).map_err(|e| box_err!("register timer err: {:?}", e))
+    event_loop.timeout(tick, Duration::from_millis(delay))
+              .map_err(|e| box_err!("register timer err: {:?}", e))
 }
 
 fn new_compact_log_request(region_id: u64,
@@ -773,6 +768,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             }
             Msg::ReportSnapshot { region_id, to_peer_id, status } => {
                 self.on_report_snapshot(region_id, to_peer_id, status);
+            }
+            Msg::ReportUnreachable { region_id, to_peer_id } => {
+                self.on_unreachable(region_id, to_peer_id);
             }
         }
         slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());

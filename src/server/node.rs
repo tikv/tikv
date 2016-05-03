@@ -190,6 +190,7 @@ impl<T, Trans> Node<T, Trans>
     }
 
     fn start_store(&mut self, store_id: u64, engine: Arc<DB>) -> Result<()> {
+        info!("start raft store {} thread", store_id);
         let meta = try!(self.pd_client.rl().get_cluster_meta(self.cluster_id));
 
         if self.store_handle.is_some() {
@@ -220,6 +221,7 @@ impl<T, Trans> Node<T, Trans>
     }
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
+        info!("stop raft store {} thread", store_id);
         match self.ch.take() {
             None => return Err(box_err!("stop invalid store with id {}", store_id)),
             Some(ch) => try!(ch.send(Msg::Quit)),

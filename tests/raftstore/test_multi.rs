@@ -21,7 +21,6 @@ use super::transport_simulate::Strategy;
 
 use rand;
 use rand::Rng;
-use std::time::Duration;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     test_multi_with_transport_strategy(cluster, vec![]);
@@ -105,6 +104,10 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     cluster.shutdown();
+
+    // avoid TIMEWAIT
+    sleep_ms(500);
+
     cluster.start();
 
     assert_eq!(cluster.get(key), Some(value.to_vec()));
@@ -137,46 +140,27 @@ fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>,
     cluster.start();
 
     let mut rng = rand::thread_rng();
-    let key = b"a1";
     let mut value = [0u8; 5];
 
-    assert_eq!(cluster.get(key), None);
-
-    for _ in 1..restart_count {
-        rng.fill_bytes(&mut value);
-        cluster.must_put(key, &value);
-        assert_eq!(cluster.get(key), Some(value.to_vec()));
+    for i in 1..restart_count {
 
         let id = 1 + rng.gen_range(0, node_count as u64);
         cluster.stop_node(id);
+
+        let key = i.to_string().into_bytes();
+
+        rng.fill_bytes(&mut value);
+        cluster.must_put(&key, &value);
+        assert_eq!(cluster.get(&key), Some(value.to_vec()));
+
         cluster.run_node(id);
-        wait_until_node_online(cluster, id);
 
-        // verify whether data is actually being replicated
-        must_get_equal(&cluster.get_engine(id), key, &value);
+        // verify whether data is actually being replicated and waiting for node online.
+        must_get_equal(&cluster.get_engine(id), &key, &value);
 
-        cluster.must_delete(key);
-        assert_eq!(cluster.get(key), None);
+        cluster.must_delete(&key);
+        assert_eq!(cluster.get(&key), None);
     }
-}
-
-pub fn wait_until_node_online<T: Simulator>(cluster: &mut Cluster<T>, node_id: u64) {
-    for _ in 0..200 {
-        // leverage the fact that store id is equal to node id actually
-        let peer = new_peer(node_id, 0);
-        let find_leader = new_status_request(1, peer, new_region_leader_cmd());
-        let resp = cluster.call_command(find_leader, Duration::from_secs(3));
-        if resp.is_err() {
-            sleep_ms(10);
-            continue;
-        }
-        if !resp.unwrap().get_status_response().get_region_leader().has_leader() {
-            sleep_ms(10);
-            continue;
-        }
-        return;
-    }
-    assert!(false);
 }
 
 #[test]

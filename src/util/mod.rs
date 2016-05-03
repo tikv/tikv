@@ -14,7 +14,6 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io::{self, Write};
-use std::fmt::{self, Formatter, Display};
 use std::slice;
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
@@ -146,25 +145,35 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
     Ok(addrs.collect::<Vec<SocketAddr>>()[0])
 }
 
-/// A struct to make byte array format more friendly.
+/// A function to escape a byte array to a readable ascii string.
 ///
-/// Remove this once issue [33127](https://github.com/rust-lang/rust/issues/33127) is resolved.
-pub struct HexDisplay<'a> {
-    data: &'a [u8],
-}
-
-impl<'a> Display for HexDisplay<'a> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        try!(write!(f, "0x"));
-        for &b in self.data {
-            try!(write!(f, "{:02X}", b));
+/// # Examples
+///
+/// ```
+/// use tikv::util::escape;
+///
+/// assert_eq!("ab", escape(b"ab"));
+/// assert_eq!("a\\015\\012\\011 \\'\\\"\\", escape(b"a\r\n\t '\"\\"));
+/// assert_eq!("\\342\\235\\244\\360\\237\\220\\267", escape("❤🐷".as_bytes()));
+/// ```
+///
+pub fn escape(data: &[u8]) -> String {
+    let mut escaped = Vec::with_capacity(data.len() * 4);
+    for &c in data {
+        match c {
+            b'\'' => escaped.extend_from_slice(b"\\'"),
+            b'"' => escaped.extend_from_slice(b"\\\""),
+            b'\x20'...b'\x7e' => escaped.push(c),
+            _ => {
+                escaped.push(b'\\');
+                escaped.push(b'0' + (c >> 6));
+                escaped.push(b'0' + ((c >> 3) & 7));
+                escaped.push(b'0' + (c & 7));
+            }
         }
-        Ok(())
     }
-}
-
-pub fn hex(data: &[u8]) -> HexDisplay {
-    HexDisplay { data: data }
+    escaped.shrink_to_fit();
+    unsafe { String::from_utf8_unchecked(escaped) }
 }
 
 /// Convert a borrow to a slice.

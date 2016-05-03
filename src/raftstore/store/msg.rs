@@ -54,6 +54,11 @@ pub enum Msg {
         to_peer_id: u64,
         status: SnapshotStatus,
     },
+
+    ReportUnreachable {
+        region_id: u64,
+        to_peer_id: u64,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -69,6 +74,12 @@ impl fmt::Debug for Msg {
                        to_peer_id,
                        region_id,
                        status)
+            }
+            Msg::ReportUnreachable { ref region_id, ref to_peer_id } => {
+                write!(fmt,
+                       "peer {} for region {} is unreachable",
+                       to_peer_id,
+                       region_id)
             }
         }
     }
