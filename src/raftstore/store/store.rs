@@ -607,7 +607,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_split_region_check_tick(event_loop);
     }
 
-    fn on_split_check_result(&mut self, region_id: u64, split_key: Vec<u8>) {
+    fn on_split_check_result(&mut self,
+                             region_id: u64,
+                             epoch: metapb::RegionEpoch,
+                             split_key: Vec<u8>) {
         if split_key.is_empty() {
             error!("split key should not be empty!!!");
             return;
@@ -619,10 +622,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        let key = keys::origin_key(&split_key);
         let peer = p.unwrap();
+        let region = peer.region();
+
+        if region.get_region_epoch().get_version() != epoch.get_version() {
+            info!("{} epoch changed {:?} != {:?}, need re-check later",
+                  region_id,
+                  region.get_region_epoch(),
+                  epoch);
+            return;
+        }
+
+        let key = keys::origin_key(&split_key);
         let task = PdTask::AskSplit {
-            region: peer.region(),
+            region: region,
             split_key: key.to_vec(),
             leader_store_id: peer.store_id(),
         };
@@ -741,9 +754,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("receive quit message");
                 event_loop.shutdown();
             }
-            Msg::SplitCheckResult { region_id, split_key } => {
+            Msg::SplitCheckResult { region_id, epoch, split_key } => {
                 info!("split check of {} complete.", region_id);
-                self.on_split_check_result(region_id, split_key);
+                self.on_split_check_result(region_id, epoch, split_key);
             }
             Msg::ReportSnapshot { region_id, to_store_id, status } => {
                 self.on_report_snapshot(region_id, to_store_id, status);

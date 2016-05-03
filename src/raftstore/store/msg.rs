@@ -21,6 +21,7 @@ use mio;
 use raftstore::{Result, send_msg, Error};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) -> Result<()> + Send>;
@@ -46,6 +47,7 @@ pub enum Msg {
     // For split check
     SplitCheckResult {
         region_id: u64,
+        epoch: RegionEpoch,
         split_key: Vec<u8>,
     },
 
