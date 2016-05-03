@@ -155,7 +155,6 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
         let mut header = RaftRequestHeader::new();
         header.set_region_id(ctx.get_region_id());
-        header.set_peer(ctx.get_peer().clone());
         header.set_region_epoch(ctx.get_region_epoch().clone());
         header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
         header

@@ -85,7 +85,7 @@ pub trait PdClient: Send + Sync {
     fn ask_change_peer(&self,
                        cluster_id: u64,
                        region: metapb::Region,
-                       leader: metapb::Peer)
+                       leader_store_id: u64)
                        -> Result<()>;
 
     // Ask pd to split with given split_key for the region.
@@ -94,6 +94,6 @@ pub trait PdClient: Send + Sync {
                  cluster_id: u64,
                  region: metapb::Region,
                  split_key: &[u8],
-                 leader: metapb::Peer)
+                 leader_store_id: u64)
                  -> Result<()>;
 }

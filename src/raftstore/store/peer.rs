@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::{Arc, RwLock};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
 
@@ -50,7 +50,7 @@ pub struct PendingCmd {
 pub enum ExecResult {
     ChangePeer {
         change_type: ConfChangeType,
-        peer: metapb::Peer,
+        store_id: u64,
         region: metapb::Region,
     },
     CompactLog {
@@ -117,12 +117,11 @@ impl PendingCmdQueue {
 
 pub struct Peer {
     engine: Arc<DB>,
-    pub peer: metapb::Peer,
     region_id: u64,
+    pub store_id: u64,
     pub raft_group: RawNode<RaftStorage>,
     pub storage: Arc<RaftStorage>,
     pending_cmds: PendingCmdQueue,
-    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
     coprocessor_host: CoprocessorHost,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
@@ -139,24 +138,21 @@ impl Peer {
                                              region: &metapb::Region)
                                              -> Result<Peer> {
         let store_id = store.store_id();
-        let peer_id = match util::find_peer(&region, store_id) {
-            None => {
-                return Err(box_err!("find no peer for store {} in region {:?}", store_id, region))
-            }
-            Some(peer) => peer.get_id(),
+        if !util::find_peer(&region, store_id) {
+            return Err(box_err!("find no peer for store {} in region {:?}", store_id, region));
         };
 
-        Peer::new(store, region, peer_id)
+        Peer::new(store, region)
     }
 
     // The peer can be created from another node with raft membership changes, and we only
-    // know the region_id and peer_id when creating this replicated peer, the region info
-    // will be retrieved later after appling snapshot.
+    // know the region_id and store_id when creating this replicated peer, the region info
+    // will be retrieved later after applying snapshot.
     pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                                 region_id: u64,
-                                                from_epoch: &metapb::RegionEpoch,
-                                                peer_id: u64)
+                                                from_epoch: &metapb::RegionEpoch)
                                                 -> Result<Peer> {
+        let store_id = store.store_id();
         let tombstone_key = &keys::region_tombstone_key(region_id);
         if let Some(region) = try!(store.engine().get_msg::<metapb::Region>(tombstone_key)) {
             let region_epoch = region.get_region_epoch();
@@ -167,28 +163,25 @@ impl Peer {
                        from_epoch,
                        region_epoch);
                 // We receive a stale message and we can't re-create the peer with the peer id.
-                return Err(box_err!("peer {} already destroyed", peer_id));
+                return Err(box_err!("peer {} for region {} already destroyed",
+                                    store_id,
+                                    region_id));
             }
         }
 
         // We will remove tombstone key when apply snapshot
-        info!("replicate peer, peer id {}, region_id {} \n",
-              peer_id,
+        info!("replicate peer, store id {}, region_id {} \n",
+              store_id,
               region_id);
 
         let mut region = metapb::Region::new();
         region.set_id(region_id);
-        Peer::new(store, &region, peer_id)
+        Peer::new(store, &region)
     }
 
     fn new<T: Transport, C: PdClient>(store: &mut Store<T, C>,
-                                      region: &metapb::Region,
-                                      peer_id: u64)
+                                      region: &metapb::Region)
                                       -> Result<Peer> {
-        if peer_id == raft::INVALID_ID {
-            return Err(box_err!("invalid peer id"));
-        }
-
         let store_id = store.store_id();
         let ps = try!(PeerStorage::new(store.engine(), &region));
         let applied_index = ps.applied_index();
@@ -196,7 +189,7 @@ impl Peer {
 
         let cfg = store.config();
         let raft_cfg = raft::Config {
-            id: peer_id,
+            id: store_id,
             peers: vec![],
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
@@ -209,13 +202,12 @@ impl Peer {
         let raft_group = try!(RawNode::new(&raft_cfg, storage.clone(), &[]));
 
         let mut peer = Peer {
+            store_id: store_id,
             engine: store.engine(),
-            peer: util::new_peer(store_id, peer_id),
             region_id: region.get_id(),
             storage: storage,
             raft_group: raft_group,
             pending_cmds: Default::default(),
-            peer_cache: store.peer_cache(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             penging_remove: false,
@@ -224,7 +216,7 @@ impl Peer {
         peer.load_all_coprocessors();
 
         // If this region has only one peer and I am the one, campaign directly.
-        if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
+        if region.get_store_ids().len() == 1 && region.get_store_ids()[0] == store_id {
             try!(peer.raft_group.campaign());
         }
 
@@ -269,16 +261,20 @@ impl Peer {
         self.storage.rl().get_region().clone()
     }
 
-    pub fn peer_id(&self) -> u64 {
-        self.peer.get_id()
+    pub fn store_id(&self) -> u64 {
+        self.store_id
     }
 
     pub fn get_raft_status(&self) -> raft::Status {
         self.raft_group.status()
     }
 
-    pub fn leader_id(&self) -> u64 {
-        self.raft_group.raft.leader_id
+    pub fn leader_store_id(&self) -> Option<u64> {
+        if self.raft_group.raft.has_leader() {
+            return Some(self.raft_group.raft.leader_id);
+        }
+
+        None
     }
 
     pub fn is_leader(&self) -> bool {
@@ -293,7 +289,7 @@ impl Peer {
         }
 
         debug!("handle raft ready: peer {:?}, region {}",
-               self.peer,
+               self.store_id(),
                self.region_id);
 
         let ready = self.raft_group.ready();
@@ -362,7 +358,7 @@ impl Peer {
     /// Please note that, `NotLeader` here doesn't mean that currently this
     /// peer is not leader.
     fn notify_not_leader(&self, cmd: PendingCmd) {
-        let leader = self.get_peer_from_cache(self.leader_id());
+        let leader = self.leader_store_id();
         let not_leader = Error::NotLeader(self.region_id, leader);
         let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
         if let Err(e) = cmd.cb.call_box((resp,)) {
@@ -384,7 +380,7 @@ impl Peer {
 
         let mut cc = raftpb::ConfChange::new();
         cc.set_change_type(change_peer.get_change_type());
-        cc.set_node_id(change_peer.get_peer().get_id());
+        cc.set_node_id(change_peer.get_store_id());
         cc.set_context(data);
 
         info!("propose conf change {:?} peer {:?} at region {}",
@@ -437,21 +433,6 @@ impl Peer {
         Ok(())
     }
 
-    pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
-        if let Some(peer) = self.peer_cache.rl().get(&peer_id).cloned() {
-            return Some(peer);
-        }
-
-        // Try to find in region, if found, set in cache.
-        for peer in self.storage.rl().get_region().get_peers() {
-            if peer.get_id() == peer_id {
-                self.peer_cache.wl().insert(peer_id, peer.clone());
-                return Some(peer.clone());
-            }
-        }
-
-        None
-    }
 
     fn send_raft_message<T: Transport>(&mut self,
                                        msg: &raftpb::Message,
@@ -464,49 +445,27 @@ impl Peer {
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
         let mut unreachable = false;
 
-        let from_peer = match self.get_peer_from_cache(msg.get_from()) {
-            Some(p) => p,
-            None => {
-                return Err(box_err!("failed to lookup sender peer {} in region {}",
-                                    msg.get_from(),
-                                    self.region_id))
-            }
-        };
-
-        let to_peer = match self.get_peer_from_cache(msg.get_to()) {
-            Some(p) => p,
-            None => {
-                return Err(box_err!("failed to look up recipient peer {} in region {}",
-                                    msg.get_to(),
-                                    self.region_id))
-            }
-        };
-
-        let to_peer_id = to_peer.get_id();
-        let to_store_id = to_peer.get_store_id();
+        let from_store_id = msg.get_from();
+        let to_store_id = msg.get_to();
 
         debug!("send raft msg {:?}[size: {}] from {} to {}",
                msg.get_msg_type(),
                msg.compute_size(),
-               from_peer.get_id(),
-               to_peer_id);
-
-        send_msg.set_from_peer(from_peer);
-        send_msg.set_to_peer(to_peer);
+               from_store_id,
+               to_store_id);
 
         if let Err(e) = trans.rl().send(send_msg) {
-            warn!("region {} with peer {:?} failed to send msg to {} in store {}, err: {:?}",
-                  self.region_id,
-                  self.peer,
-                  to_peer_id,
+            warn!("failed to send msg from {} to {} for region {}, err: {:?}",
+                  from_store_id,
                   to_store_id,
+                  self.region_id,
                   e);
 
             unreachable = true;
         }
 
         if unreachable {
-            self.raft_group.report_unreachable(to_peer_id);
+            self.raft_group.report_unreachable(to_store_id);
         }
 
         Ok(())
@@ -640,7 +599,7 @@ impl Peer {
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         if self.penging_remove {
             return Err(box_err!("handle removing peer {} before, ignore apply",
-                                self.peer.get_id()));
+                                self.store_id()));
         }
 
         let last_applied_index = self.storage.rl().applied_index();
@@ -668,23 +627,26 @@ impl Peer {
         peer_storage::save_applied_index(&wb, self.region_id, index)
             .expect("save applied index must not fail");
 
+        // Commit write and change storage fields atomically.
+        // Lock here to guarantee generating snapshot sees a consistent view data.
+        let mut storage = self.storage.wl();
         match self.engine
                   .write(wb) {
             Ok(_) => {
-                self.storage.wl().set_applied_index(index);
+                storage.set_applied_index(index);
 
                 if let Some(ref exec_result) = exec_result {
                     match *exec_result {
                         ExecResult::ChangePeer { ref region, .. } => {
-                            self.storage.wl().set_region(region);
+                            storage.set_region(region);
                         }
                         ExecResult::CompactLog { ref state } => {
-                            self.storage.wl().set_truncated_state(state);
+                            storage.set_truncated_state(state);
                             // TODO: we can set exec_result to None, because outer store
                             // doesn't need it.
                         }
                         ExecResult::SplitRegion { ref left, .. } => {
-                            self.storage.wl().set_region(left);
+                            storage.set_region(left);
                         }
                     }
                 };
@@ -758,66 +720,52 @@ impl Peer {
                         request: &AdminRequest)
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
-        let peer = request.get_peer();
-        let store_id = peer.get_store_id();
+        let store_id = request.get_store_id();
         let change_type = request.get_change_type();
         let mut region = self.region();
 
-        warn!("my peer id {}, {}, {:?}, epoch: {:?}\n",
-              self.peer_id(),
-              peer.get_id(),
+        warn!("my peer store id {}, {}, {:?}, epoch: {:?}\n",
+              self.store_id(),
+              store_id,
               util::conf_change_type_str(&change_type),
               region.get_region_epoch());
 
-        // TODO: we should need more check, like peer validation, duplicated id, etc.
-        let exists = util::find_peer(&region, store_id).is_some();
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
-
         region.mut_region_epoch().set_conf_ver(conf_ver);
 
         match change_type {
             raftpb::ConfChangeType::AddNode => {
-                if exists {
-                    error!("my peer id {}, can't add duplicated peer {:?} to store {}, region \
+                if util::find_peer(&region, store_id) {
+                    error!("my peer store id {}, can't add duplicated store {}, region \
                             {:?}",
-                           self.peer_id(),
-                           peer,
+                           self.store_id(),
                            store_id,
                            region);
-                    return Err(box_err!("can't add duplicated peer {:?} to store {}",
-                                        peer,
-                                        store_id));
+                    return Err(box_err!("can't add duplicated store {}", store_id));
                 }
-                // TODO: Do we allow adding peer in same node?
 
-                // Add this peer to cache.
-                self.peer_cache.wl().insert(peer.get_id(), peer.clone());
-                region.mut_peers().push(peer.clone());
+                region.mut_store_ids().push(store_id);
 
-                warn!("my peer id {}, add peer {:?}, region {:?}",
-                      self.peer_id(),
-                      peer,
+                warn!("my peer store id {}, add store {:?}, region {:?}",
+                      self.store_id(),
+                      store_id,
                       self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
-                if !exists {
-                    error!("remove missing peer {:?} from store {}", peer, store_id);
-                    return Err(box_err!("remove missing peer {:?} from store {}", peer, store_id));
+                if !util::remove_peer(&mut region, store_id) {
+                    error!("remove missing store {}", store_id);
+                    return Err(box_err!("remove missing store {}", store_id));
                 }
 
-                if self.peer_id() == peer.get_id() {
+                if self.store_id() == store_id {
                     // Remove ourself, we will destroy all region data later.
                     // So we need not to apply following logs.
                     self.penging_remove = true;
                 }
 
-                // Remove this peer from cache.
-                self.peer_cache.wl().remove(&peer.get_id());
-                util::remove_peer(&mut region, store_id).unwrap();
-
-                warn!("my peer_id {}, remove {}, region:{:?}",
-                      self.peer_id(),
-                      peer.get_id(),
+                warn!("my peer store {}, remove {}, region:{:?}",
+                      self.store_id(),
+                      store_id,
                       self.region());
             }
         }
@@ -830,7 +778,7 @@ impl Peer {
         Ok((resp,
             Some(ExecResult::ChangePeer {
             change_type: change_type,
-            peer: peer.clone(),
+            store_id: store_id,
             region: region,
         })))
     }
@@ -865,21 +813,8 @@ impl Peer {
         new_region.set_start_key(split_key.to_vec());
         new_region.set_id(new_region_id);
 
-        // Update new region peer ids.
-        let new_peer_ids = split_req.get_new_peer_ids();
-        if new_peer_ids.len() != new_region.get_peers().len() {
-            return Err(box_err!("invalid new peer id count, need {}, but got {}",
-                                new_region.get_peers().len(),
-                                new_peer_ids.len()));
-        }
-
-        for (index, peer) in new_region.mut_peers().iter_mut().enumerate() {
-            let peer_id = new_peer_ids[index];
-            peer.set_id(peer_id);
-
-            // Add this peer to cache.
-            self.peer_cache.wl().insert(peer_id, peer.clone());
-        }
+        // New region has the same store ids with origin split region.
+        new_region.set_store_ids(region.get_store_ids().to_vec());
 
         // update region version
         let region_ver = region.get_region_epoch().get_version() + 1;

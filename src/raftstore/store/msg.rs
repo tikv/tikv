@@ -21,6 +21,7 @@ use mio;
 use raftstore::{Result, send_msg, Error};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) -> Result<()> + Send>;
@@ -46,18 +47,19 @@ pub enum Msg {
     // For split check
     SplitCheckResult {
         region_id: u64,
+        epoch: RegionEpoch,
         split_key: Vec<u8>,
     },
 
     ReportSnapshot {
         region_id: u64,
-        to_peer_id: u64,
+        to_store_id: u64,
         status: SnapshotStatus,
     },
 
     ReportUnreachable {
         region_id: u64,
-        to_peer_id: u64,
+        to_store_id: u64,
     },
 }
 
@@ -68,17 +70,17 @@ impl fmt::Debug for Msg {
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
-            Msg::ReportSnapshot { ref region_id, ref to_peer_id, ref status } => {
+            Msg::ReportSnapshot { ref region_id, ref to_store_id, ref status } => {
                 write!(fmt,
                        "Send snapshot to {} for region {} {:?}",
-                       to_peer_id,
+                       to_store_id,
                        region_id,
                        status)
             }
-            Msg::ReportUnreachable { ref region_id, ref to_peer_id } => {
+            Msg::ReportUnreachable { ref region_id, ref to_store_id } => {
                 write!(fmt,
                        "peer {} for region {} is unreachable",
-                       to_peer_id,
+                       to_store_id,
                        region_id)
             }
         }
