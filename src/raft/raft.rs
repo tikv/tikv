@@ -513,7 +513,7 @@ impl<T: Storage> Raft<T> {
             return;
         }
         self.election_elapsed += 1;
-        if self.is_election_timeout() {
+        if self.pass_election_timeout() {
             self.election_elapsed = 0;
             let m = new_message(INVALID_ID, MessageType::MsgHup, Some(self.id));
             self.step(m).is_ok();
@@ -1165,10 +1165,10 @@ impl<T: Storage> Raft<T> {
         self.vote = hs.get_vote();
     }
 
-    // is_election_timeout returns true if self.election_elapsed is greater than the
-    // randomized election timeout in [electiontimeout, 2 * electiontimeout - 1].
-    // Otherwise, it returns false.
-    pub fn is_election_timeout(&self) -> bool {
+    /// `pass_election_timeout` returns true iff `election_elapsed` is greater
+    /// than or equal to the randomized election timeout in
+    /// [`election_timeout`, 2 * `election_timeout` - 1].
+    pub fn pass_election_timeout(&self) -> bool {
         self.election_elapsed >= self.randomized_election_timeout
     }
 
