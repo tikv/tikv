@@ -468,19 +468,31 @@ fn test_tombstone_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     for peer in detail1.get_region().get_peers() {
         assert!(peer.get_store_id() != 3);
     }
-
-    let detail2 = cluster.region_detail(1, 3);
-    let mut stores: HashSet<_> = [1, 2, 3].iter().cloned().collect();
-    for peer in detail2.get_region().get_peers() {
-        assert!(stores.remove(&peer.get_store_id()));
-    }
-    assert_eq!(stores.len(), 0);
-    assert!(detail2.get_region().get_region_epoch().get_conf_ver() <
-            detail1.get_region().get_region_epoch().get_conf_ver());
+    // what should I check?
+    // peer 3 send request to cluster and the later ignored?
 
     cluster.must_put(key, b"v2");
-
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
-    // wait_until_node_online(cluster, 3);
-    // must_get_equal(&cluster.get_engine(3), key, b"v2");
+
+    let key_not_exist = b"k2";
+    cluster.must_put(key_not_exist, b"value");
+    must_get_equal(&cluster.get_engine(3), key_not_exist, b"value");
+
+    // if the new key exists in engine, the previous put key to "v2"
+    // must have been applied
+    must_get_equal(&cluster.get_engine(3), key, b"v2");
+}
+
+#[test]
+fn test_server_tombstone_peer() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_tombstone_peer(&mut cluster);
+}
+
+#[test]
+fn test_node_tombstone_peer() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_tombstone_peer(&mut cluster);
 }
