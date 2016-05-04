@@ -94,7 +94,7 @@ fn build_raftkv(matches: &Matches,
             Some(v) => {
                 v.as_str()
                  .unwrap_or_else(|| {
-                     info!("mlfromed advertise-addr, use addr: {}", addr);
+                     info!("malfromed advertise-addr, use addr: {}", addr);
                      &*addr // String -> &str
                  })
                  .to_owned()
