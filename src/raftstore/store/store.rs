@@ -239,9 +239,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                to_store_id);
 
         if to_store_id != self.store_id() {
-            warn!("mismatch store {} != {}, ignore it",
+            warn!("store not match, to store id {}, mine {}, ignore it",
                   to_store_id,
                   self.store_id());
+            return Ok(());
         }
 
         if !msg.has_region_epoch() {
