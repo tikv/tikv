@@ -103,14 +103,16 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         }
     }
 
-    pub fn call_command(&self, request: RaftCmdRequest) -> Result<Arc<Event<RaftCmdResponse>>> {
-        let finished = Arc::new(Event::new());
+    pub fn call_command(&self, request: RaftCmdRequest) -> Result<Event<RaftCmdResponse>> {
+        let finished = Event::new();
         let finished2 = finished.clone();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
 
         try!(self.router.rl().send_command(request,
                                            box move |resp| {
                                                finished2.set(resp);
+                                               // Wait for response to be consumed or `finished` is
+                                               // dropped.
                                                finished2.wait_clear(None);
                                                Ok(())
                                            }));
@@ -122,7 +124,7 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         Err(Error::Timeout(timeout))
     }
 
-    fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<Arc<Event<RaftCmdResponse>>> {
+    fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<Event<RaftCmdResponse>> {
         let uuid = req.get_header().get_uuid().to_vec();
         let l = req.get_requests().len();
 
@@ -265,7 +267,6 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
                               })
                               .unwrap());
         let snap = RegionSnapshot::from_raw(self.db.as_ref(), region);
-        resp.take();
         Ok(box snap)
     }
 }
