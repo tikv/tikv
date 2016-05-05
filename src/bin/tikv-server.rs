@@ -26,7 +26,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use std::io::prelude::Read;
+use std::io::Read;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
