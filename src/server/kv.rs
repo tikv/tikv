@@ -429,7 +429,7 @@ mod tests {
         let resp = build_resp(Err(box_err!("error")), StoreHandler::cmd_get_done);
         let mut cmd = CmdGetResponse::new();
         let mut key_error = KeyError::new();
-        key_error.set_abort("error".to_owned());
+        key_error.set_abort("Other(StringError(\"error\"))".to_owned());
         cmd.set_error(key_error);
         let mut expect = Response::new();
         expect.set_field_type(MessageType::CmdGet);
