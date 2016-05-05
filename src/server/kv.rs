@@ -333,9 +333,9 @@ fn extract_key_error(err: &StorageError) -> KeyError {
         }
         StorageError::Txn(TxnError::Mvcc(MvccError::WriteConflict)) |
         StorageError::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound)) => {
-            key_error.set_retryable(format!("{}", err));
+            key_error.set_retryable(format!("{:?}", err));
         }
-        _ => key_error.set_abort(format!("{}", err)),
+        _ => key_error.set_abort(format!("{:?}", err)),
     }
     key_error
 }
