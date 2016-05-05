@@ -48,9 +48,6 @@ quick_error! {
             description("invalid data type")
             display("{}", reason)
         }
-        Eof {
-            description("eof")
-        }
         Encoding(err: Utf8Error) {
             from()
             cause(err)
