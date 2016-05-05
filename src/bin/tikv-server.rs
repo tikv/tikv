@@ -69,7 +69,7 @@ fn get_string_value<F>(short: &str,
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
     let level = get_string_value("L",
-                                 "server.log",
+                                 "server.log-level",
                                  &matches,
                                  &config,
                                  Some("info".to_owned()),
@@ -123,20 +123,15 @@ fn build_raftkv(matches: &Matches,
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
-    let path = match matches.opt_str("s") {
-        Some(path) => path,
-        None => {
-            match config.lookup("server.store") {
-                Some(v) => {
-                    match v.as_str() {
-                        Some(s) => s.to_owned(),
-                        None => return TEMP_DIR.to_owned(),
-                    }
-                }
-                None => return TEMP_DIR.to_owned(),
-            }
-        }
-    };
+    let path = get_string_value("s",
+                                "server.store",
+                                matches,
+                                config,
+                                Some(TEMP_DIR.to_owned()),
+                                |v| v.as_str().map(|s| s.to_owned()));
+    if path == TEMP_DIR {
+        return path;
+    }
 
     let p = Path::new(&path);
     if p.exists() && p.is_file() {

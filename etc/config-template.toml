@@ -8,7 +8,7 @@ dsn = "rocksdb"
 # set the path to rocksdb directory.
 store = "/tmp/tikv/store"
 # log level: trace, debug, info, warn, error, off.
-log = "info"
+log-level = "info"
 
 [raft]
 # set cluster id, must greater than 0.
