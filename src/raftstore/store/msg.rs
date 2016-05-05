@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::boxed::{Box, FnBox};
-use std::sync::Arc;
 use std::fmt;
 use std::time::Duration;
 
@@ -95,7 +94,7 @@ pub fn call_command(sendch: &SendCh,
                     request: RaftCmdRequest,
                     timeout: Duration)
                     -> Result<RaftCmdResponse> {
-    let finished = Arc::new(Event::new());
+    let finished = Event::new();
     let finished2 = finished.clone();
 
     try!(sendch.send(Msg::RaftCmd {

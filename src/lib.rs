@@ -14,6 +14,8 @@
 #![crate_type = "lib"]
 #![allow(unused_features)]
 #![feature(test)]
+#![feature(arc_counts)]
+#![feature(optin_builtin_traits)]
 #![feature(btree_range, collections_bound)]
 #![feature(recover)]
 #![feature(fnbox)]
