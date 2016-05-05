@@ -48,13 +48,43 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
-fn initial_log(matches: &Matches, config: &toml::Value) {
-    let level = matches.opt_str("L").unwrap_or_else(|| {
-        match config.lookup("server.log") {
-            Some(v) => v.as_str().unwrap_or("info").to_owned(),
-            None => "info".to_owned(),
+fn get_string_value<F>(short: &str,
+                       long: &str,
+                       matches: &Matches,
+                       config: &toml::Value,
+                       default: Option<String>,
+                       f: F)
+                       -> String
+    where F: Fn(&toml::Value) -> Option<String>
+{
+    matches.opt_str(short).unwrap_or_else(|| {
+        match config.lookup(long) {
+            Some(v) => {
+                f(&v).unwrap_or_else(|| {
+                    info!("malformed {}, use default", long);
+                    default.expect(&*format!("please specify {}", long))
+                })
+            }
+            None => {
+                info!("unspecified {}, use default", long);
+                default.expect(&*format!("please specify {}", long))
+            }
         }
-    });
+    })
+}
+
+fn initial_log(matches: &Matches, config: &toml::Value) {
+    let level = get_string_value("L",
+                                 "server.log",
+                                 &matches,
+                                 &config,
+                                 Some("info".to_owned()),
+                                 |v| {
+                                     match v.as_str() {
+                                         Some(s) => Some(s.to_owned()),
+                                         None => None,
+                                     }
+                                 });
     util::init_log(logger::get_level_by_string(&level)).unwrap();
 }
 
@@ -89,22 +119,17 @@ fn build_raftkv(matches: &Matches,
 
     // Set advertise address for outer node and client use.
     // If no advertise listening address set, use the associated listening address.
-    cfg.advertise_addr = matches.opt_str("advertise-addr").unwrap_or_else(|| {
-        match config.lookup("server.advertise-addr") {
-            Some(v) => {
-                v.as_str()
-                 .unwrap_or_else(|| {
-                     info!("malformed advertise-addr, use addr: {}", addr);
-                     &*addr // String -> &str
-                 })
-                 .to_owned()
-            }
-            None => {
-                info!("unspecified advertise-addr, use addr: {}", addr);
-                addr
-            }
-        }
-    });
+    cfg.advertise_addr = get_string_value("advertise-addr",
+                                          "server.advertise-addr",
+                                          &matches,
+                                          &config,
+                                          Some(addr),
+                                          |v| {
+                                              match v.as_str() {
+                                                  Some(s) => Some(s.to_owned()),
+                                                  None => None,
+                                              }
+                                          });
 
     let mut node = Node::new(&cfg, pd_client, trans.clone());
     node.start(engine.clone()).unwrap();
@@ -156,18 +181,18 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     let mut event_loop = create_event_loop().unwrap();
     let ch = SendCh::new(event_loop.channel());
 
-    let id = matches.opt_str("I").unwrap_or_else(|| {
-        match config.lookup("raft.cluster-id") {
-            Some(v) => v.as_integer().expect("raftkv requires cluster id").to_string(),
-            None => panic!("raftkv requires cluster id"),
+    let id = get_string_value("I", "raft.cluster-id", &matches, &config, None, |v| {
+        match v.as_integer() {
+            Some(i) => Some(i.to_string()),
+            None => None,
         }
     });
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
 
-    let pd_addr = matches.opt_str("pd").unwrap_or_else(|| {
-        match config.lookup("server.pd") {
-            Some(v) => v.as_str().expect("raftkv needs pd client").to_owned(),
-            None => panic!("raftkv needs pd client"),
+    let pd_addr = get_string_value("pd", "raft.pd", &matches, &config, None, |v| {
+        match v.as_str() {
+            Some(s) => Some(s.to_owned()),
+            None => None,
         }
     });
     let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
@@ -231,41 +256,31 @@ fn main() {
 
     initial_log(&matches, &config);
 
-    let addr = matches.opt_str("A").unwrap_or_else(|| {
-        match config.lookup("server.addr") {
-            Some(v) => {
-                v.as_str()
-                 .unwrap_or_else(|| {
-                     info!("malformed addr, use default: {}", DEFAULT_LISTENING_ADDR);
-                     DEFAULT_LISTENING_ADDR
-                 })
-                 .to_owned()
-            }
-            None => {
-                info!("unspecified addr, use default: {}", DEFAULT_LISTENING_ADDR);
-                DEFAULT_LISTENING_ADDR.to_owned()
-            }
-        }
-    });
+    let addr = get_string_value("A",
+                                "server.addr",
+                                &matches,
+                                &config,
+                                Some(DEFAULT_LISTENING_ADDR.to_owned()),
+                                |v| {
+                                    match v.as_str() {
+                                        Some(s) => Some(s.to_owned()),
+                                        None => None,
+                                    }
+                                });
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
 
-    let dsn_name = matches.opt_str("S").unwrap_or_else(|| {
-        match config.lookup("server.dsn") {
-            Some(v) => {
-                v.as_str()
-                 .unwrap_or_else(|| {
-                     info!("malformed dsn, use default: {}", ROCKSDB_DSN);
-                     ROCKSDB_DSN
-                 })
-                 .to_owned()
-            }
-            None => {
-                info!("unspecified dsn, use default: {}", ROCKSDB_DSN);
-                ROCKSDB_DSN.to_owned()
-            }
-        }
-    });
+    let dsn_name = get_string_value("S",
+                                    "server.dsn",
+                                    &matches,
+                                    &config,
+                                    Some(ROCKSDB_DSN.to_owned()),
+                                    |v| {
+                                        match v.as_str() {
+                                            Some(s) => Some(s.to_owned()),
+                                            None => None,
+                                        }
+                                    });
 
     panic_hook::set_exit_hook();
 
