@@ -369,7 +369,7 @@ impl<'a> SelectContext<'a> {
         }
         let res = box_try!(self.eval.eval(self.sel.get_field_where()));
         let b = box_try!(res.into_bool());
-        Ok(!b)
+        Ok(b.map_or(false, |v| !v))
     }
 
     fn get_row_by_handle(&self, h: i64) -> Result<Option<Row>> {
