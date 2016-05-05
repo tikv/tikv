@@ -29,7 +29,9 @@ use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb;
 use storage::Key;
-use util::codec::{Datum, table, datum, number};
+use util::codec::number::NumberDecoder;
+use util::codec::datum::DatumDecoder;
+use util::codec::{Datum, table, datum};
 use util::xeval::Evaluator;
 use util::{as_slice, escape};
 use util::SlowTimer;
@@ -258,7 +260,7 @@ fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
                        expr: &Expr)
                        -> Result<()> {
     if expr.get_tp() == ExprType::ColumnRef {
-        let i = box_try!(number::decode_i64(expr.get_val()));
+        let i = box_try!(expr.get_val().decode_i64());
         for c in col_meta {
             if c.get_column_id() == i {
                 cols.insert(i, c.clone());
@@ -363,7 +365,7 @@ impl<'a> SelectContext<'a> {
                 if data.is_none() {
                     return Err(box_err!("data is missing for [{}, {}, {}]", t_id, h, col_id));
                 }
-                let (value, _) = box_try!(datum::decode_datum(&data.unwrap()));
+                let value = box_try!(data.unwrap().as_slice().decode_datum());
                 self.eval.row.insert(col_id, value);
             }
         }
