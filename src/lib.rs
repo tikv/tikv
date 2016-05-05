@@ -25,6 +25,7 @@
 #![feature(iter_arith)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
+#![recursion_limit="100"]
 
 #[macro_use]
 extern crate log;
