@@ -57,20 +57,14 @@ fn get_string_value<F>(short: &str,
                        -> String
     where F: Fn(&toml::Value) -> Option<String>
 {
-    matches.opt_str(short).unwrap_or_else(|| {
-        match config.lookup(long) {
-            Some(v) => {
-                f(&v).unwrap_or_else(|| {
-                    info!("malformed {}, use default", long);
-                    default.expect(&*format!("please specify {}", long))
-                })
-            }
-            None => {
-                info!("unspecified {}, use default", long);
-                default.expect(&*format!("please specify {}", long))
-            }
-        }
-    })
+    matches.opt_str(short)
+           .or_else(|| {
+               config.lookup(long).and_then(|v| f(&v)).or_else(|| {
+                   info!("malformed or missing {}, use default", long);
+                   default
+               })
+           })
+           .expect(&format!("please specify {}", long))
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
@@ -79,12 +73,7 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
                                  &matches,
                                  &config,
                                  Some("info".to_owned()),
-                                 |v| {
-                                     match v.as_str() {
-                                         Some(s) => Some(s.to_owned()),
-                                         None => None,
-                                     }
-                                 });
+                                 |v| v.as_str().map(|s| s.to_owned()));
     util::init_log(logger::get_level_by_string(&level)).unwrap();
 }
 
@@ -124,12 +113,7 @@ fn build_raftkv(matches: &Matches,
                                           &matches,
                                           &config,
                                           Some(addr),
-                                          |v| {
-                                              match v.as_str() {
-                                                  Some(s) => Some(s.to_owned()),
-                                                  None => None,
-                                              }
-                                          });
+                                          |v| v.as_str().map(|s| s.to_owned()));
 
     let mut node = Node::new(&cfg, pd_client, trans.clone());
     node.start(engine.clone()).unwrap();
@@ -181,20 +165,20 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     let mut event_loop = create_event_loop().unwrap();
     let ch = SendCh::new(event_loop.channel());
 
-    let id = get_string_value("I", "raft.cluster-id", &matches, &config, None, |v| {
-        match v.as_integer() {
-            Some(i) => Some(i.to_string()),
-            None => None,
-        }
-    });
+    let id = get_string_value("I",
+                              "raft.cluster-id",
+                              &matches,
+                              &config,
+                              None,
+                              |v| v.as_integer().map(|i| i.to_string()));
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
 
-    let pd_addr = get_string_value("pd", "raft.pd", &matches, &config, None, |v| {
-        match v.as_str() {
-            Some(s) => Some(s.to_owned()),
-            None => None,
-        }
-    });
+    let pd_addr = get_string_value("pd",
+                                   "raft.pd",
+                                   &matches,
+                                   &config,
+                                   None,
+                                   |v| v.as_str().map(|s| s.to_owned()));
     let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
     let resolver = PdStoreAddrResolver::new(cluster_id, pd_client.clone()).unwrap();
 
@@ -261,12 +245,7 @@ fn main() {
                                 &matches,
                                 &config,
                                 Some(DEFAULT_LISTENING_ADDR.to_owned()),
-                                |v| {
-                                    match v.as_str() {
-                                        Some(s) => Some(s.to_owned()),
-                                        None => None,
-                                    }
-                                });
+                                |v| v.as_str().map(|s| s.to_owned()));
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
 
@@ -275,12 +254,7 @@ fn main() {
                                     &matches,
                                     &config,
                                     Some(ROCKSDB_DSN.to_owned()),
-                                    |v| {
-                                        match v.as_str() {
-                                            Some(s) => Some(s.to_owned()),
-                                            None => None,
-                                        }
-                                    });
+                                    |v| v.as_str().map(|s| s.to_owned()));
 
     panic_hook::set_exit_hook();
 
