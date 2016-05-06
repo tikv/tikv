@@ -195,7 +195,7 @@ pub fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
             ents.push(new_entry(0, 0, SOME_DATA));
         }
         m.set_entries(RepeatedField::from_vec(ents));
-    } 
+    }
     m
 }
 
@@ -1962,19 +1962,19 @@ fn test_leader_transfer_to_slow_follower() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.isolate(3);
-	nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+    nt.isolate(3);
+    nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
 
-	nt.recover();
-	let matched = nt.peers[&1].prs[&3].matched;
-	if matched != 1 {
-		panic!("node 1 has match {} for node 3, want {}", matched, 1);
-	}
+    nt.recover();
+    let matched = nt.peers[&1].prs[&3].matched;
+    if matched != 1 {
+        panic!("node 1 has match {} for node 3, want {}", matched, 1);
+    }
 
-	// Transfer leadership to 3 when node 3 is lack of log.
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    // Transfer leadership to 3 when node 3 is lack of log.
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
 
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 3);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 3);
 }
 
 #[test]
@@ -1982,30 +1982,30 @@ fn test_leader_transfer_after_snapshot() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.isolate(3);
+    nt.isolate(3);
 
-	nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
-	next_ents(&mut nt.peers.get_mut(&1).unwrap(), &nt.storage[&1]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+    next_ents(&mut nt.peers.get_mut(&1).unwrap(), &nt.storage[&1]);
     let mut cs = ConfState::new();
     cs.set_nodes(nt.peers[&1].nodes());
-	nt.storage[&1]
+    nt.storage[&1]
         .wl()
         .create_snapshot(nt.peers[&1].raft_log.applied, Some(cs), vec![])
         .expect("");
-	nt.storage[&1].wl().compact(nt.peers[&1].raft_log.applied).expect("");
+    nt.storage[&1].wl().compact(nt.peers[&1].raft_log.applied).expect("");
 
-	nt.recover();
+    nt.recover();
     let matched = nt.peers[&1].prs[&3].matched;
-	if matched != 1 {
-		panic!("node 1 has match {} for node 3, want {}", matched, 1);
-	}
+    if matched != 1 {
+        panic!("node 1 has match {} for node 3, want {}", matched, 1);
+    }
 
-	// Transfer leadership to 3 when node 3 is lack of snapshot.
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
-	// Send pb.MsgHeartbeatResp to leader to trigger a snapshot for node 3.
-	nt.send(vec![new_message(3, 1, MessageType::MsgHeartbeatResponse, 0)]);
+    // Transfer leadership to 3 when node 3 is lack of snapshot.
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    // Send pb.MsgHeartbeatResp to leader to trigger a snapshot for node 3.
+    nt.send(vec![new_message(3, 1, MessageType::MsgHeartbeatResponse, 0)]);
 
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 3);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 3);
 }
 
 #[test]
@@ -2013,9 +2013,9 @@ fn test_leader_transfer_to_self() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	// Transfer leadership to self, there will be noop.
-	nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    // Transfer leadership to self, there will be noop.
+    nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
 #[test]
@@ -2023,9 +2023,9 @@ fn test_leader_transfer_to_non_existing_node() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	// Transfer leadership to non-existing node, there will be noop.
-	nt.send(vec![new_message(4, 1, MessageType::MsgTransferLeader, 0)]);
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    // Transfer leadership to non-existing node, there will be noop.
+    nt.send(vec![new_message(4, 1, MessageType::MsgTransferLeader, 0)]);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
 #[test]
@@ -2033,28 +2033,32 @@ fn test_leader_transfer_timeout() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.isolate(3);
+    nt.isolate(3);
 
-	// Transfer leadership to isolated node, wait for timeout.
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    // Transfer leadership to isolated node, wait for timeout.
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
     let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-	if lead_transferee != 3 {
-		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
-	}
+    if lead_transferee != 3 {
+        panic!("wait transferring, leadTransferee = {}, want {}",
+               lead_transferee,
+               3);
+    }
     let heartbeat_timeout = nt.peers[&1].get_heartbeat_timeout();
     let election_timeout = nt.peers[&1].get_election_timeout();
     for _ in 0..heartbeat_timeout {
         nt.peers.get_mut(&1).unwrap().tick();
     }
     let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-	if lead_transferee != 3 {
-		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
-	}
-	for _ in 0..election_timeout-heartbeat_timeout {
+    if lead_transferee != 3 {
+        panic!("wait transferring, leadTransferee = {}, want {}",
+               lead_transferee,
+               3);
+    }
+    for _ in 0..election_timeout - heartbeat_timeout {
         nt.peers.get_mut(&1).unwrap().tick();
-	}
+    }
 
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
 #[test]
@@ -2062,21 +2066,23 @@ fn test_leader_transfer_ignore_proposal() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.isolate(3);
+    nt.isolate(3);
 
-	// Transfer leadership to isolated node to let transfer pending, then send proposal.
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    // Transfer leadership to isolated node to let transfer pending, then send proposal.
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
     let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-	if lead_transferee != 3 {
-		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
-	}
+    if lead_transferee != 3 {
+        panic!("wait transferring, leadTransferee = {}, want {}",
+               lead_transferee,
+               3);
+    }
 
-	nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
 
     let matched = nt.peers[&1].prs[&1].matched;
-	if matched != 1 {
-		panic!("node 1 has match {}, want {}", matched, 1);
-	}
+    if matched != 1 {
+        panic!("node 1 has match {}, want {}", matched, 1);
+    }
 }
 
 #[test]
@@ -2084,21 +2090,20 @@ fn test_leader_transfer_receive_higher_term_vote() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.isolate(3);
+    nt.isolate(3);
 
-	// Transfer leadership to isolated node to let transfer pending.
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    // Transfer leadership to isolated node to let transfer pending.
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
     let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-	if lead_transferee != 3 {
-		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
-	}
+    if lead_transferee != 3 {
+        panic!("wait transferring, leadTransferee = {}, want {}",
+               lead_transferee,
+               3);
+    }
 
-    nt.send(vec![new_message_with_entries(2, 
-                                          2, 
-                                          MessageType::MsgHup, 
-                                          vec![new_entry(1, 2, None)])]);
+    nt.send(vec![new_message_with_entries(2, 2, MessageType::MsgHup, vec![new_entry(1, 2, None)])]);
 
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
 }
 
 #[test]
@@ -2106,38 +2111,43 @@ fn test_leader_transfer_remove_node() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.ignore(MessageType::MsgTimeoutNow);
+    nt.ignore(MessageType::MsgTimeoutNow);
 
-	// The leadTransferee is removed when leadship transferring.
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    // The leadTransferee is removed when leadship transferring.
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
     let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-	if lead_transferee != 3 {
-		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
-	}
+    if lead_transferee != 3 {
+        panic!("wait transferring, leadTransferee = {}, want {}",
+               lead_transferee,
+               3);
+    }
 
     nt.peers.get_mut(&1).unwrap().remove_node(3);
 
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
-// TestLeaderTransferBack verifies leadership can transfer back to self when last transfer is pending.
+// TestLeaderTransferBack verifies leadership can transfer
+// back to self when last transfer is pending.
 #[test]
 fn test_leader_transfer_back() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.isolate(3);
+    nt.isolate(3);
 
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
     let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-	if lead_transferee != 3 {
-		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
-	}
+    if lead_transferee != 3 {
+        panic!("wait transferring, leadTransferee = {}, want {}",
+               lead_transferee,
+               3);
+    }
 
-	// Transfer leadership back to self.
-	nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
+    // Transfer leadership back to self.
+    nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
 
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
 // TestLeaderTransferSecondTransferToAnotherNode verifies leader can transfer to another node
@@ -2147,18 +2157,20 @@ fn test_leader_transfer_second_transfer_to_another_node() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.isolate(3);
+    nt.isolate(3);
 
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
     let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-	if lead_transferee != 3 {
-		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
-	}
+    if lead_transferee != 3 {
+        panic!("wait transferring, leadTransferee = {}, want {}",
+               lead_transferee,
+               3);
+    }
 
-	// Transfer leadership to another node.
-	nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
+    // Transfer leadership to another node.
+    nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
 
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
 }
 
 // TestLeaderTransferSecondTransferToSameNode verifies second transfer leader request
@@ -2168,28 +2180,30 @@ fn test_leader_transfer_second_transfer_to_same_node() {
     let mut nt = Network::new(vec![None, None, None]);
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.isolate(3);
+    nt.isolate(3);
 
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
     let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-	if lead_transferee != 3 {
-		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
-	}
+    if lead_transferee != 3 {
+        panic!("wait transferring, leadTransferee = {}, want {}",
+               lead_transferee,
+               3);
+    }
 
     let heartbeat_timeout = nt.peers[&1].get_heartbeat_timeout();
     for _ in 0..heartbeat_timeout {
         nt.peers.get_mut(&1).unwrap().tick();
     }
 
-	// Second transfer leadership request to the same node.
-	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    // Second transfer leadership request to the same node.
+    nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
 
     let election_timeout = nt.peers[&1].get_election_timeout();
-	for _ in 0..election_timeout-heartbeat_timeout {
+    for _ in 0..election_timeout - heartbeat_timeout {
         nt.peers.get_mut(&1).unwrap().tick();
-	}
+    }
 
-	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
 fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64) {
