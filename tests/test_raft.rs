@@ -176,18 +176,26 @@ pub const NOP_STEPPER: Option<Interface> = Some(Interface { raft: None });
 
 pub const SOME_DATA: Option<&'static str> = Some("somedata");
 
-pub fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
+pub fn new_message_with_entries(from: u64, to: u64, t: MessageType, ents: Vec<Entry>) -> Message {
     let mut m = Message::new();
     m.set_from(from);
     m.set_to(to);
     m.set_msg_type(t);
+    if !ents.is_empty() {
+        m.set_entries(RepeatedField::from_vec(ents));
+    }
+    m
+}
+
+pub fn new_message(from: u64, to: u64, t: MessageType, n: usize) -> Message {
+    let mut m = new_message_with_entries(from, to, t, vec![]);
     if n > 0 {
         let mut ents = Vec::with_capacity(n);
         for _ in 0..n {
             ents.push(new_entry(0, 0, SOME_DATA));
         }
         m.set_entries(RepeatedField::from_vec(ents));
-    }
+    } 
     m
 }
 
@@ -2069,6 +2077,28 @@ fn test_leader_transfer_ignore_proposal() {
 	if matched != 1 {
 		panic!("node 1 has match {}, want {}", matched, 1);
 	}
+}
+
+#[test]
+fn test_leader_transfer_receive_higher_term_vote() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+	nt.isolate(3);
+
+	// Transfer leadership to isolated node to let transfer pending.
+	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
+	if lead_transferee != 3 {
+		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
+	}
+
+    nt.send(vec![new_message_with_entries(2, 
+                                          2, 
+                                          MessageType::MsgHup, 
+                                          vec![new_entry(1, 2, None)])]);
+
+	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
 }
 
 fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64) {
