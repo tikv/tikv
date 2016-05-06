@@ -2000,6 +2000,79 @@ fn test_leader_transfer_after_snapshot() {
 	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 3);
 }
 
+#[test]
+fn test_leader_transfer_to_self() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+	// Transfer leadership to self, there will be noop.
+	nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
+	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+}
+
+#[test]
+fn test_leader_transfer_to_non_existing_node() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+	// Transfer leadership to non-existing node, there will be noop.
+	nt.send(vec![new_message(4, 1, MessageType::MsgTransferLeader, 0)]);
+	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+}
+
+#[test]
+fn test_leader_transfer_timeout() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+	nt.isolate(3);
+
+	// Transfer leadership to isolated node, wait for timeout.
+	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
+	if lead_transferee != 3 {
+		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
+	}
+    let heartbeat_timeout = nt.peers[&1].get_heartbeat_timeout();
+    let election_timeout = nt.peers[&1].get_election_timeout();
+    for _ in 0..heartbeat_timeout {
+        nt.peers.get_mut(&1).unwrap().tick();
+    }
+    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
+	if lead_transferee != 3 {
+		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
+	}
+	for _ in 0..election_timeout-heartbeat_timeout {
+        nt.peers.get_mut(&1).unwrap().tick();
+	}
+
+	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+}
+
+/*
+#[test]
+fn TestLeaderTransferIgnoreProposal(t *testing.T) {
+	nt := newNetwork(nil, nil, nil)
+	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgHup})
+
+	nt.isolate(3)
+
+	lead := nt.peers[1].(*raft)
+
+	// Transfer leadership to isolated node to let transfer pending, then send proposal.
+	nt.send(pb.Message{From: 3, To: 1, Type: pb.MsgTransferLeader})
+	if lead.leadTransferee != 3 {
+		t.Fatalf("wait transferring, leadTransferee = %v, want %v", lead.leadTransferee, 3)
+	}
+
+	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgProp, Entries: []pb.Entry{{}}})
+
+	if lead.prs[1].Match != 1 {
+		t.Fatalf("node 1 has match %x, want %x", lead.prs[1].Match, 1)
+	}
+}
+*/
+
 fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64) {
     if r.state != state || r.leader_id != lead {
         panic!("after transferring, node has state {:?} lead {}, want state {:?} lead {}",
