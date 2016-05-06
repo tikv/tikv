@@ -207,4 +207,25 @@ mod test {
         assert!(e.wait_timeout(None));
         assert!(!e.wait_clear(None));
     }
+
+    /// In some cases `drop` of Event has been called, but not the inner Arc.
+    /// This may cause dead lock if we count on arc's strong count. 
+    #[test]
+    fn test_dead_lock() {
+        let e1: Event<i64> = Event::new();
+        let e2 = e1.clone();
+        let handle = thread::spawn(move || {
+            let timer = Instant::now();
+            e1.set(2);
+            e1.wait_clear(Some(Duration::from_millis(500)));
+            assert!(timer.elapsed() < Duration::from_millis(500));
+        });
+        e2.wait_timeout(None);
+        // make a clone to simulate the special case.
+        let cloned = e2.inner.clone();
+        drop(e2);
+        thread::sleep(Duration::from_millis(100));
+        drop(cloned);
+        handle.join().unwrap();
+    }
 }
