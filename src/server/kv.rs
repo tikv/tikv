@@ -16,9 +16,9 @@ use std::boxed::Box;
 use protobuf::RepeatedField;
 
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
-                       CmdCleanupResponse, CmdRollbackThenGetResponse, CmdCommitThenGetResponse,
-                       CmdBatchGetResponse, Request, Response, MessageType, KvPair as RpcKvPair,
-                       KeyError, LockInfo, Op};
+                       CmdBatchRollbackResponse, CmdCleanupResponse, CmdRollbackThenGetResponse,
+                       CmdCommitThenGetResponse, CmdBatchGetResponse, Request, Response,
+                       MessageType, KvPair as RpcKvPair, KeyError, LockInfo, Op};
 use kvproto::msgpb;
 use kvproto::errorpb::Error as RegionError;
 use storage::{Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
@@ -109,6 +109,18 @@ impl StoreHandler {
                           req.get_start_version(),
                           req.get_commit_version(),
                           cb)
+            .map_err(Error::Storage)
+    }
+
+    fn on_batch_rollback(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
+        if !msg.has_cmd_batch_rollback_req() {
+            return Err(box_err!("msg doesn't contain a CmdRollbackRequest"));
+        }
+        let req = msg.take_cmd_batch_rollback_req();
+        let cb = self.make_cb(StoreHandler::cmd_rollback_done, on_resp);
+        let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+        self.store
+            .async_rollback(msg.take_context(), keys, req.get_start_version(), cb)
             .map_err(Error::Storage)
     }
 
@@ -223,9 +235,18 @@ impl StoreHandler {
         resp.set_field_type(MessageType::CmdCommit);
         let mut cmd_commit_resp = CmdCommitResponse::new();
         if let Err(e) = r {
-            cmd_commit_resp.set_errors(RepeatedField::from_vec(vec![extract_key_error(&e)]));
+            cmd_commit_resp.set_error(extract_key_error(&e));
         }
         resp.set_cmd_commit_resp(cmd_commit_resp);
+    }
+
+    fn cmd_rollback_done(r: StorageResult<()>, resp: &mut Response) {
+        resp.set_field_type(MessageType::CmdBatchRollback);
+        let mut cmd_batch_rollback_resp = CmdBatchRollbackResponse::new();
+        if let Err(e) = r {
+            cmd_batch_rollback_resp.set_error(extract_key_error(&e));
+        }
+        resp.set_cmd_batch_rollback_resp(cmd_batch_rollback_resp)
     }
 
     fn cmd_cleanup_done(r: StorageResult<()>, resp: &mut Response) {
@@ -273,6 +294,7 @@ impl StoreHandler {
             MessageType::CmdCommitThenGet => self.on_commit_then_get(req, on_resp),
             MessageType::CmdRollbackThenGet => self.on_rollback_then_get(req, on_resp),
             MessageType::CmdBatchGet => self.on_batch_get(req, on_resp),
+            MessageType::CmdBatchRollback => self.on_batch_rollback(req, on_resp),
         } {
             // TODO: should we return an error and tell the client later?
             error!("Some error occur err[{:?}]", e);
@@ -495,7 +517,7 @@ mod tests {
         let resp = build_resp(Ok(()), StoreHandler::cmd_commit_done);
         assert_eq!(MessageType::CmdCommit, resp.get_field_type());
         let cmd = resp.get_cmd_commit_resp();
-        assert_eq!(cmd.get_errors().len(), 0);
+        assert!(!cmd.has_error());
     }
 
     #[test]
@@ -503,7 +525,7 @@ mod tests {
         let resp = build_resp(Err(box_err!("commit error")), StoreHandler::cmd_commit_done);
         assert_eq!(MessageType::CmdCommit, resp.get_field_type());
         let cmd = resp.get_cmd_commit_resp();
-        assert_eq!(cmd.get_errors().len(), 1);
+        assert!(cmd.has_error());
     }
 
     #[test]
