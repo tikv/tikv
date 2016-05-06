@@ -181,6 +181,7 @@ mod test {
                                         1024,
                                         -1023];
 
+    // use macro to generate order tests for number codecs.
     macro_rules! test_order {
         ($arr:expr, $sorted:expr, $enc:ident, $dec:ident) => {
             let mut encoded: Vec<_> = $arr.iter().map(|e| {
@@ -194,6 +195,7 @@ mod test {
         }
     }
 
+    // use macro to generate serialization tests for number codecs.
     macro_rules! test_serialize {
         ($tag:ident, $enc:ident, $dec:ident, $cases:expr) => {
             #[test]
@@ -208,6 +210,7 @@ mod test {
         }
     }
 
+    // use macro to generate serialization and order tests for number codecs.
     macro_rules! test_codec {
         ($enc:ident, $dec:ident, $compare:expr, $cases:expr) => {
             #[allow(unused_imports)]
@@ -252,6 +255,7 @@ mod test {
         }
     }
 
+    // test if a `Result` is expected io error.
     macro_rules! check_error {
         ($e:expr, $k:expr) => {
             match $e {
@@ -261,6 +265,7 @@ mod test {
         }
     }
 
+    // generate bound check test for number codecs.
     macro_rules! test_eof {
         ($tag:ident, $enc:ident, $dec:ident) => {
             #[test]
