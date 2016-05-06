@@ -2101,6 +2101,97 @@ fn test_leader_transfer_receive_higher_term_vote() {
 	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
 }
 
+#[test]
+fn test_leader_transfer_remove_node() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+	nt.ignore(MessageType::MsgTimeoutNow);
+
+	// The leadTransferee is removed when leadship transferring.
+	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
+	if lead_transferee != 3 {
+		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
+	}
+
+    nt.peers.get_mut(&1).unwrap().remove_node(3);
+
+	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+}
+
+// TestLeaderTransferBack verifies leadership can transfer back to self when last transfer is pending.
+#[test]
+fn test_leader_transfer_back() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+	nt.isolate(3);
+
+	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
+	if lead_transferee != 3 {
+		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
+	}
+
+	// Transfer leadership back to self.
+	nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
+
+	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+}
+
+// TestLeaderTransferSecondTransferToAnotherNode verifies leader can transfer to another node
+// when last transfer is pending.
+#[test]
+fn test_leader_transfer_second_transfer_to_another_node() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+	nt.isolate(3);
+
+	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
+	if lead_transferee != 3 {
+		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
+	}
+
+	// Transfer leadership to another node.
+	nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
+
+	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+}
+
+// TestLeaderTransferSecondTransferToSameNode verifies second transfer leader request
+// to the same node should not extend the timeout while the first one is pending.
+#[test]
+fn test_leader_transfer_second_transfer_to_same_node() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+	nt.isolate(3);
+
+	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
+	if lead_transferee != 3 {
+		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
+	}
+
+    let heartbeat_timeout = nt.peers[&1].get_heartbeat_timeout();
+    for _ in 0..heartbeat_timeout {
+        nt.peers.get_mut(&1).unwrap().tick();
+    }
+
+	// Second transfer leadership request to the same node.
+	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+
+    let election_timeout = nt.peers[&1].get_election_timeout();
+	for _ in 0..election_timeout-heartbeat_timeout {
+        nt.peers.get_mut(&1).unwrap().tick();
+	}
+
+	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+}
+
 fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64) {
     if r.state != state || r.leader_id != lead {
         panic!("after transferring, node has state {:?} lead {}, want state {:?} lead {}",
