@@ -2049,29 +2049,27 @@ fn test_leader_transfer_timeout() {
 	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
-/*
 #[test]
-fn TestLeaderTransferIgnoreProposal(t *testing.T) {
-	nt := newNetwork(nil, nil, nil)
-	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgHup})
+fn test_leader_transfer_ignore_proposal() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-	nt.isolate(3)
-
-	lead := nt.peers[1].(*raft)
+	nt.isolate(3);
 
 	// Transfer leadership to isolated node to let transfer pending, then send proposal.
-	nt.send(pb.Message{From: 3, To: 1, Type: pb.MsgTransferLeader})
-	if lead.leadTransferee != 3 {
-		t.Fatalf("wait transferring, leadTransferee = %v, want %v", lead.leadTransferee, 3)
+	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
+	if lead_transferee != 3 {
+		panic!("wait transferring, leadTransferee = {}, want {}", lead_transferee, 3);
 	}
 
-	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgProp, Entries: []pb.Entry{{}}})
+	nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
 
-	if lead.prs[1].Match != 1 {
-		t.Fatalf("node 1 has match %x, want %x", lead.prs[1].Match, 1)
+    let matched = nt.peers[&1].prs[&1].matched;
+	if matched != 1 {
+		panic!("node 1 has match {}, want {}", matched, 1);
 	}
 }
-*/
 
 fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64) {
     if r.state != state || r.leader_id != lead {
