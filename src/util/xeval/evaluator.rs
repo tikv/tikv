@@ -158,7 +158,7 @@ impl Evaluator {
             return Ok(Datum::Null);
         }
         let b = try!(d.into_bool());
-        Ok((!b).into())
+        Ok((b.map(|v| !v)).into())
     }
 
     fn eval_like(&mut self, expr: &Expr) -> Result<Datum> {
@@ -189,8 +189,8 @@ impl Evaluator {
 
     fn eval_two_children_as_bool(&mut self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
         let (left, right) = try!(self.eval_two_children(expr));
-        let left_bool = try!(eval_into_bool(left));
-        let right_bool = try!(eval_into_bool(right));
+        let left_bool = try!(left.into_bool());
+        let right_bool = try!(right.into_bool());
         Ok((left_bool, right_bool))
     }
 
@@ -224,16 +224,6 @@ impl Evaluator {
                                .entry(p)
                                .or_try_insert_with(|| datum::decode(value_list_expr.get_val())));
         Ok(decoded)
-    }
-}
-
-/// eval datum into bool, if expr is Null, then None is return.
-fn eval_into_bool(datum: Datum) -> Result<Option<bool>> {
-    if datum == Datum::Null {
-        Ok(None)
-    } else {
-        let b = try!(datum.into_bool());
-        Ok(Some(b))
     }
 }
 

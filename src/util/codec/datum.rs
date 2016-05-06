@@ -133,13 +133,14 @@ impl Datum {
     }
 
     // into_bool converts self to a bool.
-    pub fn into_bool(self) -> Result<bool> {
+    pub fn into_bool(self) -> Result<Option<bool>> {
         let b = match self {
-            Datum::I64(i) => i != 0,
-            Datum::U64(u) => u != 0,
-            Datum::F32(f) => f.round() != 0f32,
-            Datum::F64(f) => f.round() != 0f64,
-            Datum::Bytes(ref bs) => !bs.is_empty() && try!(convert::bytes_to_int(bs)) != 0,
+            Datum::I64(i) => Some(i != 0),
+            Datum::U64(u) => Some(u != 0),
+            Datum::F32(f) => Some(f.round() != 0f32),
+            Datum::F64(f) => Some(f.round() != 0f64),
+            Datum::Bytes(ref bs) => Some(!bs.is_empty() && try!(convert::bytes_to_int(bs)) != 0),
+            Datum::Null => None,
             _ => return Err(Error::InvalidDataType(format!("can't convert {:?} to bool", self))),
         };
         Ok(b)
@@ -421,29 +422,30 @@ mod test {
     #[test]
     fn test_datum_to_bool() {
         let tests = vec![
-            (Datum::I64(0), false),
-            (Datum::I64(-1), true),
-            (Datum::U64(0), false),
-            (Datum::U64(1), true),
-            (Datum::F32(0f32), false),
-            (Datum::F32(0.4), false),
-            (Datum::F32(0.5), true),
-            (Datum::F32(-0.5), true),
-            (Datum::F32(-0.4), false),
-            (Datum::F64(0f64), false),
-            (Datum::F64(0.4), false),
-            (Datum::F64(0.5), true),
-            (Datum::F64(-0.5), true),
-            (Datum::F64(-0.4), false),
-            (b"".as_ref().into(), false),
-            (b"0.5".as_ref().into(), false),
-            (b"0".as_ref().into(), false),
-            (b"2".as_ref().into(), true),
-            (b"abc".as_ref().into(), false),
+            (Datum::I64(0), Some(false)),
+            (Datum::I64(-1), Some(true)),
+            (Datum::U64(0), Some(false)),
+            (Datum::U64(1), Some(true)),
+            (Datum::F32(0f32), Some(false)),
+            (Datum::F32(0.4), Some(false)),
+            (Datum::F32(0.5), Some(true)),
+            (Datum::F32(-0.5), Some(true)),
+            (Datum::F32(-0.4), Some(false)),
+            (Datum::F64(0f64), Some(false)),
+            (Datum::F64(0.4), Some(false)),
+            (Datum::F64(0.5), Some(true)),
+            (Datum::F64(-0.5), Some(true)),
+            (Datum::F64(-0.4), Some(false)),
+            (Datum::Null, None),
+            (b"".as_ref().into(), Some(false)),
+            (b"0.5".as_ref().into(), Some(false)),
+            (b"0".as_ref().into(), Some(false)),
+            (b"2".as_ref().into(), Some(true)),
+            (b"abc".as_ref().into(), Some(false)),
         ];
         for (d, b) in tests {
-            if d.clone().into_bool().unwrap() ^ b {
-                panic!("expect {:?} to be {}", d, b);
+            if d.clone().into_bool().unwrap() != b {
+                panic!("expect {:?} to be {:?}", d, b);
             }
         }
     }
