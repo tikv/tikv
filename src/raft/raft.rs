@@ -99,6 +99,9 @@ pub struct Config {
     /// check_quorum specifies if the leader should check quorum activity. Leader steps down when
     /// quorum is not active for an electionTimeout.
     pub check_quorum: bool,
+
+    /// tag is only used for logging
+    pub tag: String,
 }
 
 impl Config {
@@ -186,6 +189,9 @@ pub struct Raft<T: Storage> {
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
     pub allow_step: bool,
+
+    /// tag is only used for logging
+    tag: String,
 }
 
 fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
@@ -242,6 +248,7 @@ impl<T: Storage> Raft<T> {
             vote: Default::default(),
             heartbeat_elapsed: Default::default(),
             randomized_election_timeout: 0,
+            tag: c.tag.to_owned(),
         };
         for p in peers {
             r.prs.insert(*p, new_progress(1, r.max_inflight));
@@ -254,8 +261,9 @@ impl<T: Storage> Raft<T> {
         }
         let term = r.term;
         r.become_follower(term, INVALID_ID);
-        info!("newRaft {} [peers: {:?}, term: {:?}, commit: {}, applied: {}, last_index: {}, \
+        info!("{} newRaft {} [peers: {:?}, term: {:?}, commit: {}, applied: {}, last_index: {}, \
                last_term: {}]",
+              r.tag,
               r.id,
               r.nodes(),
               r.term,
@@ -323,7 +331,8 @@ impl<T: Storage> Raft<T> {
     fn prepare_send_snapshot(&mut self, m: &mut Message, to: u64) -> bool {
         let pr = self.prs.get_mut(&to).unwrap();
         if !pr.recent_active {
-            debug!("ignore sending snapshot to {} since it is not recently active",
+            debug!("{} ignore sending snapshot to {} since it is not recently active",
+                   self.tag,
                    to);
             return false;
         }
@@ -332,8 +341,9 @@ impl<T: Storage> Raft<T> {
         let snapshot_r = self.raft_log.snapshot();
         if let Err(e) = snapshot_r {
             if e == Error::Store(StorageError::SnapshotTemporarilyUnavailable) {
-                debug!("{} failed to send snapshot to {} because snapshot is termporarily \
+                debug!("{} {} failed to send snapshot to {} because snapshot is termporarily \
                         unavailable",
+                       self.tag,
                        self.id,
                        to);
                 return false;
@@ -347,8 +357,9 @@ impl<T: Storage> Raft<T> {
         let (sindex, sterm) = (snapshot.get_metadata().get_index(),
                                snapshot.get_metadata().get_term());
         m.set_snapshot(snapshot);
-        debug!("{} [firstindex: {}, commit: {}] sent snapshot[index: {}, term: {}] to {} \
+        debug!("{} {} [firstindex: {}, commit: {}] sent snapshot[index: {}, term: {}] to {} \
                 [{:?}]",
+               self.tag,
                self.id,
                self.raft_log.first_index(),
                self.raft_log.committed,
@@ -357,7 +368,8 @@ impl<T: Storage> Raft<T> {
                to,
                pr);
         pr.become_snapshot(sindex);
-        debug!("{} paused sending replication messages to {} [{:?}]",
+        debug!("{} {} paused sending replication messages to {} [{:?}]",
+               self.tag,
                self.id,
                to,
                pr);
@@ -380,7 +392,8 @@ impl<T: Storage> Raft<T> {
                 }
                 ProgressState::Probe => pr.pause(),
                 _ => {
-                    panic!("{} is sending append in unhandled state {:?}",
+                    panic!("{} {} is sending append in unhandled state {:?}",
+                           self.tag,
                            self.id,
                            pr.state)
                 }
@@ -558,7 +571,10 @@ impl<T: Storage> Raft<T> {
         self.reset(term);
         self.leader_id = leader_id;
         self.state = StateRole::Follower;
-        info!("{} became follower at term {}", self.id, self.term);
+        info!("{} {} became follower at term {}",
+              self.tag,
+              self.id,
+              self.term);
     }
 
     // TODO: revoke pub when there is a better way to test.
@@ -570,7 +586,10 @@ impl<T: Storage> Raft<T> {
         let id = self.id;
         self.vote = id;
         self.state = StateRole::Candidate;
-        info!("{} became candidate at term {}", self.id, self.term);
+        info!("{} {} became candidate at term {}",
+              self.tag,
+              self.id,
+              self.term);
     }
 
     // TODO: revoke pub when there is a better way to test.
@@ -594,7 +613,10 @@ impl<T: Storage> Raft<T> {
             self.pending_conf = true;
         }
         self.append_entry(&mut [Entry::new()]);
-        info!("{} became leader at term {}", self.id, self.term);
+        info!("{} {} became leader at term {}",
+              self.tag,
+              self.id,
+              self.term);
     }
 
     fn campaign(&mut self) {
@@ -610,7 +632,8 @@ impl<T: Storage> Raft<T> {
             if id == self.id {
                 continue;
             }
-            info!("{} [logterm: {}, index: {}] sent vote request to {} at term {}",
+            info!("{} {} [logterm: {}, index: {}] sent vote request to {} at term {}",
+                  self.tag,
                   self.id,
                   self.raft_log.last_term(),
                   self.raft_log.last_index(),
@@ -625,12 +648,14 @@ impl<T: Storage> Raft<T> {
 
     fn poll(&mut self, id: u64, v: bool) -> usize {
         if v {
-            info!("{} received vote from {} at term {}",
+            info!("{} {} received vote from {} at term {}",
+                  self.tag,
                   self.id,
                   id,
                   self.term)
         } else {
-            info!("{} received vote rejection from {} at term {}",
+            info!("{} {} received vote rejection from {} at term {}",
+                  self.tag,
                   self.id,
                   id,
                   self.term)
@@ -642,9 +667,12 @@ impl<T: Storage> Raft<T> {
     pub fn step(&mut self, m: Message) -> Result<()> {
         if m.get_msg_type() == MessageType::MsgHup {
             if self.state == StateRole::Leader {
-                debug!("{} ignoring MsgHup because already leader", self.id);
+                debug!("{} {} ignoring MsgHup because already leader",
+                       self.tag,
+                       self.id);
             } else {
-                info!("{} is starting a new election at term {}",
+                info!("{} {} is starting a new election at term {}",
+                      self.tag,
                       self.id,
                       self.term);
                 self.campaign();
@@ -666,7 +694,8 @@ impl<T: Storage> Raft<T> {
             if m.get_msg_type() == MessageType::MsgRequestVote {
                 leader_id = INVALID_ID;
             }
-            info!("{} [term: {}] received a {:?} message with higher term from {} [term: {}]",
+            info!("{} {} [term: {}] received a {:?} message with higher term from {} [term: {}]",
+                  self.tag,
                   self.id,
                   self.term,
                   m.get_msg_type(),
@@ -675,7 +704,8 @@ impl<T: Storage> Raft<T> {
             self.become_follower(m.get_term(), leader_id);
         } else if m.get_term() < self.term {
             // ignore
-            info!("{} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
+            info!("{} {} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
+                  self.tag,
                   self.id,
                   self.term,
                   m.get_msg_type(),
@@ -701,13 +731,15 @@ impl<T: Storage> Raft<T> {
         let pr = self.prs.get_mut(&m.get_from()).unwrap();
         pr.recent_active = true;
         if m.get_reject() {
-            debug!("{} received msgAppend rejection(lastindex: {}) from {} for index {}",
+            debug!("{} {} received msgAppend rejection(lastindex: {}) from {} for index {}",
+                   self.tag,
                    self.id,
                    m.get_reject_hint(),
                    m.get_from(),
                    m.get_index());
             if pr.maybe_decr_to(m.get_index(), m.get_reject_hint()) {
-                debug!("{} decreased progress of {} to [{:?}]",
+                debug!("{} {} decreased progress of {} to [{:?}]",
+                       self.tag,
                        self.id,
                        m.get_from(),
                        pr);
@@ -730,8 +762,9 @@ impl<T: Storage> Raft<T> {
                 if !pr.maybe_snapshot_abort() {
                     return;
                 }
-                debug!("{} snapshot aborted, resumed sending replication messages to {} \
+                debug!("{} {} snapshot aborted, resumed sending replication messages to {} \
                         [{:?}]",
+                       self.tag,
                        self.id,
                        m.get_from(),
                        pr);
@@ -744,10 +777,12 @@ impl<T: Storage> Raft<T> {
 
     fn handle_transfer_leader(&mut self, m: &Message) {
         let lead_transferee = m.get_from();
-        if let Some(last_lead_transferee) = self.lead_transferee {
-            if last_lead_transferee == lead_transferee {
-                info!("{} [term {}] transfer leadership to {} is in progress, ignores request to \
-                       same node {}",
+        let last_lead_transferee = self.lead_transferee;
+        if last_lead_transferee.is_some() {
+            if last_lead_transferee.unwrap() == lead_transferee {
+                info!("{} {} [term {}] transfer leadership to {} is in progress, ignores request \
+                       to same node {}",
+                      self.tag,
                       self.id,
                       self.term,
                       lead_transferee,
@@ -755,18 +790,21 @@ impl<T: Storage> Raft<T> {
                 return;
             }
             self.abort_leader_transfer();
-            info!("{} [term {}] abort transfer leadership to {}",
+            info!("{} {} [term {}] abort transfer leadership to {}",
+                  self.tag,
                   self.id,
                   self.term,
-                  last_lead_transferee);
+                  last_lead_transferee.unwrap());
         }
         if lead_transferee == self.id {
-            if self.lead_transferee.is_none() {
-                debug!("{} is already leader. Ignored transfer leadership to {}",
+            if last_lead_transferee.is_none() {
+                debug!("{} {} is already leader. Ignored transfer leadership to {}",
+                       self.tag,
                        self.id,
                        self.id);
             } else {
-                debug!("{} abort transfer leadership to {}, transfer to current leader {}.",
+                debug!("{} {} abort transfer leadership to {}, transfer to current leader {}.",
+                       self.tag,
                        self.id,
                        self.lead_transferee.unwrap(),
                        self.id);
@@ -774,7 +812,8 @@ impl<T: Storage> Raft<T> {
             return;
         }
         // Transfer leadership to third party.
-        info!("{} [term {}] starts to transfer leadership to {}",
+        info!("{} {} [term {}] starts to transfer leadership to {}",
+              self.tag,
               self.id,
               self.term,
               lead_transferee);
@@ -784,7 +823,8 @@ impl<T: Storage> Raft<T> {
         self.lead_transferee = Some(lead_transferee);
         if self.prs.get(&m.get_from()).unwrap().matched == self.raft_log.last_index() {
             self.send_timeout_now(lead_transferee);
-            info!("{} sends MsgTimeoutNow to {} immediately as {} already has up-to-date log",
+            info!("{} {} sends MsgTimeoutNow to {} immediately as {} already has up-to-date log",
+                  self.tag,
                   self.id,
                   lead_transferee,
                   lead_transferee);
@@ -798,13 +838,15 @@ impl<T: Storage> Raft<T> {
         if m.get_reject() {
             pr.snapshot_failure();
             pr.become_probe();
-            debug!("{} snapshot failed, resumed sending replication messages to {} [{:?}]",
+            debug!("{} {} snapshot failed, resumed sending replication messages to {} [{:?}]",
+                   self.tag,
                    self.id,
                    m.get_from(),
                    pr);
         } else {
             pr.become_probe();
-            debug!("{} snapshot succeeded, resumed sending replication messages to {} [{:?}]",
+            debug!("{} {} snapshot succeeded, resumed sending replication messages to {} [{:?}]",
+                   self.tag,
                    self.id,
                    m.get_from(),
                    pr);
@@ -822,7 +864,7 @@ impl<T: Storage> Raft<T> {
                                    old_paused: &mut bool,
                                    maybe_commit: &mut bool) {
         if !self.prs.contains_key(&m.get_from()) {
-            debug!("{} no progress available for {}", self.id, m.get_from());
+            debug!("{} no progress available for {}", self.tag, m.get_from());
             return;
         }
         match m.get_msg_type() {
@@ -832,7 +874,8 @@ impl<T: Storage> Raft<T> {
                 if let Some(lead_transferee) = self.lead_transferee {
                     if m.get_from() == lead_transferee &&
                        self.prs.get(&m.get_from()).unwrap().matched == self.raft_log.last_index() {
-                        info!("{} sent MsgTimeoutNow to {} after received MsgAppResp",
+                        info!("{} {} sent MsgTimeoutNow to {} after received MsgAppResp",
+                              self.tag,
                               self.id,
                               m.get_from());
                         self.send_timeout_now(m.get_from());
@@ -864,7 +907,8 @@ impl<T: Storage> Raft<T> {
                 if pr.state == ProgressState::Replicate {
                     pr.become_probe();
                 }
-                debug!("{} failed to send message to {} because it is unreachable [{:?}]",
+                debug!("{} {} failed to send message to {} because it is unreachable [{:?}]",
+                       self.tag,
                        self.id,
                        m.get_from(),
                        pr);
@@ -877,8 +921,9 @@ impl<T: Storage> Raft<T> {
     }
 
     fn log_vote_reject(&self, m: &Message) {
-        info!("{} [logterm: {}, index: {}, vote: {}] rejected vote from {} [logterm: {}, \
+        info!("{} {} [logterm: {}, index: {}, vote: {}] rejected vote from {} [logterm: {}, \
                index: {}] at term {}",
+              self.tag,
               self.id,
               self.raft_log.last_term(),
               self.raft_log.last_index(),
@@ -890,8 +935,9 @@ impl<T: Storage> Raft<T> {
     }
 
     fn log_vote_approve(&self, m: &Message) {
-        info!("{} [logterm: {}, index: {}, vote: {}] voted for {} [logterm: {}, index: {}] \
+        info!("{} {} [logterm: {}, index: {}, vote: {}] voted for {} [logterm: {}, index: {}] \
                at term {}",
+              self.tag,
               self.id,
               self.raft_log.last_term(),
               self.raft_log.last_index(),
@@ -911,7 +957,8 @@ impl<T: Storage> Raft<T> {
             }
             MessageType::MsgCheckQuorum => {
                 if !self.check_quorum_active() {
-                    warn!("{} stepped down to follower since quorum is not active",
+                    warn!("{} {} stepped down to follower since quorum is not active",
+                          self.tag,
                           self.id);
                     let term = self.term;
                     self.become_follower(term, INVALID_ID);
@@ -920,7 +967,7 @@ impl<T: Storage> Raft<T> {
             }
             MessageType::MsgPropose => {
                 if m.get_entries().len() == 0 {
-                    panic!("{} stepped empty MsgProp", self.id);
+                    panic!("{} {} stepped empty MsgProp", self.tag, self.id);
                 }
                 if !self.prs.contains_key(&self.id) {
                     // If we are not currently a member of the range (i.e. this node
@@ -985,7 +1032,10 @@ impl<T: Storage> Raft<T> {
         let term = self.term;
         match m.get_msg_type() {
             MessageType::MsgPropose => {
-                info!("{} no leader at term {}; dropping proposal", self.id, term);
+                info!("{} {} no leader at term {}; dropping proposal",
+                      self.tag,
+                      self.id,
+                      term);
                 return;
             }
             MessageType::MsgAppend => {
@@ -1010,7 +1060,8 @@ impl<T: Storage> Raft<T> {
             MessageType::MsgRequestVoteResponse => {
                 let gr = self.poll(m.get_from(), !m.get_reject());
                 let quorum = self.quorum();
-                info!("{} [quorum:{}] has received {} votes and {} vote rejections",
+                info!("{} {} [quorum:{}] has received {} votes and {} vote rejections",
+                      self.tag,
                       self.id,
                       quorum,
                       gr,
@@ -1023,7 +1074,8 @@ impl<T: Storage> Raft<T> {
                 }
             }
             MessageType::MsgTimeoutNow => {
-                debug!("{} [term {} state {:?}] ignored MsgTimeoutNow from {}",
+                debug!("{} {} [term {} state {:?}] ignored MsgTimeoutNow from {}",
+                       self.tag,
                        self.id,
                        self.term,
                        self.state,
@@ -1038,7 +1090,10 @@ impl<T: Storage> Raft<T> {
         match m.get_msg_type() {
             MessageType::MsgPropose => {
                 if self.leader_id == INVALID_ID {
-                    info!("{} no leader at term {}; dropping proposal", self.id, term);
+                    info!("{} {} no leader at term {}; dropping proposal",
+                          self.tag,
+                          self.id,
+                          term);
                     return;
                 }
                 m.set_to(self.leader_id);
@@ -1076,8 +1131,9 @@ impl<T: Storage> Raft<T> {
                 }
             }
             MessageType::MsgTimeoutNow => {
-                info!("{} [term {}] received MsgTimeoutNow from {} and starts an election to get \
-                       leadership.",
+                info!("{} {} [term {}] received MsgTimeoutNow from {} and starts an election to \
+                       get leadership.",
+                      self.tag,
                       self.id,
                       self.term,
                       m.get_from());
@@ -1109,8 +1165,9 @@ impl<T: Storage> Raft<T> {
                 self.send(to_send);
             }
             None => {
-                debug!("{} [logterm: {}, index: {}] rejected msgApp [logterm: {}, index: {}] \
+                debug!("{} {} [logterm: {}, index: {}] rejected msgApp [logterm: {}, index: {}] \
                         from {}",
+                       self.tag,
                        self.id,
                        self.raft_log.zero_term_on_err_compacted(self.raft_log.term(m.get_index())),
                        m.get_index(),
@@ -1138,7 +1195,8 @@ impl<T: Storage> Raft<T> {
         let (sindex, sterm) = (m.get_snapshot().get_metadata().get_index(),
                                m.get_snapshot().get_metadata().get_term());
         if self.restore(m.take_snapshot()) {
-            info!("{} [commit: {}] restored snapshot [index: {}, term: {}]",
+            info!("{} {} [commit: {}] restored snapshot [index: {}, term: {}]",
+                  self.tag,
                   self.id,
                   self.raft_log.committed,
                   sindex,
@@ -1149,7 +1207,8 @@ impl<T: Storage> Raft<T> {
             to_send.set_index(self.raft_log.last_index());
             self.send(to_send);
         } else {
-            info!("{} [commit: {}] ignored snapshot [index: {}, term: {}]",
+            info!("{} {} [commit: {}] ignored snapshot [index: {}, term: {}]",
+                  self.tag,
                   self.id,
                   self.raft_log.committed,
                   sindex,
@@ -1165,8 +1224,9 @@ impl<T: Storage> Raft<T> {
     fn restore_raft(&mut self, snap: &Snapshot) -> Option<bool> {
         let meta = snap.get_metadata();
         if self.raft_log.match_term(meta.get_index(), meta.get_term()) {
-            info!("{} [commit: {}, lastindex: {}, lastterm: {}] fast-forwarded commit to \
+            info!("{} {} [commit: {}, lastindex: {}, lastterm: {}] fast-forwarded commit to \
                    snapshot [index: {}, term: {}]",
+                  self.tag,
                   self.id,
                   self.raft_log.committed,
                   self.raft_log.last_index(),
@@ -1177,8 +1237,9 @@ impl<T: Storage> Raft<T> {
             return Some(false);
         }
 
-        info!("{} [commit: {}, lastindex: {}, lastterm: {}] starts to restore snapshot [index: \
-               {}, term: {}]",
+        info!("{} {} [commit: {}, lastindex: {}, lastterm: {}] starts to restore snapshot \
+               [index: {}, term: {}]",
+              self.tag,
               self.id,
               self.raft_log.committed,
               self.raft_log.last_index(),
@@ -1194,7 +1255,8 @@ impl<T: Storage> Raft<T> {
                 0
             };
             self.set_progress(n, matched, next_idx);
-            info!("{} restored progress of {} [{:?}]",
+            info!("{} {} restored progress of {} [{:?}]",
+                  self.tag,
                   self.id,
                   n,
                   self.prs[&n]);
@@ -1266,7 +1328,8 @@ impl<T: Storage> Raft<T> {
     pub fn load_state(&mut self, hs: HardState) {
         if hs.get_commit() < self.raft_log.committed ||
            hs.get_commit() > self.raft_log.last_index() {
-            panic!("{} hs.commit {} is out of range [{}, {}]",
+            panic!("{} {} hs.commit {} is out of range [{}, {}]",
+                   self.tag,
                    self.id,
                    hs.get_commit(),
                    self.raft_log.committed,

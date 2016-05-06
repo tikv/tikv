@@ -178,8 +178,8 @@ pub struct Storage {
 impl Storage {
     pub fn from_engine(engine: Box<Engine>) -> Result<Storage> {
         let desc = format!("{:?}", engine);
-        let shared = Arc::new(engine);
-        let mut scheduler = Scheduler::new(shared.clone());
+        let engine = Arc::new(engine);
+        let mut scheduler = Scheduler::new(engine.clone());
 
         let (tx, rx) = mpsc::channel::<Message>();
         let builder = thread::Builder::new().name(format!("storage-{:?}", desc));
@@ -198,7 +198,7 @@ impl Storage {
         }));
 
         Ok(Storage {
-            engine: shared,
+            engine: engine,
             tx: tx,
             thread: handle,
         })
