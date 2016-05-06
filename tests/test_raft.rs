@@ -1969,6 +1969,37 @@ fn test_leader_transfer_to_slow_follower() {
 	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 3);
 }
 
+#[test]
+fn test_leader_transfer_after_snapshot() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+	nt.isolate(3);
+
+	nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+	next_ents(&mut nt.peers.get_mut(&1).unwrap(), &nt.storage[&1]);
+    let mut cs = ConfState::new();
+    cs.set_nodes(nt.peers[&1].nodes());
+	nt.storage[&1]
+        .wl()
+        .create_snapshot(nt.peers[&1].raft_log.applied, Some(cs), vec![])
+        .expect("");
+	nt.storage[&1].wl().compact(nt.peers[&1].raft_log.applied).expect("");
+
+	nt.recover();
+    let matched = nt.peers[&1].prs[&3].matched;
+	if matched != 1 {
+		panic!("node 1 has match {} for node 3, want {}", matched, 1);
+	}
+
+	// Transfer leadership to 3 when node 3 is lack of snapshot.
+	nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
+	// Send pb.MsgHeartbeatResp to leader to trigger a snapshot for node 3.
+	nt.send(vec![new_message(3, 1, MessageType::MsgHeartbeatResponse, 0)]);
+
+	check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 3);
+}
+
 fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64) {
     if r.state != state || r.leader_id != lead {
         panic!("after transferring, node has state {:?} lead {}, want state {:?} lead {}",
