@@ -479,6 +479,8 @@ impl<T: Storage> Raft<T> {
         self.heartbeat_elapsed = 0;
         self.reset_randomized_election_timeout();
 
+        self.lead_transferee = None;
+
         self.votes = HashMap::new();
         let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
         let self_id = self.id;

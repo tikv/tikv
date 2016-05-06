@@ -1923,3 +1923,42 @@ fn test_commit_after_remove_node() {
     assert_eq!(ents[0].get_entry_type(), EntryType::EntryNormal);
     assert_eq!(ents[0].get_data(), "hello".as_bytes());
 }
+
+// test_leader_transfer_to_uptodate_node verifies transferring should succeed
+// if the transferee has the most up-to-date log entires when transfer starts.
+#[test]
+fn test_leader_transfer_to_uptodate_node() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    let lead_id = nt.peers[&1].leader_id;
+    if lead_id != 1 {
+        panic!("after election leader is {}, want 1", lead_id);
+    }
+
+    // Transfer leadership to 2.
+    nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
+
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+
+    // After some log replication, transfer leadership back to 1.
+    nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+
+    nt.send(vec![new_message(1, 2, MessageType::MsgTransferLeader, 0)]);
+
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+}
+
+fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64) {
+    if r.state != state || r.leader_id != lead {
+        panic!("after transferring, node has state {:?} lead {}, want state {:?} lead {}",
+               r.state,
+               r.leader_id,
+               state,
+               lead);
+    }
+    if r.lead_transferee.is_some() {
+        panic!("after transferring, node has lead_transferee {}, want lead_transferee None",
+               r.lead_transferee.unwrap());
+    }
+}
