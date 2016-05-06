@@ -72,7 +72,7 @@ impl<T: Simulator> AskHandler<T> {
                          .get_region_by_id(cluster_id, region.get_id())
                          .unwrap();
 
-        let meta = self.pd_client.rl().get_cluster_meta(cluster_id).unwrap();
+        let meta = self.pd_client.rl().get_cluster_config(cluster_id).unwrap();
         let max_peer_number = meta.get_max_peer_number() as usize;
         let peer_number = region.get_store_ids().len();
         if max_peer_number == peer_number {
