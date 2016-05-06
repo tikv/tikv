@@ -2113,7 +2113,7 @@ fn test_leader_transfer_remove_node() {
 
     nt.ignore(MessageType::MsgTimeoutNow);
 
-    // The leadTransferee is removed when leadship transferring.
+    // The lead_transferee is removed when leadship transferring.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
     let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
     if lead_transferee != 3 {
@@ -2127,7 +2127,7 @@ fn test_leader_transfer_remove_node() {
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
-// TestLeaderTransferBack verifies leadership can transfer
+// test_leader_transfer_back verifies leadership can transfer
 // back to self when last transfer is pending.
 #[test]
 fn test_leader_transfer_back() {
@@ -2150,7 +2150,7 @@ fn test_leader_transfer_back() {
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
-// TestLeaderTransferSecondTransferToAnotherNode verifies leader can transfer to another node
+// test_leader_transfer_second_transfer_to_another_node verifies leader can transfer to another node
 // when last transfer is pending.
 #[test]
 fn test_leader_transfer_second_transfer_to_another_node() {
@@ -2173,7 +2173,7 @@ fn test_leader_transfer_second_transfer_to_another_node() {
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
 }
 
-// TestLeaderTransferSecondTransferToSameNode verifies second transfer leader request
+// test_leader_transfer_second_transfer_to_same_node verifies second transfer leader request
 // to the same node should not extend the timeout while the first one is pending.
 #[test]
 fn test_leader_transfer_second_transfer_to_same_node() {

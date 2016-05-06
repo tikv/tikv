@@ -680,7 +680,8 @@ impl<T: Storage> Raft<T> {
             return Ok(());
         }
         if m.get_msg_type() == MessageType::MsgTransferLeader && self.state != StateRole::Leader {
-            debug!("{} [term {} state {:?}] ignoring MsgTransferLeader to {}",
+            debug!("{} {} [term {} state {:?}] ignoring MsgTransferLeader to {}",
+                   self.tag,
                    self.id,
                    self.term,
                    self.state,
@@ -976,11 +977,12 @@ impl<T: Storage> Raft<T> {
                     return;
                 }
                 if self.lead_transferee.is_some() {
-                    debug!("{} [term {}] transfer leadership to {} is in progress; dropping \
+                    debug!("{} {} [term {}] transfer leadership to {} is in progress; dropping \
                             proposal",
-                           self.id,
-                           self.term,
-                           self.lead_transferee.unwrap());
+                            self.tag,
+                            self.id,
+                            self.term,
+                            self.lead_transferee.unwrap());
                     return;
                 }
 
