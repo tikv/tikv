@@ -44,16 +44,9 @@ quick_error! {
         }
         KeyLength {description("bad format key(length)")}
         KeyPadding {description("bad format key(padding)")}
-        OutOfBound(want: usize, actual: usize) {
-            description("out of bound.")
-            display("want {} actual {}", want, actual)
-        }
         InvalidDataType(reason: String) {
             description("invalid data type")
             display("{}", reason)
-        }
-        Eof {
-            description("eof")
         }
         Encoding(err: Utf8Error) {
             from()
@@ -76,10 +69,3 @@ impl From<FromUtf8Error> for Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
-
-pub fn check_bound<T>(buf: &[T], want: usize) -> Result<()> {
-    if want > buf.len() {
-        return Err(Error::OutOfBound(want, buf.len()));
-    }
-    Ok(())
-}
