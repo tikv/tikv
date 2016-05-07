@@ -27,7 +27,7 @@ fn test_pd_heartbeat() {
     util::sleep_ms(100);
 
     let pd_client = cluster.pd_client.clone();
-    let store =pd_client.rl().get_store(0, 1).unwrap();
+    let store = pd_client.rl().get_store(0, 1).unwrap();
     assert!(store.get_address().len() > 0);
 
     // force update a wrong store meta.

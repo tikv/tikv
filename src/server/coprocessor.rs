@@ -15,7 +15,8 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use std::{result, error};
 use std::time::Instant;
-use mio::Token;
+use std::boxed::FnBox;
+
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
@@ -33,7 +34,7 @@ use util::codec::{Datum, table, datum, number};
 use util::xeval::Evaluator;
 use util::{as_slice, escape};
 use util::SlowTimer;
-use server::{SendCh, Msg, ConnData};
+use super::OnResponse;
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
@@ -92,34 +93,28 @@ impl From<txn::Error> for Error {
 pub struct EndPointHost {
     snap_endpoint: Arc<TiDbEndPoint>,
     pool: ThreadPool,
-    ch: SendCh,
 }
 
 impl EndPointHost {
-    pub fn new(engine: Arc<Box<Engine>>, ch: SendCh) -> EndPointHost {
+    pub fn new(engine: Arc<Box<Engine>>) -> EndPointHost {
         EndPointHost {
             snap_endpoint: Arc::new(TiDbEndPoint::new(engine)),
             pool: ThreadPool::new(DEFAULT_POOL_SIZE),
-            ch: ch,
         }
     }
 
-    pub fn on_request(&self, req: Request, token: Token, msg_id: u64) {
+    pub fn on_request(&self, req: Request, on_resp: OnResponse) {
         let end_point = self.snap_endpoint.clone();
-        let ch = self.ch.clone();
         self.pool.execute(move || {
             let timer = SlowTimer::new();
-            end_point.handle_request(req, token, msg_id, ch);
-            slow_log!(timer,
-                      "request {:?}/{} takes {:?}",
-                      token,
-                      msg_id,
-                      timer.elapsed());
+            let tp = req.get_tp();
+            end_point.handle_request(req, on_resp);
+            slow_log!(timer, "request type {} takes {:?}", tp, timer.elapsed());
         });
     }
 }
 
-type ResponseHandler = Box<Fn(Response) -> ()>;
+type ResponseHandler = Box<FnBox(Response) -> ()>;
 
 fn on_error(e: Error, cb: ResponseHandler) {
     let mut resp = Response::new();
@@ -148,20 +143,12 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, req: Request, token: Token, msg_id: u64, ch: SendCh) {
+    fn handle_request(&self, req: Request, on_resp: OnResponse) {
         let cb = box move |r| {
             let mut resp_msg = Message::new();
             resp_msg.set_msg_type(MessageType::CopResp);
             resp_msg.set_cop_resp(r);
-            if let Err(e) = ch.send(Msg::WriteData {
-                token: token,
-                data: ConnData::new(msg_id, resp_msg),
-            }) {
-                error!("send cop resp failed with token {:?}, msg id {}, err {:?}",
-                       token,
-                       msg_id,
-                       e);
-            }
+            on_resp.call_box((resp_msg,));
         };
         match req.get_tp() {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
