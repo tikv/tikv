@@ -200,16 +200,11 @@ impl Storage {
                 }
                 // trying to gather more commands
                 loop {
-                    if let Ok(cmd) = rx.try_recv() {
+                    if let Ok(Message::Command(cmd)) = rx.try_recv() {
                         debug!("recv message: {:?}", cmd);
-                        match cmd {
-                            Message::Close => {
-                                done = true;
-                                break;
-                            }
-                            Message::Command(cmd) => cmds.push(cmd),
-                        }
+                        cmds.push(cmd);
                     } else {
+                        done = true;
                         break;
                     }
                 }

@@ -27,7 +27,7 @@ impl Scheduler {
     }
 
     pub fn handle_cmds(&mut self, cmds: Vec<Command>) {
-        let _ = cmds.into_par_iter().enumerate().for_each(|(_, cmd)| self.handle_cmd(cmd));
+        let _ = cmds.into_par_iter().map(|cmd| self.handle_cmd(cmd));
     }
 
     pub fn handle_cmd(&self, cmd: Command) {
