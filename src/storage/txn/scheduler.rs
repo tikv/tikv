@@ -15,6 +15,7 @@ use std::sync::Arc;
 use storage::Engine;
 use storage::Command;
 use super::store::TxnStore;
+use rayon::prelude::*;
 
 pub struct Scheduler {
     store: TxnStore,
@@ -25,7 +26,11 @@ impl Scheduler {
         Scheduler { store: TxnStore::new(engine) }
     }
 
-    pub fn handle_cmd(&mut self, cmd: Command) {
+    pub fn handle_cmds(&mut self, cmds: Vec<Command>) {
+        let _ = cmds.into_par_iter().map(|cmd| self.handle_cmd(cmd));
+    }
+
+    pub fn handle_cmd(&self, cmd: Command) {
         debug!("scheduler::handle_cmd: {:?}", cmd);
         match cmd {
             Command::Get { ctx, key, start_ts, callback } => {
@@ -87,5 +92,6 @@ impl Scheduler {
                              .map_err(::storage::Error::from));
             }
         }
+
     }
 }

@@ -39,6 +39,7 @@ time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"
 clippy = {version = "*", optional = true}
+rayon = "0.3.1"
 
 [dependencies.rocksdb]
 git = "https://github.com/ngaut/rust-rocksdb.git"

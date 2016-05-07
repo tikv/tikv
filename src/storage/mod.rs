@@ -185,13 +185,30 @@ impl Storage {
         let builder = thread::Builder::new().name(format!("storage-{:?}", desc));
         let handle = box_try!(builder.spawn(move || {
             info!("storage: [{}] started.", desc);
+            let mut done = false;
             loop {
-                let msg = try!(rx.recv());
-                debug!("recv message: {:?}", msg);
-                match msg {
-                    Message::Command(cmd) => scheduler.handle_cmd(cmd),
-                    Message::Close => break,
+                if done {
+                    break;
                 }
+
+                let mut cmds = vec![];
+                let cmd = try!(rx.recv());
+                debug!("recv message: {:?}", cmd);
+                match cmd {
+                    Message::Close => return Ok(()),
+                    Message::Command(cmd) => cmds.push(cmd),
+                }
+                // trying to gather more commands
+                loop {
+                    if let Ok(Message::Command(cmd)) = rx.try_recv() {
+                        debug!("recv message: {:?}", cmd);
+                        cmds.push(cmd);
+                    } else {
+                        done = true;
+                        break;
+                    }
+                }
+                scheduler.handle_cmds(cmds);
             }
             info!("storage: [{}] closing.", desc);
             Ok(())
