@@ -235,7 +235,7 @@ impl<T> RaftLog<T>
     }
 
     pub fn append(&mut self, ents: &[Entry]) -> u64 {
-        if ents.len() == 0 {
+        if ents.is_empty() {
             return self.last_index();
         }
 
@@ -637,7 +637,7 @@ mod test {
         store.wl().apply_snapshot(new_snapshot(index, term)).expect("apply failed.");
         let raft_log = RaftLog::new(Arc::new(store));
 
-        assert_eq!(0, raft_log.all_entries().len());
+        assert!(raft_log.all_entries().is_empty());
         assert_eq!(index + 1, raft_log.first_index());
         assert_eq!(index, raft_log.committed);
         assert_eq!(index + 1, raft_log.unstable.offset);
