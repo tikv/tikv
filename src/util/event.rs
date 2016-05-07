@@ -209,7 +209,7 @@ mod test {
     }
 
     /// In some cases `drop` of Event has been called, but not the inner Arc.
-    /// This may cause dead lock if we count on arc's strong count. 
+    /// This may cause dead lock if we count on arc's strong count.
     #[test]
     fn test_dead_lock() {
         let e1: Event<i64> = Event::new();
