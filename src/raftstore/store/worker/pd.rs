@@ -23,8 +23,6 @@ use util::escape;
 use pd::PdClient;
 
 // Use an asynchronous thread to tell pd something.
-// TODO: remove enum_variant_names if we add other task later.
-#[allow(enum_variant_names)]
 pub enum Task {
     AskChangePeer {
         change_type: raftpb::ConfChangeType,
@@ -35,6 +33,9 @@ pub enum Task {
         region: metapb::Region,
         split_key: Vec<u8>,
         leader_store_id: u64,
+    },
+    Heartbeat {
+        store: metapb::Store,
     },
 }
 
@@ -51,6 +52,7 @@ impl Display for Task {
                        region.get_id(),
                        escape(&split_key))
             }
+            Task::Heartbeat { ref store } => write!(f, "heartbeat for store {}", store.get_id()),
         }
     }
 }
@@ -80,6 +82,10 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             }
             Task::AskSplit { region, split_key, leader_store_id } => {
                 self.pd_client.rl().ask_split(self.cluster_id, region, &split_key, leader_store_id)
+            }
+            Task::Heartbeat { store } => {
+                // Now we use put store protocol for heartbeat.
+                self.pd_client.wl().put_store(self.cluster_id, store)
             }
         };
 
