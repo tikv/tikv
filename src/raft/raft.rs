@@ -214,8 +214,8 @@ impl<T: Storage> Raft<T> {
         let rs = store.initial_state().expect("");
         let raft_log = RaftLog::new(store);
         let mut peers: &[u64] = &c.peers;
-        if rs.conf_state.get_nodes().len() > 0 {
-            if peers.len() > 0 {
+        if !rs.conf_state.get_nodes().is_empty() {
+            if !peers.is_empty() {
                 // TODO: the peers argument is always nil except in
                 // tests; the argument should be removed and these tests should be
                 // updated to specify their nodes through a snap
@@ -378,7 +378,7 @@ impl<T: Storage> Raft<T> {
         m.set_log_term(term);
         m.set_entries(RepeatedField::from_vec(ents));
         m.set_commit(self.raft_log.committed);
-        if m.get_entries().len() != 0 {
+        if !m.get_entries().is_empty() {
             match pr.state {
                 ProgressState::Replicate => {
                     let last = m.get_entries().last().unwrap().get_index();
@@ -876,7 +876,7 @@ impl<T: Storage> Raft<T> {
                 return;
             }
             MessageType::MsgPropose => {
-                if m.get_entries().len() == 0 {
+                if m.get_entries().is_empty() {
                     panic!("{} {} stepped empty MsgProp", self.tag, self.id);
                 }
                 if !self.prs.contains_key(&self.id) {
