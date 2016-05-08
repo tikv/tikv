@@ -138,6 +138,11 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"a2", b"v2");
     must_get_equal(&engine_2, b"a3", b"v3");
 
+    // Make sure peer 2 is not in probe mode.
+    cluster.must_put(b"a4", b"v4");
+    assert_eq!(cluster.get(b"a4"), Some(b"v4".to_vec()));
+    must_get_equal(&engine_2, b"a4", b"v4");
+
     // Remove peer 2 from region 1.
     cluster.change_peer(r1, ConfChangeType::RemoveNode, 2);
 
