@@ -169,15 +169,20 @@ impl TiDbEndPoint {
     }
 
     pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
+        let ts = Instant::now();
         let snap = try!(self.new_snapshot(req.get_context(), sel.get_start_ts()));
+        debug!("[TIME_SNAPSHOT] {:?}", ts.elapsed());
         let mut ctx = try!(SelectContext::new(sel, snap));
         let range = req.take_ranges().into_vec();
         debug!("scanning range: {:?}", range);
+        let sel_ts = Instant::now();
         let res = if req.get_tp() == REQ_TYPE_SELECT {
             ctx.get_rows_from_sel(range)
         } else {
             ctx.get_rows_from_idx(range)
         };
+        debug!("[TIME_SELECT] {:?} {:?}", req.get_tp(), sel_ts.elapsed());
+        let resp_ts = Instant::now();
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
         match res {
@@ -196,6 +201,7 @@ impl TiDbEndPoint {
         }
         let data = box_try!(sel_resp.write_to_bytes());
         resp.set_data(data);
+        debug!("[TIME_COMPOSE_RESP] {:?}", resp_ts.elapsed());
         Ok(resp)
     }
 }
