@@ -286,8 +286,10 @@ impl StoreHandler {
 
 fn extract_region_error<T>(res: &StorageResult<T>) -> Option<RegionError> {
     match *res {
-        Err(StorageError::Txn(TxnError::Engine(EngineError::Request(ref err)))) => {
-            Some(err.to_owned())
+        Err(StorageError::Engine(EngineError::Request(ref e))) |
+        Err(StorageError::Txn(TxnError::Engine(EngineError::Request(ref e)))) |
+        Err(StorageError::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
+            Some(e.to_owned())
         }
         _ => None,
     }
