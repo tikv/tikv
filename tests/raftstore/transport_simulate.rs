@@ -99,6 +99,13 @@ impl<T: Transport> SimulateTransport<T> {
     }
 }
 
+pub fn new_drop_packet_filter(rate: u32) -> RwLock<Box<Filter>> {
+    RwLock::new(box FilterDropPacket {
+        rate: rate,
+        drop: false,
+    })
+}
+
 impl<T: Transport> Transport for SimulateTransport<T> {
     fn send(&self, msg: RaftMessage) -> Result<()> {
         let mut discard = false;

@@ -14,6 +14,7 @@
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
 use std::thread;
+use std::collections::HashSet;
 
 use tikv::raftstore::store::*;
 use kvproto::raftpb::ConfChangeType;
@@ -21,7 +22,8 @@ use kvproto::metapb;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 
-use super::cluster::{Cluster, Simulator};
+use super::cluster::{Cluster, Simulator, new_partition_filter};
+use super::transport_simulate::new_drop_packet_filter;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::*;
@@ -424,4 +426,67 @@ fn test_server_after_remove_itself() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
     test_after_remove_itself(&mut cluster);
+}
+
+fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
+    let r1 = cluster.bootstrap_conf_change();
+    cluster.start();
+    cluster.change_peer(r1, ConfChangeType::AddNode, 2);
+    cluster.change_peer(r1, ConfChangeType::AddNode, 3);
+
+    // leader isolation
+    let leader = cluster.leader_of_region(r1).unwrap();
+    assert_eq!(leader, 1);
+    cluster.hook_transport(leader, vec![new_drop_packet_filter(100)]);
+    let s: Arc<HashSet<u64>> = Arc::new((leader..leader + 1).collect());
+    for id in 1..7 {
+        if id != leader {
+            let filter = new_partition_filter(s.clone());
+            cluster.hook_transport(leader, vec![RwLock::new(filter)]);
+        }
+    }
+
+    // refresh region info, maybe no need
+    cluster.must_put(b"k1", b"v1");
+
+    // add [4,5,6] and remove [2,3]
+    cluster.change_peer(r1, ConfChangeType::AddNode, 4);
+    cluster.change_peer(r1, ConfChangeType::AddNode, 5);
+    cluster.change_peer(r1, ConfChangeType::AddNode, 6);
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, 2);
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, 3);
+
+    // refresh region info, maybe no need
+    cluster.must_put(b"k2", b"v2");
+
+    cluster.reset_transport_hooks();
+    let s1 = (1..4).collect();
+    let s2 = (4..7).collect();
+    cluster.partition(Arc::new(s1), Arc::new(s2));
+
+    // refresh region info, maybe no need
+    cluster.must_put(b"k3", b"v3");
+
+    // when network recover, 1 will send message to [2,3]
+    // check whether a new cluster [1,2,3] formed
+    // if so, both [1,2,3] and [4,5,6] think they serve for region r1
+    // result in split brain
+    let find_leader = new_status_request(r1, new_region_leader_cmd());
+    let resp = cluster.call_command(2, find_leader.clone(), Duration::from_secs(3)).unwrap();
+    assert_eq!(resp.get_header().get_error().get_message(),
+               "region is not found");
+}
+
+#[test]
+fn test_server_split_brain() {
+    let count = 6;
+    let mut cluster = new_server_cluster(0, count);
+    test_split_brain(&mut cluster);
+}
+
+#[test]
+fn test_node_split_brain() {
+    let count = 6;
+    let mut cluster = new_node_cluster(0, count);
+    test_split_brain(&mut cluster);
 }

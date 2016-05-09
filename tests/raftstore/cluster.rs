@@ -517,10 +517,13 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn reset_transport_hooks(&mut self) {
-        let sim = &self.sim.rl();
-        for node_id in sim.get_node_ids() {
-            sim.hook_transport(node_id, vec![]);
+        for node_id in self.sim.rl().get_node_ids() {
+            self.sim.rl().hook_transport(node_id, vec![]);
         }
+    }
+
+    pub fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>) {
+        self.sim.rl().hook_transport(node_id, filters);
     }
 }
 
@@ -542,7 +545,7 @@ impl Filter for PartitionFilter {
     }
 }
 
-fn new_partition_filter(node_ids: Arc<HashSet<u64>>) -> Box<Filter> {
+pub fn new_partition_filter(node_ids: Arc<HashSet<u64>>) -> Box<Filter> {
     let ids = node_ids.clone();
     Box::new(PartitionFilter {
         node_ids: ids,
