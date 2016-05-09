@@ -1940,9 +1940,7 @@ fn test_leader_transfer_to_uptodate_node() {
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
     let lead_id = nt.peers[&1].leader_id;
-    if lead_id != 1 {
-        panic!("after election leader is {}, want 1", lead_id);
-    }
+    assert_eq!(lead_id, 1);
 
     // Transfer leadership to 2.
     nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
