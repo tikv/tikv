@@ -52,7 +52,7 @@ impl Evaluator {
             ExprType::Not => self.eval_not(expr),
             ExprType::Like => self.eval_like(expr),
             ExprType::Float32 |
-            ExprType::Float64 => unimplemented!(),
+            ExprType::Float64 => self.eval_float(expr),
             ExprType::In => self.eval_in(expr),
             _ => Ok(Datum::Null),
         }
@@ -66,6 +66,11 @@ impl Evaluator {
     fn eval_uint(&self, expr: &Expr) -> Result<Datum> {
         let u = try!(expr.get_val().decode_u64());
         Ok(Datum::U64(u))
+    }
+
+    fn eval_float(&self, expr: &Expr) -> Result<Datum> {
+        let f = try!(expr.get_val().decode_f64());
+        Ok(Datum::F64(f))
     }
 
     fn eval_column_ref(&self, expr: &Expr) -> Result<Datum> {
@@ -249,7 +254,7 @@ fn check_in(target: Datum, value_list: &[Datum]) -> Result<bool> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use util::codec::number::NumberEncoder;
+    use util::codec::number::{self, NumberEncoder};
     use util::codec::{Datum, datum};
 
     use tipb::expression::{Expr, ExprType};
@@ -260,13 +265,13 @@ mod test {
         match datum {
             Datum::I64(i) => {
                 expr.set_tp(ExprType::Int64);
-                let mut buf = Vec::with_capacity(8);
+                let mut buf = Vec::with_capacity(number::I64_SIZE);
                 buf.encode_i64(i).unwrap();
                 expr.set_val(buf);
             }
             Datum::U64(u) => {
                 expr.set_tp(ExprType::Uint64);
-                let mut buf = Vec::with_capacity(8);
+                let mut buf = Vec::with_capacity(number::U64_SIZE);
                 buf.encode_u64(u).unwrap();
                 expr.set_val(buf);
             }
@@ -274,8 +279,12 @@ mod test {
                 expr.set_tp(ExprType::Bytes);
                 expr.set_val(bs);
             }
-            Datum::F32(_) => unimplemented!(),
-            Datum::F64(_) => unimplemented!(),
+            Datum::F64(f) => {
+                expr.set_tp(ExprType::Float64);
+                let mut buf = Vec::with_capacity(number::F64_SIZE);
+                buf.encode_f64(f).unwrap();
+                expr.set_val(buf);
+            }
             _ => expr.set_tp(ExprType::Null),
         };
         expr
@@ -322,6 +331,7 @@ mod test {
     #[test]
     fn test_eval() {
         let tests = vec![
+            (datum_expr(Datum::F64(1.1)), Datum::F64(1.1)),
             (datum_expr(Datum::I64(1)), Datum::I64(1)),
             (datum_expr(Datum::U64(1)), Datum::U64(1)),
             (datum_expr(b"abc".as_ref().into()), b"abc".as_ref().into()),
