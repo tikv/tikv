@@ -296,7 +296,7 @@ mod test {
         u.restore(s.clone());
 
         assert_eq!(u.offset, s.get_metadata().get_index() + 1);
-        assert_eq!(u.entries.len(), 0);
+        assert!(u.entries.is_empty());
         assert_eq!(u.snapshot.unwrap(), s);
     }
 

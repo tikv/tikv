@@ -21,13 +21,13 @@ use std::net::SocketAddr;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
 
-use raftstore::store::{cmd_resp, Transport};
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use raftstore::store::Transport;
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::raftpb::MessageType as RaftMessageType;
 use super::{Msg, SendCh, ConnData};
 use super::conn::{Conn, OnWriteComplete};
-use super::Result;
+use super::{Result, OnResponse};
 use util::HandyRwLock;
 use storage::Storage;
 use super::kv::StoreHandler;
@@ -99,8 +99,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
         let sendch = SendCh::new(event_loop.channel());
         let engine = storage.get_engine();
-        let store_handler = StoreHandler::new(storage, sendch.clone());
-        let end_point = EndPointHost::new(engine, sendch.clone());
+        let store_handler = StoreHandler::new(storage);
+        let end_point = EndPointHost::new(engine);
 
         let svr = Server {
             listener: listener,
@@ -228,9 +228,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 Ok(())
             }
             MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
-            MessageType::KvReq => self.store.on_request(msg.take_kv_req(), token, msg_id),
+            MessageType::KvReq => {
+                let req = msg.take_kv_req();
+                debug!("notify Request token[{:?}] msg_id[{}] type[{:?}]",
+                       token,
+                       msg_id,
+                       req.get_field_type());
+                let on_resp = self.make_response_cb(token, msg_id);
+                self.store.on_request(req, on_resp)
+            }
             MessageType::CopReq => {
-                self.end_point.on_request(msg.take_cop_req(), token, msg_id);
+                let on_resp = self.make_response_cb(token, msg_id);
+                self.end_point.on_request(msg.take_cop_req(), on_resp);
                 Ok(())
             }
             _ => {
@@ -244,24 +253,17 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn on_raft_command(&mut self, msg: RaftCmdRequest, token: Token, msg_id: u64) -> Result<()> {
         debug!("handle raft command {:?}", msg);
-        let ch = self.sendch.clone();
+        let on_resp = self.make_response_cb(token, msg_id);
         let cb = box move |resp| {
-            send_raft_cmd_resp(ch, token, msg_id, resp);
+            let mut resp_msg = Message::new();
+            resp_msg.set_msg_type(MessageType::CmdResp);
+            resp_msg.set_cmd_resp(resp);
+
+            on_resp.call_box((resp_msg,));
             Ok(())
         };
 
-        let uuid = msg.get_header().get_uuid().to_vec();
-        if let Err(e) = self.raft_router.rl().send_command(msg, cb) {
-            // send error, reply an error response.
-            warn!("send command for token {:?} with msg id {} err {:?}",
-                  token,
-                  msg_id,
-                  e);
-
-            let mut resp = cmd_resp::message_error(e);
-            resp.mut_header().set_uuid(uuid);
-            send_raft_cmd_resp(self.sendch.clone(), token, msg_id, resp)
-        }
+        try!(self.raft_router.rl().send_command(msg, cb));
 
         Ok(())
     }
@@ -383,11 +385,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
 
         let region_id = data.msg.get_raft().get_region_id();
-        let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
+        let to_store_id = data.msg.get_raft().get_message().get_to();
 
-        if let Err(e) = self.raft_router.rl().report_unreachable(region_id, to_peer_id) {
+        if let Err(e) = self.raft_router.rl().report_unreachable(region_id, to_store_id) {
             error!("report peer {} unreachable for region {} failed {:?}",
-                   to_peer_id,
+                   to_store_id,
                    region_id,
                    e);
         }
@@ -468,12 +470,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter<T> {
         let region_id = data.msg.get_raft().get_region_id();
-        let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
+        let to_store_id = data.msg.get_raft().get_message().get_to();
 
         SnapshotReporter {
             router: self.raft_router.clone(),
             region_id: region_id,
-            to_peer_id: to_peer_id,
+            to_store_id: to_store_id,
             reported: AtomicBool::new(false),
         }
     }
@@ -507,6 +509,23 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                         Some(box move || {
                             reporter.report(SnapshotStatus::Finish);
                         }))
+    }
+
+    fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
+        let ch = self.sendch.clone();
+        box move |res: Message| {
+            let tp = res.get_msg_type();
+            if let Err(e) = ch.send(Msg::WriteData {
+                token: token,
+                data: ConnData::new(msg_id, res),
+            }) {
+                error!("send {:?} resp failed with token {:?}, msg id {}, err {:?}",
+                       tp,
+                       token,
+                       msg_id,
+                       e);
+            }
+        }
     }
 }
 
@@ -558,25 +577,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
     }
 }
 
-fn send_raft_cmd_resp(ch: SendCh, token: Token, msg_id: u64, resp: RaftCmdResponse) {
-    let mut resp_msg = Message::new();
-    resp_msg.set_msg_type(MessageType::CmdResp);
-    resp_msg.set_cmd_resp(resp);
-    if let Err(e) = ch.send(Msg::WriteData {
-        token: token,
-        data: ConnData::new(msg_id, resp_msg),
-    }) {
-        error!("send raft cmd resp failed with token {:?}, msg id {}, err {:?}",
-               token,
-               msg_id,
-               e);
-    }
-}
-
 struct SnapshotReporter<T: RaftStoreRouter + 'static> {
     router: Arc<RwLock<T>>,
     region_id: u64,
-    to_peer_id: u64,
+    to_store_id: u64,
 
     reported: AtomicBool,
 }
@@ -589,16 +593,16 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
         }
 
         debug!("send snapshot to {} for {} {:?}",
-               self.to_peer_id,
+               self.to_store_id,
                self.region_id,
                status);
 
 
         if let Err(e) = self.router
                             .rl()
-                            .report_snapshot(self.region_id, self.to_peer_id, status) {
+                            .report_snapshot(self.region_id, self.to_store_id, status) {
             error!("report snapshot to peer {} with region {} err {:?}",
-                   self.to_peer_id,
+                   self.to_store_id,
                    self.region_id,
                    e);
         }
@@ -625,6 +629,7 @@ mod tests {
     use raftstore::store::Callback;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use raft::SnapshotStatus;
+    use storage::engine::TEMP_DIR;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -672,7 +677,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut server = Server::new(&mut event_loop,
                                      listener,
-                                     Storage::new(Dsn::Memory).unwrap(),
+                                     Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                                      Arc::new(RwLock::new(TestRaftStoreRouter {
                                          tx: Mutex::new(tx),
                                      })),

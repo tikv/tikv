@@ -24,7 +24,7 @@ pub mod mvcc;
 pub mod txn;
 mod types;
 
-pub use self::engine::{Engine, Snapshot, Dsn, new_engine, Modify, Error as EngineError};
+pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::SnapshotStore;
 pub use self::types::{Key, Value, KvPair};
@@ -178,8 +178,8 @@ pub struct Storage {
 impl Storage {
     pub fn from_engine(engine: Box<Engine>) -> Result<Storage> {
         let desc = format!("{:?}", engine);
-        let shared = Arc::new(engine);
-        let mut scheduler = Scheduler::new(shared.clone());
+        let engine = Arc::new(engine);
+        let mut scheduler = Scheduler::new(engine.clone());
 
         let (tx, rx) = mpsc::channel::<Message>();
         let builder = thread::Builder::new().name(format!("storage-{:?}", desc));
@@ -198,7 +198,7 @@ impl Storage {
         }));
 
         Ok(Storage {
-            engine: shared,
+            engine: engine,
             tx: tx,
             thread: handle,
         })
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = Storage::new(Dsn::Memory).unwrap();
+        let storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_get(Context::new(), make_key(b"x"), 100, expect_get_none()).unwrap();
         storage.async_prewrite(Context::new(),
                                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let storage = Storage::new(Dsn::Memory).unwrap();
+        let storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_prewrite(Context::new(),
                                vec![
             Mutation::Put((make_key(b"a"), b"aa".to_vec())),
@@ -502,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let storage = Storage::new(Dsn::Memory).unwrap();
+        let storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_prewrite(Context::new(),
                                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                                b"x".to_vec(),

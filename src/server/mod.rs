@@ -15,6 +15,7 @@ use std::thread;
 use std::time::Duration;
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
+use std::boxed::{Box, FnBox};
 
 use bytes::ByteBuf;
 use mio::{self, Token, NotifyError};
@@ -40,6 +41,8 @@ pub use self::server::{Server, create_event_loop, bind};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
 pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver, MockStoreAddrResolver};
+
+pub type OnResponse = Box<FnBox(msgpb::Message) + Send>;
 
 const MAX_SEND_RETRY_CNT: i32 = 20;
 
@@ -107,15 +110,15 @@ impl Display for ConnData {
             MessageType::Cmd => write!(f, "[{}] raft command request", self.msg_id),
             MessageType::CmdResp => write!(f, "[{}] raft command response", self.msg_id),
             MessageType::Raft => {
-                let from_peer = self.msg.get_raft().get_from_peer();
-                let to_peer = self.msg.get_raft().get_to_peer();
+                let from_store_id = self.msg.get_raft().get_message().get_from();
+                let to_store_id = self.msg.get_raft().get_message().get_to();
                 let msg_type = self.msg.get_raft().get_message().get_msg_type();
                 write!(f,
                        "[{}] raft {:?} from {:?} to {:?}",
                        self.msg_id,
                        msg_type,
-                       from_peer.get_id(),
-                       to_peer.get_id())
+                       from_store_id,
+                       to_store_id)
             }
             MessageType::KvReq => {
                 write!(f,

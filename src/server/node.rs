@@ -168,7 +168,7 @@ impl<T, Trans> Node<T, Trans>
               peer_id,
               region_id);
 
-        let region = try!(store::bootstrap_region(engine, store_id, region_id, peer_id));
+        let region = try!(store::bootstrap_region(engine, store_id, region_id));
         Ok(region)
     }
 
@@ -202,6 +202,7 @@ impl<T, Trans> Node<T, Trans>
         let mut event_loop = try!(store::create_event_loop(&cfg));
         let mut store = try!(Store::new(&mut event_loop,
                                         meta,
+                                        self.store.clone(),
                                         cfg,
                                         engine,
                                         self.trans.clone(),

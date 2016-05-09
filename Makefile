@@ -22,9 +22,6 @@ bench:
 	ulimit -n 4096 && LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features ${ENABLE_FEATURES} -- --nocapture 
 	ulimit -n 4096 && RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features ${ENABLE_FEATURES}
 
-genprotobuf:
-	cd ./src/proto && protoc --rust_out . *.proto
-
 format:
 	@cargo fmt -- --write-mode overwrite | grep -v "found TODO" || exit 0
 	@rustfmt --write-mode overwrite tests/tests.rs benches/benches.rs | grep -v "found TODO" || exit 0

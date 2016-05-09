@@ -14,6 +14,7 @@
 #![crate_type = "lib"]
 #![allow(unused_features)]
 #![feature(test)]
+#![feature(optin_builtin_traits)]
 #![feature(btree_range, collections_bound)]
 #![feature(recover)]
 #![feature(fnbox)]
@@ -25,6 +26,7 @@
 #![feature(iter_arith)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
+#![recursion_limit="100"]
 
 #[macro_use]
 extern crate log;

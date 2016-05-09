@@ -121,7 +121,8 @@ mod test {
     use raftstore::coprocessor::RegionObserver;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
-    use util::codec::{datum, table, Datum, number};
+    use util::codec::{datum, table, Datum};
+    use util::codec::number::NumberEncoder;
     use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
@@ -139,8 +140,8 @@ mod test {
     }
 
     fn new_row_key(table_id: i64, row_id: i64, column_id: u64, version_id: u64) -> Vec<u8> {
-        let mut buf = vec![0; table::ID_LEN];
-        number::encode_i64(&mut buf, row_id).unwrap();
+        let mut buf = Vec::with_capacity(table::ID_LEN);
+        buf.encode_i64(row_id).unwrap();
         let mut key = table::encode_row_key(table_id, &buf);
         if column_id > 0 {
             key.write_u64::<BigEndian>(column_id).unwrap();
@@ -208,7 +209,7 @@ mod test {
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         let key = b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\
-                    \x82\x7f\x80\x00\x00\x00\x00\x00\x00\xd3";
+    \x82\x7f\x80\x00\x00\x00\x00\x00\x00\xd3";
         let expect_key = b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f";
         req = new_split_request(key);
         observer.pre_admin(&mut ctx, &mut req).unwrap();

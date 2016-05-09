@@ -106,11 +106,11 @@ impl super::PdClient for RpcClient {
     fn ask_change_peer(&self,
                        cluster_id: u64,
                        region: metapb::Region,
-                       leader: metapb::Peer)
+                       leader_store_id: u64)
                        -> Result<()> {
         let mut ask_change_peer = pdpb::AskChangePeerRequest::new();
         ask_change_peer.set_region(region);
-        ask_change_peer.set_leader(leader);
+        ask_change_peer.set_leader_store_id(leader_store_id);
 
         let mut req = new_request(cluster_id, pdpb::CommandType::AskChangePeer);
         req.set_ask_change_peer(ask_change_peer);
@@ -124,12 +124,12 @@ impl super::PdClient for RpcClient {
                  cluster_id: u64,
                  region: metapb::Region,
                  split_key: &[u8],
-                 leader: metapb::Peer)
+                 leader_store_id: u64)
                  -> Result<()> {
         let mut ask_split = pdpb::AskSplitRequest::new();
         ask_split.set_region(region);
         ask_split.set_split_key(split_key.to_vec());
-        ask_split.set_leader(leader);
+        ask_split.set_leader_store_id(leader_store_id);
 
         let mut req = new_request(cluster_id, pdpb::CommandType::AskSplit);
         req.set_ask_split(ask_split);
