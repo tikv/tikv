@@ -162,6 +162,7 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         cmd.set_header(header);
         cmd.set_requests(RepeatedField::from_vec(reqs));
         let resp = try!(self.exec_cmd_request(cmd));
+        // notice: raft thread will be woken up after the take method is called.
         Ok(resp.take().unwrap().take_responses().to_vec())
     }
 
@@ -256,6 +257,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         cmd.set_header(header);
         cmd.mut_requests().push(req);
 
+        // notice: the raft thread will be woken up after resp is dropped
         let resp = try!(self.exec_cmd_request(cmd));
         let region = try!(resp.apply(|resp| {
                                   let mut resp = resp.take_responses().remove(0);
@@ -266,6 +268,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
                                   Ok(resp.take_snap().take_region().clone())
                               })
                               .unwrap());
+
         let snap = RegionSnapshot::from_raw(self.db.as_ref(), region);
         Ok(box snap)
     }
