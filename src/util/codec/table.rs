@@ -79,6 +79,12 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     remaining.decode_i64()
 }
 
+/// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
+pub fn truncate_as_row_key(key: &[u8]) -> Result<&[u8]> {
+    try!(decode_handle(key));
+    Ok(&key[..RECORD_ROW_KEY_LEN])
+}
+
 /// `encode_index_seek_key` encodes an index value to byte array.
 pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PREFIX_LEN + ID_LEN + encoded.len());
