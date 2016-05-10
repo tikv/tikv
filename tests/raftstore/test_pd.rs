@@ -33,7 +33,7 @@ fn test_pd_heartbeat() {
     // force update a wrong store meta.
     pd_client.wl().put_store(0, util::new_store(1, "".to_owned())).unwrap();
 
-    util::sleep_ms(100);
+    util::sleep_ms(500);
     let store1 = pd_client.rl().get_store(0, 1).unwrap();
     assert_eq!(store1.get_address(), store.get_address());
 }
