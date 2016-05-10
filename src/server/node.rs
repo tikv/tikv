@@ -202,6 +202,7 @@ impl<T, Trans> Node<T, Trans>
         let mut event_loop = try!(store::create_event_loop(&cfg));
         let mut store = try!(Store::new(&mut event_loop,
                                         meta,
+                                        self.store.clone(),
                                         cfg,
                                         engine,
                                         self.trans.clone(),

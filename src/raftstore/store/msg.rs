@@ -32,6 +32,7 @@ pub enum Tick {
     RaftLogGc,
     SplitRegionCheck,
     ReplicaCheck,
+    PdHeartbeat,
 }
 
 pub enum Msg {

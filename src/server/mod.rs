@@ -15,6 +15,7 @@ use std::thread;
 use std::time::Duration;
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
+use std::boxed::{Box, FnBox};
 
 use bytes::ByteBuf;
 use mio::{self, Token, NotifyError};
@@ -40,6 +41,8 @@ pub use self::server::{Server, create_event_loop, bind};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
 pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver, MockStoreAddrResolver};
+
+pub type OnResponse = Box<FnBox(msgpb::Message) + Send>;
 
 const MAX_SEND_RETRY_CNT: i32 = 20;
 
@@ -131,6 +134,8 @@ impl Display for ConnData {
             }
             MessageType::CopReq => write!(f, "[{}] coprocessor request", self.msg_id),
             MessageType::CopResp => write!(f, "[{}] coprocessor response", self.msg_id),
+            MessageType::PdReq => write!(f, "[{}] pd request", self.msg_id),
+            MessageType::PdResp => write!(f, "[{}] pd response", self.msg_id),
             MessageType::None => write!(f, "[{}] invalid message", self.msg_id),
         }
     }

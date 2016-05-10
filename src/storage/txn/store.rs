@@ -197,7 +197,7 @@ impl<'a> SnapshotStore<'a> {
 
     pub fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
-        let mut results = Vec::<_>::with_capacity(keys.len());
+        let mut results = Vec::with_capacity(keys.len());
         for k in keys {
             results.push(txn.get(k).map_err(Error::from));
         }

@@ -126,7 +126,7 @@ impl MemStorageCore {
     }
 
     pub fn append(&mut self, ents: &[Entry]) -> Result<()> {
-        if ents.len() == 0 {
+        if ents.is_empty() {
             return Ok(());
         }
         let first: u64 = self.entries[0].get_index() + 1;

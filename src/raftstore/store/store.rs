@@ -54,7 +54,7 @@ const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cluster_meta: metapb::Cluster,
     cfg: Config,
-    ident: StoreIdent,
+    store: metapb::Store,
     engine: Arc<DB>,
     sendch: SendCh,
 
@@ -90,11 +90,13 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn new(event_loop: &mut EventLoop<Self>,
                cluster_meta: metapb::Cluster,
+               meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
                trans: Arc<RwLock<T>>,
                pd_client: Arc<RwLock<C>>)
                -> Result<Store<T, C>> {
+        // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
         let ident: StoreIdent = try!(load_store_ident(engine.as_ref()).and_then(|res| {
@@ -104,12 +106,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }));
 
+        if ident.get_cluster_id() != cluster_meta.get_id() {
+            return Err(box_err!("cluster id {} mismatches with ident {}",
+                                cluster_meta.get_id(),
+                                ident.get_cluster_id()));
+        }
+
+        if ident.get_store_id() != meta.get_id() {
+            return Err(box_err!("store id {} mismatches with ident {}",
+                                meta.get_id(),
+                                ident.get_store_id()));
+        }
+
         let sendch = SendCh::new(event_loop.channel());
 
         Ok(Store {
             cluster_meta: cluster_meta,
             cfg: cfg,
-            ident: ident,
+            store: meta,
             engine: engine,
             sendch: sendch,
             region_peers: HashMap::new(),
@@ -159,6 +173,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
         self.register_replica_check_tick(event_loop);
+        self.register_pd_heartbeat_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -184,12 +199,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.engine.clone()
     }
 
-    pub fn ident(&self) -> &StoreIdent {
-        &self.ident
-    }
 
     pub fn store_id(&self) -> u64 {
-        self.ident.get_store_id()
+        self.store.get_id()
     }
 
     pub fn config(&self) -> &Config {
@@ -688,6 +700,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_replica_check_tick(event_loop);
     }
 
+    fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let task = PdTask::Heartbeat { store: self.store.clone() };
+
+        if let Err(e) = self.pd_worker.schedule(task) {
+            error!("failed to notify pd: {}", e);
+        }
+
+        self.register_pd_heartbeat_tick(event_loop);
+    }
+
+    fn register_pd_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::PdHeartbeat,
+                                       self.cfg.pd_heartbeat_tick_interval) {
+            error!("register replica check tick err: {:?}", e);
+        };
+    }
+
     fn on_report_snapshot(&mut self, region_id: u64, to_store_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             info!("report to snapshot {} for {} {:?}",
@@ -776,6 +806,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::ReplicaCheck => self.on_replica_check_tick(event_loop),
+            Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
         }
         slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }

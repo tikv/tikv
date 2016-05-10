@@ -1,6 +1,8 @@
 use tikv::server::coprocessor::*;
 use kvproto::kvrpcpb::Context;
-use tikv::util::codec::{table, Datum, datum, number};
+use tikv::util::codec::{table, Datum, datum};
+use tikv::util::codec::datum::DatumDecoder;
+use tikv::util::codec::number::*;
 use tikv::storage::{Dsn, Mutation, Key};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::storage::txn::TxnStore;
@@ -136,8 +138,8 @@ fn prepare_table_data(store: &mut Store, tbl: &TableInfo, count: i64) {
     for i in 1..count + 1 {
         let mut mutations = vec![];
 
-        let mut buf = vec![0; 8];
-        number::encode_i64(&mut buf, i).unwrap();
+        let mut buf = Vec::with_capacity(8);
+        buf.encode_i64(i).unwrap();
         let row_key = table::encode_row_key(tbl.t_id, &buf);
 
         mutations.push((row_key, vec![]));
@@ -158,11 +160,12 @@ fn prepare_sel(store: &mut Store, tbl: &TableInfo) -> Request {
 
     let mut range = KeyRange::new();
 
-    let mut buf = vec![0; 8];
-    number::encode_i64(&mut buf, i64::MIN).unwrap();
+    let mut buf = Vec::with_capacity(8);
+    buf.encode_i64(i64::MIN).unwrap();
     range.set_start(table::encode_row_key(tbl.t_id, &buf));
 
-    number::encode_i64(&mut buf, i64::MAX).unwrap();
+    buf.clear();
+    buf.encode_i64(i64::MAX).unwrap();
     range.set_end(table::encode_row_key(tbl.t_id, &buf));
     req.set_ranges(RepeatedField::from_vec(vec![range]));
     req
@@ -240,7 +243,7 @@ fn test_index() {
     assert_eq!(sel_resp.get_rows().len(), count as usize);
     let mut handles = vec![];
     for row in sel_resp.get_rows() {
-        let datums = datum::decode(row.get_handle()).unwrap();
+        let datums = row.get_handle().decode().unwrap();
         assert_eq!(datums.len(), 1);
         if let Datum::I64(h) = datums[0] {
             handles.push(h);
