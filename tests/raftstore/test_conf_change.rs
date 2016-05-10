@@ -422,10 +422,13 @@ fn test_server_after_remove_itself() {
 }
 
 fn test_add_remove_add<T: Simulator>(cluster: &mut Cluster<T>) {
+    init_log();
     let r1 = cluster.bootstrap_conf_change();
     cluster.start();
     cluster.change_peer(r1, ConfChangeType::AddNode, 2);
+    cluster.must_put(b"k1", b"v1");
     cluster.change_peer(r1, ConfChangeType::AddNode, 3);
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
     let s1 = (1..3).collect();
     let s2 = (3..4).collect();
@@ -437,6 +440,8 @@ fn test_add_remove_add<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // when network recover, peer 3 will receive heartbeat
     cluster.reset_transport_hooks();
+    print!("--------------------------------------------\n");
+    sleep_ms(3000);
 }
 
 #[test]
