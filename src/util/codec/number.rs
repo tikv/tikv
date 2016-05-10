@@ -13,32 +13,54 @@
 
 use byteorder::{ByteOrder, BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, ErrorKind, Write, Read};
+use std::mem;
 
 use super::{Result, Error};
 
 const SIGN_MARK: u64 = 0x8000000000000000;
 pub const MAX_VAR_I64_LEN: usize = 10;
+pub const U64_SIZE: usize = 8;
+pub const I64_SIZE: usize = 8;
+pub const F64_SIZE: usize = 8;
 
-fn order_encode(v: i64) -> u64 {
+fn order_encode_i64(v: i64) -> u64 {
     v as u64 ^ SIGN_MARK
 }
 
-fn order_decode(u: u64) -> i64 {
+fn order_decode_i64(u: u64) -> i64 {
     (u ^ SIGN_MARK) as i64
+}
+
+fn order_encode_f64(v: f64) -> u64 {
+    let u: u64 = unsafe { mem::transmute(v) };
+    if v.is_sign_positive() {
+        u | SIGN_MARK
+    } else {
+        !u
+    }
+}
+
+fn order_decode_f64(u: u64) -> f64 {
+    let u = if u & SIGN_MARK > 0 {
+        u & (!SIGN_MARK)
+    } else {
+        !u
+    };
+    unsafe { mem::transmute(u) }
 }
 
 pub trait NumberEncoder: Write {
     /// `encode_i64` writes the encoded value to buf.
     /// `encode_i64` guarantees that the encoded value is in ascending order for comparison.
     fn encode_i64(&mut self, v: i64) -> Result<()> {
-        let u = order_encode(v);
+        let u = order_encode_i64(v);
         self.encode_u64(u)
     }
 
     /// `encode_i64_desc` writes the encoded value to buf.
     /// `encode_i64_desc` guarantees that the encoded value is in descending order for comparison.
     fn encode_i64_desc(&mut self, v: i64) -> Result<()> {
-        let u = order_encode(v);
+        let u = order_encode_i64(v);
         self.encode_u64_desc(u)
     }
 
@@ -73,6 +95,20 @@ pub trait NumberEncoder: Write {
         }
         self.write_u8(v as u8).map_err(From::from)
     }
+
+    /// `encode_f64` writes the encoded value to slice buf.
+    /// `encode_f64` guarantees that the encoded value is in ascending order for comparison.
+    fn encode_f64(&mut self, f: f64) -> Result<()> {
+        let u = order_encode_f64(f);
+        self.encode_u64(u)
+    }
+
+    /// `encode_f64_desc` writes the encoded value to slice buf.
+    /// `encode_f64_desc` guarantees that the encoded value is in descending order for comparison.
+    fn encode_f64_desc(&mut self, f: f64) -> Result<()> {
+        let u = order_encode_f64(f);
+        self.encode_u64_desc(u)
+    }
 }
 
 impl<T: Write> NumberEncoder for T {}
@@ -80,14 +116,12 @@ impl<T: Write> NumberEncoder for T {}
 pub trait NumberDecoder: Read {
     /// `decode_i64` decodes value encoded by `encode_i64` before.
     fn decode_i64(&mut self) -> Result<i64> {
-        let u = try!(self.decode_u64());
-        Ok(order_decode(u))
+        self.decode_u64().map(order_decode_i64)
     }
 
     /// `decode_i64_desc` decodes value encoded by `encode_i64_desc` before.
     fn decode_i64_desc(&mut self) -> Result<i64> {
-        let u = try!(self.decode_u64_desc());
-        Ok(order_decode(u))
+        self.decode_u64_desc().map(order_decode_i64)
     }
 
     /// `decode_u64` decodes value encoded by `encode_u64` before.
@@ -127,6 +161,16 @@ pub trait NumberDecoder: Read {
             i += 1;
         }
     }
+
+    /// `decode_f64` decodes value encoded by `encode_f64` before.
+    fn decode_f64(&mut self) -> Result<f64> {
+        self.decode_u64().map(order_decode_f64)
+    }
+
+    /// `decode_f64_desc` decodes value encoded by `encode_f64_desc` before.
+    fn decode_f64_desc(&mut self) -> Result<f64> {
+        self.decode_u64_desc().map(order_decode_f64)
+    }
 }
 
 impl<T: Read> NumberDecoder for T {}
@@ -136,7 +180,7 @@ mod test {
     use super::*;
     use util::codec::Error;
 
-    use std::{i64, u64};
+    use std::{i64, u64, f64, f32};
     use protobuf::CodedOutputStream;
     use std::io::{Write, ErrorKind};
 
@@ -181,6 +225,18 @@ mod test {
                                         1024,
                                         -1023];
 
+    const F64_TESTS: &'static [f64] = &[-1.0,
+                                        0.0,
+                                        1.0,
+                                        f64::MAX,
+                                        f64::MIN,
+                                        f32::MAX as f64,
+                                        f32::MIN as f64,
+                                        f64::MIN_POSITIVE,
+                                        f32::MIN_POSITIVE as f64,
+                                        f64::INFINITY,
+                                        f64::NEG_INFINITY];
+
     // use macro to generate order tests for number codecs.
     macro_rules! test_order {
         ($arr:expr, $sorted:expr, $enc:ident, $dec:ident) => {
@@ -214,11 +270,12 @@ mod test {
     macro_rules! test_codec {
         ($enc:ident, $dec:ident, $compare:expr, $cases:expr) => {
             #[allow(unused_imports)]
+            #[allow(float_cmp)]
             mod $enc {
-                use super::{I64_TESTS, U64_TESTS};
+                use super::{I64_TESTS, U64_TESTS, F64_TESTS};
                 use util::codec::number::*;
 
-                test_serialize!(asc, $enc, $dec, $cases);
+                test_serialize!(serialize, $enc, $dec, $cases);
 
                 #[test]
                 fn test_order() {
@@ -234,6 +291,14 @@ mod test {
     test_codec!(encode_i64_desc, decode_i64_desc, |a, b| b.cmp(a), I64_TESTS);
     test_codec!(encode_u64, decode_u64, |a, b| a.cmp(b), U64_TESTS);
     test_codec!(encode_u64_desc, decode_u64_desc, |a, b| b.cmp(a), U64_TESTS);
+    test_codec!(encode_f64,
+                decode_f64,
+                |a, b| a.partial_cmp(b).unwrap(),
+                F64_TESTS);
+    test_codec!(encode_f64_desc,
+                decode_f64_desc,
+                |a, b| b.partial_cmp(a).unwrap(),
+                F64_TESTS);
 
     test_serialize!(var_i64_codec, encode_var_i64, decode_var_i64, I64_TESTS);
 
@@ -267,20 +332,22 @@ mod test {
 
     // generate bound check test for number codecs.
     macro_rules! test_eof {
-        ($tag:ident, $enc:ident, $dec:ident) => {
+        ($tag:ident, $enc:ident, $dec:ident, $case:expr) => {
             #[test]
             fn $tag() {
                 let mut buf = vec![0; 7];
-                check_error!(buf.as_mut_slice().$enc(1), ErrorKind::WriteZero);
+                check_error!(buf.as_mut_slice().$enc($case), ErrorKind::WriteZero);
                 check_error!(buf.as_slice().$dec(), ErrorKind::UnexpectedEof);
             }
         }
     }
 
-    test_eof!(i64_eof, encode_i64, decode_i64);
-    test_eof!(u64_eof, encode_u64, decode_u64);
-    test_eof!(i64_desc_eof, encode_i64_desc, decode_i64_desc);
-    test_eof!(u64_desc_eof, encode_u64_desc, decode_u64_desc);
+    test_eof!(i64_eof, encode_i64, decode_i64, 1);
+    test_eof!(u64_eof, encode_u64, decode_u64, 1);
+    test_eof!(f64_eof, encode_f64, decode_f64, 1.0);
+    test_eof!(i64_desc_eof, encode_i64_desc, decode_i64_desc, 1);
+    test_eof!(u64_desc_eof, encode_u64_desc, decode_u64_desc, 1);
+    test_eof!(f64_desc_eof, encode_f64_desc, decode_f64_desc, 1.0);
 
     #[test]
     fn test_var_eof() {
