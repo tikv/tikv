@@ -2029,23 +2029,13 @@ fn test_leader_transfer_timeout() {
 
     // Transfer leadership to isolated node, wait for timeout.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
-    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-    if lead_transferee != 3 {
-        panic!("wait transferring, leadTransferee = {}, want {}",
-               lead_transferee,
-               3);
-    }
+    assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
     let heartbeat_timeout = nt.peers[&1].get_heartbeat_timeout();
     let election_timeout = nt.peers[&1].get_election_timeout();
     for _ in 0..heartbeat_timeout {
         nt.peers.get_mut(&1).unwrap().tick();
     }
-    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-    if lead_transferee != 3 {
-        panic!("wait transferring, leadTransferee = {}, want {}",
-               lead_transferee,
-               3);
-    }
+    assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
     for _ in 0..election_timeout - heartbeat_timeout {
         nt.peers.get_mut(&1).unwrap().tick();
     }
@@ -2062,12 +2052,7 @@ fn test_leader_transfer_ignore_proposal() {
 
     // Transfer leadership to isolated node to let transfer pending, then send proposal.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
-    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-    if lead_transferee != 3 {
-        panic!("wait transferring, leadTransferee = {}, want {}",
-               lead_transferee,
-               3);
-    }
+    assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
 
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
     assert_eq!(nt.peers[&1].prs[&1].matched, 1);
@@ -2082,12 +2067,7 @@ fn test_leader_transfer_receive_higher_term_vote() {
 
     // Transfer leadership to isolated node to let transfer pending.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
-    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-    if lead_transferee != 3 {
-        panic!("wait transferring, leadTransferee = {}, want {}",
-               lead_transferee,
-               3);
-    }
+    assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
 
     nt.send(vec![new_message_with_entries(2, 2, MessageType::MsgHup, vec![new_entry(1, 2, None)])]);
 
@@ -2103,12 +2083,7 @@ fn test_leader_transfer_remove_node() {
 
     // The lead_transferee is removed when leadship transferring.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
-    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-    if lead_transferee != 3 {
-        panic!("wait transferring, leadTransferee = {}, want {}",
-               lead_transferee,
-               3);
-    }
+    assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
 
     nt.peers.get_mut(&1).unwrap().remove_node(3);
 
@@ -2125,12 +2100,7 @@ fn test_leader_transfer_back() {
     nt.isolate(3);
 
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
-    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-    if lead_transferee != 3 {
-        panic!("wait transferring, leadTransferee = {}, want {}",
-               lead_transferee,
-               3);
-    }
+    assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
 
     // Transfer leadership back to self.
     nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
@@ -2148,12 +2118,7 @@ fn test_leader_transfer_second_transfer_to_another_node() {
     nt.isolate(3);
 
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
-    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-    if lead_transferee != 3 {
-        panic!("wait transferring, leadTransferee = {}, want {}",
-               lead_transferee,
-               3);
-    }
+    assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
 
     // Transfer leadership to another node.
     nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
@@ -2171,12 +2136,7 @@ fn test_leader_transfer_second_transfer_to_same_node() {
     nt.isolate(3);
 
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
-    let lead_transferee = nt.peers[&1].lead_transferee.unwrap();
-    if lead_transferee != 3 {
-        panic!("wait transferring, leadTransferee = {}, want {}",
-               lead_transferee,
-               3);
-    }
+    assert_eq!(nt.peers[&1].lead_transferee.unwrap(), 3);
 
     let heartbeat_timeout = nt.peers[&1].get_heartbeat_timeout();
     for _ in 0..heartbeat_timeout {
@@ -2202,8 +2162,5 @@ fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64
                state,
                lead);
     }
-    if r.lead_transferee.is_some() {
-        panic!("after transferring, node has lead_transferee {}, want lead_transferee None",
-               r.lead_transferee.unwrap());
-    }
+    assert_eq!(r.lead_transferee, None);
 }
