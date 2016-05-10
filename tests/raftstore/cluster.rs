@@ -191,12 +191,22 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
+        let store_ids = self.store_ids_of_region(region_id);
+        let node_ids = self.sim.rl().get_node_ids();
+        store_ids.contains(&leader_id) && node_ids.contains(&leader_id)
+    }
+
+    fn store_ids_of_region(&self, region_id: u64) -> Vec<u64> {
+        self.pd_client.rl().get_region_by_id(self.id(), region_id).unwrap().take_store_ids()
+    }
+
     fn query_leader(&self, store_id: u64, region_id: u64) -> Option<u64> {
         let find_leader = new_status_request(region_id, new_region_leader_cmd());
         let mut resp = self.call_command(store_id, find_leader, Duration::from_secs(3)).unwrap();
         let region_leader = resp.take_status_response().take_region_leader();
         // NOTE: node id can't be 0.
-        if self.sim.rl().get_node_ids().contains(&region_leader.get_leader_store_id()) {
+        if self.valid_leader_id(region_id, region_leader.get_leader_store_id()) {
             Some(region_leader.get_leader_store_id())
         } else {
             None
@@ -204,9 +214,10 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<u64> {
+        let store_ids = self.store_ids_of_region(region_id);
         if let Some(l) = self.leaders.get(&region_id) {
             // leader may be stopped in some tests.
-            if self.sim.rl().get_node_ids().contains(&l) {
+            if self.valid_leader_id(region_id, *l) {
                 return Some(*l);
             }
         }
@@ -214,11 +225,6 @@ impl<T: Simulator> Cluster<T> {
         let mut leader = None;
         let mut retry_cnt = 500;
 
-        let store_ids = self.pd_client
-                            .rl()
-                            .get_region_by_id(self.id(), region_id)
-                            .unwrap()
-                            .take_store_ids();
         let node_ids: HashSet<u64> = self.sim.rl().get_node_ids();
         let mut count = 0;
         while (leader.is_none() || count < store_ids.len()) && retry_cnt > 0 {
@@ -232,6 +238,9 @@ impl<T: Simulator> Cluster<T> {
                     continue;
                 }
                 let l = self.query_leader(*store_id, region_id);
+                if l.is_none() {
+                    continue;
+                }
                 if leader.is_none() {
                     leader = l;
                     count += 1;
