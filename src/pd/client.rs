@@ -18,7 +18,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use util::codec::rpc;
 use util::make_std_tcp_conn;
-use protobuf::MessageStatic;
 
 use kvproto::pdpb::{Request, Response};
 use kvproto::msgpb::{Message, MessageType};
