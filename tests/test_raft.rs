@@ -1964,10 +1964,7 @@ fn test_leader_transfer_to_slow_follower() {
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
 
     nt.recover();
-    let matched = nt.peers[&1].prs[&3].matched;
-    if matched != 1 {
-        panic!("node 1 has match {} for node 3, want {}", matched, 1);
-    }
+    assert_eq!(nt.peers[&1].prs[&3].matched, 1);
 
     // Transfer leadership to 3 when node 3 is lack of log.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
@@ -1993,10 +1990,7 @@ fn test_leader_transfer_after_snapshot() {
     nt.storage[&1].wl().compact(nt.peers[&1].raft_log.applied).expect("");
 
     nt.recover();
-    let matched = nt.peers[&1].prs[&3].matched;
-    if matched != 1 {
-        panic!("node 1 has match {} for node 3, want {}", matched, 1);
-    }
+    assert_eq!(nt.peers[&1].prs[&3].matched, 1);
 
     // Transfer leadership to 3 when node 3 is lack of snapshot.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
@@ -2076,11 +2070,7 @@ fn test_leader_transfer_ignore_proposal() {
     }
 
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
-
-    let matched = nt.peers[&1].prs[&1].matched;
-    if matched != 1 {
-        panic!("node 1 has match {}, want {}", matched, 1);
-    }
+    assert_eq!(nt.peers[&1].prs[&1].matched, 1);
 }
 
 #[test]
