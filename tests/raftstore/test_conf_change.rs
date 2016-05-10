@@ -18,6 +18,7 @@ use std::collections::HashSet;
 
 use tikv::raftstore::store::*;
 use kvproto::raftpb::ConfChangeType;
+use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::metapb;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
@@ -459,6 +460,7 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // refresh region info, maybe no need
     cluster.must_put(b"k2", b"v2");
 
+    // when network recover, 1 will send message to [2,3]
     cluster.reset_transport_hooks();
     let s1 = (1..4).collect();
     let s2 = (4..7).collect();
@@ -467,14 +469,32 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // refresh region info, maybe no need
     cluster.must_put(b"k3", b"v3");
 
-    // when network recover, 1 will send message to [2,3]
     // check whether a new cluster [1,2,3] formed
     // if so, both [1,2,3] and [4,5,6] think they serve for region r1
     // result in split brain
-    let find_leader = new_status_request(r1, new_region_leader_cmd());
-    let resp = cluster.call_command(2, find_leader.clone(), Duration::from_secs(3)).unwrap();
-    assert_eq!(resp.get_header().get_error().get_message(),
-               "region is not found");
+    let header0 = find_leader_response_header(cluster, 2, r1);
+    assert!(header0.get_error().has_region_not_found());
+
+    // at least wait for a round of election timeout and check again
+    let term = find_leader_response_header(cluster, 1, r1).get_current_term();
+    let mut current_term = term;
+    while current_term < term + 3 {
+        sleep_ms(10);
+        let header2 = find_leader_response_header(cluster, 1, r1);
+        current_term = header2.get_current_term();
+    }
+
+    let header1 = find_leader_response_header(cluster, 2, r1);
+    assert!(header1.get_error().has_region_not_found());
+}
+
+fn find_leader_response_header<T: Simulator>(cluster: &mut Cluster<T>,
+                                             node_id: u64,
+                                             region_id: u64)
+                                             -> RaftResponseHeader {
+    let find_leader = new_status_request(region_id, new_region_leader_cmd());
+    let resp = cluster.call_command(node_id, find_leader.clone(), Duration::from_secs(3));
+    resp.unwrap().take_header()
 }
 
 #[test]
