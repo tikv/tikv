@@ -23,7 +23,7 @@ use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, 
 use super::Result;
 use util::HandyRwLock;
 use super::config::Config;
-use storage::{Storage, Engine, RaftKv};
+use storage::{Storage, RaftKv};
 use super::transport::ServerRaftStoreRouter;
 
 pub fn create_raft_storage<T, Trans>(node: Node<T, Trans>, db: Arc<DB>) -> Result<Storage>

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::{ByteOrder, BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, ErrorKind, Write, Read};
 use std::mem;
 
@@ -182,7 +182,7 @@ mod test {
 
     use std::{i64, u64, f64, f32};
     use protobuf::CodedOutputStream;
-    use std::io::{Write, ErrorKind};
+    use std::io::ErrorKind;
 
     const U64_TESTS: &'static [u64] = &[i64::MIN as u64,
                                         i64::MAX as u64,

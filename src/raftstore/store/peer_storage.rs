@@ -646,7 +646,6 @@ mod test {
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
-    use raft::Storage;
     use raftstore::store::bootstrap;
 
     fn new_storage(path: &TempDir) -> RaftStorage {

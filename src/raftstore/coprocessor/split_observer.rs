@@ -123,7 +123,7 @@ mod test {
     use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
     use util::codec::{datum, table, Datum};
     use util::codec::number::NumberEncoder;
-    use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
+    use byteorder::{BigEndian, WriteBytesExt};
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
