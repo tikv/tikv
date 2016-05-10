@@ -25,8 +25,8 @@ const BYTES_FLAG: u8 = 1;
 const COMPACT_BYTES_FLAG: u8 = 2;
 const INT_FLAG: u8 = 3;
 const UINT_FLAG: u8 = 4;
-// TODO: support following flag
-// const FLOAT_FLAG: u8 = 5;
+const FLOAT_FLAG: u8 = 5;
+// TODO: support following flags
 // const DECIMAL_FLAG: u8 = 6;
 // const DURATION_FLAG: u8 = 7;
 const MAX_FLAG: u8 = 250;
@@ -36,7 +36,6 @@ pub enum Datum {
     Null,
     I64(i64),
     U64(u64),
-    F32(f32),
     F64(f64),
     Bytes(Vec<u8>),
     Min,
@@ -73,7 +72,6 @@ impl Datum {
             }
             Datum::I64(i) => self.cmp_i64(i),
             Datum::U64(u) => self.cmp_u64(u),
-            Datum::F32(f) => self.cmp_f64(f as f64),
             Datum::F64(f) => self.cmp_f64(f),
             Datum::Bytes(ref bs) => self.cmp_bytes(bs),
         }
@@ -113,7 +111,6 @@ impl Datum {
             Datum::Max => Ok(Ordering::Greater),
             Datum::I64(i) => cmp_f64(i as f64, f),
             Datum::U64(u) => cmp_f64(u as f64, f),
-            Datum::F32(ff) => cmp_f64(ff as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
             Datum::Bytes(ref bs) => {
                 let ff = try!(convert::bytes_to_f64(bs));
@@ -139,7 +136,6 @@ impl Datum {
         let b = match self {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
-            Datum::F32(f) => Some(f.round() != 0f32),
             Datum::F64(f) => Some(f.round() != 0f64),
             Datum::Bytes(ref bs) => Some(!bs.is_empty() && try!(convert::bytes_to_int(bs)) != 0),
             Datum::Null => None,
@@ -154,7 +150,6 @@ impl Datum {
             Datum::I64(i) => format!("{}", i),
             Datum::U64(u) => format!("{}", u),
             Datum::F64(f) => format!("{}", f),
-            Datum::F32(f) => format!("{}", f),
             Datum::Bytes(bs) => try!(String::from_utf8(bs)),
             d => return Err(Error::InvalidDataType(format!("can't convert {:?} to string", d))),
         };
@@ -197,6 +192,7 @@ pub trait DatumDecoder: BytesDecoder {
             BYTES_FLAG => self.decode_bytes().map(Datum::Bytes),
             COMPACT_BYTES_FLAG => self.decode_compact_bytes().map(Datum::Bytes),
             NIL_FLAG => Ok(Datum::Null),
+            FLOAT_FLAG => self.decode_f64().map(Datum::F64),
             f => Err(Error::InvalidDataType(format!("unsupported data type `{}`", f))),
         }
     }
@@ -242,13 +238,16 @@ pub trait DatumEncoder: BytesEncoder {
                         try!(self.encode_compact_bytes(bs));
                     }
                 }
+                Datum::F64(f) => {
+                    try!(self.write_u8(FLOAT_FLAG));
+                    try!(self.encode_f64(f));
+                }
                 Datum::Null => try!(self.write_u8(NIL_FLAG)),
                 Datum::Min => {
                     try!(self.write_u8(BYTES_FLAG)); // for backward compatibility
                     find_min = true;
                 }
                 Datum::Max => try!(self.write_u8(MAX_FLAG)),
-                _ => unimplemented!(),
             }
         }
         Ok(())
@@ -260,20 +259,23 @@ impl<T: Write> DatumEncoder for T {}
 /// Get the approximate needed buffer size of values.
 ///
 /// This function ensures that encoded values must fit in the given buffer size.
+#[allow(match_same_arms)]
 pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
     values.iter()
           .map(|v| {
+              1 +
               match *v {
-                  Datum::I64(_) | Datum::U64(_) => 9,
+                  Datum::I64(_) => number::I64_SIZE,
+                  Datum::U64(_) => number::U64_SIZE,
+                  Datum::F64(_) => number::F64_SIZE,
                   Datum::Bytes(ref bs) => {
                       if comparable {
-                          bytes::max_encoded_bytes_size(bs.len()) + 1
+                          bytes::max_encoded_bytes_size(bs.len())
                       } else {
-                          bs.len() + number::MAX_VAR_I64_LEN + 1
+                          bs.len() + number::MAX_VAR_I64_LEN
                       }
                   }
-                  Datum::Null | Datum::Min | Datum::Max => 1,
-                  _ => unimplemented!(),
+                  Datum::Null | Datum::Min | Datum::Max => 0,
               }
           })
           .sum()
@@ -303,7 +305,8 @@ mod test {
     fn test_datum_codec() {
         let table = vec![
 			vec![Datum::I64(1)],
-			vec![Datum::U64(1), b"123".as_ref().into(), Datum::I64(-1)],
+            vec![Datum::F64(1.0), Datum::F64(3.15), b"123".as_ref().into()],
+			vec![Datum::U64(1), Datum::F64(3.15), b"123".as_ref().into(), Datum::I64(-1)],
 			vec![Datum::Null],
 		];
 
@@ -392,11 +395,6 @@ mod test {
             (Datum::I64(-1), Some(true)),
             (Datum::U64(0), Some(false)),
             (Datum::U64(1), Some(true)),
-            (Datum::F32(0f32), Some(false)),
-            (Datum::F32(0.4), Some(false)),
-            (Datum::F32(0.5), Some(true)),
-            (Datum::F32(-0.5), Some(true)),
-            (Datum::F32(-0.4), Some(false)),
             (Datum::F64(0f64), Some(false)),
             (Datum::F64(0.4), Some(false)),
             (Datum::F64(0.5), Some(true)),

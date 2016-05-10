@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::vec::Vec;
-use std::io::{Read, Write};
+use std::io::Write;
 
 use super::{Result, Error};
 use util::codec::number::{NumberEncoder, NumberDecoder};
