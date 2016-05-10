@@ -21,7 +21,6 @@ use std::net::SocketAddr;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
 
-use raftstore::store::Transport;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::raftpb::MessageType as RaftMessageType;

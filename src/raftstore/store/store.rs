@@ -14,7 +14,7 @@
 use std::sync::{Arc, RwLock};
 use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
-use std::boxed::{Box, FnBox};
+use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::Duration;
 

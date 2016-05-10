@@ -407,7 +407,7 @@ impl<T> RaftLog<T>
 #[cfg(test)]
 mod test {
     use raft::raft_log::{self, RaftLog};
-    use raft::storage::{MemStorage, Storage};
+    use raft::storage::MemStorage;
     use std::sync::Arc;
     use kvproto::raftpb;
     use raft::errors::{Error, StorageError};

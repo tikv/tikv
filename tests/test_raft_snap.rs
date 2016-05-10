@@ -27,7 +27,6 @@
 
 use test_raft::*;
 use kvproto::raftpb::*;
-use tikv::raft::*;
 
 fn testing_snap() -> Snapshot {
     new_snapshot(11, 11, vec![1, 2])
