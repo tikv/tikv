@@ -20,7 +20,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::RegionSnapshot;
 use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
-                          GetRequest, CmdType, SeekRequest, DeleteRequest, PutRequest};
+                          CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 
@@ -162,6 +162,7 @@ impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
         cmd.set_header(header);
         cmd.set_requests(RepeatedField::from_vec(reqs));
         let resp = try!(self.exec_cmd_request(cmd));
+        // notice: raft thread will be woken up after the take method is called.
         Ok(resp.take().unwrap().take_responses().to_vec())
     }
 
@@ -183,39 +184,13 @@ impl<T: PdClient, Trans: Transport> Debug for RaftKv<T, Trans> {
 
 impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
     fn get(&self, ctx: &Context, key: &Key) -> engine::Result<Option<Value>> {
-        let mut get = GetRequest::new();
-        get.set_key(key.raw().clone());
-        let mut req = Request::new();
-        req.set_cmd_type(CmdType::Get);
-        req.set_get(get);
-        let mut resp = try!(self.exec_request(ctx, req));
-        if resp.get_cmd_type() != CmdType::Get {
-            return Err(invalid_resp_type(CmdType::Get, resp.get_cmd_type()));
-        }
-        let get_resp = resp.mut_get();
-        if get_resp.has_value() {
-            Ok(Some(get_resp.take_value()))
-        } else {
-            Ok(None)
-        }
+        let snap = self.snapshot(ctx).unwrap();
+        snap.get(key)
     }
 
     fn seek(&self, ctx: &Context, key: &Key) -> engine::Result<Option<KvPair>> {
-        let mut seek = SeekRequest::new();
-        seek.set_key(key.raw().clone());
-        let mut req = Request::new();
-        req.set_cmd_type(CmdType::Seek);
-        req.set_seek(seek);
-        let mut resp = try!(self.exec_request(ctx, req));
-        if resp.get_cmd_type() != CmdType::Seek {
-            return Err(invalid_resp_type(CmdType::Seek, resp.get_cmd_type()));
-        }
-        let seek_resp = resp.mut_seek();
-        if seek_resp.has_key() {
-            Ok(Some((seek_resp.take_key(), seek_resp.take_value())))
-        } else {
-            Ok(None)
-        }
+        let snap = self.snapshot(ctx).unwrap();
+        snap.seek(key)
     }
 
     fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
@@ -256,6 +231,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
         cmd.set_header(header);
         cmd.mut_requests().push(req);
 
+        // notice: the raft thread will be woken up after resp is dropped
         let resp = try!(self.exec_cmd_request(cmd));
         let region = try!(resp.apply(|resp| {
                                   let mut resp = resp.take_responses().remove(0);
@@ -266,6 +242,7 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
                                   Ok(resp.take_snap().take_region().clone())
                               })
                               .unwrap());
+
         let snap = RegionSnapshot::from_raw(self.db.as_ref(), region);
         Ok(box snap)
     }
