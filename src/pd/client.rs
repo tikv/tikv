@@ -21,6 +21,7 @@ use util::make_std_tcp_conn;
 use protobuf::MessageStatic;
 
 use kvproto::pdpb::{Request, Response};
+use kvproto::msgpb::{Message, MessageType};
 
 use super::Result;
 
@@ -37,13 +38,21 @@ struct RpcClientCore {
 }
 
 fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u64, Response)> {
+    let mut req = Message::new();
+    req.set_msg_type(MessageType::PdReq);
+    // TODO: optimize clone later in HTTP refactor.
+    req.set_pd_req(message.clone());
+
     try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
-    try!(rpc::encode_msg(stream, msg_id, message));
+    try!(rpc::encode_msg(stream, msg_id, &req));
 
     try!(stream.set_read_timeout(Some(Duration::from_secs(SOCKET_READ_TIMEOUT))));
-    let mut resp = Response::new();
+    let mut resp = Message::new();
     let id = try!(rpc::decode_msg(stream, &mut resp));
-    Ok((id, resp))
+    if resp.get_msg_type() != MessageType::PdResp {
+        return Err(box_err!("invalid pd response type {:?}", resp.get_msg_type()));
+    }
+    Ok((id, resp.take_pd_resp()))
 }
 
 impl RpcClientCore {
@@ -140,6 +149,7 @@ mod tests {
     use super::*;
     use util::codec::rpc;
     use kvproto::pdpb;
+    use kvproto::msgpb::{Message, MessageType};
     use rand;
     use util::make_std_tcp_conn;
 
@@ -166,8 +176,12 @@ mod tests {
                     continue;
                 }
 
-                let (id, data) = rpc::decode_data(&mut stream).unwrap();
-                rpc::encode_data(&mut stream, id, &data).unwrap();
+
+                let (id, _) = rpc::decode_data(&mut stream).unwrap();
+                let mut msg = Message::new();
+                msg.set_msg_type(MessageType::PdResp);
+                msg.set_pd_resp(pdpb::Response::new());
+                rpc::encode_msg(&mut stream, id, &msg).unwrap();
             }
         });
 
