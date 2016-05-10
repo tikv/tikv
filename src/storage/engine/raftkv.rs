@@ -204,13 +204,13 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
             match m {
                 Modify::Delete(k) => {
                     let mut delete = DeleteRequest::new();
-                    delete.set_key(k.raw().clone());
+                    delete.set_key(k.encoded().to_owned());
                     req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
                 Modify::Put((k, v)) => {
                     let mut put = PutRequest::new();
-                    put.set_key(k.raw().clone());
+                    put.set_key(k.encoded().to_owned());
                     put.set_value(v);
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
@@ -250,17 +250,17 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
 
 impl<'a> Snapshot for RegionSnapshot<'a> {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
-        let v = box_try!(self.get_value(key.raw()));
+        let v = box_try!(self.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
-        let pair = box_try!(self.seek(key.raw()));
+        let pair = box_try!(self.seek(key.encoded()));
         Ok(pair)
     }
 
     fn reverse_seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
-        let pair = box_try!(self.reverse_seek(key.raw()));
+        let pair = box_try!(self.reverse_seek(key.encoded()));
         Ok(pair)
     }
 }

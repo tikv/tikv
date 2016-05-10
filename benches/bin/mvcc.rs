@@ -35,24 +35,24 @@ fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
     for (k, v) in kvs.take(100000) {
         let mut ts = ts_generator.next().unwrap();
         store.prewrite(Context::new(),
-                       vec![Mutation::Put((Key::from_raw(k.clone()), v))],
+                       vec![Mutation::Put((Key::from_raw(&k), v))],
                        k.clone(),
                        ts)
              .expect("");
         store.commit(Context::new(),
-                     vec![Key::from_raw(k.clone())],
+                     vec![Key::from_raw(&k)],
                      ts,
                      ts_generator.next().unwrap())
              .expect("");
 
         ts = ts_generator.next().unwrap();
         store.prewrite(Context::new(),
-                       vec![Mutation::Delete(Key::from_raw(k.clone()))],
+                       vec![Mutation::Delete(Key::from_raw(&k))],
                        k.clone(),
                        ts)
              .expect("");
         store.commit(Context::new(),
-                     vec![Key::from_raw(k.clone())],
+                     vec![Key::from_raw(&k)],
                      ts,
                      ts_generator.next().unwrap())
              .expect("");
@@ -62,7 +62,7 @@ fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
     bench!{
         let (k, _) = kvs.next().unwrap();
         assert!(store.scan(Context::new(),
-                           Key::from_raw(k.clone()),
+                           Key::from_raw(&k),
                            1,
                            ts_generator.next().unwrap())
                      .unwrap()

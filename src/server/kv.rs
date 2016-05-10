@@ -43,11 +43,11 @@ impl StoreHandler {
         if !msg.has_cmd_get_req() {
             return Err(box_err!("msg doesn't contain a CmdGetRequest"));
         }
-        let mut req = msg.take_cmd_get_req();
+        let req = msg.take_cmd_get_req();
         let ctx = msg.take_context();
         let cb = self.make_cb(StoreHandler::cmd_get_done, on_resp);
         self.store
-            .async_get(ctx, Key::from_raw(req.take_key()), req.get_version(), cb)
+            .async_get(ctx, Key::from_raw(req.get_key()), req.get_version(), cb)
             .map_err(Error::Storage)
     }
 
@@ -55,8 +55,8 @@ impl StoreHandler {
         if !msg.has_cmd_scan_req() {
             return Err(box_err!("msg doesn't contain a CmdScanRequest"));
         }
-        let mut req = msg.take_cmd_scan_req();
-        let start_key = req.take_start_key();
+        let req = msg.take_cmd_scan_req();
+        let start_key = req.get_start_key();
         debug!("start_key [{}]", escape(&start_key));
         let cb = self.make_cb(StoreHandler::cmd_scan_done, on_resp);
         self.store
@@ -78,10 +78,10 @@ impl StoreHandler {
                            .map(|mut x| {
                                match x.get_op() {
                                    Op::Put => {
-                                       Mutation::Put((Key::from_raw(x.take_key()), x.take_value()))
+                                       Mutation::Put((Key::from_raw(x.get_key()), x.take_value()))
                                    }
-                                   Op::Del => Mutation::Delete(Key::from_raw(x.take_key())),
-                                   Op::Lock => Mutation::Lock(Key::from_raw(x.take_key())),
+                                   Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
+                                   Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
                                }
                            })
                            .collect();
@@ -99,11 +99,11 @@ impl StoreHandler {
         if !msg.has_cmd_commit_req() {
             return Err(box_err!("msg doesn't contain a CmdCommitRequest"));
         }
-        let mut req = msg.take_cmd_commit_req();
+        let req = msg.take_cmd_commit_req();
         let cb = self.make_cb(StoreHandler::cmd_commit_done, on_resp);
-        let keys = req.take_keys()
-                      .into_iter()
-                      .map(Key::from_raw)
+        let keys = req.get_keys()
+                      .iter()
+                      .map(|x| Key::from_raw(&x))
                       .collect();
         self.store
             .async_commit(msg.take_context(),
@@ -118,11 +118,11 @@ impl StoreHandler {
         if !msg.has_cmd_cleanup_req() {
             return Err(box_err!("msg doesn't contain a CmdCleanupRequest"));
         }
-        let mut req = msg.take_cmd_cleanup_req();
+        let req = msg.take_cmd_cleanup_req();
         let cb = self.make_cb(StoreHandler::cmd_cleanup_done, on_resp);
         self.store
             .async_cleanup(msg.take_context(),
-                           Key::from_raw(req.take_key()),
+                           Key::from_raw(req.get_key()),
                            req.get_start_version(),
                            cb)
             .map_err(Error::Storage)
@@ -133,10 +133,10 @@ impl StoreHandler {
             return Err(box_err!("msg doesn't contain a CmdCommitThenGetRequest"));
         }
         let cb = self.make_cb(StoreHandler::cmd_commit_get_done, on_resp);
-        let mut req = msg.take_cmd_commit_get_req();
+        let req = msg.take_cmd_commit_get_req();
         self.store
             .async_commit_then_get(msg.take_context(),
-                                   Key::from_raw(req.take_key()),
+                                   Key::from_raw(req.get_key()),
                                    req.get_lock_version(),
                                    req.get_commit_version(),
                                    req.get_get_version(),
@@ -148,11 +148,11 @@ impl StoreHandler {
         if !msg.has_cmd_rb_get_req() {
             return Err(box_err!("msg doesn't contain a CmdRollbackThenGetRequest"));
         }
-        let mut req = msg.take_cmd_rb_get_req();
+        let req = msg.take_cmd_rb_get_req();
         let cb = self.make_cb(StoreHandler::cmd_rollback_get_done, on_resp);
         self.store
             .async_rollback_then_get(msg.take_context(),
-                                     Key::from_raw(req.take_key()),
+                                     Key::from_raw(req.get_key()),
                                      req.get_lock_version(),
                                      cb)
             .map_err(Error::Storage)
@@ -162,11 +162,11 @@ impl StoreHandler {
         if !msg.has_cmd_batch_get_req() {
             return Err(box_err!("msg doesn't contain a CmdBatchGetRequest"));
         }
-        let mut req = msg.take_cmd_batch_get_req();
+        let req = msg.take_cmd_batch_get_req();
         let cb = self.make_cb(StoreHandler::cmd_batch_get_done, on_resp);
         self.store
             .async_batch_get(msg.take_context(),
-                             req.take_keys().into_iter().map(Key::from_raw).collect(),
+                             req.get_keys().into_iter().map(|x| Key::from_raw(&x)).collect(),
                              req.get_version(),
                              cb)
             .map_err(Error::Storage)
