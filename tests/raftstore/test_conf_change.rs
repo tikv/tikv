@@ -440,7 +440,7 @@ fn test_add_remove_add<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // when network recover, peer 3 will receive heartbeat
     cluster.reset_transport_hooks();
-    print!("--------------------------------------------\n");
+    debug!("--------------------------------------------\n");
     sleep_ms(3000);
 }
 

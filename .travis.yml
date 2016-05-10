@@ -37,4 +37,4 @@ install:
 script:
   - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$rocksdb_dir"
   - export LIBRARY_PATH="$LD_LIBRARY_PATH"
-  - ENABLE_FEATURES=default make test
+  - RUST_BACKTRACE=1 cargo test test_node_add_remove_add -- --nocapture
