@@ -375,7 +375,7 @@ mod tests {
         must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
     }
 
-    // make sure meta version could never catch up with key version(time stamp)
+    // make sure meta version could never catch up with key version(timestamp)
     fn to_fake_ts(ts: u64) -> u64 {
         let base = 1000000u64;
         base + ts
