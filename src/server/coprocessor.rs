@@ -360,8 +360,8 @@ impl<'a> SelectContext<'a> {
                     break;
                 }
                 let (key, _) = try!(res.pop().unwrap());
-                if desc && range.get_start() > &key || !desc && range.get_end() <= &key {
-                    debug!("reach end key: {} out of range [{}, {})",
+                if range.get_start() > &key || range.get_end() <= &key {
+                    debug!("key: {} out of range [{}, {})",
                            escape(&key),
                            escape(range.get_start()),
                            escape(range.get_end()));
@@ -467,8 +467,8 @@ impl<'a> SelectContext<'a> {
                 break;
             }
             let (key, value) = try!(nk.pop().unwrap());
-            if desc && r.get_start() > &key || !desc && r.get_end() <= &key {
-                debug!("reach end key: {} out of range [{}, {})",
+            if r.get_start() > &key || r.get_end() <= &key {
+                debug!("key: {} out of range [{}, {})",
                        escape(&key),
                        escape(r.get_start()),
                        escape(r.get_end()));
