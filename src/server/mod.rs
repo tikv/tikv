@@ -34,6 +34,9 @@ pub mod coprocessor;
 pub mod transport;
 pub mod node;
 pub mod resolve;
+pub mod http_server;
+pub mod http_client;
+mod http;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Result, Error};

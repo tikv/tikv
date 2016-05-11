@@ -16,10 +16,9 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::time::Duration;
 
 use rocksdb::DB;
-use mio::{self, EventLoop, EventLoopBuilder};
+use mio::{self, EventLoop, EventLoopConfig};
 use protobuf;
 use uuid::Uuid;
 
@@ -81,9 +80,9 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
           C: PdClient
 {
     // We use base raft tick as the event loop timer tick.
-    let mut builder = EventLoopBuilder::new();
-    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval));
-    let event_loop = try!(builder.build());
+    let mut config = EventLoopConfig::new();
+    config.timer_tick_ms(cfg.raft_base_tick_interval);
+    let event_loop = try!(EventLoop::configured(config));
     Ok(event_loop)
 }
 
@@ -747,7 +746,7 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
                                              -> Result<mio::Timeout> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
-    event_loop.timeout(tick, Duration::from_millis(delay))
+    event_loop.timeout_ms(tick, delay)
               .map_err(|e| box_err!("register timer err: {:?}", e))
 }
 
