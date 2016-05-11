@@ -350,9 +350,7 @@ mod tests {
                                                     .collect();
             let expect: Vec<Option<KvPair>> = expect.into_iter()
                                                     .map(|x| {
-                                                        x.map(|(k, v)| {
-                                                            (k.to_vec(), v.to_vec())
-                                                        })
+                                                        x.map(|(k, v)| (k.to_vec(), v.to_vec()))
                                                     })
                                                     .collect();
             assert_eq!(result, expect);
