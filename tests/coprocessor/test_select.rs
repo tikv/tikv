@@ -86,12 +86,12 @@ impl Store {
     fn put(&mut self, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
         self.handles.extend(kv.iter().map(|&(ref k, _)| k.clone()));
         let pk = kv[0].0.clone();
-        let kv = kv.drain(..).map(|(k, v)| Mutation::Put((Key::from_raw(k), v))).collect();
+        let kv = kv.drain(..).map(|(k, v)| Mutation::Put((Key::from_raw(&k), v))).collect();
         self.store.prewrite(Context::new(), kv, pk, self.current_ts).unwrap();
     }
 
     fn commit(&mut self) {
-        let handles = self.handles.drain(..).map(Key::from_raw).collect();
+        let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
         self.store
             .commit(Context::new(), handles, self.current_ts, self.ts_g.gen())
             .unwrap();
