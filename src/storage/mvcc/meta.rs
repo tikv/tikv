@@ -17,8 +17,8 @@ use protobuf::RepeatedField;
 use kvproto::mvccpb::{Meta as PbMeta, MetaItem, MetaLock};
 use super::Result;
 
-pub const META_SPLIT_SIZE: usize = 128;
-pub const META_RESERVE_SIZE: usize = 20;
+pub const META_SPLIT_SIZE: usize = 5;
+pub const META_RESERVE_SIZE: usize = 2;
 pub const FIRST_META_INDEX: u64 = 0;
 
 #[derive(Debug)]
