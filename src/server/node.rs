@@ -14,6 +14,7 @@
 use std::thread;
 use std::sync::{Arc, RwLock};
 
+use mio::EventLoop;
 use rocksdb::DB;
 
 use pd::{INVALID_ID, PdClient, Error as PdError};
@@ -42,18 +43,24 @@ pub struct Node<T: Transport + 'static, C: PdClient + 'static> {
     store: metapb::Store,
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
-    ch: Option<SendCh>,
+    ch: SendCh,
 
     trans: Arc<RwLock<T>>,
 
     pd_client: Arc<RwLock<C>>,
+
+    raft_router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
 
 impl<T, C> Node<T, C>
     where T: Transport,
           C: PdClient
 {
-    pub fn new(cfg: &Config, pd_client: Arc<RwLock<C>>, trans: Arc<RwLock<T>>) -> Node<T, C> {
+    pub fn new(event_loop: &mut EventLoop<Store<T, C>>,
+               cfg: &Config,
+               pd_client: Arc<RwLock<C>>,
+               trans: Arc<RwLock<T>>)
+               -> Node<T, C> {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -62,6 +69,8 @@ impl<T, C> Node<T, C>
             store.set_address(cfg.advertise_addr.clone())
         }
 
+        let ch = SendCh::new(event_loop.channel());
+        let router = Arc::new(RwLock::new(ServerRaftStoreRouter::new(ch.clone())));
         Node {
             cluster_id: cfg.cluster_id,
             store: store,
@@ -69,11 +78,12 @@ impl<T, C> Node<T, C>
             store_handle: None,
             pd_client: pd_client,
             trans: trans.clone(),
-            ch: None,
+            ch: ch,
+            raft_router: router,
         }
     }
 
-    pub fn start(&mut self, engine: Arc<DB>) -> Result<()> {
+    pub fn start(&mut self, event_loop: EventLoop<Store<T, C>>, engine: Arc<DB>) -> Result<()> {
         let bootstrapped = try!(self.pd_client
                                     .read()
                                     .unwrap()
@@ -98,7 +108,7 @@ impl<T, C> Node<T, C>
         }
 
         // inform pd.
-        try!(self.start_store(store_id, engine));
+        try!(self.start_store(event_loop, store_id, engine));
         try!(self.pd_client
                  .write()
                  .unwrap()
@@ -111,10 +121,7 @@ impl<T, C> Node<T, C>
     }
 
     pub fn raft_store_router(&self) -> Arc<RwLock<ServerRaftStoreRouter>> {
-        // We must start Store thread OK before using this raft handler.
-        // TODO: should we return an error? or
-        let ch = self.ch.clone().unwrap();
-        Arc::new(RwLock::new(ServerRaftStoreRouter::new(self.store.get_id(), ch)))
+        self.raft_router.clone()
     }
 
     // check store, return store id for the engine.
@@ -186,7 +193,11 @@ impl<T, C> Node<T, C>
         }
     }
 
-    fn start_store(&mut self, store_id: u64, engine: Arc<DB>) -> Result<()> {
+    fn start_store(&mut self,
+                   mut event_loop: EventLoop<Store<T, C>>,
+                   store_id: u64,
+                   engine: Arc<DB>)
+                   -> Result<()> {
         info!("start raft store {} thread", store_id);
         let meta = try!(self.pd_client.rl().get_cluster_config(self.cluster_id));
 
@@ -196,7 +207,6 @@ impl<T, C> Node<T, C>
 
         let cfg = self.store_cfg.clone();
         let pd_client = self.pd_client.clone();
-        let mut event_loop = try!(store::create_event_loop(&cfg));
         let mut store = try!(Store::new(&mut event_loop,
                                         meta,
                                         self.store.clone(),
@@ -204,8 +214,6 @@ impl<T, C> Node<T, C>
                                         engine,
                                         self.trans.clone(),
                                         pd_client));
-        let ch = store.get_sendch();
-        self.ch = Some(ch);
 
         let builder = thread::Builder::new().name(format!("raftstore-{}", store_id));
         let h = try!(builder.spawn(move || {
@@ -220,10 +228,7 @@ impl<T, C> Node<T, C>
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
         info!("stop raft store {} thread", store_id);
-        match self.ch.take() {
-            None => return Err(box_err!("stop invalid store with id {}", store_id)),
-            Some(ch) => try!(ch.send(Msg::Quit)),
-        }
+        try!(self.ch.send(Msg::Quit));
 
         // Handler must exist here.
         let h = self.store_handle.take().unwrap();
