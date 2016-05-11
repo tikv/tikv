@@ -27,9 +27,8 @@ use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::ServerRaftStoreRouter;
 
-pub fn create_raft_storage<T, C>(node: Node<T, C>, db: Arc<DB>) -> Result<Storage>
-    where T: Transport + 'static,
-          C: PdClient + 'static
+pub fn create_raft_storage<C>(node: Node<C>, db: Arc<DB>) -> Result<Storage>
+    where C: PdClient + 'static
 {
     let engine = box RaftKv::new(node, db);
     let store = try!(Storage::from_engine(engine));
@@ -38,29 +37,27 @@ pub fn create_raft_storage<T, C>(node: Node<T, C>, db: Arc<DB>) -> Result<Storag
 
 // Node is a wrapper for raft store.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<T: Transport + 'static, C: PdClient + 'static> {
+pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
     ch: SendCh,
 
-    trans: Arc<RwLock<T>>,
-
     pd_client: Arc<RwLock<C>>,
 
     raft_router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
 
-impl<T, C> Node<T, C>
-    where T: Transport,
-          C: PdClient
+impl<C> Node<C>
+    where C: PdClient
 {
-    pub fn new(event_loop: &mut EventLoop<Store<T, C>>,
-               cfg: &Config,
-               pd_client: Arc<RwLock<C>>,
-               trans: Arc<RwLock<T>>)
-               -> Node<T, C> {
+    pub fn new<T>(event_loop: &mut EventLoop<Store<T, C>>,
+                  cfg: &Config,
+                  pd_client: Arc<RwLock<C>>)
+                  -> Node<C>
+        where T: Transport + 'static
+    {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -77,13 +74,18 @@ impl<T, C> Node<T, C>
             store_cfg: cfg.store_cfg.clone(),
             store_handle: None,
             pd_client: pd_client,
-            trans: trans.clone(),
             ch: ch,
             raft_router: router,
         }
     }
 
-    pub fn start(&mut self, event_loop: EventLoop<Store<T, C>>, engine: Arc<DB>) -> Result<()> {
+    pub fn start<T>(&mut self,
+                    event_loop: EventLoop<Store<T, C>>,
+                    engine: Arc<DB>,
+                    trans: Arc<RwLock<T>>)
+                    -> Result<()>
+        where T: Transport + 'static
+    {
         let bootstrapped = try!(self.pd_client
                                     .read()
                                     .unwrap()
@@ -108,7 +110,7 @@ impl<T, C> Node<T, C>
         }
 
         // inform pd.
-        try!(self.start_store(event_loop, store_id, engine));
+        try!(self.start_store(event_loop, store_id, engine, trans));
         try!(self.pd_client
                  .write()
                  .unwrap()
@@ -118,6 +120,10 @@ impl<T, C> Node<T, C>
 
     pub fn id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    pub fn get_sendch(&self) -> SendCh {
+        self.ch.clone()
     }
 
     pub fn raft_store_router(&self) -> Arc<RwLock<ServerRaftStoreRouter>> {
@@ -193,11 +199,14 @@ impl<T, C> Node<T, C>
         }
     }
 
-    fn start_store(&mut self,
-                   mut event_loop: EventLoop<Store<T, C>>,
-                   store_id: u64,
-                   engine: Arc<DB>)
-                   -> Result<()> {
+    fn start_store<T>(&mut self,
+                      mut event_loop: EventLoop<Store<T, C>>,
+                      store_id: u64,
+                      engine: Arc<DB>,
+                      trans: Arc<RwLock<T>>)
+                      -> Result<()>
+        where T: Transport + 'static
+    {
         info!("start raft store {} thread", store_id);
         let meta = try!(self.pd_client.rl().get_cluster_config(self.cluster_id));
 
@@ -212,7 +221,7 @@ impl<T, C> Node<T, C>
                                         self.store.clone(),
                                         cfg,
                                         engine,
-                                        self.trans.clone(),
+                                        trans.clone(),
                                         pd_client));
 
         let builder = thread::Builder::new().name(format!("raftstore-{}", store_id));
@@ -241,9 +250,8 @@ impl<T, C> Node<T, C>
     }
 }
 
-impl<T, C> Drop for Node<T, C>
-    where T: Transport,
-          C: PdClient
+impl<C> Drop for Node<C>
+    where C: PdClient
 {
     fn drop(&mut self) {
         let store_id = self.store.get_id();

@@ -15,7 +15,7 @@
 
 use server::Node;
 use server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
-use raftstore::store::{Transport, Peekable};
+use raftstore::store::Peekable;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::RegionSnapshot;
 use util::HandyRwLock;
@@ -86,15 +86,15 @@ impl From<Error> for engine::Error {
 }
 
 /// RaftKv is a storage engine base on RaftKvServer.
-pub struct RaftKv<T: Transport + 'static, C: PdClient + 'static> {
-    node: Node<T, C>,
+pub struct RaftKv<C: PdClient + 'static> {
+    node: Node<C>,
     db: Arc<DB>,
     router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
 
-impl<T: Transport, C: PdClient> RaftKv<T, C> {
+impl<C: PdClient> RaftKv<C> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(node: Node<T, C>, db: Arc<DB>) -> RaftKv<T, C> {
+    pub fn new(node: Node<C>, db: Arc<DB>) -> RaftKv<C> {
         let router = node.raft_store_router();
         RaftKv {
             node: node,
@@ -176,13 +176,13 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> engine::Error {
     Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!", exp, act)).into()
 }
 
-impl<T: Transport, C: PdClient> Debug for RaftKv<T, C> {
+impl<C: PdClient> Debug for RaftKv<C> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<T: Transport, C: PdClient> Engine for RaftKv<T, C> {
+impl<C: PdClient> Engine for RaftKv<C> {
     fn get(&self, ctx: &Context, key: &Key) -> engine::Result<Option<Value>> {
         let snap = self.snapshot(ctx).unwrap();
         snap.get(key)
