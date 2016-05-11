@@ -74,7 +74,7 @@ pub trait PdClient: Send + Sync {
     fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store>;
 
     // Get cluster meta information.
-    fn get_cluster_meta(&self, cluster_id: u64) -> Result<metapb::Cluster>;
+    fn get_cluster_config(&self, cluster_id: u64) -> Result<metapb::Cluster>;
 
     // For route.
     // Get region which the key belong to.

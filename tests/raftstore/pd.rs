@@ -249,7 +249,7 @@ impl PdClient for TestPdClient {
         cluster.get_region(data_key(key))
     }
 
-    fn get_cluster_meta(&self, cluster_id: u64) -> Result<metapb::Cluster> {
+    fn get_cluster_config(&self, cluster_id: u64) -> Result<metapb::Cluster> {
         let cluster = try!(self.get_cluster(cluster_id));
         Ok(cluster.meta.clone())
     }
