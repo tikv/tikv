@@ -40,16 +40,12 @@ pub trait RaftStoreRouter: Send + Sync {
 }
 
 pub struct ServerRaftStoreRouter {
-    pub store_id: u64,
     pub ch: SendCh,
 }
 
 impl ServerRaftStoreRouter {
-    pub fn new(store_id: u64, ch: SendCh) -> ServerRaftStoreRouter {
-        ServerRaftStoreRouter {
-            store_id: store_id,
-            ch: ch,
-        }
+    pub fn new(ch: SendCh) -> ServerRaftStoreRouter {
+        ServerRaftStoreRouter { ch: ch }
     }
 }
 
