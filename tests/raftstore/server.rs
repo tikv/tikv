@@ -24,6 +24,7 @@ use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
+use tikv::raftstore::store;
 use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
@@ -123,9 +124,10 @@ impl Simulator for ServerCluster {
         cfg.addr = format!("{}", addr);
 
         let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(strategy, trans.clone())));
-        let mut node = Node::new(&cfg, self.pd_client.clone(), simulate_trans.clone());
+        let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+        let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
 
-        node.start(engine.clone()).unwrap();
+        node.start(store_event_loop, engine.clone(), simulate_trans.clone()).unwrap();
         let router = node.raft_store_router();
 
         assert!(node_id == 0 || node_id == node.id());

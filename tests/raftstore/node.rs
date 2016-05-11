@@ -21,7 +21,7 @@ use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
-use tikv::raftstore::store::{Transport, msg};
+use tikv::raftstore::store::{self, Transport, msg};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tikv::raftstore::Result;
@@ -59,7 +59,7 @@ pub struct NodeCluster {
     cluster_id: u64,
     trans: Arc<RwLock<ChannelTransport>>,
     pd_client: Arc<RwLock<TestPdClient>>,
-    nodes: HashMap<u64, Node<TestPdClient, SimulateChannelTransport>>,
+    nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, Arc<RwLock<SimulateChannelTransport>>>,
 }
 
@@ -84,11 +84,12 @@ impl Simulator for NodeCluster {
                 -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
+        let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
         let simulate_trans = SimulateTransport::new(strategy, self.trans.clone());
         let trans = Arc::new(RwLock::new(simulate_trans));
-        let mut node = Node::new(&cfg, self.pd_client.clone(), trans.clone());
+        let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
 
-        node.start(engine).unwrap();
+        node.start(event_loop, engine, trans.clone()).unwrap();
         assert!(node_id == 0 || node_id == node.id());
 
         let node_id = node.id();
