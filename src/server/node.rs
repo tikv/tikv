@@ -191,7 +191,7 @@ impl<T, Trans> Node<T, Trans>
 
     fn start_store(&mut self, store_id: u64, engine: Arc<DB>) -> Result<()> {
         info!("start raft store {} thread", store_id);
-        let meta = try!(self.pd_client.rl().get_cluster_meta(self.cluster_id));
+        let meta = try!(self.pd_client.rl().get_cluster_config(self.cluster_id));
 
         if self.store_handle.is_some() {
             return Err(box_err!("{} is already started", store_id));
