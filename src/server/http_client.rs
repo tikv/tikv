@@ -146,7 +146,6 @@ impl Msg {
     }
 
     fn on_error(&mut self, err: HyperError) -> Next {
-        error!("receive hyper error {:?}", err);
         self.on_end(Err(Error::Hyper(err)))
     }
 }

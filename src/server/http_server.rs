@@ -154,10 +154,8 @@ impl<T: ServerHandler, H: HyperTransport> HyperHandler<H> for Handler<T> {
                                  let ctrl = ctrl.lock()
                                                 .unwrap();
                                  if let Err(e) = tx.send(res) {
+                                     // The connection is closed, no need to call ready again.
                                      error!("send response failed {:?}", e);
-                                     if let Err(e) = ctrl.ready(Next::end()) {
-                                         error!("set response writable to END failed {:?}", e);
-                                     }
                                      return;
                                  }
 
