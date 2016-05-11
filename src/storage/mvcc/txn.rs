@@ -64,10 +64,10 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
 
     fn write_meta(&mut self, key: &Key, meta: &mut Meta) {
         if let Some((split_meta, index)) = meta.split() {
-            let modify = Modify::Put((key.encode_ts(index), split_meta.to_bytes()));
+            let modify = Modify::Put((key.append_ts(index), split_meta.to_bytes()));
             self.writes.push(modify);
         }
-        let modify = Modify::Put((key.encode_ts(FIRST_META_INDEX), meta.to_bytes()));
+        let modify = Modify::Put((key.append_ts(FIRST_META_INDEX), meta.to_bytes()));
         self.writes.push(modify);
     }
 
@@ -88,7 +88,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
         if let Some(lock) = meta.get_lock() {
             if lock.get_start_ts() != self.start_ts {
                 return Err(Error::KeyIsLocked {
-                    key: key.raw().to_owned(),
+                    key: try!(key.raw()),
                     primary: lock.get_primary_key().to_vec(),
                     ts: lock.get_start_ts(),
                 });
@@ -103,7 +103,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
         self.write_meta(&key, &mut meta);
 
         if let Mutation::Put((_, ref value)) = mutation {
-            let value_key = key.encode_ts(self.start_ts);
+            let value_key = key.append_ts(self.start_ts);
             self.writes.push(Modify::Put((value_key, value.clone())));
         }
         Ok(())
@@ -160,7 +160,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
     fn rollback_impl(&mut self, key: &Key, meta: &mut Meta) -> Result<()> {
         match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => {
-                let value_key = key.encode_ts(lock.get_start_ts());
+                let value_key = key.append_ts(lock.get_start_ts());
                 self.writes.push(Modify::Delete(value_key));
             }
             _ => {
@@ -205,7 +205,7 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
     }
 
     fn load_meta(&self, key: &Key, index: u64) -> Result<Meta> {
-        let meta = match try!(self.snapshot.get(&key.encode_ts(index))) {
+        let meta = match try!(self.snapshot.get(&key.append_ts(index))) {
             Some(x) => try!(Meta::parse(&x)),
             None => Meta::new(),
         };
@@ -223,7 +223,7 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
             if lock.get_start_ts() <= ts {
                 // There is a pending lock. Client should wait or clean it.
                 return Err(Error::KeyIsLocked {
-                    key: key.raw().to_owned(),
+                    key: try!(key.raw()),
                     primary: lock.get_primary_key().to_vec(),
                     ts: lock.get_start_ts(),
                 });
@@ -231,7 +231,7 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
         }
         // Find the latest write below our start timestamp.
         if let Some(x) = first_meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
-            let data_key = key.encode_ts(x.get_start_ts());
+            let data_key = key.append_ts(x.get_start_ts());
             return Ok(try!(self.snapshot.get(&data_key)));
         }
         let mut next = first_meta.next_index();
@@ -241,7 +241,7 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
                 None => break,
             };
             if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
-                let data_key = key.encode_ts(x.get_start_ts());
+                let data_key = key.append_ts(x.get_start_ts());
                 return Ok(try!(self.snapshot.get(&data_key)));
             }
             next = meta.next_index();
@@ -282,7 +282,7 @@ mod tests {
 
         // insert bad format data
         engine.put(&Context::new(),
-                   make_key(b"y").encode_ts(0),
+                   make_key(b"y").append_ts(0),
                    b"dummy".to_vec())
               .unwrap();
         must_get_err(engine.as_ref(), b"y", 100);

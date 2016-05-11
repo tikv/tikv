@@ -302,7 +302,7 @@ impl<'a> SelectContext<'a> {
     fn get_rows_from_range(&mut self, mut range: KeyRange) -> Result<Vec<Row>> {
         let mut rows = vec![];
         if is_point(&range) {
-            if let None = try!(self.snap.get(&Key::from_raw(range.get_start().to_vec()))) {
+            if let None = try!(self.snap.get(&Key::from_raw(range.get_start()))) {
                 return Ok(rows);
             }
             let h = box_try!(table::decode_handle(range.get_start()));
@@ -317,7 +317,7 @@ impl<'a> SelectContext<'a> {
             loop {
                 trace!("seek {}", escape(&seek_key));
                 let timer = Instant::now();
-                let mut res = try!(self.snap.scan(Key::from_raw(seek_key), 1));
+                let mut res = try!(self.snap.scan(Key::from_raw(&seek_key), 1));
                 trace!("scan takes {:?}", timer.elapsed());
                 if res.is_empty() {
                     debug!("no more data to scan.");
@@ -354,7 +354,7 @@ impl<'a> SelectContext<'a> {
                 self.eval.row.insert(col_id, Datum::I64(h));
             } else {
                 let key = table::encode_column_key(t_id, h, col_id);
-                let data = try!(self.snap.get(&Key::from_raw(key)));
+                let data = try!(self.snap.get(&Key::from_raw(&key)));
                 if data.is_none() {
                     return Err(box_err!("data is missing for [{}, {}, {}]", t_id, h, col_id));
                 }
@@ -383,7 +383,7 @@ impl<'a> SelectContext<'a> {
                     row.mut_data().extend(bytes);
                 } else {
                     let raw_key = table::encode_column_key(tid, h, col.get_column_id());
-                    let key = Key::from_raw(raw_key);
+                    let key = Key::from_raw(&raw_key);
                     match try!(self.snap.get(&key)) {
                         None => return Err(box_err!("key {} not exists", key)),
                         Some(bs) => row.mut_data().extend(bs),
@@ -411,7 +411,7 @@ impl<'a> SelectContext<'a> {
         loop {
             trace!("seek {}", escape(&seek_key));
             let timer = Instant::now();
-            let mut nk = try!(self.snap.scan(Key::from_raw(seek_key.clone()), 1));
+            let mut nk = try!(self.snap.scan(Key::from_raw(&seek_key), 1));
             trace!("scan takes {:?}", timer.elapsed());
             if nk.is_empty() {
                 debug!("no more data to scan");

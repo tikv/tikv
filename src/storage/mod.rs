@@ -419,7 +419,6 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 mod tests {
     use super::*;
     use kvproto::kvrpcpb::Context;
-    use util::codec::bytes;
 
     fn expect_get_none() -> Callback<Option<Value>> {
         Box::new(|x: Result<Option<Value>>| assert_eq!(x.unwrap(), None))
@@ -492,9 +491,9 @@ mod tests {
                            1000,
                            5,
                            expect_scan(vec![
-            Some((bytes::encode_bytes(b"a"), b"aa".to_vec())),
-            Some((bytes::encode_bytes(b"b"), b"bb".to_vec())),
-            Some((bytes::encode_bytes(b"c"), b"cc".to_vec())),
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
             ]))
                .unwrap();
         storage.stop().unwrap();
