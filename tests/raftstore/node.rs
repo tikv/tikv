@@ -59,7 +59,7 @@ pub struct NodeCluster {
     cluster_id: u64,
     trans: Arc<RwLock<ChannelTransport>>,
     pd_client: Arc<RwLock<TestPdClient>>,
-    nodes: HashMap<u64, Node<TestPdClient, SimulateChannelTransport>>,
+    nodes: HashMap<u64, Node<SimulateChannelTransport, TestPdClient>>,
     simulate_trans: HashMap<u64, Arc<RwLock<SimulateChannelTransport>>>,
 }
 

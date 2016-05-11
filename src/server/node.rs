@@ -26,9 +26,9 @@ use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::ServerRaftStoreRouter;
 
-pub fn create_raft_storage<T, Trans>(node: Node<T, Trans>, db: Arc<DB>) -> Result<Storage>
-    where T: PdClient + 'static,
-          Trans: Transport + 'static
+pub fn create_raft_storage<T, C>(node: Node<T, C>, db: Arc<DB>) -> Result<Storage>
+    where T: Transport + 'static,
+          C: PdClient + 'static
 {
     let engine = box RaftKv::new(node, db);
     let store = try!(Storage::from_engine(engine));
@@ -37,26 +37,23 @@ pub fn create_raft_storage<T, Trans>(node: Node<T, Trans>, db: Arc<DB>) -> Resul
 
 // Node is a wrapper for raft store.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<T: PdClient + 'static, Trans: Transport + 'static> {
+pub struct Node<T: Transport + 'static, C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
     ch: Option<SendCh>,
 
-    trans: Arc<RwLock<Trans>>,
+    trans: Arc<RwLock<T>>,
 
-    pd_client: Arc<RwLock<T>>,
+    pd_client: Arc<RwLock<C>>,
 }
 
-impl<T, Trans> Node<T, Trans>
-    where T: PdClient,
-          Trans: Transport
+impl<T, C> Node<T, C>
+    where T: Transport,
+          C: PdClient
 {
-    pub fn new(cfg: &Config,
-               pd_client: Arc<RwLock<T>>,
-               trans: Arc<RwLock<Trans>>)
-               -> Node<T, Trans> {
+    pub fn new(cfg: &Config, pd_client: Arc<RwLock<C>>, trans: Arc<RwLock<T>>) -> Node<T, C> {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -239,9 +236,9 @@ impl<T, Trans> Node<T, Trans>
     }
 }
 
-impl<T, Trans> Drop for Node<T, Trans>
-    where T: PdClient,
-          Trans: Transport + 'static
+impl<T, C> Drop for Node<T, C>
+    where T: Transport,
+          C: PdClient
 {
     fn drop(&mut self) {
         let store_id = self.store.get_id();
