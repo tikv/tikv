@@ -51,7 +51,6 @@ git = "https://github.com/carllerche/bytes"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
-rev = "0297e2b2a5c84d778ccb9695632d7573018748b4"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
