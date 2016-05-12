@@ -146,8 +146,6 @@ mod tests {
     use raft::SnapshotStatus;
     use util::HandyRwLock;
 
-    use mio::tcp::TcpListener;
-
     use kvproto::msgpb::{Message, MessageType};
 
     struct TestServerHandler;
@@ -163,14 +161,11 @@ mod tests {
         // use util;
         // util::init_log(util::LogLevelFilter::Debug).unwrap();
 
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let listener = TcpListener::bind(&addr).unwrap();
-
-        let addr = listener.local_addr().unwrap();
-        let url: Url = format!("http://{}{}", addr, V1_MSG_PATH).parse().unwrap();
-
         let mut s = Server::new(TestServerHandler);
-        let listening = s.run(listener).unwrap();
+        let listening = s.http(&"127.0.0.1:0".parse().unwrap()).unwrap();
+
+        let addr = listening.addr;
+        let url: Url = format!("http://{}{}", addr, V1_MSG_PATH).parse().unwrap();
 
         let mut msg = Message::new();
         msg.set_msg_type(MessageType::Raft);
@@ -259,16 +254,12 @@ mod tests {
 
     #[test]
     fn test_http_transport() {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let listener = TcpListener::bind(&addr).unwrap();
-
-        let addr = listener.local_addr().unwrap();
-
-        let peeker = TestStoreAddrPeeker { addr: format!("http://{}", addr) };
-
         let (tx, rx) = mpsc::channel();
         let mut s = Server::new(TestTransportServerHandler { tx: tx });
-        let listening = s.run(listener).unwrap();
+        let listening = s.http(&"127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = listening.addr;
+
+        let peeker = TestStoreAddrPeeker { addr: format!("http://{}", addr) };
 
         let client = Client::new().unwrap();
         let router = Arc::new(RwLock::new(TestRaftStoreRouter {

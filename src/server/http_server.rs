@@ -16,14 +16,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::io::{Read, Write};
 use std::sync::mpsc::{self, Sender, Receiver};
+use std::net::SocketAddr;
 
 use uuid::Uuid;
 use protobuf::Message;
-use mio::tcp::TcpListener;
 use hyper::{Next, Encoder, Decoder, Control};
 use hyper::method::Method::{Post, Put};
 use hyper::server::{Server as HyperServer, Handler as HyperHandler, Request, Response, Listening};
-use hyper::net::{HttpListener, Transport as HyperTransport};
+use hyper::net::Transport as HyperTransport;
 use hyper::{RequestUri, StatusCode};
 use hyper::header::ContentLength;
 
@@ -183,7 +183,7 @@ impl<T: ServerHandler, H: HyperTransport> HyperHandler<H> for Handler<T> {
                     Err(e) => {
                         error!("{} get response error {:?}", self.tag, e);
                         response.set_status(StatusCode::InternalServerError);
-                        Next::end()
+                        Next::remove()
                     }
                     Ok(res) => {
                         match res {
@@ -245,11 +245,11 @@ impl<T: ServerHandler> Server<T> {
 }
 
 impl<T: ServerHandler> Server<T> {
-    pub fn run(&mut self, listener: TcpListener) -> Result<Listening> {
+    pub fn http(&mut self, addr: &SocketAddr) -> Result<Listening> {
         // TODO: support HTTPS later.
-        let s = HyperServer::new(HttpListener(listener))
-                    .keep_alive(true)
-                    .idle_timeout(Duration::from_millis(HTTP_CONN_IDLE_TIMEOUT_MS));
+        let s = try!(HyperServer::http(addr));
+        let s = s.keep_alive(true)
+                 .idle_timeout(Duration::from_millis(HTTP_CONN_IDLE_TIMEOUT_MS));
 
         let h = self.h.clone();
         let listening = try!(s.handle(move |ctrl| Handler::new(h.clone(), ctrl)));
