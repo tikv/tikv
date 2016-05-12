@@ -15,6 +15,18 @@ use std::io;
 
 use protobuf;
 
+/// A shortcut to box an error.
+macro_rules! invalid_type {
+    ($e:expr) => ({
+        use util::codec::Error;
+        Error::InvalidDataType(($e).into())
+    });
+    ($f:tt, $($arg:expr),+) => ({
+        use util::codec::Error;
+        Error::InvalidDataType(format!($f, $($arg),+))
+    });
+}
+
 pub mod bytes;
 pub mod rpc;
 pub mod number;

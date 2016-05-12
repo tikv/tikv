@@ -16,7 +16,7 @@ use std::io::Write;
 
 use super::number::{NumberDecoder, NumberEncoder};
 use super::datum::DatumDecoder;
-use super::{Result, Error, Datum};
+use super::{Result, Datum};
 use util::escape;
 
 pub const ID_LEN: usize = 8;
@@ -63,16 +63,14 @@ pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> 
 /// `decode_handle` decodes the key and gets the handle.
 pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     if !encoded.starts_with(TABLE_PREFIX) {
-        return Err(Error::InvalidDataType(format!("record key expected, but got {}",
-                                                  escape(encoded))));
+        return Err(invalid_type!("record key expected, but got {}", escape(encoded)));
     }
 
     let mut remaining = &encoded[TABLE_PREFIX.len()..];
     try!(remaining.decode_i64());
 
     if !remaining.starts_with(RECORD_PREFIX_SEP) {
-        return Err(Error::InvalidDataType(format!("record key expected, but got {}",
-                                                  escape(encoded))));
+        return Err(invalid_type!("record key expected, but got {}", escape(encoded)));
     }
 
     remaining = &remaining[RECORD_PREFIX_SEP.len()..];
