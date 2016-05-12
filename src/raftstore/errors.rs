@@ -39,9 +39,9 @@ quick_error!{
             description("region has not been initialized yet.")
             display("region {} not initialized yet", region_id)
         }
-        NotLeader(region_id: u64, leader_store_id: Option<u64>) {
+        NotLeader(region_id: u64, leader:Option<metapb::Peer>) {
             description("peer is not leader")
-            display("peer is not leader for region {}, leader may {:?}", region_id, leader_store_id)
+            display("peer is not leader for region {}, leader may {:?}", region_id, leader)
         }
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             description("key is not in region")

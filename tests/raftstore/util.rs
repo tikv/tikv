@@ -31,6 +31,7 @@ use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_cmdpb::{CmdType, StatusCmdType, AdminCmdType};
 use kvproto::raftpb::ConfChangeType;
+use tikv::raft::INVALID_ID;
 
 pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
     for _ in 1..200 {
@@ -133,8 +134,12 @@ pub fn new_seek_cmd(key: &[u8]) -> Request {
     cmd
 }
 
-pub fn new_status_request(region_id: u64, request: StatusRequest) -> RaftCmdRequest {
+pub fn new_status_request(region_id: u64,
+                          peer: metapb::Peer,
+                          request: StatusRequest)
+                          -> RaftCmdRequest {
     let mut req = new_base_request(region_id, RegionEpoch::new());
+    req.mut_header().set_peer(peer);
     req.set_status_request(request);
     req
 }
@@ -160,21 +165,25 @@ pub fn new_admin_request(region_id: u64,
     req
 }
 
-pub fn new_change_peer_cmd(change_type: ConfChangeType, store_id: u64) -> AdminRequest {
+pub fn new_change_peer_cmd(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
     let mut cmd = AdminRequest::new();
     cmd.set_cmd_type(AdminCmdType::ChangePeer);
     cmd.mut_change_peer().set_change_type(change_type);
-    cmd.mut_change_peer().set_store_id(store_id);
+    cmd.mut_change_peer().set_peer(peer);
     cmd
 }
 
-pub fn new_split_region_cmd(split_key: Option<Vec<u8>>, new_region_id: u64) -> AdminRequest {
+pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
+                            new_region_id: u64,
+                            peer_ids: Vec<u64>)
+                            -> AdminRequest {
     let mut cmd = AdminRequest::new();
     cmd.set_cmd_type(AdminCmdType::Split);
     if let Some(key) = split_key {
         cmd.mut_split().set_split_key(key);
     }
     cmd.mut_split().set_new_region_id(new_region_id);
+    cmd.mut_split().set_new_peer_ids(peer_ids);
     cmd
 }
 
@@ -184,6 +193,14 @@ pub fn new_compact_log_cmd(index: u64) -> AdminRequest {
     cmd.mut_compact_log().set_compact_index(index);
     cmd
 }
+
+pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
+    let mut peer = metapb::Peer::new();
+    peer.set_store_id(store_id);
+    peer.set_id(peer_id);
+    peer
+}
+
 
 pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
     let mut store = metapb::Store::new();
@@ -207,6 +224,9 @@ pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
 }
 
+pub fn is_invalid_peer(peer: &metapb::Peer) -> bool {
+    peer.get_id() == INVALID_ID
+}
 
 pub fn write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
     let wb = WriteBatch::new();
