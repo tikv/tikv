@@ -18,7 +18,7 @@ use std::io::Write;
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
 use super::bytes::{BytesEncoder, BytesDecoder};
-use super::{number, Result, Error, bytes, convert};
+use super::{number, Result, bytes, convert};
 use super::mysql::{Duration, MAX_FSP};
 
 const NIL_FLAG: u8 = 0;
@@ -46,7 +46,7 @@ pub enum Datum {
 
 fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
     l.partial_cmp(&r)
-     .ok_or_else(|| Error::InvalidDataType(format!("{} and {} can't be compared", l, r)))
+     .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
 }
 
 #[allow(should_implement_trait)]
@@ -162,7 +162,7 @@ impl Datum {
             Datum::Bytes(ref bs) => Some(!bs.is_empty() && try!(convert::bytes_to_int(bs)) != 0),
             Datum::Null => None,
             Datum::Dur(d) => Some(!d.is_empty()),
-            _ => return Err(Error::InvalidDataType(format!("can't convert {:?} to bool", self))),
+            _ => return Err(invalid_type!("can't convert {:?} to bool", self)),
         };
         Ok(b)
     }
@@ -175,7 +175,7 @@ impl Datum {
             Datum::F64(f) => format!("{}", f),
             Datum::Bytes(bs) => try!(String::from_utf8(bs)),
             Datum::Dur(d) => format!("{}", d),
-            d => return Err(Error::InvalidDataType(format!("can't convert {:?} to string", d))),
+            d => return Err(invalid_type!("can't convert {:?} to string", d)),
         };
         Ok(s)
     }
@@ -228,7 +228,7 @@ pub trait DatumDecoder: BytesDecoder {
                 let dur = try!(Duration::from_nanos(nanos, MAX_FSP));
                 Ok(Datum::Dur(dur))
             }
-            f => Err(Error::InvalidDataType(format!("unsupported data type `{}`", f))),
+            f => Err(invalid_type!("unsupported data type `{}`", f)),
         }
     }
 
@@ -253,7 +253,7 @@ pub trait DatumEncoder: BytesEncoder {
         let mut find_min = false;
         for v in values {
             if find_min {
-                return Err(Error::InvalidDataType("MinValue should be the last datum.".to_owned()));
+                return Err(invalid_type!("MinValue should be the last datum.".to_owned()));
             }
             match *v {
                 Datum::I64(i) => {

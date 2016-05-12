@@ -17,7 +17,7 @@ use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::{str, i64, u64};
 
-use util::codec::{Error, Result};
+use util::codec::Result;
 use util::escape;
 
 const NANOS_PER_SEC: i64 = 1_000_000_000;
@@ -36,7 +36,7 @@ const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
 
 fn check_fsp(fsp: usize) -> Result<()> {
     if fsp > MAX_FSP {
-        return Err(Error::InvalidDataType(format!("Invalid fsp {}", fsp)));
+        return Err(invalid_type!("Invalid fsp {}", fsp));
     }
     Ok(())
 }
@@ -44,9 +44,7 @@ fn check_fsp(fsp: usize) -> Result<()> {
 fn check_dur(dur: &StdDuration) -> Result<()> {
     let secs = dur.as_secs();
     if secs > MAX_TIME_IN_SECS || secs == MAX_TIME_IN_SECS && dur.subsec_nanos() > 0 {
-        return Err(Error::InvalidDataType(format!("{:?} is larger than {:?}",
-                                                  dur,
-                                                  MAX_TIME_IN_SECS)));
+        return Err(invalid_type!("{:?} is larger than {:?}", dur, MAX_TIME_IN_SECS));
     }
     Ok(())
 }
@@ -55,7 +53,7 @@ fn check_dur(dur: &StdDuration) -> Result<()> {
 /// only `fsp` precision.
 fn parse_frac(s: &[u8], fsp: usize) -> Result<u32> {
     if s.iter().any(|&c| c < b'0' || c > b'9') {
-        return Err(Error::InvalidDataType(format!("{} contains invalid char", escape(s))));
+        return Err(invalid_type!("{} contains invalid char", escape(s)));
     }
     let res = s.iter().take(fsp + 1).fold(0, |l, r| l * 10 + (r - b'0') as u32);
     if s.len() > fsp {
@@ -194,10 +192,7 @@ impl Duration {
                 let t = box_try!(match remain.len() {
                     5 => time::strptime(remain_str, "%M:%S"),
                     2 => time::strptime(remain_str, "%M"),
-                    _ => {
-                        return Err(Error::InvalidDataType(format!("{} is invalid time.",
-                                                                  remain_str)))
-                    }
+                    _ => return Err(invalid_type!("{} is invalid time.", remain_str)),
                 });
                 secs = tm_to_secs(t);
                 secs += box_try!(u64::from_str_radix(s_str, 10)) * SECS_PER_HOUR;
@@ -210,7 +205,7 @@ impl Duration {
                     6 => time::strptime(s_str, "%H%M%S"),
                     4 => time::strptime(s_str, "%M%S"),
                     2 => time::strptime(s_str, "%S"),
-                    _ => return Err(Error::InvalidDataType(format!("{} is invalid time", s_str))),
+                    _ => return Err(invalid_type!("{} is invalid time", s_str)),
                 });
                 secs = tm_to_secs(t);
             }
