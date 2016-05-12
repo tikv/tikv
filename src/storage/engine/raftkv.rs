@@ -15,7 +15,7 @@
 
 use server::Node;
 use server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
-use raftstore::store::{Transport, Peekable};
+use raftstore::store::Peekable;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::RegionSnapshot;
 use util::HandyRwLock;
@@ -86,15 +86,15 @@ impl From<Error> for engine::Error {
 }
 
 /// RaftKv is a storage engine base on RaftKvServer.
-pub struct RaftKv<T: PdClient + 'static, Trans: Transport + 'static> {
-    node: Node<T, Trans>,
+pub struct RaftKv<C: PdClient + 'static> {
+    node: Node<C>,
     db: Arc<DB>,
     router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
 
-impl<T: PdClient, Trans: Transport> RaftKv<T, Trans> {
+impl<C: PdClient> RaftKv<C> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(node: Node<T, Trans>, db: Arc<DB>) -> RaftKv<T, Trans> {
+    pub fn new(node: Node<C>, db: Arc<DB>) -> RaftKv<C> {
         let router = node.raft_store_router();
         RaftKv {
             node: node,
@@ -176,13 +176,13 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> engine::Error {
     Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!", exp, act)).into()
 }
 
-impl<T: PdClient, Trans: Transport> Debug for RaftKv<T, Trans> {
+impl<C: PdClient> Debug for RaftKv<C> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
+impl<C: PdClient> Engine for RaftKv<C> {
     fn get(&self, ctx: &Context, key: &Key) -> engine::Result<Option<Value>> {
         let snap = self.snapshot(ctx).unwrap();
         snap.get(key)
@@ -204,13 +204,13 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
             match m {
                 Modify::Delete(k) => {
                     let mut delete = DeleteRequest::new();
-                    delete.set_key(k.raw().clone());
+                    delete.set_key(k.encoded().to_owned());
                     req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
                 Modify::Put((k, v)) => {
                     let mut put = PutRequest::new();
-                    put.set_key(k.raw().clone());
+                    put.set_key(k.encoded().to_owned());
                     put.set_value(v);
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
@@ -250,17 +250,17 @@ impl<T: PdClient, Trans: Transport> Engine for RaftKv<T, Trans> {
 
 impl<'a> Snapshot for RegionSnapshot<'a> {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
-        let v = box_try!(self.get_value(key.raw()));
+        let v = box_try!(self.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
-        let pair = box_try!(self.seek(key.raw()));
+        let pair = box_try!(self.seek(key.encoded()));
         Ok(pair)
     }
 
     fn reverse_seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
-        let pair = box_try!(self.reverse_seek(key.raw()));
+        let pair = box_try!(self.reverse_seek(key.encoded()));
         Ok(pair)
     }
 }

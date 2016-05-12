@@ -38,6 +38,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, c
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
+use tikv::raftstore::store;
 use tikv::pd::{new_rpc_client, RpcClient};
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -115,8 +116,9 @@ fn build_raftkv(matches: &Matches,
                                           Some(addr),
                                           |v| v.as_str().map(|s| s.to_owned()));
 
-    let mut node = Node::new(&cfg, pd_client, trans.clone());
-    node.start(engine.clone()).unwrap();
+    let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+    let mut node = Node::new(&mut event_loop, &cfg, pd_client);
+    node.start(event_loop, engine.clone(), trans).unwrap();
     let raft_router = node.raft_store_router();
 
     (create_raft_storage(node, engine).unwrap(), raft_router)

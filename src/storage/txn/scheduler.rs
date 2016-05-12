@@ -37,7 +37,7 @@ impl Scheduler {
                         let mut res = vec![];
                         for (k, v) in keys.into_iter().zip(results.into_iter()) {
                             match v {
-                                Ok(Some(x)) => res.push(Ok((k.raw().to_owned(), x))),
+                                Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
                                 Ok(None) => {}
                                 Err(e) => res.push(Err(::storage::Error::from(e))),
                             }
