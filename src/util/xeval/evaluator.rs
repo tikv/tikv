@@ -14,6 +14,7 @@
 
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
+use util::codec::mysql::{MAX_FSP, Duration};
 use util::TryInsertWith;
 use super::{Result, Error};
 
@@ -53,6 +54,7 @@ impl Evaluator {
             ExprType::Like => self.eval_like(expr),
             ExprType::Float32 |
             ExprType::Float64 => self.eval_float(expr),
+            ExprType::MysqlDuration => self.eval_duration(expr),
             ExprType::In => self.eval_in(expr),
             _ => Ok(Datum::Null),
         }
@@ -71,6 +73,12 @@ impl Evaluator {
     fn eval_float(&self, expr: &Expr) -> Result<Datum> {
         let f = try!(expr.get_val().decode_f64());
         Ok(Datum::F64(f))
+    }
+
+    fn eval_duration(&self, expr: &Expr) -> Result<Datum> {
+        let n = try!(expr.get_val().decode_i64());
+        let dur = try!(Duration::from_nanos(n, MAX_FSP));
+        Ok(Datum::Dur(dur))
     }
 
     fn eval_column_ref(&self, expr: &Expr) -> Result<Datum> {
@@ -256,6 +264,7 @@ mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
     use util::codec::{Datum, datum};
+    use util::codec::mysql::Duration;
 
     use tipb::expression::{Expr, ExprType};
     use protobuf::RepeatedField;
@@ -283,6 +292,12 @@ mod test {
                 expr.set_tp(ExprType::Float64);
                 let mut buf = Vec::with_capacity(number::F64_SIZE);
                 buf.encode_f64(f).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Dur(d) => {
+                expr.set_tp(ExprType::MysqlDuration);
+                let mut buf = Vec::with_capacity(number::I64_SIZE);
+                buf.encode_i64(d.to_nanos()).unwrap();
                 expr.set_val(buf);
             }
             _ => expr.set_tp(ExprType::Null),
@@ -337,6 +352,12 @@ mod test {
             (datum_expr(b"abc".as_ref().into()), b"abc".as_ref().into()),
             (datum_expr(Datum::Null), Datum::Null),
             (col_expr(1), Datum::I64(100)),
+            (bin_expr(Duration::parse(b"11:00:00", 0).unwrap().into(),
+             Duration::parse(b"00:00:00", 0).unwrap().into(), ExprType::LT), Datum::I64(0)),
+            (bin_expr(Duration::parse(b"11:00:00.233", 2).unwrap().into(),
+             Duration::parse(b"11:00:00.233", 0).unwrap().into(), ExprType::EQ), Datum::I64(0)),
+            (bin_expr(Duration::parse(b"11:00:00.233", 3).unwrap().into(),
+             Duration::parse(b"11:00:00.233", 4).unwrap().into(), ExprType::EQ), Datum::I64(1)),
             (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LT), Datum::I64(0)),
             (bin_expr(Datum::I64(1), Datum::I64(100), ExprType::LT), Datum::I64(1)),
             (bin_expr(Datum::I64(100), Datum::Null, ExprType::LT), Datum::Null),
