@@ -21,6 +21,7 @@ pub mod number;
 pub mod datum;
 pub mod table;
 pub mod convert;
+pub mod mysql;
 
 pub use self::datum::Datum;
 
