@@ -295,6 +295,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // the new peer will have a larger new allocated peer id
             if msg.get_to_peer().get_id() > peer.peer_id() {
                 stale_peer = true;
+                warn!("raft message {:?} to_peer newer than current, find stale peer {:?}",
+                      msg,
+                      peer.peer);
             }
         }
 
