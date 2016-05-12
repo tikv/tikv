@@ -37,6 +37,9 @@ pub enum Task {
     Heartbeat {
         store: metapb::Store,
     },
+    GetRegion {
+        region: metapb::Region,
+    },
 }
 
 
@@ -58,12 +61,13 @@ impl Display for Task {
 }
 
 pub struct Runner<T: PdClient> {
+    ch: SendCh,
     cluster_id: u64,
     pd_client: Arc<RwLock<T>>,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<T>>) -> Runner<T> {
+    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<T>>, ch: SendCh) -> Runner<T> {
         Runner {
             cluster_id: cluster_id,
             pd_client: pd_client,
@@ -86,6 +90,9 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::Heartbeat { store } => {
                 // Now we use put store protocol for heartbeat.
                 self.pd_client.wl().put_store(self.cluster_id, store)
+            }
+            Task::GetRegion { region } => {
+                self.pd_client.wl().get_region(self.cluster_id, region.get_start_key())
             }
         };
 

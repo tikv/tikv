@@ -20,7 +20,7 @@ use mio;
 use raftstore::{Result, send_msg, Error};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::metapb::RegionEpoch;
+use kvproto::metapb::{Peer, RegionEpoch};
 use raft::SnapshotStatus;
 use util::event::Event;
 
@@ -33,6 +33,7 @@ pub enum Tick {
     SplitRegionCheck,
     ReplicaCheck,
     PdHeartbeat,
+    DeadPeerCheck,
 }
 
 pub enum Msg {
@@ -61,6 +62,12 @@ pub enum Msg {
     ReportUnreachable {
         region_id: u64,
         to_peer_id: u64,
+    },
+
+    DeadPeerCheckResult {
+        region_id: u64,
+        peer: Peer,
+        exist: bool,
     },
 }
 

@@ -179,6 +179,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_split_region_check_tick(event_loop);
         self.register_replica_check_tick(event_loop);
         self.register_pd_heartbeat_tick(event_loop);
+        self.register_dead_peer_check_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -321,7 +322,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
-        try!(peer.raft_group.step(msg.take_message()));
+        try!(peer.step_raft(msg.take_message()));
         slow_log!(timer, "step takes {:?}", timer.elapsed());
 
         // Add into pending raft groups for later handling ready.
@@ -684,6 +685,35 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn register_dead_peer_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::DeadPeerCheck,
+                                       self.cfg.dead_peer_check_tick_interval) {
+            error!("register dead peer check tick err: {:?}", e);
+        }
+    }
+
+    fn on_dead_peer_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        for peer in self.region_peers.values() {
+            if peer.get_inactive() {
+                let task = PdTask::GetRegion { region: peer.region() };
+                if let Err(e) = self.pd_worker.schedule(task) {
+                    error!("failed to notify pd: {}", e);
+                }
+            }
+
+            peer.set_inactive();
+        }
+
+        self.register_replica_check_tick(event_loop);
+    }
+
+    fn on_dead_peer_check_result(&mut self, region_id: u64, peer: metapb::Peer, exist: bool) {
+        if !exist {
+            self.on_ready_change_peer(region_id, ConfChangeType::RemoveNode, peer);
+        }
+    }
+
     fn register_replica_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::ReplicaCheck,
@@ -822,6 +852,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
             }
+            Msg::DeadPeerCheckResult { region_id, peer, exist } => {
+                self.on_dead_peer_check_result(region_id, peer, exist);
+            }
         }
         slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());
     }
@@ -834,6 +867,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::ReplicaCheck => self.on_replica_check_tick(event_loop),
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
+            Tick::DeadPeerCheck => self.on_dead_peer_check_tick(event_loop),
         }
         slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }
