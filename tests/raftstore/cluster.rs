@@ -236,7 +236,7 @@ impl<T: Simulator> Cluster<T> {
             for store_id in &store_ids {
                 // For some tests, we stop the node but pd still has this information,
                 // and we must skip this.
-                if !node_ids.contains(&store_id) {
+                if !node_ids.contains(store_id) {
                     count += 1;
                     continue;
                 }
@@ -281,7 +281,7 @@ impl<T: Simulator> Cluster<T> {
         for (&id, engine) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(&engine, self.id(), id).unwrap();
+            bootstrap_store(engine, self.id(), id).unwrap();
         }
 
         for engine in self.engines.values() {
@@ -301,7 +301,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for (&id, engine) in &self.engines {
-            bootstrap_store(&engine, self.id(), id).unwrap();
+            bootstrap_store(engine, self.id(), id).unwrap();
         }
 
         let node_id = 1;

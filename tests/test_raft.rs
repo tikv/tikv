@@ -105,7 +105,7 @@ fn ents(terms: Vec<u64>) -> Interface {
 }
 
 fn next_ents(r: &mut Raft<MemStorage>, s: &MemStorage) -> Vec<Entry> {
-    s.wl().append(&r.raft_log.unstable_entries().unwrap_or(&[])).expect("");
+    s.wl().append(r.raft_log.unstable_entries().unwrap_or(&[])).expect("");
     let (last_idx, last_term) = (r.raft_log.last_index(), r.raft_log.last_term());
     r.raft_log.stable_to(last_idx, last_term);
     let ents = r.raft_log.next_entries();

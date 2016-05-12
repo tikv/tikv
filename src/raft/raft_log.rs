@@ -455,7 +455,7 @@ mod test {
             let store = MemStorage::new();
             let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&previous_ents);
-            let gconflict = raft_log.find_conflict(&ents);
+            let gconflict = raft_log.find_conflict(ents);
             if gconflict != wconflict {
                 panic!("#{}: conflict = {}, want {}", i, gconflict, wconflict)
             }
@@ -673,7 +673,7 @@ mod test {
             let store = MemStorage::new();
             store.wl().apply_snapshot(new_snapshot(snap_index, snap_term)).expect("");
             let mut raft_log = RaftLog::new(Arc::new(store));
-            raft_log.append(&new_ents);
+            raft_log.append(new_ents);
             raft_log.stable_to(stablei, stablet);
             if raft_log.unstable.offset != wunstable {
                 panic!("#{}: unstable = {}, want {}",

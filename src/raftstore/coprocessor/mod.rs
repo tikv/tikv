@@ -44,7 +44,7 @@ pub struct ObserverContext<'a> {
 impl<'a> ObserverContext<'a> {
     pub fn new(peer: &'a PeerStorage) -> ObserverContext<'a> {
         ObserverContext {
-            snap: RegionSnapshot::new(&peer),
+            snap: RegionSnapshot::new(peer),
             bypass: false,
         }
     }

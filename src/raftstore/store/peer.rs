@@ -139,7 +139,7 @@ impl Peer {
                                              region: &metapb::Region)
                                              -> Result<Peer> {
         let store_id = store.store_id();
-        let peer_id = match util::find_peer(&region, store_id) {
+        let peer_id = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!("find no peer for store {} in region {:?}", store_id, region))
             }

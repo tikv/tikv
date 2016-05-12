@@ -47,27 +47,16 @@ impl ServerRaftStoreRouter {
     pub fn new(ch: SendCh) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter { ch: ch }
     }
-
-    fn check_store(&self, store_id: u64) -> RaftStoreResult<()> {
-        if store_id != self.store_id {
-            return Err(box_err!("invalid store {} != {}", store_id, self.store_id));
-        }
-        Ok(())
-    }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        try!(self.check_store(msg.get_to_peer().get_store_id()));
-
         try!(self.ch.send(StoreMsg::RaftMessage(msg)));
 
         Ok(())
     }
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        try!(self.check_store(req.get_header().get_peer().get_store_id()));
-
         try!(self.ch.send(StoreMsg::RaftCmd {
             request: req,
             callback: cb,

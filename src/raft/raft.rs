@@ -904,7 +904,7 @@ impl<T: Storage> Raft<T> {
                 if self.prs[&m.get_from()].state != ProgressState::Snapshot {
                     return;
                 }
-                self.handle_snapshot_status(&m);
+                self.handle_snapshot_status(m);
             }
             MessageType::MsgUnreachable => {
                 let pr = self.prs.get_mut(&m.get_from()).unwrap();
