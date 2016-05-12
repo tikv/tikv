@@ -45,6 +45,8 @@ extern crate kvproto;
 extern crate time;
 extern crate tipb;
 extern crate threadpool;
+#[macro_use]
+extern crate hyper;
 
 #[macro_use]
 pub mod util;

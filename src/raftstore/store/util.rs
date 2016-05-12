@@ -37,7 +37,8 @@ pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> bool {
 }
 
 pub fn get_uuid_from_req(cmd: &RaftCmdRequest) -> Option<Uuid> {
-    Uuid::from_bytes(cmd.get_header().get_uuid())
+    // TODO: log from_bytes error later.
+    Uuid::from_bytes(cmd.get_header().get_uuid()).ok()
 }
 
 pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {

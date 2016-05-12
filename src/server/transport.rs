@@ -30,13 +30,9 @@ pub trait RaftStoreRouter: Send + Sync {
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()>;
 
     // Report sending snapshot status.
-    fn report_snapshot(&self,
-                       region_id: u64,
-                       to_store_id: u64,
-                       status: SnapshotStatus)
-                       -> RaftStoreResult<()>;
+    fn report_snapshot(&self, region_id: u64, to_store_id: u64, status: SnapshotStatus);
 
-    fn report_unreachable(&self, region_id: u64, to_store_id: u64) -> RaftStoreResult<()>;
+    fn report_unreachable(&self, region_id: u64, to_store_id: u64);
 }
 
 pub struct ServerRaftStoreRouter {
@@ -65,27 +61,30 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         Ok(())
     }
 
-    fn report_snapshot(&self,
-                       region_id: u64,
-                       to_store_id: u64,
-                       status: SnapshotStatus)
-                       -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::ReportSnapshot {
+    fn report_snapshot(&self, region_id: u64, to_store_id: u64, status: SnapshotStatus) {
+        if let Err(e) = self.ch.send(StoreMsg::ReportSnapshot {
             region_id: region_id,
             to_store_id: to_store_id,
             status: status,
-        }));
-
-        Ok(())
+        }) {
+            error!("report snapshot {:?} to peer {} with region {} err {:?}",
+                   status,
+                   to_store_id,
+                   region_id,
+                   e);
+        }
     }
 
-    fn report_unreachable(&self, region_id: u64, to_store_id: u64) -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::ReportUnreachable {
+    fn report_unreachable(&self, region_id: u64, to_store_id: u64) {
+        if let Err(e) = self.ch.send(StoreMsg::ReportUnreachable {
             region_id: region_id,
             to_store_id: to_store_id,
-        }));
-
-        Ok(())
+        }) {
+            error!("report peer {} unreachable for region {} failed {:?}",
+                   to_store_id,
+                   region_id,
+                   e);
+        }
     }
 }
 
@@ -138,11 +137,11 @@ impl RaftStoreRouter for MockRaftStoreRouter {
         unimplemented!();
     }
 
-    fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) -> RaftStoreResult<()> {
+    fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) {
         unimplemented!();
     }
 
-    fn report_unreachable(&self, _: u64, _: u64) -> RaftStoreResult<()> {
+    fn report_unreachable(&self, _: u64, _: u64) {
         unimplemented!();
     }
 }

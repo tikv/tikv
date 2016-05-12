@@ -386,12 +386,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let region_id = data.msg.get_raft().get_region_id();
         let to_store_id = data.msg.get_raft().get_message().get_to();
 
-        if let Err(e) = self.raft_router.rl().report_unreachable(region_id, to_store_id) {
-            error!("report peer {} unreachable for region {} failed {:?}",
-                   to_store_id,
-                   region_id,
-                   e);
-        }
+        self.raft_router.rl().report_unreachable(region_id, to_store_id);
     }
 
     fn send_store(&mut self, event_loop: &mut EventLoop<Self>, store_id: u64, data: ConnData) {
@@ -597,14 +592,9 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
                status);
 
 
-        if let Err(e) = self.router
-                            .rl()
-                            .report_snapshot(self.region_id, self.to_store_id, status) {
-            error!("report snapshot to peer {} with region {} err {:?}",
-                   self.to_store_id,
-                   self.region_id,
-                   e);
-        }
+        self.router
+            .rl()
+            .report_snapshot(self.region_id, self.to_store_id, status);
     }
 }
 
@@ -656,11 +646,11 @@ mod tests {
             Ok(())
         }
 
-        fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) -> RaftStoreResult<()> {
+        fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) {
             unimplemented!();
         }
 
-        fn report_unreachable(&self, _: u64, _: u64) -> RaftStoreResult<()> {
+        fn report_unreachable(&self, _: u64, _: u64) {
             unimplemented!();
         }
     }

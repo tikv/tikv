@@ -34,7 +34,7 @@ rand = "0.3"
 quick-error = "0.2"
 tempdir = "0.3"
 getopts = "0.2"
-uuid = "0.1"
+uuid = { version = "0.2", features = ["v4"] }
 time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"
@@ -57,6 +57,10 @@ git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio.git"
+
+[dependencies.hyper]
+git = "https://github.com/hyperium/hyper.git"
+branch = "mio"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

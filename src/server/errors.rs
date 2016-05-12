@@ -16,8 +16,11 @@ use std::boxed::Box;
 use std::result;
 use std::io::Error as IoError;
 use std::net::AddrParseError;
+use std::time::Duration;
 
 use protobuf::ProtobufError;
+use hyper::Error as HyperError;
+use hyper::StatusCode;
 
 use util::codec::Error as CodecError;
 use raftstore::Error as RaftServerError;
@@ -74,6 +77,20 @@ quick_error!{
             from()
             cause(err)
             description(err.description())
+        }
+        Hyper(err: HyperError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Timeout(d: Duration) {
+            description("request timeout")
+            display("timeout after {:?}", d)
+        }
+        // TODO: add header and error message.
+        HttpResponse(code: StatusCode) {
+            description("invalid HTTP response")
+            display("invalid HTTP response, status: {:?}", code)
         }
     }
 }
