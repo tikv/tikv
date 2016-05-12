@@ -492,7 +492,7 @@ impl<T: Storage> Raft<T> {
         self.heartbeat_elapsed = 0;
         self.reset_randomized_election_timeout();
 
-        self.lead_transferee = None;
+        self.abort_leader_transfer();
 
         self.votes = HashMap::new();
         let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
@@ -807,25 +807,16 @@ impl<T: Storage> Raft<T> {
                 return;
             }
             self.abort_leader_transfer();
-            info!("{} {} [term {}] abort transfer leadership to {}",
+            info!("{} {} [term {}] abort previous transferring leadership to {}",
                   self.tag,
                   self.id,
                   self.term,
                   last_lead_transferee.unwrap());
         }
         if lead_transferee == self.id {
-            if last_lead_transferee.is_none() {
-                debug!("{} {} is already leader. Ignored transfer leadership to {}",
-                       self.tag,
-                       self.id,
-                       self.id);
-            } else {
-                debug!("{} {} abort transfer leadership to {}, transfer to current leader {}.",
-                       self.tag,
-                       self.id,
-                       self.lead_transferee.unwrap(),
-                       self.id);
-            }
+            debug!("{} {} is already leader. Ignored transferring leadership to self",
+                   self.tag,
+                   self.id);
             return;
         }
         // Transfer leadership to third party.
