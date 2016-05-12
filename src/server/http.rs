@@ -26,8 +26,8 @@ pub type OnResponseResult = Result<Option<msgpb::Message>>;
 pub type OnResponse = Box<FnBox(OnResponseResult) + Send>;
 
 pub struct Body {
-    pub pos: usize,
-    pub data: Vec<u8>,
+    pos: usize,
+    data: Vec<u8>,
 }
 
 impl Body {
@@ -99,7 +99,7 @@ impl Body {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.data.len() == 0
+        self.data.is_empty()
     }
 
     pub fn as_bytes(&self) -> &[u8] {

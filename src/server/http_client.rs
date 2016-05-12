@@ -216,7 +216,6 @@ impl<H: HyperTransport> HyperHandler<H> for Handler {
 
     fn on_response_readable(&mut self, decoder: &mut Decoder<H>) -> Next {
         debug!("{} on response readable", self.tag);
-
         match self.route {
             Route::Msg { ref mut msg } => msg.on_response_readable(decoder),
             _ => unimplemented!(),
