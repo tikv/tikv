@@ -14,20 +14,3 @@
 mod duration;
 
 pub use self::duration::{Duration, MAX_FSP, DEFAULT_FSP};
-
-use std::error;
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("unknown error {:?}", err)
-        }
-    }
-}
-
-use std::result;
-pub type Result<T> = result::Result<T, Error>;

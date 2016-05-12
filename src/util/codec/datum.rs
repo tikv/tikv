@@ -130,7 +130,7 @@ impl Datum {
         match *self {
             Datum::Dur(ref d2) => Ok(d2.cmp(d)),
             Datum::Bytes(ref bs) => {
-                let d2 = box_try!(Duration::parse(bs, MAX_FSP));
+                let d2 = try!(Duration::parse(bs, MAX_FSP));
                 Ok(d2.cmp(d))
             }
             _ => self.cmp_f64(d.to_secs()),
@@ -143,7 +143,7 @@ impl Datum {
             Datum::Max => Ok(Ordering::Greater),
             Datum::Bytes(ref bss) => Ok((bss as &[u8]).cmp(bs)),
             Datum::Dur(ref d) => {
-                let d2 = box_try!(Duration::parse(bs, MAX_FSP));
+                let d2 = try!(Duration::parse(bs, MAX_FSP));
                 Ok(d.cmp(&d2))
             }
             _ => {
@@ -224,7 +224,9 @@ pub trait DatumDecoder: BytesDecoder {
             NIL_FLAG => Ok(Datum::Null),
             FLOAT_FLAG => self.decode_f64().map(Datum::F64),
             DURATION_FLAG => {
-                self.decode_i64().map(|n| Duration::from_nanos(n, MAX_FSP)).map(Datum::Dur)
+                let nanos = try!(self.decode_i64());
+                let dur = try!(Duration::from_nanos(nanos, MAX_FSP));
+                Ok(Datum::Dur(dur))
             }
             f => Err(Error::InvalidDataType(format!("unsupported data type `{}`", f))),
         }
@@ -283,8 +285,7 @@ pub trait DatumEncoder: BytesEncoder {
                 Datum::Max => try!(self.write_u8(MAX_FLAG)),
                 Datum::Dur(ref d) => {
                     try!(self.write_u8(DURATION_FLAG));
-                    let d = box_try!(d.to_nanos());
-                    try!(self.encode_i64(d as i64));
+                    try!(self.encode_i64(d.to_nanos()));
                 }
             }
         }
@@ -350,8 +351,8 @@ mod test {
             vec![Datum::F64(1.0), Datum::F64(3.15), b"123".as_ref().into()],
 			vec![Datum::U64(1), Datum::F64(3.15), b"123".as_ref().into(), Datum::I64(-1)],
 			vec![Datum::Null],
-            vec![Duration::new(StdDuration::from_millis(23), false, MAX_FSP).into(),
-             Duration::new(StdDuration::from_millis(23), true, MAX_FSP).into()],
+            vec![Duration::new(StdDuration::from_millis(23), false, MAX_FSP).unwrap().into(),
+             Duration::new(StdDuration::from_millis(23), true, MAX_FSP).unwrap().into()],
 		];
 
         for vs in table {
@@ -411,24 +412,30 @@ mod test {
             (b"aasf".as_ref().into(), b"4".as_ref().into(), Ordering::Greater),
             (b"".as_ref().into(), b"".as_ref().into(), Ordering::Equal),
 
-            (Duration::new(StdDuration::from_millis(34), false, 2).into(),
+            (Duration::new(StdDuration::from_millis(34), false, 2).unwrap().into(),
              Datum::Null, Ordering::Greater),
-            (Duration::new(StdDuration::from_millis(3340), false, 2).into(),
-             Duration::new(StdDuration::from_millis(29034), false, 2).into(), Ordering::Less),
-            (Duration::new(StdDuration::from_millis(3340), false, 2).into(),
-             Duration::new(StdDuration::from_millis(34), false, 2).into(), Ordering::Greater),
-            (Duration::new(StdDuration::from_millis(34), false, 2).into(),
-             Duration::new(StdDuration::from_millis(34), false, 2).into(), Ordering::Equal),
-            (Duration::new(StdDuration::from_millis(34), true, 2).into(),
+            (Duration::new(StdDuration::from_millis(3340), false, 2).unwrap().into(),
+             Duration::new(StdDuration::from_millis(29034), false, 2).unwrap().into(),
+             Ordering::Less),
+            (Duration::new(StdDuration::from_millis(3340), false, 2).unwrap().into(),
+             Duration::new(StdDuration::from_millis(34), false, 2).unwrap().into(),
+             Ordering::Greater),
+            (Duration::new(StdDuration::from_millis(34), false, 2).unwrap().into(),
+             Duration::new(StdDuration::from_millis(34), false, 2).unwrap().into(),
+             Ordering::Equal),
+            (Duration::new(StdDuration::from_millis(34), true, 2).unwrap().into(),
              Datum::Null, Ordering::Greater),
-            (Duration::new(StdDuration::from_millis(0), true, 2).into(),
+            (Duration::new(StdDuration::from_millis(0), true, 2).unwrap().into(),
              Datum::I64(0), Ordering::Equal),
-            (Duration::new(StdDuration::from_millis(3340), false, 2).into(),
-             Duration::new(StdDuration::from_millis(29034), true, 2).into(), Ordering::Greater),
-            (Duration::new(StdDuration::from_millis(3340), true, 2).into(),
-             Duration::new(StdDuration::from_millis(34), false, 2).into(), Ordering::Less),
-            (Duration::new(StdDuration::from_millis(34), false, 2).into(),
-             Duration::new(StdDuration::from_millis(34), true, 2).into(), Ordering::Greater),
+            (Duration::new(StdDuration::from_millis(3340), false, 2).unwrap().into(),
+             Duration::new(StdDuration::from_millis(29034), true, 2).unwrap().into(),
+             Ordering::Greater),
+            (Duration::new(StdDuration::from_millis(3340), true, 2).unwrap().into(),
+             Duration::new(StdDuration::from_millis(34), false, 2).unwrap().into(),
+             Ordering::Less),
+            (Duration::new(StdDuration::from_millis(34), false, 2).unwrap().into(),
+             Duration::new(StdDuration::from_millis(34), true, 2).unwrap().into(),
+             Ordering::Greater),
 
             (b"abc".as_ref().into(), b"ab".as_ref().into(), Ordering::Greater),
             (b"123".as_ref().into(), Datum::I64(1234), Ordering::Less),

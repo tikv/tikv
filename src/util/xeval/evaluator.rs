@@ -77,7 +77,8 @@ impl Evaluator {
 
     fn eval_duration(&self, expr: &Expr) -> Result<Datum> {
         let n = try!(expr.get_val().decode_i64());
-        Ok(Datum::Dur(Duration::from_nanos(n, MAX_FSP)))
+        let dur = try!(Duration::from_nanos(n, MAX_FSP));
+        Ok(Datum::Dur(dur))
     }
 
     fn eval_column_ref(&self, expr: &Expr) -> Result<Datum> {
@@ -296,7 +297,7 @@ mod test {
             Datum::Dur(d) => {
                 expr.set_tp(ExprType::MysqlDuration);
                 let mut buf = Vec::with_capacity(number::I64_SIZE);
-                buf.encode_i64(d.to_nanos().unwrap()).unwrap();
+                buf.encode_i64(d.to_nanos()).unwrap();
                 expr.set_val(buf);
             }
             _ => expr.set_tp(ExprType::Null),
