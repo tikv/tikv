@@ -127,11 +127,24 @@ impl AsMut<Vec<u8>> for Body {
 mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
+    use std::sync::{Arc, RwLock};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
 
     use super::*;
     use super::super::http_client::*;
     use super::super::http_server::*;
+    use super::super::http_transport::*;
     use super::super::errors::Error;
+    use super::super::Result;
+    use super::super::transport::RaftStoreRouter;
+    use raftstore::store::Transport;
+    use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::store::Callback;
+    use kvproto::raft_cmdpb::RaftCmdRequest;
+    use raftstore::Result as RaftStoreResult;
+    use raft::SnapshotStatus;
+    use util::HandyRwLock;
 
     use mio::tcp::TcpListener;
 
@@ -196,5 +209,91 @@ mod tests {
         c.close();
 
         listening.close();
+    }
+
+    struct TestStoreAddrPeeker {
+        addr: String,
+    }
+
+    impl StoreAddrPeeker for TestStoreAddrPeeker {
+        fn get_address(&mut self, _: u64) -> Result<&str> {
+            Ok(&self.addr)
+        }
+    }
+
+    struct TestRaftStoreRouter {
+        unreachable_cnt: AtomicUsize,
+    }
+
+    impl RaftStoreRouter for TestRaftStoreRouter {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+            Ok(())
+        }
+
+        fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
+            Ok(())
+        }
+
+        fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) {}
+
+        fn report_unreachable(&self, _: u64, _: u64) {
+            self.unreachable_cnt.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct TestTransportServerHandler {
+        tx: mpsc::Sender<Message>,
+    }
+
+    impl ServerHandler for TestTransportServerHandler {
+        fn on_request(&mut self, msg: Message, cb: OnResponse) {
+            if msg.get_raft().get_region_id() % 2 == 0 {
+                cb.call_box((Err(box_err!("test unreachable")),));
+            } else {
+                cb.call_box((Ok(None),));
+            }
+
+            self.tx.send(msg).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_http_transport() {
+        let addr = "127.0.0.1:0".parse().unwrap();
+        let listener = TcpListener::bind(&addr).unwrap();
+
+        let addr = listener.local_addr().unwrap();
+
+        let peeker = TestStoreAddrPeeker { addr: format!("http://{}", addr) };
+
+        let (tx, rx) = mpsc::channel();
+        let mut s = Server::new(TestTransportServerHandler { tx: tx });
+        let listening = s.run(listener).unwrap();
+
+        let client = Client::new().unwrap();
+        let router = Arc::new(RwLock::new(TestRaftStoreRouter {
+            unreachable_cnt: AtomicUsize::new(0),
+        }));
+        let transport = HttpTransport::new(client.clone(), peeker, router.clone()).unwrap();
+
+        let mut msg = RaftMessage::new();
+
+        let num = 4;
+        for i in 0..num {
+            msg.set_region_id(i as u64);
+            transport.send(msg.clone()).unwrap();
+        }
+
+        for i in 0..num {
+            let msg = rx.recv().unwrap();
+            assert_eq!(msg.get_raft().get_region_id(), i as u64);
+        }
+
+        thread::sleep(Duration::from_millis(200));
+
+        client.close();
+        listening.close();
+
+        assert_eq!(router.rl().unreachable_cnt.load(Ordering::SeqCst), num / 2);
     }
 }

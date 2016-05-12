@@ -33,7 +33,7 @@ use super::http::{Body, OnResponseResult, OnResponse, XRequestGuid};
 
 const HTTP_CONN_IDLE_TIMEOUT_MS: u64 = 30000;
 
-pub trait ServerHandler: Send + Sync {
+pub trait ServerHandler: Send {
     fn on_request(&mut self, msg: msgpb::Message, cb: OnResponse);
 }
 
