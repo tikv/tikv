@@ -19,7 +19,7 @@ use super::util;
 #[test]
 fn test_pd_heartbeat() {
     let mut cluster = new_server_cluster(0, 1);
-    cluster.cfg.store_cfg.pd_heartbeat_tick_interval = 10;
+    cluster.cfg.store_cfg.pd_heartbeat_tick_interval = 50;
 
     cluster.bootstrap_region().unwrap();
     cluster.start();
