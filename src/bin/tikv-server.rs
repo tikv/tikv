@@ -176,8 +176,8 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                    config,
                                    None,
                                    |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
-    let resolver = PdStoreAddrResolver::new(cluster_id, pd_client.clone()).unwrap();
+    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr, cluster_id).unwrap()));
+    let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let (store, raft_router) = build_raftkv(matches,
                                             config,

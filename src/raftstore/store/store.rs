@@ -189,7 +189,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         box_try!(self.compact_worker.start(CompactRunner));
 
-        let pd_runner = PdRunner::new(self.cluster_meta.get_id(), self.pd_client.clone());
+        let pd_runner = PdRunner::new(self.pd_client.clone());
         box_try!(self.pd_worker.start(pd_runner));
 
         try!(event_loop.run(self));

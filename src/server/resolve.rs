@@ -43,7 +43,6 @@ impl Display for Task {
 }
 
 pub struct Runner<T: PdClient> {
-    cluster_id: u64,
     pd_client: Arc<RwLock<T>>,
     store_addrs: HashMap<u64, String>,
 }
@@ -63,10 +62,9 @@ impl<T: PdClient> Runner<T> {
         // TODO: do we need re-update the cache sometimes?
         // Store address may be changed?
         let pd_client = self.pd_client.clone();
-        let cluster_id = self.cluster_id;
         let s = try!(self.store_addrs.entry(store_id).or_try_insert_with(|| {
             pd_client.rl()
-                     .get_store(cluster_id, store_id)
+                     .get_store(store_id)
                      .and_then(|s| {
                          let addr = s.get_address().to_owned();
                          // In some tests, we use empty address for store first,
@@ -96,7 +94,7 @@ pub struct PdStoreAddrResolver {
 }
 
 impl PdStoreAddrResolver {
-    pub fn new<T>(cluster_id: u64, pd_client: Arc<RwLock<T>>) -> Result<PdStoreAddrResolver>
+    pub fn new<T>(pd_client: Arc<RwLock<T>>) -> Result<PdStoreAddrResolver>
         where T: PdClient + 'static
     {
         let mut r = PdStoreAddrResolver {
@@ -104,7 +102,6 @@ impl PdStoreAddrResolver {
         };
 
         let runner = Runner {
-            cluster_id: cluster_id,
             pd_client: pd_client,
             store_addrs: HashMap::new(),
         };
