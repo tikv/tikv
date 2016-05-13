@@ -28,6 +28,7 @@ use super::{Msg, SendCh, ConnData};
 use super::conn::{Conn, OnWriteComplete};
 use super::{Result, OnResponse};
 use util::HandyRwLock;
+use util::metric::Metric;
 use storage::Storage;
 use super::kv::StoreHandler;
 use super::coprocessor::EndPointHost;
@@ -77,6 +78,10 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     end_point: EndPointHost,
 
     resolver: S,
+
+    // TODO: remove `#[allow(dead_code)]`
+    #[allow(dead_code)]
+    metric: Metric,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -89,7 +94,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                listener: TcpListener,
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
-               resolver: S)
+               resolver: S,
+               metric: Metric)
                -> Result<Server<T, S>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
@@ -112,6 +118,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store: store_handler,
             end_point: end_point,
             resolver: resolver,
+            metric: metric,
         };
 
         Ok(svr)

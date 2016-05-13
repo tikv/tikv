@@ -10,6 +10,12 @@ store = "/tmp/tikv/store"
 # log level: trace, debug, info, warn, error, off.
 log-level = "info"
 
+[server.metric]
+# metric log level: trace, debug, info, warn, error, off.
+level = "info"
+# metric prefix: trace, debug, info, warn, error, off.
+prefix = "tikv"
+
 [raft]
 # set cluster id, must greater than 0.
 #cluster-id = 1
