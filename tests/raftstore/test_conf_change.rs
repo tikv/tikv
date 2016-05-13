@@ -33,7 +33,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let r1 = cluster.bootstrap_conf_change();
     cluster.start();
 
-    // Now region 1 only has peer (1, 1, 1);
+    // Now region 1 only has peer (1, 1);
     let (key, value) = (b"a1", b"v1");
 
     cluster.must_put(key, value);
@@ -41,7 +41,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let engine_2 = cluster.get_engine(2);
     must_get_none(&engine_2, b"a1");
-    // add peer (2,2,2) to region 1.
+    // add peer (2,2) to region 1.
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
 
     let (key, value) = (b"a2", b"v2");
@@ -86,9 +86,9 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_5 = cluster.get_engine(5);
     must_get_none(&engine_5, b"a1");
 
-    // add peer (3, 3, 3) to region 1.
+    // add peer (3, 3) to region 1.
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
-    // Remove peer (2, 2, 2) from region 1.
+    // Remove peer (2, 2) from region 1.
     cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2));
 
     let (key, value) = (b"a3", b"v3");
@@ -143,17 +143,11 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"a2", b"v2");
     must_get_equal(&engine_2, b"a3", b"v3");
 
-    // Make sure peer 2 is not in probe mode.
-    cluster.must_put(b"a4", b"v4");
-    assert_eq!(cluster.get(b"a4"), Some(b"v4".to_vec()));
-    must_get_equal(&engine_2, b"a4", b"v4");
-
-    // Remove peer (2, 2, 2) from region 1.
+    // Remove peer (2, 2) from region 1.
     cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2));
-
-    // add peer (2, 2, 4) to region 1.
+    // add peer (2, 4) to region 1.
     cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 4));
-    // Remove peer (3, 3, 3) from region 1.
+    // Remove peer (3, 3) from region 1.
     cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(3, 3));
 
     let (key, value) = (b"a4", b"v4");
@@ -439,4 +433,40 @@ fn test_server_after_remove_itself() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
     test_after_remove_itself(&mut cluster);
+}
+
+fn test_add_remove_add<T: Simulator>(cluster: &mut Cluster<T>) {
+    let r1 = cluster.bootstrap_conf_change();
+    cluster.start();
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    let s1 = (1..3).collect();
+    let s2 = (3..4).collect();
+    cluster.partition(Arc::new(s1), Arc::new(s2));
+
+    // during partition, store 3 don't know it's removed and add again
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(3, 3));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 4));
+
+    // when network recover, peer (3, 3) will receive heartbeat
+    cluster.reset_transport_hooks();
+    cluster.reset_leader_of_region(r1);
+    cluster.must_put(b"key", b"value");
+}
+
+#[test]
+fn test_server_add_remove_add() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    test_add_remove_add(&mut cluster);
+}
+
+#[test]
+fn test_node_add_remove_add() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    test_add_remove_add(&mut cluster);
 }

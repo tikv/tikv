@@ -383,6 +383,11 @@ impl Peer {
         let data = try!(cmd.write_to_bytes());
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
 
+        if change_peer.get_change_type() == ConfChangeType::AddNode &&
+           change_peer.get_peer().get_id() <= self.peer_id() {
+            return Err(box_err!("add node must allocate larger peer id than current!"));
+        }
+
         let mut cc = raftpb::ConfChange::new();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
