@@ -117,13 +117,15 @@ impl RpcClientCore {
 pub struct RpcClient {
     msg_id: AtomicUsize,
     core: Mutex<RpcClientCore>,
+    pub cluster_id: u64,
 }
 
 impl RpcClient {
-    pub fn new(dsn: &str) -> Result<RpcClient> {
+    pub fn new(dsn: &str, cluster_id: u64) -> Result<RpcClient> {
         Ok(RpcClient {
             msg_id: AtomicUsize::new(0),
             core: Mutex::new(RpcClientCore::new(dsn)),
+            cluster_id: cluster_id,
         })
     }
 
@@ -204,7 +206,7 @@ mod tests {
         let dsn = addrs.join(",");
 
         let msg = pdpb::Request::new();
-        let client = RpcClient::new(&dsn).unwrap();
+        let client = RpcClient::new(&dsn, 0).unwrap();
 
         for _ in 0..10 {
             client.send(&msg).unwrap();

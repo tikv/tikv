@@ -60,7 +60,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let epoch = cluster.pd_client
                        .rl()
-                       .get_region_by_id(cluster.id(), 1)
+                       .get_region_by_id(1)
                        .unwrap()
                        .get_region_epoch()
                        .clone();

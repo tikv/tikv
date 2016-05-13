@@ -196,7 +196,7 @@ impl<T: Simulator> Cluster<T> {
     fn store_ids_of_region(&self, region_id: u64) -> Vec<u64> {
         let peers = self.pd_client
                         .rl()
-                        .get_region_by_id(self.id(), region_id)
+                        .get_region_by_id(region_id)
                         .unwrap()
                         .take_peers();
         peers.iter().map(|peer| peer.get_store_id()).collect()
@@ -317,11 +317,11 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client
             .write()
             .unwrap()
-            .bootstrap_cluster(self.id(), new_store(1, "".to_owned()), region)
+            .bootstrap_cluster(new_store(1, "".to_owned()), region)
             .unwrap();
 
         for &id in self.engines.keys() {
-            self.pd_client.wl().put_store(self.id(), new_store(id, "".to_owned())).unwrap();
+            self.pd_client.wl().put_store(new_store(id, "".to_owned())).unwrap();
         }
     }
 
@@ -397,7 +397,7 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client
             .read()
             .unwrap()
-            .get_region(self.id(), key)
+            .get_region(key)
             .unwrap()
     }
 
@@ -456,7 +456,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         self.pd_client
             .rl()
-            .get_region_by_id(self.id(), region_id)
+            .get_region_by_id(region_id)
             .unwrap()
             .get_region_epoch()
             .clone()
@@ -476,16 +476,16 @@ impl<T: Simulator> Cluster<T> {
                 format!("{:?}", resp));
 
         let region = resp.get_admin_response().get_change_peer().get_region();
-        self.pd_client.wl().change_peer(self.id(), region.clone()).unwrap();
+        self.pd_client.wl().change_peer(region.clone()).unwrap();
     }
 
     pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
-        let new_region_id = self.pd_client.wl().alloc_id(0).unwrap();
-        let region = self.pd_client.rl().get_region_by_id(self.id(), region_id).unwrap();
+        let new_region_id = self.pd_client.wl().alloc_id().unwrap();
+        let region = self.pd_client.rl().get_region_by_id(region_id).unwrap();
         let peer_count = region.get_peers().len();
         let mut peer_ids: Vec<u64> = vec![];
         for _ in 0..peer_count {
-            let peer_id = self.pd_client.wl().alloc_id(0).unwrap();
+            let peer_id = self.pd_client.wl().alloc_id().unwrap();
             peer_ids.push(peer_id);
         }
 
@@ -501,7 +501,7 @@ impl<T: Simulator> Cluster<T> {
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
 
-        self.pd_client.wl().split_region(self.id(), left.clone(), right.clone()).unwrap();
+        self.pd_client.wl().split_region(left.clone(), right.clone()).unwrap();
     }
 
     pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {

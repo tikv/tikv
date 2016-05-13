@@ -58,16 +58,12 @@ impl Display for Task {
 }
 
 pub struct Runner<T: PdClient> {
-    cluster_id: u64,
     pd_client: Arc<RwLock<T>>,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<T>>) -> Runner<T> {
-        Runner {
-            cluster_id: cluster_id,
-            pd_client: pd_client,
-        }
+    pub fn new(pd_client: Arc<RwLock<T>>) -> Runner<T> {
+        Runner { pd_client: pd_client }
     }
 }
 
@@ -78,14 +74,14 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         let res = match task {
             Task::AskChangePeer { region, peer, .. } => {
                 // TODO: We may add change_type in pd protocol later.
-                self.pd_client.rl().ask_change_peer(self.cluster_id, region, peer)
+                self.pd_client.rl().ask_change_peer(region, peer)
             }
             Task::AskSplit { region, split_key, peer } => {
-                self.pd_client.rl().ask_split(self.cluster_id, region, &split_key, peer)
+                self.pd_client.rl().ask_split(region, &split_key, peer)
             }
             Task::Heartbeat { store } => {
                 // Now we use put store protocol for heartbeat.
-                self.pd_client.wl().put_store(self.cluster_id, store)
+                self.pd_client.wl().put_store(store)
             }
         };
 
