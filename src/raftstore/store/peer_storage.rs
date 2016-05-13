@@ -105,7 +105,7 @@ impl PeerStorage {
     }
 
     pub fn is_initialized(&self) -> bool {
-        !self.region.get_store_ids().is_empty()
+        !self.region.get_peers().is_empty()
     }
 
     pub fn initial_state(&mut self) -> raft::Result<RaftState> {
@@ -133,7 +133,9 @@ impl PeerStorage {
 
         let mut conf_state = ConfState::new();
         if found || initialized {
-            conf_state.set_nodes(self.region.get_store_ids().to_vec());
+            for p in self.region.get_peers() {
+                conf_state.mut_nodes().push(p.get_id());
+            }
         }
 
         Ok(RaftState {
@@ -525,7 +527,9 @@ pub fn do_snapshot(snap: &RocksDbSnapshot,
     snapshot.mut_metadata().set_term(term);
 
     let mut conf_state = ConfState::new();
-    conf_state.set_nodes(region.get_store_ids().to_vec());
+    for p in region.get_peers() {
+        conf_state.mut_nodes().push(p.get_id());
+    }
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
@@ -652,7 +656,7 @@ mod test {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
-        let region = bootstrap::bootstrap_region(&db, 1, 1).expect("");
+        let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
         RaftStorage::new(PeerStorage::new(db, &region).unwrap())
     }
 
@@ -799,7 +803,7 @@ mod test {
         let mut data = RaftSnapshotData::new();
         protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).expect("");
         assert_eq!(data.get_region().get_id(), 1);
-        assert_eq!(data.get_region().get_store_ids().len(), 1);
+        assert_eq!(data.get_region().get_peers().len(), 1);
 
         s.wl().snap_state = SnapState::Snap(snap.clone());
         assert_eq!(s.wl().snapshot(), Ok(snap));

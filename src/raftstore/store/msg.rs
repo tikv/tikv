@@ -54,13 +54,13 @@ pub enum Msg {
 
     ReportSnapshot {
         region_id: u64,
-        to_store_id: u64,
+        to_peer_id: u64,
         status: SnapshotStatus,
     },
 
     ReportUnreachable {
         region_id: u64,
-        to_store_id: u64,
+        to_peer_id: u64,
     },
 }
 
@@ -71,17 +71,17 @@ impl fmt::Debug for Msg {
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
-            Msg::ReportSnapshot { ref region_id, ref to_store_id, ref status } => {
+            Msg::ReportSnapshot { ref region_id, ref to_peer_id, ref status } => {
                 write!(fmt,
                        "Send snapshot to {} for region {} {:?}",
-                       to_store_id,
+                       to_peer_id,
                        region_id,
                        status)
             }
-            Msg::ReportUnreachable { ref region_id, ref to_store_id } => {
+            Msg::ReportUnreachable { ref region_id, ref to_peer_id } => {
                 write!(fmt,
                        "peer {} for region {} is unreachable",
-                       to_store_id,
+                       to_peer_id,
                        region_id)
             }
         }

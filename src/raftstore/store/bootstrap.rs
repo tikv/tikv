@@ -58,7 +58,11 @@ pub fn clear_region(engine: &DB, region_id: u64) -> Result<()> {
 }
 
 // Bootstrap first region.
-pub fn bootstrap_region(engine: &DB, store_id: u64, region_id: u64) -> Result<metapb::Region> {
+pub fn bootstrap_region(engine: &DB,
+                        store_id: u64,
+                        region_id: u64,
+                        peer_id: u64)
+                        -> Result<metapb::Region> {
     let mut region = metapb::Region::new();
     region.set_id(region_id);
     region.set_start_key(keys::EMPTY_KEY.to_vec());
@@ -66,7 +70,10 @@ pub fn bootstrap_region(engine: &DB, store_id: u64, region_id: u64) -> Result<me
     region.mut_region_epoch().set_version(INIT_EPOCH_VER);
     region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
-    region.mut_store_ids().push(store_id);
+    let mut peer = metapb::Peer::new();
+    peer.set_store_id(store_id);
+    peer.set_id(peer_id);
+    region.mut_peers().push(peer);
 
     try!(write_region(engine, &region));
 

@@ -60,7 +60,7 @@ fn get_string_value<F>(short: &str,
 {
     matches.opt_str(short)
            .or_else(|| {
-               config.lookup(long).and_then(|v| f(&v)).or_else(|| {
+               config.lookup(long).and_then(|v| f(v)).or_else(|| {
                    info!("malformed or missing {}, use default", long);
                    default
                })
@@ -71,8 +71,8 @@ fn get_string_value<F>(short: &str,
 fn initial_log(matches: &Matches, config: &toml::Value) {
     let level = get_string_value("L",
                                  "server.log-level",
-                                 &matches,
-                                 &config,
+                                 matches,
+                                 config,
                                  Some("info".to_owned()),
                                  |v| v.as_str().map(|s| s.to_owned()));
     util::init_log(logger::get_level_by_string(&level)).unwrap();
@@ -111,8 +111,8 @@ fn build_raftkv(matches: &Matches,
     // If no advertise listening address set, use the associated listening address.
     cfg.advertise_addr = get_string_value("advertise-addr",
                                           "server.advertise-addr",
-                                          &matches,
-                                          &config,
+                                          matches,
+                                          config,
                                           Some(addr),
                                           |v| v.as_str().map(|s| s.to_owned()));
 
@@ -164,22 +164,22 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
 
     let id = get_string_value("I",
                               "raft.cluster-id",
-                              &matches,
-                              &config,
+                              matches,
+                              config,
                               None,
                               |v| v.as_integer().map(|i| i.to_string()));
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
 
     let pd_addr = get_string_value("pd",
                                    "raft.pd",
-                                   &matches,
-                                   &config,
+                                   matches,
+                                   config,
                                    None,
                                    |v| v.as_str().map(|s| s.to_owned()));
     let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
     let resolver = PdStoreAddrResolver::new(cluster_id, pd_client.clone()).unwrap();
 
-    let (store, raft_router) = build_raftkv(&matches,
+    let (store, raft_router) = build_raftkv(matches,
                                             config,
                                             ch,
                                             cluster_id,
