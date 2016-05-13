@@ -271,8 +271,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        let mut stale_peer = false;
-
         // If we receive a message whose sender peer is not in current region and
         // epoch is stale, we can ignore it.
         if let Some(peer) = self.region_peers.get(&region_id) {
@@ -288,23 +286,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                       from_epoch);
                 return Ok(());
             }
-
-            // if to_peer has larger peer id than us, current peer maybe stale.
-            // this may happen when we miss the conf change with RemoveNode message
-            // and conf change AddNode again with the same store
-            // the new peer will have a larger new allocated peer id
-            if msg.get_to_peer().get_id() > peer.peer_id() {
-                stale_peer = true;
-                warn!("raft message {:?} to_peer newer than current, find stale peer {:?}",
-                      msg,
-                      peer.peer);
-            }
         }
 
-        if stale_peer {
-            let meta_peer = self.region_peers.get(&region_id).unwrap().peer.clone();
-            self.on_ready_change_peer(region_id, ConfChangeType::RemoveNode, meta_peer);
-        }
+        // TODO: we may encounter a message with larger peer id, which
+        // means current peer is stale, then we should remove current peer
 
         if !self.region_peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self, region_id, msg.get_region_epoch(), to.get_id()));
