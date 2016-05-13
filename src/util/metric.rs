@@ -26,64 +26,50 @@ impl Metric {
 
     // Increment the counter by `1`
     pub fn incr(&self, key: &str) {
-        let r = self.inner.incr(key);
-        match r {
-            Err(e) => warn!("{}", e),
-            _ => {}
+        if let Err(e) = self.inner.incr(key) {
+            warn!("{}", e);
         }
     }
 
     // Decrement the counter by `1`
     pub fn decr(&self, key: &str) {
-        let r = self.inner.decr(key);
-        match r {
-            Err(e) => warn!("{}", e),
-            _ => {}
+        if let Err(e) = self.inner.decr(key) {
+            warn!("{}", e);
         }
     }
 
     // Increment or decrement the counter by the given amount
     pub fn count(&self, key: &str, count: i64) {
-        let r = self.inner.count(key, count);
-        match r {
-            Err(e) => warn!("{}", e),
-            _ => {}
+        if let Err(e) = self.inner.count(key, count) {
+            warn!("{}", e);
         }
     }
 
     // Record a  timing in milliseconds with the given key
     pub fn time(&self, key: &str, time: u64) {
-        let r = self.inner.time(key, time);
-        match r {
-            Err(e) => warn!("{}", e),
-            _ => {}
+        if let Err(e) = self.inner.time(key, time) {
+            warn!("{}", e);
         }
     }
 
     // Record a gauge value with the given key
     pub fn gauge(&self, key: &str, value: u64) {
-        let r = self.inner.gauge(key, value);
-        match r {
-            Err(e) => warn!("{}", e),
-            _ => {}
+        if let Err(e) = self.inner.gauge(key, value) {
+            warn!("{}", e);
         }
     }
 
     // Record a single metered event with the given key
     pub fn mark(&self, key: &str) {
-        let r = self.inner.mark(key);
-        match r {
-            Err(e) => warn!("{}", e),
-            _ => {}
+        if let Err(e) = self.inner.mark(key) {
+            warn!("{}", e);
         }
     }
 
     // Record a meter value with the given key
     pub fn meter(&self, key: &str, value: u64) {
-        let r = self.inner.meter(key, value);
-        match r {
-            Err(e) => warn!("{}", e),
-            _ => {}
+        if let Err(e) = self.inner.meter(key, value) {
+            warn!("{}", e);
         }
     }
 }
