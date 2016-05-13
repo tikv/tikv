@@ -19,7 +19,7 @@ use super::util;
 #[test]
 fn test_pd_heartbeat() {
     let mut cluster = new_server_cluster(0, 1);
-    cluster.cfg.store_cfg.pd_heartbeat_tick_interval = 50;
+    cluster.cfg.store_cfg.pd_heartbeat_tick_interval = 10;
 
     cluster.bootstrap_region().unwrap();
     cluster.start();
@@ -27,13 +27,13 @@ fn test_pd_heartbeat() {
     util::sleep_ms(100);
 
     let pd_client = cluster.pd_client.clone();
-    let store = pd_client.rl().get_store(0, 1).unwrap();
+    let store = pd_client.rl().get_store(1).unwrap();
     assert!(store.get_address().len() > 0);
 
     // force update a wrong store meta.
-    pd_client.wl().put_store(0, util::new_store(1, "".to_owned())).unwrap();
+    pd_client.wl().put_store(util::new_store(1, "".to_owned())).unwrap();
 
     util::sleep_ms(500);
-    let store1 = pd_client.rl().get_store(0, 1).unwrap();
+    let store1 = pd_client.rl().get_store(1).unwrap();
     assert_eq!(store1.get_address(), store.get_address());
 }

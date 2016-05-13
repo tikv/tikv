@@ -37,7 +37,6 @@ use super::transport_simulate::{Strategy, SimulateTransport, Filter};
 type SimulateServerTransport = SimulateTransport<ServerTransport>;
 
 pub struct ServerCluster {
-    cluster_id: u64,
     senders: HashMap<u64, SendCh>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
     addrs: HashMap<u64, SocketAddr>,
@@ -49,9 +48,8 @@ pub struct ServerCluster {
 }
 
 impl ServerCluster {
-    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<TestPdClient>>) -> ServerCluster {
+    pub fn new(pd_client: Arc<RwLock<TestPdClient>>) -> ServerCluster {
         ServerCluster {
-            cluster_id: cluster_id,
             senders: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
@@ -107,7 +105,7 @@ impl Simulator for ServerCluster {
         // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop().unwrap();
         let sendch = SendCh::new(event_loop.channel());
-        let resolver = PdStoreAddrResolver::new(self.cluster_id, self.pd_client.clone()).unwrap();
+        let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
         let trans = Arc::new(RwLock::new(ServerTransport::new(sendch)));
 
         let mut cfg = cfg;
@@ -228,8 +226,8 @@ impl Simulator for ServerCluster {
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(RwLock::new(TestPdClient::new(tx)));
-    let sim = Arc::new(RwLock::new(ServerCluster::new(id, pd_client.clone())));
+    let pd_client = Arc::new(RwLock::new(TestPdClient::new(tx, id)));
+    let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
     run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)
 }
