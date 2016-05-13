@@ -103,7 +103,7 @@ impl StoreHandler {
         let cb = self.make_cb(StoreHandler::cmd_commit_done, on_resp);
         let keys = req.get_keys()
                       .iter()
-                      .map(|x| Key::from_raw(&x))
+                      .map(|x| Key::from_raw(x))
                       .collect();
         self.store
             .async_commit(msg.take_context(),
@@ -166,7 +166,7 @@ impl StoreHandler {
         let cb = self.make_cb(StoreHandler::cmd_batch_get_done, on_resp);
         self.store
             .async_batch_get(msg.take_context(),
-                             req.get_keys().into_iter().map(|x| Key::from_raw(&x)).collect(),
+                             req.get_keys().into_iter().map(|x| Key::from_raw(x)).collect(),
                              req.get_version(),
                              cb)
             .map_err(Error::Storage)

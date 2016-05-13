@@ -278,7 +278,7 @@ impl<T: Storage> Raft<T> {
         self.raft_log.get_store()
     }
 
-    pub fn has_leader(&self) -> bool {
+    fn has_leader(&self) -> bool {
         self.leader_id != INVALID_ID
     }
 
@@ -904,7 +904,7 @@ impl<T: Storage> Raft<T> {
                 if self.prs[&m.get_from()].state != ProgressState::Snapshot {
                     return;
                 }
-                self.handle_snapshot_status(&m);
+                self.handle_snapshot_status(m);
             }
             MessageType::MsgUnreachable => {
                 let pr = self.prs.get_mut(&m.get_from()).unwrap();

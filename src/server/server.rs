@@ -384,11 +384,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
 
         let region_id = data.msg.get_raft().get_region_id();
-        let to_store_id = data.msg.get_raft().get_message().get_to();
+        let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
 
-        if let Err(e) = self.raft_router.rl().report_unreachable(region_id, to_store_id) {
+        if let Err(e) = self.raft_router.rl().report_unreachable(region_id, to_peer_id) {
             error!("report peer {} unreachable for region {} failed {:?}",
-                   to_store_id,
+                   to_peer_id,
                    region_id,
                    e);
         }
@@ -469,12 +469,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter<T> {
         let region_id = data.msg.get_raft().get_region_id();
-        let to_store_id = data.msg.get_raft().get_message().get_to();
+        let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
 
         SnapshotReporter {
             router: self.raft_router.clone(),
             region_id: region_id,
-            to_store_id: to_store_id,
+            to_peer_id: to_peer_id,
             reported: AtomicBool::new(false),
         }
     }
@@ -579,7 +579,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 struct SnapshotReporter<T: RaftStoreRouter + 'static> {
     router: Arc<RwLock<T>>,
     region_id: u64,
-    to_store_id: u64,
+    to_peer_id: u64,
 
     reported: AtomicBool,
 }
@@ -592,16 +592,16 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
         }
 
         debug!("send snapshot to {} for {} {:?}",
-               self.to_store_id,
+               self.to_peer_id,
                self.region_id,
                status);
 
 
         if let Err(e) = self.router
                             .rl()
-                            .report_snapshot(self.region_id, self.to_store_id, status) {
+                            .report_snapshot(self.region_id, self.to_peer_id, status) {
             error!("report snapshot to peer {} with region {} err {:?}",
-                   self.to_store_id,
+                   self.to_peer_id,
                    self.region_id,
                    e);
         }
