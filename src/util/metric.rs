@@ -10,6 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 use log::LogLevel;
 use cadence::prelude::{Counted, Timed, Gauged, Metered};
 use cadence::{StatsdClient, LoggingMetricSink};

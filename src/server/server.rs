@@ -81,7 +81,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
 
     // TODO: remove `#[allow(dead_code)]`
     #[allow(dead_code)]
-    metric: Metric,
+    metric: Arc<Metric>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -106,6 +106,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let engine = storage.get_engine();
         let store_handler = StoreHandler::new(storage);
         let end_point = EndPointHost::new(engine);
+        let metric = Arc::new(metric);
 
         let svr = Server {
             listener: listener,
