@@ -127,8 +127,8 @@ impl<'a> Snapshot for RocksSnapshot<'a> {
             iter = self.iterator(IteratorMode::End);
         }
         let pair = iter.skip_while(|&(k, _)| k >= key.encoded())
-                       .next()
-                       .map(|(k, v)| (k.to_vec(), v.to_vec()));
+            .next()
+            .map(|(k, v)| (k.to_vec(), v.to_vec()));
         Ok(pair)
     }
 }

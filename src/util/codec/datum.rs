@@ -46,7 +46,7 @@ pub enum Datum {
 
 fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
     l.partial_cmp(&r)
-     .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
+        .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
 }
 
 #[allow(should_implement_trait)]
@@ -301,24 +301,24 @@ impl<T: Write> DatumEncoder for T {}
 #[allow(match_same_arms)]
 pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
     values.iter()
-          .map(|v| {
-              1 +
-              match *v {
-                  Datum::I64(_) => number::I64_SIZE,
-                  Datum::U64(_) => number::U64_SIZE,
-                  Datum::F64(_) => number::F64_SIZE,
-                  Datum::Dur(_) => number::I64_SIZE,
-                  Datum::Bytes(ref bs) => {
-                      if comparable {
-                          bytes::max_encoded_bytes_size(bs.len())
-                      } else {
-                          bs.len() + number::MAX_VAR_I64_LEN
-                      }
-                  }
-                  Datum::Null | Datum::Min | Datum::Max => 0,
-              }
-          })
-          .sum()
+        .map(|v| {
+            1 +
+            match *v {
+                Datum::I64(_) => number::I64_SIZE,
+                Datum::U64(_) => number::U64_SIZE,
+                Datum::F64(_) => number::F64_SIZE,
+                Datum::Dur(_) => number::I64_SIZE,
+                Datum::Bytes(ref bs) => {
+                    if comparable {
+                        bytes::max_encoded_bytes_size(bs.len())
+                    } else {
+                        bs.len() + number::MAX_VAR_I64_LEN
+                    }
+                }
+                Datum::Null | Datum::Min | Datum::Max => 0,
+            }
+        })
+        .sum()
 }
 
 pub fn encode(values: &[Datum], comparable: bool) -> Result<Vec<u8>> {

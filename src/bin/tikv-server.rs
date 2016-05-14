@@ -59,13 +59,13 @@ fn get_string_value<F>(short: &str,
     where F: Fn(&toml::Value) -> Option<String>
 {
     matches.opt_str(short)
-           .or_else(|| {
-               config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                   info!("malformed or missing {}, use default", long);
-                   default
-               })
-           })
-           .expect(&format!("please specify {}", long))
+        .or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("malformed or missing {}, use default", long);
+                default
+            })
+        })
+        .expect(&format!("please specify {}", long))
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
@@ -154,7 +154,7 @@ fn run_local_server(listener: TcpListener, store: Storage) {
                               store,
                               router,
                               MockStoreAddrResolver)
-                      .unwrap();
+        .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 

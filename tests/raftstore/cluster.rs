@@ -195,10 +195,10 @@ impl<T: Simulator> Cluster<T> {
 
     fn store_ids_of_region(&self, region_id: u64) -> Vec<u64> {
         let peers = self.pd_client
-                        .rl()
-                        .get_region_by_id(region_id)
-                        .unwrap()
-                        .take_peers();
+            .rl()
+            .get_region_by_id(region_id)
+            .unwrap()
+            .take_peers();
         peers.iter().map(|peer| peer.get_store_id()).collect()
     }
 
@@ -467,11 +467,10 @@ impl<T: Simulator> Cluster<T> {
                        change_type: ConfChangeType,
                        peer: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
-        let change_peer = new_admin_request(region_id,
-                                            &epoch,
-                                            new_change_peer_cmd(change_type, peer));
+        let change_peer =
+            new_admin_request(region_id, &epoch, new_change_peer_cmd(change_type, peer));
         let resp = self.call_command_on_leader(change_peer, Duration::from_secs(3))
-                       .unwrap();
+            .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::ChangePeer,
                 format!("{:?}", resp));
 

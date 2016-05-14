@@ -131,7 +131,7 @@ impl Conn {
 
                 // we have already read whole header, parse it and begin to read payload.
                 let (msg_id, payload_len) = try!(rpc::decode_msg_header(self.header
-                                                                            .bytes()));
+                    .bytes()));
                 self.last_msg_id = msg_id;
                 self.payload = Some(create_mem_buf(payload_len));
             }

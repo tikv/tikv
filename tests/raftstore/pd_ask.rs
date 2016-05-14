@@ -68,9 +68,9 @@ impl<T: Simulator> AskHandler<T> {
         // because region may change at this point, we should use
         // latest region info instead.
         let region = self.pd_client
-                         .rl()
-                         .get_region_by_id(region.get_id())
-                         .unwrap();
+            .rl()
+            .get_region_by_id(region.get_id())
+            .unwrap();
 
         let meta = self.pd_client.rl().get_cluster_config().unwrap();
         let max_peer_number = meta.get_max_peer_number() as usize;
@@ -82,9 +82,9 @@ impl<T: Simulator> AskHandler<T> {
         let (conf_change_type, peer) = if max_peer_number < peer_number {
             // Find first follower.
             let pos = region.get_peers()
-                            .iter()
-                            .position(|x| x.get_id() != leader.get_id())
-                            .unwrap();
+                .iter()
+                .position(|x| x.get_id() != leader.get_id())
+                .unwrap();
             (ConfChangeType::RemoveNode, region.get_peers()[pos].clone())
         } else {
             // Choose first store which all peers are not in.
@@ -135,9 +135,9 @@ impl<T: Simulator> AskHandler<T> {
         let leader = req.get_ask_split().get_leader();
         let split_key = req.get_ask_split().get_split_key().to_vec();
         let region = self.pd_client
-                         .rl()
-                         .get_region_by_id(region.get_id())
-                         .unwrap();
+            .rl()
+            .get_region_by_id(region.get_id())
+            .unwrap();
         if &*split_key <= region.get_start_key() ||
            (!region.get_end_key().is_empty() && &*split_key >= region.get_end_key()) {
             error!("invalid split key {} for region {:?}",
@@ -153,11 +153,10 @@ impl<T: Simulator> AskHandler<T> {
             peer_ids.push(peer_id);
         }
 
-        let split = new_admin_request(region.get_id(),
-                                      region.get_region_epoch(),
-                                      new_split_region_cmd(Some(split_key),
-                                                           new_region_id,
-                                                           peer_ids));
+        let split =
+            new_admin_request(region.get_id(),
+                              region.get_region_epoch(),
+                              new_split_region_cmd(Some(split_key), new_region_id, peer_ids));
         let resp = self.call_command(split, leader.clone());
         if resp.is_none() {
             return;

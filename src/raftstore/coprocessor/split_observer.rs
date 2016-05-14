@@ -77,7 +77,7 @@ impl RegionObserver for SplitObserver {
         if !req.has_split() {
             box_try!(Err("cmd_type is Split but it doesn't have split request, message maybe \
                           corrupted!"
-                             .to_owned()));
+                .to_owned()));
         }
         if let Err(e) = self.on_split(ctx, req.mut_split()) {
             error!("failed to handle split req: {:?}", e);
@@ -148,9 +148,8 @@ mod test {
     }
 
     fn new_index_key(table_id: i64, idx_id: i64, datums: &[Datum], version_id: u64) -> Vec<u8> {
-        let mut key = table::encode_index_seek_key(table_id,
-                                                   idx_id,
-                                                   &datum::encode_key(datums).unwrap());
+        let mut key =
+            table::encode_index_seek_key(table_id, idx_id, &datum::encode_key(datums).unwrap());
         key = encode_bytes(&key);
         key.write_u64::<BigEndian>(version_id).unwrap();
         key

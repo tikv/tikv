@@ -673,7 +673,7 @@ impl Peer {
         // Lock here to guarantee generating snapshot sees a consistent view data.
         let mut storage = self.storage.wl();
         match self.engine
-                  .write(wb) {
+            .write(wb) {
             Ok(_) => {
                 storage.set_applied_index(index);
 

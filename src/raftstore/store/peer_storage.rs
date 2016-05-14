@@ -111,7 +111,7 @@ impl PeerStorage {
     pub fn initial_state(&mut self) -> raft::Result<RaftState> {
         let initialized = self.is_initialized();
         let hs = try!(self.engine
-                          .get_msg(&keys::raft_hard_state_key(self.get_region_id())));
+            .get_msg(&keys::raft_hard_state_key(self.get_region_id())));
 
         let (mut hard_state, found) = hs.map_or((HardState::new(), false), |s| (s, true));
 
@@ -170,25 +170,25 @@ impl PeerStorage {
         try!(self.engine.scan(&start_key,
                               &end_key,
                               &mut |_, value| {
-                                  let mut entry = Entry::new();
-                                  try!(entry.merge_from_bytes(value));
+            let mut entry = Entry::new();
+            try!(entry.merge_from_bytes(value));
 
-                                  // May meet gap or has been compacted.
-                                  if entry.get_index() != next_index {
-                                      return Ok(false);
-                                  }
+            // May meet gap or has been compacted.
+            if entry.get_index() != next_index {
+                return Ok(false);
+            }
 
-                                  next_index += 1;
+            next_index += 1;
 
-                                  total_size += entry.compute_size() as u64;
-                                  exceeded_max_size = total_size > max_size;
+            total_size += entry.compute_size() as u64;
+            exceeded_max_size = total_size > max_size;
 
-                                  if !exceeded_max_size || ents.is_empty() {
-                                      ents.push(entry);
-                                  }
+            if !exceeded_max_size || ents.is_empty() {
+                ents.push(entry);
+            }
 
-                                  Ok(!exceeded_max_size)
-                              }));
+            Ok(!exceeded_max_size)
+        }));
 
         // If we get the correct number of entries the total size exceeds max_size, returns.
         if ents.len() == (high - low) as usize || exceeded_max_size {
@@ -374,8 +374,8 @@ impl PeerStorage {
 
     // Truncated state contains the meta about log preceded the first current entry.
     pub fn load_truncated_state(&self) -> Result<RaftTruncatedState> {
-        let res: Option<RaftTruncatedState> = try!(self.engine.get_msg(
-                                         &keys::raft_truncated_state_key(self.get_region_id())));
+        let res: Option<RaftTruncatedState> = try!(self.engine
+            .get_msg(&keys::raft_truncated_state_key(self.get_region_id())));
 
         if let Some(state) = res {
             return Ok(state);
@@ -511,14 +511,12 @@ pub fn do_snapshot(snap: &RocksDbSnapshot,
     debug!("begin to generate a snapshot for region {}", region_id);
 
     let region: metapb::Region = try!(snap.get_msg(&keys::region_info_key(region_id))
-                                          .and_then(|res| {
-                                              match res {
-                                                  None => {
-                                                      Err(box_err!("could not find region info"))
-                                                  }
-                                                  Some(region) => Ok(region),
-                                              }
-                                          }));
+        .and_then(|res| {
+            match res {
+                None => Err(box_err!("could not find region info")),
+                Some(region) => Ok(region),
+            }
+        }));
 
     let mut snapshot = Snapshot::new();
 
@@ -546,21 +544,21 @@ pub fn do_snapshot(snap: &RocksDbSnapshot,
         try!(snap.scan(&begin,
                        &end,
                        &mut |key, value| {
-                           if key.starts_with(&log_prefix) {
-                               // Ignore raft logs.
-                               // TODO: do more tests for snapshot.
-                               return Ok(true);
-                           }
-                           snap_size += key.len();
-                           snap_size += value.len();
-                           snap_key_cnt += 1;
+            if key.starts_with(&log_prefix) {
+                // Ignore raft logs.
+                // TODO: do more tests for snapshot.
+                return Ok(true);
+            }
+            snap_size += key.len();
+            snap_size += value.len();
+            snap_key_cnt += 1;
 
-                           let mut kv = KeyValue::new();
-                           kv.set_key(key.to_vec());
-                           kv.set_value(value.to_vec());
-                           data.push(kv);
-                           Ok(true)
-                       }));
+            let mut kv = KeyValue::new();
+            kv.set_key(key.to_vec());
+            kv.set_value(value.to_vec());
+            data.push(kv);
+            Ok(true)
+        }));
     }
 
     snap_data.set_data(protobuf::RepeatedField::from_vec(data));

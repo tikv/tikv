@@ -598,8 +598,8 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
 
 
         if let Err(e) = self.router
-                            .rl()
-                            .report_snapshot(self.region_id, self.to_peer_id, status) {
+            .rl()
+            .report_snapshot(self.region_id, self.to_peer_id, status) {
             error!("report snapshot to peer {} with region {} err {:?}",
                    self.to_peer_id,
                    self.region_id,
@@ -674,14 +674,13 @@ mod tests {
 
         let mut event_loop = create_event_loop().unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut server = Server::new(&mut event_loop,
-                                     listener,
-                                     Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
-                                     Arc::new(RwLock::new(TestRaftStoreRouter {
-                                         tx: Mutex::new(tx),
-                                     })),
-                                     resolver)
-                             .unwrap();
+        let mut server =
+            Server::new(&mut event_loop,
+                        listener,
+                        Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
+                        Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
+                        resolver)
+                .unwrap();
 
         let ch = server.get_sendch();
         let h = thread::spawn(move || {
@@ -692,10 +691,10 @@ mod tests {
         msg.set_msg_type(MessageType::Raft);
 
         ch.send(Msg::SendStore {
-              store_id: 1,
-              data: ConnData::new(0, msg),
-          })
-          .unwrap();
+                store_id: 1,
+                data: ConnData::new(0, msg),
+            })
+            .unwrap();
 
         rx.recv().unwrap();
 

@@ -66,8 +66,8 @@ mod tests {
             let sm = sm.clone();
             children.push(thread::spawn(move || {
                 let values: Vec<i32> = (0..VALUE_NUM)
-                                           .map(|_| rand::random::<i32>() % VALUE_RANGE as i32)
-                                           .collect();
+                    .map(|_| rand::random::<i32>() % VALUE_RANGE as i32)
+                    .collect();
                 let _guard = sm.lock(&values);
                 thread::sleep(Duration::from_millis(1));
             }));
