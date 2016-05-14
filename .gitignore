@@ -5,6 +5,9 @@
 # OSX trash
 .DS_Store
 
+# Vim Swapfiles
+*.swp
+
 # Eclipse files
 .classpath
 .project
