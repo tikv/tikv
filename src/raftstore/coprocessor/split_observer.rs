@@ -59,7 +59,7 @@ impl SplitObserver {
             return Err("no need to split".to_owned());
         }
 
-        split.set_split_key(encode_bytes(&key, false));
+        split.set_split_key(encode_bytes(&key));
         Ok(())
     }
 }
@@ -142,7 +142,7 @@ mod test {
         if column_id > 0 {
             key.write_u64::<BigEndian>(column_id).unwrap();
         }
-        key = encode_bytes(&key, false);
+        key = encode_bytes(&key);
         key.write_u64::<BigEndian>(version_id).unwrap();
         key
     }
@@ -150,7 +150,7 @@ mod test {
     fn new_index_key(table_id: i64, idx_id: i64, datums: &[Datum], version_id: u64) -> Vec<u8> {
         let mut key =
             table::encode_index_seek_key(table_id, idx_id, &datum::encode_key(datums).unwrap());
-        key = encode_bytes(&key, false);
+        key = encode_bytes(&key);
         key.write_u64::<BigEndian>(version_id).unwrap();
         key
     }
@@ -173,9 +173,9 @@ mod test {
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), b"test");
 
-        let mut key = encode_bytes(b"db:1", false);
+        let mut key = encode_bytes(b"db:1");
         key.write_u64::<BigEndian>(0).unwrap();
-        let mut expect_key = encode_bytes(b"db:1", false);
+        let mut expect_key = encode_bytes(b"db:1");
         req = new_split_request(&key);
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
@@ -208,8 +208,7 @@ mod test {
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         expect_key =
-            encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f",
-                         false);
+            encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f");
         key = expect_key.clone();
         key.extend_from_slice(b"\x80\x00\x00\x00\x00\x00\x00\xd3");
         req = new_split_request(&key);

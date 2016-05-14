@@ -27,6 +27,7 @@ pub fn max_encoded_bytes_size(n: usize) -> usize {
 }
 
 pub trait BytesEncoder: NumberEncoder {
+    /// Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
     fn encode_bytes(&mut self, key: &[u8], desc: bool) -> Result<()> {
         let len = key.len();
         let mut index = 0;
@@ -73,11 +74,18 @@ fn adjust_bytes_order<'a>(bs: &'a [u8], desc: bool, buf: &'a mut [u8]) -> &'a [u
 
 impl<T: Write> BytesEncoder for T {}
 
-// Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
-pub fn encode_bytes(key: &[u8], desc: bool) -> Vec<u8> {
-    let cap = max_encoded_bytes_size(key.len());
+pub fn encode_bytes(bs: &[u8]) -> Vec<u8> {
+    encode_order_bytes(bs, false)
+}
+
+pub fn encode_bytes_desc(bs: &[u8]) -> Vec<u8> {
+    encode_order_bytes(bs, true)
+}
+
+fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
+    let cap = max_encoded_bytes_size(bs.len());
     let mut encoded = Vec::with_capacity(cap);
-    encoded.encode_bytes(key, desc).unwrap();
+    encoded.encode_bytes(bs, desc).unwrap();
     encoded.shrink_to_fit();
     encoded
 }
@@ -172,8 +180,8 @@ mod tests {
         ];
 
         for (source, asc, desc) in pairs {
-            assert_eq!(encode_bytes(&source, false), asc);
-            assert_eq!(encode_bytes(&source, true), desc);
+            assert_eq!(encode_bytes(&source), asc);
+            assert_eq!(encode_bytes_desc(&source), desc);
 
             let asc_offset = asc.as_ptr() as usize;
             let mut asc_input = asc.as_slice();
@@ -238,8 +246,8 @@ mod tests {
                   Ordering::Greater)];
 
         for (x, y, ord) in pairs {
-            assert_eq!(encode_bytes(x, false).cmp(&encode_bytes(y, false)), ord);
-            assert_eq!(encode_bytes(x, true).cmp(&encode_bytes(y, true)),
+            assert_eq!(encode_bytes(x).cmp(&encode_bytes(y)), ord);
+            assert_eq!(encode_bytes_desc(x).cmp(&encode_bytes_desc(y)),
                        ord.reverse());
         }
     }
@@ -273,13 +281,13 @@ mod tests {
     #[bench]
     fn bench_encode(b: &mut Bencher) {
         let key = [b'x'; 20];
-        b.iter(|| encode_bytes(&key, false));
+        b.iter(|| encode_bytes(&key));
     }
 
     #[bench]
     fn bench_decode(b: &mut Bencher) {
         let key = [b'x'; 2000000];
-        let encoded = encode_bytes(&key, false);
+        let encoded = encode_bytes(&key);
         b.iter(|| encoded.as_slice().decode_bytes(false));
     }
 }

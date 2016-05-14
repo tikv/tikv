@@ -26,7 +26,7 @@ pub struct Key(Vec<u8>);
 
 impl Key {
     pub fn from_raw(key: &[u8]) -> Key {
-        Key(codec::bytes::encode_bytes(key, false))
+        Key(codec::bytes::encode_bytes(key))
     }
 
     pub fn raw(&self) -> Result<Vec<u8>, codec::Error> {
