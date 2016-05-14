@@ -624,6 +624,7 @@ mod tests {
     use std::net::SocketAddr;
 
     use mio::tcp::TcpListener;
+    use log::LogLevel;
 
     use super::*;
     use super::super::{Msg, ConnData, Result};
@@ -637,6 +638,7 @@ mod tests {
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use raft::SnapshotStatus;
     use storage::engine::TEMP_DIR;
+    use util::metric::Metric;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -680,6 +682,8 @@ mod tests {
 
         let resolver = MockResolver { addr: listener.local_addr().unwrap() };
 
+        let metric = Metric::new("tikv", LogLevel::Info);
+
         let mut event_loop = create_event_loop().unwrap();
         let (tx, rx) = mpsc::channel();
         let mut server = Server::new(&mut event_loop,
@@ -688,7 +692,8 @@ mod tests {
                                      Arc::new(RwLock::new(TestRaftStoreRouter {
                                          tx: Mutex::new(tx),
                                      })),
-                                     resolver)
+                                     resolver,
+                                     metric)
                              .unwrap();
 
         let ch = server.get_sendch();
