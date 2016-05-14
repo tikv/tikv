@@ -34,6 +34,7 @@ use mio::tcp::TcpListener;
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
 use tikv::util::{self, logger, panic_hook};
+use tikv::util::metric::Metric;
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
@@ -146,19 +147,23 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
-fn run_local_server(listener: TcpListener, store: Storage) {
+fn run_local_server(listener: TcpListener, store: Storage, metric: Metric) {
     let mut event_loop = create_event_loop().unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
     let mut svr = Server::new(&mut event_loop,
                               listener,
                               store,
                               router,
-                              MockStoreAddrResolver)
+                              MockStoreAddrResolver,
+                              metric)
                       .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
-fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value) {
+fn run_raft_server(listener: TcpListener,
+                   metric: Metric,
+                   matches: &Matches,
+                   config: &toml::Value) {
     let mut event_loop = create_event_loop().unwrap();
     let ch = SendCh::new(event_loop.channel());
 
@@ -186,7 +191,13 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                             format!("{}", listener.local_addr().unwrap()),
                                             pd_client);
 
-    let mut svr = Server::new(&mut event_loop, listener, store, raft_router, resolver).unwrap();
+    let mut svr = Server::new(&mut event_loop,
+                              listener,
+                              store,
+                              raft_router,
+                              resolver,
+                              metric)
+                      .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
@@ -206,6 +217,14 @@ fn main() {
                 "log",
                 "set log level",
                 "log level: trace, debug, info, warn, error, off");
+    opts.optopt("M",
+                "metric",
+                "set metric level",
+                "metric level: trace, debug, info, warn, error, off");
+    opts.optopt("",
+                "metric-prefix",
+                "set metric prefix",
+                "metric prefix: tikv");
     opts.optflag("h", "help", "print this help menu");
     opts.optopt("C", "config", "set configuration file", "file path");
     opts.optopt("s",
@@ -237,6 +256,21 @@ fn main() {
 
     initial_log(&matches, &config);
 
+    let level = get_string_value("M",
+                                 "server.metric.level",
+                                 &matches,
+                                 &config,
+                                 Some("info".to_owned()),
+                                 |v| v.as_str().map(|s| s.to_owned()));
+    let prefix = get_string_value("metric-prefix",
+                                  "server.metric.prefix",
+                                  &matches,
+                                  &config,
+                                  Some("tikv".to_owned()),
+                                  |v| v.as_str().map(|s| s.to_owned()));
+    let metric = Metric::new(&prefix,
+                             logger::get_level_by_string(&level).to_log_level().unwrap());
+
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,
@@ -259,10 +293,10 @@ fn main() {
         ROCKSDB_DSN => {
             let path = get_store_path(&matches, &config);
             let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();
-            run_local_server(listener, store);
+            run_local_server(listener, store, metric);
         }
         RAFTKV_DSN => {
-            run_raft_server(listener, &matches, &config);
+            run_raft_server(listener, metric, &matches, &config);
         }
         n => panic!("unrecognized dns name: {}", n),
     };
