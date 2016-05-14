@@ -72,11 +72,8 @@ impl super::PdClient for RpcClient {
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
-        let mut get_config = pdpb::GetClusterConfigRequest::new();
-        get_config.set_cluster_id(self.cluster_id);
-
         let mut req = self.new_request(pdpb::CommandType::GetClusterConfig);
-        req.set_get_cluster_config(get_config);
+        req.set_get_cluster_config(pdpb::GetClusterConfigRequest::new());
 
         let resp = try!(self.send(&req));
         try!(check_resp(&resp));
