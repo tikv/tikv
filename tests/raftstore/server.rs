@@ -20,6 +20,7 @@ use std::time::Duration;
 use std::io::ErrorKind;
 
 use rocksdb::DB;
+use log::LogLevel;
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
@@ -27,6 +28,7 @@ use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store;
 use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::{make_std_tcp_conn, HandyRwLock};
+use tikv::util::metric::Metric;
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
@@ -134,7 +136,10 @@ impl Simulator for ServerCluster {
         self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
 
-        let mut server = Server::new(&mut event_loop, listener, store, router, resolver).unwrap();
+        let metric = Metric::new("tikv", LogLevel::Info);
+
+        let mut server = Server::new(&mut event_loop, listener, store, router, resolver, metric)
+                             .unwrap();
 
         let ch = server.get_sendch();
 
