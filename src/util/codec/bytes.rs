@@ -27,20 +27,23 @@ pub fn max_encoded_bytes_size(n: usize) -> usize {
 }
 
 pub trait BytesEncoder: NumberEncoder {
-    fn encode_bytes(&mut self, key: &[u8]) -> Result<()> {
+    fn encode_bytes(&mut self, key: &[u8], desc: bool) -> Result<()> {
         let len = key.len();
         let mut index = 0;
+        let mut buf = [0; ENC_GROUP_SIZE];
         while index <= len {
             let remain = len - index;
             let mut pad: usize = 0;
             if remain > ENC_GROUP_SIZE {
-                try!(self.write_all(&key[index..index + ENC_GROUP_SIZE]));
+                try!(self.write_all(adjust_bytes_order(&key[index..index + ENC_GROUP_SIZE],
+                                                       desc,
+                                                       &mut buf)));
             } else {
                 pad = ENC_GROUP_SIZE - remain;
-                try!(self.write_all(&key[index..]));
-                try!(self.write_all(&ENC_PADDING[..pad]));
+                try!(self.write_all(adjust_bytes_order(&key[index..], desc, &mut buf)));
+                try!(self.write_all(adjust_bytes_order(&ENC_PADDING[..pad], desc, &mut buf)));
             }
-            try!(self.write_all(&[ENC_MARKER - (pad as u8)]));
+            try!(self.write_all(adjust_bytes_order(&[ENC_MARKER - (pad as u8)], desc, &mut buf)));
             index += ENC_GROUP_SIZE;
         }
         Ok(())
@@ -55,13 +58,26 @@ pub trait BytesEncoder: NumberEncoder {
     }
 }
 
+fn adjust_bytes_order<'a>(bs: &'a [u8], desc: bool, buf: &'a mut [u8]) -> &'a [u8] {
+    if desc {
+        let mut buf_idx = 0;
+        for &b in bs {
+            buf[buf_idx] = !b;
+            buf_idx += 1;
+        }
+        &buf[..buf_idx]
+    } else {
+        bs
+    }
+}
+
 impl<T: Write> BytesEncoder for T {}
 
 // Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
-pub fn encode_bytes(key: &[u8]) -> Vec<u8> {
+pub fn encode_bytes(key: &[u8], desc: bool) -> Vec<u8> {
     let cap = max_encoded_bytes_size(key.len());
     let mut encoded = Vec::with_capacity(cap);
-    encoded.encode_bytes(key).unwrap();
+    encoded.encode_bytes(key, desc).unwrap();
     encoded.shrink_to_fit();
     encoded
 }
@@ -70,13 +86,17 @@ pub trait BytesDecoder: NumberDecoder {
     /// Get the remaining length in bytes of current reader.
     fn remaining(&self) -> usize;
 
-    fn decode_bytes(&mut self) -> Result<Vec<u8>> {
+    fn decode_bytes(&mut self, desc: bool) -> Result<Vec<u8>> {
         let mut key = Vec::with_capacity(self.remaining());
         let mut chunk = [0; ENC_GROUP_SIZE + 1];
         loop {
             try!(self.read_exact(&mut chunk));
-            let (marker, bytes) = chunk.split_last().unwrap();
-            let pad_size = (ENC_MARKER - *marker) as usize;
+            let (&marker, bytes) = chunk.split_last().unwrap();
+            let pad_size = if desc {
+                marker as usize
+            } else {
+                (ENC_MARKER - marker) as usize
+            };
             if pad_size == 0 {
                 key.write_all(bytes).unwrap();
                 continue;
@@ -86,10 +106,20 @@ pub trait BytesDecoder: NumberDecoder {
             }
             let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
             key.write_all(bytes).unwrap();
-            if padding.iter().any(|x| *x != 0) {
+            let pad_byte = if desc {
+                !0
+            } else {
+                0
+            };
+            if padding.iter().any(|x| *x != pad_byte) {
                 return Err(Error::KeyPadding);
             }
             key.shrink_to_fit();
+            if desc {
+                for k in &mut key {
+                    *k = !*k;
+                }
+            }
             return Ok(key);
         }
     }
@@ -117,29 +147,43 @@ mod tests {
 
     #[test]
     fn test_enc_dec_bytes() {
-        let pairs = vec![(vec![], vec![0, 0, 0, 0, 0, 0, 0, 0, 247]),
-                         (vec![1, 2, 3], vec![1, 2, 3, 0, 0, 0, 0, 0, 250]),
-                         (vec![0], vec![0, 0, 0, 0, 0, 0, 0, 0, 248]),
-                         (vec![1, 2, 3], vec![1, 2, 3, 0, 0, 0, 0, 0, 250]),
-                         (vec![1, 2, 3, 0], vec![1, 2, 3, 0, 0, 0, 0, 0, 251]),
-                         (vec![1, 2, 3, 4, 5, 6, 7], vec![1, 2, 3, 4, 5, 6, 7, 0, 254]),
+        let pairs = vec![
+            (vec![], vec![0, 0, 0, 0, 0, 0, 0, 0, 247],
+             vec![255, 255, 255, 255, 255, 255, 255, 255, 8]),
+            (vec![0], vec![0, 0, 0, 0, 0, 0, 0, 0, 248],
+             vec![255, 255, 255, 255, 255, 255, 255, 255, 7]),
+            (vec![1, 2, 3], vec![1, 2, 3, 0, 0, 0, 0, 0, 250],
+             vec![254, 253, 252, 255, 255, 255, 255, 255, 5]),
+            (vec![1, 2, 3, 0], vec![1, 2, 3, 0, 0, 0, 0, 0, 251],
+             vec![254, 253, 252, 255, 255, 255, 255, 255, 4]),
+            (vec![1, 2, 3, 4, 5, 6, 7], vec![1, 2, 3, 4, 5, 6, 7, 0, 254],
+             vec![254, 253, 252, 251, 250, 249, 248, 255, 1]),
+            (vec![0, 0, 0, 0, 0, 0, 0, 0],
+             vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+             vec![255, 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255,
+                  255, 255, 255, 255, 255, 8]),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8],
+             vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+             vec![254, 253, 252, 251, 250, 249, 248, 247, 0, 255, 255, 255,
+                  255, 255, 255, 255, 255, 8]),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 9], vec![1, 2, 3, 4, 5, 6, 7, 8, 255,
+                  9, 0, 0, 0, 0, 0, 0, 0, 248], vec![254, 253, 252, 251, 250, 249,
+                  248, 247, 0, 246, 255, 255, 255, 255, 255, 255, 255, 7]),
+        ];
 
-                         (vec![0, 0, 0, 0, 0, 0, 0, 0],
-                          vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247]),
+        for (source, asc, desc) in pairs {
+            assert_eq!(encode_bytes(&source, false), asc);
+            assert_eq!(encode_bytes(&source, true), desc);
 
-                         (vec![1, 2, 3, 4, 5, 6, 7, 8],
-                          vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247]),
+            let asc_offset = asc.as_ptr() as usize;
+            let mut asc_input = asc.as_slice();
+            assert_eq!(source, asc_input.decode_bytes(false).unwrap());
+            assert_eq!(asc_input.as_ptr() as usize - asc_offset, asc.len());
 
-                         (vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
-                          vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 9, 0, 0, 0, 0, 0, 0, 0, 248])];
-
-        for (x, y) in pairs {
-            assert_eq!(encode_bytes(&x), y);
-            let origin_offset = y.as_ptr() as usize;
-            let mut input = y.as_slice();
-            let key = input.decode_bytes().unwrap();
-            assert_eq!(key, x);
-            assert_eq!(input.as_ptr() as usize - origin_offset, y.len());
+            let desc_offset = desc.as_ptr() as usize;
+            let mut desc_input = desc.as_slice();
+            assert_eq!(source, desc_input.decode_bytes(true).unwrap());
+            assert_eq!(desc_input.as_ptr() as usize - desc_offset, desc.len());
         }
     }
 
@@ -156,7 +200,7 @@ mod tests {
                                  vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 0]];
 
         for x in invalid_bytes {
-            assert!(x.as_slice().decode_bytes().is_err());
+            assert!(x.as_slice().decode_bytes(false).is_err());
         }
     }
 
@@ -194,7 +238,9 @@ mod tests {
                   Ordering::Greater)];
 
         for (x, y, ord) in pairs {
-            assert_eq!(encode_bytes(x).cmp(&encode_bytes(y)), ord);
+            assert_eq!(encode_bytes(x, false).cmp(&encode_bytes(y, false)), ord);
+            assert_eq!(encode_bytes(x, true).cmp(&encode_bytes(y, true)),
+                       ord.reverse());
         }
     }
 
@@ -227,13 +273,13 @@ mod tests {
     #[bench]
     fn bench_encode(b: &mut Bencher) {
         let key = [b'x'; 20];
-        b.iter(|| encode_bytes(&key));
+        b.iter(|| encode_bytes(&key, false));
     }
 
     #[bench]
     fn bench_decode(b: &mut Bencher) {
         let key = [b'x'; 2000000];
-        let encoded = encode_bytes(&key);
-        b.iter(|| encoded.as_slice().decode_bytes());
+        let encoded = encode_bytes(&key, false);
+        b.iter(|| encoded.as_slice().decode_bytes(false));
     }
 }
