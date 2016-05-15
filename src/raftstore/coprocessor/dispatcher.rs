@@ -235,11 +235,8 @@ mod test {
 
     #[test]
     fn test_coprocessor_host() {
-        let (bypass_pre1, bypass_post1, called_pre1, called_post1, r1) = (share(false),
-                                                                          share(false),
-                                                                          share(0),
-                                                                          share(0),
-                                                                          share(false));
+        let (bypass_pre1, bypass_post1, called_pre1, called_post1, r1) =
+            (share(false), share(false), share(0), share(0), share(false));
         let observer1 = TestCoprocessor::new(bypass_pre1.clone(),
                                              bypass_post1.clone(),
                                              called_pre1.clone(),
@@ -269,11 +266,8 @@ mod test {
         // reset
         set_all(&[&called_post1, &called_pre1], 0);
 
-        let (bypass_pre2, bypass_post2, called_pre2, called_post2, r2) = (share(false),
-                                                                          share(false),
-                                                                          share(0),
-                                                                          share(0),
-                                                                          share(false));
+        let (bypass_pre2, bypass_post2, called_pre2, called_post2, r2) =
+            (share(false), share(false), share(0), share(0), share(false));
         let observer2 = TestCoprocessor::new(bypass_pre2.clone(),
                                              bypass_post2.clone(),
                                              called_pre2.clone(),

@@ -160,7 +160,7 @@ impl<T: Storage> RawNode<T> {
                     cc.set_context(peer.context.as_ref().unwrap().clone());
                 }
                 let data = protobuf::Message::write_to_bytes(&cc)
-                               .expect("unexpected marshal error");
+                    .expect("unexpected marshal error");
                 let mut e = Entry::new();
                 e.set_entry_type(EntryType::EntryConfChange);
                 e.set_term(1);

@@ -75,13 +75,13 @@ impl Runnable<Task> for Runner {
         let res = task.engine.scan(&task.start_key,
                                    &task.end_key,
                                    &mut |k, v| {
-                                       size += k.len() as u64;
-                                       size += v.len() as u64;
-                                       if split_key.is_empty() && size > self.split_size {
-                                           split_key = k.to_vec();
-                                       }
-                                       Ok(size < self.region_max_size)
-                                   });
+            size += k.len() as u64;
+            size += v.len() as u64;
+            if split_key.is_empty() && size > self.split_size {
+                split_key = k.to_vec();
+            }
+            Ok(size < self.region_max_size)
+        });
         if let Err(e) = res {
             error!("failed to scan split key of region {}: {:?}",
                    task.region_id,

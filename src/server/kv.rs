@@ -74,17 +74,15 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_prewrite_req();
         let mutations = req.take_mutations()
-                           .into_iter()
-                           .map(|mut x| {
-                               match x.get_op() {
-                                   Op::Put => {
-                                       Mutation::Put((Key::from_raw(x.get_key()), x.take_value()))
-                                   }
-                                   Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
-                                   Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
-                               }
-                           })
-                           .collect();
+            .into_iter()
+            .map(|mut x| {
+                match x.get_op() {
+                    Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
+                    Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
+                    Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+                }
+            })
+            .collect();
         let cb = self.make_cb(StoreHandler::cmd_prewrite_done, on_resp);
         self.store
             .async_prewrite(msg.take_context(),
@@ -102,9 +100,9 @@ impl StoreHandler {
         let req = msg.take_cmd_commit_req();
         let cb = self.make_cb(StoreHandler::cmd_commit_done, on_resp);
         let keys = req.get_keys()
-                      .iter()
-                      .map(|x| Key::from_raw(x))
-                      .collect();
+            .iter()
+            .map(|x| Key::from_raw(x))
+            .collect();
         self.store
             .async_commit(msg.take_context(),
                           keys,
@@ -563,10 +561,10 @@ mod tests {
 
     fn make_lock_error<T>(key: Vec<u8>, primary: Vec<u8>, ts: u64) -> StorageResult<T> {
         Err(mvcc::Error::KeyIsLocked {
-            key: key,
-            primary: primary,
-            ts: ts,
-        })
+                key: key,
+                primary: primary,
+                ts: ts,
+            })
             .map_err(txn::Error::from)
             .map_err(storage::Error::from)
     }

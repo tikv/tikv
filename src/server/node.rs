@@ -87,9 +87,9 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         let bootstrapped = try!(self.pd_client
-                                    .read()
-                                    .unwrap()
-                                    .is_cluster_bootstrapped());
+            .read()
+            .unwrap()
+            .is_cluster_bootstrapped());
         let mut store_id = try!(self.check_store(&engine));
         if store_id == INVALID_ID {
             store_id = try!(self.bootstrap_store(&engine));
@@ -112,9 +112,9 @@ impl<C> Node<C>
         // inform pd.
         try!(self.start_store(event_loop, store_id, engine, trans));
         try!(self.pd_client
-                 .write()
-                 .unwrap()
-                 .put_store(self.store.clone()));
+            .write()
+            .unwrap()
+            .put_store(self.store.clone()));
         Ok(())
     }
 

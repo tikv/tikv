@@ -68,8 +68,8 @@ impl ServerCluster {
     fn pool_get(&self, addr: &SocketAddr) -> Result<TcpStream> {
         {
             let mut conns = self.conns
-                                .lock()
-                                .unwrap();
+                .lock()
+                .unwrap();
             let conn = conns.get_mut(addr);
             if let Some(mut pool) = conn {
                 if !pool.is_empty() {
@@ -84,8 +84,8 @@ impl ServerCluster {
 
     fn pool_put(&self, addr: &SocketAddr, conn: TcpStream) {
         let mut conns = self.conns
-                            .lock()
-                            .unwrap();
+            .lock()
+            .unwrap();
         let p = conns.entry(*addr).or_insert_with(Vec::new);
         p.push(conn);
     }

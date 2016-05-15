@@ -53,16 +53,16 @@ impl<'a> RegionSnapshot<'a> {
         };
         let scan_end_key = enc_end_key(&self.region);
         box self.snap
-                .new_iterator(&scan_start_key)
-                .take_while(move |&(k, _)| k < &scan_end_key)
-                .map(|(k, v)| (keys::origin_key(k), v))
+            .new_iterator(&scan_start_key)
+            .take_while(move |&(k, _)| k < &scan_end_key)
+            .map(|(k, v)| (keys::origin_key(k), v))
     }
 
     // Seek the first key >= given key, if no found, return None.
     pub fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let pair = self.new_iterator(key)
-                       .next()
-                       .map(|(k, v)| (k.to_vec(), v.to_vec()));
+            .next()
+            .map(|(k, v)| (k.to_vec(), v.to_vec()));
         Ok(pair)
     }
 
@@ -79,8 +79,8 @@ impl<'a> RegionSnapshot<'a> {
         }
         let scan_end_key = keys::data_key(self.region.get_start_key());
         box iter.skip_while(move |&(k, _)| k >= &scan_start_key)
-                .take_while(move |&(k, _)| k >= &scan_end_key)
-                .map(|(k, v)| (keys::origin_key(k), v))
+            .take_while(move |&(k, _)| k >= &scan_end_key)
+            .map(|(k, v)| (keys::origin_key(k), v))
     }
 
     // Seek the first key < given key, if no found, return None.

@@ -82,9 +82,9 @@ impl Cluster {
 
     fn get_region(&self, key: Vec<u8>) -> Result<metapb::Region> {
         let (_, region) = self.regions
-                              .range::<Key, Key>(Excluded(&key), Unbounded)
-                              .next()
-                              .unwrap();
+            .range::<Key, Key>(Excluded(&key), Unbounded)
+            .next()
+            .unwrap();
         Ok(region.clone())
     }
 
