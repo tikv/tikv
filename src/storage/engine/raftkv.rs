@@ -110,12 +110,12 @@ impl<C: PdClient> RaftKv<C> {
 
         try!(self.router.rl().send_command(request,
                                            box move |resp| {
-                                               finished2.set(resp);
-                                               // Wait for response to be consumed or `finished` is
-                                               // dropped.
-                                               finished2.wait_clear(None);
-                                               Ok(())
-                                           }));
+            finished2.set(resp);
+            // Wait for response to be consumed or `finished` is
+            // dropped.
+            finished2.wait_clear(None);
+            Ok(())
+        }));
 
         if finished.wait_timeout(Some(timeout)) {
             return Ok(finished);
@@ -130,21 +130,20 @@ impl<C: PdClient> RaftKv<C> {
 
         let resp = try!(self.call_command(req));
         try!(resp.apply(|resp| {
-                     if resp.get_header().get_uuid() != &*uuid {
-                         return Err(Error::InvalidResponse("response is not correct!!!"
-                                                               .to_owned()));
-                     }
-                     if resp.get_header().has_error() {
-                         return Err(Error::RequestFailed(resp.take_header().take_error()));
-                     }
-                     if l != resp.get_responses().len() {
-                         return Err(Error::InvalidResponse("response count is not equal to \
-                                                            requests, something must go wrong."
-                                                               .to_owned()));
-                     }
-                     Ok(())
-                 })
-                 .unwrap());
+                if resp.get_header().get_uuid() != &*uuid {
+                    return Err(Error::InvalidResponse("response is not correct!!!".to_owned()));
+                }
+                if resp.get_header().has_error() {
+                    return Err(Error::RequestFailed(resp.take_header().take_error()));
+                }
+                if l != resp.get_responses().len() {
+                    return Err(Error::InvalidResponse("response count is not equal to requests, \
+                                                       something must go wrong."
+                        .to_owned()));
+                }
+                Ok(())
+            })
+            .unwrap());
         Ok(resp)
     }
 
@@ -235,14 +234,13 @@ impl<C: PdClient> Engine for RaftKv<C> {
         // notice: the raft thread will be woken up after resp is dropped
         let resp = try!(self.exec_cmd_request(cmd));
         let region = try!(resp.apply(|resp| {
-                                  let mut resp = resp.take_responses().remove(0);
-                                  if resp.get_cmd_type() != CmdType::Snap {
-                                      return Err(invalid_resp_type(CmdType::Snap,
-                                                                   resp.get_cmd_type()));
-                                  }
-                                  Ok(resp.take_snap().take_region().clone())
-                              })
-                              .unwrap());
+                let mut resp = resp.take_responses().remove(0);
+                if resp.get_cmd_type() != CmdType::Snap {
+                    return Err(invalid_resp_type(CmdType::Snap, resp.get_cmd_type()));
+                }
+                Ok(resp.take_snap().take_region().clone())
+            })
+            .unwrap());
 
         let snap = RegionSnapshot::from_raw(self.db.as_ref(), region);
         Ok(box snap)

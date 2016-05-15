@@ -282,9 +282,9 @@ mod tests {
 
         // insert bad format data
         engine.put(&Context::new(),
-                   make_key(b"y").append_ts(0),
-                   b"dummy".to_vec())
-              .unwrap();
+                 make_key(b"y").append_ts(0),
+                 b"dummy".to_vec())
+            .unwrap();
         must_get_err(engine.as_ref(), b"y", 100);
     }
 
@@ -474,8 +474,8 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
         assert_eq!(txn.commit_then_get(&make_key(key), to_fake_ts(commit_ts), to_fake_ts(get_ts))
-                      .unwrap()
-                      .unwrap(),
+                       .unwrap()
+                       .unwrap(),
                    expect);
         txn.submit().unwrap();
     }
@@ -489,7 +489,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
         assert!(txn.commit_then_get(&make_key(key), to_fake_ts(commit_ts), to_fake_ts(get_ts))
-                   .is_err());
+            .is_err());
     }
 
     fn must_rollback<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {

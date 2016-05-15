@@ -32,9 +32,9 @@ pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer
 
 pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
     region.get_peers()
-          .iter()
-          .position(|x| x.get_store_id() == store_id)
-          .map(|i| region.mut_peers().remove(i))
+        .iter()
+        .position(|x| x.get_store_id() == store_id)
+        .map(|i| region.mut_peers().remove(i))
 }
 
 // a helper function to create peer easily.

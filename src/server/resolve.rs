@@ -64,17 +64,17 @@ impl<T: PdClient> Runner<T> {
         let pd_client = self.pd_client.clone();
         let s = try!(self.store_addrs.entry(store_id).or_try_insert_with(|| {
             pd_client.rl()
-                     .get_store(store_id)
-                     .and_then(|s| {
-                         let addr = s.get_address().to_owned();
-                         // In some tests, we use empty address for store first,
-                         // so we should ignore here.
-                         // TODO: we may remove this check after we refactor the test.
-                         if addr.len() == 0 {
-                             return Err(box_err!("invalid empty address for store {}", store_id));
-                         }
-                         Ok(addr)
-                     })
+                .get_store(store_id)
+                .and_then(|s| {
+                    let addr = s.get_address().to_owned();
+                    // In some tests, we use empty address for store first,
+                    // so we should ignore here.
+                    // TODO: we may remove this check after we refactor the test.
+                    if addr.len() == 0 {
+                        return Err(box_err!("invalid empty address for store {}", store_id));
+                    }
+                    Ok(addr)
+                })
         }));
 
         Ok(s)
@@ -97,9 +97,8 @@ impl PdStoreAddrResolver {
     pub fn new<T>(pd_client: Arc<RwLock<T>>) -> Result<PdStoreAddrResolver>
         where T: PdClient + 'static
     {
-        let mut r = PdStoreAddrResolver {
-            worker: Worker::new("store address resolve worker".to_owned()),
-        };
+        let mut r =
+            PdStoreAddrResolver { worker: Worker::new("store address resolve worker".to_owned()) };
 
         let runner = Runner {
             pd_client: pd_client,

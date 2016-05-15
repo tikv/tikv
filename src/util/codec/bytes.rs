@@ -162,39 +162,36 @@ mod tests {
 
     #[test]
     fn test_encode_bytes_compare() {
-        let pairs: Vec<(&[u8], &[u8], _)> = vec![(b"", b"\x00", Ordering::Less),
-                                                 (b"\x00", b"\x00", Ordering::Equal),
-                                                 (b"\xFF", b"\x00", Ordering::Greater),
-                                                 (b"\xFF", b"\xFF\x00", Ordering::Less),
-                                                 (b"a", b"b", Ordering::Less),
-                                                 (b"a", b"\x00", Ordering::Greater),
-                                                 (b"\x00", b"\x01", Ordering::Less),
-                                                 (b"\x00\x01", b"\x00\x00", Ordering::Greater),
-                                                 (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
-                                                 (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
+        let pairs: Vec<(&[u8], &[u8], _)> =
+            vec![(b"", b"\x00", Ordering::Less),
+                 (b"\x00", b"\x00", Ordering::Equal),
+                 (b"\xFF", b"\x00", Ordering::Greater),
+                 (b"\xFF", b"\xFF\x00", Ordering::Less),
+                 (b"a", b"b", Ordering::Less),
+                 (b"a", b"\x00", Ordering::Greater),
+                 (b"\x00", b"\x01", Ordering::Less),
+                 (b"\x00\x01", b"\x00\x00", Ordering::Greater),
+                 (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
+                 (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
 
-                                                 (b"\x00\x00\x00\x00\x00\x00\x00\x00",
-                                                  b"\x00\x00\x00\x00\x00\x00\x00\x00\x00",
-                                                  Ordering::Less),
+                 (b"\x00\x00\x00\x00\x00\x00\x00\x00",
+                  b"\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+                  Ordering::Less),
 
-                                                 (b"\x01\x02\x03\x00",
-                                                  b"\x01\x02\x03",
-                                                  Ordering::Greater),
-                                                 (b"\x01\x03\x03\x04",
-                                                  b"\x01\x03\x03\x05",
-                                                  Ordering::Less),
+                 (b"\x01\x02\x03\x00", b"\x01\x02\x03", Ordering::Greater),
+                 (b"\x01\x03\x03\x04", b"\x01\x03\x03\x05", Ordering::Less),
 
-                                                 (b"\x01\x02\x03\x04\x05\x06\x07",
-                                                  b"\x01\x02\x03\x04\x05\x06\x07\x08",
-                                                  Ordering::Less),
+                 (b"\x01\x02\x03\x04\x05\x06\x07",
+                  b"\x01\x02\x03\x04\x05\x06\x07\x08",
+                  Ordering::Less),
 
-                                                 (b"\x01\x02\x03\x04\x05\x06\x07\x08\x09",
-                                                  b"\x01\x02\x03\x04\x05\x06\x07\x08",
-                                                  Ordering::Greater),
+                 (b"\x01\x02\x03\x04\x05\x06\x07\x08\x09",
+                  b"\x01\x02\x03\x04\x05\x06\x07\x08",
+                  Ordering::Greater),
 
-                                                 (b"\x01\x02\x03\x04\x05\x06\x07\x08\x00",
-                                                  b"\x01\x02\x03\x04\x05\x06\x07\x08",
-                                                  Ordering::Greater)];
+                 (b"\x01\x02\x03\x04\x05\x06\x07\x08\x00",
+                  b"\x01\x02\x03\x04\x05\x06\x07\x08",
+                  Ordering::Greater)];
 
         for (x, y, ord) in pairs {
             assert_eq!(encode_bytes(x).cmp(&encode_bytes(y)), ord);
