@@ -30,7 +30,7 @@ impl Key {
     }
 
     pub fn raw(&self) -> Result<Vec<u8>, codec::Error> {
-        self.0.as_slice().decode_bytes()
+        self.0.as_slice().decode_bytes(false)
     }
 
     pub fn from_encoded(encoded_key: Vec<u8>) -> Key {
