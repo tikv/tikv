@@ -44,7 +44,7 @@ pub trait PdClient: Send + Sync {
     // It may happen that multi nodes start at same time to try to
     // bootstrap, and only one can success, others will fail
     // and must remove their created local region data themselves.
-    fn bootstrap_cluster(&mut self, stores: metapb::Store, region: metapb::Region) -> Result<()>;
+    fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()>;
 
     // Return whether the cluster is bootstrapped or not.
     // We must use the cluster after bootstrapped, so when the
@@ -53,11 +53,11 @@ pub trait PdClient: Send + Sync {
     fn is_cluster_bootstrapped(&self) -> Result<bool>;
 
     // Allocate a unique positive id.
-    fn alloc_id(&mut self) -> Result<u64>;
+    fn alloc_id(&self) -> Result<u64>;
 
     // When the store starts, or some store information changed, it
     // uses put_store to inform pd.
-    fn put_store(&mut self, store: metapb::Store) -> Result<()>;
+    fn put_store(&self, store: metapb::Store) -> Result<()>;
 
     // We don't need to support region and peer put/delete,
     // because pd knows all region and peers itself.

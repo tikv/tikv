@@ -21,7 +21,6 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util;
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
 
@@ -36,7 +35,7 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    let region = pd_client.rl().get_region(b"").unwrap();
+    let region = pd_client.get_region(b"").unwrap();
 
     let a1 = b"a1";
     cluster.must_put(a1, b"v1");
@@ -49,8 +48,8 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // Split with a2, so a1 must in left, and a3 in right.
     cluster.split_region(region.get_id(), Some(a2.to_vec()));
 
-    let left = pd_client.rl().get_region(a1).unwrap();
-    let right = pd_client.rl().get_region(a3).unwrap();
+    let left = pd_client.get_region(a1).unwrap();
+    let right = pd_client.get_region(a3).unwrap();
 
     assert_eq!(region.get_id(), left.get_id());
     assert_eq!(region.get_start_key(), left.get_start_key());
@@ -120,14 +119,14 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    let region = pd_client.rl().get_region(b"").unwrap();
+    let region = pd_client.get_region(b"").unwrap();
 
     let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
 
     // it should be finished in millis if split.
     thread::sleep(Duration::from_secs(1));
 
-    let target = pd_client.rl().get_region(&last_key).unwrap();
+    let target = pd_client.get_region(&last_key).unwrap();
 
     assert_eq!(region, target);
 
@@ -138,16 +137,15 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     thread::sleep(Duration::from_secs(1));
 
-    let left = pd_client.rl().get_region(b"").unwrap();
-    let right = pd_client.rl().get_region(&max_key).unwrap();
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
 
     assert!(left != right);
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
-    assert_eq!(pd_client.rl().get_region(&max_key).unwrap(), right);
-    assert_eq!(pd_client.rl().get_region(left.get_end_key()).unwrap(),
-               right);
+    assert_eq!(pd_client.get_region(&max_key).unwrap(), right);
+    assert_eq!(pd_client.get_region(left.get_end_key()).unwrap(), right);
 
     let middle_key = left.get_end_key();
     let leader = cluster.leader_of_region(left.get_id()).unwrap();
@@ -195,7 +193,7 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    let region = pd_client.rl().get_region(b"").unwrap();
+    let region = pd_client.get_region(b"").unwrap();
 
     let a1 = b"a1";
     cluster.must_put(a1, b"v1");

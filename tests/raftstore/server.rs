@@ -44,11 +44,11 @@ pub struct ServerCluster {
     sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
 
     msg_id: AtomicUsize,
-    pd_client: Arc<RwLock<TestPdClient>>,
+    pd_client: Arc<TestPdClient>,
 }
 
 impl ServerCluster {
-    pub fn new(pd_client: Arc<RwLock<TestPdClient>>) -> ServerCluster {
+    pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
         ServerCluster {
             senders: HashMap::new(),
             handles: HashMap::new(),
@@ -226,7 +226,7 @@ impl Simulator for ServerCluster {
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(RwLock::new(TestPdClient::new(tx, id)));
+    let pd_client = Arc::new(TestPdClient::new(tx, id));
     let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
     run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)

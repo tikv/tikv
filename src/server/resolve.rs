@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::boxed::{Box, FnBox};
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
 use std::collections::HashMap;
 
 use super::Result;
-use util::{self, HandyRwLock, TryInsertWith};
+use util::{self, TryInsertWith};
 use util::worker::{Runnable, Worker};
 use pd::PdClient;
 
@@ -43,7 +43,7 @@ impl Display for Task {
 }
 
 pub struct Runner<T: PdClient> {
-    pd_client: Arc<RwLock<T>>,
+    pd_client: Arc<T>,
     store_addrs: HashMap<u64, String>,
 }
 
@@ -63,8 +63,7 @@ impl<T: PdClient> Runner<T> {
         // Store address may be changed?
         let pd_client = self.pd_client.clone();
         let s = try!(self.store_addrs.entry(store_id).or_try_insert_with(|| {
-            pd_client.rl()
-                .get_store(store_id)
+            pd_client.get_store(store_id)
                 .and_then(|s| {
                     let addr = s.get_address().to_owned();
                     // In some tests, we use empty address for store first,
@@ -94,7 +93,7 @@ pub struct PdStoreAddrResolver {
 }
 
 impl PdStoreAddrResolver {
-    pub fn new<T>(pd_client: Arc<RwLock<T>>) -> Result<PdStoreAddrResolver>
+    pub fn new<T>(pd_client: Arc<T>) -> Result<PdStoreAddrResolver>
         where T: PdClient + 'static
     {
         let mut r =

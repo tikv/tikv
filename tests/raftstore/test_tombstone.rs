@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use kvproto::raftpb::ConfChangeType;
 use kvproto::raft_serverpb;
-use tikv::util::HandyRwLock;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -59,7 +58,6 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"a3");
 
     let epoch = cluster.pd_client
-        .rl()
         .get_region_by_id(1)
         .unwrap()
         .get_region_epoch()
