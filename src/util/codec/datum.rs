@@ -188,7 +188,7 @@ impl Datum {
             Datum::Bytes(ref bs) => Some(!bs.is_empty() && try!(convert::bytes_to_int(bs)) != 0),
             Datum::Null => None,
             Datum::Dur(d) => Some(!d.is_empty()),
-            Datum::Dec(d) => Some(try!(d.to_f64()) != 0f64),
+            Datum::Dec(d) => Some(try!(d.to_f64()).round() != 0f64),
             _ => return Err(invalid_type!("can't convert {:?} to bool", self)),
         };
         Ok(b)
@@ -648,7 +648,7 @@ mod test {
             (b"2".as_ref().into(), Some(true)),
             (b"abc".as_ref().into(), Some(false)),
             (Duration::parse(b"11:11:11.999999", MAX_FSP).unwrap().into(), Some(true)),
-            (Datum::Dec(Decimal::from_f64(0.1415926).unwrap()), Some(true)),
+            (Datum::Dec(Decimal::from_f64(0.1415926).unwrap()), Some(false)),
             (Datum::Dec(0u64.into()), Some(false)),
         ];
         for (d, b) in tests {

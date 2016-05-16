@@ -190,10 +190,7 @@ impl Decimal {
         let bits_cnt = self.coeff.bits();
 
         // 2 * 2 * 2 ≈ 10
-        let mut number_cnt = bits_cnt / 3;
-        if bits_cnt % 3 > 0 {
-            number_cnt += 1;
-        }
+        let number_cnt = (bits_cnt + 2) / 3;
 
         let basic_size = number::I64_SIZE + bytes::max_encoded_bytes_size(number_cnt);
         if self.is_negative() {
