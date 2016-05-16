@@ -219,7 +219,7 @@ pub trait DatumDecoder: BytesDecoder {
         match flag {
             INT_FLAG => self.decode_i64().map(Datum::I64),
             UINT_FLAG => self.decode_u64().map(Datum::U64),
-            BYTES_FLAG => self.decode_bytes().map(Datum::Bytes),
+            BYTES_FLAG => self.decode_bytes(false).map(Datum::Bytes),
             COMPACT_BYTES_FLAG => self.decode_compact_bytes().map(Datum::Bytes),
             NIL_FLAG => Ok(Datum::Null),
             FLOAT_FLAG => self.decode_f64().map(Datum::F64),
@@ -267,7 +267,7 @@ pub trait DatumEncoder: BytesEncoder {
                 Datum::Bytes(ref bs) => {
                     if comparable {
                         try!(self.write_u8(BYTES_FLAG));
-                        try!(self.encode_bytes(bs));
+                        try!(self.encode_bytes(bs, false));
                     } else {
                         try!(self.write_u8(COMPACT_BYTES_FLAG));
                         try!(self.encode_compact_bytes(bs));

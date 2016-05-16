@@ -35,7 +35,7 @@ impl SplitObserver {
         if !split.has_split_key() {
             return Err("split key is expected!".to_owned());
         }
-        let mut key = match split.get_split_key().decode_bytes() {
+        let mut key = match split.get_split_key().decode_bytes(false) {
             Ok(x) => x,
             Err(_) => return Ok(()),
         };
