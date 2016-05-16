@@ -53,11 +53,11 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"a2", b"v2");
 
     let epoch = cluster.pd_client
-                       .rl()
-                       .get_region_by_id(1)
-                       .unwrap()
-                       .get_region_epoch()
-                       .clone();
+        .rl()
+        .get_region_by_id(1)
+        .unwrap()
+        .get_region_epoch()
+        .clone();
 
     // Conf version must change.
     assert!(epoch.get_conf_ver() > 1);
@@ -105,11 +105,11 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"a2");
 
     let epoch = cluster.pd_client
-                       .rl()
-                       .get_region_by_id(1)
-                       .unwrap()
-                       .get_region_epoch()
-                       .clone();
+        .rl()
+        .get_region_by_id(1)
+        .unwrap()
+        .get_region_epoch()
+        .clone();
     let change_peer = new_admin_request(1,
                                         &epoch,
                                         new_change_peer_cmd(ConfChangeType::RemoveNode,
@@ -320,8 +320,8 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
 
     region = pd_client.rl().get_region_by_id(region_id).unwrap();
     let i = stores.iter()
-                  .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
-                  .unwrap();
+        .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
+        .unwrap();
 
     let peer = new_conf_change_peer(&stores[i], &pd_client);
     let engine = cluster.get_engine(peer.get_store_id());
@@ -385,11 +385,11 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.stop_node(3);
 
     let epoch = cluster.pd_client
-                       .rl()
-                       .get_region_by_id(1)
-                       .unwrap()
-                       .get_region_epoch()
-                       .clone();
+        .rl()
+        .get_region_by_id(1)
+        .unwrap()
+        .get_region_epoch()
+        .clone();
     let mut change_peer = new_admin_request(r1,
                                             &epoch,
                                             new_change_peer_cmd(ConfChangeType::RemoveNode,

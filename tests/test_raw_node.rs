@@ -100,7 +100,7 @@ fn test_raw_node_step() {
                 MessageType::MsgHup,
                 MessageType::MsgUnreachable,
                 MessageType::MsgSnapStatus]
-               .contains(msg_t) {
+            .contains(msg_t) {
             assert_eq!(res, Err(Error::StepLocalMsg));
         }
     }
