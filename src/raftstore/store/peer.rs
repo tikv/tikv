@@ -705,8 +705,8 @@ impl Peer {
     }
 
     pub fn step_raft(&mut self, m: raftpb::Message) -> Result<()> {
-        try!(self.raft_group.step(m));
         self.inactive = false;
+        try!(self.raft_group.step(m));
         Ok(())
     }
 

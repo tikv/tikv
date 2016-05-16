@@ -119,8 +119,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         peer: peer.clone(),
                         exist: exist,
                     }) {
-                        warn!("failed to send dead peer check result of {:?}: {}", peer, e)
-                    }
+                    warn!("failed to send dead peer check result of {:?}: {}", peer, e)
+                }
                 Ok(())
             }
         };

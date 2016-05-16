@@ -435,3 +435,47 @@ fn test_server_after_remove_itself() {
     let mut cluster = new_server_cluster(0, count);
     test_after_remove_itself(&mut cluster);
 }
+
+fn test_remove_dead_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+    // fasten dead peer check
+    cluster.cfg.store_cfg.dead_peer_check_tick_interval = 500;
+
+    let r1 = cluster.bootstrap_conf_change();
+    cluster.start();
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+
+    let s1 = (1..3).collect();
+    let s2 = (3..4).collect();
+    cluster.partition(Arc::new(s1), Arc::new(s2));
+    cluster.must_put(b"k2", b"v2");
+
+    // node 3 will miss the conf change command and become a dead peer
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(3, 3));
+    cluster.must_put(b"k3", b"v3");
+
+    // wait for dead peer check ticker
+    sleep_ms(1000);
+
+    // check dead peer (3, 3) is removed
+    let peer = new_peer(3, 3);
+    let find_leader = new_status_request(r1, peer, new_region_leader_cmd());
+    let resp = cluster.call_command(find_leader, Duration::from_secs(3));
+    assert!(resp.unwrap().get_header().get_error().has_region_not_found());
+}
+
+#[test]
+fn test_server_remove_dead_peer() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    test_remove_dead_peer(&mut cluster);
+}
+
+#[test]
+fn test_node_remove_dead_peer() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    test_remove_dead_peer(&mut cluster);
+}

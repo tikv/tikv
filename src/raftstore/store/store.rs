@@ -367,6 +367,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             peer: metapb::Peer) {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
+
             warn!("destroy peer {:?} for region {}", peer, region_id);
             // The remove peer is in the same store.
             // TODO: should we check None here?
@@ -381,10 +382,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                        e);
             } else {
                 if self.region_ranges.remove(&end_key).is_none() {
-                    panic!("Remove region, peer {:?}, region {} in store {}",
-                           peer,
-                           region_id,
-                           self.store_id());
+                    warn!("Remove region, peer {:?}, region {} in store {}",
+                          peer,
+                          region_id,
+                          self.store_id());
 
                 }
             }
@@ -709,11 +710,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.set_inactive();
         }
 
-        self.register_replica_check_tick(event_loop);
+        self.register_dead_peer_check_tick(event_loop);
     }
 
     fn on_dead_peer_check_result(&mut self, region_id: u64, peer: metapb::Peer, exist: bool) {
         if !exist {
+            info!("remove dead peer: {:?}", peer);
             self.on_ready_change_peer(region_id, ConfChangeType::RemoveNode, peer);
         }
     }
