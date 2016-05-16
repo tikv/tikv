@@ -283,12 +283,12 @@ impl Network {
                 // hups never go over the network, so don't drop them but panic
                 assert!(m.get_msg_type() != MessageType::MsgHup, "unexpected msgHup");
                 let perc = self.dropm
-                               .get(&Connem {
-                                   from: m.get_from(),
-                                   to: m.get_to(),
-                               })
-                               .cloned()
-                               .unwrap_or(0f64);
+                    .get(&Connem {
+                        from: m.get_from(),
+                        to: m.get_to(),
+                    })
+                    .cloned()
+                    .unwrap_or(0f64);
                 rand::random::<f64>() >= perc
             })
             .collect()
@@ -597,8 +597,8 @@ fn test_log_replicatioin() {
             let mut ents = next_ents(x, &network.storage[j]);
             let ents: Vec<Entry> = ents.drain(..).filter(|e| e.has_data()).collect();
             for (k, m) in msgs.iter()
-                              .filter(|m| m.get_msg_type() == MessageType::MsgPropose)
-                              .enumerate() {
+                .filter(|m| m.get_msg_type() == MessageType::MsgPropose)
+                .enumerate() {
                 if ents[k].get_data() != m.get_entries()[0].get_data() {
                     panic!("#{}.{}: data = {:?}, want {:?}",
                            i,
@@ -786,10 +786,8 @@ fn test_old_messages() {
     // commit a new entry
     tt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
 
-    let ents = vec![empty_entry(1, 1),
-                    empty_entry(2, 2),
-                    empty_entry(3, 3),
-                    new_entry(3, 4, SOME_DATA)];
+    let ents =
+        vec![empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3), new_entry(3, 4, SOME_DATA)];
     let ilog = new_raft_log(ents, 5, 4);
     let base = ltoa(&ilog);
     for (id, p) in &tt.peers {
@@ -974,8 +972,8 @@ fn test_handle_msg_append() {
         m.set_commit(commit);
         if let Some(ets) = ents {
             m.set_entries(RepeatedField::from_vec(ets.iter()
-                                                     .map(|&(i, t)| empty_entry(t, i))
-                                                     .collect()));
+                .map(|&(i, t)| empty_entry(t, i))
+                .collect()));
         }
         m
     };
@@ -1045,8 +1043,8 @@ fn test_handle_heartbeat() {
     for (i, (m, w_commit)) in tests.drain(..).enumerate() {
         let store = new_storage();
         store.wl()
-             .append(&[empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)])
-             .expect("");
+            .append(&[empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)])
+            .expect("");
         let mut sm = new_test_raft(1, vec![1, 2], 5, 1, store);
         sm.become_follower(2, 2);
         sm.raft_log.commit_to(commit);
@@ -1074,8 +1072,8 @@ fn test_handle_heartbeat() {
 fn test_handle_heartbeat_resp() {
     let store = new_storage();
     store.wl()
-         .append(&[empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)])
-         .expect("");
+        .append(&[empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)])
+        .expect("");
     let mut sm = new_test_raft(1, vec![1, 2], 5, 1, store);
     sm.become_candidate();
     sm.become_leader();
@@ -1361,7 +1359,7 @@ fn test_leader_append_response() {
     ];
 
     for (i, (index, reject, wmatch, wnext, wmsg_num, windex, wcommitted)) in tests.drain(..)
-                                                                                  .enumerate() {
+        .enumerate() {
         // sm term is 1 after it becomes the leader.
         // thus the last log term must be 1 to be committed.
         let mut sm = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());

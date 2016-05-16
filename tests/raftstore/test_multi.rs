@@ -51,9 +51,8 @@ fn test_multi_with_transport_strategy<T: Simulator>(cluster: &mut Cluster<T>,
     cluster.must_delete(key);
     assert_eq!(cluster.get(key), None);
 
-    let check_res = cluster.check_quorum(|engine| {
-        engine.get_value(&keys::data_key(key)).unwrap().is_none()
-    });
+    let check_res =
+        cluster.check_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
     assert!(check_res);
 
     // TODO add stale epoch test cases.
