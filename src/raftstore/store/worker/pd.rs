@@ -11,13 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 
 use kvproto::metapb;
 use kvproto::raftpb;
 
-use util::HandyRwLock;
 use util::worker::Runnable;
 use util::escape;
 use pd::PdClient;
@@ -58,11 +57,11 @@ impl Display for Task {
 }
 
 pub struct Runner<T: PdClient> {
-    pd_client: Arc<RwLock<T>>,
+    pd_client: Arc<T>,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(pd_client: Arc<RwLock<T>>) -> Runner<T> {
+    pub fn new(pd_client: Arc<T>) -> Runner<T> {
         Runner { pd_client: pd_client }
     }
 }
@@ -74,14 +73,14 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         let res = match task {
             Task::AskChangePeer { region, peer, .. } => {
                 // TODO: We may add change_type in pd protocol later.
-                self.pd_client.rl().ask_change_peer(region, peer)
+                self.pd_client.ask_change_peer(region, peer)
             }
             Task::AskSplit { region, split_key, peer } => {
-                self.pd_client.rl().ask_split(region, &split_key, peer)
+                self.pd_client.ask_split(region, &split_key, peer)
             }
             Task::Heartbeat { store } => {
                 // Now we use put store protocol for heartbeat.
-                self.pd_client.wl().put_store(store)
+                self.pd_client.put_store(store)
             }
         };
 

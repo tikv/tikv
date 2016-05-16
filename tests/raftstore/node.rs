@@ -58,13 +58,13 @@ type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 pub struct NodeCluster {
     cluster_id: u64,
     trans: Arc<RwLock<ChannelTransport>>,
-    pd_client: Arc<RwLock<TestPdClient>>,
+    pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, Arc<RwLock<SimulateChannelTransport>>>,
 }
 
 impl NodeCluster {
-    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<TestPdClient>>) -> NodeCluster {
+    pub fn new(cluster_id: u64, pd_client: Arc<TestPdClient>) -> NodeCluster {
         NodeCluster {
             cluster_id: cluster_id,
             trans: ChannelTransport::new(),
@@ -134,7 +134,7 @@ impl Simulator for NodeCluster {
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(RwLock::new(TestPdClient::new(tx, id)));
+    let pd_client = Arc::new(TestPdClient::new(tx, id));
     let sim = Arc::new(RwLock::new(NodeCluster::new(id, pd_client.clone())));
     run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)

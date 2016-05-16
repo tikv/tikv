@@ -27,7 +27,7 @@ use super::pd::TestPdClient;
 use super::cluster::Simulator;
 use super::util::*;
 
-pub fn run_ask_loop<T>(pd_client: Arc<RwLock<TestPdClient>>,
+pub fn run_ask_loop<T>(pd_client: Arc<TestPdClient>,
                        sim: Arc<RwLock<T>>,
                        rx: mpsc::Receiver<pdpb::Request>)
     where T: Simulator + Send + Sync + 'static
@@ -57,7 +57,7 @@ pub fn run_ask_loop<T>(pd_client: Arc<RwLock<TestPdClient>>,
 }
 
 struct AskHandler<T: Simulator> {
-    pd_client: Arc<RwLock<TestPdClient>>,
+    pd_client: Arc<TestPdClient>,
     sim: Arc<RwLock<T>>,
 }
 
@@ -68,11 +68,10 @@ impl<T: Simulator> AskHandler<T> {
         // because region may change at this point, we should use
         // latest region info instead.
         let region = self.pd_client
-            .rl()
             .get_region_by_id(region.get_id())
             .unwrap();
 
-        let meta = self.pd_client.rl().get_cluster_config().unwrap();
+        let meta = self.pd_client.get_cluster_config().unwrap();
         let max_peer_number = meta.get_max_peer_number() as usize;
         let peer_number = region.get_peers().len();
         if max_peer_number == peer_number {
@@ -88,7 +87,7 @@ impl<T: Simulator> AskHandler<T> {
             (ConfChangeType::RemoveNode, region.get_peers()[pos].clone())
         } else {
             // Choose first store which all peers are not in.
-            let stores = self.pd_client.rl().get_stores().unwrap();
+            let stores = self.pd_client.get_stores().unwrap();
             let pos = stores.iter().position(|store| {
                 let store_id = store.get_id();
                 region.get_peers().iter().all(|x| x.get_store_id() != store_id)
@@ -100,7 +99,7 @@ impl<T: Simulator> AskHandler<T> {
             }
 
             let store = &stores[pos.unwrap()];
-            let peer_id = self.pd_client.wl().alloc_id().unwrap();
+            let peer_id = self.pd_client.alloc_id().unwrap();
             let peer = new_peer(store.get_id(), peer_id);
             (ConfChangeType::AddNode, peer)
         };
@@ -114,7 +113,7 @@ impl<T: Simulator> AskHandler<T> {
         }
         let resp = resp.unwrap();
         let region = resp.get_admin_response().get_change_peer().get_region();
-        self.pd_client.wl().change_peer(region.clone()).unwrap();
+        self.pd_client.change_peer(region.clone()).unwrap();
     }
 
     fn call_command(&self, mut req: RaftCmdRequest, leader: Peer) -> Option<RaftCmdResponse> {
@@ -135,7 +134,6 @@ impl<T: Simulator> AskHandler<T> {
         let leader = req.get_ask_split().get_leader();
         let split_key = req.get_ask_split().get_split_key().to_vec();
         let region = self.pd_client
-            .rl()
             .get_region_by_id(region.get_id())
             .unwrap();
         if &*split_key <= region.get_start_key() ||
@@ -146,10 +144,10 @@ impl<T: Simulator> AskHandler<T> {
             return;
         }
 
-        let new_region_id = self.pd_client.wl().alloc_id().unwrap();
+        let new_region_id = self.pd_client.alloc_id().unwrap();
         let mut peer_ids: Vec<u64> = vec![];
         for _ in 0..region.get_peers().len() {
-            let peer_id = self.pd_client.wl().alloc_id().unwrap();
+            let peer_id = self.pd_client.alloc_id().unwrap();
             peer_ids.push(peer_id);
         }
 
@@ -165,6 +163,6 @@ impl<T: Simulator> AskHandler<T> {
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
 
-        self.pd_client.wl().split_region(left.clone(), right.clone()).unwrap();
+        self.pd_client.split_region(left.clone(), right.clone()).unwrap();
     }
 }
