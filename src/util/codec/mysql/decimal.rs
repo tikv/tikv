@@ -463,6 +463,26 @@ mod test {
     }
 
     #[test]
+    fn test_decimal_parse() {
+        let cases = vec![
+            ("1.21", 1.21),
+            (".21", 0.21),
+            ("1.00", 1.0),
+            ("-0.00", 0f64),
+            ("-2.010", -2.01),
+            ("12345", 12345f64),
+            ("-12345", -12345f64),
+            ("-3.", -3f64),
+            ("3.", 3f64),
+        ];
+
+        for (s, f) in cases {
+            let d = Decimal::from_str(s).unwrap();
+            assert_f64_eq!(s, d.to_f64().unwrap(), f);
+        }
+    }
+
+    #[test]
     fn test_decimal_codec() {
         let cases = vec![
             123400f64, 1234f64, 12.34, 0.1234, 0.01234, -0.1234,
