@@ -16,6 +16,7 @@ use std::fmt::{self, Formatter, Display};
 
 use kvproto::metapb;
 use kvproto::raftpb;
+use raftstore::store::{SendCh, Msg};
 
 use util::HandyRwLock;
 use util::worker::Runnable;
@@ -37,7 +38,8 @@ pub enum Task {
     Heartbeat {
         store: metapb::Store,
     },
-    GetRegion {
+    DeadPeerCheck {
+        peer: metapb::Peer,
         region: metapb::Region,
     },
 }
@@ -56,20 +58,22 @@ impl Display for Task {
                        escape(&split_key))
             }
             Task::Heartbeat { ref store } => write!(f, "heartbeat for store {}", store.get_id()),
+            Task::DeadPeerCheck { ref peer, .. } => {
+                write!(f, "dead peer check for {}", peer.get_id())
+            }
         }
     }
 }
 
 pub struct Runner<T: PdClient> {
     ch: SendCh,
-    cluster_id: u64,
     pd_client: Arc<RwLock<T>>,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<T>>, ch: SendCh) -> Runner<T> {
+    pub fn new(ch: SendCh, pd_client: Arc<RwLock<T>>) -> Runner<T> {
         Runner {
-            cluster_id: cluster_id,
+            ch: ch,
             pd_client: pd_client,
         }
     }
@@ -82,17 +86,42 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         let res = match task {
             Task::AskChangePeer { region, peer, .. } => {
                 // TODO: We may add change_type in pd protocol later.
-                self.pd_client.rl().ask_change_peer(self.cluster_id, region, peer)
+                self.pd_client.rl().ask_change_peer(region, peer)
             }
             Task::AskSplit { region, split_key, peer } => {
-                self.pd_client.rl().ask_split(self.cluster_id, region, &split_key, peer)
+                self.pd_client.rl().ask_split(region, &split_key, peer)
             }
             Task::Heartbeat { store } => {
                 // Now we use put store protocol for heartbeat.
-                self.pd_client.wl().put_store(self.cluster_id, store)
+                self.pd_client.wl().put_store(store)
             }
-            Task::GetRegion { region } => {
-                self.pd_client.wl().get_region(self.cluster_id, region.get_start_key())
+            Task::DeadPeerCheck { peer, region } => {
+                let result = self.pd_client.rl().get_region(region.get_start_key());
+                if result.is_err() {
+                    return;
+                }
+                let region_pd = result.unwrap();
+                // if the region id of remote do not equal to local, it means region
+                // has already splited and local peer don't know, this case it's also
+                // a dead peer
+                let mut exist = false;
+                if region_pd.get_id() == region.get_id() {
+                    for p in region_pd.get_peers() {
+                        if *p == peer {
+                            exist = true;
+                            break;
+                        }
+                    }
+                }
+                if let Err(e) = self.ch
+                    .send(Msg::DeadPeerCheckResult {
+                        region_id: region.get_id(),
+                        peer: peer.clone(),
+                        exist: exist,
+                    }) {
+                        warn!("failed to send dead peer check result of {:?}: {}", peer, e)
+                    }
+                Ok(())
             }
         };
 

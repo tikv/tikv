@@ -59,13 +59,13 @@ fn get_string_value<F>(short: &str,
     where F: Fn(&toml::Value) -> Option<String>
 {
     matches.opt_str(short)
-           .or_else(|| {
-               config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                   info!("malformed or missing {}, use default", long);
-                   default
-               })
-           })
-           .expect(&format!("please specify {}", long))
+        .or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("malformed or missing {}, use default", long);
+                default
+            })
+        })
+        .expect(&format!("please specify {}", long))
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
@@ -154,7 +154,7 @@ fn run_local_server(listener: TcpListener, store: Storage) {
                               store,
                               router,
                               MockStoreAddrResolver)
-                      .unwrap();
+        .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
@@ -176,8 +176,8 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                    config,
                                    None,
                                    |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
-    let resolver = PdStoreAddrResolver::new(cluster_id, pd_client.clone()).unwrap();
+    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr, cluster_id).unwrap()));
+    let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let (store, raft_router) = build_raftkv(matches,
                                             config,

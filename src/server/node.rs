@@ -87,9 +87,9 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         let bootstrapped = try!(self.pd_client
-                                    .read()
-                                    .unwrap()
-                                    .is_cluster_bootstrapped(self.cluster_id));
+            .read()
+            .unwrap()
+            .is_cluster_bootstrapped());
         let mut store_id = try!(self.check_store(&engine));
         if store_id == INVALID_ID {
             store_id = try!(self.bootstrap_store(&engine));
@@ -112,9 +112,9 @@ impl<C> Node<C>
         // inform pd.
         try!(self.start_store(event_loop, store_id, engine, trans));
         try!(self.pd_client
-                 .write()
-                 .unwrap()
-                 .put_store(self.cluster_id, self.store.clone()));
+            .write()
+            .unwrap()
+            .put_store(self.store.clone()));
         Ok(())
     }
 
@@ -154,7 +154,7 @@ impl<C> Node<C>
     }
 
     fn alloc_id(&self) -> Result<u64> {
-        let id = try!(self.pd_client.wl().alloc_id(self.cluster_id));
+        let id = try!(self.pd_client.wl().alloc_id());
         Ok(id)
     }
 
@@ -184,7 +184,7 @@ impl<C> Node<C>
 
     fn bootstrap_cluster(&mut self, engine: &DB, region: metapb::Region) -> Result<()> {
         let region_id = region.get_id();
-        match self.pd_client.wl().bootstrap_cluster(self.cluster_id, self.store.clone(), region) {
+        match self.pd_client.wl().bootstrap_cluster(self.store.clone(), region) {
             Err(PdError::ClusterBootstrapped(_)) => {
                 error!("cluster {} is already bootstrapped", self.cluster_id);
                 try!(store::clear_region(engine, region_id));
@@ -208,7 +208,7 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         info!("start raft store {} thread", store_id);
-        let meta = try!(self.pd_client.rl().get_cluster_config(self.cluster_id));
+        let meta = try!(self.pd_client.rl().get_cluster_config());
 
         if self.store_handle.is_some() {
             return Err(box_err!("{} is already started", store_id));

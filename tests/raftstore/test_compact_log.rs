@@ -33,8 +33,8 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for (&id, engine) in &cluster.engines {
         let state: RaftTruncatedState = engine.get_msg(&keys::raft_truncated_state_key(1))
-                                              .unwrap()
-                                              .unwrap_or_default();
+            .unwrap()
+            .unwrap_or_default();
         before_states.insert(id, state);
     }
 
@@ -53,8 +53,8 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
     for (&id, engine) in &cluster.engines {
         let after_state: RaftTruncatedState = engine.get_msg(&keys::raft_truncated_state_key(1))
-                                                    .unwrap()
-                                                    .unwrap_or_default();
+            .unwrap()
+            .unwrap_or_default();
 
         let before_state = before_states.get(&id).unwrap();
         let idx = after_state.get_index();
@@ -79,8 +79,8 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for (&id, engine) in &cluster.engines {
         let state: RaftTruncatedState = engine.get_msg(&keys::raft_truncated_state_key(1))
-                                              .unwrap()
-                                              .unwrap_or_default();
+            .unwrap()
+            .unwrap_or_default();
         before_states.insert(id, state);
     }
 
@@ -102,8 +102,8 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     // limit has not reached, should not gc.
     for (&id, engine) in &cluster.engines {
         let after_state: RaftTruncatedState = engine.get_msg(&keys::raft_truncated_state_key(1))
-                                                    .unwrap()
-                                                    .unwrap_or_default();
+            .unwrap()
+            .unwrap_or_default();
 
         let before_state = before_states.get(&id).unwrap();
         let idx = after_state.get_index();
@@ -126,8 +126,8 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
             continue;
         }
         let after_state: RaftTruncatedState = engine.get_msg(&keys::raft_truncated_state_key(1))
-                                                    .unwrap()
-                                                    .unwrap_or_default();
+            .unwrap()
+            .unwrap_or_default();
 
         let before_state = before_states.get(&id).unwrap();
         let idx = after_state.get_index();

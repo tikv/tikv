@@ -59,11 +59,11 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"a3");
 
     let epoch = cluster.pd_client
-                       .rl()
-                       .get_region_by_id(cluster.id(), 1)
-                       .unwrap()
-                       .get_region_epoch()
-                       .clone();
+        .rl()
+        .get_region_by_id(1)
+        .unwrap()
+        .get_region_epoch()
+        .clone();
 
     // Send a stale raft message to peer (2, 2, 2)
     let mut raft_msg = raft_serverpb::RaftMessage::new();

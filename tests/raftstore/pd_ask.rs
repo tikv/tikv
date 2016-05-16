@@ -63,17 +63,16 @@ struct AskHandler<T: Simulator> {
 
 impl<T: Simulator> AskHandler<T> {
     fn handle_change_peer(&mut self, req: pdpb::Request) {
-        let cluster_id = req.get_header().get_cluster_id();
         let region = req.get_ask_change_peer().get_region();
         let leader = req.get_ask_change_peer().get_leader();
         // because region may change at this point, we should use
         // latest region info instead.
         let region = self.pd_client
-                         .rl()
-                         .get_region_by_id(cluster_id, region.get_id())
-                         .unwrap();
+            .rl()
+            .get_region_by_id(region.get_id())
+            .unwrap();
 
-        let meta = self.pd_client.rl().get_cluster_config(cluster_id).unwrap();
+        let meta = self.pd_client.rl().get_cluster_config().unwrap();
         let max_peer_number = meta.get_max_peer_number() as usize;
         let peer_number = region.get_peers().len();
         if max_peer_number == peer_number {
@@ -83,13 +82,13 @@ impl<T: Simulator> AskHandler<T> {
         let (conf_change_type, peer) = if max_peer_number < peer_number {
             // Find first follower.
             let pos = region.get_peers()
-                            .iter()
-                            .position(|x| x.get_id() != leader.get_id())
-                            .unwrap();
+                .iter()
+                .position(|x| x.get_id() != leader.get_id())
+                .unwrap();
             (ConfChangeType::RemoveNode, region.get_peers()[pos].clone())
         } else {
             // Choose first store which all peers are not in.
-            let stores = self.pd_client.rl().get_stores(cluster_id).unwrap();
+            let stores = self.pd_client.rl().get_stores().unwrap();
             let pos = stores.iter().position(|store| {
                 let store_id = store.get_id();
                 region.get_peers().iter().all(|x| x.get_store_id() != store_id)
@@ -101,7 +100,7 @@ impl<T: Simulator> AskHandler<T> {
             }
 
             let store = &stores[pos.unwrap()];
-            let peer_id = self.pd_client.wl().alloc_id(0).unwrap();
+            let peer_id = self.pd_client.wl().alloc_id().unwrap();
             let peer = new_peer(store.get_id(), peer_id);
             (ConfChangeType::AddNode, peer)
         };
@@ -115,7 +114,7 @@ impl<T: Simulator> AskHandler<T> {
         }
         let resp = resp.unwrap();
         let region = resp.get_admin_response().get_change_peer().get_region();
-        self.pd_client.wl().change_peer(cluster_id, region.clone()).unwrap();
+        self.pd_client.wl().change_peer(region.clone()).unwrap();
     }
 
     fn call_command(&self, mut req: RaftCmdRequest, leader: Peer) -> Option<RaftCmdResponse> {
@@ -132,14 +131,13 @@ impl<T: Simulator> AskHandler<T> {
     }
 
     fn handle_split(&mut self, req: pdpb::Request) {
-        let cluster_id = req.get_header().get_cluster_id();
         let region = req.get_ask_split().get_region();
         let leader = req.get_ask_split().get_leader();
         let split_key = req.get_ask_split().get_split_key().to_vec();
         let region = self.pd_client
-                         .rl()
-                         .get_region_by_id(cluster_id, region.get_id())
-                         .unwrap();
+            .rl()
+            .get_region_by_id(region.get_id())
+            .unwrap();
         if &*split_key <= region.get_start_key() ||
            (!region.get_end_key().is_empty() && &*split_key >= region.get_end_key()) {
             error!("invalid split key {} for region {:?}",
@@ -148,18 +146,17 @@ impl<T: Simulator> AskHandler<T> {
             return;
         }
 
-        let new_region_id = self.pd_client.wl().alloc_id(0).unwrap();
+        let new_region_id = self.pd_client.wl().alloc_id().unwrap();
         let mut peer_ids: Vec<u64> = vec![];
         for _ in 0..region.get_peers().len() {
-            let peer_id = self.pd_client.wl().alloc_id(0).unwrap();
+            let peer_id = self.pd_client.wl().alloc_id().unwrap();
             peer_ids.push(peer_id);
         }
 
-        let split = new_admin_request(region.get_id(),
-                                      region.get_region_epoch(),
-                                      new_split_region_cmd(Some(split_key),
-                                                           new_region_id,
-                                                           peer_ids));
+        let split =
+            new_admin_request(region.get_id(),
+                              region.get_region_epoch(),
+                              new_split_region_cmd(Some(split_key), new_region_id, peer_ids));
         let resp = self.call_command(split, leader.clone());
         if resp.is_none() {
             return;
@@ -168,6 +165,6 @@ impl<T: Simulator> AskHandler<T> {
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
 
-        self.pd_client.wl().split_region(cluster_id, left.clone(), right.clone()).unwrap();
+        self.pd_client.wl().split_region(left.clone(), right.clone()).unwrap();
     }
 }

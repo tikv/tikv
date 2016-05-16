@@ -328,13 +328,11 @@ mod tests {
             let key_address = make_key(start_key);
             let result = self.scan(Context::new(), key_address, limit, ts).unwrap();
             let result: Vec<Option<KvPair>> = result.into_iter()
-                                                    .map(Result::ok)
-                                                    .collect();
+                .map(Result::ok)
+                .collect();
             let expect: Vec<Option<KvPair>> = expect.into_iter()
-                                                    .map(|x| {
-                                                        x.map(|(k, v)| (k.to_vec(), v.to_vec()))
-                                                    })
-                                                    .collect();
+                .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
+                .collect();
             assert_eq!(result, expect);
         }
 
@@ -346,13 +344,11 @@ mod tests {
             let key_address = make_key(start_key);
             let result = self.reverse_scan(Context::new(), key_address, limit, ts).unwrap();
             let result: Vec<Option<KvPair>> = result.into_iter()
-                                                    .map(Result::ok)
-                                                    .collect();
+                .map(Result::ok)
+                .collect();
             let expect: Vec<Option<KvPair>> = expect.into_iter()
-                                                    .map(|x| {
-                                                        x.map(|(k, v)| (k.to_vec(), v.to_vec()))
-                                                    })
-                                                    .collect();
+                .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
+                .collect();
             assert_eq!(result, expect);
         }
 
@@ -362,7 +358,7 @@ mod tests {
 
         fn prewrite_err(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
             assert!(self.prewrite(Context::new(), mutations, primary.to_vec(), start_ts)
-                        .is_err());
+                .is_err());
         }
 
         fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {

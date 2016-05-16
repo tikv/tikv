@@ -91,6 +91,13 @@ impl fmt::Debug for Msg {
                        to_peer_id,
                        region_id)
             }
+            Msg::DeadPeerCheckResult { ref peer, ref exist, .. } => {
+                if *exist {
+                    write!(fmt, "peer {:?} is not dead", peer)
+                } else {
+                    write!(fmt, "peer {:?} is dead", peer)
+                }
+            }
         }
     }
 }

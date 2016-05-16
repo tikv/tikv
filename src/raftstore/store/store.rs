@@ -152,21 +152,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let engine = self.engine.clone();
         try!(engine.scan(start_key,
                          end_key,
-                         &mut |key, value|{
-                             let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
-                             if suffix != keys::REGION_INFO_SUFFIX {
-                                 return Ok(true);
-                             }
+                         &mut |key, value| {
+            let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_INFO_SUFFIX {
+                return Ok(true);
+            }
 
-                             let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
-                             let peer = try!(Peer::create(self, &region));
+            let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
+            let peer = try!(Peer::create(self, &region));
 
-                             self.region_ranges.insert(enc_end_key(&region), region_id);
-        // No need to check duplicated here, because we use region id as the key
-        // in DB.
-                             self.region_peers.insert(region_id, peer);
-                             Ok(true)
-                         }));
+            self.region_ranges.insert(enc_end_key(&region), region_id);
+            // No need to check duplicated here, because we use region id as the key
+            // in DB.
+            self.region_peers.insert(region_id, peer);
+            Ok(true)
+        }));
 
         Ok(())
     }
@@ -190,7 +190,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         box_try!(self.compact_worker.start(CompactRunner));
 
-        let pd_runner = PdRunner::new(self.cluster_meta.get_id(), self.pd_client.clone());
+        let pd_runner = PdRunner::new(self.sendch.clone(), self.pd_client.clone());
         box_try!(self.pd_worker.start(pd_runner));
 
         try!(event_loop.run(self));
@@ -289,6 +289,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
+        // TODO: we may encounter a message with larger peer id, which
+        // means current peer is stale, then we should remove current peer
 
         if !self.region_peers.contains_key(&region_id) {
             let peer = try!(Peer::replicate(self, region_id, msg.get_region_epoch(), to.get_id()));
@@ -309,9 +311,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             try!(snap_data.merge_from_bytes(snap.get_data()));
             let snap_region = snap_data.get_region();
             if let Some((_, &region_id)) = self.region_ranges
-                                               .range(Excluded(&enc_start_key(snap_region)),
-                                                      Unbounded::<&Key>)
-                                               .next() {
+                .range(Excluded(&enc_start_key(snap_region)), Unbounded::<&Key>)
+                .next() {
                 let exist_region = self.region_peers[&region_id].region();
                 if enc_start_key(&exist_region) < enc_end_key(snap_region) {
                     warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
@@ -433,13 +434,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Insert new regions and validation
                 info!("insert new regions left: {:?}, right:{:?}", left, right);
                 if self.region_ranges
-                       .insert(enc_end_key(&left), left.get_id())
-                       .is_some() {
+                    .insert(enc_end_key(&left), left.get_id())
+                    .is_some() {
                     panic!("region should not exist, {:?}", left);
                 }
                 if self.region_ranges
-                       .insert(enc_end_key(&right), new_region_id)
-                       .is_none() {
+                    .insert(enc_end_key(&right), new_region_id)
+                    .is_none() {
                     panic!("region should exist, {:?}", right);
                 }
                 self.region_peers.insert(new_region_id, new_peer);
@@ -569,12 +570,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             //                  |-----------------threshold------------ |
             //              first_index                         replicated_index
             let replicated_idx = peer.raft_group
-                                     .status()
-                                     .progress
-                                     .values()
-                                     .map(|p| p.matched)
-                                     .min()
-                                     .unwrap();
+                .status()
+                .progress
+                .values()
+                .map(|p| p.matched)
+                .min()
+                .unwrap();
             let applied_idx = peer.storage.rl().applied_index();
             let first_idx = peer.storage.rl().first_index();
             let compact_idx;
@@ -694,9 +695,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_dead_peer_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for peer in self.region_peers.values() {
+        for (_, peer) in &mut self.region_peers {
             if peer.get_inactive() {
-                let task = PdTask::GetRegion { region: peer.region() };
+                let task = PdTask::DeadPeerCheck {
+                    peer: peer.peer.clone(),
+                    region: peer.region(),
+                };
                 if let Err(e) = self.pd_worker.schedule(task) {
                     error!("failed to notify pd: {}", e);
                 }
@@ -801,7 +805,7 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
     event_loop.timeout(tick, Duration::from_millis(delay))
-              .map_err(|e| box_err!("register timer err: {:?}", e))
+        .map_err(|e| box_err!("register timer err: {:?}", e))
 }
 
 fn new_compact_log_request(region_id: u64,
