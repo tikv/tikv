@@ -12,14 +12,13 @@
 // limitations under the License.
 
 use std::time::Duration;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread;
 
 use tikv::raftstore::store::*;
 use kvproto::raftpb::ConfChangeType;
 use kvproto::metapb;
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -53,7 +52,6 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"a2", b"v2");
 
     let epoch = cluster.pd_client
-        .rl()
         .get_region_by_id(1)
         .unwrap()
         .get_region_epoch()
@@ -105,7 +103,6 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"a2");
 
     let epoch = cluster.pd_client
-        .rl()
         .get_region_by_id(1)
         .unwrap()
         .get_region_epoch()
@@ -172,10 +169,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // TODO: add more tests.
 }
 
-fn new_conf_change_peer(store: &metapb::Store,
-                        pd_client: &Arc<RwLock<TestPdClient>>)
-                        -> metapb::Peer {
-    let peer_id = pd_client.wl().alloc_id().unwrap();
+fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) -> metapb::Peer {
+    let peer_id = pd_client.alloc_id().unwrap();
     new_peer(store.get_id(), peer_id)
 }
 
@@ -184,10 +179,10 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();
-    let region = &pd_client.rl().get_region(b"").unwrap();
+    let region = &pd_client.get_region(b"").unwrap();
     let region_id = region.get_id();
 
-    let mut stores = pd_client.rl().get_stores().unwrap();
+    let mut stores = pd_client.get_stores().unwrap();
 
     // Must have only one peer
     assert_eq!(region.get_peers().len(), 1);
@@ -286,10 +281,10 @@ fn test_server_pd_conf_change() {
     test_pd_conf_change(&mut cluster);
 }
 
-fn wait_till_reach_count(pd_client: Arc<RwLock<TestPdClient>>, region_id: u64, c: usize) {
+fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize) {
     let mut replica_count = 0;
     for _ in 0..1000 {
-        let region = pd_client.rl().get_region_by_id(region_id).unwrap();
+        let region = pd_client.get_region_by_id(region_id).unwrap();
         replica_count = region.get_peers().len();
         if replica_count == c {
             return;
@@ -306,10 +301,10 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();
-    let mut region = pd_client.rl().get_region(b"").unwrap();
+    let mut region = pd_client.get_region(b"").unwrap();
     let region_id = region.get_id();
 
-    let stores = pd_client.rl().get_stores().unwrap();
+    let stores = pd_client.get_stores().unwrap();
 
     // default replica is 5.
     wait_till_reach_count(pd_client.clone(), region_id, 5);
@@ -318,7 +313,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    region = pd_client.rl().get_region_by_id(region_id).unwrap();
+    region = pd_client.get_region_by_id(region_id).unwrap();
     let i = stores.iter()
         .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
         .unwrap();
@@ -333,7 +328,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     // it should remove extra replica.
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 
-    region = pd_client.rl().get_region_by_id(region_id).unwrap();
+    region = pd_client.get_region_by_id(region_id).unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
 
     cluster.change_peer(region_id, ConfChangeType::RemoveNode, peer);
@@ -385,7 +380,6 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.stop_node(3);
 
     let epoch = cluster.pd_client
-        .rl()
         .get_region_by_id(1)
         .unwrap()
         .get_region_epoch()
@@ -414,7 +408,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let detail = cluster.region_detail(r1, 2);
 
-    cluster.pd_client.wl().change_peer(detail.get_region().clone()).unwrap();
+    cluster.pd_client.change_peer(detail.get_region().clone()).unwrap();
 
     cluster.reset_leader_of_region(r1);
     cluster.must_put(b"a3", b"v3");

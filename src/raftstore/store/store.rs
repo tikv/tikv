@@ -73,7 +73,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     stopped: Arc<RwLock<bool>>,
 
     trans: Arc<RwLock<T>>,
-    pd_client: Arc<RwLock<C>>,
+    pd_client: Arc<C>,
 
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
 }
@@ -96,7 +96,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                cfg: Config,
                engine: Arc<DB>,
                trans: Arc<RwLock<T>>,
-               pd_client: Arc<RwLock<C>>)
+               pd_client: Arc<C>)
                -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());

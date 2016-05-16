@@ -16,7 +16,7 @@ use kvproto::{metapb, pdpb};
 use super::{Error, Result, RpcClient};
 
 impl super::PdClient for RpcClient {
-    fn bootstrap_cluster(&mut self, store: metapb::Store, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
         let mut bootstrap = pdpb::BootstrapRequest::new();
         bootstrap.set_store(store);
         bootstrap.set_region(region);
@@ -38,7 +38,7 @@ impl super::PdClient for RpcClient {
         Ok(resp.get_is_bootstrapped().get_bootstrapped())
     }
 
-    fn alloc_id(&mut self) -> Result<u64> {
+    fn alloc_id(&self) -> Result<u64> {
         let mut req = self.new_request(pdpb::CommandType::AllocId);
         req.set_alloc_id(pdpb::AllocIdRequest::new());
 
@@ -47,7 +47,7 @@ impl super::PdClient for RpcClient {
         Ok(resp.get_alloc_id().get_id())
     }
 
-    fn put_store(&mut self, store: metapb::Store) -> Result<()> {
+    fn put_store(&self, store: metapb::Store) -> Result<()> {
         let mut put_store = pdpb::PutStoreRequest::new();
         put_store.set_store(store);
 
@@ -66,18 +66,18 @@ impl super::PdClient for RpcClient {
         let mut req = self.new_request(pdpb::CommandType::GetStore);
         req.set_get_store(get_store);
 
-        let resp = try!(self.send(&req));
+        let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        Ok(resp.get_get_store().get_store().clone())
+        Ok(resp.take_get_store().take_store())
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
         let mut req = self.new_request(pdpb::CommandType::GetClusterConfig);
         req.set_get_cluster_config(pdpb::GetClusterConfigRequest::new());
 
-        let resp = try!(self.send(&req));
+        let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        Ok(resp.get_get_cluster_config().get_cluster().clone())
+        Ok(resp.take_get_cluster_config().take_cluster())
     }
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
@@ -87,9 +87,9 @@ impl super::PdClient for RpcClient {
         let mut req = self.new_request(pdpb::CommandType::GetRegion);
         req.set_get_region(get_region);
 
-        let resp = try!(self.send(&req));
+        let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        Ok(resp.get_get_region().get_region().clone())
+        Ok(resp.take_get_region().take_region())
     }
 
     fn ask_change_peer(&self, region: metapb::Region, leader: metapb::Peer) -> Result<()> {

@@ -16,12 +16,14 @@
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Mutex, mpsc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kvproto::metapb;
 use kvproto::pdpb;
 use tikv::pd::{PdClient, Result, Error, Key};
 use tikv::raftstore::store::keys::{enc_end_key, data_key};
+use tikv::util::HandyRwLock;
 
 #[derive(Default)]
 struct Store {
@@ -152,98 +154,89 @@ impl Cluster {
 }
 
 pub struct TestPdClient {
-    base_id: u64,
+    base_id: AtomicUsize,
 
     ask_tx: Mutex<mpsc::Sender<pdpb::Request>>,
     cluster_id: u64,
 
-    cluster: Option<Cluster>,
+    cluster: RwLock<Option<Cluster>>,
 }
 
 impl TestPdClient {
     pub fn new(tx: mpsc::Sender<pdpb::Request>, cluster_id: u64) -> TestPdClient {
         TestPdClient {
-            base_id: 1000,
+            base_id: AtomicUsize::new(1000),
             ask_tx: Mutex::new(tx),
             cluster_id: cluster_id,
-            cluster: None,
+            cluster: RwLock::new(None),
         }
     }
 
-    fn get_cluster(&self) -> Result<&Cluster> {
-        self.cluster.as_ref().ok_or_else(|| Error::ClusterNotBootstrapped(self.cluster_id))
+    pub fn change_peer(&self, region: metapb::Region) -> Result<()> {
+        let mut cluster = self.cluster.wl();
+        cluster.as_mut().unwrap().change_peer(region)
     }
 
-    fn get_mut_cluster(&mut self) -> Result<&mut Cluster> {
-        let cluster_id = self.cluster_id;
-        self.cluster.as_mut().ok_or_else(|| Error::ClusterNotBootstrapped(cluster_id))
-    }
-
-    pub fn change_peer(&mut self, region: metapb::Region) -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster());
-        cluster.change_peer(region)
-    }
-
-    pub fn split_region(&mut self, left: metapb::Region, right: metapb::Region) -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster());
-        cluster.split_region(left, right)
+    pub fn split_region(&self, left: metapb::Region, right: metapb::Region) -> Result<()> {
+        let mut cluster = self.cluster.wl();
+        cluster.as_mut().unwrap().split_region(left, right)
     }
 
     pub fn get_stores(&self) -> Result<Vec<metapb::Store>> {
-        let cluster = try!(self.get_cluster());
-        Ok(cluster.get_stores())
+        let cluster = self.cluster.rl();
+        Ok(cluster.as_ref().unwrap().get_stores())
     }
 
     pub fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
-        let cluster = try!(self.get_cluster());
-        cluster.get_region_by_id(region_id)
+        let cluster = self.cluster.rl();
+        cluster.as_ref().unwrap().get_region_by_id(region_id)
     }
 }
 
 impl PdClient for TestPdClient {
-    fn bootstrap_cluster(&mut self, store: metapb::Store, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
         if self.is_cluster_bootstrapped().unwrap() {
             return Err(Error::ClusterBootstrapped(self.cluster_id));
         }
 
-        self.cluster = Some(Cluster::new(self.cluster_id, store, region));
+        *self.cluster.wl() = Some(Cluster::new(self.cluster_id, store, region));
 
         Ok(())
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
-        Ok(self.cluster.is_some())
+        Ok(self.cluster.rl().is_some())
     }
 
     // We don't care cluster id here, so any value like 0 in tests is ok.
-    fn alloc_id(&mut self) -> Result<u64> {
-        self.base_id += 1;
-        Ok(self.base_id)
+    fn alloc_id(&self) -> Result<u64> {
+        Ok(self.base_id.fetch_add(1, Ordering::Relaxed) as u64)
     }
 
-    fn put_store(&mut self, store: metapb::Store) -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster());
-        cluster.put_store(store)
+    fn put_store(&self, store: metapb::Store) -> Result<()> {
+        let mut cluster = self.cluster.wl();
+        cluster.as_mut().unwrap().put_store(store)
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        let cluster = try!(self.get_cluster());
-        cluster.get_store(store_id)
+        let cluster = self.cluster.rl();
+        cluster.as_ref().unwrap().get_store(store_id)
     }
 
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
-        let cluster = try!(self.get_cluster());
-        cluster.get_region(data_key(key))
+        let cluster = self.cluster.rl();
+        cluster.as_ref().unwrap().get_region(data_key(key))
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
-        let cluster = try!(self.get_cluster());
-        Ok(cluster.meta.clone())
+        let cluster = self.cluster.rl();
+        Ok(cluster.as_ref().unwrap().meta.clone())
     }
 
     fn ask_change_peer(&self, region: metapb::Region, leader: metapb::Peer) -> Result<()> {
-        try!(self.get_cluster());
+        assert!(self.cluster.rl().is_some());
+
         let mut req = pdpb::Request::new();
         req.mut_header().set_cluster_id(self.cluster_id);
         req.set_cmd_type(pdpb::CommandType::AskChangePeer);
@@ -260,7 +253,8 @@ impl PdClient for TestPdClient {
                  split_key: &[u8],
                  leader: metapb::Peer)
                  -> Result<()> {
-        try!(self.get_cluster());
+        assert!(self.cluster.rl().is_some());
+
         let mut req = pdpb::Request::new();
         req.mut_header().set_cluster_id(self.cluster_id);
         req.set_cmd_type(pdpb::CommandType::AskSplit);
