@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn test_meta_split() {
         let mut meta = Meta::new();
-        let mut ts = 1u64..;
+        let mut ts = 1000000u64..;
 
         push_item_n(&mut meta, &mut ts, META_SPLIT_SIZE - 1);
         assert!(meta.split().is_none());

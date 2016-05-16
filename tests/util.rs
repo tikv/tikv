@@ -58,7 +58,7 @@ pub struct TsGenerator {
 
 impl TsGenerator {
     pub fn new() -> TsGenerator {
-        TsGenerator { ts_pool: 1.. }
+        TsGenerator { ts_pool: 1000000.. }
     }
 
     pub fn gen(&mut self) -> u64 {

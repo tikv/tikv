@@ -650,7 +650,7 @@ mod tests {
 
     impl Oracle {
         fn new() -> Oracle {
-            Oracle { ts: AtomicUsize::new(1) }
+            Oracle { ts: AtomicUsize::new(1000000) }
         }
 
         fn get_ts(&self) -> u64 {
