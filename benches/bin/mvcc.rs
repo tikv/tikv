@@ -28,7 +28,7 @@ fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
     let engine = storage::new_engine(dsn).unwrap();
 
     let store = TxnStore::new(Arc::new(engine));
-    let mut ts_generator = 1..;
+    let mut ts_generator = 1000000..;
 
     let mut kvs = KvGenerator::new(100, 1000);
 
