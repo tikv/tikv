@@ -22,7 +22,6 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport, SendCh};
 use super::Result;
-use util::HandyRwLock;
 use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::ServerRaftStoreRouter;
@@ -44,7 +43,7 @@ pub struct Node<C: PdClient + 'static> {
     store_handle: Option<thread::JoinHandle<()>>,
     ch: SendCh,
 
-    pd_client: Arc<RwLock<C>>,
+    pd_client: Arc<C>,
 
     raft_router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
@@ -54,7 +53,7 @@ impl<C> Node<C>
 {
     pub fn new<T>(event_loop: &mut EventLoop<Store<T, C>>,
                   cfg: &Config,
-                  pd_client: Arc<RwLock<C>>)
+                  pd_client: Arc<C>)
                   -> Node<C>
         where T: Transport + 'static
     {
@@ -87,8 +86,6 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         let bootstrapped = try!(self.pd_client
-            .read()
-            .unwrap()
             .is_cluster_bootstrapped());
         let mut store_id = try!(self.check_store(&engine));
         if store_id == INVALID_ID {
@@ -112,8 +109,6 @@ impl<C> Node<C>
         // inform pd.
         try!(self.start_store(event_loop, store_id, engine, trans));
         try!(self.pd_client
-            .write()
-            .unwrap()
             .put_store(self.store.clone()));
         Ok(())
     }
@@ -154,7 +149,7 @@ impl<C> Node<C>
     }
 
     fn alloc_id(&self) -> Result<u64> {
-        let id = try!(self.pd_client.wl().alloc_id());
+        let id = try!(self.pd_client.alloc_id());
         Ok(id)
     }
 
@@ -184,7 +179,7 @@ impl<C> Node<C>
 
     fn bootstrap_cluster(&mut self, engine: &DB, region: metapb::Region) -> Result<()> {
         let region_id = region.get_id();
-        match self.pd_client.wl().bootstrap_cluster(self.store.clone(), region) {
+        match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
             Err(PdError::ClusterBootstrapped(_)) => {
                 error!("cluster {} is already bootstrapped", self.cluster_id);
                 try!(store::clear_region(engine, region_id));
@@ -208,7 +203,7 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         info!("start raft store {} thread", store_id);
-        let meta = try!(self.pd_client.rl().get_cluster_config());
+        let meta = try!(self.pd_client.get_cluster_config());
 
         if self.store_handle.is_some() {
             return Err(box_err!("{} is already started", store_id));
