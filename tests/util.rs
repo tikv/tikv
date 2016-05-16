@@ -13,6 +13,7 @@
 
 use rand::{self, Rng, ThreadRng};
 use std::ops::RangeFrom;
+use tikv::storage::mvcc::TEST_TS_BASE;
 
 /// A random generator of kv.
 /// Every iter should be taken in µs. See also `benches::bench_kv_iter`.
@@ -58,7 +59,7 @@ pub struct TsGenerator {
 
 impl TsGenerator {
     pub fn new() -> TsGenerator {
-        TsGenerator { ts_pool: 1000000.. }
+        TsGenerator { ts_pool: TEST_TS_BASE.. }
     }
 
     pub fn gen(&mut self) -> u64 {
