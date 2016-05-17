@@ -390,8 +390,10 @@ impl<'a> SelectContext<'a> {
                 let key = table::encode_column_key(t_id, h, col_id);
                 let data = try!(self.snap.get(&Key::from_raw(&key)));
                 let value = match data {
-                    None if mysql::has_not_null_flag(col.get_flag() as u64) => Datum::Null,
-                    None => return Err(box_err!("key {} not exists", escape(&key))),
+                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                        return Err(box_err!("key {} not exists", escape(&key)));
+                    }
+                    None => Datum::Null,
                     Some(bs) => box_try!(bs.as_slice().decode_datum()),
                 };
                 self.eval.row.insert(col_id, value);
@@ -428,10 +430,12 @@ impl<'a> SelectContext<'a> {
                     let key = Key::from_raw(&raw_key);
                     match try!(self.snap.get(&key)) {
                         None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                            return Err(box_err!("key {} not exists", escape(&raw_key)));
+                        }
+                        None => {
                             let bs = box_try!(datum::encode_value(&[Datum::Null]));
                             row.mut_data().extend(bs);
                         }
-                        None => return Err(box_err!("key {} not exists", escape(&raw_key))),
                         Some(bs) => row.mut_data().extend(bs),
                     }
                 }
