@@ -117,7 +117,7 @@ impl StoreHandler {
             return Err(box_err!("msg doesn't contain a CmdRollbackRequest"));
         }
         let req = msg.take_cmd_batch_rollback_req();
-        let cb = self.make_cb(StoreHandler::cmd_rollback_done, on_resp);
+        let cb = self.make_cb(StoreHandler::cmd_batch_rollback_done, on_resp);
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
         self.store
             .async_rollback(msg.take_context(), keys, req.get_start_version(), cb)
@@ -240,7 +240,7 @@ impl StoreHandler {
         resp.set_cmd_commit_resp(cmd_commit_resp);
     }
 
-    fn cmd_rollback_done(r: StorageResult<()>, resp: &mut Response) {
+    fn cmd_batch_rollback_done(r: StorageResult<()>, resp: &mut Response) {
         resp.set_field_type(MessageType::CmdBatchRollback);
         let mut cmd_batch_rollback_resp = CmdBatchRollbackResponse::new();
         if let Err(e) = r {
@@ -542,6 +542,23 @@ mod tests {
                               StoreHandler::cmd_cleanup_done);
         assert_eq!(MessageType::CmdCleanup, resp.get_field_type());
         let cmd = resp.get_cmd_cleanup_resp();
+        assert!(cmd.has_error());
+    }
+
+    #[test]
+    fn test_rollback_done_ok() {
+        let resp = build_resp(Ok(()), StoreHandler::cmd_batch_rollback_done);
+        assert_eq!(MessageType::CmdBatchRollback, resp.get_field_type());
+        let cmd = resp.get_cmd_batch_rollback_resp();
+        assert!(!cmd.has_error());
+    }
+
+    #[test]
+    fn test_rollback_done_err() {
+        let resp = build_resp(Err(box_err!("rollback error")),
+                              StoreHandler::cmd_batch_rollback_done);
+        assert_eq!(MessageType::CmdBatchRollback, resp.get_field_type());
+        let cmd = resp.get_cmd_batch_rollback_resp();
         assert!(cmd.has_error());
     }
 
