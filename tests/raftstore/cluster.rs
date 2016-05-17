@@ -31,7 +31,7 @@ use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
-use super::transport_simulate::{Filter, new_partition_filter};
+use super::transport_simulate::*;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -512,9 +512,22 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn reset_transport_hooks(&mut self) {
-        let sim = &self.sim.rl();
-        for node_id in sim.get_node_ids() {
-            sim.hook_transport(node_id, vec![]);
+        for node_id in self.sim.rl().get_node_ids() {
+            self.sim.wl().hook_transport(node_id, vec![]);
+        }
+    }
+
+    pub fn hook_transport_drop_packet(&self, rate: u32) {
+        for node_id in self.sim.rl().get_node_ids() {
+            let filter = new_drop_packet_filter(rate);
+            self.sim.wl().hook_transport(node_id, vec![filter]);
+        }
+    }
+
+    pub fn hook_transport_delay(&self, duration: u64) {
+        for node_id in self.sim.rl().get_node_ids() {
+            let filter = new_delay_filter(duration);
+            self.sim.wl().hook_transport(node_id, vec![filter]);
         }
     }
 }

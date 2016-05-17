@@ -51,6 +51,7 @@ impl Filter for FilterDropPacket {
     }
 }
 
+
 impl Filter for FilterDelay {
     fn before(&self, _: &RaftMessage) -> bool {
         sleep_ms(self.duration);
@@ -68,21 +69,6 @@ pub struct SimulateTransport<T: Transport> {
 
 impl<T: Transport> SimulateTransport<T> {
     pub fn new(trans: Arc<RwLock<T>>) -> SimulateTransport<T> {
-        // let mut filters: Vec<RwLock<Box<Filter>>> = vec![];
-        // for s in strategy {
-        //     match s {
-        //         DropPacket(rate) => {
-        //             filters.push(RwLock::new(box FilterDropPacket {
-        //                 rate: rate,
-        //                 drop: false,
-        //             }));
-        //         }
-        //         Delay(latency) => {
-        //             filters.push(RwLock::new(box FilterDelay { duration: latency }));
-        //         }
-        //     }
-        // }
-
         SimulateTransport {
             filters: vec![],
             trans: trans,
@@ -141,4 +127,15 @@ pub fn new_partition_filter(node_ids: Vec<u64>) -> Box<Filter> {
         node_ids: ids,
         drop: RwLock::new(false),
     })
+}
+
+pub fn new_drop_packet_filter(rate: u32) -> Box<Filter> {
+    Box::new(FilterDropPacket {
+        rate: rate,
+        drop: RwLock::new(false),
+    })
+}
+
+pub fn new_delay_filter(duration: u64) -> Box<Filter> {
+    Box::new(FilterDelay { duration: duration })
 }

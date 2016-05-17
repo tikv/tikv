@@ -15,7 +15,6 @@ use tikv::raftstore::store::*;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
-use super::transport_simulate::Filter;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
@@ -23,10 +22,6 @@ use rand;
 use rand::Rng;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
-    test_multi_hook_transport(cluster, vec![]);
-}
-
-fn test_multi_hook_transport<T: Simulator>(cluster: &mut Cluster<T>, filters: Vec<Box<Filter>>) {
     // init_log();
 
     // test a cluster with five nodes [1, 5], only one region (region 1).
@@ -34,6 +29,10 @@ fn test_multi_hook_transport<T: Simulator>(cluster: &mut Cluster<T>, filters: Ve
     cluster.bootstrap_region().expect("");
     cluster.start();
 
+    test_multi_base_after_bootstrap(cluster);
+}
+
+fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     let (key, value) = (b"a1", b"v1");
 
     cluster.must_put(key, value);
@@ -172,14 +171,20 @@ fn test_multi_node_base() {
 fn test_multi_node_latency() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_hook_transport(&mut cluster, vec![]);
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+    cluster.hook_transport_delay(30);
+    test_multi_base_after_bootstrap(&mut cluster);
 }
 
 #[test]
 fn test_multi_node_drop_packet() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_hook_transport(&mut cluster, vec![]);
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+    cluster.hook_transport_drop_packet(30);
+    test_multi_base_after_bootstrap(&mut cluster);
 }
 
 #[test]
@@ -193,14 +198,20 @@ fn test_multi_server_base() {
 fn test_multi_server_latency() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_hook_transport(&mut cluster, vec![]);
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+    cluster.hook_transport_delay(30);
+    test_multi_base_after_bootstrap(&mut cluster);
 }
 
 #[test]
 fn test_multi_server_drop_packet() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_hook_transport(&mut cluster, vec![]);
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+    cluster.hook_transport_drop_packet(30);
+    test_multi_base_after_bootstrap(&mut cluster);
 }
 
 #[test]
