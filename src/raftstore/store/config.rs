@@ -22,11 +22,10 @@ const RAFT_LOG_GC_INTERVAL: u64 = 5000;
 const RAFT_LOG_GC_THRESHOLD: u64 = 50;
 const RAFT_LOG_GC_LIMIT: u64 = 100000;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
-const REPLICA_CHECK_TICK_INTERVAL: u64 = 4 * 1000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
-const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 60000;
+const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -46,8 +45,6 @@ pub struct Config {
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: u64,
-    /// Interval (ms) to check region whether need to add or remove replica.
-    pub replica_check_tick_interval: u64,
     /// When region [a, b) size meets region_max_size, it will be split
     /// into two region into [a, c), [c, b). And the size of [a, c) will
     /// be region_split_size (or a little bit smaller).
@@ -71,7 +68,6 @@ impl Default for Config {
             raft_log_gc_threshold: RAFT_LOG_GC_THRESHOLD,
             raft_log_gc_limit: RAFT_LOG_GC_LIMIT,
             split_region_check_tick_interval: SPLIT_REGION_CHECK_TICK_INTERVAL,
-            replica_check_tick_interval: REPLICA_CHECK_TICK_INTERVAL,
             region_max_size: REGION_MAX_SIZE,
             region_split_size: REGION_SPLIT_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,

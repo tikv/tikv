@@ -25,7 +25,6 @@ use tikv::raftstore::store::*;
 use super::util::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raftpb::ConfChangeType;
 use kvproto::raft_serverpb::RaftMessage;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
@@ -454,47 +453,6 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
             .get_region_epoch()
             .clone()
-    }
-
-    pub fn change_peer(&mut self,
-                       region_id: u64,
-                       change_type: ConfChangeType,
-                       peer: metapb::Peer) {
-        let epoch = self.get_region_epoch(region_id);
-        let change_peer =
-            new_admin_request(region_id, &epoch, new_change_peer_cmd(change_type, peer));
-        let resp = self.call_command_on_leader(change_peer, Duration::from_secs(3))
-            .unwrap();
-        assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::ChangePeer,
-                format!("{:?}", resp));
-
-        let region = resp.get_admin_response().get_change_peer().get_region();
-        self.pd_client.change_peer(region.clone()).unwrap();
-    }
-
-    pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
-        let new_region_id = self.pd_client.alloc_id().unwrap();
-        let region = self.pd_client.get_region_by_id(region_id).unwrap();
-        let peer_count = region.get_peers().len();
-        let mut peer_ids: Vec<u64> = vec![];
-        for _ in 0..peer_count {
-            let peer_id = self.pd_client.alloc_id().unwrap();
-            peer_ids.push(peer_id);
-        }
-
-        // TODO: use region instead of region_id
-        let split = new_admin_request(region_id,
-                                      region.get_region_epoch(),
-                                      new_split_region_cmd(split_key, new_region_id, peer_ids));
-        let resp = self.call_command_on_leader(split, Duration::from_secs(3)).unwrap();
-
-        assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCmdType::Split);
-
-        let left = resp.get_admin_response().get_split().get_left();
-        let right = resp.get_admin_response().get_split().get_right();
-
-        self.pd_client.split_region(left.clone(), right.clone()).unwrap();
     }
 
     pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {

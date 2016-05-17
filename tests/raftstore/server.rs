@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::thread;
 use std::net::{SocketAddr, TcpStream};
-use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
 use std::io::ErrorKind;
@@ -31,7 +31,6 @@ use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
-use super::pd_ask::run_ask_loop;
 use super::transport_simulate::{Strategy, SimulateTransport, Filter};
 
 type SimulateServerTransport = SimulateTransport<ServerTransport>;
@@ -225,9 +224,7 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(TestPdClient::new(tx, id));
+    let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
-    run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)
 }

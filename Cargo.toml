@@ -51,6 +51,7 @@ git = "https://github.com/carllerche/bytes"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
+branch = "siddontang/refactor-pd"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

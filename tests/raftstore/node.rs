@@ -14,7 +14,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use rocksdb::DB;
@@ -29,7 +29,6 @@ use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use super::pd::TestPdClient;
-use super::pd_ask::run_ask_loop;
 use super::transport_simulate::{Strategy, SimulateTransport, Filter};
 
 pub struct ChannelTransport {
@@ -133,9 +132,7 @@ impl Simulator for NodeCluster {
 }
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
-    let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(TestPdClient::new(tx, id));
+    let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(NodeCluster::new(id, pd_client.clone())));
-    run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)
 }
