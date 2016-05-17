@@ -23,7 +23,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raftpb;
 use tikv::pd::{PdClient, Result, Error, Key};
-use tikv::raftstore::store::util::{find_peer, remove_peer};
+use tikv::raftstore::store::util::find_peer;
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::util::HandyRwLock;
 use super::util::new_peer;
@@ -146,8 +146,8 @@ impl Cluster {
         // For split, we should handle heartbeat carefully.
         // E.g, for region 1 [a, c) -> 1 [a, b) + 2 [b, c).
         // after split, region 1 and 2 will do heartbeat independently.
-        let end_key = enc_end_key(&region);
         let start_key = enc_start_key(&region);
+        let end_key = enc_end_key(&region);
         assert!(end_key > start_key);
 
         let version = region.get_region_epoch().get_version();
@@ -155,8 +155,9 @@ impl Cluster {
 
         let search_key = data_key(region.get_start_key());
         let search_region = self.get_region(search_key).unwrap();
-        let search_end_key = enc_end_key(&search_region);
         let search_start_key = enc_start_key(&search_region);
+        let search_end_key = enc_end_key(&search_region);
+
         let search_version = search_region.get_region_epoch().get_version();
         let search_conf_ver = search_region.get_region_epoch().get_conf_ver();
 
@@ -164,7 +165,6 @@ impl Cluster {
             // we are the same, must check epoch here.
             try!(check_stale_region(&search_region, &region));
         } else if search_start_key > end_key {
-            assert!(!region.get_end_key().is_empty());
             // No range [start, end) in region now, insert directly.
             assert!(self.regions.insert(end_key.clone(), region.clone()).is_none());
             assert!(self.region_id_keys.insert(region.get_id(), end_key.clone()).is_none());
@@ -188,7 +188,7 @@ impl Cluster {
     }
 
     fn handle_heartbeat_conf_ver(&mut self,
-                                 mut region: metapb::Region,
+                                 region: metapb::Region,
                                  leader: metapb::Peer)
                                  -> Result<pdpb::RegionHeartbeatResponse> {
         let conf_ver = region.get_region_epoch().get_conf_ver();
@@ -205,76 +205,64 @@ impl Cluster {
         let mut resp = pdpb::RegionHeartbeatResponse::new();
         let mut change_peer = pdpb::ChangePeer::new();
 
-        if conf_ver > cur_conf_ver || cur_region_peer_len == region_peer_len {
-            // We do the ConfChange already, so must check already entered the final state.
-            // Must have same peers.
-            must_same_peers(&region, &cur_region);
+        if conf_ver > cur_conf_ver {
+            // If ConfVer changed, TiKV has added/removed one peer already.
+            // So pd and TiKV can't have same peer number and can only have
+            // only one different peer.
+            // E.g, we can't meet following cases:
+            // 1) pd is (1, 2, 3), TiKV is (1)
+            // 2) pd is (1), TiKV is (1, 2, 3)
+            // 3) pd is (1, 2), TiKV is (3)
+            // 4) pd id (1), TiKV is (2, 3)
 
-            let max_peer_number = self.meta.get_max_peer_number() as usize;
-            let peer_number = region.get_peers().len();
+            assert!(region_peer_len != cur_region_peer_len);
 
-            if peer_number < max_peer_number {
-                // find the first store which the region has not covered.
-                for store_id in self.stores.keys() {
-                    if region.get_peers().iter().all(|x| x.get_store_id() != *store_id) {
-                        let peer = new_peer(*store_id, self.alloc_id().unwrap());
-                        change_peer.set_change_type(raftpb::ConfChangeType::AddNode);
-                        change_peer.set_peer(peer.clone());
-                        resp.set_change_peer(change_peer);
-                        region.mut_peers().push(peer);
-                        break;
-                    }
-                }
-            } else if peer_number > max_peer_number {
-                // find the first peer which not leader.
-                let pos = region.get_peers()
-                    .iter()
-                    .position(|x| x.get_store_id() != leader.get_store_id())
-                    .unwrap();
-
-                let store_id = region.get_peers()[pos].get_store_id();
-                change_peer.set_change_type(raftpb::ConfChangeType::RemoveNode);
-                change_peer.set_peer(region.get_peers()[pos].clone());
-                resp.set_change_peer(change_peer);
-
-                assert!(remove_peer(&mut region, store_id).is_some());
-            }
-
-        } else if conf_ver == cur_conf_ver {
-            // The region is not the final state in pd, we should step to it first.
-            // We must change state one by one, so we can only add or remove one peer
-            // at same time, and must guarantee to step to next change only after the
-            // TiKV region steps to the state first.
-            // E.g, peers (1), -> peers (1, 2), TiKV must enters (1, 2) first, then
-            // we can step to (1, 2, 3) maybe. So for same ConfVer, we can't meet:
-            // 1) pd is (1, 2, 3) but TiKV is (1)
-            // 2) pd is (1) but TiKV is (1, 2, 3)
-            // 3) pd is (1, 2) but TiKV is (1, 3)
             if cur_region_peer_len > region_peer_len {
-                // must pd is (1, 2) but TiKV is (1)
+                // must pd is (1, 2), TiKV is (1)
                 assert_eq!(cur_region_peer_len - region_peer_len, 1);
                 let peers = different_peers(&cur_region, &region);
                 assert_eq!(peers.len(), 1);
                 assert!(different_peers(&region, &cur_region).is_empty());
-
-                change_peer.set_change_type(raftpb::ConfChangeType::AddNode);
-                change_peer.set_peer(peers[0].clone());
             } else {
-                // must pd is (1) but TiKV is (1, 2)
+                // must pd is (1), TiKV is (1, 2)
                 assert_eq!(region_peer_len - cur_region_peer_len, 1);
                 let peers = different_peers(&region, &cur_region);
                 assert_eq!(peers.len(), 1);
                 assert!(different_peers(&cur_region, &region).is_empty());
-
-                change_peer.set_change_type(raftpb::ConfChangeType::RemoveNode);
-                change_peer.set_peer(peers[0].clone());
             }
 
-            resp.set_change_peer(change_peer);
+            // update the region.
+            assert!(self.regions.insert(end_key, region.clone()).is_some());
         }
 
-        // update the region again.
-        assert!(self.regions.insert(end_key, region).is_some());
+        // TODO: add special rule instead of origin max peer number check,
+        // so that we can do test easily.
+        let max_peer_number = self.meta.get_max_peer_number() as usize;
+        let peer_number = region.get_peers().len();
+
+        if peer_number < max_peer_number {
+            // find the first store which the region has not covered.
+            for store_id in self.stores.keys() {
+                if region.get_peers().iter().all(|x| x.get_store_id() != *store_id) {
+                    let peer = new_peer(*store_id, self.alloc_id().unwrap());
+                    change_peer.set_change_type(raftpb::ConfChangeType::AddNode);
+                    change_peer.set_peer(peer.clone());
+                    resp.set_change_peer(change_peer);
+                    break;
+                }
+            }
+        } else if peer_number > max_peer_number {
+            // find the first peer which not leader.
+            let pos = region.get_peers()
+                .iter()
+                .position(|x| x.get_store_id() != leader.get_store_id())
+                .unwrap();
+
+            change_peer.set_change_type(raftpb::ConfChangeType::RemoveNode);
+            change_peer.set_peer(region.get_peers()[pos].clone());
+            resp.set_change_peer(change_peer);
+
+        }
 
         Ok(resp)
 
