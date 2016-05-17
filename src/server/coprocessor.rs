@@ -33,7 +33,7 @@ use kvproto::errorpb;
 use storage::Key;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
-use util::codec::{Datum, table, datum};
+use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
 use util::{as_slice, escape};
 use util::SlowTimer;
@@ -408,7 +408,14 @@ impl<'a> SelectContext<'a> {
         let handle = box_try!(datum::encode_value(&[Datum::I64(h)]));
         for col in columns {
             if col.get_pk_handle() {
-                row.mut_data().extend(handle.clone());
+                if mysql::has_unsigned_flag(col.get_flag() as u64) {
+                    // PK column is unsigned
+                    let ud = Datum::U64(h as u64);
+                    let handle = box_try!(datum::encode_value(&[ud]));
+                    row.mut_data().extend(handle);
+                } else {
+                    row.mut_data().extend(handle.clone());
+                }
             } else {
                 let col_id = col.get_column_id();
                 if self.cond_cols.contains_key(&col_id) {
