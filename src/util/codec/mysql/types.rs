@@ -16,6 +16,7 @@
 const UNSIGNED_FLAG: u64 = 32;
 
 /// `has_unsigned_flag` checks if `UNSIGNED_FLAG` is set.
+#[inline]
 pub fn has_unsigned_flag(flag: u64) -> bool {
     flag & UNSIGNED_FLAG > 0
 }
