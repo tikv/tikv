@@ -385,7 +385,11 @@ impl<'a> SelectContext<'a> {
         let t_id = self.sel.get_table_info().get_table_id();
         for (&col_id, col) in &self.cond_cols {
             if col.get_pk_handle() {
-                self.eval.row.insert(col_id, Datum::I64(h));
+                if mysql::has_unsigned_flag(col.get_flag() as u64) {
+                    self.eval.row.insert(col_id, Datum::U64(h as u64));
+                } else {
+                    self.eval.row.insert(col_id, Datum::I64(h));
+                }
             } else {
                 let key = table::encode_column_key(t_id, h, col_id);
                 let data = try!(self.snap.get(&Key::from_raw(&key)));
