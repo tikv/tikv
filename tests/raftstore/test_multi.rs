@@ -15,25 +15,24 @@ use tikv::raftstore::store::*;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
+use super::transport_simulate::Filter;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use super::transport_simulate::Strategy;
 
 use rand;
 use rand::Rng;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
-    test_multi_with_transport_strategy(cluster, vec![]);
+    test_multi_hook_transport(cluster, vec![]);
 }
 
-fn test_multi_with_transport_strategy<T: Simulator>(cluster: &mut Cluster<T>,
-                                                    strategy: Vec<Strategy>) {
+fn test_multi_hook_transport<T: Simulator>(cluster: &mut Cluster<T>, filters: Vec<Box<Filter>>) {
     // init_log();
 
     // test a cluster with five nodes [1, 5], only one region (region 1).
     // every node has a store and a peer with same id as node's.
     cluster.bootstrap_region().expect("");
-    cluster.start_with_strategy(strategy);
+    cluster.start();
 
     let (key, value) = (b"a1", b"v1");
 
@@ -173,14 +172,14 @@ fn test_multi_node_base() {
 fn test_multi_node_latency() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::Delay(10)]);
+    test_multi_hook_transport(&mut cluster, vec![]);
 }
 
 #[test]
 fn test_multi_node_drop_packet() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::DropPacket(30)]);
+    test_multi_hook_transport(&mut cluster, vec![]);
 }
 
 #[test]
@@ -194,14 +193,14 @@ fn test_multi_server_base() {
 fn test_multi_server_latency() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::Delay(10)]);
+    test_multi_hook_transport(&mut cluster, vec![]);
 }
 
 #[test]
 fn test_multi_server_drop_packet() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::DropPacket(40)]);
+    test_multi_hook_transport(&mut cluster, vec![]);
 }
 
 #[test]
