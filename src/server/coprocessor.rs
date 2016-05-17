@@ -385,14 +385,21 @@ impl<'a> SelectContext<'a> {
         let t_id = self.sel.get_table_info().get_table_id();
         for (&col_id, col) in &self.cond_cols {
             if col.get_pk_handle() {
-                self.eval.row.insert(col_id, Datum::I64(h));
+                if mysql::has_unsigned_flag(col.get_flag() as u64) {
+                    self.eval.row.insert(col_id, Datum::U64(h as u64));
+                } else {
+                    self.eval.row.insert(col_id, Datum::I64(h));
+                }
             } else {
                 let key = table::encode_column_key(t_id, h, col_id);
                 let data = try!(self.snap.get(&Key::from_raw(&key)));
-                if data.is_none() {
-                    return Err(box_err!("data is missing for [{}, {}, {}]", t_id, h, col_id));
-                }
-                let value = box_try!(data.unwrap().as_slice().decode_datum());
+                let value = match data {
+                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                        return Err(box_err!("key {} not exists", escape(&key)));
+                    }
+                    None => Datum::Null,
+                    Some(bs) => box_try!(bs.as_slice().decode_datum()),
+                };
                 self.eval.row.insert(col_id, value);
             }
         }
@@ -426,7 +433,13 @@ impl<'a> SelectContext<'a> {
                     let raw_key = table::encode_column_key(tid, h, col.get_column_id());
                     let key = Key::from_raw(&raw_key);
                     match try!(self.snap.get(&key)) {
-                        None => return Err(box_err!("key {} not exists", key)),
+                        None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                            return Err(box_err!("key {} not exists", escape(&raw_key)));
+                        }
+                        None => {
+                            let bs = box_try!(datum::encode_value(&[Datum::Null]));
+                            row.mut_data().extend(bs);
+                        }
                         Some(bs) => row.mut_data().extend(bs),
                     }
                 }
