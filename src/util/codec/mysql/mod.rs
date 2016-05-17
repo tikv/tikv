@@ -12,7 +12,9 @@
 // limitations under the License.
 
 mod duration;
+mod decimal;
 mod types;
 
 pub use self::duration::{Duration, MAX_FSP, DEFAULT_FSP};
+pub use self::decimal::{Decimal, DecimalEncoder, DecimalDecoder};
 pub use self::types::{has_unsigned_flag, has_not_null_flag};
