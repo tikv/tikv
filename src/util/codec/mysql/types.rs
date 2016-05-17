@@ -22,6 +22,7 @@ pub fn has_unsigned_flag(flag: u64) -> bool {
 }
 
 /// `has_not_null_flag` checks if `NOT_NULL_FLAG` is set.
+#[inline]
 pub fn has_not_null_flag(flag: u64) -> bool {
     flag & NOT_NULL_FLAG > 0
 }
