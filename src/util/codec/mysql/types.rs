@@ -11,8 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod duration;
-mod types;
 
-pub use self::duration::{Duration, MAX_FSP, DEFAULT_FSP};
-pub use self::types::has_unsigned_flag;
+/// The field is unsigned.
+const UNSIGNED_FLAG: u64 = 32;
+
+/// `has_unsigned_flag` checks if `UNSIGNED_FLAG` is set.
+pub fn has_unsigned_flag(flag: u64) -> bool {
+    flag & UNSIGNED_FLAG > 0
+}
