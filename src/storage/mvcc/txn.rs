@@ -256,6 +256,7 @@ mod tests {
     use super::MvccTxn;
     use storage::{make_key, Mutation};
     use storage::engine::{self, Engine, Dsn, TEMP_DIR};
+    use storage::mvcc::TEST_TS_BASE;
 
     #[test]
     fn test_mvcc_txn_read() {
@@ -375,10 +376,8 @@ mod tests {
         must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
     }
 
-    // make sure meta version could never catch up with key version(timestamp)
     fn to_fake_ts(ts: u64) -> u64 {
-        let base = 1000000u64;
-        base + ts
+        TEST_TS_BASE + ts
     }
 
     #[test]

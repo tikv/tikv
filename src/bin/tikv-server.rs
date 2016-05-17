@@ -83,7 +83,7 @@ fn build_raftkv(matches: &Matches,
                 ch: SendCh,
                 cluster_id: u64,
                 addr: String,
-                pd_client: Arc<RwLock<RpcClient>>)
+                pd_client: Arc<RpcClient>)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
@@ -176,7 +176,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                    config,
                                    None,
                                    |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr, cluster_id).unwrap()));
+    let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let (store, raft_router) = build_raftkv(matches,

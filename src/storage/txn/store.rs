@@ -254,6 +254,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use storage::{Mutation, Key, KvPair, make_key};
     use storage::engine::{self, Dsn, TEMP_DIR};
+    use storage::mvcc::TEST_TS_BASE;
 
     trait TxnStoreAssert {
         fn get_none(&self, key: &[u8], ts: u64);
@@ -650,7 +651,7 @@ mod tests {
 
     impl Oracle {
         fn new() -> Oracle {
-            Oracle { ts: AtomicUsize::new(1) }
+            Oracle { ts: AtomicUsize::new(TEST_TS_BASE as usize) }
         }
 
         fn get_ts(&self) -> u64 {

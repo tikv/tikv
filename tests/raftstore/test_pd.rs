@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
 use super::server::new_server_cluster;
 use super::util;
 
@@ -27,13 +26,13 @@ fn test_pd_heartbeat() {
     util::sleep_ms(100);
 
     let pd_client = cluster.pd_client.clone();
-    let store = pd_client.rl().get_store(1).unwrap();
+    let store = pd_client.get_store(1).unwrap();
     assert!(store.get_address().len() > 0);
 
     // force update a wrong store meta.
-    pd_client.wl().put_store(util::new_store(1, "".to_owned())).unwrap();
+    pd_client.put_store(util::new_store(1, "".to_owned())).unwrap();
 
     util::sleep_ms(500);
-    let store1 = pd_client.rl().get_store(1).unwrap();
+    let store1 = pd_client.get_store(1).unwrap();
     assert_eq!(store1.get_address(), store.get_address());
 }
