@@ -24,7 +24,8 @@ use uuid::Uuid;
 use kvproto::metapb;
 use kvproto::raftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
-                          AdminCmdType, Request, Response, AdminRequest, AdminResponse};
+                          AdminCmdType, Request, Response, AdminRequest, AdminResponse,
+                          TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
 use raft::{self, RawNode, StateRole};
 use raftstore::{Result, Error};
@@ -331,7 +332,20 @@ impl Peer {
             return cmd.cb.call_box((err_resp,));
         }
 
-        if get_change_peer_cmd(&req).is_some() {
+        if get_transfer_leader_cmd(&req).is_some() {
+            if let Err(e) = self.transfer_leader(req) {
+                cmd_resp::bind_error(&mut err_resp, e);
+                return cmd.cb.call_box((err_resp,));
+            }
+
+            // transfer leader command don't have a apply, so we return immediately
+            let mut response = AdminResponse::new();
+            response.set_cmd_type(AdminCmdType::TransferLeader);
+            response.set_transfer_leader(TransferLeaderResponse::new());
+            let mut resp = RaftCmdResponse::new();
+            resp.set_admin_response(response);
+            return cmd.cb.call_box((resp,));
+        } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
                 return Err(box_err!("there is a pending conf change, try later."));
             }
@@ -379,6 +393,19 @@ impl Peer {
         Ok(())
     }
 
+    fn transfer_leader(&mut self, cmd: RaftCmdRequest) -> Result<()> {
+        let transfer_leader = get_transfer_leader_cmd(&cmd).unwrap();
+        let peer = transfer_leader.get_peer();
+
+        info!("transfer leader {:?} at region {}",
+              peer,
+              self.region_id,
+        );
+
+        self.raft_group.transfer_leader(peer.get_id());
+        Ok(())
+    }
+
     fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
         let data = try!(cmd.write_to_bytes());
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
@@ -401,7 +428,8 @@ impl Peer {
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
-                AdminCmdType::InvalidAdmin => {}
+                AdminCmdType::InvalidAdmin |
+                AdminCmdType::TransferLeader => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
             };
@@ -703,6 +731,18 @@ impl Peer {
     }
 }
 
+fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_transfer_leader() {
+        return None;
+    }
+
+    Some(req.get_transfer_leader())
+}
+
 fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
     if !msg.has_admin_request() {
         return None;
@@ -748,6 +788,7 @@ impl Peer {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
+            AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);

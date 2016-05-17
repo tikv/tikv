@@ -530,6 +530,15 @@ impl<T: Simulator> Cluster<T> {
             sim.hook_transport(node_id, vec![]);
         }
     }
+
+    pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
+        let epoch = self.get_region_epoch(region_id);
+        let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
+        let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(3))
+            .unwrap();
+        assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
+                format!("{:?}", resp));
+    }
 }
 
 struct PartitionFilter {

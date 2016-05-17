@@ -6,7 +6,7 @@ dependencies = [
  "bytes 0.3.0 (git+https://github.com/carllerche/bytes)",
  "clippy 0.0.65 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto?rev=e1a61aa9c96eb3074d099fa77853945dc1275e6d)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.0 (git+https://github.com/carllerche/mio.git)",
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
@@ -75,7 +75,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#e8c65d0b6f2986e913ba017b717f24061c6020d6"
+source = "git+https://github.com/pingcap/kvproto?rev=e1a61aa9c96eb3074d099fa77853945dc1275e6d#e1a61aa9c96eb3074d099fa77853945dc1275e6d"
 dependencies = [
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]

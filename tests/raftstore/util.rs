@@ -173,6 +173,13 @@ pub fn new_change_peer_cmd(change_type: ConfChangeType, peer: metapb::Peer) -> A
     cmd
 }
 
+pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
+    let mut cmd = AdminRequest::new();
+    cmd.set_cmd_type(AdminCmdType::TransferLeader);
+    cmd.mut_transfer_leader().set_peer(peer);
+    cmd
+}
+
 pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
                             new_region_id: u64,
                             peer_ids: Vec<u64>)
