@@ -21,6 +21,7 @@ use super::transport_simulate::{Delay, DropPacket};
 
 use rand;
 use rand::Rng;
+use std::time::Duration;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
@@ -200,7 +201,7 @@ fn test_multi_server_base() {
 fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.bootstrap_region().expect("");
     cluster.start();
-    cluster.hook_transport(Delay::new(30));
+    cluster.hook_transport(Delay::new(Duration::from_millis(30)));
     test_multi_base_after_bootstrap(cluster);
 }
 

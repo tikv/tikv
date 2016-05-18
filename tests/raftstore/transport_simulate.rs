@@ -16,9 +16,10 @@ use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::Transport;
 use rand;
 use std::sync::{Arc, RwLock};
+use std::time;
+use std::thread;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::util::*;
 use tikv::util::HandyRwLock;
 
 pub trait Filter: Send + Sync {
@@ -34,7 +35,7 @@ struct FilterDropPacket {
 }
 
 struct FilterDelay {
-    duration: u64,
+    duration: time::Duration,
 }
 
 impl Filter for FilterDropPacket {
@@ -54,7 +55,7 @@ impl Filter for FilterDropPacket {
 
 impl Filter for FilterDelay {
     fn before(&self, _: &RaftMessage) -> bool {
-        sleep_ms(self.duration);
+        thread::sleep(self.duration);
         false
     }
     fn after(&self, x: Result<()>) -> Result<()> {
@@ -126,11 +127,11 @@ impl FilterFactory for DropPacket {
 }
 
 pub struct Delay {
-    duration: u64,
+    duration: time::Duration,
 }
 
 impl Delay {
-    pub fn new(duration: u64) -> Delay {
+    pub fn new(duration: time::Duration) -> Delay {
         Delay { duration: duration }
     }
 }
