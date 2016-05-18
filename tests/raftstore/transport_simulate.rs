@@ -16,6 +16,7 @@ use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::Transport;
 use rand;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::util::*;
 use tikv::util::HandyRwLock;
@@ -29,7 +30,7 @@ pub trait Filter: Send + Sync {
 
 struct FilterDropPacket {
     rate: u32,
-    drop: RwLock<bool>,
+    drop: AtomicBool,
 }
 
 struct FilterDelay {
@@ -39,11 +40,11 @@ struct FilterDelay {
 impl Filter for FilterDropPacket {
     fn before(&self, _: &RaftMessage) -> bool {
         let drop = rand::random::<u32>() % 100u32 < self.rate;
-        *self.drop.wl() = drop;
+        self.drop.store(drop, Ordering::Relaxed);
         drop
     }
     fn after(&self, x: Result<()>) -> Result<()> {
-        if *self.drop.rl() {
+        if self.drop.load(Ordering::Relaxed) {
             return Err(Error::Timeout("drop by FilterDropPacket in SimulateTransport".to_string()));
         }
         x
@@ -103,17 +104,17 @@ impl<T: Transport> Transport for SimulateTransport<T> {
 
 struct PartitionFilter {
     node_ids: Vec<u64>,
-    drop: RwLock<bool>,
+    drop: AtomicBool,
 }
 
 impl Filter for PartitionFilter {
     fn before(&self, msg: &RaftMessage) -> bool {
         let drop = self.node_ids.contains(&msg.get_to_peer().get_store_id());
-        *self.drop.wl() = drop;
+        self.drop.store(drop, Ordering::Relaxed);
         drop
     }
     fn after(&self, r: Result<()>) -> Result<()> {
-        if *self.drop.rl() {
+        if self.drop.load(Ordering::Relaxed) {
             return Err(Error::Timeout("drop by PartitionPacket in SimulateTransport".to_string()));
         }
         r
@@ -124,14 +125,14 @@ pub fn new_partition_filter(node_ids: Vec<u64>) -> Box<Filter> {
     let ids = node_ids.clone();
     Box::new(PartitionFilter {
         node_ids: ids,
-        drop: RwLock::new(false),
+        drop: AtomicBool::new(false),
     })
 }
 
 pub fn new_drop_packet_filter(rate: u32) -> Box<Filter> {
     Box::new(FilterDropPacket {
         rate: rate,
-        drop: RwLock::new(false),
+        drop: AtomicBool::new(false),
     })
 }
 
