@@ -12,7 +12,10 @@
 // limitations under the License.
 
 
-use util::codec::{number, Datum, datum};
+use util::codec::number::NumberDecoder;
+use util::codec::datum::{Datum, DatumDecoder};
+use util::codec::mysql::DecimalDecoder;
+use util::codec::mysql::{MAX_FSP, Duration};
 use util::TryInsertWith;
 use super::{Result, Error};
 
@@ -51,24 +54,42 @@ impl Evaluator {
             ExprType::Not => self.eval_not(expr),
             ExprType::Like => self.eval_like(expr),
             ExprType::Float32 |
-            ExprType::Float64 => unimplemented!(),
+            ExprType::Float64 => self.eval_float(expr),
+            ExprType::MysqlDuration => self.eval_duration(expr),
+            ExprType::MysqlDecimal => self.eval_decimal(expr),
             ExprType::In => self.eval_in(expr),
             _ => Ok(Datum::Null),
         }
     }
 
     fn eval_int(&self, expr: &Expr) -> Result<Datum> {
-        let i = try!(number::decode_i64(expr.get_val()));
+        let i = try!(expr.get_val().decode_i64());
         Ok(Datum::I64(i))
     }
 
     fn eval_uint(&self, expr: &Expr) -> Result<Datum> {
-        let u = try!(number::decode_u64(expr.get_val()));
+        let u = try!(expr.get_val().decode_u64());
         Ok(Datum::U64(u))
     }
 
+    fn eval_float(&self, expr: &Expr) -> Result<Datum> {
+        let f = try!(expr.get_val().decode_f64());
+        Ok(Datum::F64(f))
+    }
+
+    fn eval_duration(&self, expr: &Expr) -> Result<Datum> {
+        let n = try!(expr.get_val().decode_i64());
+        let dur = try!(Duration::from_nanos(n, MAX_FSP));
+        Ok(Datum::Dur(dur))
+    }
+
+    fn eval_decimal(&self, expr: &Expr) -> Result<Datum> {
+        let d = try!(expr.get_val().decode_decimal());
+        Ok(Datum::Dec(d))
+    }
+
     fn eval_column_ref(&self, expr: &Expr) -> Result<Datum> {
-        let i = try!(number::decode_i64(expr.get_val()));
+        let i = try!(expr.get_val().decode_i64());
         self.row.get(&i).cloned().ok_or_else(|| Error::Eval(format!("column {} not found", i)))
     }
 
@@ -158,7 +179,7 @@ impl Evaluator {
             return Ok(Datum::Null);
         }
         let b = try!(d.into_bool());
-        Ok((!b).into())
+        Ok((b.map(|v| !v)).into())
     }
 
     fn eval_like(&mut self, expr: &Expr) -> Result<Datum> {
@@ -189,8 +210,8 @@ impl Evaluator {
 
     fn eval_two_children_as_bool(&mut self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
         let (left, right) = try!(self.eval_two_children(expr));
-        let left_bool = try!(eval_into_bool(left));
-        let right_bool = try!(eval_into_bool(right));
+        let left_bool = try!(left.into_bool());
+        let right_bool = try!(right.into_bool());
         Ok((left_bool, right_bool))
     }
 
@@ -221,19 +242,9 @@ impl Evaluator {
     fn decode_value_list(&mut self, value_list_expr: &Expr) -> Result<&Vec<Datum>> {
         let p = value_list_expr as *const Expr as isize;
         let decoded = try!(self.cached_value_list
-                               .entry(p)
-                               .or_try_insert_with(|| datum::decode(value_list_expr.get_val())));
+            .entry(p)
+            .or_try_insert_with(|| value_list_expr.get_val().decode()));
         Ok(decoded)
-    }
-}
-
-/// eval datum into bool, if expr is Null, then None is return.
-fn eval_into_bool(datum: Datum) -> Result<Option<bool>> {
-    if datum == Datum::Null {
-        Ok(None)
-    } else {
-        let b = try!(datum.into_bool());
-        Ok(Some(b))
     }
 }
 
@@ -258,7 +269,9 @@ fn check_in(target: Datum, value_list: &[Datum]) -> Result<bool> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use util::codec::{Datum, number, datum};
+    use util::codec::number::{self, NumberEncoder};
+    use util::codec::{Datum, datum};
+    use util::codec::mysql::{Decimal, Duration, DecimalEncoder};
 
     use tipb::expression::{Expr, ExprType};
     use protobuf::RepeatedField;
@@ -268,22 +281,38 @@ mod test {
         match datum {
             Datum::I64(i) => {
                 expr.set_tp(ExprType::Int64);
-                let mut buf = vec![0; 8];
-                number::encode_i64(&mut buf, i).unwrap();
+                let mut buf = Vec::with_capacity(number::I64_SIZE);
+                buf.encode_i64(i).unwrap();
                 expr.set_val(buf);
             }
             Datum::U64(u) => {
                 expr.set_tp(ExprType::Uint64);
-                let mut buf = vec![0; 8];
-                number::encode_u64(&mut buf, u).unwrap();
+                let mut buf = Vec::with_capacity(number::U64_SIZE);
+                buf.encode_u64(u).unwrap();
                 expr.set_val(buf);
             }
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
                 expr.set_val(bs);
             }
-            Datum::F32(_) => unimplemented!(),
-            Datum::F64(_) => unimplemented!(),
+            Datum::F64(f) => {
+                expr.set_tp(ExprType::Float64);
+                let mut buf = Vec::with_capacity(number::F64_SIZE);
+                buf.encode_f64(f).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Dur(d) => {
+                expr.set_tp(ExprType::MysqlDuration);
+                let mut buf = Vec::with_capacity(number::I64_SIZE);
+                buf.encode_i64(d.to_nanos()).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Dec(d) => {
+                expr.set_tp(ExprType::MysqlDecimal);
+                let mut buf = Vec::with_capacity(d.max_encode_bytes());
+                buf.encode_decimal(&d).unwrap();
+                expr.set_val(buf);
+            }
             _ => expr.set_tp(ExprType::Null),
         };
         expr
@@ -292,8 +321,8 @@ mod test {
     fn col_expr(col_id: i64) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ColumnRef);
-        let mut buf = vec![0; 8];
-        number::encode_i64(&mut buf, col_id).unwrap();
+        let mut buf = Vec::with_capacity(8);
+        buf.encode_i64(col_id).unwrap();
         expr.set_val(buf);
         expr
     }
@@ -330,47 +359,60 @@ mod test {
     #[test]
     fn test_eval() {
         let tests = vec![
-			(datum_expr(Datum::I64(1)), Datum::I64(1)),
-			(datum_expr(Datum::U64(1)), Datum::U64(1)),
-			(datum_expr(b"abc".as_ref().into()), b"abc".as_ref().into()),
-			(datum_expr(Datum::Null), Datum::Null),
-			(col_expr(1), Datum::I64(100)),
-			(bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LT), Datum::I64(0)),
-			(bin_expr(Datum::I64(1), Datum::I64(100), ExprType::LT), Datum::I64(1)),
-			(bin_expr(Datum::I64(100), Datum::Null, ExprType::LT), Datum::Null),
-			(bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LE), Datum::I64(0)),
-			(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::LE), Datum::I64(1)),
-			(bin_expr(Datum::I64(100), Datum::Null, ExprType::LE), Datum::Null),
-			(bin_expr(Datum::I64(100), Datum::I64(1), ExprType::EQ), Datum::I64(0)),
-			(bin_expr(Datum::I64(100), Datum::I64(100), ExprType::EQ), Datum::I64(1)),
-			(bin_expr(Datum::I64(100), Datum::Null, ExprType::EQ), Datum::Null),
-			(bin_expr(Datum::I64(100), Datum::I64(100), ExprType::NE), Datum::I64(0)),
-			(bin_expr(Datum::I64(100), Datum::I64(1), ExprType::NE), Datum::I64(1)),
-			(bin_expr(Datum::I64(100), Datum::Null, ExprType::NE), Datum::Null),
-			(bin_expr(Datum::I64(1), Datum::I64(100), ExprType::GE), Datum::I64(0)),
-			(bin_expr(Datum::I64(100), Datum::I64(100), ExprType::GE), Datum::I64(1)),
-			(bin_expr(Datum::I64(100), Datum::Null, ExprType::GE), Datum::Null),
-			(bin_expr(Datum::I64(100), Datum::I64(100), ExprType::GT), Datum::I64(0)),
-			(bin_expr(Datum::I64(100), Datum::I64(1), ExprType::GT), Datum::I64(1)),
-			(bin_expr(Datum::I64(100), Datum::Null, ExprType::GT), Datum::Null),
-			(bin_expr(Datum::I64(1), Datum::Null, ExprType::NullEQ), Datum::I64(0)),
-			(bin_expr(Datum::Null, Datum::Null, ExprType::NullEQ), Datum::I64(1)),
-			// logic operation
-			(bin_expr(Datum::I64(0), Datum::I64(1), ExprType::And), Datum::I64(0)),
-			(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::And), Datum::I64(1)),
-			(bin_expr(Datum::I64(1), Datum::Null, ExprType::And), Datum::Null),
-			(bin_expr(Datum::Null, Datum::I64(0), ExprType::And), Datum::I64(0)),
-			(bin_expr(Datum::Null, Datum::Null, ExprType::And), Datum::Null),
-			(bin_expr(Datum::I64(0), Datum::I64(0), ExprType::Or), Datum::I64(0)),
-			(bin_expr(Datum::I64(0), Datum::I64(1), ExprType::Or), Datum::I64(1)),
-			(bin_expr(Datum::I64(1), Datum::Null, ExprType::Or), Datum::I64(1)),
-			(bin_expr(Datum::Null, Datum::Null, ExprType::Or), Datum::Null),
-			(bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
-			(bin_expr_r(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
-			 bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ), ExprType::And), Datum::I64(1)),
-			(not_expr(Datum::I64(1)), Datum::I64(0)),
-			(not_expr(Datum::I64(0)), Datum::I64(1)),
-			(not_expr(Datum::Null), Datum::Null),
+            (datum_expr(Datum::F64(1.1)), Datum::F64(1.1)),
+            (datum_expr(Datum::I64(1)), Datum::I64(1)),
+            (datum_expr(Datum::U64(1)), Datum::U64(1)),
+            (datum_expr(b"abc".as_ref().into()), b"abc".as_ref().into()),
+            (datum_expr(Datum::Null), Datum::Null),
+            (col_expr(1), Datum::I64(100)),
+            (bin_expr(Duration::parse(b"11:00:00", 0).unwrap().into(),
+             Duration::parse(b"00:00:00", 0).unwrap().into(), ExprType::LT), Datum::I64(0)),
+            (bin_expr(Duration::parse(b"11:00:00.233", 2).unwrap().into(),
+             Duration::parse(b"11:00:00.233", 0).unwrap().into(), ExprType::EQ), Datum::I64(0)),
+            (bin_expr(Duration::parse(b"11:00:00.233", 3).unwrap().into(),
+             Duration::parse(b"11:00:00.233", 4).unwrap().into(), ExprType::EQ), Datum::I64(1)),
+            (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(2u64.into()),
+             ExprType::EQ), Datum::I64(1)),
+            (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LT), Datum::I64(0)),
+            (bin_expr(Datum::I64(1), Datum::I64(100), ExprType::LT), Datum::I64(1)),
+            (bin_expr(Datum::I64(100), Datum::Null, ExprType::LT), Datum::Null),
+            (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LE), Datum::I64(0)),
+            (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::LE), Datum::I64(1)),
+            (bin_expr(Datum::I64(100), Datum::Null, ExprType::LE), Datum::Null),
+            (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::EQ), Datum::I64(0)),
+            (bin_expr(Datum::I64(100), Datum::I64(100), ExprType::EQ), Datum::I64(1)),
+            (bin_expr(Datum::I64(100), Datum::Null, ExprType::EQ), Datum::Null),
+            (bin_expr(Datum::I64(100), Datum::I64(100), ExprType::NE), Datum::I64(0)),
+            (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::NE), Datum::I64(1)),
+            (bin_expr(Datum::I64(100), Datum::Null, ExprType::NE), Datum::Null),
+            (bin_expr(Datum::I64(1), Datum::I64(100), ExprType::GE), Datum::I64(0)),
+            (bin_expr(Datum::I64(100), Datum::I64(100), ExprType::GE), Datum::I64(1)),
+            (bin_expr(Datum::I64(100), Datum::Null, ExprType::GE), Datum::Null),
+            (bin_expr(Datum::I64(100), Datum::I64(100), ExprType::GT), Datum::I64(0)),
+            (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::GT), Datum::I64(1)),
+            (bin_expr(Datum::I64(100), Datum::Null, ExprType::GT), Datum::Null),
+            (bin_expr(Datum::I64(1), Datum::Null, ExprType::NullEQ), Datum::I64(0)),
+            (bin_expr(Datum::Null, Datum::Null, ExprType::NullEQ), Datum::I64(1)),
+            // logic operation
+            (bin_expr(Datum::I64(0), Datum::I64(1), ExprType::And), Datum::I64(0)),
+            (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::And), Datum::I64(1)),
+            (bin_expr(Datum::I64(1), Datum::Null, ExprType::And), Datum::Null),
+            (bin_expr(Datum::Null, Datum::I64(0), ExprType::And), Datum::I64(0)),
+            (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
+             ExprType::And), Datum::I64(0)),
+            (bin_expr(Datum::Null, Datum::Null, ExprType::And), Datum::Null),
+            (bin_expr(Datum::I64(0), Datum::I64(0), ExprType::Or), Datum::I64(0)),
+            (bin_expr(Datum::I64(0), Datum::I64(1), ExprType::Or), Datum::I64(1)),
+            (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
+             ExprType::Or), Datum::I64(1)),
+            (bin_expr(Datum::I64(1), Datum::Null, ExprType::Or), Datum::I64(1)),
+            (bin_expr(Datum::Null, Datum::Null, ExprType::Or), Datum::Null),
+            (bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
+            (bin_expr_r(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
+             bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ), ExprType::And), Datum::I64(1)),
+            (not_expr(Datum::I64(1)), Datum::I64(0)),
+            (not_expr(Datum::I64(0)), Datum::I64(1)),
+            (not_expr(Datum::Null), Datum::Null),
             // like operation
             (like_expr("a", ""), Datum::I64(0)),
             (like_expr("a", "a"), Datum::I64(1)),

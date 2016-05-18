@@ -16,6 +16,7 @@ use std::mem;
 use std::fmt::{self, Formatter, Display};
 use byteorder::{BigEndian, WriteBytesExt};
 use util::{escape, codec};
+use util::codec::bytes::BytesDecoder;
 
 pub type Value = Vec<u8>;
 pub type KvPair = (Vec<u8>, Value);
@@ -24,15 +25,23 @@ pub type KvPair = (Vec<u8>, Value);
 pub struct Key(Vec<u8>);
 
 impl Key {
-    pub fn from_raw(key: Vec<u8>) -> Key {
-        Key(key)
+    pub fn from_raw(key: &[u8]) -> Key {
+        Key(codec::bytes::encode_bytes(key))
     }
 
-    pub fn raw(&self) -> &Vec<u8> {
+    pub fn raw(&self) -> Result<Vec<u8>, codec::Error> {
+        self.0.as_slice().decode_bytes(false)
+    }
+
+    pub fn from_encoded(encoded_key: Vec<u8>) -> Key {
+        Key(encoded_key)
+    }
+
+    pub fn encoded(&self) -> &Vec<u8> {
         &self.0
     }
 
-    pub fn encode_ts(&self, ts: u64) -> Key {
+    pub fn append_ts(&self, ts: u64) -> Key {
         let mut encoded = self.0.clone();
         encoded.write_u64::<BigEndian>(ts).unwrap();
         Key(encoded)
@@ -43,13 +52,13 @@ impl Key {
         if len < mem::size_of::<u64>() {
             return Err(codec::Error::KeyLength);
         }
-        Ok(Key::from_raw(self.0[..len - mem::size_of::<u64>()].to_owned()))
+        Ok(Key::from_encoded(self.0[..len - mem::size_of::<u64>()].to_vec()))
     }
 }
 
 impl Hash for Key {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.raw().hash(state)
+        self.encoded().hash(state)
     }
 }
 
@@ -61,6 +70,5 @@ impl Display for Key {
 
 #[cfg(test)]
 pub fn make_key(k: &[u8]) -> Key {
-    use util::codec::bytes;
-    Key::from_raw(bytes::encode_bytes(k))
+    Key::from_raw(k)
 }

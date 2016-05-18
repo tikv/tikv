@@ -197,7 +197,7 @@ impl<'a> SnapshotStore<'a> {
 
     pub fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
-        let mut results = Vec::<_>::with_capacity(keys.len());
+        let mut results = Vec::with_capacity(keys.len());
         for k in keys {
             results.push(txn.get(k).map_err(Error::from));
         }
@@ -210,18 +210,18 @@ impl<'a> SnapshotStore<'a> {
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
             key = match try!(self.snapshot.seek(&key)) {
-                Some((k, _)) => try!(Key::from_raw(k).truncate_ts()),
+                Some((k, _)) => try!(Key::from_encoded(k).truncate_ts()),
                 None => break,
             };
             match txn.get(&key) {
-                Ok(Some(value)) => results.push(Ok((key.raw().to_owned(), value))),
+                Ok(Some(value)) => results.push(Ok((try!(key.raw()), value))),
                 Ok(None) => {}
                 e @ Err(MvccError::KeyIsLocked { .. }) => {
                     results.push(Err(Error::from(e.unwrap_err())))
                 }
                 Err(e) => return Err(e.into()),
             };
-            key = key.encode_ts(u64::max_value());
+            key = key.append_ts(u64::max_value());
         }
         Ok(results)
     }
@@ -232,11 +232,11 @@ impl<'a> SnapshotStore<'a> {
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
             key = match try!(self.snapshot.reverse_seek(&key)) {
-                Some((k, _)) => try!(Key::from_raw(k).truncate_ts()),
+                Some((k, _)) => try!(Key::from_encoded(k).truncate_ts()),
                 None => break,
             };
             match txn.get(&key) {
-                Ok(Some(value)) => results.push(Ok((key.raw().to_owned(), value))),
+                Ok(Some(value)) => results.push(Ok((try!(key.raw()), value))),
                 Ok(None) => {}
                 e @ Err(MvccError::KeyIsLocked { .. }) => {
                     results.push(Err(Error::from(e.unwrap_err())))
@@ -254,7 +254,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use storage::{Mutation, Key, KvPair, make_key};
     use storage::engine::{self, Dsn, TEMP_DIR};
-    use util::codec::bytes;
+    use storage::mvcc::TEST_TS_BASE;
 
     trait TxnStoreAssert {
         fn get_none(&self, key: &[u8], ts: u64);
@@ -329,15 +329,11 @@ mod tests {
             let key_address = make_key(start_key);
             let result = self.scan(Context::new(), key_address, limit, ts).unwrap();
             let result: Vec<Option<KvPair>> = result.into_iter()
-                                                    .map(Result::ok)
-                                                    .collect();
+                .map(Result::ok)
+                .collect();
             let expect: Vec<Option<KvPair>> = expect.into_iter()
-                                                    .map(|x| {
-                                                        x.map(|(k, v)| {
-                                                            (bytes::encode_bytes(k), v.to_vec())
-                                                        })
-                                                    })
-                                                    .collect();
+                .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
+                .collect();
             assert_eq!(result, expect);
         }
 
@@ -349,15 +345,11 @@ mod tests {
             let key_address = make_key(start_key);
             let result = self.reverse_scan(Context::new(), key_address, limit, ts).unwrap();
             let result: Vec<Option<KvPair>> = result.into_iter()
-                                                    .map(Result::ok)
-                                                    .collect();
+                .map(Result::ok)
+                .collect();
             let expect: Vec<Option<KvPair>> = expect.into_iter()
-                                                    .map(|x| {
-                                                        x.map(|(k, v)| {
-                                                            (bytes::encode_bytes(k), v.to_vec())
-                                                        })
-                                                    })
-                                                    .collect();
+                .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
+                .collect();
             assert_eq!(result, expect);
         }
 
@@ -367,7 +359,7 @@ mod tests {
 
         fn prewrite_err(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
             assert!(self.prewrite(Context::new(), mutations, primary.to_vec(), start_ts)
-                        .is_err());
+                .is_err());
         }
 
         fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
@@ -659,7 +651,7 @@ mod tests {
 
     impl Oracle {
         fn new() -> Oracle {
-            Oracle { ts: AtomicUsize::new(1) }
+            Oracle { ts: AtomicUsize::new(TEST_TS_BASE as usize) }
         }
 
         fn get_ts(&self) -> u64 {

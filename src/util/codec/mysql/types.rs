@@ -11,20 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod util;
-pub mod cluster;
-mod node;
-mod server;
-pub mod pd;
-pub mod pd_ask;
-pub mod transport_simulate;
+/// Field can't be NULL
+const NOT_NULL_FLAG: u64 = 1;
+/// The field is unsigned.
+const UNSIGNED_FLAG: u64 = 32;
 
-mod test_single;
-mod test_multi;
-mod test_conf_change;
-mod test_compact_log;
-mod test_split_region;
-mod test_status_command;
-mod test_tombstone;
-mod test_transport;
-mod test_pd;
+/// `has_unsigned_flag` checks if `UNSIGNED_FLAG` is set.
+#[inline]
+pub fn has_unsigned_flag(flag: u64) -> bool {
+    flag & UNSIGNED_FLAG > 0
+}
+
+/// `has_not_null_flag` checks if `NOT_NULL_FLAG` is set.
+#[inline]
+pub fn has_not_null_flag(flag: u64) -> bool {
+    flag & NOT_NULL_FLAG > 0
+}

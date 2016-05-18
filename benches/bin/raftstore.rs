@@ -49,9 +49,9 @@ fn bench_get<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
     prepare_cluster(&mut cluster, &kvs);
 
     let mut keys = kvs.drain(..)
-                      .take(DEFAULT_DATA_SIZE / 10)
-                      .map(|i| i.0)
-                      .chain(KvGenerator::new(100, 0).map(|i| i.0));
+        .take(DEFAULT_DATA_SIZE / 10)
+        .map(|i| i.0)
+        .chain(KvGenerator::new(100, 0).map(|i| i.0));
 
     bench!{
             let k = keys.next().unwrap();
@@ -64,9 +64,9 @@ fn bench_seek<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
     prepare_cluster(&mut cluster, &kvs);
 
     let mut keys = kvs.drain(..)
-                      .take(DEFAULT_DATA_SIZE / 10)
-                      .map(|i| i.0)
-                      .chain(KvGenerator::new(100, 0).map(|i| i.0));
+        .take(DEFAULT_DATA_SIZE / 10)
+        .map(|i| i.0)
+        .chain(KvGenerator::new(100, 0).map(|i| i.0));
 
     bench!{
             let k = keys.next().unwrap();
@@ -79,9 +79,9 @@ fn bench_delete<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
     prepare_cluster(&mut cluster, &kvs);
 
     let mut keys = kvs.drain(..)
-                      .take(DEFAULT_DATA_SIZE / 10)
-                      .map(|i| i.0)
-                      .chain(KvGenerator::new(100, 0).map(|i| i.0));
+        .take(DEFAULT_DATA_SIZE / 10)
+        .map(|i| i.0)
+        .chain(KvGenerator::new(100, 0).map(|i| i.0));
 
     bench!{
             let k = keys.next().unwrap();

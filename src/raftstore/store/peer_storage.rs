@@ -105,13 +105,13 @@ impl PeerStorage {
     }
 
     pub fn is_initialized(&self) -> bool {
-        !self.region.get_store_ids().is_empty()
+        !self.region.get_peers().is_empty()
     }
 
     pub fn initial_state(&mut self) -> raft::Result<RaftState> {
         let initialized = self.is_initialized();
         let hs = try!(self.engine
-                          .get_msg(&keys::raft_hard_state_key(self.get_region_id())));
+            .get_msg(&keys::raft_hard_state_key(self.get_region_id())));
 
         let (mut hard_state, found) = hs.map_or((HardState::new(), false), |s| (s, true));
 
@@ -133,7 +133,9 @@ impl PeerStorage {
 
         let mut conf_state = ConfState::new();
         if found || initialized {
-            conf_state.set_nodes(self.region.get_store_ids().to_vec());
+            for p in self.region.get_peers() {
+                conf_state.mut_nodes().push(p.get_id());
+            }
         }
 
         Ok(RaftState {
@@ -168,25 +170,25 @@ impl PeerStorage {
         try!(self.engine.scan(&start_key,
                               &end_key,
                               &mut |_, value| {
-                                  let mut entry = Entry::new();
-                                  try!(entry.merge_from_bytes(value));
+            let mut entry = Entry::new();
+            try!(entry.merge_from_bytes(value));
 
-                                  // May meet gap or has been compacted.
-                                  if entry.get_index() != next_index {
-                                      return Ok(false);
-                                  }
+            // May meet gap or has been compacted.
+            if entry.get_index() != next_index {
+                return Ok(false);
+            }
 
-                                  next_index += 1;
+            next_index += 1;
 
-                                  total_size += entry.compute_size() as u64;
-                                  exceeded_max_size = total_size > max_size;
+            total_size += entry.compute_size() as u64;
+            exceeded_max_size = total_size > max_size;
 
-                                  if !exceeded_max_size || ents.is_empty() {
-                                      ents.push(entry);
-                                  }
+            if !exceeded_max_size || ents.is_empty() {
+                ents.push(entry);
+            }
 
-                                  Ok(!exceeded_max_size)
-                              }));
+            Ok(!exceeded_max_size)
+        }));
 
         // If we get the correct number of entries the total size exceeds max_size, returns.
         if ents.len() == (high - low) as usize || exceeded_max_size {
@@ -372,8 +374,8 @@ impl PeerStorage {
 
     // Truncated state contains the meta about log preceded the first current entry.
     pub fn load_truncated_state(&self) -> Result<RaftTruncatedState> {
-        let res: Option<RaftTruncatedState> = try!(self.engine.get_msg(
-                                         &keys::raft_truncated_state_key(self.get_region_id())));
+        let res: Option<RaftTruncatedState> = try!(self.engine
+            .get_msg(&keys::raft_truncated_state_key(self.get_region_id())));
 
         if let Some(state) = res {
             return Ok(state);
@@ -509,14 +511,12 @@ pub fn do_snapshot(snap: &RocksDbSnapshot,
     debug!("begin to generate a snapshot for region {}", region_id);
 
     let region: metapb::Region = try!(snap.get_msg(&keys::region_info_key(region_id))
-                                          .and_then(|res| {
-                                              match res {
-                                                  None => {
-                                                      Err(box_err!("could not find region info"))
-                                                  }
-                                                  Some(region) => Ok(region),
-                                              }
-                                          }));
+        .and_then(|res| {
+            match res {
+                None => Err(box_err!("could not find region info")),
+                Some(region) => Ok(region),
+            }
+        }));
 
     let mut snapshot = Snapshot::new();
 
@@ -525,7 +525,9 @@ pub fn do_snapshot(snap: &RocksDbSnapshot,
     snapshot.mut_metadata().set_term(term);
 
     let mut conf_state = ConfState::new();
-    conf_state.set_nodes(region.get_store_ids().to_vec());
+    for p in region.get_peers() {
+        conf_state.mut_nodes().push(p.get_id());
+    }
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
@@ -542,21 +544,21 @@ pub fn do_snapshot(snap: &RocksDbSnapshot,
         try!(snap.scan(&begin,
                        &end,
                        &mut |key, value| {
-                           if key.starts_with(&log_prefix) {
-                               // Ignore raft logs.
-                               // TODO: do more tests for snapshot.
-                               return Ok(true);
-                           }
-                           snap_size += key.len();
-                           snap_size += value.len();
-                           snap_key_cnt += 1;
+            if key.starts_with(&log_prefix) {
+                // Ignore raft logs.
+                // TODO: do more tests for snapshot.
+                return Ok(true);
+            }
+            snap_size += key.len();
+            snap_size += value.len();
+            snap_key_cnt += 1;
 
-                           let mut kv = KeyValue::new();
-                           kv.set_key(key.to_vec());
-                           kv.set_value(value.to_vec());
-                           data.push(kv);
-                           Ok(true)
-                       }));
+            let mut kv = KeyValue::new();
+            kv.set_key(key.to_vec());
+            kv.set_value(value.to_vec());
+            data.push(kv);
+            Ok(true)
+        }));
     }
 
     snap_data.set_data(protobuf::RepeatedField::from_vec(data));
@@ -646,14 +648,13 @@ mod test {
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
-    use raft::Storage;
     use raftstore::store::bootstrap;
 
     fn new_storage(path: &TempDir) -> RaftStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
-        let region = bootstrap::bootstrap_region(&db, 1, 1).expect("");
+        let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
         RaftStorage::new(PeerStorage::new(db, &region).unwrap())
     }
 
@@ -800,7 +801,7 @@ mod test {
         let mut data = RaftSnapshotData::new();
         protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).expect("");
         assert_eq!(data.get_region().get_id(), 1);
-        assert_eq!(data.get_region().get_store_ids().len(), 1);
+        assert_eq!(data.get_region().get_peers().len(), 1);
 
         s.wl().snap_state = SnapState::Snap(snap.clone());
         assert_eq!(s.wl().snapshot(), Ok(snap));

@@ -212,12 +212,12 @@ mod tests {
 
         let mut data = vec![];
         engine.scan(b"",
-                    &[0xFF, 0xFF],
-                    &mut |key, value| {
-                        data.push((key.to_vec(), value.to_vec()));
-                        Ok(true)
-                    })
-              .unwrap();
+                  &[0xFF, 0xFF],
+                  &mut |key, value| {
+                      data.push((key.to_vec(), value.to_vec()));
+                      Ok(true)
+                  })
+            .unwrap();
 
         assert_eq!(data.len(), 2);
         let pair = engine.seek(b"a1").unwrap().unwrap();
@@ -227,13 +227,13 @@ mod tests {
         data.clear();
         let mut index = 0;
         engine.scan(b"",
-                    &[0xFF, 0xFF],
-                    &mut |key, value| {
-                        data.push((key.to_vec(), value.to_vec()));
-                        index += 1;
-                        Ok(index != 1)
-                    })
-              .unwrap();
+                  &[0xFF, 0xFF],
+                  &mut |key, value| {
+                      data.push((key.to_vec(), value.to_vec()));
+                      index += 1;
+                      Ok(index != 1)
+                  })
+            .unwrap();
 
         assert_eq!(data.len(), 1);
 

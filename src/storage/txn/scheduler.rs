@@ -37,7 +37,7 @@ impl Scheduler {
                         let mut res = vec![];
                         for (k, v) in keys.into_iter().zip(results.into_iter()) {
                             match v {
-                                Ok(Some(x)) => res.push(Ok((k.raw().to_owned(), x))),
+                                Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
                                 Ok(None) => {}
                                 Err(e) => res.push(Err(::storage::Error::from(e))),
                             }
@@ -65,26 +65,26 @@ impl Scheduler {
             }
             Command::Commit { ctx, keys, lock_ts, commit_ts, callback } => {
                 callback(self.store
-                             .commit(ctx, keys, lock_ts, commit_ts)
-                             .map_err(::storage::Error::from));
+                    .commit(ctx, keys, lock_ts, commit_ts)
+                    .map_err(::storage::Error::from));
             }
             Command::CommitThenGet { ctx, key, lock_ts, commit_ts, get_ts, callback } => {
                 callback(self.store
-                             .commit_then_get(ctx, key, lock_ts, commit_ts, get_ts)
-                             .map_err(::storage::Error::from));
+                    .commit_then_get(ctx, key, lock_ts, commit_ts, get_ts)
+                    .map_err(::storage::Error::from));
             }
             Command::Cleanup { ctx, key, start_ts, callback } => {
                 callback(self.store.cleanup(ctx, key, start_ts).map_err(::storage::Error::from));
             }
             Command::Rollback { ctx, keys, start_ts, callback } => {
                 callback(self.store
-                             .rollback(ctx, keys, start_ts)
-                             .map_err(::storage::Error::from));
+                    .rollback(ctx, keys, start_ts)
+                    .map_err(::storage::Error::from));
             }
             Command::RollbackThenGet { ctx, key, lock_ts, callback } => {
                 callback(self.store
-                             .rollback_then_get(ctx, key, lock_ts)
-                             .map_err(::storage::Error::from));
+                    .rollback_then_get(ctx, key, lock_ts)
+                    .map_err(::storage::Error::from));
             }
         }
     }

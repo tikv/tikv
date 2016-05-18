@@ -32,24 +32,20 @@ pub trait RaftStoreRouter: Send + Sync {
     // Report sending snapshot status.
     fn report_snapshot(&self,
                        region_id: u64,
-                       to_store_id: u64,
+                       to_peer_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()>;
 
-    fn report_unreachable(&self, region_id: u64, to_store_id: u64) -> RaftStoreResult<()>;
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()>;
 }
 
 pub struct ServerRaftStoreRouter {
-    pub store_id: u64,
     pub ch: SendCh,
 }
 
 impl ServerRaftStoreRouter {
-    pub fn new(store_id: u64, ch: SendCh) -> ServerRaftStoreRouter {
-        ServerRaftStoreRouter {
-            store_id: store_id,
-            ch: ch,
-        }
+    pub fn new(ch: SendCh) -> ServerRaftStoreRouter {
+        ServerRaftStoreRouter { ch: ch }
     }
 }
 
@@ -71,22 +67,22 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn report_snapshot(&self,
                        region_id: u64,
-                       to_store_id: u64,
+                       to_peer_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()> {
         try!(self.ch.send(StoreMsg::ReportSnapshot {
             region_id: region_id,
-            to_store_id: to_store_id,
+            to_peer_id: to_peer_id,
             status: status,
         }));
 
         Ok(())
     }
 
-    fn report_unreachable(&self, region_id: u64, to_store_id: u64) -> RaftStoreResult<()> {
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
         try!(self.ch.send(StoreMsg::ReportUnreachable {
             region_id: region_id,
-            to_store_id: to_store_id,
+            to_peer_id: to_peer_id,
         }));
 
         Ok(())
@@ -113,7 +109,7 @@ impl ServerTransport {
 
 impl Transport for ServerTransport {
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        let to_store_id = msg.get_message().get_to();
+        let to_store_id = msg.get_to_peer().get_store_id();
 
         let mut req = Message::new();
         req.set_msg_type(MessageType::Raft);
