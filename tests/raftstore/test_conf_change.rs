@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::thread;
 
 use tikv::raftstore::store::*;
-use kvproto::raftpb::ConfChangeType;
 use kvproto::metapb;
 use tikv::pd::PdClient;
 
@@ -29,6 +28,10 @@ use super::pd::TestPdClient;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.set_empty_rule();
+
     let r1 = cluster.bootstrap_conf_change();
     cluster.start();
 
@@ -40,8 +43,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let engine_2 = cluster.get_engine(2);
     must_get_none(&engine_2, b"a1");
-    // add peer (2,2,2) to region 1.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
+    // add peer (2,2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
 
     let (key, value) = (b"a2", b"v2");
     cluster.must_put(key, value);
@@ -60,34 +63,14 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Conf version must change.
     assert!(epoch.get_conf_ver() > 1);
 
-    let change_peer = new_admin_request(1,
-                                        &epoch,
-                                        new_change_peer_cmd(ConfChangeType::AddNode,
-                                                            new_peer(2, 2)));
-    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().has_error(),
-            "we can't add same peer twice");
-
-    // Send an invalid stale epoch
-    let mut stale_epoch = metapb::RegionEpoch::new();
-    stale_epoch.set_version(1);
-    stale_epoch.set_conf_ver(1);
-    let change_peer = new_admin_request(1,
-                                        &stale_epoch,
-                                        new_change_peer_cmd(ConfChangeType::AddNode,
-                                                            new_peer(5, 5)));
-    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().has_error(),
-            "We can't change peer with stale epoch");
-
     // peer 5 must not exist
     let engine_5 = cluster.get_engine(5);
     must_get_none(&engine_5, b"a1");
 
-    // add peer (3, 3, 3) to region 1.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
-    // Remove peer (2, 2, 2) from region 1.
-    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2));
+    // add peer (3, 3) to region 1.
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    // Remove peer (2, 2) from region 1.
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
 
     let (key, value) = (b"a3", b"v3");
     cluster.must_put(key, value);
@@ -102,32 +85,11 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"a1");
     must_get_none(&engine_2, b"a2");
 
-    let epoch = cluster.pd_client
-        .get_region_by_id(1)
-        .unwrap()
-        .get_region_epoch()
-        .clone();
-    let change_peer = new_admin_request(1,
-                                        &epoch,
-                                        new_change_peer_cmd(ConfChangeType::RemoveNode,
-                                                            new_peer(2, 2)));
-    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().has_error(),
-            "we can't remove same peer twice");
-
-    let change_peer = new_admin_request(1,
-                                        &stale_epoch,
-                                        new_change_peer_cmd(ConfChangeType::RemoveNode,
-                                                            new_peer(3, 3)));
-    let resp = cluster.call_command_on_leader(change_peer, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().has_error(),
-            "We can't change peer with stale epoch");
-
     // peer 3 must exist
     must_get_equal(&engine_3, b"a3", b"v3");
 
     // add peer 2 then remove it again.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(2, 2));
 
     // Force update a2 to check whether peer 2 added ok and received the snapshot.
     let (key, value) = (b"a2", b"v2");
@@ -145,13 +107,14 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(b"a4"), Some(b"v4".to_vec()));
     must_get_equal(&engine_2, b"a4", b"v4");
 
-    // Remove peer (2, 2, 2) from region 1.
-    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2));
+    // Remove peer (2, 2) from region 1.
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
 
-    // add peer (2, 2, 4) to region 1.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 4));
-    // Remove peer (3, 3, 3) from region 1.
-    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(3, 3));
+    // add peer (2, 4) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 4));
+
+    // Remove peer (3, 3) from region 1.
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
 
     let (key, value) = (b"a4", b"v4");
     cluster.must_put(key, value);
@@ -176,9 +139,12 @@ fn new_conf_change_peer(store: &metapb::Store, pd_client: &Arc<TestPdClient>) ->
 
 fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.set_empty_rule();
+
     cluster.start();
 
-    let pd_client = cluster.pd_client.clone();
     let region = &pd_client.get_region(b"").unwrap();
     let region_id = region.get_id();
 
@@ -202,7 +168,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_2 = cluster.get_engine(peer2.get_store_id());
     assert!(engine_2.get_value(&keys::data_key(b"a1")).unwrap().is_none());
     // add new peer to first region.
-    cluster.change_peer(region_id, ConfChangeType::AddNode, peer2.clone());
+    pd_client.must_add_peer(region_id, peer2.clone());
 
     let (key, value) = (b"a2", b"v2");
     cluster.must_put(key, value);
@@ -214,9 +180,10 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // add new peer to first region.
     let peer3 = new_conf_change_peer(&stores[2], &pd_client);
-    cluster.change_peer(region_id, ConfChangeType::AddNode, peer3.clone());
+    pd_client.must_add_peer(region_id, peer3.clone());
+
     // Remove peer2 from first region.
-    cluster.change_peer(region_id, ConfChangeType::RemoveNode, peer2.clone());
+    pd_client.must_remove_peer(region_id, peer2.clone());
 
     let (key, value) = (b"a3", b"v3");
     cluster.must_put(key, value);
@@ -232,9 +199,9 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"a2");
     // add peer4 to first region 1.
     let peer4 = new_conf_change_peer(&stores[1], &pd_client);
-    cluster.change_peer(region_id, ConfChangeType::AddNode, peer4.clone());
+    pd_client.must_add_peer(region_id, peer4.clone());
     // Remove peer3 from first region.
-    cluster.change_peer(region_id, ConfChangeType::RemoveNode, peer3.clone());
+    pd_client.must_remove_peer(region_id, peer3.clone());
 
     let (key, value) = (b"a4", b"v4");
     cluster.must_put(key, value);
@@ -297,7 +264,6 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
 }
 
 fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.store_cfg.replica_check_tick_interval = 200;
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();
@@ -322,18 +288,21 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine = cluster.get_engine(peer.get_store_id());
     must_get_none(&engine, b"a1");
 
-    cluster.change_peer(region_id, ConfChangeType::AddNode, peer.clone());
+    pd_client.must_add_peer(region_id, peer.clone());
 
     wait_till_reach_count(pd_client.clone(), region_id, 6);
+
     // it should remove extra replica.
+    pd_client.clear_rule();
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 
     region = pd_client.get_region_by_id(region_id).unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
-
-    cluster.change_peer(region_id, ConfChangeType::RemoveNode, peer);
+    pd_client.must_remove_peer(region_id, peer);
     wait_till_reach_count(pd_client.clone(), region_id, 4);
+
     // it should add missing replica.
+    pd_client.clear_rule();
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 }
 
@@ -352,14 +321,18 @@ fn test_server_auto_adjust_replica() {
 }
 
 fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.set_empty_rule();
+
     // disable auto compact log.
     cluster.cfg.store_cfg.raft_log_gc_threshold = 10000;
 
     let r1 = cluster.bootstrap_conf_change();
     cluster.start();
 
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
 
     // 1, stop node 2
     // 2, add data to guarantee leader has more logs
@@ -379,36 +352,27 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.stop_node(3);
 
+    pd_client.set_rule(box move |region| new_remove_change_peer(region, new_peer(1, 1)));
+
     let epoch = cluster.pd_client
         .get_region_by_id(1)
         .unwrap()
         .get_region_epoch()
         .clone();
-    let mut change_peer = new_admin_request(r1,
-                                            &epoch,
-                                            new_change_peer_cmd(ConfChangeType::RemoveNode,
-                                                                new_peer(1, 1)));
-    change_peer.mut_header().set_peer(new_peer(1, 1));
-    // ignore error, we just want to send this command to peer (1, 1),
-    // and know that it can't be executed because we have only one peer,
-    // so here will return timeout error, we should ignore it.
-    let _ = cluster.call_command(change_peer, Duration::from_millis(1));
 
     let engine1 = cluster.get_engine(1);
     let index = engine1.get_u64(&keys::raft_applied_index_key(r1)).unwrap().unwrap();
     let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
     compact_log.mut_header().set_peer(new_peer(1, 1));
-    // ignore error, see above comment.
+    // ignore error, we just want to send this command to peer (1, 1),
+    // and know that it can't be executed because we have only one peer,
+    // so here will return timeout error, we should ignore it.
     let _ = cluster.call_command(compact_log, Duration::from_millis(1));
 
     cluster.run_node(2);
     cluster.run_node(3);
 
     sleep_ms(2000);
-
-    let detail = cluster.region_detail(r1, 2);
-
-    cluster.pd_client.change_peer(detail.get_region().clone()).unwrap();
 
     cluster.reset_leader_of_region(r1);
     cluster.must_put(b"a3", b"v3");

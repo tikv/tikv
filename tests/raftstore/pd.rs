@@ -23,10 +23,16 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raftpb;
 use tikv::pd::{PdClient, Result, Error, Key};
-use tikv::raftstore::store::util::find_peer;
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::util::HandyRwLock;
-use super::util::new_peer;
+use super::util::*;
+
+// Rule is just for special test which we want do more accurate control
+// instead of origin max_peer_number check.
+// E.g, for region a, change peers 1,2,3 -> 1,2,4.
+// But unlike real pd, Rule is global, and if you set rule,
+// we won't check the peer number later.
+pub type Rule = Box<Fn(&metapb::Region) -> Option<pdpb::ChangePeer> + Send + Sync>;
 
 #[derive(Default)]
 struct Store {
@@ -40,6 +46,7 @@ struct Cluster {
     regions: BTreeMap<Key, metapb::Region>,
     region_id_keys: HashMap<u64, Key>,
     base_id: AtomicUsize,
+    rule: Option<Rule>,
 }
 
 impl Cluster {
@@ -54,6 +61,7 @@ impl Cluster {
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
             base_id: AtomicUsize::new(1000),
+            rule: None,
         }
     }
 
@@ -103,39 +111,6 @@ impl Cluster {
     fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
         let key = self.region_id_keys.get(&region_id).unwrap();
         Ok(self.regions.get(key).cloned().unwrap())
-    }
-
-    fn split_region(&mut self, left: metapb::Region, right: metapb::Region) -> Result<()> {
-        let left_end_key = enc_end_key(&left);
-        let right_end_key = enc_end_key(&right);
-
-        assert!(left.get_start_key() < left.get_end_key());
-        assert_eq!(left.get_end_key(), right.get_start_key());
-        assert!(right.get_end_key().is_empty() || right.get_start_key() < right.get_end_key());
-
-        // origin pre-split region's end key is the same as right end key,
-        // and must exists.
-        if !self.regions.contains_key(&right_end_key) {
-            return Err(box_err!("region {:?} doesn't exist", right));
-        }
-
-        if self.regions.contains_key(&left_end_key) {
-            return Err(box_err!("region {:?} has already existed", left));
-        }
-
-        assert!(self.region_id_keys.insert(left.get_id(), left_end_key.clone()).is_some());
-        assert!(self.region_id_keys.insert(right.get_id(), right_end_key.clone()).is_none());
-
-        for peer in right.get_peers() {
-            let store = self.stores.get_mut(&peer.get_store_id()).unwrap();
-            store.region_ids.insert(right.get_id());
-        }
-
-        assert!(self.regions.insert(left_end_key, left).is_none());
-        assert!(self.regions.insert(right_end_key, right).is_some());
-        debug!("cluster.regions: {:?}", self.regions);
-
-        Ok(())
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -202,9 +177,6 @@ impl Cluster {
         let region_peer_len = region.get_peers().len();
         let cur_region_peer_len = cur_region.get_peers().len();
 
-        let mut resp = pdpb::RegionHeartbeatResponse::new();
-        let mut change_peer = pdpb::ChangePeer::new();
-
         if conf_ver > cur_conf_ver {
             // If ConfVer changed, TiKV has added/removed one peer already.
             // So pd and TiKV can't have same peer number and can only have
@@ -233,10 +205,24 @@ impl Cluster {
 
             // update the region.
             assert!(self.regions.insert(end_key, region.clone()).is_some());
+        } else {
+            must_same_peers(&cur_region, &region);
         }
 
-        // TODO: add special rule instead of origin max peer number check,
-        // so that we can do test easily.
+        let mut resp = pdpb::RegionHeartbeatResponse::new();
+
+        if self.rule.is_some() {
+            let rule = self.rule.as_ref().unwrap();
+            if let Some(change_peer) = rule(&region) {
+                resp.set_change_peer(change_peer);
+            }
+
+            return Ok(resp);
+        }
+
+        // If no rule, or rule returns None, use default max_peer_number check.
+        let mut change_peer = pdpb::ChangePeer::new();
+
         let max_peer_number = self.meta.get_max_peer_number() as usize;
         let peer_number = region.get_peers().len();
 
@@ -265,7 +251,6 @@ impl Cluster {
         }
 
         Ok(resp)
-
     }
 
     fn region_heartbeat(&mut self,
@@ -280,8 +265,8 @@ impl Cluster {
 fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) -> Result<()> {
     let epoch = region.get_region_epoch();
     let check_epoch = check_region.get_region_epoch();
-    if epoch.get_conf_ver() >= check_epoch.get_conf_ver() &&
-       epoch.get_version() >= check_epoch.get_version() {
+    if check_epoch.get_conf_ver() >= epoch.get_conf_ver() &&
+       check_epoch.get_version() >= epoch.get_version() {
         return Ok(());
     }
 
@@ -338,6 +323,75 @@ impl TestPdClient {
         }
 
         Ok(())
+    }
+
+    pub fn set_rule(&self, rule: Rule) {
+        self.cluster.wl().rule = Some(rule);
+    }
+
+    pub fn clear_rule(&self) {
+        self.cluster.wl().rule = None;
+    }
+
+    // Set an empty rule which disables default max peer number check.
+    pub fn set_empty_rule(&self) {
+        self.set_rule(box move |_| None);
+    }
+
+    pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
+        for _ in 1..500 {
+            let region = self.get_region_by_id(region_id)
+                .unwrap();
+
+            if let Some(p) = find_peer(&region, peer.get_store_id()) {
+                if p.get_id() == peer.get_id() {
+                    return;
+                }
+            }
+            sleep_ms(10);
+        }
+
+        let region = self.get_region_by_id(region_id)
+            .unwrap();
+        assert!(false, format!("region {:?} has no peer {:?}", region, peer));
+    }
+
+    pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
+        for _ in 1..500 {
+            let region = self.get_region_by_id(region_id)
+                .unwrap();
+
+            if find_peer(&region, peer.get_store_id()).is_none() {
+                return;
+            }
+            sleep_ms(10);
+        }
+
+        let region = self.get_region_by_id(region_id)
+            .unwrap();
+        assert!(false, format!("region {:?} has peer {:?}", region, peer));
+    }
+
+    pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
+        let peer2 = peer.clone();
+        self.set_rule(box move |region: &metapb::Region| {
+            if region.get_id() != region_id {
+                return None;
+            }
+            new_add_change_peer(region, peer2.clone())
+        });
+        self.must_have_peer(region_id, peer);
+    }
+
+    pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
+        let peer2 = peer.clone();
+        self.set_rule(box move |region: &metapb::Region| {
+            if region.get_id() != region_id {
+                return None;
+            }
+            new_remove_change_peer(region, peer2.clone())
+        });
+        self.must_none_peer(region_id, peer);
     }
 }
 

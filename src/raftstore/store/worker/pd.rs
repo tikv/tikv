@@ -100,11 +100,14 @@ impl<T: PdClient> Runner<T> {
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
-        info!("executing task {}", task);
+        debug!("executing task {}", task);
 
         match task {
             Task::AskSplit { region, split_key, peer } => {
                 if let Ok(mut resp) = self.pd_client.ask_split(region.clone()) {
+                    info!("try to split with new region id {} for region {:?}",
+                          resp.get_new_region_id(),
+                          region);
                     let req = new_split_region_request(split_key,
                                                        resp.get_new_region_id(),
                                                        resp.take_new_peer_ids());
@@ -118,6 +121,10 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     .region_heartbeat(region.clone(), peer.clone()) {
                     if resp.has_change_peer() {
                         let mut change_peer = resp.take_change_peer();
+                        info!("try to change peer {:?} {:?} for region {:?}",
+                              change_peer.get_change_type(),
+                              change_peer.get_peer(),
+                              region);
                         let req = new_change_peer_request(change_peer.get_change_type(),
                                                           change_peer.take_peer());
                         self.send_admin_request(region, peer, req);
