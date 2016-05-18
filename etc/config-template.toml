@@ -17,9 +17,9 @@ log-level = "info"
 level = "off"
 # if log level is off then `udp` will be activated.
 # remote statsd server address.
-host = "127.0.0.1:8125"
+host = ""
 # local statsd client address.
-addr = "127.0.0.1:8989"
+addr = ""
 # metric prefix: trace, debug, info, warn, error, off.
 prefix = "tikv"
 
