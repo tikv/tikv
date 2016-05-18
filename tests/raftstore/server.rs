@@ -24,7 +24,7 @@ use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
-use tikv::raftstore::store;
+use tikv::raftstore::store::{self, SendCh as StoreSendCh};
 use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
@@ -41,6 +41,7 @@ pub struct ServerCluster {
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
+    store_chs: HashMap<u64, StoreSendCh>,
 
     msg_id: AtomicUsize,
     pd_client: Arc<TestPdClient>,
@@ -56,6 +57,7 @@ impl ServerCluster {
             conns: Mutex::new(HashMap::new()),
             msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
+            store_chs: HashMap::new(),
         }
     }
 
@@ -130,6 +132,7 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
 
+        self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
 
@@ -152,6 +155,7 @@ impl Simulator for ServerCluster {
         let h = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
         let addr = self.addrs.get(&node_id).unwrap();
+        let _ = self.store_chs.remove(&node_id).unwrap();
         self.conns
             .lock()
             .unwrap()
@@ -220,6 +224,10 @@ impl Simulator for ServerCluster {
     fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>) {
         let trans = self.sim_trans.get(&node_id).unwrap();
         trans.wl().set_filters(filters);
+    }
+
+    fn get_store_sendch(&self, node_id: u64) -> Option<StoreSendCh> {
+        self.store_chs.get(&node_id).cloned()
     }
 }
 

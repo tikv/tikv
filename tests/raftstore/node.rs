@@ -21,7 +21,7 @@ use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
-use tikv::raftstore::store::{self, Transport, msg};
+use tikv::raftstore::store::{self, Transport, msg, SendCh};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tikv::raftstore::Result;
@@ -128,6 +128,10 @@ impl Simulator for NodeCluster {
     fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>) {
         let trans = self.simulate_trans.get(&node_id).unwrap();
         trans.wl().set_filters(filters);
+    }
+
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh> {
+        self.nodes.get(&node_id).map(|node| node.get_sendch())
     }
 }
 

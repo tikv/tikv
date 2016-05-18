@@ -24,7 +24,7 @@ use kvproto::pdpb;
 use kvproto::raftpb;
 use tikv::pd::{PdClient, Result, Error, Key};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
-use tikv::util::HandyRwLock;
+use tikv::util::{HandyRwLock, escape};
 use super::util::*;
 
 // Rule is just for special test which we want do more accurate control
@@ -81,8 +81,7 @@ impl Cluster {
 
         self.stores.insert(store_id, s);
 
-        self.region_id_keys.insert(region.get_id(), enc_end_key(&region));
-        self.regions.insert(enc_end_key(&region), region);
+        self.add_region(&region);
     }
 
     // We don't care cluster id here, so any value like 0 in tests is ok.
@@ -100,12 +99,11 @@ impl Cluster {
         Ok(self.stores.get(&store_id).unwrap().store.clone())
     }
 
-    fn get_region(&self, key: Vec<u8>) -> Result<metapb::Region> {
-        let (_, region) = self.regions
+    fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
+        self.regions
             .range::<Key, Key>(Excluded(&key), Unbounded)
             .next()
-            .unwrap();
-        Ok(region.clone())
+            .map(|(_, region)| region.clone())
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
@@ -115,6 +113,18 @@ impl Cluster {
 
     fn get_stores(&self) -> Vec<metapb::Store> {
         self.stores.values().map(|s| s.store.clone()).collect()
+    }
+
+    fn add_region(&mut self, region: &metapb::Region) {
+        let end_key = enc_end_key(region);
+        assert!(self.regions.insert(end_key.clone(), region.clone()).is_none());
+        assert!(self.region_id_keys.insert(region.get_id(), end_key.clone()).is_none());
+    }
+
+    fn remove_region(&mut self, region: &metapb::Region) {
+        let end_key = enc_end_key(region);
+        assert!(self.regions.remove(&end_key).is_some());
+        assert!(self.region_id_keys.remove(&region.get_id()).is_some());
     }
 
     fn handle_heartbeat_version(&mut self, region: metapb::Region) -> Result<()> {
@@ -129,7 +139,15 @@ impl Cluster {
         let conf_ver = region.get_region_epoch().get_conf_ver();
 
         let search_key = data_key(region.get_start_key());
-        let search_region = self.get_region(search_key).unwrap();
+        let search_region = match self.get_region(search_key) {
+            None => {
+                // Find no range after start key, insert directly.
+                self.add_region(&region);
+                return Ok(());
+            }
+            Some(search_region) => search_region,
+        };
+
         let search_start_key = enc_start_key(&search_region);
         let search_end_key = enc_end_key(&search_region);
 
@@ -141,8 +159,7 @@ impl Cluster {
             try!(check_stale_region(&search_region, &region));
         } else if search_start_key > end_key {
             // No range [start, end) in region now, insert directly.
-            assert!(self.regions.insert(end_key.clone(), region.clone()).is_none());
-            assert!(self.region_id_keys.insert(region.get_id(), end_key.clone()).is_none());
+            self.add_region(&region);
         } else if search_start_key < end_key {
             // overlap, remove old, insert new.
             // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
@@ -150,10 +167,8 @@ impl Cluster {
             assert!(version > search_version);
             assert!(conf_ver >= search_conf_ver);
 
-            assert!(self.regions.remove(&search_end_key).is_some());
-            assert!(self.region_id_keys.remove(&search_region.get_id()).is_some());
-            assert!(self.regions.insert(end_key.clone(), region.clone()).is_none());
-            assert!(self.region_id_keys.insert(region.get_id(), end_key.clone()).is_none());
+            self.remove_region(&search_region);
+            self.add_region(&region);
         } else {
             panic!("invalid region {:?} compared searched {:?}",
                    region,
@@ -343,6 +358,8 @@ impl TestPdClient {
 
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
+            sleep_ms(10);
+
             let region = self.get_region_by_id(region_id)
                 .unwrap();
 
@@ -351,7 +368,6 @@ impl TestPdClient {
                     return;
                 }
             }
-            sleep_ms(10);
         }
 
         let region = self.get_region_by_id(region_id)
@@ -361,13 +377,14 @@ impl TestPdClient {
 
     pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
+            sleep_ms(10);
+
             let region = self.get_region_by_id(region_id)
                 .unwrap();
 
             if find_peer(&region, peer.get_store_id()).is_none() {
                 return;
             }
-            sleep_ms(10);
         }
 
         let region = self.get_region_by_id(region_id)
@@ -395,6 +412,44 @@ impl TestPdClient {
             new_remove_change_peer(region, peer2.clone())
         });
         self.must_none_peer(region_id, peer);
+    }
+
+    // check whether region is split by split_key or not.
+    pub fn must_split(&self, region: &metapb::Region, split_key: &[u8]) {
+        for _ in 1..200 {
+            sleep_ms(10);
+            // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c)
+            // use a to find new [a, b).
+            // use b to find new [b, c)
+            let left = match self.get_region(region.get_start_key()) {
+                Err(_) => continue,
+                Ok(left) => left,
+            };
+
+            if left.get_end_key() != split_key {
+                continue;
+            }
+
+            let right = match self.get_region(split_key) {
+                Err(_) => continue,
+                Ok(right) => right,
+            };
+
+            if right.get_start_key() != split_key {
+                continue;
+            }
+
+            assert!(left.get_region_epoch().get_version() >
+                    region.get_region_epoch().get_version());
+            assert!(right.get_region_epoch().get_version() >
+                    region.get_region_epoch().get_version());
+            return;
+        }
+
+        assert!(false,
+                format!("region {:?} has not been split by {:?}",
+                        region,
+                        escape(split_key)));
     }
 }
 
@@ -430,7 +485,11 @@ impl PdClient for TestPdClient {
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
         try!(self.check_bootstrap());
-        self.cluster.rl().get_region(data_key(key))
+        if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
+            return Ok(region);
+        }
+
+        Err(box_err!("no region contains key {:?}", escape(key)))
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {

@@ -35,8 +35,6 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    let region = pd_client.get_region(b"").unwrap();
-
     let a1 = b"a1";
     cluster.must_put(a1, b"v1");
 
@@ -45,8 +43,9 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let a3 = b"a3";
     cluster.must_put(a3, b"v3");
 
+    let region = pd_client.get_region(b"").unwrap();
     // Split with a2, so a1 must in left, and a3 in right.
-    cluster.split_region(region.get_id(), Some(a2.to_vec()));
+    cluster.must_split(&region, a2);
 
     let left = pd_client.get_region(a1).unwrap();
     let right = pd_client.get_region(a3).unwrap();
@@ -66,7 +65,8 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(a3)]);
     let resp = cluster.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().has_error());
-    assert!(resp.get_header().get_error().has_key_not_in_region());
+    assert!(resp.get_header().get_error().has_key_not_in_region(),
+            format!("{:?}", resp));
 }
 
 #[test]
@@ -215,7 +215,7 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.stop_node(index);
 
     let a2 = b"a20";
-    cluster.split_region(region.get_id(), Some(a2.to_vec()));
+    cluster.must_split(&region, a2);
 
     // When the node starts, the region will try to join the raft group first,
     // so most of case, the new leader's heartbeat for split region may arrive

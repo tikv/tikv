@@ -31,6 +31,7 @@ use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use super::transport_simulate::{Strategy, Filter};
+use tikv::raftstore::store::keys::data_key;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -54,6 +55,7 @@ pub trait Simulator {
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>);
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
 }
 
 pub struct Cluster<T: Simulator> {
@@ -487,6 +489,25 @@ impl<T: Simulator> Cluster<T> {
         for node_id in sim.get_node_ids() {
             sim.hook_transport(node_id, vec![]);
         }
+    }
+
+    pub fn ask_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
+        // Now we can't control split easily in pd, so here we use store send channel
+        // directly to send the AskSplit request.
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let ch = self.sim.rl().get_store_sendch(leader.get_store_id()).unwrap();
+        ch.send(Msg::SplitCheckResult {
+                region_id: region.get_id(),
+                epoch: region.get_region_epoch().clone(),
+                split_key: data_key(split_key),
+            })
+            .unwrap();
+    }
+
+    pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
+        self.ask_split(region, split_key);
+
+        self.pd_client.must_split(region, split_key)
     }
 }
 
