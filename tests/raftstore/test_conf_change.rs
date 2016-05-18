@@ -466,25 +466,25 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // check whether a new cluster [1,2,3] formed
     // if so, both [1,2,3] and [4,5,6] think they serve for region r1
     // result in split brain
-    let header0 = find_leader_response_header(cluster, new_peer(2, 2), r1);
+    let header0 = find_leader_response_header(cluster, r1, new_peer(2, 2));
     assert!(header0.get_error().has_region_not_found());
 
     // at least wait for a round of election timeout and check again
-    let term = find_leader_response_header(cluster, new_peer(1, 1), r1).get_current_term();
+    let term = find_leader_response_header(cluster, r1, new_peer(1, 1)).get_current_term();
     let mut current_term = term;
     while current_term < term + 3 {
         sleep_ms(10);
-        let header2 = find_leader_response_header(cluster, new_peer(1, 1), r1);
+        let header2 = find_leader_response_header(cluster, r1, new_peer(1, 1));
         current_term = header2.get_current_term();
     }
 
-    let header1 = find_leader_response_header(cluster, new_peer(2, 2), r1);
+    let header1 = find_leader_response_header(cluster, r1, new_peer(2, 2));
     assert!(header1.get_error().has_region_not_found());
 }
 
 fn find_leader_response_header<T: Simulator>(cluster: &mut Cluster<T>,
-                                             peer: metapb::Peer,
-                                             region_id: u64)
+                                             region_id: u64,
+                                             peer: metapb::Peer)
                                              -> RaftResponseHeader {
     let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
     let resp = cluster.call_command(find_leader, Duration::from_secs(3));
