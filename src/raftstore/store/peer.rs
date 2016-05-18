@@ -338,7 +338,8 @@ impl Peer {
                 return cmd.cb.call_box((err_resp,));
             }
 
-            // transfer leader command don't have a apply, so we return immediately
+            // transfer leader command don't need to replicate log and apply, so we
+            // return immediately. Note that this command may fail, we can view it just as an advice
             let mut response = AdminResponse::new();
             response.set_cmd_type(AdminCmdType::TransferLeader);
             response.set_transfer_leader(TransferLeaderResponse::new());
