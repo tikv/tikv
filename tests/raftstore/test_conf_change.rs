@@ -30,7 +30,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
-    pd_client.set_empty_rule();
+    pd_client.disable_default_rule();
 
     let r1 = cluster.bootstrap_conf_change();
     cluster.start();
@@ -141,7 +141,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
-    pd_client.set_empty_rule();
+    pd_client.disable_default_rule();
 
     cluster.start();
 
@@ -323,7 +323,7 @@ fn test_server_auto_adjust_replica() {
 fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
-    pd_client.set_empty_rule();
+    pd_client.disable_default_rule();
 
     // disable auto compact log.
     cluster.cfg.store_cfg.raft_log_gc_threshold = 10000;

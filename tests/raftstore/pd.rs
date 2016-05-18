@@ -325,16 +325,19 @@ impl TestPdClient {
         Ok(())
     }
 
+    // Set a customized rule to overwrite default max peer number check rule.
     pub fn set_rule(&self, rule: Rule) {
         self.cluster.wl().rule = Some(rule);
     }
 
+    // Clear the customized rule set before and use default rule again.
     pub fn clear_rule(&self) {
         self.cluster.wl().rule = None;
     }
 
-    // Set an empty rule which disables default max peer number check.
-    pub fn set_empty_rule(&self) {
+    // Set an empty rule which nothing to do to disable default max peer number
+    // check rule, we can use clear_rule to enable default again.
+    pub fn disable_default_rule(&self) {
         self.set_rule(box move |_| None);
     }
 

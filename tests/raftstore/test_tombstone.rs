@@ -25,7 +25,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
-    pd_client.set_empty_rule();
+    pd_client.disable_default_rule();
 
     let r1 = cluster.bootstrap_conf_change();
     cluster.start();
