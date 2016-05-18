@@ -17,24 +17,24 @@ use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use super::transport_simulate::Strategy;
+use super::transport_simulate::{Delay, DropPacket};
 
 use rand;
 use rand::Rng;
+use std::time::Duration;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
-    test_multi_with_transport_strategy(cluster, vec![]);
-}
-
-fn test_multi_with_transport_strategy<T: Simulator>(cluster: &mut Cluster<T>,
-                                                    strategy: Vec<Strategy>) {
     // init_log();
 
     // test a cluster with five nodes [1, 5], only one region (region 1).
     // every node has a store and a peer with same id as node's.
     cluster.bootstrap_region().expect("");
-    cluster.start_with_strategy(strategy);
+    cluster.start();
 
+    test_multi_base_after_bootstrap(cluster);
+}
+
+fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     let (key, value) = (b"a1", b"v1");
 
     cluster.must_put(key, value);
@@ -169,18 +169,25 @@ fn test_multi_node_base() {
     test_multi_base(&mut cluster)
 }
 
+fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+    cluster.hook_transport(DropPacket::new(30));
+    test_multi_base_after_bootstrap(cluster);
+}
+
 #[test]
 fn test_multi_node_latency() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::Delay(10)]);
+    test_multi_latency(&mut cluster);
 }
 
 #[test]
 fn test_multi_node_drop_packet() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::DropPacket(30)]);
+    test_multi_drop_packet(&mut cluster);
 }
 
 #[test]
@@ -190,18 +197,26 @@ fn test_multi_server_base() {
     test_multi_base(&mut cluster)
 }
 
+
+fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+    cluster.hook_transport(Delay::new(Duration::from_millis(30)));
+    test_multi_base_after_bootstrap(cluster);
+}
+
 #[test]
 fn test_multi_server_latency() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::Delay(10)]);
+    test_multi_latency(&mut cluster);
 }
 
 #[test]
 fn test_multi_server_drop_packet() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_multi_with_transport_strategy(&mut cluster, vec![Strategy::DropPacket(40)]);
+    test_multi_drop_packet(&mut cluster);
 }
 
 #[test]

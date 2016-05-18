@@ -32,7 +32,7 @@ use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
-use super::transport_simulate::{Strategy, SimulateTransport, Filter};
+use super::transport_simulate::{SimulateTransport, Filter};
 
 type SimulateServerTransport = SimulateTransport<ServerTransport>;
 
@@ -93,12 +93,7 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self,
-                node_id: u64,
-                cfg: Config,
-                engine: Arc<DB>,
-                strategy: Vec<Strategy>)
-                -> u64 {
+    fn run_node(&mut self, node_id: u64, cfg: Config, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.handles.contains_key(&node_id));
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
@@ -121,7 +116,7 @@ impl Simulator for ServerCluster {
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
 
-        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(strategy, trans.clone())));
+        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
         let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
 
@@ -218,7 +213,7 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>) {
+    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>) {
         let trans = self.sim_trans.get(&node_id).unwrap();
         trans.wl().set_filters(filters);
     }
