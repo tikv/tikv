@@ -24,6 +24,7 @@ use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
+use tikv::raftstore::store;
 use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
@@ -31,12 +32,11 @@ use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::pd_ask::run_ask_loop;
-use super::transport_simulate::{Strategy, SimulateTransport, Filter};
+use super::transport_simulate::{SimulateTransport, Filter};
 
 type SimulateServerTransport = SimulateTransport<ServerTransport>;
 
 pub struct ServerCluster {
-    cluster_id: u64,
     senders: HashMap<u64, SendCh>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
     addrs: HashMap<u64, SocketAddr>,
@@ -44,13 +44,12 @@ pub struct ServerCluster {
     sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
 
     msg_id: AtomicUsize,
-    pd_client: Arc<RwLock<TestPdClient>>,
+    pd_client: Arc<TestPdClient>,
 }
 
 impl ServerCluster {
-    pub fn new(cluster_id: u64, pd_client: Arc<RwLock<TestPdClient>>) -> ServerCluster {
+    pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
         ServerCluster {
-            cluster_id: cluster_id,
             senders: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
@@ -69,8 +68,8 @@ impl ServerCluster {
     fn pool_get(&self, addr: &SocketAddr) -> Result<TcpStream> {
         {
             let mut conns = self.conns
-                                .lock()
-                                .unwrap();
+                .lock()
+                .unwrap();
             let conn = conns.get_mut(addr);
             if let Some(mut pool) = conn {
                 if !pool.is_empty() {
@@ -85,8 +84,8 @@ impl ServerCluster {
 
     fn pool_put(&self, addr: &SocketAddr, conn: TcpStream) {
         let mut conns = self.conns
-                            .lock()
-                            .unwrap();
+            .lock()
+            .unwrap();
         let p = conns.entry(*addr).or_insert_with(Vec::new);
         p.push(conn);
     }
@@ -94,19 +93,14 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self,
-                node_id: u64,
-                cfg: Config,
-                engine: Arc<DB>,
-                strategy: Vec<Strategy>)
-                -> u64 {
+    fn run_node(&mut self, node_id: u64, cfg: Config, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.handles.contains_key(&node_id));
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
         // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop().unwrap();
         let sendch = SendCh::new(event_loop.channel());
-        let resolver = PdStoreAddrResolver::new(self.cluster_id, self.pd_client.clone()).unwrap();
+        let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
         let trans = Arc::new(RwLock::new(ServerTransport::new(sendch)));
 
         let mut cfg = cfg;
@@ -122,10 +116,11 @@ impl Simulator for ServerCluster {
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
 
-        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(strategy, trans.clone())));
-        let mut node = Node::new(&cfg, self.pd_client.clone(), simulate_trans.clone());
+        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
+        let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+        let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
 
-        node.start(engine.clone()).unwrap();
+        node.start(store_event_loop, engine.clone(), simulate_trans.clone()).unwrap();
         let router = node.raft_store_router();
 
         assert!(node_id == 0 || node_id == node.id());
@@ -166,11 +161,8 @@ impl Simulator for ServerCluster {
         self.senders.keys().cloned().collect()
     }
 
-    fn call_command(&self,
-                    store_id: u64,
-                    request: RaftCmdRequest,
-                    timeout: Duration)
-                    -> Result<RaftCmdResponse> {
+    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
+        let store_id = request.get_header().get_peer().get_store_id();
         let addr = self.addrs.get(&store_id).unwrap();
         let mut conn = self.pool_get(addr).unwrap();
 
@@ -204,7 +196,7 @@ impl Simulator for ServerCluster {
     }
 
     fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
-        let store_id = raft_msg.get_message().get_to();
+        let store_id = raft_msg.get_to_peer().get_store_id();
         let addr = self.addrs.get(&store_id).unwrap();
 
         let mut msg = Message::new();
@@ -221,7 +213,7 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>) {
+    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>) {
         let trans = self.sim_trans.get(&node_id).unwrap();
         trans.wl().set_filters(filters);
     }
@@ -229,8 +221,8 @@ impl Simulator for ServerCluster {
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(RwLock::new(TestPdClient::new(tx)));
-    let sim = Arc::new(RwLock::new(ServerCluster::new(id, pd_client.clone())));
+    let pd_client = Arc::new(TestPdClient::new(tx, id));
+    let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
     run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)
 }

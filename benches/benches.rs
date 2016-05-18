@@ -22,6 +22,8 @@ extern crate log;
 extern crate test;
 extern crate mio;
 extern crate rand;
+#[macro_use]
+extern crate tikv;
 
 mod channel;
 

@@ -139,15 +139,15 @@ mod tests {
 
     fn batch<T: Engine + ?Sized>(engine: &T) {
         engine.write(&Context::new(),
-                     vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
-                          Modify::Put((make_key(b"y"), b"2".to_vec()))])
-              .unwrap();
+                   vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
+                        Modify::Put((make_key(b"y"), b"2".to_vec()))])
+            .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
         engine.write(&Context::new(),
-                     vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
-              .unwrap();
+                   vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
+            .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
     }

@@ -8,7 +8,7 @@ use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::storage::txn::TxnStore;
 use tikv::util;
 use kvproto::coprocessor::{Request, KeyRange};
-use tipb::select::{SelectRequest, SelectResponse};
+use tipb::select::{ByItem, SelectRequest, SelectResponse};
 use tipb::schema::{self, ColumnInfo};
 
 use std::sync::Arc;
@@ -86,12 +86,12 @@ impl Store {
     fn put(&mut self, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
         self.handles.extend(kv.iter().map(|&(ref k, _)| k.clone()));
         let pk = kv[0].0.clone();
-        let kv = kv.drain(..).map(|(k, v)| Mutation::Put((Key::from_raw(k), v))).collect();
+        let kv = kv.drain(..).map(|(k, v)| Mutation::Put((Key::from_raw(&k), v))).collect();
         self.store.prewrite(Context::new(), kv, pk, self.current_ts).unwrap();
     }
 
     fn commit(&mut self) {
-        let handles = self.handles.drain(..).map(Key::from_raw).collect();
+        let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
         self.store
             .commit(Context::new(), handles, self.current_ts, self.ts_g.gen())
             .unwrap();
@@ -200,9 +200,59 @@ fn test_select() {
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     assert_eq!(sel_resp.get_rows().len(), count as usize);
+    for (i, row) in sel_resp.get_rows().iter().enumerate() {
+        let handle = i as i64 + 1;
+        let mut expected_datum = vec![Datum::I64(handle)];
+        expected_datum.extend(gen_values(handle, &tbl));
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+}
+
+#[test]
+fn test_limit() {
+    let count = 10;
+    let (mut store, end_point, tbl) = initial_data(count);
+    let req = prepare_sel(&mut store, &tbl);
+    let mut sel_req = SelectRequest::new();
+    sel_req.merge_from_bytes(req.get_data()).unwrap();
+    sel_req.set_limit(5);
+
+    let resp = end_point.handle_select(req, sel_req).unwrap();
+
+    let mut sel_resp = SelectResponse::new();
+    sel_resp.merge_from_bytes(resp.get_data()).unwrap();
+    assert_eq!(sel_resp.get_rows().len(), 5 as usize);
 
     for (i, row) in sel_resp.get_rows().iter().enumerate() {
         let handle = i as i64 + 1;
+        let mut expected_datum = vec![Datum::I64(handle)];
+        expected_datum.extend(gen_values(handle, &tbl));
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+}
+
+#[test]
+fn test_reverse() {
+    let count = 10;
+    let (mut store, end_point, tbl) = initial_data(count);
+    let req = prepare_sel(&mut store, &tbl);
+    let mut sel_req = SelectRequest::new();
+    sel_req.merge_from_bytes(req.get_data()).unwrap();
+    sel_req.set_limit(5);
+    let mut item = ByItem::new();
+    item.set_desc(true);
+    sel_req.mut_order_by().push(item);
+
+    let resp = end_point.handle_select(req, sel_req).unwrap();
+
+    let mut sel_resp = SelectResponse::new();
+    sel_resp.merge_from_bytes(resp.get_data()).unwrap();
+    assert_eq!(sel_resp.get_rows().len(), 5 as usize);
+
+    for (i, row) in sel_resp.get_rows().iter().enumerate() {
+        let handle = 10 - i as i64;
         let mut expected_datum = vec![Datum::I64(handle)];
         expected_datum.extend(gen_values(handle, &tbl));
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
@@ -254,5 +304,37 @@ fn test_index() {
     handles.sort();
     for (i, &h) in handles.iter().enumerate() {
         assert_eq!(i as i64 + 1, h);
+    }
+}
+
+#[test]
+fn test_index_reverse_limit() {
+    let count = 10;
+    let (mut store, end_point, tbl) = initial_data(count);
+    let req = prepare_idx(&mut store, &tbl);
+    let mut sel_req = SelectRequest::new();
+    sel_req.merge_from_bytes(req.get_data()).unwrap();
+    sel_req.set_limit(5);
+    let mut item = ByItem::new();
+    item.set_desc(true);
+    sel_req.mut_order_by().push(item);
+
+    let resp = end_point.handle_select(req, sel_req).unwrap();
+
+    let mut sel_resp = SelectResponse::new();
+    sel_resp.merge_from_bytes(resp.get_data()).unwrap();
+    assert_eq!(sel_resp.get_rows().len(), 5);
+    let mut handles = vec![];
+    for row in sel_resp.get_rows() {
+        let datums = row.get_handle().decode().unwrap();
+        assert_eq!(datums.len(), 1);
+        if let Datum::I64(h) = datums[0] {
+            handles.push(h);
+        } else {
+            panic!("i64 expected, but got {:?}", datums[0]);
+        }
+    }
+    for (i, &h) in handles.iter().enumerate() {
+        assert_eq!(9 - i as i64, h);
     }
 }

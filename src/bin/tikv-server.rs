@@ -38,6 +38,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, c
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
+use tikv::raftstore::store;
 use tikv::pd::{new_rpc_client, RpcClient};
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -58,20 +59,20 @@ fn get_string_value<F>(short: &str,
     where F: Fn(&toml::Value) -> Option<String>
 {
     matches.opt_str(short)
-           .or_else(|| {
-               config.lookup(long).and_then(|v| f(&v)).or_else(|| {
-                   info!("malformed or missing {}, use default", long);
-                   default
-               })
-           })
-           .expect(&format!("please specify {}", long))
+        .or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("malformed or missing {}, use default", long);
+                default
+            })
+        })
+        .expect(&format!("please specify {}", long))
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
     let level = get_string_value("L",
                                  "server.log-level",
-                                 &matches,
-                                 &config,
+                                 matches,
+                                 config,
                                  Some("info".to_owned()),
                                  |v| v.as_str().map(|s| s.to_owned()));
     util::init_log(logger::get_level_by_string(&level)).unwrap();
@@ -82,7 +83,7 @@ fn build_raftkv(matches: &Matches,
                 ch: SendCh,
                 cluster_id: u64,
                 addr: String,
-                pd_client: Arc<RwLock<RpcClient>>)
+                pd_client: Arc<RpcClient>)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
@@ -110,13 +111,14 @@ fn build_raftkv(matches: &Matches,
     // If no advertise listening address set, use the associated listening address.
     cfg.advertise_addr = get_string_value("advertise-addr",
                                           "server.advertise-addr",
-                                          &matches,
-                                          &config,
+                                          matches,
+                                          config,
                                           Some(addr),
                                           |v| v.as_str().map(|s| s.to_owned()));
 
-    let mut node = Node::new(&cfg, pd_client, trans.clone());
-    node.start(engine.clone()).unwrap();
+    let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+    let mut node = Node::new(&mut event_loop, &cfg, pd_client);
+    node.start(event_loop, engine.clone(), trans).unwrap();
     let raft_router = node.raft_store_router();
 
     (create_raft_storage(node, engine).unwrap(), raft_router)
@@ -152,7 +154,7 @@ fn run_local_server(listener: TcpListener, store: Storage) {
                               store,
                               router,
                               MockStoreAddrResolver)
-                      .unwrap();
+        .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
@@ -162,22 +164,22 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
 
     let id = get_string_value("I",
                               "raft.cluster-id",
-                              &matches,
-                              &config,
+                              matches,
+                              config,
                               None,
                               |v| v.as_integer().map(|i| i.to_string()));
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
 
     let pd_addr = get_string_value("pd",
                                    "raft.pd",
-                                   &matches,
-                                   &config,
+                                   matches,
+                                   config,
                                    None,
                                    |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
-    let resolver = PdStoreAddrResolver::new(cluster_id, pd_client.clone()).unwrap();
+    let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
+    let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
-    let (store, raft_router) = build_raftkv(&matches,
+    let (store, raft_router) = build_raftkv(matches,
                                             config,
                                             ch,
                                             cluster_id,

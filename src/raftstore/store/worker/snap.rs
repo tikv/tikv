@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use raftstore::store::{self, RaftStorage, SnapState};
-use util::HandyRwLock;
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};

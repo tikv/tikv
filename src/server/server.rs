@@ -21,7 +21,6 @@ use std::net::SocketAddr;
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
 
-use raftstore::store::Transport;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::raftpb::MessageType as RaftMessageType;
@@ -385,11 +384,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
 
         let region_id = data.msg.get_raft().get_region_id();
-        let to_store_id = data.msg.get_raft().get_message().get_to();
+        let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
 
-        if let Err(e) = self.raft_router.rl().report_unreachable(region_id, to_store_id) {
+        if let Err(e) = self.raft_router.rl().report_unreachable(region_id, to_peer_id) {
             error!("report peer {} unreachable for region {} failed {:?}",
-                   to_store_id,
+                   to_peer_id,
                    region_id,
                    e);
         }
@@ -470,12 +469,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter<T> {
         let region_id = data.msg.get_raft().get_region_id();
-        let to_store_id = data.msg.get_raft().get_message().get_to();
+        let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
 
         SnapshotReporter {
             router: self.raft_router.clone(),
             region_id: region_id,
-            to_store_id: to_store_id,
+            to_peer_id: to_peer_id,
             reported: AtomicBool::new(false),
         }
     }
@@ -580,7 +579,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 struct SnapshotReporter<T: RaftStoreRouter + 'static> {
     router: Arc<RwLock<T>>,
     region_id: u64,
-    to_store_id: u64,
+    to_peer_id: u64,
 
     reported: AtomicBool,
 }
@@ -593,16 +592,16 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
         }
 
         debug!("send snapshot to {} for {} {:?}",
-               self.to_store_id,
+               self.to_peer_id,
                self.region_id,
                status);
 
 
         if let Err(e) = self.router
-                            .rl()
-                            .report_snapshot(self.region_id, self.to_store_id, status) {
+            .rl()
+            .report_snapshot(self.region_id, self.to_peer_id, status) {
             error!("report snapshot to peer {} with region {} err {:?}",
-                   self.to_store_id,
+                   self.to_peer_id,
                    self.region_id,
                    e);
         }
@@ -675,14 +674,13 @@ mod tests {
 
         let mut event_loop = create_event_loop().unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut server = Server::new(&mut event_loop,
-                                     listener,
-                                     Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
-                                     Arc::new(RwLock::new(TestRaftStoreRouter {
-                                         tx: Mutex::new(tx),
-                                     })),
-                                     resolver)
-                             .unwrap();
+        let mut server =
+            Server::new(&mut event_loop,
+                        listener,
+                        Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
+                        Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
+                        resolver)
+                .unwrap();
 
         let ch = server.get_sendch();
         let h = thread::spawn(move || {
@@ -693,10 +691,10 @@ mod tests {
         msg.set_msg_type(MessageType::Raft);
 
         ch.send(Msg::SendStore {
-              store_id: 1,
-              data: ConnData::new(0, msg),
-          })
-          .unwrap();
+                store_id: 1,
+                data: ConnData::new(0, msg),
+            })
+            .unwrap();
 
         rx.recv().unwrap();
 

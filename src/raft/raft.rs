@@ -116,12 +116,12 @@ impl Config {
 
         if self.election_tick <= self.heartbeat_tick {
             return Err(Error::ConfigInvalid("election tick must be greater than heartbeat tick"
-                                                .to_owned()));
+                .to_owned()));
         }
 
         if self.max_inflight_msgs == 0 {
             return Err(Error::ConfigInvalid("max inflight messages must be greater than 0"
-                                                .to_owned()));
+                .to_owned()));
         }
 
         Ok(())
@@ -158,6 +158,10 @@ pub struct Raft<T: Storage> {
 
     /// the leader id
     pub leader_id: u64,
+
+    /// lead_transferee is id of the leader transfer target when its value is not None.
+    /// Follow the procedure defined in raft thesis 3.10.
+    pub lead_transferee: Option<u64>,
 
     /// New configuration is ignored if there exists unapplied configuration.
     pub pending_conf: bool,
@@ -236,6 +240,7 @@ impl<T: Storage> Raft<T> {
             votes: Default::default(),
             msgs: Default::default(),
             leader_id: Default::default(),
+            lead_transferee: None,
             term: Default::default(),
             election_elapsed: Default::default(),
             pending_conf: Default::default(),
@@ -273,7 +278,7 @@ impl<T: Storage> Raft<T> {
         self.raft_log.get_store()
     }
 
-    pub fn has_leader(&self) -> bool {
+    fn has_leader(&self) -> bool {
         self.leader_id != INVALID_ID
     }
 
@@ -387,7 +392,8 @@ impl<T: Storage> Raft<T> {
                 }
                 ProgressState::Probe => pr.pause(),
                 _ => {
-                    panic!("{} is sending append in unhandled state {:?}",
+                    panic!("{} {} is sending append in unhandled state {:?}",
+                           self.tag,
                            self.id,
                            pr.state)
                 }
@@ -486,6 +492,8 @@ impl<T: Storage> Raft<T> {
         self.heartbeat_elapsed = 0;
         self.reset_randomized_election_timeout();
 
+        self.abort_leader_transfer();
+
         self.votes = HashMap::new();
         let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
         let self_id = self.id;
@@ -543,6 +551,9 @@ impl<T: Storage> Raft<T> {
                 let m = new_message(INVALID_ID, MessageType::MsgCheckQuorum, Some(self.id));
                 self.step(m).is_ok();
             }
+            if self.state == StateRole::Leader && self.lead_transferee.is_some() {
+                self.abort_leader_transfer()
+            }
         }
 
         if self.state != StateRole::Leader {
@@ -591,8 +602,8 @@ impl<T: Storage> Raft<T> {
         self.state = StateRole::Leader;
         let begin = self.raft_log.committed + 1;
         let ents = self.raft_log
-                       .entries(begin, raft_log::NO_LIMIT)
-                       .expect("unexpected error getting uncommitted entries");
+            .entries(begin, raft_log::NO_LIMIT)
+            .expect("unexpected error getting uncommitted entries");
         for e in ents {
             if e.get_entry_type() != EntryType::EntryConfChange {
                 continue;
@@ -668,6 +679,14 @@ impl<T: Storage> Raft<T> {
             }
             return Ok(());
         }
+        if m.get_msg_type() == MessageType::MsgTransferLeader && self.state != StateRole::Leader {
+            debug!("{} {} [term {} state {:?}] ignoring MsgTransferLeader to {}",
+                   self.tag,
+                   self.id,
+                   self.term,
+                   self.state,
+                   m.get_from());
+        }
 
         if m.get_term() == 0 {
             // local message
@@ -710,9 +729,9 @@ impl<T: Storage> Raft<T> {
                               old_paused: &mut bool,
                               send_append: &mut bool,
                               maybe_commit: &mut bool) {
-        let pr = self.prs.get_mut(&m.get_from()).unwrap();
-        pr.recent_active = true;
+        self.prs.get_mut(&m.get_from()).unwrap().recent_active = true;
         if m.get_reject() {
+            let pr = self.prs.get_mut(&m.get_from()).unwrap();
             debug!("{} {} received msgAppend rejection(lastindex: {}) from {} for index {}",
                    self.tag,
                    self.id,
@@ -733,11 +752,27 @@ impl<T: Storage> Raft<T> {
             return;
         }
 
-        *old_paused = pr.is_paused();
-        if !pr.maybe_update(m.get_index()) {
-            return;
+        {
+            let pr = self.prs.get_mut(&m.get_from()).unwrap();
+            *old_paused = pr.is_paused();
+            if !pr.maybe_update(m.get_index()) {
+                return;
+            }
         }
 
+        // Transfer leadership is in progress.
+        if let Some(lead_transferee) = self.lead_transferee {
+            if m.get_from() == lead_transferee &&
+               self.prs.get_mut(&m.get_from()).unwrap().matched == self.raft_log.last_index() {
+                info!("{} {} sent MsgTimeoutNow to {} after received MsgAppResp",
+                      self.tag,
+                      self.id,
+                      m.get_from());
+                self.send_timeout_now(m.get_from());
+            }
+        }
+
+        let pr = self.prs.get_mut(&m.get_from()).unwrap();
         match pr.state {
             ProgressState::Probe => pr.become_replicate(),
             ProgressState::Snapshot => {
@@ -755,6 +790,55 @@ impl<T: Storage> Raft<T> {
             ProgressState::Replicate => pr.ins.free_to(m.get_index()),
         }
         *maybe_commit = true;
+    }
+
+    fn handle_transfer_leader(&mut self, m: &Message) {
+        let lead_transferee = m.get_from();
+        let last_lead_transferee = self.lead_transferee;
+        if last_lead_transferee.is_some() {
+            if last_lead_transferee.unwrap() == lead_transferee {
+                info!("{} {} [term {}] transfer leadership to {} is in progress, ignores request \
+                       to same node {}",
+                      self.tag,
+                      self.id,
+                      self.term,
+                      lead_transferee,
+                      lead_transferee);
+                return;
+            }
+            self.abort_leader_transfer();
+            info!("{} {} [term {}] abort previous transferring leadership to {}",
+                  self.tag,
+                  self.id,
+                  self.term,
+                  last_lead_transferee.unwrap());
+        }
+        if lead_transferee == self.id {
+            debug!("{} {} is already leader. Ignored transferring leadership to self",
+                   self.tag,
+                   self.id);
+            return;
+        }
+        // Transfer leadership to third party.
+        info!("{} {} [term {}] starts to transfer leadership to {}",
+              self.tag,
+              self.id,
+              self.term,
+              lead_transferee);
+        // Transfer leadership should be finished in one electionTimeout
+        // so reset r.electionElapsed.
+        self.election_elapsed = 0;
+        self.lead_transferee = Some(lead_transferee);
+        if self.prs.get(&m.get_from()).unwrap().matched == self.raft_log.last_index() {
+            self.send_timeout_now(lead_transferee);
+            info!("{} {} sends MsgTimeoutNow to {} immediately as {} already has up-to-date log",
+                  self.tag,
+                  self.id,
+                  lead_transferee,
+                  lead_transferee);
+        } else {
+            self.send_append(lead_transferee);
+        }
     }
 
     fn handle_snapshot_status(&mut self, m: &Message) {
@@ -793,7 +877,7 @@ impl<T: Storage> Raft<T> {
         }
         match m.get_msg_type() {
             MessageType::MsgAppendResponse => {
-                self.handle_append_response(m, old_paused, send_append, maybe_commit)
+                self.handle_append_response(m, old_paused, send_append, maybe_commit);
             }
             MessageType::MsgHeartbeatResponse => {
                 let pr = self.prs.get_mut(&m.get_from()).unwrap();
@@ -811,7 +895,7 @@ impl<T: Storage> Raft<T> {
                 if self.prs[&m.get_from()].state != ProgressState::Snapshot {
                     return;
                 }
-                self.handle_snapshot_status(&m);
+                self.handle_snapshot_status(m);
             }
             MessageType::MsgUnreachable => {
                 let pr = self.prs.get_mut(&m.get_from()).unwrap();
@@ -825,6 +909,9 @@ impl<T: Storage> Raft<T> {
                        self.id,
                        m.get_from(),
                        pr);
+            }
+            MessageType::MsgTransferLeader => {
+                self.handle_transfer_leader(m);
             }
             _ => {}
         }
@@ -885,6 +972,16 @@ impl<T: Storage> Raft<T> {
                     // drop any new proposals.
                     return;
                 }
+                if self.lead_transferee.is_some() {
+                    debug!("{} {} [term {}] transfer leadership to {} is in progress; dropping \
+                            proposal",
+                           self.tag,
+                           self.id,
+                           self.term,
+                           self.lead_transferee.unwrap());
+                    return;
+                }
+
                 for e in m.mut_entries().iter_mut() {
                     if e.get_entry_type() == EntryType::EntryConfChange {
                         if self.pending_conf {
@@ -923,6 +1020,7 @@ impl<T: Storage> Raft<T> {
                 send_append = true;
             }
         }
+
         if send_append {
             self.send_append(m.get_from());
         }
@@ -973,6 +1071,14 @@ impl<T: Storage> Raft<T> {
                     self.become_follower(term, INVALID_ID);
                 }
             }
+            MessageType::MsgTimeoutNow => {
+                debug!("{} {} [term {} state {:?}] ignored MsgTimeoutNow from {}",
+                       self.tag,
+                       self.id,
+                       self.term,
+                       self.state,
+                       m.get_from())
+            }
             _ => {}
         }
     }
@@ -1021,6 +1127,15 @@ impl<T: Storage> Raft<T> {
                     to_send.set_reject(true);
                     self.send(to_send);
                 }
+            }
+            MessageType::MsgTimeoutNow => {
+                info!("{} {} [term {}] received MsgTimeoutNow from {} and starts an election to \
+                       get leadership.",
+                      self.tag,
+                      self.id,
+                      self.term,
+                      m.get_from());
+                self.campaign();
             }
             _ => {}
         }
@@ -1180,10 +1295,20 @@ impl<T: Storage> Raft<T> {
     pub fn remove_node(&mut self, id: u64) {
         self.del_progress(id);
         self.pending_conf = false;
+
+        // do not try to commit or abort transferring if there is no nodes in the cluster.
+        if self.prs.is_empty() {
+            return;
+        }
+
         // The quorum size is now smaller, so see if any pending entries can
         // be committed.
         if self.maybe_commit() {
             self.bcast_append();
+        }
+        // If the removed node is the lead_transferee, then abort the leadership transferring.
+        if self.state == StateRole::Leader && self.lead_transferee == Some(id) {
+            self.abort_leader_transfer()
         }
     }
 
@@ -1250,5 +1375,14 @@ impl<T: Storage> Raft<T> {
             p.recent_active = false;
         }
         act >= self.quorum()
+    }
+
+    pub fn send_timeout_now(&mut self, to: u64) {
+        let msg = new_message(to, MessageType::MsgTimeoutNow, None);
+        self.send(msg);
+    }
+
+    pub fn abort_leader_transfer(&mut self) {
+        self.lead_transferee = None;
     }
 }

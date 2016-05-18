@@ -64,10 +64,10 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
 
     fn write_meta(&mut self, key: &Key, meta: &mut Meta) {
         if let Some((split_meta, index)) = meta.split() {
-            let modify = Modify::Put((key.encode_ts(index), split_meta.to_bytes()));
+            let modify = Modify::Put((key.append_ts(index), split_meta.to_bytes()));
             self.writes.push(modify);
         }
-        let modify = Modify::Put((key.encode_ts(FIRST_META_INDEX), meta.to_bytes()));
+        let modify = Modify::Put((key.append_ts(FIRST_META_INDEX), meta.to_bytes()));
         self.writes.push(modify);
     }
 
@@ -88,7 +88,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
         if let Some(lock) = meta.get_lock() {
             if lock.get_start_ts() != self.start_ts {
                 return Err(Error::KeyIsLocked {
-                    key: key.raw().to_owned(),
+                    key: try!(key.raw()),
                     primary: lock.get_primary_key().to_vec(),
                     ts: lock.get_start_ts(),
                 });
@@ -103,7 +103,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
         self.write_meta(&key, &mut meta);
 
         if let Mutation::Put((_, ref value)) = mutation {
-            let value_key = key.encode_ts(self.start_ts);
+            let value_key = key.append_ts(self.start_ts);
             self.writes.push(Modify::Put((value_key, value.clone())));
         }
         Ok(())
@@ -160,7 +160,7 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
     fn rollback_impl(&mut self, key: &Key, meta: &mut Meta) -> Result<()> {
         match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => {
-                let value_key = key.encode_ts(lock.get_start_ts());
+                let value_key = key.append_ts(lock.get_start_ts());
                 self.writes.push(Modify::Delete(value_key));
             }
             _ => {
@@ -205,7 +205,7 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
     }
 
     fn load_meta(&self, key: &Key, index: u64) -> Result<Meta> {
-        let meta = match try!(self.snapshot.get(&key.encode_ts(index))) {
+        let meta = match try!(self.snapshot.get(&key.append_ts(index))) {
             Some(x) => try!(Meta::parse(&x)),
             None => Meta::new(),
         };
@@ -223,7 +223,7 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
             if lock.get_start_ts() <= ts {
                 // There is a pending lock. Client should wait or clean it.
                 return Err(Error::KeyIsLocked {
-                    key: key.raw().to_owned(),
+                    key: try!(key.raw()),
                     primary: lock.get_primary_key().to_vec(),
                     ts: lock.get_start_ts(),
                 });
@@ -231,7 +231,7 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
         }
         // Find the latest write below our start timestamp.
         if let Some(x) = first_meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
-            let data_key = key.encode_ts(x.get_start_ts());
+            let data_key = key.append_ts(x.get_start_ts());
             return Ok(try!(self.snapshot.get(&data_key)));
         }
         let mut next = first_meta.next_index();
@@ -241,7 +241,7 @@ impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
                 None => break,
             };
             if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
-                let data_key = key.encode_ts(x.get_start_ts());
+                let data_key = key.append_ts(x.get_start_ts());
                 return Ok(try!(self.snapshot.get(&data_key)));
             }
             next = meta.next_index();
@@ -256,6 +256,7 @@ mod tests {
     use super::MvccTxn;
     use storage::{make_key, Mutation};
     use storage::engine::{self, Engine, Dsn, TEMP_DIR};
+    use storage::mvcc::TEST_TS_BASE;
 
     #[test]
     fn test_mvcc_txn_read() {
@@ -282,9 +283,9 @@ mod tests {
 
         // insert bad format data
         engine.put(&Context::new(),
-                   make_key(b"y").encode_ts(0),
-                   b"dummy".to_vec())
-              .unwrap();
+                 make_key(b"y").append_ts(0),
+                 b"dummy".to_vec())
+            .unwrap();
         must_get_err(engine.as_ref(), b"y", 100);
     }
 
@@ -375,6 +376,10 @@ mod tests {
         must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
     }
 
+    fn to_fake_ts(ts: u64) -> u64 {
+        TEST_TS_BASE + ts
+    }
+
     #[test]
     fn test_mvcc_txn_meta_split() {
         let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
@@ -390,21 +395,21 @@ mod tests {
     fn must_get<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, ts);
+        let txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect);
     }
 
     fn must_get_none<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, ts);
+        let txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         assert!(txn.get(&make_key(key)).unwrap().is_none());
     }
 
     fn must_get_err<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, ts);
+        let txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         assert!(txn.get(&make_key(key)).is_err());
     }
 
@@ -415,7 +420,7 @@ mod tests {
                                              ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, ts);
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), pk).unwrap();
         txn.submit().unwrap();
     }
@@ -423,7 +428,7 @@ mod tests {
     fn must_prewrite_delete<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, ts);
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         txn.prewrite(Mutation::Delete(make_key(key)), pk).unwrap();
         txn.submit().unwrap();
     }
@@ -431,7 +436,7 @@ mod tests {
     fn must_prewrite_lock<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, ts);
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         txn.prewrite(Mutation::Lock(make_key(key)), pk).unwrap();
         txn.submit().unwrap();
     }
@@ -439,23 +444,23 @@ mod tests {
     fn must_prewrite_lock_err<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, ts);
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         assert!(txn.prewrite(Mutation::Lock(make_key(key)), pk).is_err());
     }
 
     fn must_commit<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
-        txn.commit(&make_key(key), commit_ts).unwrap();
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
+        txn.commit(&make_key(key), to_fake_ts(commit_ts)).unwrap();
         txn.submit().unwrap();
     }
 
     fn must_commit_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
-        assert!(txn.commit(&make_key(key), commit_ts).is_err());
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
+        assert!(txn.commit(&make_key(key), to_fake_ts(commit_ts)).is_err());
     }
 
     fn must_commit_then_get<T: Engine + ?Sized>(engine: &T,
@@ -466,8 +471,10 @@ mod tests {
                                                 expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, lock_ts);
-        assert_eq!(txn.commit_then_get(&make_key(key), commit_ts, get_ts).unwrap().unwrap(),
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
+        assert_eq!(txn.commit_then_get(&make_key(key), to_fake_ts(commit_ts), to_fake_ts(get_ts))
+                       .unwrap()
+                       .unwrap(),
                    expect);
         txn.submit().unwrap();
     }
@@ -479,14 +486,15 @@ mod tests {
                                                     get_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, lock_ts);
-        assert!(txn.commit_then_get(&make_key(key), commit_ts, get_ts).is_err());
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
+        assert!(txn.commit_then_get(&make_key(key), to_fake_ts(commit_ts), to_fake_ts(get_ts))
+            .is_err());
     }
 
     fn must_rollback<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
         txn.rollback(&make_key(key)).unwrap();
         txn.submit().unwrap();
     }
@@ -494,7 +502,7 @@ mod tests {
     fn must_rollback_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
         assert!(txn.rollback(&make_key(key)).is_err());
     }
 
@@ -504,7 +512,7 @@ mod tests {
                                                   expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, lock_ts);
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
         assert_eq!(txn.rollback_then_get(&make_key(key)).unwrap().unwrap(),
                    expect);
         txn.submit().unwrap();
@@ -513,7 +521,7 @@ mod tests {
     fn must_rollback_then_get_err<T: Engine + ?Sized>(engine: &T, key: &[u8], lock_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, lock_ts);
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
         assert!(txn.rollback_then_get(&make_key(key)).is_err());
     }
 }

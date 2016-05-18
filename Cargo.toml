@@ -38,6 +38,7 @@ uuid = "0.1"
 time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"
+num = "0.1"
 clippy = {version = "*", optional = true}
 
 [dependencies.rocksdb]

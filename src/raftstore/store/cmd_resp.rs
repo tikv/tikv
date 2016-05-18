@@ -41,9 +41,9 @@ pub fn bind_error(resp: &mut RaftCmdResponse, err: Error) {
         Error::RegionNotFound(region_id) => {
             error_header.mut_region_not_found().set_region_id(region_id);
         }
-        Error::NotLeader(region_id, leader_store_id) => {
-            if let Some(leader_store_id) = leader_store_id {
-                error_header.mut_not_leader().set_leader_store_id(leader_store_id);
+        Error::NotLeader(region_id, leader) => {
+            if let Some(leader) = leader {
+                error_header.mut_not_leader().set_leader(leader);
             }
             error_header.mut_not_leader().set_region_id(region_id);
         }

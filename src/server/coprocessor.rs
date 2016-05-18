@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::usize;
 use std::collections::HashMap;
 use std::{result, error};
 use std::time::Instant;
@@ -32,7 +33,7 @@ use kvproto::errorpb;
 use storage::Key;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
-use util::codec::{Datum, table, datum};
+use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
 use util::{as_slice, escape};
 use util::SlowTimer;
@@ -169,15 +170,29 @@ impl TiDbEndPoint {
     }
 
     pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
+        let ts = Instant::now();
         let snap = try!(self.new_snapshot(req.get_context(), sel.get_start_ts()));
+        debug!("[TIME_SNAPSHOT] {:?}", ts.elapsed());
         let mut ctx = try!(SelectContext::new(sel, snap));
-        let range = req.take_ranges().into_vec();
+        let mut range = req.take_ranges().into_vec();
+        let desc = ctx.sel.get_order_by().first().map_or(false, |o| o.get_desc());
         debug!("scanning range: {:?}", range);
-        let res = if req.get_tp() == REQ_TYPE_SELECT {
-            ctx.get_rows_from_sel(range)
+        if desc {
+            range.reverse();
+        }
+        let limit = if ctx.sel.has_limit() {
+            ctx.sel.get_limit() as usize
         } else {
-            ctx.get_rows_from_idx(range)
+            usize::MAX
         };
+        let sel_ts = Instant::now();
+        let res = if req.get_tp() == REQ_TYPE_SELECT {
+            ctx.get_rows_from_sel(range, limit, desc)
+        } else {
+            ctx.get_rows_from_idx(range, limit, desc)
+        };
+        debug!("[TIME_SELECT] {:?} {:?}", req.get_tp(), sel_ts.elapsed());
+        let resp_ts = Instant::now();
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
         match res {
@@ -196,6 +211,7 @@ impl TiDbEndPoint {
         }
         let data = box_try!(sel_resp.write_to_bytes());
         resp.set_data(data);
+        debug!("[TIME_COMPOSE_RESP] {:?}", resp_ts.elapsed());
         Ok(resp)
     }
 }
@@ -284,55 +300,79 @@ impl<'a> SelectContext<'a> {
         Ok(ctx)
     }
 
-    fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>) -> Result<Vec<Row>> {
+    fn get_rows_from_sel(&mut self,
+                         ranges: Vec<KeyRange>,
+                         limit: usize,
+                         desc: bool)
+                         -> Result<Vec<Row>> {
         let mut rows = vec![];
         for ran in ranges {
-            let ran_rows = try!(self.get_rows_from_range(ran));
+            if rows.len() >= limit {
+                break;
+            }
+            let ran_rows = try!(self.get_rows_from_range(ran, limit - rows.len(), desc));
             rows.extend(ran_rows);
         }
         Ok(rows)
     }
 
-    fn get_rows_from_range(&mut self, mut range: KeyRange) -> Result<Vec<Row>> {
+    fn load_row_with_key(&mut self, key: &[u8], dest: &mut Vec<Row>) -> Result<()> {
+        let h = box_try!(table::decode_handle(key));
+        if try!(self.should_skip(h)) {
+            return Ok(());
+        }
+        if let Some(r) = try!(self.get_row_by_handle(h)) {
+            dest.push(r);
+        }
+        Ok(())
+    }
+
+    fn get_rows_from_range(&mut self,
+                           range: KeyRange,
+                           limit: usize,
+                           desc: bool)
+                           -> Result<Vec<Row>> {
         let mut rows = vec![];
+        if limit == 0 {
+            return Ok(rows);
+        }
         if is_point(&range) {
-            if let None = try!(self.snap.get(&Key::from_raw(range.get_start().to_vec()))) {
+            if let None = try!(self.snap.get(&Key::from_raw(range.get_start()))) {
                 return Ok(rows);
             }
-            let h = box_try!(table::decode_handle(range.get_start()));
-            if try!(self.should_skip(h)) {
-                return Ok(rows);
-            }
-            if let Some(row) = try!(self.get_row_by_handle(h)) {
-                rows.push(row);
-            }
+            try!(self.load_row_with_key(range.get_start(), &mut rows));
         } else {
-            let mut seek_key = range.take_start();
-            loop {
-                trace!("seek {}", escape(&seek_key));
+            let mut seek_key = if desc {
+                range.get_end().to_vec()
+            } else {
+                range.get_start().to_vec()
+            };
+            while limit > rows.len() {
                 let timer = Instant::now();
-                let mut res = try!(self.snap.scan(Key::from_raw(seek_key), 1));
+                let mut res = if desc {
+                    try!(self.snap.reverse_scan(Key::from_raw(&seek_key), 1))
+                } else {
+                    try!(self.snap.scan(Key::from_raw(&seek_key), 1))
+                };
                 trace!("scan takes {:?}", timer.elapsed());
                 if res.is_empty() {
                     debug!("no more data to scan.");
                     break;
                 }
                 let (key, _) = try!(res.pop().unwrap());
-                if range.get_end() <= &key {
-                    debug!("reach end key: {} >= {}",
+                if range.get_start() > &key || range.get_end() <= &key {
+                    debug!("key: {} out of range [{}, {})",
                            escape(&key),
+                           escape(range.get_start()),
                            escape(range.get_end()));
                     break;
                 }
-                let h = box_try!(table::decode_handle(&key));
-                if try!(self.should_skip(h)) {
-                    seek_key = prefix_next(&key);
-                    continue;
-                }
-                if let Some(row) = try!(self.get_row_by_handle(h)) {
-                    rows.push(row);
-                }
-                seek_key = prefix_next(&key);
+                try!(self.load_row_with_key(&key, &mut rows));
+                seek_key = if desc {
+                    box_try!(table::truncate_as_row_key(&key)).to_vec()
+                } else {
+                    prefix_next(&key)
+                };
             }
         }
         Ok(rows)
@@ -345,20 +385,27 @@ impl<'a> SelectContext<'a> {
         let t_id = self.sel.get_table_info().get_table_id();
         for (&col_id, col) in &self.cond_cols {
             if col.get_pk_handle() {
-                self.eval.row.insert(col_id, Datum::I64(h));
+                if mysql::has_unsigned_flag(col.get_flag() as u64) {
+                    self.eval.row.insert(col_id, Datum::U64(h as u64));
+                } else {
+                    self.eval.row.insert(col_id, Datum::I64(h));
+                }
             } else {
                 let key = table::encode_column_key(t_id, h, col_id);
-                let data = try!(self.snap.get(&Key::from_raw(key)));
-                if data.is_none() {
-                    return Err(box_err!("data is missing for [{}, {}, {}]", t_id, h, col_id));
-                }
-                let value = box_try!(data.unwrap().as_slice().decode_datum());
+                let data = try!(self.snap.get(&Key::from_raw(&key)));
+                let value = match data {
+                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                        return Err(box_err!("key {} not exists", escape(&key)));
+                    }
+                    None => Datum::Null,
+                    Some(bs) => box_try!(bs.as_slice().decode_datum()),
+                };
                 self.eval.row.insert(col_id, value);
             }
         }
         let res = box_try!(self.eval.eval(self.sel.get_field_where()));
         let b = box_try!(res.into_bool());
-        Ok(b.map_or(false, |v| !v))
+        Ok(b.map_or(true, |v| !v))
     }
 
     fn get_row_by_handle(&self, h: i64) -> Result<Option<Row>> {
@@ -368,7 +415,14 @@ impl<'a> SelectContext<'a> {
         let handle = box_try!(datum::encode_value(&[Datum::I64(h)]));
         for col in columns {
             if col.get_pk_handle() {
-                row.mut_data().extend(handle.clone());
+                if mysql::has_unsigned_flag(col.get_flag() as u64) {
+                    // PK column is unsigned
+                    let ud = Datum::U64(h as u64);
+                    let handle = box_try!(datum::encode_value(&[ud]));
+                    row.mut_data().extend(handle);
+                } else {
+                    row.mut_data().extend(handle.clone());
+                }
             } else {
                 let col_id = col.get_column_id();
                 if self.cond_cols.contains_key(&col_id) {
@@ -377,9 +431,15 @@ impl<'a> SelectContext<'a> {
                     row.mut_data().extend(bytes);
                 } else {
                     let raw_key = table::encode_column_key(tid, h, col.get_column_id());
-                    let key = Key::from_raw(raw_key);
+                    let key = Key::from_raw(&raw_key);
                     match try!(self.snap.get(&key)) {
-                        None => return Err(box_err!("key {} not exists", key)),
+                        None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                            return Err(box_err!("key {} not exists", escape(&raw_key)));
+                        }
+                        None => {
+                            let bs = box_try!(datum::encode_value(&[Datum::Null]));
+                            row.mut_data().extend(bs);
+                        }
                         Some(bs) => row.mut_data().extend(bs),
                     }
                 }
@@ -389,32 +449,50 @@ impl<'a> SelectContext<'a> {
         Ok(Some(row))
     }
 
-    fn get_rows_from_idx(&self, ranges: Vec<KeyRange>) -> Result<Vec<Row>> {
+    fn get_rows_from_idx(&self,
+                         ranges: Vec<KeyRange>,
+                         limit: usize,
+                         desc: bool)
+                         -> Result<Vec<Row>> {
         let mut rows = vec![];
         for r in ranges {
-            let part = try!(self.get_idx_row_from_range(r));
+            if rows.len() >= limit {
+                break;
+            }
+            let part = try!(self.get_idx_row_from_range(r, limit, desc));
             rows.extend(part);
         }
         Ok(rows)
     }
 
-    fn get_idx_row_from_range(&self, mut r: KeyRange) -> Result<Vec<Row>> {
+    fn get_idx_row_from_range(&self, r: KeyRange, limit: usize, desc: bool) -> Result<Vec<Row>> {
         let mut rows = vec![];
         let info = self.sel.get_index_info();
-        let mut seek_key = r.take_start();
-        loop {
+        let mut seek_key = if desc {
+            r.get_end().to_vec()
+        } else {
+            r.get_start().to_vec()
+        };
+        while rows.len() < limit {
             trace!("seek {}", escape(&seek_key));
             let timer = Instant::now();
-            let mut nk = try!(self.snap.scan(Key::from_raw(seek_key.clone()), 1));
+            let mut nk = if desc {
+                try!(self.snap.reverse_scan(Key::from_raw(&seek_key), 1))
+            } else {
+                try!(self.snap.scan(Key::from_raw(&seek_key), 1))
+            };
             trace!("scan takes {:?}", timer.elapsed());
             if nk.is_empty() {
                 debug!("no more data to scan");
-                return Ok(rows);
+                break;
             }
             let (key, value) = try!(nk.pop().unwrap());
-            if r.get_end() <= &key {
-                debug!("reach end key: {} >= {}", escape(&key), escape(r.get_end()));
-                return Ok(rows);
+            if r.get_start() > &key || r.get_end() <= &key {
+                debug!("key: {} out of range [{}, {})",
+                       escape(&key),
+                       escape(r.get_start()),
+                       escape(r.get_end()));
+                break;
             }
             let mut datums = box_try!(table::decode_index_key(&key));
             let handle = if datums.len() > info.get_columns().len() {
@@ -429,7 +507,12 @@ impl<'a> SelectContext<'a> {
             row.set_handle(handle_data);
             row.set_data(data);
             rows.push(row);
-            seek_key = prefix_next(&key);
+            seek_key = if desc {
+                key
+            } else {
+                prefix_next(&key)
+            };
         }
+        Ok(rows)
     }
 }

@@ -16,16 +16,12 @@ use kvproto::{metapb, pdpb};
 use super::{Error, Result, RpcClient};
 
 impl super::PdClient for RpcClient {
-    fn bootstrap_cluster(&mut self,
-                         cluster_id: u64,
-                         store: metapb::Store,
-                         region: metapb::Region)
-                         -> Result<()> {
+    fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
         let mut bootstrap = pdpb::BootstrapRequest::new();
         bootstrap.set_store(store);
         bootstrap.set_region(region);
 
-        let mut req = new_request(cluster_id, pdpb::CommandType::Bootstrap);
+        let mut req = self.new_request(pdpb::CommandType::Bootstrap);
         req.set_bootstrap(bootstrap);
 
         let resp = try!(self.send(&req));
@@ -33,8 +29,8 @@ impl super::PdClient for RpcClient {
         Ok(())
     }
 
-    fn is_cluster_bootstrapped(&self, cluster_id: u64) -> Result<bool> {
-        let mut req = new_request(cluster_id, pdpb::CommandType::IsBootstrapped);
+    fn is_cluster_bootstrapped(&self) -> Result<bool> {
+        let mut req = self.new_request(pdpb::CommandType::IsBootstrapped);
         req.set_is_bootstrapped(pdpb::IsBootstrappedRequest::new());
 
         let resp = try!(self.send(&req));
@@ -42,8 +38,8 @@ impl super::PdClient for RpcClient {
         Ok(resp.get_is_bootstrapped().get_bootstrapped())
     }
 
-    fn alloc_id(&mut self, cluster_id: u64) -> Result<u64> {
-        let mut req = new_request(cluster_id, pdpb::CommandType::AllocId);
+    fn alloc_id(&self) -> Result<u64> {
+        let mut req = self.new_request(pdpb::CommandType::AllocId);
         req.set_alloc_id(pdpb::AllocIdRequest::new());
 
         let resp = try!(self.send(&req));
@@ -51,68 +47,57 @@ impl super::PdClient for RpcClient {
         Ok(resp.get_alloc_id().get_id())
     }
 
-    fn put_store(&mut self, cluster_id: u64, store: metapb::Store) -> Result<()> {
-        let mut put_meta = pdpb::PutMetaRequest::new();
-        put_meta.set_meta_type(pdpb::MetaType::StoreType);
-        put_meta.set_store(store);
+    fn put_store(&self, store: metapb::Store) -> Result<()> {
+        let mut put_store = pdpb::PutStoreRequest::new();
+        put_store.set_store(store);
 
-        let mut req = new_request(cluster_id, pdpb::CommandType::PutMeta);
-        req.set_put_meta(put_meta);
+        let mut req = self.new_request(pdpb::CommandType::PutStore);
+        req.set_put_store(put_store);
 
         let resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(())
     }
 
-    fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store> {
-        let mut get_meta = pdpb::GetMetaRequest::new();
-        get_meta.set_meta_type(pdpb::MetaType::StoreType);
-        get_meta.set_store_id(store_id);
+    fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
+        let mut get_store = pdpb::GetStoreRequest::new();
+        get_store.set_store_id(store_id);
 
-        let mut req = new_request(cluster_id, pdpb::CommandType::GetMeta);
-        req.set_get_meta(get_meta);
+        let mut req = self.new_request(pdpb::CommandType::GetStore);
+        req.set_get_store(get_store);
 
-        let resp = try!(self.send(&req));
+        let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        Ok(resp.get_get_meta().get_store().clone())
+        Ok(resp.take_get_store().take_store())
     }
 
-    fn get_cluster_meta(&self, cluster_id: u64) -> Result<metapb::Cluster> {
-        let mut get_meta = pdpb::GetMetaRequest::new();
-        get_meta.set_meta_type(pdpb::MetaType::ClusterType);
-        get_meta.set_cluster_id(cluster_id);
+    fn get_cluster_config(&self) -> Result<metapb::Cluster> {
+        let mut req = self.new_request(pdpb::CommandType::GetClusterConfig);
+        req.set_get_cluster_config(pdpb::GetClusterConfigRequest::new());
 
-        let mut req = new_request(cluster_id, pdpb::CommandType::GetMeta);
-        req.set_get_meta(get_meta);
-
-        let resp = try!(self.send(&req));
+        let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        Ok(resp.get_get_meta().get_cluster().clone())
+        Ok(resp.take_get_cluster_config().take_cluster())
     }
 
-    fn get_region(&self, cluster_id: u64, key: &[u8]) -> Result<metapb::Region> {
-        let mut get_meta = pdpb::GetMetaRequest::new();
-        get_meta.set_meta_type(pdpb::MetaType::RegionType);
-        get_meta.set_region_key(key.to_vec());
+    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+        let mut get_region = pdpb::GetRegionRequest::new();
+        get_region.set_region_key(key.to_vec());
 
-        let mut req = new_request(cluster_id, pdpb::CommandType::GetMeta);
-        req.set_get_meta(get_meta);
+        let mut req = self.new_request(pdpb::CommandType::GetRegion);
+        req.set_get_region(get_region);
 
-        let resp = try!(self.send(&req));
+        let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        Ok(resp.get_get_meta().get_region().clone())
+        Ok(resp.take_get_region().take_region())
     }
 
-    fn ask_change_peer(&self,
-                       cluster_id: u64,
-                       region: metapb::Region,
-                       leader_store_id: u64)
-                       -> Result<()> {
+    fn ask_change_peer(&self, region: metapb::Region, leader: metapb::Peer) -> Result<()> {
         let mut ask_change_peer = pdpb::AskChangePeerRequest::new();
         ask_change_peer.set_region(region);
-        ask_change_peer.set_leader_store_id(leader_store_id);
+        ask_change_peer.set_leader(leader);
 
-        let mut req = new_request(cluster_id, pdpb::CommandType::AskChangePeer);
+        let mut req = self.new_request(pdpb::CommandType::AskChangePeer);
         req.set_ask_change_peer(ask_change_peer);
 
         let resp = try!(self.send(&req));
@@ -121,17 +106,16 @@ impl super::PdClient for RpcClient {
     }
 
     fn ask_split(&self,
-                 cluster_id: u64,
                  region: metapb::Region,
                  split_key: &[u8],
-                 leader_store_id: u64)
+                 leader: metapb::Peer)
                  -> Result<()> {
         let mut ask_split = pdpb::AskSplitRequest::new();
         ask_split.set_region(region);
         ask_split.set_split_key(split_key.to_vec());
-        ask_split.set_leader_store_id(leader_store_id);
+        ask_split.set_leader(leader);
 
-        let mut req = new_request(cluster_id, pdpb::CommandType::AskSplit);
+        let mut req = self.new_request(pdpb::CommandType::AskSplit);
         req.set_ask_split(ask_split);
 
         let resp = try!(self.send(&req));
@@ -140,15 +124,18 @@ impl super::PdClient for RpcClient {
     }
 }
 
-fn new_request(cluster_id: u64, cmd_type: pdpb::CommandType) -> pdpb::Request {
-    let mut header = pdpb::RequestHeader::new();
-    header.set_cluster_id(cluster_id);
-    header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-    let mut req = pdpb::Request::new();
-    req.set_header(header);
-    req.set_cmd_type(cmd_type);
-    req
+impl RpcClient {
+    fn new_request(&self, cmd_type: pdpb::CommandType) -> pdpb::Request {
+        let mut header = pdpb::RequestHeader::new();
+        header.set_cluster_id(self.cluster_id);
+        header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        let mut req = pdpb::Request::new();
+        req.set_header(header);
+        req.set_cmd_type(cmd_type);
+        req
+    }
 }
+
 
 fn check_resp(resp: &pdpb::Response) -> Result<()> {
     if !resp.has_header() {

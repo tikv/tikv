@@ -31,7 +31,7 @@ use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
-use super::transport_simulate::{Strategy, Filter};
+use super::transport_simulate::*;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -44,26 +44,17 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(&mut self,
-                node_id: u64,
-                cfg: ServerConfig,
-                engine: Arc<DB>,
-                strategy: Vec<Strategy>)
-                -> u64;
+    fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
-    fn call_command(&self,
-                    store_id: u64,
-                    request: RaftCmdRequest,
-                    timeout: Duration)
-                    -> Result<RaftCmdResponse>;
+    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
-    fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>);
+    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>);
 }
 
 pub struct Cluster<T: Simulator> {
     pub cfg: ServerConfig,
-    leaders: HashMap<u64, u64>,
+    leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
     dbs: Vec<Arc<DB>>,
 
@@ -71,7 +62,7 @@ pub struct Cluster<T: Simulator> {
     pub engines: HashMap<u64, Arc<DB>>,
 
     sim: Arc<RwLock<T>>,
-    pub pd_client: Arc<RwLock<TestPdClient>>,
+    pub pd_client: Arc<TestPdClient>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -79,7 +70,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn new(id: u64,
                count: usize,
                sim: Arc<RwLock<T>>,
-               pd_client: Arc<RwLock<TestPdClient>>)
+               pd_client: Arc<TestPdClient>)
                -> Cluster<T> {
         let mut c = Cluster {
             cfg: new_server_config(id),
@@ -112,7 +103,11 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn start(&mut self) {
         if self.engines.is_empty() {
-            self.start_with_strategy(vec![]);
+            let mut sim = self.sim.wl();
+            for engine in &self.dbs {
+                let node_id = sim.run_node(0, self.cfg.clone(), engine.clone());
+                self.engines.insert(node_id, engine.clone());
+            }
         } else {
             // recover from last shutdown.
             let node_ids: Vec<u64> = self.engines.keys().cloned().collect();
@@ -122,21 +117,9 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn start_with_strategy(&mut self, strategy: Vec<Strategy>) {
-        let mut sim = self.sim.wl();
-        for engine in &self.dbs {
-            let node_id = sim.run_node(0, self.cfg.clone(), engine.clone(), strategy.clone());
-            self.engines.insert(node_id, engine.clone());
-        }
-    }
-
     pub fn run_node(&mut self, node_id: u64) {
-        self.run_node_with_strategy(node_id, vec![]);
-    }
-
-    pub fn run_node_with_strategy(&mut self, node_id: u64, strategy: Vec<Strategy>) {
         let engine = self.engines.get(&node_id).unwrap();
-        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone(), strategy);
+        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
     }
 
     pub fn stop_node(&mut self, node_id: u64) {
@@ -152,20 +135,20 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn call_command(&self,
-                        store_id: u64,
                         request: RaftCmdRequest,
                         timeout: Duration)
                         -> Result<RaftCmdResponse> {
-        self.sim.rl().call_command(store_id, request, timeout)
+        self.sim.rl().call_command(request, timeout)
     }
 
     fn call_command_on_leader_once(&mut self,
-                                   request: RaftCmdRequest,
+                                   mut request: RaftCmdRequest,
                                    timeout: Duration)
                                    -> Result<RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
         if let Some(leader) = self.leader_of_region(region_id) {
-            return self.call_command(leader, request, timeout);
+            request.mut_header().set_peer(leader);
+            return self.call_command(request, timeout);
         }
         Err(box_err!("can't get leader of region"))
     }
@@ -198,27 +181,33 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn store_ids_of_region(&self, region_id: u64) -> Vec<u64> {
-        self.pd_client.rl().get_region_by_id(self.id(), region_id).unwrap().take_store_ids()
+        let peers = self.pd_client
+            .get_region_by_id(region_id)
+            .unwrap()
+            .take_peers();
+        peers.iter().map(|peer| peer.get_store_id()).collect()
     }
 
-    fn query_leader(&self, store_id: u64, region_id: u64) -> Option<u64> {
-        let find_leader = new_status_request(region_id, new_region_leader_cmd());
-        let mut resp = self.call_command(store_id, find_leader, Duration::from_secs(3)).unwrap();
-        let region_leader = resp.take_status_response().take_region_leader();
+    fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
+        // To get region leader, we don't care real peer id, so use 0 instead.
+        let peer = new_peer(store_id, 0);
+        let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
+        let mut resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
+        let mut region_leader = resp.take_status_response().take_region_leader();
         // NOTE: node id can't be 0.
-        if self.valid_leader_id(region_id, region_leader.get_leader_store_id()) {
-            Some(region_leader.get_leader_store_id())
+        if self.valid_leader_id(region_id, region_leader.get_leader().get_store_id()) {
+            Some(region_leader.take_leader())
         } else {
             None
         }
     }
 
-    pub fn leader_of_region(&mut self, region_id: u64) -> Option<u64> {
+    pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
         let store_ids = self.store_ids_of_region(region_id);
         if let Some(l) = self.leaders.get(&region_id) {
             // leader may be stopped in some tests.
-            if self.valid_leader_id(region_id, *l) {
-                return Some(*l);
+            if self.valid_leader_id(region_id, l.get_store_id()) {
+                return Some(l.clone());
             }
         }
         self.reset_leader_of_region(region_id);
@@ -233,7 +222,7 @@ impl<T: Simulator> Cluster<T> {
             for store_id in &store_ids {
                 // For some tests, we stop the node but pd still has this information,
                 // and we must skip this.
-                if !node_ids.contains(&store_id) {
+                if !node_ids.contains(store_id) {
                     count += 1;
                     continue;
                 }
@@ -259,8 +248,9 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.get(&region_id).cloned()
     }
 
-    // Multiple stores with fixed store id, like store 1, 2, .. 5,
-    // First region 1 is in all stores.
+    // Multiple nodes with fixed node id, like node 1, 2, .. 5,
+    // First region 1 is in all stores with peer 1, 2, .. 5.
+    // Peer 1 is in node 1, store 1, etc.
     pub fn bootstrap_region(&mut self) -> Result<()> {
         for (id, engine) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
@@ -275,8 +265,9 @@ impl<T: Simulator> Cluster<T> {
         region.mut_region_epoch().set_conf_ver(1);
 
         for (&id, engine) in &self.engines {
-            region.mut_store_ids().push(id);
-            bootstrap_store(&engine, self.id(), id).unwrap();
+            let peer = new_peer(id, id);
+            region.mut_peers().push(peer.clone());
+            bootstrap_store(engine, self.id(), id).unwrap();
         }
 
         for engine in self.engines.values() {
@@ -296,11 +287,11 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for (&id, engine) in &self.engines {
-            bootstrap_store(&engine, self.id(), id).unwrap();
+            bootstrap_store(engine, self.id(), id).unwrap();
         }
 
         let node_id = 1;
-        let region = bootstrap_region(self.engines.get(&node_id).unwrap(), 1, 1).unwrap();
+        let region = bootstrap_region(self.engines.get(&node_id).unwrap(), 1, 1, 1).unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid
@@ -310,13 +301,11 @@ impl<T: Simulator> Cluster<T> {
     // This is only for fixed id test.
     fn bootstrap_cluster(&mut self, region: metapb::Region) {
         self.pd_client
-            .write()
-            .unwrap()
-            .bootstrap_cluster(self.id(), new_store(1, "".to_owned()), region)
+            .bootstrap_cluster(new_store(1, "".to_owned()), region)
             .unwrap();
 
         for &id in self.engines.keys() {
-            self.pd_client.wl().put_store(self.id(), new_store(id, "".to_owned())).unwrap();
+            self.pd_client.put_store(new_store(id, "".to_owned())).unwrap();
         }
     }
 
@@ -354,11 +343,11 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let err = err.get_not_leader();
-        if !err.has_leader_store_id() {
+        if !err.has_leader() {
             self.reset_leader_of_region(region_id);
             return true;
         }
-        self.leaders.insert(region_id, err.get_leader_store_id());
+        self.leaders.insert(region_id, err.get_leader().clone());
         true
     }
 
@@ -390,9 +379,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
         self.pd_client
-            .read()
-            .unwrap()
-            .get_region(self.id(), key)
+            .get_region(key)
             .unwrap()
     }
 
@@ -450,35 +437,42 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         self.pd_client
-            .rl()
-            .get_region_by_id(self.id(), region_id)
+            .get_region_by_id(region_id)
             .unwrap()
             .get_region_epoch()
             .clone()
     }
 
-    pub fn change_peer(&mut self, region_id: u64, change_type: ConfChangeType, store_id: u64) {
+    pub fn change_peer(&mut self,
+                       region_id: u64,
+                       change_type: ConfChangeType,
+                       peer: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
-        let change_peer = new_admin_request(region_id,
-                                            &epoch,
-                                            new_change_peer_cmd(change_type, store_id));
+        let change_peer =
+            new_admin_request(region_id, &epoch, new_change_peer_cmd(change_type, peer));
         let resp = self.call_command_on_leader(change_peer, Duration::from_secs(3))
-                       .unwrap();
+            .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::ChangePeer,
                 format!("{:?}", resp));
 
         let region = resp.get_admin_response().get_change_peer().get_region();
-        self.pd_client.wl().change_peer(self.id(), region.clone()).unwrap();
+        self.pd_client.change_peer(region.clone()).unwrap();
     }
 
     pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
-        let new_region_id = self.pd_client.wl().alloc_id(0).unwrap();
-        let region = self.pd_client.rl().get_region_by_id(self.id(), region_id).unwrap();
+        let new_region_id = self.pd_client.alloc_id().unwrap();
+        let region = self.pd_client.get_region_by_id(region_id).unwrap();
+        let peer_count = region.get_peers().len();
+        let mut peer_ids: Vec<u64> = vec![];
+        for _ in 0..peer_count {
+            let peer_id = self.pd_client.alloc_id().unwrap();
+            peer_ids.push(peer_id);
+        }
 
         // TODO: use region instead of region_id
         let split = new_admin_request(region_id,
                                       region.get_region_epoch(),
-                                      new_split_region_cmd(split_key, new_region_id));
+                                      new_split_region_cmd(split_key, new_region_id, peer_ids));
         let resp = self.call_command_on_leader(split, Duration::from_secs(3)).unwrap();
 
         assert_eq!(resp.get_admin_response().get_cmd_type(),
@@ -487,13 +481,14 @@ impl<T: Simulator> Cluster<T> {
         let left = resp.get_admin_response().get_split().get_left();
         let right = resp.get_admin_response().get_split().get_right();
 
-        self.pd_client.wl().split_region(self.id(), left.clone(), right.clone()).unwrap();
+        self.pd_client.split_region(left.clone(), right.clone()).unwrap();
     }
 
-    pub fn region_detail(&mut self, region_id: u64, store_id: u64) -> RegionDetailResponse {
+    pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {
         let status_cmd = new_region_detail_cmd();
-        let req = new_status_request(region_id, status_cmd);
-        let resp = self.call_command(store_id, req, Duration::from_secs(3));
+        let peer = new_peer(peer_id, peer_id);
+        let req = new_status_request(region_id, peer, status_cmd);
+        let resp = self.call_command(req, Duration::from_secs(3));
         assert!(resp.is_ok(), format!("{:?}", resp));
 
         let mut resp = resp.unwrap();
@@ -504,53 +499,25 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
-    // NOTE: if you have set transport hooks before, call this function will overwrite them
-    pub fn partition(&mut self, s1: Arc<HashSet<u64>>, s2: Arc<HashSet<u64>>) {
-        for node_id in s1.iter() {
-            let filter = new_partition_filter(s2.clone());
-            self.sim.rl().hook_transport(*node_id, vec![RwLock::new(filter)]);
-        }
-        for node_id in s2.iter() {
-            let filter = new_partition_filter(s1.clone());
-            self.sim.wl().hook_transport(*node_id, vec![RwLock::new(filter)]);
+    pub fn hook_transport<F: FilterFactory>(&self, factory: F) {
+        let sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            let filter = factory.generate(node_id);
+            sim.hook_transport(node_id, filter);
         }
     }
 
     pub fn reset_transport_hooks(&mut self) {
-        for node_id in self.sim.rl().get_node_ids() {
-            self.sim.rl().hook_transport(node_id, vec![]);
+        let sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            sim.hook_transport(node_id, vec![]);
         }
     }
 
-    pub fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>) {
-        self.sim.rl().hook_transport(node_id, filters);
+    // it's so common that we provide a API for it
+    pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
+        self.hook_transport(Partition::new(s1, s2));
     }
-}
-
-struct PartitionFilter {
-    node_ids: Arc<HashSet<u64>>,
-    drop: bool,
-}
-
-impl Filter for PartitionFilter {
-    fn before(&mut self, msg: &RaftMessage) -> bool {
-        self.drop = self.node_ids.contains(&msg.get_message().get_to());
-        self.drop
-    }
-    fn after(&mut self, r: Result<()>) -> Result<()> {
-        if self.drop {
-            return Err(Error::Timeout("drop by PartitionPacket in SimulateTransport".to_string()));
-        }
-        r
-    }
-}
-
-pub fn new_partition_filter(node_ids: Arc<HashSet<u64>>) -> Box<Filter> {
-    let ids = node_ids.clone();
-    Box::new(PartitionFilter {
-        node_ids: ids,
-        drop: false,
-    })
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
