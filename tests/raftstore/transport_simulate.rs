@@ -39,8 +39,7 @@ struct FilterDelay {
 impl Filter for FilterDropPacket {
     fn before(&self, _: &RaftMessage) -> bool {
         let drop = rand::random::<u32>() % 100u32 < self.rate;
-        let mut drop_ref = self.drop.wl();
-        *drop_ref = drop;
+        *self.drop.wl() = drop;
         drop
     }
     fn after(&self, x: Result<()>) -> Result<()> {

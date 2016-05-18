@@ -512,22 +512,25 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn reset_transport_hooks(&mut self) {
-        for node_id in self.sim.rl().get_node_ids() {
-            self.sim.wl().hook_transport(node_id, vec![]);
+        let sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            sim.hook_transport(node_id, vec![]);
         }
     }
 
     pub fn hook_transport_drop_packet(&self, rate: u32) {
-        for node_id in self.sim.rl().get_node_ids() {
+        let sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
             let filter = new_drop_packet_filter(rate);
-            self.sim.wl().hook_transport(node_id, vec![filter]);
+            sim.hook_transport(node_id, vec![filter]);
         }
     }
 
     pub fn hook_transport_delay(&self, duration: u64) {
-        for node_id in self.sim.rl().get_node_ids() {
+        let sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
             let filter = new_delay_filter(duration);
-            self.sim.wl().hook_transport(node_id, vec![filter]);
+            sim.hook_transport(node_id, vec![filter]);
         }
     }
 }
