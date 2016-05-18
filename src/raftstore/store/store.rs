@@ -365,7 +365,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             peer: metapb::Peer) {
         if let Some(p) = self.region_peers.get(&region_id) {
             if p.is_leader() {
-                // Notify pd quickly
+                // Notify pd immediately.
                 self.heartbeat_pd(p);
             }
         }
@@ -438,7 +438,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
 
                 if is_leader {
-                    // Notify pd quickly to let it update the region meta.
+                    // Notify pd immediately to let it update the region meta.
                     self.heartbeat_pd(self.region_peers.get(&region_id).unwrap());
                     self.heartbeat_pd(&new_peer);
                 }
