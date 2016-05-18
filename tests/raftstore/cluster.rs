@@ -499,38 +499,11 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
-    // NOTE: if you have set transport hooks before, call this function will overwrite them
-    pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
-        for node_id in &s1 {
-            let filter = new_partition_filter(s2.clone());
-            self.sim.rl().hook_transport(*node_id, vec![filter]);
-        }
-        for node_id in &s2 {
-            let filter = new_partition_filter(s1.clone());
-            self.sim.wl().hook_transport(*node_id, vec![filter]);
-        }
-    }
-
-    pub fn reset_transport_hooks(&mut self) {
+    pub fn hook_transport<F: FilterFactory>(&self, factory: F) {
         let sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
-            sim.hook_transport(node_id, vec![]);
-        }
-    }
-
-    pub fn hook_transport_drop_packet(&self, rate: u32) {
-        let sim = self.sim.wl();
-        for node_id in sim.get_node_ids() {
-            let filter = new_drop_packet_filter(rate);
-            sim.hook_transport(node_id, vec![filter]);
-        }
-    }
-
-    pub fn hook_transport_delay(&self, duration: u64) {
-        let sim = self.sim.wl();
-        for node_id in sim.get_node_ids() {
-            let filter = new_delay_filter(duration);
-            sim.hook_transport(node_id, vec![filter]);
+            let filter = factory.generate();
+            sim.hook_transport(node_id, filter);
         }
     }
 }

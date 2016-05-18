@@ -43,6 +43,7 @@ impl Filter for FilterDropPacket {
         self.drop.store(drop, Ordering::Relaxed);
         drop
     }
+
     fn after(&self, x: Result<()>) -> Result<()> {
         if self.drop.load(Ordering::Relaxed) {
             return Err(Error::Timeout("drop by FilterDropPacket in SimulateTransport".to_string()));
@@ -50,7 +51,6 @@ impl Filter for FilterDropPacket {
         x
     }
 }
-
 
 impl Filter for FilterDelay {
     fn before(&self, _: &RaftMessage) -> bool {
@@ -102,40 +102,41 @@ impl<T: Transport> Transport for SimulateTransport<T> {
     }
 }
 
-struct PartitionFilter {
-    node_ids: Vec<u64>,
-    drop: AtomicBool,
+pub trait FilterFactory {
+    fn generate(&self) -> Vec<Box<Filter>>;
 }
 
-impl Filter for PartitionFilter {
-    fn before(&self, msg: &RaftMessage) -> bool {
-        let drop = self.node_ids.contains(&msg.get_to_peer().get_store_id());
-        self.drop.store(drop, Ordering::Relaxed);
-        drop
-    }
-    fn after(&self, r: Result<()>) -> Result<()> {
-        if self.drop.load(Ordering::Relaxed) {
-            return Err(Error::Timeout("drop by PartitionPacket in SimulateTransport".to_string()));
-        }
-        r
+pub struct DropPacket {
+    rate: u32,
+}
+
+impl DropPacket {
+    pub fn new(rate: u32) -> DropPacket {
+        DropPacket { rate: rate }
     }
 }
 
-pub fn new_partition_filter(node_ids: Vec<u64>) -> Box<Filter> {
-    let ids = node_ids.clone();
-    Box::new(PartitionFilter {
-        node_ids: ids,
-        drop: AtomicBool::new(false),
-    })
+impl FilterFactory for DropPacket {
+    fn generate(&self) -> Vec<Box<Filter>> {
+        vec![Box::new(FilterDropPacket {
+                 rate: self.rate,
+                 drop: AtomicBool::new(false),
+             })]
+    }
 }
 
-pub fn new_drop_packet_filter(rate: u32) -> Box<Filter> {
-    Box::new(FilterDropPacket {
-        rate: rate,
-        drop: AtomicBool::new(false),
-    })
+pub struct Delay {
+    duration: u64,
 }
 
-pub fn new_delay_filter(duration: u64) -> Box<Filter> {
-    Box::new(FilterDelay { duration: duration })
+impl Delay {
+    pub fn new(duration: u64) -> Delay {
+        Delay { duration: duration }
+    }
+}
+
+impl FilterFactory for Delay {
+    fn generate(&self) -> Vec<Box<Filter>> {
+        vec![Box::new(FilterDelay { duration: self.duration })]
+    }
 }
