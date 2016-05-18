@@ -118,10 +118,10 @@ impl DropPacket {
 
 impl FilterFactory for DropPacket {
     fn generate(&self) -> Vec<Box<Filter>> {
-        vec![Box::new(FilterDropPacket {
+        vec![box FilterDropPacket {
                  rate: self.rate,
                  drop: AtomicBool::new(false),
-             })]
+             }]
     }
 }
 
@@ -137,6 +137,6 @@ impl Delay {
 
 impl FilterFactory for Delay {
     fn generate(&self) -> Vec<Box<Filter>> {
-        vec![Box::new(FilterDelay { duration: self.duration })]
+        vec![box FilterDelay { duration: self.duration }]
     }
 }
