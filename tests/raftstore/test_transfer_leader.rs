@@ -15,6 +15,7 @@ use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
+use std::time::Duration;
 
 fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     // test a cluster with five nodes [1, 5], only one region (region 1).
@@ -37,6 +38,17 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(k2, v2);
     must_get_equal(&cluster.engines[&3], k2, v2);
     assert_eq!(cluster.leader_of_region(1), Some(new_peer(3, 3)));
+
+    let mut region = cluster.get_region(b"k3");
+    let mut req = new_request(region.get_id(),
+                              region.take_region_epoch(),
+                              vec![new_put_cmd(b"k3", b"v3")]);
+    req.mut_header().set_peer(new_peer(3, 3));
+    // transfer leader to (4, 4)
+    cluster.transfer_leader(1, new_peer(4, 4));
+    // send request to old leader (3, 3) directly and verify it fails
+    let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
+    assert!(resp.get_header().get_error().has_not_leader());
 }
 
 #[test]

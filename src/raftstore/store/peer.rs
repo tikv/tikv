@@ -398,7 +398,8 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&cmd).unwrap();
         let peer = transfer_leader.get_peer();
 
-        info!("transfer leader {:?} at region {}",
+        info!("transfer leader from {:?} to {:?} at region {}",
+              self.peer,
               peer,
               self.region_id,
         );
