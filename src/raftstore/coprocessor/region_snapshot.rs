@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{DB, IteratorMode, Direction, DBVector};
+use rocksdb::{DB, SeekKey, DBVector, DBIterator};
 use rocksdb::rocksdb::Snapshot;
-use raftstore::store::engine::{Iterable, Peekable};
-use raftstore::store::keys::{self, enc_end_key};
-use raftstore::store::{util, PeerStorage};
+use kvproto::metapb::Region;
+
+use raftstore::store::engine::Peekable;
+use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
-use kvproto::metapb;
 
 
 type Kv<'a> = (&'a [u8], &'a [u8]);
@@ -27,7 +27,7 @@ type Kv<'a> = (&'a [u8], &'a [u8]);
 /// Only data within a region can be accessed.
 pub struct RegionSnapshot<'a> {
     snap: Snapshot<'a>,
-    region: metapb::Region,
+    region: Region,
 }
 
 impl<'a> RegionSnapshot<'a> {
@@ -38,59 +38,20 @@ impl<'a> RegionSnapshot<'a> {
         }
     }
 
-    pub fn from_raw(db: &'a DB, region: metapb::Region) -> RegionSnapshot<'a> {
+    pub fn from_raw(db: &'a DB, region: Region) -> RegionSnapshot<'a> {
         RegionSnapshot {
             snap: db.snapshot(),
             region: region,
         }
     }
 
-    fn new_iterator(&'a self, start_key: &[u8]) -> Box<Iterator<Item = Kv> + 'a> {
-        let scan_start_key = if start_key < self.region.get_start_key() {
-            keys::data_key(self.region.get_start_key())
-        } else {
-            keys::data_key(start_key)
-        };
-        let scan_end_key = enc_end_key(&self.region);
-        box self.snap
-            .new_iterator(&scan_start_key)
-            .take_while(move |&(k, _)| k < &scan_end_key)
-            .map(|(k, v)| (keys::origin_key(k), v))
-    }
-
-    // Seek the first key >= given key, if no found, return None.
-    pub fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let pair = self.new_iterator(key)
-            .next()
-            .map(|(k, v)| (k.to_vec(), v.to_vec()));
-        Ok(pair)
-    }
-
-    fn new_reverse_iterator(&'a self, start_key: &[u8]) -> Box<Iterator<Item = Kv> + 'a> {
-        let scan_start_key = if start_key > self.region.get_end_key() &&
-                                !self.region.get_end_key().is_empty() {
-            enc_end_key(&self.region)
-        } else {
-            keys::data_key(start_key)
-        };
-        let mut iter = self.snap.iterator(IteratorMode::From(&scan_start_key, Direction::Reverse));
-        if !iter.valid() {
-            iter = self.snap.iterator(IteratorMode::End);
-        }
-        let scan_end_key = keys::data_key(self.region.get_start_key());
-        box iter.skip_while(move |&(k, _)| k >= &scan_start_key)
-            .take_while(move |&(k, _)| k >= &scan_end_key)
-            .map(|(k, v)| (keys::origin_key(k), v))
-    }
-
-    // Seek the first key < given key, if no found, return None.
-    pub fn reverse_seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let pair = self.new_reverse_iterator(key).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
-        Ok(pair)
-    }
-
-    pub fn get_region(&self) -> &metapb::Region {
+    pub fn get_region(&self) -> &Region {
         &self.region
+    }
+
+    pub fn iter(&self) -> RegionIterator {
+        let start_key = keys::enc_start_key(&self.region);
+        RegionIterator::new(self.snap.iter(start_key.as_slice().into()), &self.region)
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -98,17 +59,22 @@ impl<'a> RegionSnapshot<'a> {
     pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let it = self.new_iterator(start_key);
-
-        for (key, value) in it {
-            if !end_key.is_empty() && key >= end_key {
-                break;
-            }
-
-            let r = try!(f(key, value));
-            if !r {
-                break;
-            }
+        let mut it = self.iter();
+        println!("no {}", it.valid());
+        if !it.seek(start_key) {
+            return Ok(());
+        }
+        println!("I did");
+        let mut r = true;
+        while r && it.valid() {
+            r = {
+                let key = it.key();
+                if !end_key.is_empty() && key >= end_key {
+                    break;
+                }
+                try!(f(key, it.value()))
+            };
+            it.next();
         }
 
         Ok(())
@@ -131,6 +97,110 @@ impl<'a> Peekable for RegionSnapshot<'a> {
     }
 }
 
+/// `RegionIterator` wrap a rocksdb iterator and only allow it to
+/// iterate in the region. It behaves as if underlying
+/// db only contains one region.
+pub struct RegionIterator<'a> {
+    iter: DBIterator<'a>,
+
+    valid: bool,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+}
+
+// we use rocksdb's style iterator, so omit the warning.
+#[allow(should_implement_trait)]
+impl<'a> RegionIterator<'a> {
+    pub fn new(iter: DBIterator<'a>, region: &Region) -> RegionIterator<'a> {
+        RegionIterator {
+            iter: iter,
+
+            valid: false,
+            start_key: keys::enc_start_key(region),
+            end_key: keys::enc_end_key(region),
+        }
+    }
+
+    pub fn seek_to_first(&mut self) -> bool {
+        self.valid = self.iter.seek(self.start_key.as_slice().into());
+
+        self.update_valid()
+    }
+
+    #[inline]
+    fn update_valid(&mut self) -> bool {
+        if self.valid {
+            let key = self.iter.key();
+            self.valid = key >= &self.start_key && (self.end_key.is_empty() || key < &self.end_key);
+        }
+        self.valid
+    }
+
+    pub fn seek_to_last(&mut self) -> bool {
+        if (self.end_key.is_empty() || !self.iter.seek(self.end_key.as_slice().into())) &&
+           !self.iter.seek(SeekKey::End) {
+            self.valid = false;
+            return self.valid;
+        }
+
+        if !self.end_key.is_empty() {
+            while self.iter.key() >= &self.end_key && self.iter.prev() {
+            }
+        }
+
+        self.valid = self.iter.valid();
+        self.update_valid()
+    }
+
+    pub fn seek(&mut self, key: &[u8]) -> bool {
+        let key = keys::data_key(key);
+        if key < self.start_key {
+            return self.seek_to_first();
+        } else if !self.end_key.is_empty() && key >= self.end_key {
+            self.valid = false;
+        } else {
+            self.valid = self.iter.seek(key.as_slice().into());
+        }
+
+        self.update_valid()
+    }
+
+    pub fn prev(&mut self) -> bool {
+        if !self.valid {
+            return false;
+        }
+        self.valid = self.iter.prev();
+
+        self.update_valid()
+    }
+
+    pub fn next(&mut self) -> bool {
+        if !self.valid {
+            return false;
+        }
+        self.valid = self.iter.next();
+
+        self.update_valid()
+    }
+
+    #[inline]
+    pub fn key(&self) -> &[u8] {
+        assert!(self.valid);
+        keys::origin_key(self.iter.key())
+    }
+
+    #[inline]
+    pub fn value(&self) -> &[u8] {
+        assert!(self.valid);
+        self.iter.value()
+    }
+
+    #[inline]
+    pub fn valid(&self) -> bool {
+        self.valid
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempdir::TempDir;
@@ -138,6 +208,7 @@ mod tests {
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
+    use storage::{Cursor, Key};
 
     use super::*;
     use std::sync::Arc;
@@ -229,9 +300,11 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
-        let pair = snap.seek(b"a1").unwrap().unwrap();
-        assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(snap.seek(b"a6").unwrap().is_none());
+        let mut iter = snap.iter();
+        assert!(iter.seek(b"a1"));
+        assert_eq!(iter.key(), b"a3");
+        assert_eq!(iter.value(), b"v3");
+        assert!(!iter.seek(b"a6"));
 
         data.clear();
         snap.scan(b"a2",
@@ -243,6 +316,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(data.len(), 1);
+
+        assert!(iter.seek_to_first());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.next() {
+                break;
+            }
+        }
+        assert_eq!(res, base_data[1..3].to_vec());
 
         // test last region
         let store = new_peer_storage(engine.clone(), &Region::new());
@@ -259,10 +342,19 @@ mod tests {
         assert_eq!(data.len(), 4);
         assert_eq!(data, base_data);
 
-        assert!(snap.seek(b"a1").unwrap().is_some());
+        assert!(iter.seek(b"a1"));
+
+        assert!(iter.seek_to_first());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.next() {
+                break;
+            }
+        }
+        assert_eq!(res, base_data[1..3].to_vec());
     }
 
-    #[allow(needless_range_loop)]
     #[test]
     fn test_reverse_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
@@ -270,23 +362,53 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
-        assert!(snap.reverse_seek(b"a2").unwrap().is_none());
-        let mut pair = snap.reverse_seek(b"a7").unwrap().unwrap();
+        let mut iter = snap.iter();
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())));
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())));
+        let mut pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        pair = snap.reverse_seek(b"a5").unwrap().unwrap();
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec())));
+        pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(snap.reverse_seek(b"a3").unwrap().is_none());
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec())));
+
+        assert!(iter.seek_to_last());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.prev() {
+                break;
+            }
+        }
+        let mut expect = test_data[1..3].to_vec();
+        expect.reverse();
+        assert_eq!(res, expect);
 
         // test last region
         let store = new_peer_storage(engine.clone(), &Region::new());
         let snap = RegionSnapshot::new(&store);
-        assert!(snap.reverse_seek(b"a1").unwrap().is_none());
-        let pair = snap.reverse_seek(b"a2").unwrap().unwrap();
+        let mut iter = snap.iter();
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())));
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())));
+        let pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
-        for i in 0..test_data.len() - 1 {
-            let seek_key = &test_data[i + 1].0;
-            let pair = snap.reverse_seek(seek_key).unwrap().unwrap();
-            assert_eq!(pair, test_data[i]);
+        for kv_pairs in test_data.windows(2) {
+            let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
+            assert!(iter.reverse_seek(&seek_key), format!("{}", seek_key));
+            let pair = (iter.key().to_vec(), iter.value().to_vec());
+            assert_eq!(pair, kv_pairs[0]);
         }
+
+        assert!(iter.seek_to_last());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.prev() {
+                break;
+            }
+        }
+        let mut expect = test_data.clone();
+        expect.reverse();
+        assert_eq!(res, expect);
     }
 }

@@ -204,15 +204,17 @@ impl<'a> SnapshotStore<'a> {
         Ok(results)
     }
 
+    // TODO: extract to Scanner.
     pub fn scan(&self, key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         let mut key = key;
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         while results.len() < limit {
-            key = match try!(self.snapshot.seek(&key)) {
-                Some((k, _)) => try!(Key::from_encoded(k).truncate_ts()),
-                None => break,
-            };
+            let iter = try!(self.snapshot.iter(&key));
+            if !iter.valid() {
+                break;
+            }
+            key = try!(Key::from_encoded(iter.key().to_vec()).truncate_ts());
             match txn.get(&key) {
                 Ok(Some(value)) => results.push(Ok((try!(key.raw()), value))),
                 Ok(None) => {}
@@ -230,11 +232,12 @@ impl<'a> SnapshotStore<'a> {
         let mut results = vec![];
         let mut key = key;
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
+        let mut iter = try!(self.snapshot.iter(&key));
         while results.len() < limit {
-            key = match try!(self.snapshot.reverse_seek(&key)) {
-                Some((k, _)) => try!(Key::from_encoded(k).truncate_ts()),
-                None => break,
-            };
+            if !iter.reverse_seek(&key) {
+                break;
+            }
+            key = try!(Key::from_encoded(iter.key().to_vec()).truncate_ts());
             match txn.get(&key) {
                 Ok(Some(value)) => results.push(Ok((try!(key.raw()), value))),
                 Ok(None) => {}
