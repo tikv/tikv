@@ -514,7 +514,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    // it's so common that we provide a API for it
+    // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.hook_transport(Partition::new(s1, s2));
     }
