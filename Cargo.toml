@@ -38,6 +38,7 @@ uuid = "0.1"
 time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"
+num = "0.1"
 clippy = {version = "*", optional = true}
 
 [dependencies.rocksdb]
@@ -51,7 +52,7 @@ git = "https://github.com/carllerche/bytes"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
-rev = "e1a61aa9c96eb3074d099fa77853945dc1275e6d"
+rev = "788e32b67858fa306d0f75799aa59d4b408ea3eb"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

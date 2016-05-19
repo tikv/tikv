@@ -1833,6 +1833,10 @@ fn test_remove_node() {
     r.remove_node(2);
     assert!(!r.pending_conf);
     assert_eq!(r.nodes(), vec![1]);
+
+    // remove all nodes from cluster
+    r.remove_node(1);
+    assert_eq!(r.nodes(), vec![]);
 }
 
 #[test]

@@ -14,6 +14,7 @@
 
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
+use util::codec::mysql::DecimalDecoder;
 use util::codec::mysql::{MAX_FSP, Duration};
 use util::TryInsertWith;
 use super::{Result, Error};
@@ -55,6 +56,7 @@ impl Evaluator {
             ExprType::Float32 |
             ExprType::Float64 => self.eval_float(expr),
             ExprType::MysqlDuration => self.eval_duration(expr),
+            ExprType::MysqlDecimal => self.eval_decimal(expr),
             ExprType::In => self.eval_in(expr),
             _ => Ok(Datum::Null),
         }
@@ -79,6 +81,11 @@ impl Evaluator {
         let n = try!(expr.get_val().decode_i64());
         let dur = try!(Duration::from_nanos(n, MAX_FSP));
         Ok(Datum::Dur(dur))
+    }
+
+    fn eval_decimal(&self, expr: &Expr) -> Result<Datum> {
+        let d = try!(expr.get_val().decode_decimal());
+        Ok(Datum::Dec(d))
     }
 
     fn eval_column_ref(&self, expr: &Expr) -> Result<Datum> {
@@ -264,7 +271,7 @@ mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
     use util::codec::{Datum, datum};
-    use util::codec::mysql::Duration;
+    use util::codec::mysql::{Decimal, Duration, DecimalEncoder};
 
     use tipb::expression::{Expr, ExprType};
     use protobuf::RepeatedField;
@@ -298,6 +305,12 @@ mod test {
                 expr.set_tp(ExprType::MysqlDuration);
                 let mut buf = Vec::with_capacity(number::I64_SIZE);
                 buf.encode_i64(d.to_nanos()).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Dec(d) => {
+                expr.set_tp(ExprType::MysqlDecimal);
+                let mut buf = Vec::with_capacity(d.max_encode_bytes());
+                buf.encode_decimal(&d).unwrap();
                 expr.set_val(buf);
             }
             _ => expr.set_tp(ExprType::Null),
@@ -358,6 +371,8 @@ mod test {
              Duration::parse(b"11:00:00.233", 0).unwrap().into(), ExprType::EQ), Datum::I64(0)),
             (bin_expr(Duration::parse(b"11:00:00.233", 3).unwrap().into(),
              Duration::parse(b"11:00:00.233", 4).unwrap().into(), ExprType::EQ), Datum::I64(1)),
+            (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(2u64.into()),
+             ExprType::EQ), Datum::I64(1)),
             (bin_expr(Datum::I64(100), Datum::I64(1), ExprType::LT), Datum::I64(0)),
             (bin_expr(Datum::I64(1), Datum::I64(100), ExprType::LT), Datum::I64(1)),
             (bin_expr(Datum::I64(100), Datum::Null, ExprType::LT), Datum::Null),
@@ -383,9 +398,13 @@ mod test {
             (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::And), Datum::I64(1)),
             (bin_expr(Datum::I64(1), Datum::Null, ExprType::And), Datum::Null),
             (bin_expr(Datum::Null, Datum::I64(0), ExprType::And), Datum::I64(0)),
+            (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
+             ExprType::And), Datum::I64(0)),
             (bin_expr(Datum::Null, Datum::Null, ExprType::And), Datum::Null),
             (bin_expr(Datum::I64(0), Datum::I64(0), ExprType::Or), Datum::I64(0)),
             (bin_expr(Datum::I64(0), Datum::I64(1), ExprType::Or), Datum::I64(1)),
+            (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
+             ExprType::Or), Datum::I64(1)),
             (bin_expr(Datum::I64(1), Datum::Null, ExprType::Or), Datum::I64(1)),
             (bin_expr(Datum::Null, Datum::Null, ExprType::Or), Datum::Null),
             (bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
