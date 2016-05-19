@@ -207,15 +207,15 @@ impl Cluster {
             if cur_region_peer_len > region_peer_len {
                 // must pd is (1, 2), TiKV is (1)
                 assert_eq!(cur_region_peer_len - region_peer_len, 1);
-                let peers = different_peers(&cur_region, &region);
+                let peers = setdiff_peers(&cur_region, &region);
                 assert_eq!(peers.len(), 1);
-                assert!(different_peers(&region, &cur_region).is_empty());
+                assert!(setdiff_peers(&region, &cur_region).is_empty());
             } else {
                 // must pd is (1), TiKV is (1, 2)
                 assert_eq!(region_peer_len - cur_region_peer_len, 1);
-                let peers = different_peers(&region, &cur_region);
+                let peers = setdiff_peers(&region, &cur_region);
                 assert_eq!(peers.len(), 1);
-                assert!(different_peers(&cur_region, &region).is_empty());
+                assert!(setdiff_peers(&cur_region, &region).is_empty());
             }
 
             // update the region.
@@ -297,7 +297,7 @@ fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
 }
 
 // Left - Right, left (1, 2, 3), right (1, 2), left - right = (3)
-fn different_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::Peer> {
+fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::Peer> {
     let mut peers = vec![];
     for peer in left.get_peers() {
         if let Some(p) = find_peer(&right, peer.get_store_id()) {
