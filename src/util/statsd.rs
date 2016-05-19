@@ -14,7 +14,7 @@
 use std::net::UdpSocket;
 
 use log::LogLevel;
-use metric::Metric;
+use super::metric::Metric;
 use cadence::prelude::*;
 use cadence::{StatsdClient, LoggingMetricSink, UdpMetricSink};
 

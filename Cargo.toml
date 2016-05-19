@@ -60,9 +60,6 @@ git = "https://github.com/pingcap/tipb.git"
 [dependencies.mio]
 git = "https://github.com/carllerche/mio.git"
 
-[dependencies.metric]
-git = "https://github.com/overvenus/metric-rust.git"
-
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`

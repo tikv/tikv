@@ -9,7 +9,6 @@ dependencies = [
  "getopts 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "metric 0.1.0 (git+https://github.com/overvenus/metric-rust.git)",
  "mio 0.5.0 (git+https://github.com/carllerche/mio.git)",
  "num 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
@@ -113,11 +112,6 @@ dependencies = [
 name = "log"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-
-[[package]]
-name = "metric"
-version = "0.1.0"
-source = "git+https://github.com/overvenus/metric-rust.git#906364c6576bad1212ba998fce1f1b45b7e6d20c"
 
 [[package]]
 name = "mio"

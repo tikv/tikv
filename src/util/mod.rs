@@ -28,6 +28,8 @@ use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 #[macro_use]
 pub mod macros;
+#[macro_use]
+pub mod metric;
 pub mod logger;
 pub mod panic_hook;
 pub mod worker;

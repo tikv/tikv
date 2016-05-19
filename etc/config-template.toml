@@ -14,7 +14,7 @@ log-level = "info"
 # There are two type of statsd client implemented: `log` and `udp. The default statsd client is
 # `log` which will output to log.
 # log level: trace, debug, info, warn, error, off.
-level = "off"
+level = "info"
 # if log level is off then `udp` will be activated.
 # remote statsd server address.
 host = ""

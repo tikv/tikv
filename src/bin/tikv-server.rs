@@ -21,8 +21,6 @@ extern crate log;
 extern crate rocksdb;
 extern crate mio;
 extern crate toml;
-#[macro_use]
-extern crate metric;
 extern crate cadence;
 
 use std::env;
@@ -36,7 +34,7 @@ use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionTyp
 use mio::tcp::TcpListener;
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
-use tikv::util::{self, logger, panic_hook, statsd};
+use tikv::util::{self, logger, panic_hook, statsd, metric};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
