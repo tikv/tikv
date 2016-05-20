@@ -470,10 +470,13 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(header0.get_error().has_region_not_found());
 
     // at least wait for a round of election timeout and check again
-    let term1 = find_leader_response_header(cluster, r1, new_peer(1, 1)).get_current_term();
-    sleep_ms(500);
-    let term2 = find_leader_response_header(cluster, r1, new_peer(1, 1)).get_current_term();
-    assert!(term2 > term1);
+    let term = find_leader_response_header(cluster, r1, new_peer(1, 1)).get_current_term();
+    let mut current_term = term;
+    while current_term < term + 3 {
+        sleep_ms(10);
+        let header2 = find_leader_response_header(cluster, r1, new_peer(1, 1));
+        current_term = header2.get_current_term();
+    }
 
     let header1 = find_leader_response_header(cluster, r1, new_peer(2, 2));
     assert!(header1.get_error().has_region_not_found());
