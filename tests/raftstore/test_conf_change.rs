@@ -365,7 +365,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
     compact_log.mut_header().set_peer(new_peer(1, 1));
     // ignore error, we just want to send this command to peer (1, 1),
-    // and know that it can't be executed because we have only one peer,
+    // and the command can't be executed because we have only one peer,
     // so here will return timeout error, we should ignore it.
     let _ = cluster.call_command(compact_log, Duration::from_millis(1));
 

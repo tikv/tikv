@@ -28,10 +28,10 @@ use tikv::util::{HandyRwLock, escape};
 use super::util::*;
 
 // Rule is just for special test which we want do more accurate control
-// instead of origin max_peer_number check.
+// instead of origin max_peer_count check.
 // E.g, for region a, change peers 1,2,3 -> 1,2,4.
 // But unlike real pd, Rule is global, and if you set rule,
-// we won't check the peer number later.
+// we won't check the peer count later.
 pub type Rule = Box<Fn(&metapb::Region) -> Option<pdpb::ChangePeer> + Send + Sync>;
 
 #[derive(Default)]
@@ -194,7 +194,7 @@ impl Cluster {
 
         if conf_ver > cur_conf_ver {
             // If ConfVer changed, TiKV has added/removed one peer already.
-            // So pd and TiKV can't have same peer number and can only have
+            // So pd and TiKV can't have same peer count and can only have
             // only one different peer.
             // E.g, we can't meet following cases:
             // 1) pd is (1, 2, 3), TiKV is (1)
@@ -235,13 +235,13 @@ impl Cluster {
             return Ok(resp);
         }
 
-        // If no rule, or rule returns None, use default max_peer_number check.
+        // If no rule, or rule returns None, use default max_peer_count check.
         let mut change_peer = pdpb::ChangePeer::new();
 
-        let max_peer_number = self.meta.get_max_peer_number() as usize;
-        let peer_number = region.get_peers().len();
+        let max_peer_count = self.meta.get_max_peer_number() as usize;
+        let peer_count = region.get_peers().len();
 
-        if peer_number < max_peer_number {
+        if peer_count < max_peer_count {
             // find the first store which the region has not covered.
             for store_id in self.stores.keys() {
                 if region.get_peers().iter().all(|x| x.get_store_id() != *store_id) {
@@ -252,7 +252,7 @@ impl Cluster {
                     break;
                 }
             }
-        } else if peer_number > max_peer_number {
+        } else if peer_count > max_peer_count {
             // find the first peer which not leader.
             let pos = region.get_peers()
                 .iter()
@@ -340,7 +340,7 @@ impl TestPdClient {
         Ok(())
     }
 
-    // Set a customized rule to overwrite default max peer number check rule.
+    // Set a customized rule to overwrite default max peer count check rule.
     pub fn set_rule(&self, rule: Rule) {
         self.cluster.wl().rule = Some(rule);
     }
@@ -350,7 +350,7 @@ impl TestPdClient {
         self.cluster.wl().rule = None;
     }
 
-    // Set an empty rule which nothing to do to disable default max peer number
+    // Set an empty rule which nothing to do to disable default max peer count
     // check rule, we can use clear_rule to enable default again.
     pub fn disable_default_rule(&self) {
         self.set_rule(box move |_| None);

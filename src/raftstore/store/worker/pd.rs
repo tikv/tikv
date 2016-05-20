@@ -74,7 +74,7 @@ impl<T: PdClient> Runner<T> {
                           peer: metapb::Peer,
                           request: AdminRequest) {
         let region_id = region.get_id();
-        let admin_type = request.get_cmd_type();
+        let cmd_type = request.get_cmd_type();
 
         let mut req = RaftCmdRequest::new();
         req.mut_header().set_region_id(region_id);
@@ -91,7 +91,7 @@ impl<T: PdClient> Runner<T> {
             callback: cb,
         }) {
             error!("send {:?} request to region {} err {:?}",
-                   admin_type,
+                   cmd_type,
                    region_id,
                    e);
         }
