@@ -88,7 +88,6 @@ impl error::Error for SetMetricError {
 pub fn set_metric<M>(make_metric: M) -> Result<(), SetMetricError>
     where M: FnOnce() -> Box<Metric>
 {
-    // unsafe { set_metric_raw(|| mem::transmute(make_metric())) }
     unsafe {
         if STATE.compare_and_swap(UNINITIALIZED, INITIALIZED, Ordering::SeqCst) != UNINITIALIZED {
             return Err(SetMetricError(()));
@@ -98,17 +97,6 @@ pub fn set_metric<M>(make_metric: M) -> Result<(), SetMetricError>
         Ok(())
     }
 }
-
-//pub unsafe fn set_metric_raw<M>(make_metric: M) -> Result<(), SetMetricError>
-//    where M: FnOnce() -> *const Metric
-//{
-//    if STATE.compare_and_swap(UNINITIALIZED, INITIALIZED, Ordering::SeqCst) != UNINITIALIZED {
-//        return Err(SetMetricError(()));
-//    }
-//
-//    CLIENT = make_metric();
-//    Ok(())
-//}
 
 #[doc(hidden)]
 pub fn __client() -> Option<&'static Metric> {
