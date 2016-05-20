@@ -86,15 +86,14 @@ impl error::Error for SetMetricError {
     }
 }
 
-pub fn set_metric_client<M>(make_metric: M) -> Result<(), SetMetricError>
-    where M: FnOnce() -> Box<Metric>
+pub fn set_metric_client(client: Box<Metric>) -> Result<(), SetMetricError>
 {
     unsafe {
         if STATE.compare_and_swap(UNINITIALIZED, INITIALIZED, Ordering::SeqCst) != UNINITIALIZED {
             return Err(SetMetricError(()));
         }
 
-        CLIENT = mem::transmute(make_metric());
+        CLIENT = mem::transmute(client);
         Ok(())
     }
 }

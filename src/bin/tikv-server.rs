@@ -60,13 +60,13 @@ fn get_string_value<F>(short: &str,
     where F: Fn(&toml::Value) -> Option<String>
 {
     matches.opt_str(short)
-        .or_else(|| {
-            config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("malformed or missing {}, use default", long);
-                default
-            })
-        })
-        .expect(&format!("please specify {}", long))
+           .or_else(|| {
+               config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                   info!("malformed or missing {}, use default", long);
+                   default
+               })
+           })
+           .expect(&format!("please specify {}", long))
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
@@ -107,7 +107,7 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
     if level == "off" {
         if addr != "" && host != "" {
             let client = statsd::StatsdUdpClient::new(&prefix, &host, &addr);
-            if let Err(r) = metric::set_metric_client(|| Box::new(client)) {
+            if let Err(r) = metric::set_metric_client(Box::new(client)) {
                 error!("{}", r);
             }
         }
@@ -116,7 +116,7 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
                                                   logger::get_level_by_string(&level)
                                                       .to_log_level()
                                                       .unwrap());
-        if let Err(r) = metric::set_metric_client(|| Box::new(client)) {
+        if let Err(r) = metric::set_metric_client(Box::new(client)) {
             error!("{}", r);
         }
     }
@@ -198,7 +198,7 @@ fn run_local_server(listener: TcpListener, store: Storage) {
                               store,
                               router,
                               MockStoreAddrResolver)
-        .unwrap();
+                      .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
