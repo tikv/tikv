@@ -60,11 +60,9 @@ impl<'a> RegionSnapshot<'a> {
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
         let mut it = self.iter();
-        println!("no {}", it.valid());
         if !it.seek(start_key) {
             return Ok(());
         }
-        println!("I did");
         let mut r = true;
         while r && it.valid() {
             r = {
@@ -102,7 +100,6 @@ impl<'a> Peekable for RegionSnapshot<'a> {
 /// db only contains one region.
 pub struct RegionIterator<'a> {
     iter: DBIterator<'a>,
-
     valid: bool,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -114,7 +111,6 @@ impl<'a> RegionIterator<'a> {
     pub fn new(iter: DBIterator<'a>, region: &Region) -> RegionIterator<'a> {
         RegionIterator {
             iter: iter,
-
             valid: false,
             start_key: keys::enc_start_key(region),
             end_key: keys::enc_end_key(region),
