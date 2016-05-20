@@ -17,7 +17,7 @@ use kvproto::metapb::Region;
 
 use raftstore::store::engine::Peekable;
 use raftstore::store::{keys, util, PeerStorage};
-use raftstore::Result;
+use raftstore::{Error, Result};
 
 
 type Kv<'a> = (&'a [u8], &'a [u8]);
@@ -51,7 +51,8 @@ impl<'a> RegionSnapshot<'a> {
 
     pub fn iter(&self) -> RegionIterator {
         let start_key = keys::enc_start_key(&self.region);
-        RegionIterator::new(self.snap.iter(start_key.as_slice().into()), &self.region)
+        RegionIterator::new(self.snap.iter(start_key.as_slice().into()),
+                            self.region.clone())
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -60,7 +61,7 @@ impl<'a> RegionSnapshot<'a> {
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
         let mut it = self.iter();
-        if !it.seek(start_key) {
+        if !try!(it.seek(start_key)) {
             return Ok(());
         }
         let mut r = true;
@@ -101,6 +102,7 @@ impl<'a> Peekable for RegionSnapshot<'a> {
 pub struct RegionIterator<'a> {
     iter: DBIterator<'a>,
     valid: bool,
+    region: Region,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
 }
@@ -108,12 +110,13 @@ pub struct RegionIterator<'a> {
 // we use rocksdb's style iterator, so omit the warning.
 #[allow(should_implement_trait)]
 impl<'a> RegionIterator<'a> {
-    pub fn new(iter: DBIterator<'a>, region: &Region) -> RegionIterator<'a> {
+    pub fn new(iter: DBIterator<'a>, region: Region) -> RegionIterator<'a> {
         RegionIterator {
             iter: iter,
             valid: false,
-            start_key: keys::enc_start_key(region),
-            end_key: keys::enc_end_key(region),
+            start_key: keys::enc_start_key(&region),
+            end_key: keys::enc_end_key(&region),
+            region: region,
         }
     }
 
@@ -127,38 +130,33 @@ impl<'a> RegionIterator<'a> {
     fn update_valid(&mut self) -> bool {
         if self.valid {
             let key = self.iter.key();
-            self.valid = key >= &self.start_key && (self.end_key.is_empty() || key < &self.end_key);
+            self.valid = key >= &self.start_key && key < &self.end_key;
         }
         self.valid
     }
 
     pub fn seek_to_last(&mut self) -> bool {
-        if (self.end_key.is_empty() || !self.iter.seek(self.end_key.as_slice().into())) &&
-           !self.iter.seek(SeekKey::End) {
+        if !self.iter.seek(self.end_key.as_slice().into()) && !self.iter.seek(SeekKey::End) {
             self.valid = false;
             return self.valid;
         }
 
-        if !self.end_key.is_empty() {
-            while self.iter.key() >= &self.end_key && self.iter.prev() {
-            }
+        while self.iter.key() >= &self.end_key && self.iter.prev() {
         }
 
         self.valid = self.iter.valid();
         self.update_valid()
     }
 
-    pub fn seek(&mut self, key: &[u8]) -> bool {
-        let key = keys::data_key(key);
-        if key < self.start_key {
-            return self.seek_to_first();
-        } else if !self.end_key.is_empty() && key >= self.end_key {
+    pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        let key = try!(self.should_seekable(key));
+        if key == self.end_key {
             self.valid = false;
         } else {
             self.valid = self.iter.seek(key.as_slice().into());
         }
 
-        self.update_valid()
+        Ok(self.update_valid())
     }
 
     pub fn prev(&mut self) -> bool {
@@ -194,6 +192,15 @@ impl<'a> RegionIterator<'a> {
     #[inline]
     pub fn valid(&self) -> bool {
         self.valid
+    }
+
+    #[inline]
+    fn should_seekable(&self, key: &[u8]) -> Result<Vec<u8>> {
+        let key = keys::data_key(key);
+        if key < self.start_key || key > self.end_key {
+            return Err(Error::KeyNotInRegion(key.to_vec(), self.region.clone()));
+        }
+        Ok(key)
     }
 }
 
@@ -285,7 +292,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut data = vec![];
-        snap.scan(b"",
+        snap.scan(b"a2",
                   &[0xFF, 0xFF],
                   &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
@@ -297,10 +304,13 @@ mod tests {
         assert_eq!(data, &base_data[1..3]);
 
         let mut iter = snap.iter();
-        assert!(iter.seek(b"a1"));
+        assert!(iter.seek(b"a1").is_err());
+        assert!(iter.seek(b"a2").unwrap());
         assert_eq!(iter.key(), b"a3");
         assert_eq!(iter.value(), b"v3");
-        assert!(!iter.seek(b"a6"));
+        assert!(!iter.seek(b"a6").unwrap());
+        assert!(!iter.seek(b"a7").unwrap());
+        assert!(iter.seek(b"a8").is_err());
 
         data.clear();
         snap.scan(b"a2",
@@ -338,7 +348,8 @@ mod tests {
         assert_eq!(data.len(), 4);
         assert_eq!(data, base_data);
 
-        assert!(iter.seek(b"a1"));
+        let mut iter = snap.iter();
+        assert!(iter.seek(b"a1").unwrap());
 
         assert!(iter.seek_to_first());
         let mut res = vec![];
@@ -348,7 +359,7 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(res, base_data[1..3].to_vec());
+        assert_eq!(res, base_data);
     }
 
     #[test]
@@ -359,14 +370,16 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter();
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())));
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())));
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())).unwrap());
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec())));
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec())).unwrap());
         pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec())));
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec())).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).is_err());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a8".to_vec())).is_err());
 
         assert!(iter.seek_to_last());
         let mut res = vec![];
@@ -384,13 +397,14 @@ mod tests {
         let store = new_peer_storage(engine.clone(), &Region::new());
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter();
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())));
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())));
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         let pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         for kv_pairs in test_data.windows(2) {
             let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
-            assert!(iter.reverse_seek(&seek_key), format!("{}", seek_key));
+            assert!(iter.reverse_seek(&seek_key).unwrap(),
+                    format!("{}", seek_key));
             let pair = (iter.key().to_vec(), iter.value().to_vec());
             assert_eq!(pair, kv_pairs[0]);
         }

@@ -109,8 +109,8 @@ impl<'a> Cursor for DBIterator<'a> {
         DBIterator::prev(self)
     }
 
-    fn seek(&mut self, key: &Key) -> bool {
-        DBIterator::seek(self, key.encoded().as_slice().into())
+    fn seek(&mut self, key: &Key) -> Result<bool> {
+        Ok(DBIterator::seek(self, key.encoded().as_slice().into()))
     }
 
     fn seek_to_first(&mut self) -> bool {

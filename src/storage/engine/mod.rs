@@ -54,7 +54,7 @@ pub trait Snapshot {
 pub trait Cursor {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
-    fn seek(&mut self, key: &Key) -> bool;
+    fn seek(&mut self, key: &Key) -> Result<bool>;
     fn seek_to_first(&mut self) -> bool;
     fn seek_to_last(&mut self) -> bool;
     fn valid(&self) -> bool;
@@ -62,15 +62,15 @@ pub trait Cursor {
     fn key(&self) -> &[u8];
     fn value(&self) -> &[u8];
 
-    fn reverse_seek(&mut self, key: &Key) -> bool {
-        if !self.seek(key) && !self.seek_to_last() {
-            return false;
+    fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
+        if !try!(self.seek(key)) && !self.seek_to_last() {
+            return Ok(false);
         }
 
         while self.key() >= key.encoded().as_slice() && self.prev() {
         }
 
-        self.valid()
+        Ok(self.valid())
     }
 }
 

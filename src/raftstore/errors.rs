@@ -23,7 +23,7 @@ use protobuf::ProtobufError;
 use util::codec;
 use pd;
 use raft;
-use kvproto::metapb;
+use kvproto::{errorpb, metapb};
 
 use super::coprocessor::Error as CopError;
 use util::escape;
@@ -121,3 +121,34 @@ quick_error!{
 
 
 pub type Result<T> = result::Result<T, Error>;
+
+impl Into<errorpb::Error> for Error {
+    fn into(self) -> errorpb::Error {
+        let mut errorpb = errorpb::Error::new();
+        errorpb.set_message(error::Error::description(&self).to_owned());
+
+        match self {
+            Error::RegionNotFound(region_id) => {
+                errorpb.mut_region_not_found().set_region_id(region_id);
+            }
+            Error::NotLeader(region_id, leader) => {
+                if let Some(leader) = leader {
+                    errorpb.mut_not_leader().set_leader(leader);
+                }
+                errorpb.mut_not_leader().set_region_id(region_id);
+            }
+            Error::KeyNotInRegion(key, region) => {
+                errorpb.mut_key_not_in_region().set_key(key);
+                errorpb.mut_key_not_in_region().set_region_id(region.get_id());
+                errorpb.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
+                errorpb.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
+            }
+            Error::StaleEpoch(_) => {
+                errorpb.set_stale_epoch(errorpb::StaleEpoch::new());
+            }
+            _ => {}
+        };
+
+        errorpb
+    }
+}

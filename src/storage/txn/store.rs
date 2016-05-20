@@ -209,9 +209,9 @@ impl<'a> SnapshotStore<'a> {
         let mut results = vec![];
         let mut key = key;
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
+        let mut iter = try!(self.snapshot.iter(&key));
         while results.len() < limit {
-            let iter = try!(self.snapshot.iter(&key));
-            if !iter.valid() {
+            if !try!(iter.seek(&key)) {
                 break;
             }
             key = try!(Key::from_encoded(iter.key().to_vec()).truncate_ts());
@@ -234,7 +234,7 @@ impl<'a> SnapshotStore<'a> {
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
         let mut iter = try!(self.snapshot.iter(&key));
         while results.len() < limit {
-            if !iter.reverse_seek(&key) {
+            if !try!(iter.reverse_seek(&key)) {
                 break;
             }
             key = try!(Key::from_encoded(iter.key().to_vec()).truncate_ts());

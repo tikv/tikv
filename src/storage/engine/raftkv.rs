@@ -80,8 +80,15 @@ impl From<Error> for engine::Error {
     fn from(e: Error) -> engine::Error {
         match e {
             Error::RequestFailed(e) => engine::Error::Request(e),
+            Error::Server(e) => e.into(),
             e => box_err!(e),
         }
+    }
+}
+
+impl From<RaftServerError> for engine::Error {
+    fn from(e: RaftServerError) -> engine::Error {
+        engine::Error::Request(e.into())
     }
 }
 
@@ -213,7 +220,7 @@ impl<C: PdClient> Engine for RaftKv<C> {
     fn iter<'a>(&'a self, ctx: &Context, key: &Key) -> engine::Result<Box<Cursor + 'a>> {
         let snap = try!(self.raw_snapshot(ctx));
         Ok(box RegionIterator::new(self.db.iter(key.encoded().as_slice().into()),
-                                   snap.get_region()))
+                                   snap.get_region().clone()))
     }
 
     fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
@@ -259,7 +266,7 @@ impl<'a> Snapshot for RegionSnapshot<'a> {
 
     fn iter<'b>(&'b self, key: &Key) -> engine::Result<Box<Cursor + 'b>> {
         let mut iter = RegionSnapshot::iter(self);
-        iter.seek(key.encoded());
+        try!(iter.seek(key.encoded()));
         Ok(box iter)
     }
 }
@@ -273,8 +280,11 @@ impl<'a> Cursor for RegionIterator<'a> {
         RegionIterator::prev(self)
     }
 
-    fn seek(&mut self, key: &Key) -> bool {
-        RegionIterator::seek(self, &key.encoded())
+    fn seek(&mut self, key: &Key) -> engine::Result<bool> {
+        RegionIterator::seek(self, &key.encoded()).map_err(|e| {
+            let pb = e.into();
+            engine::Error::Request(pb)
+        })
     }
 
     fn seek_to_first(&mut self) -> bool {
