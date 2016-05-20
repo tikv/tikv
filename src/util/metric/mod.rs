@@ -50,21 +50,20 @@ pub trait Metric: Sync + Send {
 
 pub struct NopMetric;
 
-#[allow(unused_variables)]
 impl Metric for NopMetric {
-    fn incr(&self, key: &str) {}
+    fn incr(&self, _: &str) {}
 
-    fn decr(&self, key: &str) {}
+    fn decr(&self, _: &str) {}
 
-    fn count(&self, key: &str, count: i64) {}
+    fn count(&self, _: &str, _: i64) {}
 
-    fn time(&self, key: &str, time: u64) {}
+    fn time(&self, _: &str, _: u64) {}
 
-    fn gauge(&self, key: &str, value: u64) {}
+    fn gauge(&self, _: &str, _: u64) {}
 
-    fn mark(&self, key: &str) {}
+    fn mark(&self, _: &str) {}
 
-    fn meter(&self, key: &str, value: u64) {}
+    fn meter(&self, _: &str, _: u64) {}
 }
 
 /// The type returned by `set_metric` if `set_metric` has already been called.
@@ -89,19 +88,27 @@ impl error::Error for SetMetricError {
 pub fn set_metric<M>(make_metric: M) -> Result<(), SetMetricError>
     where M: FnOnce() -> Box<Metric>
 {
-    unsafe { set_metric_raw(|| mem::transmute(make_metric())) }
-}
+    // unsafe { set_metric_raw(|| mem::transmute(make_metric())) }
+    unsafe {
+        if STATE.compare_and_swap(UNINITIALIZED, INITIALIZED, Ordering::SeqCst) != UNINITIALIZED {
+            return Err(SetMetricError(()));
+        }
 
-pub unsafe fn set_metric_raw<M>(make_metric: M) -> Result<(), SetMetricError>
-    where M: FnOnce() -> *const Metric
-{
-    if STATE.compare_and_swap(UNINITIALIZED, INITIALIZED, Ordering::SeqCst) != UNINITIALIZED {
-        return Err(SetMetricError(()));
+        CLIENT = mem::transmute(make_metric());
+        Ok(())
     }
-
-    CLIENT = make_metric();
-    Ok(())
 }
+
+//pub unsafe fn set_metric_raw<M>(make_metric: M) -> Result<(), SetMetricError>
+//    where M: FnOnce() -> *const Metric
+//{
+//    if STATE.compare_and_swap(UNINITIALIZED, INITIALIZED, Ordering::SeqCst) != UNINITIALIZED {
+//        return Err(SetMetricError(()));
+//    }
+//
+//    CLIENT = make_metric();
+//    Ok(())
+//}
 
 #[doc(hidden)]
 pub fn __client() -> Option<&'static Metric> {
@@ -109,37 +116,5 @@ pub fn __client() -> Option<&'static Metric> {
         None
     } else {
         Some(unsafe { &*CLIENT })
-    }
-}
-
-#[doc(hidden)]
-#[cfg(test)]
-pub fn __restore_state() {
-    STATE.store(UNINITIALIZED, Ordering::SeqCst);
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_set_metric() {
-        __restore_state();
-        if let Err(r) = set_metric(|| Box::new(NopMetric)) {
-            assert!(false, "{}", r);
-        }
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_re_set_metric() {
-        __restore_state();
-        if let Err(r) = set_metric(|| Box::new(NopMetric)) {
-            assert!(false, "{}", r);
-        }
-        if let Err(r) = set_metric(|| Box::new(NopMetric)) {
-            assert!(false, "{}", r);
-        }
     }
 }
