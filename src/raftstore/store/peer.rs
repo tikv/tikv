@@ -425,10 +425,13 @@ impl Peer {
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
-                AdminCmdType::InvalidAdmin |
-                AdminCmdType::TransferLeader => {}
+                AdminCmdType::InvalidAdmin => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
+                AdminCmdType::TransferLeader => {
+                    check_ver = true;
+                    check_conf_ver = true;
+                }
             };
         } else {
             // for get/set/seek/delete, we don't care conf_version.
