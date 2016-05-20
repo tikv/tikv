@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicUsize, ATOMIC_USIZE_INIT, Ordering};
 
 #[macro_use]
 pub mod macros;
+pub mod clients;
 
 static mut CLIENT: *const Metric = &NopMetric;
 static STATE: AtomicUsize = ATOMIC_USIZE_INIT;
@@ -85,7 +86,7 @@ impl error::Error for SetMetricError {
     }
 }
 
-pub fn set_metric<M>(make_metric: M) -> Result<(), SetMetricError>
+pub fn set_metric_client<M>(make_metric: M) -> Result<(), SetMetricError>
     where M: FnOnce() -> Box<Metric>
 {
     unsafe {

@@ -107,7 +107,7 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
     if level == "off" {
         if addr != "" && host != "" {
             let client = statsd::StatsdUdpClient::new(&prefix, &host, &addr);
-            if let Err(r) = metric::set_metric(|| Box::new(client)) {
+            if let Err(r) = metric::set_metric_client(|| Box::new(client)) {
                 error!("{}", r);
             }
         }
@@ -116,7 +116,7 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
                                                   logger::get_level_by_string(&level)
                                                       .to_log_level()
                                                       .unwrap());
-        if let Err(r) = metric::set_metric(|| Box::new(client)) {
+        if let Err(r) = metric::set_metric_client(|| Box::new(client)) {
             error!("{}", r);
         }
     }
