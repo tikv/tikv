@@ -472,7 +472,7 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // at least wait for a round of election timeout and check again
     let term = find_leader_response_header(cluster, r1, new_peer(1, 1)).get_current_term();
     let mut current_term = term;
-    while current_term < term + 3 {
+    while current_term < term + 2 {
         sleep_ms(10);
         let header2 = find_leader_response_header(cluster, r1, new_peer(1, 1));
         current_term = header2.get_current_term();
