@@ -293,7 +293,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     wait_till_reach_count(pd_client.clone(), region_id, 6);
 
     // it should remove extra replica.
-    pd_client.clear_rule();
+    pd_client.reset_rule();
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 
     region = pd_client.get_region_by_id(region_id).unwrap();
@@ -302,7 +302,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     wait_till_reach_count(pd_client.clone(), region_id, 4);
 
     // it should add missing replica.
-    pd_client.clear_rule();
+    pd_client.reset_rule();
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 }
 

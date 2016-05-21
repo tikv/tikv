@@ -156,8 +156,7 @@ impl Cluster {
 
         if start_key == search_start_key && end_key == search_end_key {
             // we are the same, must check epoch here.
-            try!(check_stale_region(&search_region, &region));
-            return Ok(());
+            return check_stale_region(&search_region, &region);
         }
 
         if search_start_key >= end_key {
@@ -226,8 +225,7 @@ impl Cluster {
 
         let mut resp = pdpb::RegionHeartbeatResponse::new();
 
-        if self.rule.is_some() {
-            let rule = self.rule.as_ref().unwrap();
+        if let Some(ref rule) = self.rule {
             if let Some(change_peer) = rule(&region) {
                 resp.set_change_peer(change_peer);
             }
@@ -235,7 +233,7 @@ impl Cluster {
             return Ok(resp);
         }
 
-        // If no rule, or rule returns None, use default max_peer_count check.
+        // If no rule, use default max_peer_count check.
         let mut change_peer = pdpb::ChangePeer::new();
 
         let max_peer_count = self.meta.get_max_peer_number() as usize;
@@ -346,12 +344,12 @@ impl TestPdClient {
     }
 
     // Clear the customized rule set before and use default rule again.
-    pub fn clear_rule(&self) {
+    pub fn reset_rule(&self) {
         self.cluster.wl().rule = None;
     }
 
     // Set an empty rule which nothing to do to disable default max peer count
-    // check rule, we can use clear_rule to enable default again.
+    // check rule, we can use reset_rule to enable default again.
     pub fn disable_default_rule(&self) {
         self.set_rule(box move |_| None);
     }
@@ -372,7 +370,7 @@ impl TestPdClient {
 
         let region = self.get_region_by_id(region_id)
             .unwrap();
-        assert!(false, format!("region {:?} has no peer {:?}", region, peer));
+        panic!("region {:?} has no peer {:?}", region, peer);
     }
 
     pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
@@ -389,7 +387,7 @@ impl TestPdClient {
 
         let region = self.get_region_by_id(region_id)
             .unwrap();
-        assert!(false, format!("region {:?} has peer {:?}", region, peer));
+        panic!("region {:?} has peer {:?}", region, peer);
     }
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
