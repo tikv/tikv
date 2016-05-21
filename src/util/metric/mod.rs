@@ -48,8 +48,7 @@ impl error::Error for SetMetricError {
     }
 }
 
-pub fn set_metric_client(client: Box<Metric>) -> Result<(), SetMetricError>
-{
+pub fn set_metric_client(client: Box<Metric>) -> Result<(), SetMetricError> {
     unsafe {
         if STATE.compare_and_swap(UNINITIALIZED, INITIALIZED, Ordering::SeqCst) != UNINITIALIZED {
             return Err(SetMetricError(()));
@@ -63,10 +62,8 @@ pub fn set_metric_client(client: Box<Metric>) -> Result<(), SetMetricError>
 #[doc(hidden)]
 pub fn __client() -> Option<&'static Metric> {
     if STATE.load(Ordering::SeqCst) != INITIALIZED {
-        return None
+        return None;
     }
 
-    unsafe {
-        CLIENT.map_or(None, |c| Some(&*c))
-    }
+    unsafe { CLIENT.map_or(None, |c| Some(&*c)) }
 }

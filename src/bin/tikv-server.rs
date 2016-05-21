@@ -118,9 +118,10 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
         }
     } else {
         let sink = LoggingMetricSink::new(logger::get_level_by_string(&level)
-                                                        .to_log_level()
-                                                        .unwrap());
+                                              .to_log_level()
+                                              .unwrap());
         let client = StatsdClient::from_sink(&prefix, sink);
+
         if let Err(r) = metric::set_metric_client(Box::new(client)) {
             error!("{}", r);
         }
