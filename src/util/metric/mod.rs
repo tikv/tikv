@@ -1,5 +1,4 @@
-// Copyright 2016 Neil Shen <overvenus@gmail.com>.
-// Copyright 2015 The Rust Project Developers.
+// Copyright 2016 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
