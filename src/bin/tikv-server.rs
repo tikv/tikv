@@ -97,9 +97,12 @@ fn build_raftkv(matches: &Matches,
     opts.set_max_write_buffer_number(5);
     opts.set_min_write_buffer_number_to_merge(2);
     opts.set_max_background_compactions(3);
-    opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
+    opts.set_max_bytes_for_level_base(64 * 1024 * 1024);
     opts.set_target_file_size_base(64 * 1024 * 1024);
     opts.create_if_missing(true);
+    opts.set_level_zero_slowdown_writes_trigger(12);
+    opts.set_level_zero_stop_writes_trigger(24);
+    // TODO: enable lz4 compression
 
     let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
