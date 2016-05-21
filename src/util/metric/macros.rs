@@ -15,7 +15,9 @@
 macro_rules! metric_count {
     ($key:expr, $count:expr) => {
         if let Some(client) = $crate::util::metric::__client() {
-            client.incr($key);
+            if let Err(e) = client.count($key, $count) {
+                warn!("{}", e);
+            }
         }
     };
 }
@@ -24,7 +26,9 @@ macro_rules! metric_count {
 macro_rules! metric_incr {
     ($key:expr) => {
         if let Some(client) = $crate::util::metric::__client() {
-            client.incr($key);
+            if let Err(e) = client.incr($key) {
+                warn!("{}", e);
+            }
         }
     };
 }
@@ -33,7 +37,9 @@ macro_rules! metric_incr {
 macro_rules! metric_decr {
     ($key:expr) => {
         if let Some(client) = $crate::util::metric::__client() {
-            client.decr($key);
+            if let Err(e) = client.decr($key) {
+                warn!("{}", e);
+            }
         }
     };
 }
@@ -42,7 +48,9 @@ macro_rules! metric_decr {
 macro_rules! metric_time {
     ($key:expr, $time:expr) => {
         if let Some(client) = $crate::util::metric::__client() {
-            client.time($key, time);
+            if let Err(e) = client.time($key, $time) {
+                warn!("{}", e);
+            }
         }
     };
 }
@@ -51,7 +59,9 @@ macro_rules! metric_time {
 macro_rules! metric_gauge {
     ($key:expr, $value:expr) => {
         if let Some(client) = $crate::util::metric::__client() {
-            client.gauge($key, $value);
+            if let Err(e) = client.gauge($key, $value) {
+                warn!("{}", e);
+            }
         }
     };
 }
@@ -60,7 +70,9 @@ macro_rules! metric_gauge {
 macro_rules! metric_mark {
     ($key:expr) => {
         if let Some(client) = $crate::util::metric::__client() {
-            client.mark($key);
+            if let Err(e) = client.mark($key) {
+                warn!("{}", e);
+            }
         }
     };
 }
@@ -69,7 +81,9 @@ macro_rules! metric_mark {
 macro_rules! metric_meter {
     ($key:expr, $value:expr) => {
         if let Some(client) = $crate::util::metric::__client() {
-            client.meter($key, $value);
+            if let Err(e) = client.meter($key, $value) {
+                warn!("{}", e);
+            }
         }
     };
 }

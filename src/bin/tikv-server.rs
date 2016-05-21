@@ -28,13 +28,15 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::io::Read;
+use std::net::UdpSocket;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
 use mio::tcp::TcpListener;
+use cadence::{StatsdClient, LoggingMetricSink, UdpMetricSink};
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
-use tikv::util::{self, logger, panic_hook, statsd, metric};
+use tikv::util::{self, logger, panic_hook, metric};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
@@ -106,16 +108,19 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
                                   |v| v.as_str().map(|s| s.to_owned()));
     if level == "off" {
         if addr != "" && host != "" {
-            let client = statsd::StatsdUdpClient::new(&prefix, &host, &addr);
+            let socket = UdpSocket::bind(&*addr).unwrap();
+            let sink = UdpMetricSink::from(&*host, socket).unwrap();
+            let client = StatsdClient::from_sink(&prefix, sink);
+
             if let Err(r) = metric::set_metric_client(Box::new(client)) {
                 error!("{}", r);
             }
         }
     } else {
-        let client = statsd::StatsdLogClient::new(&prefix,
-                                                  logger::get_level_by_string(&level)
-                                                      .to_log_level()
-                                                      .unwrap());
+        let sink = LoggingMetricSink::new(logger::get_level_by_string(&level)
+                                                        .to_log_level()
+                                                        .unwrap());
+        let client = StatsdClient::from_sink(&prefix, sink);
         if let Err(r) = metric::set_metric_client(Box::new(client)) {
             error!("{}", r);
         }
