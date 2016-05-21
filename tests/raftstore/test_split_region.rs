@@ -35,38 +35,41 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    let a1 = b"a1";
-    cluster.must_put(a1, b"v1");
+    let tbls = vec![(b"a22", b"a11", b"a33"), (b"a11", b"a00", b"a11"), (b"a33", b"a22", b"a33")];
 
-    let a2 = b"a2";
+    for (split_key, left_key, right_key) in tbls {
+        cluster.must_put(left_key, b"v1");
+        cluster.must_put(right_key, b"v3");
 
-    let a3 = b"a3";
-    cluster.must_put(a3, b"v3");
+        // Left and right key must be in same region before split.
+        let region = pd_client.get_region(left_key).unwrap();
+        let region2 = pd_client.get_region(right_key).unwrap();
+        assert_eq!(region.get_id(), region2.get_id());
 
-    let region = pd_client.get_region(b"").unwrap();
-    // Split with a2, so a1 must in left, and a3 in right.
-    cluster.must_split(&region, a2);
+        // Split with split_key, so left_key must in left, and right_key in right.
+        cluster.must_split(&region, split_key);
 
-    let left = pd_client.get_region(a1).unwrap();
-    let right = pd_client.get_region(a3).unwrap();
+        let left = pd_client.get_region(left_key).unwrap();
+        let right = pd_client.get_region(right_key).unwrap();
 
-    assert_eq!(region.get_id(), left.get_id());
-    assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(left.get_end_key(), right.get_start_key());
-    assert_eq!(region.get_end_key(), right.get_end_key());
+        assert_eq!(region.get_id(), left.get_id());
+        assert_eq!(region.get_start_key(), left.get_start_key());
+        assert_eq!(left.get_end_key(), right.get_start_key());
+        assert_eq!(region.get_end_key(), right.get_end_key());
 
-    cluster.must_put(a1, b"vv1");
-    assert_eq!(cluster.get(a1).unwrap(), b"vv1".to_vec());
+        cluster.must_put(left_key, b"vv1");
+        assert_eq!(cluster.get(left_key).unwrap(), b"vv1".to_vec());
 
-    cluster.must_put(a3, b"vv3");
-    assert_eq!(cluster.get(a3).unwrap(), b"vv3".to_vec());
+        cluster.must_put(right_key, b"vv3");
+        assert_eq!(cluster.get(right_key).unwrap(), b"vv3".to_vec());
 
-    let epoch = left.get_region_epoch().clone();
-    let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(a3)]);
-    let resp = cluster.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().has_error());
-    assert!(resp.get_header().get_error().has_key_not_in_region(),
-            format!("{:?}", resp));
+        let epoch = left.get_region_epoch().clone();
+        let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(right_key)]);
+        let resp = cluster.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
+        assert!(resp.get_header().has_error());
+        assert!(resp.get_header().get_error().has_key_not_in_region(),
+                format!("{:?}", resp));
+    }
 }
 
 #[test]

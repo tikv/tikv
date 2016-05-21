@@ -157,8 +157,8 @@ impl Cluster {
         if start_key == search_start_key && end_key == search_end_key {
             // we are the same, must check epoch here.
             try!(check_stale_region(&search_region, &region));
-        } else if search_start_key > end_key {
-            // No range [start, end) in region now, insert directly.
+        } else if search_start_key >= end_key {
+            // No range covers [start, end) now, insert directly.
             self.add_region(&region);
         } else if search_start_key < end_key {
             // overlap, remove old, insert new.

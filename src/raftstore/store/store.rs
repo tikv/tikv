@@ -710,11 +710,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values() {
-            if !peer.is_leader() {
-                continue;
+            if peer.is_leader() {
+                self.heartbeat_pd(peer);
             }
-
-            self.heartbeat_pd(peer);
         }
 
         self.register_pd_heartbeat_tick(event_loop);
