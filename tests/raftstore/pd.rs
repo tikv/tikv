@@ -157,10 +157,13 @@ impl Cluster {
         if start_key == search_start_key && end_key == search_end_key {
             // we are the same, must check epoch here.
             try!(check_stale_region(&search_region, &region));
-        } else if search_start_key >= end_key {
+            return Ok(());
+        }
+
+        if search_start_key >= end_key {
             // No range covers [start, end) now, insert directly.
             self.add_region(&region);
-        } else if search_start_key < end_key {
+        } else {
             // overlap, remove old, insert new.
             // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
             // is overlapped with origin [a, c).
@@ -169,11 +172,8 @@ impl Cluster {
 
             self.remove_region(&search_region);
             self.add_region(&region);
-        } else {
-            panic!("invalid region {:?} compared searched {:?}",
-                   region,
-                   search_region);
         }
+
         Ok(())
     }
 
