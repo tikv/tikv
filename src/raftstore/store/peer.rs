@@ -333,14 +333,11 @@ impl Peer {
         }
 
         if get_transfer_leader_cmd(&req).is_some() {
-            if let Err(e) = self.transfer_leader(req) {
-                cmd_resp::bind_error(&mut err_resp, e);
-                return cmd.cb.call_box((err_resp,));
-            }
+            let resp = self.transfer_leader(req);
 
             // transfer leader command don't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
-            return cmd.cb.call_box((self.exec_transfer_leader(),));
+            return cmd.cb.call_box((resp,));
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
                 return Err(box_err!("there is a pending conf change, try later."));
@@ -389,7 +386,7 @@ impl Peer {
         Ok(())
     }
 
-    fn transfer_leader(&mut self, cmd: RaftCmdRequest) -> Result<()> {
+    fn transfer_leader(&mut self, cmd: RaftCmdRequest) -> RaftCmdResponse {
         let transfer_leader = get_transfer_leader_cmd(&cmd).unwrap();
         let peer = transfer_leader.get_peer();
 
@@ -400,7 +397,14 @@ impl Peer {
         );
 
         self.raft_group.transfer_leader(peer.get_id());
-        Ok(())
+
+
+        let mut response = AdminResponse::new();
+        response.set_cmd_type(AdminCmdType::TransferLeader);
+        response.set_transfer_leader(TransferLeaderResponse::new());
+        let mut resp = RaftCmdResponse::new();
+        resp.set_admin_response(response);
+        resp
     }
 
     fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
