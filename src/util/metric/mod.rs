@@ -48,7 +48,7 @@ impl error::Error for SetMetricError {
     }
 }
 
-pub fn set_metric_client(client: Box<Metric>) -> Result<(), SetMetricError> {
+pub fn set_metric_client(client: Box<Metric + Send + Sync>) -> Result<(), SetMetricError> {
     unsafe {
         if STATE.compare_and_swap(UNINITIALIZED, INITIALIZED, Ordering::SeqCst) != UNINITIALIZED {
             return Err(SetMetricError(()));
