@@ -14,7 +14,7 @@
 
 use std::error;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, ATOMIC_USIZE_INIT, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cadence::prelude::*;
 
@@ -22,18 +22,17 @@ use cadence::prelude::*;
 pub mod macros;
 
 static mut CLIENT: Option<*const Metric> = None;
-static STATE: AtomicUsize = ATOMIC_USIZE_INIT;
-const UNINITIALIZED: usize = 0;
-const INITIALIZED: usize = 1;
+// IS_INITIALIZED indicates the state of CLIENT,
+// `false` for uninitialized, `true` for initialized.
+static IS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub trait Metric: Counted + Gauged + Metered + Timed {}
 
 impl<T: Counted + Gauged + Metered + Timed> Metric for T {}
 
 /// The type returned by `set_metric_client` if `set_metric_client` has already been called.
-#[allow(missing_copy_implementations)]
 #[derive(Debug)]
-pub struct SetMetricError(());
+pub struct SetMetricError;
 
 impl fmt::Display for SetMetricError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -50,8 +49,8 @@ impl error::Error for SetMetricError {
 
 pub fn set_metric_client(client: Box<Metric + Send + Sync>) -> Result<(), SetMetricError> {
     unsafe {
-        if STATE.compare_and_swap(UNINITIALIZED, INITIALIZED, Ordering::SeqCst) != UNINITIALIZED {
-            return Err(SetMetricError(()));
+        if IS_INITIALIZED.compare_and_swap(false, true, Ordering::SeqCst) != false {
+            return Err(SetMetricError);
         }
 
         CLIENT = Some(Box::into_raw(client));
@@ -60,10 +59,10 @@ pub fn set_metric_client(client: Box<Metric + Send + Sync>) -> Result<(), SetMet
 }
 
 #[doc(hidden)]
-pub fn __client() -> Option<&'static Metric> {
-    if STATE.load(Ordering::SeqCst) != INITIALIZED {
+pub fn client() -> Option<&'static Metric> {
+    if IS_INITIALIZED.load(Ordering::SeqCst) != true {
         return None;
     }
 
-    unsafe { CLIENT.map_or(None, |c| Some(&*c)) }
+    unsafe { CLIENT.map(|c| &*c) }
 }

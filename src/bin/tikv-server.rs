@@ -62,13 +62,13 @@ fn get_string_value<F>(short: &str,
     where F: Fn(&toml::Value) -> Option<String>
 {
     matches.opt_str(short)
-           .or_else(|| {
-               config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                   info!("malformed or missing {}, use default", long);
-                   default
-               })
-           })
-           .expect(&format!("please specify {}", long))
+        .or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("malformed or missing {}, use default", long);
+                default
+            })
+        })
+        .expect(&format!("please specify {}", long))
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
@@ -118,8 +118,8 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
         }
     } else {
         let sink = LoggingMetricSink::new(logger::get_level_by_string(&level)
-                                              .to_log_level()
-                                              .unwrap());
+            .to_log_level()
+            .unwrap());
         let client = StatsdClient::from_sink(&prefix, sink);
 
         if let Err(r) = metric::set_metric_client(Box::new(client)) {
@@ -204,7 +204,7 @@ fn run_local_server(listener: TcpListener, store: Storage) {
                               store,
                               router,
                               MockStoreAddrResolver)
-                      .unwrap();
+        .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
