@@ -335,7 +335,7 @@ impl Peer {
         if get_transfer_leader_cmd(&req).is_some() {
             let resp = self.transfer_leader(req);
 
-            // transfer leader command don't need to replicate log and apply, so we
+            // transfer leader command doesn't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
             return cmd.cb.call_box((resp,));
         } else if get_change_peer_cmd(&req).is_some() {
@@ -397,7 +397,6 @@ impl Peer {
         );
 
         self.raft_group.transfer_leader(peer.get_id());
-
 
         let mut response = AdminResponse::new();
         response.set_cmd_type(AdminCmdType::TransferLeader);
@@ -967,15 +966,6 @@ impl Peer {
 
         let state = try!(self.storage.rl().compact(ctx.wb, compact_index));
         Ok((resp, Some(ExecResult::CompactLog { state: state })))
-    }
-
-    fn exec_transfer_leader(&mut self) -> RaftCmdResponse {
-        let mut response = AdminResponse::new();
-        response.set_cmd_type(AdminCmdType::TransferLeader);
-        response.set_transfer_leader(TransferLeaderResponse::new());
-        let mut resp = RaftCmdResponse::new();
-        resp.set_admin_response(response);
-        resp
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
