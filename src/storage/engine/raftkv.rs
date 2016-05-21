@@ -194,7 +194,7 @@ impl<C: PdClient> RaftKv<C> {
                 if resp.get_cmd_type() != CmdType::Snap {
                     return Err(invalid_resp_type(CmdType::Snap, resp.get_cmd_type()));
                 }
-                Ok(resp.take_snap().take_region().clone())
+                Ok(resp.take_snap().take_region())
             })
             .unwrap());
         Ok(RegionSnapshot::from_raw(self.db.as_ref(), region))
