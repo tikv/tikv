@@ -102,7 +102,7 @@ fn build_raftkv(matches: &Matches,
     opts.create_if_missing(true);
     opts.set_level_zero_slowdown_writes_trigger(12);
     opts.set_level_zero_stop_writes_trigger(24);
-    // TODO: enable lz4 compression
+    opts.compression(DBCompressionType::DBLz4);
 
     let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
