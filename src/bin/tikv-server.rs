@@ -92,7 +92,7 @@ fn build_raftkv(matches: &Matches,
     let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(64 * 1024);
     opts.set_block_based_table_factory(&block_base_opts);
-    opts.compression(DBCompressionType::DBNo);
+    opts.compression(DBCompressionType::DBLz4);
     opts.set_write_buffer_size(64 * 1024 * 1024);
     opts.set_max_write_buffer_number(5);
     opts.set_min_write_buffer_number_to_merge(2);
@@ -102,7 +102,6 @@ fn build_raftkv(matches: &Matches,
     opts.create_if_missing(true);
     opts.set_level_zero_slowdown_writes_trigger(12);
     opts.set_level_zero_stop_writes_trigger(24);
-    opts.compression(DBCompressionType::DBLz4);
 
     let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
