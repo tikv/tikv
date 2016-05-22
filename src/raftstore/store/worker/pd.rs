@@ -16,6 +16,7 @@ use std::fmt::{self, Formatter, Display};
 
 use kvproto::metapb;
 use kvproto::raftpb;
+use raftstore::store::{SendCh, Msg};
 
 use util::worker::Runnable;
 use util::escape;
@@ -36,6 +37,10 @@ pub enum Task {
     Heartbeat {
         store: metapb::Store,
     },
+    DeadPeerCheck {
+        peer: metapb::Peer,
+        region: metapb::Region,
+    },
 }
 
 
@@ -52,17 +57,24 @@ impl Display for Task {
                        escape(&split_key))
             }
             Task::Heartbeat { ref store } => write!(f, "heartbeat for store {}", store.get_id()),
+            Task::DeadPeerCheck { ref peer, .. } => {
+                write!(f, "dead peer check for {}", peer.get_id())
+            }
         }
     }
 }
 
 pub struct Runner<T: PdClient> {
+    ch: SendCh,
     pd_client: Arc<T>,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(pd_client: Arc<T>) -> Runner<T> {
-        Runner { pd_client: pd_client }
+    pub fn new(ch: SendCh, pd_client: Arc<T>) -> Runner<T> {
+        Runner {
+            ch: ch,
+            pd_client: pd_client,
+        }
     }
 }
 
@@ -81,6 +93,34 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::Heartbeat { store } => {
                 // Now we use put store protocol for heartbeat.
                 self.pd_client.put_store(store)
+            }
+            Task::DeadPeerCheck { peer, region } => {
+                let result = self.pd_client.get_region(region.get_start_key());
+                if result.is_err() {
+                    return;
+                }
+                let region_pd = result.unwrap();
+                // if the region id of remote do not equal to local, it means region
+                // has already splited and local peer don't know, this case it's also
+                // a dead peer
+                let mut exist = false;
+                if region_pd.get_id() == region.get_id() {
+                    for p in region_pd.get_peers() {
+                        if *p == peer {
+                            exist = true;
+                            break;
+                        }
+                    }
+                }
+                if let Err(e) = self.ch
+                    .send(Msg::DeadPeerCheckResult {
+                        region_id: region.get_id(),
+                        peer: peer.clone(),
+                        exist: exist,
+                    }) {
+                    warn!("failed to send dead peer check result of {:?}: {}", peer, e)
+                }
+                Ok(())
             }
         };
 

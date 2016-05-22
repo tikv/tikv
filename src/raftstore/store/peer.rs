@@ -129,6 +129,7 @@ pub struct Peer {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     penging_remove: bool,
+    inactive: bool,
 }
 
 impl Peer {
@@ -220,6 +221,7 @@ impl Peer {
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             penging_remove: false,
+            inactive: false,
         };
 
         peer.load_all_coprocessors();
@@ -700,6 +702,20 @@ impl Peer {
         };
 
         Ok((resp, exec_result))
+    }
+
+    pub fn step_raft(&mut self, m: raftpb::Message) -> Result<()> {
+        self.inactive = false;
+        try!(self.raft_group.step(m));
+        Ok(())
+    }
+
+    pub fn set_inactive(&mut self) {
+        self.inactive = true;
+    }
+
+    pub fn get_inactive(&mut self) -> bool {
+        self.inactive
     }
 }
 

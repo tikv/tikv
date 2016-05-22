@@ -27,6 +27,7 @@ const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 60000;
+const DEAD_PEER_CHECK_TICK_INTERVAL: u64 = 180000;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -57,6 +58,8 @@ pub struct Config {
     /// will be checked again whether it should be split.
     pub region_check_size_diff: u64,
     pub pd_heartbeat_tick_interval: u64,
+    // should it be provided as a config?
+    pub dead_peer_check_tick_interval: u64,
 }
 
 impl Default for Config {
@@ -76,6 +79,7 @@ impl Default for Config {
             region_split_size: REGION_SPLIT_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
+            dead_peer_check_tick_interval: DEAD_PEER_CHECK_TICK_INTERVAL,
         }
     }
 }
