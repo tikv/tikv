@@ -17,10 +17,12 @@ use std::thread;
 
 use tikv::raftstore::store::*;
 use kvproto::raftpb::ConfChangeType;
+use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::metapb;
 use tikv::pd::PdClient;
 
 use super::cluster::{Cluster, Simulator};
+use super::transport_simulate::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::*;
@@ -428,4 +430,77 @@ fn test_server_after_remove_itself() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
     test_after_remove_itself(&mut cluster);
+}
+
+fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
+    let r1 = cluster.bootstrap_conf_change();
+    cluster.start();
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
+
+    // leader isolation
+    let leader = cluster.leader_of_region(r1);
+    assert_eq!(leader, Some(new_peer(1, 1)));
+    cluster.hook_transport(Isolate::new(1));
+
+    // refresh region info, maybe no need
+    cluster.must_put(b"k1", b"v1");
+
+    // add [4,5,6] and remove [2,3]
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(4, 4));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(5, 5));
+    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(6, 6));
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2));
+    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(3, 3));
+
+    // refresh region info, maybe no need
+    cluster.must_put(b"k2", b"v2");
+
+    // when network recovers, 1 will send request vote to [2,3]
+    cluster.reset_transport_hooks();
+    cluster.partition(vec![1, 2, 3], vec![4, 5, 6]);
+
+    // refresh region info, maybe no need
+    cluster.must_put(b"k3", b"v3");
+
+    // check whether a new cluster [1,2,3] is formed
+    // if so, both [1,2,3] and [4,5,6] think they serve for region r1
+    // result in split brain
+    let header0 = find_leader_response_header(cluster, r1, new_peer(2, 2));
+    assert!(header0.get_error().has_region_not_found());
+
+    // at least wait for a round of election timeout and check again
+    let term = find_leader_response_header(cluster, r1, new_peer(1, 1)).get_current_term();
+    let mut current_term = term;
+    while current_term < term + 2 {
+        sleep_ms(10);
+        let header2 = find_leader_response_header(cluster, r1, new_peer(1, 1));
+        current_term = header2.get_current_term();
+    }
+
+    let header1 = find_leader_response_header(cluster, r1, new_peer(2, 2));
+    assert!(header1.get_error().has_region_not_found());
+}
+
+fn find_leader_response_header<T: Simulator>(cluster: &mut Cluster<T>,
+                                             region_id: u64,
+                                             peer: metapb::Peer)
+                                             -> RaftResponseHeader {
+    let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
+    let resp = cluster.call_command(find_leader, Duration::from_secs(3));
+    resp.unwrap().take_header()
+}
+
+#[test]
+fn test_server_split_brain() {
+    let count = 6;
+    let mut cluster = new_server_cluster(0, count);
+    test_split_brain(&mut cluster);
+}
+
+#[test]
+fn test_node_split_brain() {
+    let count = 6;
+    let mut cluster = new_node_cluster(0, count);
+    test_split_brain(&mut cluster);
 }

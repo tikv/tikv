@@ -18,6 +18,7 @@ use rand;
 use std::sync::{Arc, RwLock};
 use std::time;
 use std::thread;
+use std::vec::Vec;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tikv::util::HandyRwLock;
@@ -104,7 +105,7 @@ impl<T: Transport> Transport for SimulateTransport<T> {
 }
 
 pub trait FilterFactory {
-    fn generate(&self) -> Vec<Box<Filter>>;
+    fn generate(&self, node_id: u64) -> Vec<Box<Filter>>;
 }
 
 pub struct DropPacket {
@@ -118,7 +119,7 @@ impl DropPacket {
 }
 
 impl FilterFactory for DropPacket {
-    fn generate(&self) -> Vec<Box<Filter>> {
+    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
         vec![box FilterDropPacket {
                  rate: self.rate,
                  drop: AtomicBool::new(false),
@@ -137,7 +138,77 @@ impl Delay {
 }
 
 impl FilterFactory for Delay {
-    fn generate(&self) -> Vec<Box<Filter>> {
+    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
         vec![box FilterDelay { duration: self.duration }]
+    }
+}
+
+struct PartitionFilter {
+    node_ids: Vec<u64>,
+    drop: AtomicBool,
+}
+
+impl Filter for PartitionFilter {
+    fn before(&self, msg: &RaftMessage) -> bool {
+        let drop = self.node_ids.contains(&msg.get_message().get_to());
+        self.drop.store(drop, Ordering::Relaxed);
+        drop
+    }
+    fn after(&self, r: Result<()>) -> Result<()> {
+        if self.drop.load(Ordering::Relaxed) {
+            return Err(Error::Timeout("drop by PartitionPacket in SimulateTransport".to_string()));
+        }
+        r
+    }
+}
+
+pub struct Partition {
+    s1: Vec<u64>,
+    s2: Vec<u64>,
+}
+
+impl Partition {
+    pub fn new(s1: Vec<u64>, s2: Vec<u64>) -> Partition {
+        Partition { s1: s1, s2: s2 }
+    }
+}
+
+impl FilterFactory for Partition {
+    fn generate(&self, node_id: u64) -> Vec<Box<Filter>> {
+        if self.s1.contains(&node_id) {
+            return vec![box PartitionFilter {
+                            node_ids: self.s2.clone(),
+                            drop: AtomicBool::new(false),
+                        }];
+        }
+        return vec![box PartitionFilter {
+                        node_ids: self.s1.clone(),
+                        drop: AtomicBool::new(false),
+                    }];
+    }
+}
+
+pub struct Isolate {
+    node_id: u64,
+}
+
+impl Isolate {
+    pub fn new(node_id: u64) -> Isolate {
+        Isolate { node_id: node_id }
+    }
+}
+
+impl FilterFactory for Isolate {
+    fn generate(&self, node_id: u64) -> Vec<Box<Filter>> {
+        if node_id == self.node_id {
+            return vec![box FilterDropPacket {
+                            rate: 100,
+                            drop: AtomicBool::new(false),
+                        }];
+        }
+        vec![box PartitionFilter {
+                 node_ids: vec![node_id],
+                 drop: AtomicBool::new(false),
+             }]
     }
 }
