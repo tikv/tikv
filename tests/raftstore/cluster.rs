@@ -502,10 +502,11 @@ impl<T: Simulator> Cluster<T> {
     pub fn hook_transport<F: FilterFactory>(&self, factory: F) {
         let sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
-            let filter = factory.generate();
+            let filter = factory.generate(node_id);
             sim.hook_transport(node_id, filter);
         }
     }
+
 
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
@@ -514,6 +515,18 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
                 format!("{:?}", resp));
+    }
+
+    pub fn reset_transport_hooks(&mut self) {
+        let sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            sim.hook_transport(node_id, vec![]);
+        }
+    }
+
+    // it's so common that we provide an API for it
+    pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
+        self.hook_transport(Partition::new(s1, s2));
     }
 }
 
