@@ -14,27 +14,28 @@
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 
+use uuid::Uuid;
+
 use kvproto::metapb;
-use kvproto::raftpb;
+use kvproto::raftpb::ConfChangeType;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, AdminRequest, AdminCmdType};
 
 use util::worker::Runnable;
 use util::escape;
 use pd::PdClient;
+use raftstore::store::{SendCh, Msg};
+use raftstore::Result;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
-    AskChangePeer {
-        change_type: raftpb::ConfChangeType,
-        region: metapb::Region,
-        peer: metapb::Peer,
-    },
     AskSplit {
         region: metapb::Region,
         split_key: Vec<u8>,
         peer: metapb::Peer,
     },
     Heartbeat {
-        store: metapb::Store,
+        region: metapb::Region,
+        peer: metapb::Peer,
     },
 }
 
@@ -42,50 +43,114 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::AskChangePeer { ref change_type, ref region, .. } => {
-                write!(f, "ask {:?} for region {}", change_type, region.get_id())
-            }
             Task::AskSplit { ref region, ref split_key, .. } => {
                 write!(f,
                        "ask split region {} with key {}",
                        region.get_id(),
                        escape(&split_key))
             }
-            Task::Heartbeat { ref store } => write!(f, "heartbeat for store {}", store.get_id()),
+            Task::Heartbeat { ref region, .. } => {
+                write!(f, "heartbeat for region {}", region.get_id())
+            }
         }
     }
 }
 
 pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
+    ch: SendCh,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(pd_client: Arc<T>) -> Runner<T> {
-        Runner { pd_client: pd_client }
+    pub fn new(pd_client: Arc<T>, ch: SendCh) -> Runner<T> {
+        Runner {
+            pd_client: pd_client,
+            ch: ch,
+        }
+    }
+
+    fn send_admin_request(&self,
+                          mut region: metapb::Region,
+                          peer: metapb::Peer,
+                          request: AdminRequest) {
+        let region_id = region.get_id();
+        let cmd_type = request.get_cmd_type();
+
+        let mut req = RaftCmdRequest::new();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header().set_region_epoch(region.take_region_epoch());
+        req.mut_header().set_peer(peer);
+        req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        req.set_admin_request(request);
+
+        let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
+
+        if let Err(e) = self.ch.send(Msg::RaftCmd {
+            request: req,
+            callback: cb,
+        }) {
+            error!("send {:?} request to region {} err {:?}",
+                   cmd_type,
+                   region_id,
+                   e);
+        }
     }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
-        info!("executing task {}", task);
+        debug!("executing task {}", task);
 
-        let res = match task {
-            Task::AskChangePeer { region, peer, .. } => {
-                // TODO: We may add change_type in pd protocol later.
-                self.pd_client.ask_change_peer(region, peer)
-            }
+        match task {
             Task::AskSplit { region, split_key, peer } => {
-                self.pd_client.ask_split(region, &split_key, peer)
+                if let Ok(mut resp) = self.pd_client.ask_split(region.clone()) {
+                    info!("try to split with new region id {} for region {:?}",
+                          resp.get_new_region_id(),
+                          region);
+                    let req = new_split_region_request(split_key,
+                                                       resp.get_new_region_id(),
+                                                       resp.take_new_peer_ids());
+                    self.send_admin_request(region, peer, req);
+
+                }
             }
-            Task::Heartbeat { store } => {
-                // Now we use put store protocol for heartbeat.
-                self.pd_client.put_store(store)
+            Task::Heartbeat { region, peer } => {
+                // Now we use put region protocol for heartbeat.
+                if let Ok(mut resp) = self.pd_client
+                    .region_heartbeat(region.clone(), peer.clone()) {
+                    if resp.has_change_peer() {
+                        let mut change_peer = resp.take_change_peer();
+                        info!("try to change peer {:?} {:?} for region {:?}",
+                              change_peer.get_change_type(),
+                              change_peer.get_peer(),
+                              region);
+                        let req = new_change_peer_request(change_peer.get_change_type(),
+                                                          change_peer.take_peer());
+                        self.send_admin_request(region, peer, req);
+                    }
+                }
             }
         };
-
-        if let Err(e) = res {
-            error!("executing pd command failed {:?}", e);
-        }
     }
+}
+
+fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::ChangePeer);
+    req.mut_change_peer().set_change_type(change_type);
+    req.mut_change_peer().set_peer(peer);
+    req
+}
+
+fn new_split_region_request(split_key: Vec<u8>,
+                            new_region_id: u64,
+                            peer_ids: Vec<u64>)
+                            -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::Split);
+    req.mut_split().set_split_key(split_key);
+    req.mut_split().set_new_region_id(new_region_id);
+    req.mut_split().set_new_peer_ids(peer_ids);
+    req
 }

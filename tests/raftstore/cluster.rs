@@ -25,13 +25,14 @@ use tikv::raftstore::store::*;
 use super::util::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::raftpb::ConfChangeType;
 use kvproto::raft_serverpb::RaftMessage;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
+use tikv::raftstore::store::keys::data_key;
 use super::transport_simulate::*;
+
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -49,6 +50,7 @@ pub trait Simulator {
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
     fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>);
 }
 
@@ -443,47 +445,6 @@ impl<T: Simulator> Cluster<T> {
             .clone()
     }
 
-    pub fn change_peer(&mut self,
-                       region_id: u64,
-                       change_type: ConfChangeType,
-                       peer: metapb::Peer) {
-        let epoch = self.get_region_epoch(region_id);
-        let change_peer =
-            new_admin_request(region_id, &epoch, new_change_peer_cmd(change_type, peer));
-        let resp = self.call_command_on_leader(change_peer, Duration::from_secs(3))
-            .unwrap();
-        assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::ChangePeer,
-                format!("{:?}", resp));
-
-        let region = resp.get_admin_response().get_change_peer().get_region();
-        self.pd_client.change_peer(region.clone()).unwrap();
-    }
-
-    pub fn split_region(&mut self, region_id: u64, split_key: Option<Vec<u8>>) {
-        let new_region_id = self.pd_client.alloc_id().unwrap();
-        let region = self.pd_client.get_region_by_id(region_id).unwrap();
-        let peer_count = region.get_peers().len();
-        let mut peer_ids: Vec<u64> = vec![];
-        for _ in 0..peer_count {
-            let peer_id = self.pd_client.alloc_id().unwrap();
-            peer_ids.push(peer_id);
-        }
-
-        // TODO: use region instead of region_id
-        let split = new_admin_request(region_id,
-                                      region.get_region_epoch(),
-                                      new_split_region_cmd(split_key, new_region_id, peer_ids));
-        let resp = self.call_command_on_leader(split, Duration::from_secs(3)).unwrap();
-
-        assert_eq!(resp.get_admin_response().get_cmd_type(),
-                   AdminCmdType::Split);
-
-        let left = resp.get_admin_response().get_split().get_left();
-        let right = resp.get_admin_response().get_split().get_right();
-
-        self.pd_client.split_region(left.clone(), right.clone()).unwrap();
-    }
-
     pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {
         let status_cmd = new_region_detail_cmd();
         let peer = new_peer(peer_id, peer_id);
@@ -522,6 +483,25 @@ impl<T: Simulator> Cluster<T> {
         for node_id in sim.get_node_ids() {
             sim.hook_transport(node_id, vec![]);
         }
+    }
+
+    pub fn ask_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
+        // Now we can't control split easily in pd, so here we use store send channel
+        // directly to send the AskSplit request.
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let ch = self.sim.rl().get_store_sendch(leader.get_store_id()).unwrap();
+        ch.send(Msg::SplitCheckResult {
+                region_id: region.get_id(),
+                epoch: region.get_region_epoch().clone(),
+                split_key: data_key(split_key),
+            })
+            .unwrap();
+    }
+
+    pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
+        self.ask_split(region, split_key);
+
+        self.pd_client.must_split(region, split_key)
     }
 
     // it's so common that we provide an API for it

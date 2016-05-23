@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::thread;
 use std::net::{SocketAddr, TcpStream};
-use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
 use std::io::ErrorKind;
@@ -24,15 +24,15 @@ use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
-use tikv::raftstore::store;
+use tikv::raftstore::store::{self, SendCh as StoreSendCh};
 use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
-use super::pd_ask::run_ask_loop;
 use super::transport_simulate::{SimulateTransport, Filter};
+
 
 type SimulateServerTransport = SimulateTransport<ServerTransport>;
 
@@ -42,6 +42,7 @@ pub struct ServerCluster {
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
+    store_chs: HashMap<u64, StoreSendCh>,
 
     msg_id: AtomicUsize,
     pd_client: Arc<TestPdClient>,
@@ -57,6 +58,7 @@ impl ServerCluster {
             conns: Mutex::new(HashMap::new()),
             msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
+            store_chs: HashMap::new(),
         }
     }
 
@@ -126,6 +128,7 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
 
+        self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
 
@@ -148,6 +151,7 @@ impl Simulator for ServerCluster {
         let h = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
         let addr = self.addrs.get(&node_id).unwrap();
+        let _ = self.store_chs.remove(&node_id).unwrap();
         self.conns
             .lock()
             .unwrap()
@@ -217,12 +221,14 @@ impl Simulator for ServerCluster {
         let trans = self.sim_trans.get(&node_id).unwrap();
         trans.wl().set_filters(filters);
     }
+
+    fn get_store_sendch(&self, node_id: u64) -> Option<StoreSendCh> {
+        self.store_chs.get(&node_id).cloned()
+    }
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(TestPdClient::new(tx, id));
+    let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
-    run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)
 }

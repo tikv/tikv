@@ -92,35 +92,32 @@ impl super::PdClient for RpcClient {
         Ok(resp.take_get_region().take_region())
     }
 
-    fn ask_change_peer(&self, region: metapb::Region, leader: metapb::Peer) -> Result<()> {
-        let mut ask_change_peer = pdpb::AskChangePeerRequest::new();
-        ask_change_peer.set_region(region);
-        ask_change_peer.set_leader(leader);
+    fn region_heartbeat(&self,
+                        region: metapb::Region,
+                        leader: metapb::Peer)
+                        -> Result<pdpb::RegionHeartbeatResponse> {
+        let mut heartbeat = pdpb::RegionHeartbeatRequest::new();
+        heartbeat.set_region(region);
+        heartbeat.set_leader(leader);
 
-        let mut req = self.new_request(pdpb::CommandType::AskChangePeer);
-        req.set_ask_change_peer(ask_change_peer);
+        let mut req = self.new_request(pdpb::CommandType::RegionHeartbeat);
+        req.set_region_heartbeat(heartbeat);
 
-        let resp = try!(self.send(&req));
+        let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        Ok(())
+        Ok(resp.take_region_heartbeat())
     }
 
-    fn ask_split(&self,
-                 region: metapb::Region,
-                 split_key: &[u8],
-                 leader: metapb::Peer)
-                 -> Result<()> {
+    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
         let mut ask_split = pdpb::AskSplitRequest::new();
         ask_split.set_region(region);
-        ask_split.set_split_key(split_key.to_vec());
-        ask_split.set_leader(leader);
 
         let mut req = self.new_request(pdpb::CommandType::AskSplit);
         req.set_ask_split(ask_split);
 
-        let resp = try!(self.send(&req));
+        let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        Ok(())
+        Ok(resp.take_ask_split())
     }
 }
 

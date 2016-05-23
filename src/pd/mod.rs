@@ -25,6 +25,7 @@ pub fn new_rpc_client(addr: &str, cluster_id: u64) -> Result<RpcClient> {
 }
 
 use kvproto::metapb;
+use kvproto::pdpb;
 
 pub type Key = Vec<u8>;
 
@@ -80,15 +81,12 @@ pub trait PdClient: Send + Sync {
     // Get region which the key belong to.
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
 
-    // Ask pd to change peer for the region.
-    // Pd will handle this request asynchronously.
-    fn ask_change_peer(&self, region: metapb::Region, leader: metapb::Peer) -> Result<()>;
+    // Leader for a region will use this to heartbeat Pd.
+    fn region_heartbeat(&self,
+                        region: metapb::Region,
+                        leader: metapb::Peer)
+                        -> Result<pdpb::RegionHeartbeatResponse>;
 
-    // Ask pd to split with given split_key for the region.
-    // Pd will handle this request asynchronously.
-    fn ask_split(&self,
-                 region: metapb::Region,
-                 split_key: &[u8],
-                 leader: metapb::Peer)
-                 -> Result<()>;
+    // Ask pd for split, pd will returns the new split region id.
+    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse>;
 }

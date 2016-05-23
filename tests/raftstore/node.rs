@@ -14,14 +14,14 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use rocksdb::DB;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
-use tikv::raftstore::store::{self, Transport, msg};
+use tikv::raftstore::store::{self, Transport, msg, SendCh};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tikv::raftstore::Result;
@@ -29,7 +29,6 @@ use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use super::pd::TestPdClient;
-use super::pd_ask::run_ask_loop;
 use super::transport_simulate::{SimulateTransport, Filter};
 
 pub struct ChannelTransport {
@@ -125,12 +124,14 @@ impl Simulator for NodeCluster {
         let trans = self.simulate_trans.get(&node_id).unwrap();
         trans.wl().set_filters(filters);
     }
+
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh> {
+        self.nodes.get(&node_id).map(|node| node.get_sendch())
+    }
 }
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
-    let (tx, rx) = mpsc::channel();
-    let pd_client = Arc::new(TestPdClient::new(tx, id));
+    let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(NodeCluster::new(id, pd_client.clone())));
-    run_ask_loop(pd_client.clone(), sim.clone(), rx);
     Cluster::new(id, count, sim, pd_client)
 }
