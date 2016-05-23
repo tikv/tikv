@@ -330,4 +330,12 @@ impl<T: Storage> RawNode<T> {
         // we don't care if it is ok actually
         self.raft.step(m).is_ok();
     }
+
+    // TransferLeader tries to transfer leadership to the given transferee.
+    pub fn transfer_leader(&mut self, transferee: u64) {
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgTransferLeader);
+        m.set_from(transferee);
+        self.raft.step(m).is_ok();
+    }
 }
