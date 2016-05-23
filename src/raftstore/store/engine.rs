@@ -13,7 +13,7 @@
 
 use std::option::Option;
 
-use rocksdb::{DB, Writable, DBIterator, Direction, IteratorMode, DBVector, WriteBatch};
+use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch};
 use rocksdb::rocksdb::Snapshot;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
@@ -26,6 +26,7 @@ pub fn new_engine(path: &str) -> Result<DB> {
     Ok(db)
 }
 
+// TODO: refactor this trait into rocksdb trait.
 pub trait Peekable {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>>;
 
@@ -68,6 +69,7 @@ pub trait Peekable {
     }
 }
 
+// TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
     fn new_iterator(&self, start_key: &[u8]) -> DBIterator;
 
@@ -76,15 +78,19 @@ pub trait Iterable {
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let it = self.new_iterator(start_key);
+        let mut it = self.new_iterator(start_key);
 
-        for (key, value) in it {
-            if key >= end_key {
-                break;
-            }
+        while it.valid() {
+            let r = {
+                let key = it.key();
+                if key >= end_key {
+                    break;
+                }
 
-            let r = try!(f(key, value));
-            if !r {
+                try!(f(key, it.value()))
+            };
+
+            if !r || !it.next() {
                 break;
             }
         }
@@ -94,8 +100,7 @@ pub trait Iterable {
 
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let pair = self.new_iterator(key).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
-        Ok(pair)
+        Ok(self.new_iterator(key).kv())
     }
 }
 
@@ -108,7 +113,7 @@ impl Peekable for DB {
 
 impl Iterable for DB {
     fn new_iterator(&self, start_key: &[u8]) -> DBIterator {
-        self.iterator(IteratorMode::From(start_key, Direction::Forward))
+        self.iter(start_key.into())
     }
 }
 
@@ -121,7 +126,7 @@ impl<'a> Peekable for Snapshot<'a> {
 
 impl<'a> Iterable for Snapshot<'a> {
     fn new_iterator(&self, start_key: &[u8]) -> DBIterator {
-        self.iterator(IteratorMode::From(start_key, Direction::Forward))
+        self.iter(start_key.into())
     }
 }
 
@@ -151,7 +156,6 @@ pub trait Mutable: Writable {
 
 impl Mutable for DB {}
 impl Mutable for WriteBatch {}
-
 
 #[cfg(test)]
 mod tests {
