@@ -50,9 +50,7 @@ impl<'a> RegionSnapshot<'a> {
     }
 
     pub fn iter(&self) -> RegionIterator {
-        let start_key = keys::enc_start_key(&self.region);
-        RegionIterator::new(self.snap.iter(start_key.as_slice().into()),
-                            self.region.clone())
+        RegionIterator::new(self.snap.iter(), self.region.clone())
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
