@@ -398,7 +398,7 @@ impl<'a> SelectContext<'a> {
                         return Err(box_err!("key {} not exists", escape(&key)));
                     }
                     None => Datum::Null,
-                    Some(bs) => box_try!(bs.as_slice().decode_datum()),
+                    Some(bs) => box_try!(bs.as_slice().decode_col_value(col)),
                 };
                 self.eval.row.insert(col_id, value);
             }
