@@ -834,7 +834,7 @@ impl Peer {
 
         match change_type {
             raftpb::ConfChangeType::AddNode => {
-                metric_incr!("raftstore.AddPeer");
+                metric_incr!("raftstore.add_peer");
                 if exists {
                     error!("my peer id {}, can't add duplicated peer {:?} to store {}, region \
                             {:?}",
@@ -852,7 +852,7 @@ impl Peer {
                 self.peer_cache.wl().insert(peer.get_id(), peer.clone());
                 region.mut_peers().push(peer.clone());
 
-                metric_incr!("raftstore.AddPeer.success");
+                metric_incr!("raftstore.add_peer.success");
 
                 warn!("my peer id {}, add peer {:?}, region {:?}",
                       self.peer_id(),
@@ -860,7 +860,7 @@ impl Peer {
                       self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
-                metric_incr!("raftstore.RemovePeer");
+                metric_incr!("raftstore.remove_peer");
                 if !exists {
                     error!("remove missing peer {:?} from store {}", peer, store_id);
                     return Err(box_err!("remove missing peer {:?} from store {}", peer, store_id));
@@ -876,7 +876,7 @@ impl Peer {
                 self.peer_cache.wl().remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
-                metric_incr!("raftstore.RemovePeer.success");
+                metric_incr!("raftstore.remove_peer.success");
                 warn!("my peer_id {}, remove {}, region:{:?}",
                       self.peer_id(),
                       peer.get_id(),
