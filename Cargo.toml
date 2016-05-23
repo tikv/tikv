@@ -43,8 +43,7 @@ cadence = "0.5.0"
 clippy = {version = "*", optional = true}
 
 [dependencies.rocksdb]
-git = "https://github.com/busyjay/rust-rocksdb.git"
-branch = "busyjay/wrap-iterator"
+git = "https://github.com/ngaut/rust-rocksdb.git"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"
