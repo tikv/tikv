@@ -30,8 +30,9 @@ use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
-use super::transport_simulate::{Strategy, Filter};
 use tikv::raftstore::store::keys::data_key;
+use super::transport_simulate::*;
+
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -44,18 +45,13 @@ pub trait Simulator {
     // and the node id must be the same as given argument.
     // Return the node id.
     // TODO: we will rename node name here because now we use store only.
-    fn run_node(&mut self,
-                node_id: u64,
-                cfg: ServerConfig,
-                engine: Arc<DB>,
-                strategy: Vec<Strategy>)
-                -> u64;
+    fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
-    fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>);
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
+    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -109,7 +105,11 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn start(&mut self) {
         if self.engines.is_empty() {
-            self.start_with_strategy(vec![]);
+            let mut sim = self.sim.wl();
+            for engine in &self.dbs {
+                let node_id = sim.run_node(0, self.cfg.clone(), engine.clone());
+                self.engines.insert(node_id, engine.clone());
+            }
         } else {
             // recover from last shutdown.
             let node_ids: Vec<u64> = self.engines.keys().cloned().collect();
@@ -119,21 +119,9 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn start_with_strategy(&mut self, strategy: Vec<Strategy>) {
-        let mut sim = self.sim.wl();
-        for engine in &self.dbs {
-            let node_id = sim.run_node(0, self.cfg.clone(), engine.clone(), strategy.clone());
-            self.engines.insert(node_id, engine.clone());
-        }
-    }
-
     pub fn run_node(&mut self, node_id: u64) {
-        self.run_node_with_strategy(node_id, vec![]);
-    }
-
-    pub fn run_node_with_strategy(&mut self, node_id: u64, strategy: Vec<Strategy>) {
         let engine = self.engines.get(&node_id).unwrap();
-        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone(), strategy);
+        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
     }
 
     pub fn stop_node(&mut self, node_id: u64) {
@@ -472,20 +460,26 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
-    // NOTE: if you have set transport hooks before, call this function will overwrite them
-    pub fn partition(&mut self, s1: Arc<HashSet<u64>>, s2: Arc<HashSet<u64>>) {
-        for node_id in s1.iter() {
-            let filter = new_partition_filter(s2.clone());
-            self.sim.rl().hook_transport(*node_id, vec![RwLock::new(filter)]);
-        }
-        for node_id in s2.iter() {
-            let filter = new_partition_filter(s1.clone());
-            self.sim.wl().hook_transport(*node_id, vec![RwLock::new(filter)]);
+    pub fn hook_transport<F: FilterFactory>(&self, factory: F) {
+        let sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            let filter = factory.generate(node_id);
+            sim.hook_transport(node_id, filter);
         }
     }
 
+
+    pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
+        let epoch = self.get_region_epoch(region_id);
+        let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
+        let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(3))
+            .unwrap();
+        assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
+                format!("{:?}", resp));
+    }
+
     pub fn reset_transport_hooks(&mut self) {
-        let sim = &self.sim.rl();
+        let sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
             sim.hook_transport(node_id, vec![]);
         }
@@ -509,32 +503,11 @@ impl<T: Simulator> Cluster<T> {
 
         self.pd_client.must_split(region, split_key)
     }
-}
 
-struct PartitionFilter {
-    node_ids: Arc<HashSet<u64>>,
-    drop: bool,
-}
-
-impl Filter for PartitionFilter {
-    fn before(&mut self, msg: &RaftMessage) -> bool {
-        self.drop = self.node_ids.contains(&msg.get_to_peer().get_store_id());
-        self.drop
+    // it's so common that we provide an API for it
+    pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
+        self.hook_transport(Partition::new(s1, s2));
     }
-    fn after(&mut self, r: Result<()>) -> Result<()> {
-        if self.drop {
-            return Err(Error::Timeout("drop by PartitionPacket in SimulateTransport".to_string()));
-        }
-        r
-    }
-}
-
-fn new_partition_filter(node_ids: Arc<HashSet<u64>>) -> Box<Filter> {
-    let ids = node_ids.clone();
-    Box::new(PartitionFilter {
-        node_ids: ids,
-        drop: false,
-    })
 }
 
 impl<T: Simulator> Drop for Cluster<T> {

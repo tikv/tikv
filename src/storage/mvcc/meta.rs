@@ -107,6 +107,7 @@ mod tests {
     use super::*;
     use std::ops::RangeFrom;
     use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
+    use storage::mvcc::TEST_TS_BASE;
 
     #[test]
     fn test_meta() {
@@ -165,7 +166,7 @@ mod tests {
     #[test]
     fn test_meta_split() {
         let mut meta = Meta::new();
-        let mut ts = 1u64..;
+        let mut ts = TEST_TS_BASE..;
 
         push_item_n(&mut meta, &mut ts, META_SPLIT_SIZE - 1);
         assert!(meta.split().is_none());

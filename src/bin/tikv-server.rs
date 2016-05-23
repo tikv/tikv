@@ -21,19 +21,22 @@ extern crate log;
 extern crate rocksdb;
 extern crate mio;
 extern crate toml;
+extern crate cadence;
 
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::io::Read;
+use std::net::UdpSocket;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
 use mio::tcp::TcpListener;
+use cadence::{StatsdClient, LoggingMetricSink, UdpMetricSink};
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
-use tikv::util::{self, logger, panic_hook};
+use tikv::util::{self, logger, panic_hook, metric};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
@@ -78,6 +81,53 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     util::init_log(logger::get_level_by_string(&level)).unwrap();
 }
 
+fn initial_metric(matches: &Matches, config: &toml::Value) {
+    let level = get_string_value("M",
+                                 "metric.level",
+                                 &matches,
+                                 &config,
+                                 Some("info".to_owned()),
+                                 |v| v.as_str().map(|s| s.to_owned()));
+    let addr = get_string_value("metric-addr",
+                                "metric.addr",
+                                &matches,
+                                &config,
+                                Some("".to_owned()),
+                                |v| v.as_str().map(|s| s.to_owned()));
+    let host = get_string_value("metric-host",
+                                "metric.host",
+                                &matches,
+                                &config,
+                                Some("".to_owned()),
+                                |v| v.as_str().map(|s| s.to_owned()));
+    let prefix = get_string_value("metric-prefix",
+                                  "metric.prefix",
+                                  &matches,
+                                  &config,
+                                  Some("tikv".to_owned()),
+                                  |v| v.as_str().map(|s| s.to_owned()));
+    if level == "off" {
+        if addr != "" && host != "" {
+            let socket = UdpSocket::bind(&*addr).unwrap();
+            let sink = UdpMetricSink::from(&*host, socket).unwrap();
+            let client = StatsdClient::from_sink(&prefix, sink);
+
+            if let Err(r) = metric::set_metric_client(Box::new(client)) {
+                error!("{}", r);
+            }
+        }
+    } else {
+        let sink = LoggingMetricSink::new(logger::get_level_by_string(&level)
+            .to_log_level()
+            .unwrap());
+        let client = StatsdClient::from_sink(&prefix, sink);
+
+        if let Err(r) = metric::set_metric_client(Box::new(client)) {
+            error!("{}", r);
+        }
+    }
+}
+
 fn build_raftkv(matches: &Matches,
                 config: &toml::Value,
                 ch: SendCh,
@@ -92,14 +142,16 @@ fn build_raftkv(matches: &Matches,
     let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(64 * 1024);
     opts.set_block_based_table_factory(&block_base_opts);
-    opts.compression(DBCompressionType::DBNo);
+    opts.compression(DBCompressionType::DBLz4);
     opts.set_write_buffer_size(64 * 1024 * 1024);
     opts.set_max_write_buffer_number(5);
     opts.set_min_write_buffer_number_to_merge(2);
     opts.set_max_background_compactions(3);
-    opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
+    opts.set_max_bytes_for_level_base(64 * 1024 * 1024);
     opts.set_target_file_size_base(64 * 1024 * 1024);
     opts.create_if_missing(true);
+    opts.set_level_zero_slowdown_writes_trigger(12);
+    opts.set_level_zero_stop_writes_trigger(24);
 
     let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
@@ -218,6 +270,19 @@ fn main() {
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
     opts.optopt("", "pd", "set pd address", "host:port");
+    opts.optopt("M",
+                "metric",
+                "set metric level",
+                "metric level: trace, debug, info, warn, error, off");
+    opts.optopt("", "metric-host", "set statsd server address", "host:port");
+    opts.optopt("",
+                "metric-addr",
+                "set local statsd client address",
+                "host:port");
+    opts.optopt("",
+                "metric-prefix",
+                "set metric prefix",
+                "metric prefix: tikv");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);
@@ -236,6 +301,8 @@ fn main() {
     };
 
     initial_log(&matches, &config);
+
+    initial_metric(&matches, &config);
 
     let addr = get_string_value("A",
                                 "server.addr",

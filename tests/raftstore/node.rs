@@ -29,7 +29,7 @@ use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use super::pd::TestPdClient;
-use super::transport_simulate::{Strategy, SimulateTransport, Filter};
+use super::transport_simulate::{SimulateTransport, Filter};
 
 pub struct ChannelTransport {
     pub routers: HashMap<u64, Arc<RwLock<ServerRaftStoreRouter>>>,
@@ -75,16 +75,11 @@ impl NodeCluster {
 }
 
 impl Simulator for NodeCluster {
-    fn run_node(&mut self,
-                node_id: u64,
-                cfg: ServerConfig,
-                engine: Arc<DB>,
-                strategy: Vec<Strategy>)
-                -> u64 {
+    fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
         let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
-        let simulate_trans = SimulateTransport::new(strategy, self.trans.clone());
+        let simulate_trans = SimulateTransport::new(self.trans.clone());
         let trans = Arc::new(RwLock::new(simulate_trans));
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
 
@@ -125,7 +120,7 @@ impl Simulator for NodeCluster {
         self.trans.rl().send(msg)
     }
 
-    fn hook_transport(&self, node_id: u64, filters: Vec<RwLock<Box<Filter>>>) {
+    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>) {
         let trans = self.simulate_trans.get(&node_id).unwrap();
         trans.wl().set_filters(filters);
     }

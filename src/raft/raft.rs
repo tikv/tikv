@@ -1295,6 +1295,12 @@ impl<T: Storage> Raft<T> {
     pub fn remove_node(&mut self, id: u64) {
         self.del_progress(id);
         self.pending_conf = false;
+
+        // do not try to commit or abort transferring if there is no nodes in the cluster.
+        if self.prs.is_empty() {
+            return;
+        }
+
         // The quorum size is now smaller, so see if any pending entries can
         // be committed.
         if self.maybe_commit() {

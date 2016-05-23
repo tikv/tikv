@@ -25,3 +25,5 @@ mod test_compact_log;
 mod test_split_region;
 mod test_status_command;
 mod test_tombstone;
+mod test_transport;
+mod test_transfer_leader;
