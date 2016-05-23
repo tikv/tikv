@@ -31,7 +31,7 @@ use std::io::Read;
 use std::net::UdpSocket;
 
 use getopts::{Options, Matches};
-use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
+use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use cadence::{StatsdClient, LoggingMetricSink, UdpMetricSink};
 
@@ -61,8 +61,37 @@ fn get_string_value<F>(short: &str,
                        -> String
     where F: Fn(&toml::Value) -> Option<String>
 {
-    matches.opt_str(short)
-        .or_else(|| {
+    let mut s = None;
+    // avoid panic if short is not defined.
+    if matches.opt_defined(short) {
+        s = matches.opt_str(short);
+    }
+
+    s.or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("malformed or missing {}, use default", long);
+                default
+            })
+        })
+        .expect(&format!("please specify {}", long))
+}
+
+fn get_integer_value<F>(short: &str,
+                        long: &str,
+                        matches: &Matches,
+                        config: &toml::Value,
+                        default: Option<i64>,
+                        f: F)
+                        -> i64
+    where F: Fn(&toml::Value) -> Option<i64>
+{
+    let mut i = None;
+    // avoid panic if short is not defined.
+    if matches.opt_defined(short) {
+        i = matches.opt_str(short).map(|x| x.parse::<i64>().unwrap());
+    };
+
+    i.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
                 info!("malformed or missing {}, use default", long);
                 default
@@ -128,6 +157,100 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
     }
 }
 
+fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
+    let mut opts = RocksdbOptions::new();
+    let mut block_base_opts = BlockBasedOptions::new();
+    let block_size = get_integer_value("",
+                                       "rocksdb.block-based-table.block-size",
+                                       matches,
+                                       config,
+                                       Some(64 * 1024),
+                                       |v| v.as_integer());
+    block_base_opts.set_block_size(block_size as u64);
+    opts.set_block_based_table_factory(&block_base_opts);
+
+    let tp = get_string_value("",
+                              "rocksdb.compression",
+                              matches,
+                              config,
+                              Some("kLZ4Compression".to_owned()),
+                              |v| v.as_str().map(|s| s.to_owned()));
+    let compression = util::rocksdb_option::get_compression_by_string(&tp);
+    opts.compression(compression);
+
+    let write_buffer_size = get_integer_value("",
+                                              "rocksdb.write-buffer-size",
+                                              matches,
+                                              config,
+                                              Some(64 * 1024 * 1024),
+                                              |v| v.as_integer());
+    opts.set_write_buffer_size(write_buffer_size as u64);
+
+    let max_write_buffer_number = get_integer_value("",
+                                                    "rocksdb.max-write-buffer-number",
+                                                    matches,
+                                                    config,
+                                                    Some(5),
+                                                    |v| v.as_integer());
+    opts.set_max_write_buffer_number(max_write_buffer_number as i32);
+
+    let min_write_buffer_number_to_merge = get_integer_value("",
+                                                             "rocksdb.min-write-buffer-number-to-merge",
+                                                             matches,
+                                                             config,
+                                                             Some(2),
+                                                             |v| v.as_integer());
+    opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
+
+    let max_background_compactions = get_integer_value("",
+                                                       "rocksdb.max-background-compactions",
+                                                       matches,
+                                                       config,
+                                                       Some(3),
+                                                       |v| v.as_integer());
+    opts.set_max_background_compactions(max_background_compactions as i32);
+
+    let max_bytes_for_level_base = get_integer_value("",
+                                                     "rocksdb.max-bytes-for-level-base",
+                                                     matches,
+                                                     config,
+                                                     Some(64 * 1024 * 1024),
+                                                     |v| v.as_integer());
+    opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
+
+    let target_file_size_base = get_integer_value("",
+                                                  "rocksdb.target-file-size-base",
+                                                  matches,
+                                                  config,
+                                                  Some(64 * 1024 * 1024),
+                                                  |v| v.as_integer());
+    opts.set_target_file_size_base(target_file_size_base as u64);
+
+    let create_if_missing = config.lookup("rocksdb.create-if-missing")
+        .unwrap_or(&toml::Value::Boolean(true))
+        .as_bool()
+        .unwrap_or(true);
+    opts.create_if_missing(create_if_missing);
+
+    let level_zero_slowdown_writes_trigger = get_integer_value("",
+                                                               "rocksdb.level0-slowdown-writes-trigger",
+                                                               matches,
+                                                               config,
+                                                               Some(12),
+                                                               |v| v.as_integer());
+    opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
+
+    let level_zero_stop_writes_trigger = get_integer_value("",
+                                                           "rocksdb.level0-stop-writes-trigger",
+                                                           matches,
+                                                           config,
+                                                           Some(24),
+                                                           |v| v.as_integer());
+    opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
+
+    opts
+}
+
 fn build_raftkv(matches: &Matches,
                 config: &toml::Value,
                 ch: SendCh,
@@ -138,20 +261,8 @@ fn build_raftkv(matches: &Matches,
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
     let path = get_store_path(matches, config);
-    let mut opts = RocksdbOptions::new();
-    let mut block_base_opts = BlockBasedOptions::new();
-    block_base_opts.set_block_size(64 * 1024);
-    opts.set_block_based_table_factory(&block_base_opts);
-    opts.compression(DBCompressionType::DBLz4);
-    opts.set_write_buffer_size(64 * 1024 * 1024);
-    opts.set_max_write_buffer_number(5);
-    opts.set_min_write_buffer_number_to_merge(2);
-    opts.set_max_background_compactions(3);
-    opts.set_max_bytes_for_level_base(64 * 1024 * 1024);
-    opts.set_target_file_size_base(64 * 1024 * 1024);
-    opts.create_if_missing(true);
-    opts.set_level_zero_slowdown_writes_trigger(12);
-    opts.set_level_zero_stop_writes_trigger(24);
+
+    let opts = get_rocksdb_option(matches, config);
 
     let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
