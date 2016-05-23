@@ -16,10 +16,12 @@ use std::cmp::Ordering;
 use std::{str, i64};
 use std::io::Write;
 use std::str::FromStr;
+use std::mem;
 use byteorder::{ReadBytesExt, WriteBytesExt};
+use tipb::schema::ColumnInfo;
 
 use super::{number, Result, bytes, convert};
-use super::mysql::{Duration, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder};
+use super::mysql::{self, Duration, types, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder};
 
 const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -207,6 +209,22 @@ impl Datum {
         };
         Ok(s)
     }
+
+    /// Convert decimal to f64.
+    pub fn f64(&self) -> f64 {
+        let i = self.i64();
+        unsafe { mem::transmute(i) }
+    }
+
+    pub fn i64(&self) -> i64 {
+        match *self {
+            Datum::I64(i) => i,
+            Datum::U64(u) => u as i64,
+            Datum::F64(f) => unsafe { mem::transmute(f) },
+            Datum::Dur(ref d) => d.to_nanos(),
+            Datum::Bytes(_) | Datum::Dec(_) | Datum::Max | Datum::Min | Datum::Null => 0,
+        }
+    }
 }
 
 impl From<bool> for Datum {
@@ -271,6 +289,48 @@ pub trait DatumDecoder: DecimalDecoder {
         }
 
         Ok(res)
+    }
+
+    // `decode_col_value` decodes data to a Datum according to the column info.
+    fn decode_col_value(&mut self, col: &ColumnInfo) -> Result<Datum> {
+        let d = try!(self.decode_datum());
+        unflatten(d, col)
+    }
+}
+
+/// `unflatten` converts a raw datum to a column datum.
+fn unflatten(datum: Datum, col: &ColumnInfo) -> Result<Datum> {
+    if let Datum::Null = datum {
+        return Ok(datum);
+    }
+    match col.get_tp() {
+        types::FLOAT => Ok(Datum::F64(datum.f64() as f32 as f64)),
+        types::TINY |
+        types::SHORT |
+        types::YEAR |
+        types::INT24 |
+        types::LONG |
+        types::LONG_LONG |
+        types::DOUBLE |
+        types::TINY_BLOB |
+        types::MEDIUM_BLOB |
+        types::BLOB |
+        types::LONG_BLOB |
+        types::VARCHAR |
+        types::STRING => Ok(datum),
+        types::DATE | types::DATETIME | types::TIMESTAMP | types::ENUM | types::SET |
+        types::BIT => unimplemented!(),
+        types::DURATION => Duration::from_nanos(datum.i64(), mysql::MAX_FSP).map(Datum::Dur),
+        types::NEW_DECIMAL => {
+            if let Datum::Dec(_) = datum {
+                return Ok(datum);
+            }
+            datum.into_string().and_then(|s| s.parse()).map(Datum::Dec)
+        }
+        t => {
+            error!("unknown type {} {:?}", t, datum);
+            Ok(datum)
+        }
     }
 }
 

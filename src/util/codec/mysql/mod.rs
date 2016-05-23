@@ -13,7 +13,7 @@
 
 mod duration;
 mod decimal;
-mod types;
+pub mod types;
 
 pub use self::duration::{Duration, MAX_FSP, DEFAULT_FSP};
 pub use self::decimal::{Decimal, DecimalEncoder, DecimalDecoder};
