@@ -6,8 +6,9 @@ dependencies = [
  "bytes 0.3.0 (git+https://github.com/carllerche/bytes)",
  "cadence 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "clippy 0.0.65 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto?rev=2660a0f0306ef148d930d2ebd09b22468a094a4c)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.0 (git+https://github.com/carllerche/mio.git)",
  "num 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -69,6 +70,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "lazy_static 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "getopts"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -85,10 +94,15 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#3db71b3c57032f21532c1716a43524c117bf4e91"
+source = "git+https://github.com/pingcap/kvproto?rev=2660a0f0306ef148d930d2ebd09b22468a094a4c#2660a0f0306ef148d930d2ebd09b22468a094a4c"
 dependencies = [
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]
+
+[[package]]
+name = "lazy_static"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "libc"
