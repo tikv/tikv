@@ -27,3 +27,4 @@ mod test_split_region;
 mod test_status_command;
 mod test_tombstone;
 mod test_pd;
+mod test_transfer_leader;
