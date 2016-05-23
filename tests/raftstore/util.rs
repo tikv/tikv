@@ -30,8 +30,11 @@ use tikv::server::Config as ServerConfig;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_cmdpb::{CmdType, StatusCmdType, AdminCmdType};
+use kvproto::pdpb::ChangePeer;
 use kvproto::raftpb::ConfChangeType;
 use tikv::raft::INVALID_ID;
+
+pub use tikv::raftstore::store::util::find_peer;
 
 pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
     for _ in 1..200 {
@@ -70,10 +73,7 @@ pub fn new_store_cfg() -> Config {
         raft_election_timeout_ticks: 20,
         raft_log_gc_tick_interval: 100,
         raft_log_gc_threshold: 1,
-        // because our tests may quit very soon, so we take a large
-        // value to avoid pd ask failure.
-        // TODO: should we ignore all mock pd failure?
-        replica_check_tick_interval: 60 * 1000,
+        pd_heartbeat_tick_interval: 20,
         region_check_size_diff: 10000,
         ..Config::default()
     }
@@ -165,32 +165,10 @@ pub fn new_admin_request(region_id: u64,
     req
 }
 
-pub fn new_change_peer_cmd(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
-    let mut cmd = AdminRequest::new();
-    cmd.set_cmd_type(AdminCmdType::ChangePeer);
-    cmd.mut_change_peer().set_change_type(change_type);
-    cmd.mut_change_peer().set_peer(peer);
-    cmd
-}
-
 pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
     let mut cmd = AdminRequest::new();
     cmd.set_cmd_type(AdminCmdType::TransferLeader);
     cmd.mut_transfer_leader().set_peer(peer);
-    cmd
-}
-
-pub fn new_split_region_cmd(split_key: Option<Vec<u8>>,
-                            new_region_id: u64,
-                            peer_ids: Vec<u64>)
-                            -> AdminRequest {
-    let mut cmd = AdminRequest::new();
-    cmd.set_cmd_type(AdminCmdType::Split);
-    if let Some(key) = split_key {
-        cmd.mut_split().set_split_key(key);
-    }
-    cmd.mut_split().set_new_region_id(new_region_id);
-    cmd.mut_split().set_new_peer_ids(peer_ids);
     cmd
 }
 
@@ -259,4 +237,28 @@ pub fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>,
         enc_write_kvs(engine, initial_kvs);
     }
     cluster.leader_of_region(1).unwrap();
+}
+
+pub fn new_change_peer(change_type: ConfChangeType, peer: metapb::Peer) -> ChangePeer {
+    let mut change_peer = ChangePeer::new();
+    change_peer.set_change_type(change_type);
+    change_peer.set_peer(peer);
+    change_peer
+}
+
+pub fn new_add_change_peer(region: &metapb::Region, peer: metapb::Peer) -> Option<ChangePeer> {
+    if let Some(p) = find_peer(&region, peer.get_store_id()) {
+        assert_eq!(p.get_id(), peer.get_id());
+        return None;
+    }
+
+    Some(new_change_peer(ConfChangeType::AddNode, peer))
+}
+
+pub fn new_remove_change_peer(region: &metapb::Region, peer: metapb::Peer) -> Option<ChangePeer> {
+    if find_peer(&region, peer.get_store_id()).is_none() {
+        return None;
+    }
+
+    Some(new_change_peer(ConfChangeType::RemoveNode, peer))
 }

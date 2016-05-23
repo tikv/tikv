@@ -177,7 +177,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
-        self.register_replica_check_tick(event_loop);
         self.register_pd_heartbeat_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
@@ -189,7 +188,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         box_try!(self.compact_worker.start(CompactRunner));
 
-        let pd_runner = PdRunner::new(self.pd_client.clone());
+        let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
         box_try!(self.pd_worker.start(pd_runner));
 
         try!(event_loop.run(self));
@@ -364,6 +363,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             region_id: u64,
                             change_type: ConfChangeType,
                             peer: metapb::Peer) {
+        if let Some(p) = self.region_peers.get(&region_id) {
+            if p.is_leader() {
+                // Notify pd immediately.
+                self.heartbeat_pd(p);
+            }
+        }
+
+
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             warn!("destroy peer {:?} for region {}", peer, region_id);
@@ -428,6 +435,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                new_region_id,
                                e);
                     }
+                }
+
+                if is_leader {
+                    // Notify pd immediately to let it update the region meta.
+                    self.heartbeat_pd(self.region_peers.get(&region_id).unwrap());
+                    self.heartbeat_pd(&new_peer);
                 }
 
                 // Insert new regions and validation
@@ -685,60 +698,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn register_replica_check_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(event_loop,
-                                       Tick::ReplicaCheck,
-                                       self.cfg.replica_check_tick_interval) {
-            error!("register replica check tick err: {:?}", e);
+    fn heartbeat_pd(&self, peer: &Peer) {
+        let task = PdTask::Heartbeat {
+            region: peer.region(),
+            peer: peer.peer.clone(),
         };
-    }
-
-    fn on_replica_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for peer in self.region_peers.values() {
-            if !peer.is_leader() {
-                continue;
-            }
-
-            let peer_count = peer.region().get_peers().len();
-            let max_count = self.cluster_meta.get_max_peer_number() as usize;
-            if peer_count == max_count {
-                continue;
-            }
-            let mut change_type = ConfChangeType::AddNode;
-            if peer_count > max_count {
-                change_type = ConfChangeType::RemoveNode;
-            }
-            info!("peer count {} != max_peer_number {}, notifying pd",
-                  peer_count,
-                  max_count);
-            let task = PdTask::AskChangePeer {
-                change_type: change_type,
-                region: peer.region(),
-                peer: peer.peer.clone(),
-            };
-            if let Err(e) = self.pd_worker.schedule(task) {
-                error!("failed to notify pd: {}", e);
-            }
+        if let Err(e) = self.pd_worker.schedule(task) {
+            error!("failed to notify pd: {}", e);
         }
-
-        self.register_replica_check_tick(event_loop);
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let task = PdTask::Heartbeat { store: self.store.clone() };
-
-        if let Err(e) = self.pd_worker.schedule(task) {
-            error!("failed to notify pd: {}", e);
+        for peer in self.region_peers.values() {
+            if peer.is_leader() {
+                self.heartbeat_pd(peer);
+            }
         }
 
         self.register_pd_heartbeat_tick(event_loop);
     }
 
+
     fn register_pd_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::PdHeartbeat,
                                        self.cfg.pd_heartbeat_tick_interval) {
-            error!("register replica check tick err: {:?}", e);
+            error!("register pd heartbeat tick err: {:?}", e);
         };
     }
 
@@ -833,7 +818,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::Raft => self.on_raft_base_tick(event_loop),
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
-            Tick::ReplicaCheck => self.on_replica_check_tick(event_loop),
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
         }
         slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());

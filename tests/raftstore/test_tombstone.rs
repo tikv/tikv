@@ -13,7 +13,6 @@
 
 use std::time::Duration;
 
-use kvproto::raftpb::ConfChangeType;
 use kvproto::raft_serverpb;
 
 use super::cluster::{Cluster, Simulator};
@@ -22,14 +21,17 @@ use super::server::new_server_cluster;
 use super::util::*;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_env_log();
+    // init_log();
+
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.disable_default_rule();
 
     let r1 = cluster.bootstrap_conf_change();
-
     cluster.start();
 
-    // add peer (2,2,2) to region 1.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(2, 2));
+    // add peer (2,2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
 
     let (key, value) = (b"a1", b"v1");
     cluster.must_put(key, value);
@@ -42,10 +44,14 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let resp = cluster.call_command(region_status, Duration::from_secs(3)).unwrap();
     assert!(resp.get_status_response().has_region_leader());
 
-    // add peer (3, 3, 3) to region 1.
-    cluster.change_peer(r1, ConfChangeType::AddNode, new_peer(3, 3));
-    // Remove peer (2, 2, 2) from region 1.
-    cluster.change_peer(r1, ConfChangeType::RemoveNode, new_peer(2, 2));
+    // add peer (3, 3) to region 1.
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    let engine_3 = cluster.get_engine(3);
+    must_get_equal(&engine_3, b"a1", b"v1");
+
+    // Remove peer (2, 2) from region 1.
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
 
     // After new leader is elected, the change peer must be finished.
     cluster.leader_of_region(1).unwrap();
