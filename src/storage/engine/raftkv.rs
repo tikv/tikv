@@ -17,7 +17,7 @@ use server::Node;
 use server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use raftstore::store::Peekable;
 use raftstore::errors::Error as RaftServerError;
-use raftstore::coprocessor::RegionSnapshot;
+use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           CmdType, DeleteRequest, PutRequest};
@@ -35,9 +35,9 @@ use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
-use super::{Engine, Modify, Snapshot};
+use super::{Engine, Modify, Cursor, Snapshot};
 use util::event::Event;
-use storage::{Key, Value, KvPair};
+use storage::{Key, Value};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
@@ -80,8 +80,15 @@ impl From<Error> for engine::Error {
     fn from(e: Error) -> engine::Error {
         match e {
             Error::RequestFailed(e) => engine::Error::Request(e),
+            Error::Server(e) => e.into(),
             e => box_err!(e),
         }
+    }
+}
+
+impl From<RaftServerError> for engine::Error {
+    fn from(e: RaftServerError) -> engine::Error {
+        engine::Error::Request(e.into())
     }
 }
 
@@ -170,10 +177,32 @@ impl<C: PdClient> RaftKv<C> {
         let resps = self.exec_requests(ctx, vec![req]);
         resps.map(|mut v| v.remove(0))
     }
+
+    fn raw_snapshot(&self, ctx: &Context) -> Result<RegionSnapshot> {
+        let mut req = Request::new();
+        req.set_cmd_type(CmdType::Snap);
+
+        let header = self.new_request_header(ctx);
+        let mut cmd = RaftCmdRequest::new();
+        cmd.set_header(header);
+        cmd.mut_requests().push(req);
+
+        // notice: the raft thread will be woken up after resp is dropped
+        let resp = try!(self.exec_cmd_request(cmd));
+        let region = try!(resp.apply(|resp| {
+                let mut resp = resp.take_responses().remove(0);
+                if resp.get_cmd_type() != CmdType::Snap {
+                    return Err(invalid_resp_type(CmdType::Snap, resp.get_cmd_type()));
+                }
+                Ok(resp.take_snap().take_region())
+            })
+            .unwrap());
+        Ok(RegionSnapshot::from_raw(self.db.as_ref(), region))
+    }
 }
 
-fn invalid_resp_type(exp: CmdType, act: CmdType) -> engine::Error {
-    Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!", exp, act)).into()
+fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
+    Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!", exp, act))
 }
 
 impl<C: PdClient> Debug for RaftKv<C> {
@@ -184,13 +213,14 @@ impl<C: PdClient> Debug for RaftKv<C> {
 
 impl<C: PdClient> Engine for RaftKv<C> {
     fn get(&self, ctx: &Context, key: &Key) -> engine::Result<Option<Value>> {
-        let snap = self.snapshot(ctx).unwrap();
+        let snap = try!(self.snapshot(ctx));
         snap.get(key)
     }
 
-    fn seek(&self, ctx: &Context, key: &Key) -> engine::Result<Option<KvPair>> {
-        let snap = self.snapshot(ctx).unwrap();
-        snap.seek(key)
+    fn iter<'a>(&'a self, ctx: &Context, key: &Key) -> engine::Result<Box<Cursor + 'a>> {
+        let snap = try!(self.raw_snapshot(ctx));
+        Ok(box RegionIterator::new(self.db.iter(key.encoded().as_slice().into()),
+                                   snap.get_region().clone()))
     }
 
     fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
@@ -223,26 +253,7 @@ impl<C: PdClient> Engine for RaftKv<C> {
     }
 
     fn snapshot<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Snapshot + 'a>> {
-        let mut req = Request::new();
-        req.set_cmd_type(CmdType::Snap);
-
-        let header = self.new_request_header(ctx);
-        let mut cmd = RaftCmdRequest::new();
-        cmd.set_header(header);
-        cmd.mut_requests().push(req);
-
-        // notice: the raft thread will be woken up after resp is dropped
-        let resp = try!(self.exec_cmd_request(cmd));
-        let region = try!(resp.apply(|resp| {
-                let mut resp = resp.take_responses().remove(0);
-                if resp.get_cmd_type() != CmdType::Snap {
-                    return Err(invalid_resp_type(CmdType::Snap, resp.get_cmd_type()));
-                }
-                Ok(resp.take_snap().take_region().clone())
-            })
-            .unwrap());
-
-        let snap = RegionSnapshot::from_raw(self.db.as_ref(), region);
+        let snap = try!(self.raw_snapshot(ctx));
         Ok(box snap)
     }
 }
@@ -253,13 +264,46 @@ impl<'a> Snapshot for RegionSnapshot<'a> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
-        let pair = box_try!(self.seek(key.encoded()));
-        Ok(pair)
+    fn iter<'b>(&'b self, key: &Key) -> engine::Result<Box<Cursor + 'b>> {
+        let mut iter = RegionSnapshot::iter(self);
+        try!(iter.seek(key.encoded()));
+        Ok(box iter)
+    }
+}
+
+impl<'a> Cursor for RegionIterator<'a> {
+    fn next(&mut self) -> bool {
+        RegionIterator::next(self)
     }
 
-    fn reverse_seek(&self, key: &Key) -> engine::Result<Option<KvPair>> {
-        let pair = box_try!(self.reverse_seek(key.encoded()));
-        Ok(pair)
+    fn prev(&mut self) -> bool {
+        RegionIterator::prev(self)
+    }
+
+    fn seek(&mut self, key: &Key) -> engine::Result<bool> {
+        RegionIterator::seek(self, &key.encoded()).map_err(|e| {
+            let pb = e.into();
+            engine::Error::Request(pb)
+        })
+    }
+
+    fn seek_to_first(&mut self) -> bool {
+        RegionIterator::seek_to_first(self)
+    }
+
+    fn seek_to_last(&mut self) -> bool {
+        RegionIterator::seek_to_last(self)
+    }
+
+    fn valid(&self) -> bool {
+        RegionIterator::valid(self)
+    }
+
+    fn key(&self) -> &[u8] {
+        RegionIterator::key(self)
+    }
+
+    fn value(&self) -> &[u8] {
+        RegionIterator::value(self)
     }
 }

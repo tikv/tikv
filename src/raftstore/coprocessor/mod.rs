@@ -16,7 +16,7 @@ pub mod dispatcher;
 pub mod split_observer;
 mod error;
 
-pub use self::region_snapshot::RegionSnapshot;
+pub use self::region_snapshot::{RegionSnapshot, RegionIterator};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 
 use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
