@@ -39,6 +39,7 @@ time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"
 num = "0.1"
+cadence = "0.5.0"
 clippy = {version = "*", optional = true}
 
 [dependencies.rocksdb]
