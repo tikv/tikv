@@ -95,8 +95,8 @@ impl Engine for EngineRocksdb {
         Ok(box snapshot)
     }
 
-    fn iter<'a>(&'a self, _: &Context, start_key: &Key) -> Result<Box<Cursor + 'a>> {
-        Ok(box self.db.iter(start_key.encoded().as_slice().into()))
+    fn iter<'a>(&'a self, _: &Context) -> Result<Box<Cursor + 'a>> {
+        Ok(box self.db.iter())
     }
 }
 
@@ -142,9 +142,9 @@ impl<'a> Snapshot for RocksSnapshot<'a> {
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 
-    fn iter<'b>(&'b self, start_key: &Key) -> Result<Box<Cursor + 'b>> {
-        trace!("RocksSnapshot: seek {}", start_key);
-        Ok(box RocksSnapshot::iter(self, start_key.encoded().as_slice().into()))
+    fn iter<'b>(&'b self) -> Result<Box<Cursor + 'b>> {
+        trace!("RocksSnapshot: create iterator");
+        Ok(box RocksSnapshot::iter(self))
     }
 }
 
