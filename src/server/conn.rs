@@ -20,7 +20,7 @@ use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 
-use kvproto::msgpb::Message;
+use kvproto::msgpb::{Message, MessageType};
 use super::{Result, ConnData};
 use super::server::Server;
 use util::codec::rpc;
@@ -30,10 +30,18 @@ use super::resolve::StoreAddrResolver;
 pub type OnClose = Box<FnBox() + Send>;
 pub type OnWriteComplete = Box<FnBox() + Send>;
 
+enum ConnType {
+    HandShake,
+    Rpc,
+    Snapshot,
+}
+
 pub struct Conn {
     pub sock: TcpStream,
     pub token: Token,
     pub interest: EventSet,
+
+    conn_type: ConnType,
 
     // store id is for remote store, we only set this
     // when we connect to the remote store.
@@ -85,6 +93,7 @@ impl Conn {
             sock: sock,
             token: token,
             interest: EventSet::readable() | EventSet::hup(),
+            conn_type: ConnType::HandShake,
             header: create_mem_buf(rpc::MSG_HEADER_LEN),
             payload: None,
             res: VecDeque::new(),
@@ -114,7 +123,93 @@ impl Conn {
         Ok(())
     }
 
-    pub fn read<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
+
+    pub fn on_readable<T, S>(&mut self,
+                             event_loop: &mut EventLoop<Server<T, S>>)
+                             -> Result<Vec<ConnData>>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
+        match self.conn_type {
+            ConnType::HandShake => self.handshake(event_loop),
+            ConnType::Rpc => self.read_rpc(event_loop),
+            ConnType::Snapshot => self.read_snapshot(event_loop),
+        }
+    }
+
+    fn handshake<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
+        let msg_or_none = try!(self.read_one_message());
+        if msg_or_none.is_none() {
+            return Ok(vec![]);
+        }
+
+        let msg = msg_or_none.unwrap();
+        match msg.get_msg_type() {
+            MessageType::Snapshot => {
+                self.conn_type = ConnType::Snapshot;
+                self.read_snapshot(event_loop)
+            }
+            _ => {
+                self.conn_type = ConnType::Rpc;
+                let mut first = vec![ConnData {
+                                         msg_id: self.last_msg_id,
+                                         msg: msg,
+                                     }];
+                let mut rem = try!(self.read_rpc(event_loop));
+                first.append(&mut rem);
+                Ok(first)
+            }
+        }
+    }
+
+    fn recv_snapshot_file(file_name: &str,
+                          from: TcpStream) {
+        let mut to = fs::File::open(file_name);
+        io::copy(to, from).unwrap();
+    }
+
+    fn read_snapshot<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
+        // TODO
+        Ok(vec![])
+    }
+
+    fn read_one_message(&mut self) -> Result<Option<Message>> {
+        if self.payload.is_none() {
+            try!(try_read_data(&mut self.sock, &mut self.header));
+            if self.header.remaining() > 0 {
+                // we need to read more data for header
+                return Ok(None);
+            }
+
+            // we have already read whole header, parse it and begin to read payload.
+            let (msg_id, payload_len) = try!(rpc::decode_msg_header(self.header
+                .bytes()));
+            self.last_msg_id = msg_id;
+            self.payload = Some(create_mem_buf(payload_len));
+        }
+
+        // payload here can't be None.
+        let mut payload = self.payload.take().unwrap();
+        try!(try_read_data(&mut self.sock, &mut payload));
+        if payload.remaining() > 0 {
+            // we need to read more data for payload
+            self.payload = Some(payload);
+            return Ok(None);
+        }
+
+        let mut msg = Message::new();
+        try!(rpc::decode_body(payload.bytes(), &mut msg));
+        self.header.clear();
+        Ok(Some(msg))
+    }
+
+    fn read_rpc<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
@@ -122,37 +217,14 @@ impl Conn {
 
         loop {
             // Because we use the edge trigger, so here we must read whole data.
-            if self.payload.is_none() {
-                try!(try_read_data(&mut self.sock, &mut self.header));
-                if self.header.remaining() > 0 {
-                    // we need to read more data for header
-                    break;
-                }
-
-                // we have already read whole header, parse it and begin to read payload.
-                let (msg_id, payload_len) = try!(rpc::decode_msg_header(self.header
-                    .bytes()));
-                self.last_msg_id = msg_id;
-                self.payload = Some(create_mem_buf(payload_len));
-            }
-
-            // payload here can't be None.
-            let mut payload = self.payload.take().unwrap();
-            try!(try_read_data(&mut self.sock, &mut payload));
-            if payload.remaining() > 0 {
-                // we need to read more data for payload
-                self.payload = Some(payload);
+            let msg = try!(self.read_one_message());
+            if msg.is_none() {
                 break;
             }
-
-            let mut msg = Message::new();
-            try!(rpc::decode_body(payload.bytes(), &mut msg));
             bufs.push(ConnData {
                 msg_id: self.last_msg_id,
-                msg: msg,
-            });
-
-            self.header.clear();
+                msg: msg.unwrap(),
+            })
         }
 
         Ok(bufs)

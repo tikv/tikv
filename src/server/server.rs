@@ -16,7 +16,7 @@ use std::option::Option;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
-use std::net::SocketAddr;
+use std::net::{self, SocketAddr};
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
@@ -185,7 +185,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 warn!("missing conn for token {:?}", token);
                 return Ok(());
             }
-            Some(conn) => conn.read(event_loop),
+            Some(conn) => conn.on_readable(event_loop),
         });
 
         if msgs.is_empty() {
@@ -477,6 +477,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             to_peer_id: to_peer_id,
             reported: AtomicBool::new(false),
         }
+    }
+
+    fn send_snapshot_file(&mut self,
+                          file_name: &str,
+                          sock_addr: SocketAddr) {
+        // let's keep things simple first.
+        let mut to = net::TcpStream::connect(&sock_addr).unwrap();
+        let mut msg = Message::new();
+        msg.set_msg_type(MessageType::Snapshot);
+        msg.write_to_writer(stream);
+        let mut from = fs::File::open(file_name).unwrap();
+        io::copy(to, from).unwrap();
     }
 
     fn send_snapshot_sock(&mut self,
