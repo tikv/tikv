@@ -53,7 +53,7 @@ impl Cluster {
     fn new(cluster_id: u64) -> Cluster {
         let mut meta = metapb::Cluster::new();
         meta.set_id(cluster_id);
-        meta.set_max_peer_number(5);
+        meta.set_max_peer_count(5);
 
         Cluster {
             meta: meta,
@@ -236,7 +236,7 @@ impl Cluster {
         // If no rule, use default max_peer_count check.
         let mut change_peer = pdpb::ChangePeer::new();
 
-        let max_peer_count = self.meta.get_max_peer_number() as usize;
+        let max_peer_count = self.meta.get_max_peer_count() as usize;
         let peer_count = region.get_peers().len();
 
         if peer_count < max_peer_count {
