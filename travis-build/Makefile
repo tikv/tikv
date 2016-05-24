@@ -50,7 +50,7 @@ cover_linux:
 	export LIBRARY_PATH="${LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	grep " Running " tests.log | sed -e 's/Running//g' | xargs -n 1 -i ${KCOV_DIR}/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv target/kcov {} --nocapture
+	grep " Running " tests.log | sed -e 's/Running//g' | xargs -n 1 -i ${KCOV_DIR}/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src target/kcov {} --nocapture
 
 cover_osx:
 	
