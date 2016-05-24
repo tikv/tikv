@@ -148,7 +148,7 @@ impl Conn {
 
         let msg = msg_or_none.unwrap();
         match msg.get_msg_type() {
-            MessageType::None => {
+            MessageType::Snapshot => {
                 self.conn_type = ConnType::Snapshot;
                 self.read_snapshot(event_loop)
             }
