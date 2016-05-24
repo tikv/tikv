@@ -78,22 +78,7 @@ impl<'a> MvccTxn<'a> {
     pub fn prewrite(&mut self, mutation: Mutation, primary: &[u8]) -> Result<()> {
         let key = mutation.key();
         let mut meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
-        // Abort on writes after our start timestamp ...
-        if let Some(latest) = meta.iter_items().nth(0) {
-            if latest.get_commit_ts() >= self.start_ts {
-                return Err(Error::WriteConflict);
-            }
-        }
-        // ... or locks at any timestamp.
-        if let Some(lock) = meta.get_lock() {
-            if lock.get_start_ts() != self.start_ts {
-                return Err(Error::KeyIsLocked {
-                    key: try!(key.raw()),
-                    primary: lock.get_primary_key().to_vec(),
-                    ts: lock.get_start_ts(),
-                });
-            }
-        }
+        try!(self.check_writable(&meta, &mutation));
 
         let mut lock = MetaLock::new();
         lock.set_field_type(meta_lock_type(&mutation));
@@ -105,6 +90,27 @@ impl<'a> MvccTxn<'a> {
         if let Mutation::Put((_, ref value)) = mutation {
             let value_key = key.append_ts(self.start_ts);
             self.writes.push(Modify::Put((value_key, value.clone())));
+        }
+        Ok(())
+    }
+
+    fn check_writable(&self, meta: &Meta, mutation: &Mutation) -> Result<()> {
+        // Abort on writes after our start timestamp ...
+        if let Some(latest) = meta.iter_items().nth(0) {
+            if latest.get_commit_ts() >= self.start_ts {
+                return Err(Error::WriteConflict);
+            }
+        }
+        // ... or locks at any timestamp.
+        if let Some(lock) = meta.get_lock() {
+            if lock.get_start_ts() != self.start_ts {
+                let key = mutation.key();
+                return Err(Error::KeyIsLocked {
+                    key: try!(key.raw()),
+                    primary: lock.get_primary_key().to_vec(),
+                    ts: lock.get_start_ts(),
+                });
+            }
         }
         Ok(())
     }
@@ -135,6 +141,25 @@ impl<'a> MvccTxn<'a> {
             meta.push_item(item);
         }
         meta.clear_lock();
+        Ok(())
+    }
+
+    pub fn fast_commit(&mut self, mutation: Mutation, commit_ts: u64) -> Result<()> {
+        let mut meta = try!(self.snapshot.load_meta(mutation.key(), FIRST_META_INDEX));
+        try!(self.check_writable(&meta, &mutation));
+        match mutation {
+            Mutation::Put((ref key, ref value)) => {
+                let value_key = key.append_ts(self.start_ts);
+                self.writes.push(Modify::Put((value_key, value.to_owned())));
+            }
+            Mutation::Delete(_) => {}
+            Mutation::Lock(_) => return Ok(()),
+        }
+        let mut item = MetaItem::new();
+        item.set_start_ts(self.start_ts);
+        item.set_commit_ts(commit_ts);
+        meta.push_item(item);
+        self.write_meta(mutation.key(), &mut meta);
         Ok(())
     }
 

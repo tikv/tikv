@@ -118,6 +118,33 @@ impl TxnStore {
         Ok(())
     }
 
+    pub fn fast_commit(&self,
+                       ctx: Context,
+                       mutations: Vec<Mutation>,
+                       start_ts: u64,
+                       commit_ts: u64)
+                       -> Result<Vec<Result<()>>> {
+        let _guard = {
+            let locked_keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
+            self.shard_mutex.lock(&locked_keys)
+        };
+
+        let engine = self.engine.as_ref().as_ref();
+        let snapshot = try!(engine.snapshot(&ctx));
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+
+        let mut results = vec![];
+        for m in mutations {
+            match txn.fast_commit(m, commit_ts) {
+                Ok(_) => results.push(Ok(())),
+                e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
+                Err(e) => return Err(Error::from(e)),
+            }
+        }
+        try!(txn.submit());
+        Ok(results)
+    }
+
     pub fn commit_then_get(&self,
                            ctx: Context,
                            key: Key,
