@@ -562,6 +562,23 @@ mod tests {
     }
 
     #[test]
+    fn test_fast_commit_done_ok() {
+        let resp = build_resp(Ok(Vec::new()), StoreHandler::cmd_fast_commit_done);
+        assert_eq!(MessageType::CmdFastCommit, resp.get_field_type());
+        let cmd = resp.get_cmd_fast_commit_resp();
+        assert_eq!(cmd.get_errors().len(), 0);
+    }
+
+    #[test]
+    fn test_fast_commit_done_err() {
+        let resp = build_resp(Ok(vec![Err(box_err!("error"))]),
+                              StoreHandler::cmd_fast_commit_done);
+        assert_eq!(MessageType::CmdFastCommit, resp.get_field_type());
+        let cmd = resp.get_cmd_fast_commit_resp();
+        assert_eq!(cmd.get_errors().len(), 1);
+    }
+
+    #[test]
     fn test_cleanup_done_ok() {
         let resp = build_resp(Ok(()), StoreHandler::cmd_cleanup_done);
         assert_eq!(MessageType::CmdCleanup, resp.get_field_type());

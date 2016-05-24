@@ -356,6 +356,34 @@ mod tests {
     }
 
     #[test]
+    fn test_mvcc_txn_fast_commit_ok() {
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
+
+        must_get_none(engine.as_ref(), b"x", 1);
+        must_fast_commit_put(engine.as_ref(), b"x", b"x5", 5, 10);
+        must_get_none(engine.as_ref(), b"x", 3);
+        must_get_none(engine.as_ref(), b"x", 7);
+        must_get(engine.as_ref(), b"x", 12, b"x5");
+
+        must_fast_commit_delete(engine.as_ref(), b"x", 15, 20);
+        must_get(engine.as_ref(), b"x", 12, b"x5");
+        must_get(engine.as_ref(), b"x", 18, b"x5");
+        must_get_none(engine.as_ref(), b"x", 21);
+    }
+
+    #[test]
+    fn test_mvcc_txn_fast_commit_err() {
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
+
+        must_fast_commit_put(engine.as_ref(), b"x", b"x5", 5, 10);
+        must_fast_commit_put_err(engine.as_ref(), b"x", b"x7", 7, 10);
+        must_get(engine.as_ref(), b"x", 12, b"x5");
+
+        must_prewrite_put(engine.as_ref(), b"x", b"x15", b"x", 15);
+        must_fast_commit_put_err(engine.as_ref(), b"x", b"x25", 25, 30);
+    }
+
+    #[test]
     fn test_mvcc_txn_commit_then_get() {
         let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
 
@@ -482,6 +510,41 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
         assert!(txn.commit(&make_key(key), to_fake_ts(commit_ts)).is_err());
+    }
+
+    fn must_fast_commit_put(engine: &Engine,
+                            key: &[u8],
+                            value: &[u8],
+                            start_ts: u64,
+                            commit_ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
+        txn.fast_commit(Mutation::Put((make_key(key), value.to_vec())),
+                         to_fake_ts(commit_ts))
+            .unwrap();
+        txn.submit().unwrap();
+    }
+
+    fn must_fast_commit_put_err(engine: &Engine,
+                                key: &[u8],
+                                value: &[u8],
+                                start_ts: u64,
+                                commit_ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
+        assert!(txn.fast_commit(Mutation::Put((make_key(key), value.to_vec())),
+                         to_fake_ts(commit_ts))
+            .is_err());
+    }
+
+    fn must_fast_commit_delete(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
+        txn.fast_commit(Mutation::Delete(make_key(key)), to_fake_ts(commit_ts)).unwrap();
+        txn.submit().unwrap();
     }
 
     fn must_commit_then_get(engine: &Engine,

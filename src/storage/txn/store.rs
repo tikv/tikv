@@ -334,21 +334,19 @@ mod tests {
         }
 
         fn put_ok(&self, key: &[u8], value: &[u8], start_ts: u64, commit_ts: u64) {
-            self.prewrite(Context::new(),
-                          vec![Mutation::Put((make_key(key), value.to_vec()))],
-                          key.to_vec(),
-                          start_ts)
+            self.fast_commit(Context::new(),
+                             vec![Mutation::Put((make_key(key), value.to_vec()))],
+                             start_ts,
+                             commit_ts)
                 .unwrap();
-            self.commit(Context::new(), vec![make_key(key)], start_ts, commit_ts).unwrap();
         }
 
         fn delete_ok(&self, key: &[u8], start_ts: u64, commit_ts: u64) {
-            self.prewrite(Context::new(),
-                          vec![Mutation::Delete(make_key(key))],
-                          key.to_vec(),
-                          start_ts)
+            self.fast_commit(Context::new(),
+                             vec![Mutation::Delete(make_key(key))],
+                             start_ts,
+                             commit_ts)
                 .unwrap();
-            self.commit(Context::new(), vec![make_key(key)], start_ts, commit_ts).unwrap();
         }
 
         fn scan_ok(&self,
