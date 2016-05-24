@@ -3,6 +3,7 @@ language: rust
 cache:
   directories:
   - $HOME/.cache/rocksdb
+  - $HOME/.cache/kcov
 
 matrix:
   include:
@@ -13,28 +14,15 @@ matrix:
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test', 'llvm-toolchain-precise-3.6']
-            packages: ['clang-3.6', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'libjemalloc-dev', 'curl']
+            packages: ['clang-3.6', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'libjemalloc-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
     - os: osx
       rust: nightly
 
 install:
-  - if [[ "${TRAVIS_OS_NAME}" == 'osx' ]]; then brew install gflags snappy rocksdb; fi
-  - rocksdb_dir=$HOME/.cache/rocksdb
-  - if [[ "${TRAVIS_OS_NAME}" == "linux" ]] && [[ ! -f "$rocksdb_dir/librocksdb.so" ]]; then need_rebuild=true; fi
-  - if [[ "$need_rebuild" == "true" ]] && [[ ! -d "$rocksdb_dir" ]]; then mkdir -p $rocksdb_dir; fi
-  # Build gflags
-  - pushd /tmp
-  - if [[ "$need_rebuild" == "true" ]]; then curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz && tar xf gflags.tar.gz && cd gflags-2.1.2 && cmake . && make; fi
-  # Add gflags to include/library paths
-  - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/tmp/gflags-2.1.2/lib"
-  - export LIBRARY_PATH="$LIBRARY_PATH:/tmp/gflags-2.1.2/lib"
-  - export CPLUS_INCLUDE_PATH="$CPLUS_INCLUDE_PATH:/tmp/gflags-2.1.2/include"
-  - if [ -n "${COMPILER}" ]; then export CXX=${COMPILER}; fi
-  - cd /tmp
-  - if [[ "$need_rebuild" == "true" ]]; then curl -L https://github.com/facebook/rocksdb/archive/rocksdb-4.3.1.tar.gz -o rocksdb.tar.gz && tar xf rocksdb.tar.gz && cd rocksdb-rocksdb-4.3.1 && make shared_lib && cp librocksdb.so* $rocksdb_dir; fi
-  - popd
+  - export KCOV_DIR=$HOME/.cache/kcov
+  - export ROCKSDB_DIR=$HOME/.cache/rocksdb
+  - make -f travis-build/Makefile prepare_${TRAVIS_OS_NAME}
 
 script:
-  - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$rocksdb_dir"
-  - export LIBRARY_PATH="$LD_LIBRARY_PATH"
-  - ENABLE_FEATURES=default make test
+  - make -f travis-build/Makefile test_${TRAVIS_OS_NAME}
+  - make -f travis-build/Makefile cover_${TRAVIS_OS_NAME}
