@@ -185,7 +185,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 warn!("missing conn for token {:?}", token);
                 return Ok(());
             }
-            Some(conn) => conn.read(event_loop),
+            Some(conn) => conn.on_readable(event_loop),
         });
 
         if msgs.is_empty() {
