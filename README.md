@@ -18,7 +18,7 @@ Similar to Google's Spanner, TiKV supports externally-consistent distributed tra
 - __Coprocessor support__  
 You can develop any application on TiKV.
 
-- __Working with [TiDB](https://github.com/pingcap/tidb)__
+- __Working with [TiDB](https://github.com/pingcap/tidb)__  
 Thanks to the internal optimization, TiKV and TiDB can work together to be the best database system that specializes in horizontal scalability, support for externally-consistent transactions, as well as a focus on supporting both traditional RDBMS and NoSQL.
 
 ### Required Rust version
