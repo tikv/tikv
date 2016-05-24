@@ -35,15 +35,15 @@ impl SplitObserver {
         if !split.has_split_key() {
             return Err("split key is expected!".to_owned());
         }
+
         let mut key = match split.get_split_key().decode_bytes(false) {
             Ok(x) => x,
             Err(_) => return Ok(()),
         };
 
-        // format of a key is TABLE_PREFIX + table_id + TABLE_ROW_MARK + handle + column_id
-        // + version or TABLE_PREFIX + table_id + TABLE_INDEX_MARK + index_id + values + version
+        // format of a key is TABLE_PREFIX + table_id + RECORD_PREFIX_SEP + handle + column_id
+        // + version or TABLE_PREFIX + table_id + INDEX_PREFIX_SEP + index_id + values + version
         // or meta_key + version
-
         let table_prefix_len = table::TABLE_PREFIX.len() + table::ID_LEN;
         if key.starts_with(table::TABLE_PREFIX) && key.len() > table::PREFIX_LEN + table::ID_LEN &&
            key[table_prefix_len..].starts_with(table::RECORD_PREFIX_SEP) {
@@ -52,6 +52,8 @@ impl SplitObserver {
         }
 
         let region_start_key = ctx.snap.get_region().get_start_key();
+        let key = encode_bytes(&key);
+
         info!("checking region_start_key {}, split key {}",
               escape(region_start_key),
               escape(&key));
@@ -59,7 +61,7 @@ impl SplitObserver {
             return Err("no need to split".to_owned());
         }
 
-        split.set_split_key(encode_bytes(&key));
+        split.set_split_key(key);
         Ok(())
     }
 }
