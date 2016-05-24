@@ -173,7 +173,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                               "rocksdb.compression",
                               matches,
                               config,
-                              Some("kLZ4Compression".to_owned()),
+                              Some("lz4".to_owned()),
                               |v| v.as_str().map(|s| s.to_owned()));
     let compression = util::rocksdb_option::get_compression_by_string(&tp);
     opts.compression(compression);

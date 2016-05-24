@@ -32,13 +32,13 @@ prefix = "tikv"
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/options.h
 [rocksdb]
 # compression method (if any) is used to compress a block.
-#   kNoCompression
-#   kSnappyCompression
-#   kZlibCompression
-#   kBZip2Compression
-#   kLZ4Compression
-#   kLZ4HCCompression
-compression = "kLZ4Compression"
+#   no: kNoCompression
+#   snappy: kSnappyCompression
+#   zlib: kZlibCompression
+#   bzip2: kBZip2Compression
+#   lz4: kLZ4Compression
+#   lz4hc: kLZ4HCCompression
+compression = "lz4"
 
 # Amount of data to build up in memory (backed by an unsorted log
 # on disk) before converting to a sorted on-disk file.
