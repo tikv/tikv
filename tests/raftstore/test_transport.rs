@@ -44,6 +44,7 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.reset_transport_hooks();
 
     // when network recover, old leader should sync data
+    cluster.reset_leader_of_region(region_id);
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(1), key, b"changed");
