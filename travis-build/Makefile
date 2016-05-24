@@ -48,7 +48,9 @@ test_osx:
 cover_linux:
 	export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	export LIBRARY_PATH="${LIBRARY_PATH}:${ROCKSDB_DIR}" && \
-	grep " Running " tests.log | sed -e 's/Running//g' | xargs -n 1 ${KCOV_DIR}/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv target/kcov
+    export LOG_LEVEL=DEBUG && \
+    export RUST_BACKTRACE=1 && \
+	grep " Running " tests.log | sed -e 's/Running//g' | xargs -n 1 -i ${KCOV_DIR}/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv target/kcov {} --nocapture
 
 cover_osx:
 	
