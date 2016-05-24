@@ -43,12 +43,12 @@ pub trait Engine: Send + Sync + Debug {
         self.write(ctx, vec![Modify::Delete(key)])
     }
 
-    fn iter<'a>(&'a self, ctx: &Context, start_key: &Key) -> Result<Box<Cursor + 'a>>;
+    fn iter<'a>(&'a self, ctx: &Context) -> Result<Box<Cursor + 'a>>;
 }
 
 pub trait Snapshot {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
-    fn iter<'a>(&'a self, start_key: &Key) -> Result<Box<Cursor + 'a>>;
+    fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
 }
 
 pub trait Cursor {
@@ -145,7 +145,8 @@ mod tests {
     }
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
-        let iter = engine.iter(&Context::new(), &make_key(key)).unwrap();
+        let mut iter = engine.iter(&Context::new()).unwrap();
+        iter.seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
     }
@@ -180,7 +181,8 @@ mod tests {
         must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
-        assert!(!engine.iter(&Context::new(), &make_key(b"z\x00")).unwrap().valid());
+        let mut iter = engine.iter(&Context::new()).unwrap();
+        assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
