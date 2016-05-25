@@ -96,9 +96,7 @@ impl PdStoreAddrResolver {
     pub fn new<T>(pd_client: Arc<T>) -> Result<PdStoreAddrResolver>
         where T: PdClient + 'static
     {
-        let mut r = PdStoreAddrResolver {
-            worker: Worker::new("store address resolve worker".to_owned(), 1),
-        };
+        let mut r = PdStoreAddrResolver { worker: Worker::new("store address resolve worker") };
 
         let runner = Runner {
             pd_client: pd_client,

@@ -36,12 +36,15 @@ pub trait Runnable<T: Display> {
 }
 
 pub trait BatchRunnable<T: Display> {
-    fn run_batch(&mut self, ts: Vec<T>);
+    /// run a batch of tasks.
+    ///
+    /// Please note that ts will be clear after the invoking this method.
+    fn run_batch(&mut self, ts: &mut Vec<T>);
 }
 
 impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
-    fn run_batch(&mut self, ts: Vec<T>) {
-        for t in ts {
+    fn run_batch(&mut self, ts: &mut Vec<T>) {
+        for t in ts.drain(..) {
             let task_str = format!("{}", t);
             let timer = SlowTimer::new();
             self.run(t);
@@ -95,8 +98,7 @@ impl<T: Display> Clone for Scheduler<T> {
 /// A worker that can schedule time consuming tasks.
 pub struct Worker<T: Display> {
     name: String,
-    batch_size: usize,
-    scheduler: Option<Scheduler<T>>,
+    scheduler: Scheduler<T>,
     receiver: Option<Receiver<Option<T>>>,
     handle: Option<JoinHandle<()>>,
 }
@@ -106,46 +108,54 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
           T: Display + Send + 'static
 {
     let mut keep_going = true;
+    let mut buffer = Vec::with_capacity(batch_size);
     while keep_going {
-        let mut buffer = vec![];
         let t = rx.recv();
         match t {
             Ok(Some(t)) => buffer.push(t),
             _ => return,
         }
-        while let Ok(opt) = rx.try_recv() {
-            match opt {
-                None => {
-                    keep_going = false;
+        if buffer.len() < batch_size {
+            while let Ok(opt) = rx.try_recv() {
+                match opt {
+                    None => {
+                        keep_going = false;
+                        break;
+                    }
+                    Some(t) => buffer.push(t),
+                }
+                if buffer.len() == batch_size {
                     break;
                 }
-                Some(t) => buffer.push(t),
-            }
-            if buffer.len() == batch_size {
-                break;
             }
         }
-        buffer.shrink_to_fit();
         counter.fetch_sub(buffer.len(), Ordering::SeqCst);
-        runner.run_batch(buffer);
+        runner.run_batch(&mut buffer);
+        buffer.clear();
     }
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
     /// Create a worker.
-    pub fn new<S: Into<String>>(name: S, batch_size: usize) -> Worker<T> {
+    pub fn new<S: Into<String>>(name: S) -> Worker<T> {
         let (tx, rx) = mpsc::channel();
         Worker {
             name: name.into(),
-            batch_size: batch_size,
-            scheduler: Some(Scheduler::new(AtomicUsize::new(0), tx)),
+            scheduler: Scheduler::new(AtomicUsize::new(0), tx),
             receiver: Some(rx),
             handle: None,
         }
     }
 
     /// Start the worker.
-    pub fn start<R: BatchRunnable<T> + Send + 'static>(&mut self, runner: R) -> Result<()> {
+    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<()> {
+        self.start_batch(runner, 1)
+    }
+
+    pub fn start_batch<R: BatchRunnable<T> + Send + 'static>(&mut self,
+                                                             runner: R,
+                                                             batch_size: usize)
+                                                             -> Result<()> {
         info!("starting working thread: {}", self.name);
         if self.receiver.is_none() {
             warn!("worker {} has been started.", self.name);
@@ -153,8 +163,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
 
         let rx = self.receiver.take().unwrap();
-        let counter = self.scheduler.as_ref().unwrap().counter.clone();
-        let batch_size = self.batch_size;
+        let counter = self.scheduler.counter.clone();
         let res = Builder::new()
             .name(self.name.clone())
             .spawn(move || poll(runner, rx, counter, batch_size));
@@ -165,59 +174,66 @@ impl<T: Display + Send + 'static> Worker<T> {
 
     /// Get a scheduler to schedule task.
     pub fn scheduler(&self) -> Scheduler<T> {
-        self.scheduler.as_ref().unwrap().clone()
+        self.scheduler.clone()
     }
 
     /// Schedule a task to run.
     ///
     /// If the worker is stopped, an error will return.
     pub fn schedule(&self, task: T) -> Result<()> {
-        self.scheduler.as_ref().ok_or(Error::Stopped).and_then(|s| s.schedule(task))
+        self.scheduler.schedule(task)
     }
 
     /// Check if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.scheduler.as_ref().map_or(true, |s| s.is_busy())
+        self.handle.is_none() || self.scheduler.is_busy()
     }
 
     /// Stop the worker thread.
     pub fn stop(&mut self) -> thread::Result<()> {
-        let scheduler = match self.scheduler.take() {
+        let handler = match self.handle.take() {
+            Some(h) => h,
             None => return Ok(()),
-            Some(s) => s,
         };
+
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.name);
-        if let Err(e) = scheduler.sender.send(None) {
+        if let Err(e) = self.scheduler.sender.send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
-        if let Some(h) = self.handle.take() {
-            try!(h.join());
-        }
-        Ok(())
+        handler.join()
     }
 }
 
 #[cfg(test)]
 mod test {
     use std::thread;
+    use std::sync::Arc;
+    use std::sync::atomic::*;
     use std::cmp;
-    use std::time::{Instant, Duration};
+    use std::time::Duration;
 
     use super::*;
 
-    struct SleepRunner;
+    struct CountRunner {
+        count: Arc<AtomicUsize>,
+    }
 
-    impl Runnable<u64> for SleepRunner {
-        fn run(&mut self, ms: u64) {
-            thread::sleep(Duration::from_millis(ms));
+    impl Runnable<u64> for CountRunner {
+        fn run(&mut self, step: u64) {
+            self.count.fetch_add(step as usize, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(10));
         }
     }
 
-    struct BatchRunner;
+    struct BatchRunner {
+        count: Arc<AtomicUsize>,
+    }
 
     impl BatchRunnable<u64> for BatchRunner {
-        fn run_batch(&mut self, ms: Vec<u64>) {
+        fn run_batch(&mut self, ms: &mut Vec<u64>) {
+            let total = ms.iter().fold(0, |l, &r| l + r);
+            self.count.fetch_add(total as usize, Ordering::SeqCst);
             let max_sleep = ms.iter().fold(0, |l, &r| cmp::max(l, r));
             thread::sleep(Duration::from_millis(max_sleep));
         }
@@ -225,10 +241,11 @@ mod test {
 
     #[test]
     fn test_worker() {
-        let mut worker = Worker::new("test-worker".to_owned(), 1);
-        worker.start(SleepRunner).unwrap();
+        let mut worker = Worker::new("test-worker");
+        let count = Arc::new(AtomicUsize::new(0));
+        worker.start(CountRunner { count: count.clone() }).unwrap();
         assert!(!worker.is_busy());
-        let timer = Instant::now();
+        worker.schedule(50).unwrap();
         worker.schedule(50).unwrap();
         worker.schedule(50).unwrap();
         assert!(worker.is_busy());
@@ -237,15 +254,15 @@ mod test {
         worker.stop().unwrap();
         // now worker can't handle any task
         assert!(worker.is_busy());
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert_eq!(count.load(Ordering::SeqCst), 150);
     }
 
     #[test]
     fn test_threaded() {
-        let mut worker = Worker::new("test-worker-threaded".to_owned(), 1);
-        worker.start(SleepRunner).unwrap();
+        let mut worker = Worker::new("test-worker-threaded");
+        let count = Arc::new(AtomicUsize::new(0));
+        worker.start(CountRunner { count: count.clone() }).unwrap();
         let scheduler = worker.scheduler();
-        let timer = Instant::now();
         thread::spawn(move || {
             scheduler.schedule(100).unwrap();
             scheduler.schedule(100).unwrap();
@@ -257,18 +274,18 @@ mod test {
             thread::sleep(Duration::from_millis(1));
         }
         worker.stop().unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(200));
+        assert_eq!(count.load(Ordering::SeqCst), 200);
     }
 
     #[test]
     fn test_batch() {
-        let mut worker = Worker::new("test-worker-batch".to_owned(), 10);
-        worker.start(BatchRunner).unwrap();
-        let timer = Instant::now();
-        for _ in 0..10 {
+        let mut worker = Worker::new("test-worker-batch");
+        let count = Arc::new(AtomicUsize::new(0));
+        worker.start_batch(BatchRunner { count: count.clone() }, 10).unwrap();
+        for _ in 0..20 {
             worker.schedule(50).unwrap();
         }
         worker.stop().unwrap();
-        assert!(timer.elapsed() < Duration::from_millis(50 * 10));
+        assert_eq!(count.load(Ordering::SeqCst), 20 * 50);
     }
 }
