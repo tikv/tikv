@@ -246,9 +246,16 @@ impl<'a, T: 'a, V: 'a, E> TryInsertWith<'a, V, E> for Entry<'a, T, V> {
     }
 }
 
+/// Convert Duration to milliseconds.
+pub fn duration_to_ms(d: Duration) -> u64 {
+    let nanos = d.subsec_nanos() as u64;
+    (1_000_000_000 * d.as_secs() + nanos) / (1_000_000)
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{SocketAddr, AddrParseError};
+    use std::time::Duration;
     use super::*;
 
     #[test]
@@ -273,6 +280,15 @@ mod tests {
         for (addr, ok) in tbls {
             let ret: Result<SocketAddr, AddrParseError> = addr.parse();
             assert_eq!(ret.is_ok(), ok);
+        }
+    }
+
+    #[test]
+    fn test_duration_to_ms() {
+        let tbl = vec![0, 100, 1_000, 5_000, 9999, 1_000_000, 1_000_000_000];
+        for ms in tbl {
+            let d = Duration::from_millis(ms);
+            assert_eq!(ms, duration_to_ms(d));
         }
     }
 }
