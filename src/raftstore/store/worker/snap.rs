@@ -69,7 +69,7 @@ quick_error! {
 pub struct Runner;
 
 impl Runner {
-    fn generate_snap(&self, task: &Task) -> Result<Snapshot, Error> {
+    fn generate_snap(&self, task: &Task) -> Result<(Snapshot, u64), Error> {
         // do we need to check leader here?
         let db = task.storage.rl().get_engine();
         let raw_snap;
@@ -88,35 +88,37 @@ impl Runner {
         }
 
         let snap = box_try!(store::do_snapshot(&raw_snap, region_id, ranges, applied_idx, term));
-        Ok(snap)
+        Ok((snap, region_id))
     }
 
-    fn save_snapshot(&self, snapshot: &Snapshot, dir: &str) -> Result<(), Error> {
-        let header = snapshot.get_metadata();
+    fn save_snapshot(&self, snapshot: &Snapshot, region_id: u64, dir: &str) -> Result<(), Error> {
         let file_name = format!("{}{}_{}_{}",
                                 dir,
-                                header.get_region().get_id(),
-                                header.get_term(),
-                                header.get_index());
-        let f = box fs::File::create(format!("{}xxx.tmp", dir)).unwrap();
+                                region_id,
+                                snapshot.get_metadata().get_term(),
+                                snapshot.get_metadata().get_index());
+        let metadata = fs::metadata(&file_name);
+        if let Ok(attr) = metadata {
+            if attr.is_file() {
+                return Err(box_err!("snapshot {} already exist!", file_name));
+            }
+        }
+        let tmp_file_name = format!("{}.tmp", &file_name);
+        let f = box try!(fs::File::create(&tmp_file_name));
         let mut crc_writer = CRCWriter::new(f);
-        // File -> Header + Body + CRC32
-        // Header: [Header Len(4 bytes)][Snapshot Meta Data]
-        // Body: [var key len][key][var value len][value] ....
-        // End:  [CRC32]
         let mut buf = [0; 4];
-        let header_len = snapshot.get_metadata().compute_size();
+        let header_len = snapshot.compute_size();
         LittleEndian::write_u32(&mut buf, header_len);
         try!(crc_writer.write(&buf));
-        try!(snapshot.get_metadata().write_to_writer(&mut crc_writer));
 
-        try!(crc_writer.write(snapshot.get_data()));
+        // TODO file format will change
+        try!(snapshot.write_to_writer(&mut crc_writer));
 
         let checksum = crc_writer.sum();
         LittleEndian::write_u32(&mut buf, checksum);
         try!(crc_writer.write(&buf));
 
-        try!(fs::rename(file_name, format!("{}xxx.tmp", dir)));
+        try!(fs::rename(file_name, tmp_file_name));
         Ok(())
     }
 }
@@ -130,8 +132,8 @@ impl Runnable<Task> for Runner {
             return;
         }
 
-        let snap = res.unwrap();
-        if let Err(e) = self.save_snapshot(&snap, "/tmp/") {
+        let (snap, region_id) = res.unwrap();
+        if let Err(e) = self.save_snapshot(&snap, region_id, "/tmp/") {
             error!("save snapshot file failed: {:?}!!!", e);
         }
         task.storage.wl().snap_state = SnapState::Snap(snap);

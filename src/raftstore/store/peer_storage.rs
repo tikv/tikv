@@ -523,7 +523,6 @@ pub fn do_snapshot(snap: &RocksDbSnapshot,
     // Set snapshot metadata.
     snapshot.mut_metadata().set_index(applied_idx);
     snapshot.mut_metadata().set_term(term);
-    snapshot.mut_metadata().set_region(region.clone());
 
     let mut conf_state = ConfState::new();
     for p in region.get_peers() {
