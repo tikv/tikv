@@ -23,9 +23,9 @@ ${ROCKSDB_DIR}/librocksdb.so: ${ROCKSDB_DIR}/libgflags.a
 
 ${KCOV_DIR}/kcov:
 	cd /tmp && \
-	curl -L https://github.com/SimonKagstrom/kcov/archive/v31.tar.gz -o kcov.tar.gz && \
+	curl -L https://github.com/BusyJay/kcov/archive/master.tar.gz -o kcov.tar.gz && \
 	tar xf kcov.tar.gz && \
-	cd kcov-31 && \
+	cd kcov-master && \
 	cmake . && \
 	make && \
 	mkdir -p ${KCOV_DIR} && \
@@ -50,7 +50,7 @@ cover_linux:
 	export LIBRARY_PATH="${LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	grep " Running " tests.log | sed -e 's/Running//g' | xargs -n 1 -i ${KCOV_DIR}/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src target/kcov {} --nocapture
+	grep " Running " tests.log | sed -e 's/Running//g' | xargs -n 1 -i ${KCOV_DIR}/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src --strip-path `pwd`/ target/kcov {} --nocapture
 
 cover_osx:
 	
