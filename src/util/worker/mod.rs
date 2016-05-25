@@ -38,7 +38,7 @@ pub trait Runnable<T: Display> {
 pub trait BatchRunnable<T: Display> {
     /// run a batch of tasks.
     ///
-    /// Please note that ts will be clear after the invoking this method.
+    /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
 }
 
@@ -56,7 +56,7 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
     }
 }
 
-/// Scheduler provide interface to schedule task to underlying workers.
+/// Scheduler provides interface to schedule task to underlying workers.
 pub struct Scheduler<T> {
     counter: Arc<AtomicUsize>,
     sender: Sender<Option<T>>,
@@ -164,10 +164,9 @@ impl<T: Display + Send + 'static> Worker<T> {
 
         let rx = self.receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
-        let res = Builder::new()
+        let h = try!(Builder::new()
             .name(self.name.clone())
-            .spawn(move || poll(runner, rx, counter, batch_size));
-        let h = try!(res);
+            .spawn(move || poll(runner, rx, counter, batch_size)));
         self.handle = Some(h);
         Ok(())
     }
