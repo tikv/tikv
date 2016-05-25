@@ -88,12 +88,6 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
                                  &config,
                                  Some("info".to_owned()),
                                  |v| v.as_str().map(|s| s.to_owned()));
-    let addr = get_string_value("metric-addr",
-                                "metric.addr",
-                                &matches,
-                                &config,
-                                Some("".to_owned()),
-                                |v| v.as_str().map(|s| s.to_owned()));
     let host = get_string_value("metric-host",
                                 "metric.host",
                                 &matches,
@@ -106,15 +100,14 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
                                   &config,
                                   Some("tikv".to_owned()),
                                   |v| v.as_str().map(|s| s.to_owned()));
-    if level == "off" {
-        if addr != "" && host != "" {
-            let socket = UdpSocket::bind(&*addr).unwrap();
-            let sink = UdpMetricSink::from(&*host, socket).unwrap();
-            let client = StatsdClient::from_sink(&prefix, sink);
+    if host != "" {
+        // We only need a unique UDP bind, so 0.0.0.0:0 is enough.
+        let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+        let sink = UdpMetricSink::from(&*host, socket).unwrap();
+        let client = StatsdClient::from_sink(&prefix, sink);
 
-            if let Err(r) = metric::set_metric_client(Box::new(client)) {
-                error!("{}", r);
-            }
+        if let Err(r) = metric::set_metric_client(Box::new(client)) {
+            error!("{}", r);
         }
     } else {
         let sink = LoggingMetricSink::new(logger::get_level_by_string(&level)
