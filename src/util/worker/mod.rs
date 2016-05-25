@@ -247,12 +247,17 @@ mod test {
         let scheduler = worker.scheduler();
         let timer = Instant::now();
         thread::spawn(move || {
-            scheduler.schedule(50).unwrap();
-            scheduler.schedule(50).unwrap();
+            scheduler.schedule(100).unwrap();
+            scheduler.schedule(100).unwrap();
         });
-        while !worker.scheduler().is_busy() {}
+        for _ in 1..1000 {
+            if worker.is_busy() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
         worker.stop().unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        assert!(timer.elapsed() >= Duration::from_millis(200));
     }
 
     #[test]
