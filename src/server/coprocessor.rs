@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::{result, error};
 use std::time::Instant;
 use std::boxed::FnBox;
+use std::cell::RefCell;
 
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
 use tipb::schema::ColumnInfo;
@@ -254,7 +255,8 @@ fn is_point(range: &KeyRange) -> bool {
 struct SelectContext<'a> {
     sel: SelectRequest,
     snap: SnapshotStore<'a>,
-    eval: Evaluator,
+    // TODO: remove refcell.
+    eval: RefCell<Evaluator>,
     cond_cols: HashMap<i64, ColumnInfo>,
 }
 
@@ -316,7 +318,7 @@ impl<'a> SelectContext<'a> {
         Ok(rows)
     }
 
-    fn load_row_with_key(&mut self, key: &[u8], dest: &mut Vec<Row>) -> Result<()> {
+    fn load_row_with_key(&self, key: &[u8], dest: &mut Vec<Row>) -> Result<()> {
         let h = box_try!(table::decode_handle(key));
         if try!(self.should_skip(h)) {
             return Ok(());
@@ -347,12 +349,13 @@ impl<'a> SelectContext<'a> {
             } else {
                 range.get_start().to_vec()
             };
+            let mut scanner = try!(self.snap.scanner());
             while limit > rows.len() {
                 let timer = Instant::now();
                 let mut res = if desc {
-                    try!(self.snap.reverse_scan(Key::from_raw(&seek_key), 1))
+                    try!(scanner.reverse_scan(Key::from_raw(&seek_key), 1))
                 } else {
-                    try!(self.snap.scan(Key::from_raw(&seek_key), 1))
+                    try!(scanner.scan(Key::from_raw(&seek_key), 1))
                 };
                 trace!("scan takes {:?}", timer.elapsed());
                 if res.is_empty() {
@@ -378,17 +381,18 @@ impl<'a> SelectContext<'a> {
         Ok(rows)
     }
 
-    fn should_skip(&mut self, h: i64) -> Result<bool> {
+    fn should_skip(&self, h: i64) -> Result<bool> {
         if !self.sel.has_field_where() {
             return Ok(false);
         }
         let t_id = self.sel.get_table_info().get_table_id();
+        let mut eval = self.eval.borrow_mut();
         for (&col_id, col) in &self.cond_cols {
             if col.get_pk_handle() {
                 if mysql::has_unsigned_flag(col.get_flag() as u64) {
-                    self.eval.row.insert(col_id, Datum::U64(h as u64));
+                    eval.row.insert(col_id, Datum::U64(h as u64));
                 } else {
-                    self.eval.row.insert(col_id, Datum::I64(h));
+                    eval.row.insert(col_id, Datum::I64(h));
                 }
             } else {
                 let key = table::encode_column_key(t_id, h, col_id);
@@ -398,12 +402,12 @@ impl<'a> SelectContext<'a> {
                         return Err(box_err!("key {} not exists", escape(&key)));
                     }
                     None => Datum::Null,
-                    Some(bs) => box_try!(bs.as_slice().decode_datum()),
+                    Some(bs) => box_try!(bs.as_slice().decode_col_value(col)),
                 };
-                self.eval.row.insert(col_id, value);
+                eval.row.insert(col_id, value);
             }
         }
-        let res = box_try!(self.eval.eval(self.sel.get_field_where()));
+        let res = box_try!(eval.eval(self.sel.get_field_where()));
         let b = box_try!(res.into_bool());
         Ok(b.map_or(true, |v| !v))
     }
@@ -426,7 +430,7 @@ impl<'a> SelectContext<'a> {
             } else {
                 let col_id = col.get_column_id();
                 if self.cond_cols.contains_key(&col_id) {
-                    let d = &self.eval.row[&col_id];
+                    let d = &self.eval.borrow().row[&col_id];
                     let bytes = box_try!(datum::encode_value(as_slice(d)));
                     row.mut_data().extend(bytes);
                 } else {
@@ -473,13 +477,14 @@ impl<'a> SelectContext<'a> {
         } else {
             r.get_start().to_vec()
         };
+        let mut scanner = try!(self.snap.scanner());
         while rows.len() < limit {
             trace!("seek {}", escape(&seek_key));
             let timer = Instant::now();
             let mut nk = if desc {
-                try!(self.snap.reverse_scan(Key::from_raw(&seek_key), 1))
+                try!(scanner.reverse_scan(Key::from_raw(&seek_key), 1))
             } else {
-                try!(self.snap.scan(Key::from_raw(&seek_key), 1))
+                try!(scanner.scan(Key::from_raw(&seek_key), 1))
             };
             trace!("scan takes {:?}", timer.elapsed());
             if nk.is_empty() {

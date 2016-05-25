@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair, Mutation};
-use storage::{Engine, Snapshot};
+use storage::{Engine, Snapshot, Cursor};
 use storage::mvcc::{MvccTxn, MvccSnapshot, Error as MvccError};
 use super::shard_mutex::ShardMutex;
 use super::{Error, Result};
@@ -58,7 +58,8 @@ impl TxnStore {
                 -> Result<Vec<Result<KvPair>>> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
         let snap_store = SnapshotStore::new(snapshot, start_ts);
-        snap_store.scan(key, limit)
+        let mut scanner = try!(snap_store.scanner());
+        scanner.scan(key, limit)
     }
 
     pub fn reverse_scan(&self,
@@ -69,7 +70,8 @@ impl TxnStore {
                         -> Result<Vec<Result<KvPair>>> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
         let snap_store = SnapshotStore::new(snapshot, start_ts);
-        snap_store.reverse_scan(key, limit)
+        let mut scanner = try!(snap_store.scanner());
+        scanner.reverse_scan(key, limit)
     }
 
     pub fn prewrite(&self,
@@ -204,23 +206,33 @@ impl<'a> SnapshotStore<'a> {
         Ok(results)
     }
 
-    // TODO: extract to Scanner.
-    pub fn scan(&self, key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
-        let mut results = vec![];
-        let mut key = key;
+    pub fn scanner(&self) -> Result<StoreScanner> {
+        let cursor = try!(self.snapshot.iter());
         let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
-        let mut iter = try!(self.snapshot.iter(&key));
+        Ok(StoreScanner {
+            cursor: cursor,
+            txn: txn,
+        })
+    }
+}
+
+pub struct StoreScanner<'a> {
+    cursor: Box<Cursor + 'a>,
+    txn: MvccSnapshot<'a>,
+}
+
+impl<'a> StoreScanner<'a> {
+    pub fn scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
+        let mut results = vec![];
         while results.len() < limit {
-            if !try!(iter.seek(&key)) {
+            if !try!(self.cursor.seek(&key)) {
                 break;
             }
-            key = try!(Key::from_encoded(iter.key().to_vec()).truncate_ts());
-            match txn.get(&key) {
+            key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
+            match self.txn.get(&key) {
                 Ok(Some(value)) => results.push(Ok((try!(key.raw()), value))),
                 Ok(None) => {}
-                e @ Err(MvccError::KeyIsLocked { .. }) => {
-                    results.push(Err(Error::from(e.unwrap_err())))
-                }
+                Err(e @ MvccError::KeyIsLocked { .. }) => results.push(Err(e.into())),
                 Err(e) => return Err(e.into()),
             };
             key = key.append_ts(u64::max_value());
@@ -228,21 +240,18 @@ impl<'a> SnapshotStore<'a> {
         Ok(results)
     }
 
-    pub fn reverse_scan(&self, key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
+    pub fn reverse_scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
-        let mut key = key;
-        let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
-        let mut iter = try!(self.snapshot.iter(&key));
         while results.len() < limit {
-            if !try!(iter.reverse_seek(&key)) {
+            if !try!(self.cursor.reverse_seek(&key)) {
                 break;
             }
-            key = try!(Key::from_encoded(iter.key().to_vec()).truncate_ts());
-            match txn.get(&key) {
+            key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
+            match self.txn.get(&key) {
                 Ok(Some(value)) => results.push(Ok((try!(key.raw()), value))),
                 Ok(None) => {}
-                e @ Err(MvccError::KeyIsLocked { .. }) => {
-                    results.push(Err(Error::from(e.unwrap_err())))
+                Err(e @ MvccError::KeyIsLocked { .. }) => {
+                    results.push(Err(e.into()));
                 }
                 Err(e) => return Err(e.into()),
             };

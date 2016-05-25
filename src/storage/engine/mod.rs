@@ -43,12 +43,12 @@ pub trait Engine: Send + Sync + Debug {
         self.write(ctx, vec![Modify::Delete(key)])
     }
 
-    fn iter<'a>(&'a self, ctx: &Context, start_key: &Key) -> Result<Box<Cursor + 'a>>;
+    fn iter<'a>(&'a self, ctx: &Context) -> Result<Box<Cursor + 'a>>;
 }
 
 pub trait Snapshot {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
-    fn iter<'a>(&'a self, start_key: &Key) -> Result<Box<Cursor + 'a>>;
+    fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
 }
 
 pub trait Cursor {
@@ -127,30 +127,31 @@ mod tests {
         seek(e.as_ref());
     }
 
-    fn must_put<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
+    fn must_put(engine: &Engine, key: &[u8], value: &[u8]) {
         engine.put(&Context::new(), make_key(key), value.to_vec()).unwrap();
     }
 
-    fn must_delete<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
+    fn must_delete(engine: &Engine, key: &[u8]) {
         engine.delete(&Context::new(), make_key(key)).unwrap();
     }
 
-    fn assert_has<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
+    fn assert_has(engine: &Engine, key: &[u8], value: &[u8]) {
         assert_eq!(engine.get(&Context::new(), &make_key(key)).unwrap().unwrap(),
                    value);
     }
 
-    fn assert_none<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
+    fn assert_none(engine: &Engine, key: &[u8]) {
         assert_eq!(engine.get(&Context::new(), &make_key(key)).unwrap(), None);
     }
 
-    fn assert_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
-        let iter = engine.iter(&Context::new(), &make_key(key)).unwrap();
+    fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
+        let mut iter = engine.iter(&Context::new()).unwrap();
+        iter.seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
     }
 
-    fn get_put<T: Engine + ?Sized>(engine: &T) {
+    fn get_put(engine: &Engine) {
         assert_none(engine, b"x");
         must_put(engine, b"x", b"1");
         assert_has(engine, b"x", b"1");
@@ -158,7 +159,7 @@ mod tests {
         assert_has(engine, b"x", b"2");
     }
 
-    fn batch<T: Engine + ?Sized>(engine: &T) {
+    fn batch(engine: &Engine) {
         engine.write(&Context::new(),
                    vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
                         Modify::Put((make_key(b"y"), b"2".to_vec()))])
@@ -173,14 +174,15 @@ mod tests {
         assert_none(engine, b"y");
     }
 
-    fn seek<T: Engine + ?Sized>(engine: &T) {
+    fn seek(engine: &Engine) {
         must_put(engine, b"x", b"1");
         assert_seek(engine, b"x", (b"x", b"1"));
         assert_seek(engine, b"a", (b"x", b"1"));
         must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
-        assert!(!engine.iter(&Context::new(), &make_key(b"z\x00")).unwrap().valid());
+        let mut iter = engine.iter(&Context::new()).unwrap();
+        assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }

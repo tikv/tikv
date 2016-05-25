@@ -271,7 +271,7 @@ mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
     use util::codec::{Datum, datum};
-    use util::codec::mysql::{Decimal, Duration, DecimalEncoder};
+    use util::codec::mysql::{MAX_FSP, Decimal, Duration, DecimalEncoder};
 
     use tipb::expression::{Expr, ExprType};
     use protobuf::RepeatedField;
@@ -364,6 +364,10 @@ mod test {
             (datum_expr(Datum::U64(1)), Datum::U64(1)),
             (datum_expr(b"abc".as_ref().into()), b"abc".as_ref().into()),
             (datum_expr(Datum::Null), Datum::Null),
+            (datum_expr(Duration::parse(b"01:00:00", 0).unwrap().into()),
+             Duration::from_nanos(3600 * 1_000_000_000, MAX_FSP).unwrap().into()),
+            (datum_expr(Datum::Dec("1.1".parse().unwrap())),
+             Datum::Dec(Decimal::from_f64(1.1).unwrap())),
             (col_expr(1), Datum::I64(100)),
             (bin_expr(Duration::parse(b"11:00:00", 0).unwrap().into(),
              Duration::parse(b"00:00:00", 0).unwrap().into(), ExprType::LT), Datum::I64(0)),

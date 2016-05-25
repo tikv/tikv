@@ -27,26 +27,26 @@ fn meta_lock_type(mutation: &Mutation) -> MetaLockType {
     }
 }
 
-pub struct MvccTxn<'a, E: Engine + ?Sized + 'a, S: Snapshot + ?Sized + 'a> {
-    engine: &'a E,
-    snapshot: MvccSnapshot<'a, S>,
+pub struct MvccTxn<'a> {
+    engine: &'a Engine,
+    snapshot: MvccSnapshot<'a>,
     ctx: &'a Context,
     start_ts: u64,
     writes: Vec<Modify>,
 }
 
-impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized + 'a> fmt::Debug for MvccTxn<'a, E, S> {
+impl<'a> fmt::Debug for MvccTxn<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "txn @{} - {:?}", self.start_ts, self.engine)
     }
 }
 
-impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
-    pub fn new(engine: &'a E,
-               snapshot: &'a S,
+impl<'a> MvccTxn<'a> {
+    pub fn new(engine: &'a Engine,
+               snapshot: &'a Snapshot,
                ctx: &'a Context,
                start_ts: u64)
-               -> MvccTxn<'a, E, S> {
+               -> MvccTxn<'a> {
         MvccTxn {
             engine: engine,
             snapshot: MvccSnapshot::new(snapshot, start_ts),
@@ -185,19 +185,19 @@ impl<'a, E: Engine + ?Sized, S: Snapshot + ?Sized> MvccTxn<'a, E, S> {
     }
 }
 
-pub struct MvccSnapshot<'a, S: Snapshot + ?Sized + 'a> {
-    snapshot: &'a S,
+pub struct MvccSnapshot<'a> {
+    snapshot: &'a Snapshot,
     start_ts: u64,
 }
 
-impl<'a, S: Snapshot + ?Sized> fmt::Debug for MvccSnapshot<'a, S> {
+impl<'a> fmt::Debug for MvccSnapshot<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "snapshot txn @{}", self.start_ts)
     }
 }
 
-impl<'a, S: Snapshot + ?Sized> MvccSnapshot<'a, S> {
-    pub fn new(snapshot: &'a S, start_ts: u64) -> MvccSnapshot<'a, S> {
+impl<'a> MvccSnapshot<'a> {
+    pub fn new(snapshot: &'a Snapshot, start_ts: u64) -> MvccSnapshot<'a> {
         MvccSnapshot {
             snapshot: snapshot,
             start_ts: start_ts,
@@ -392,32 +392,28 @@ mod tests {
         must_get_none(engine.as_ref(), b"x", 5);
     }
 
-    fn must_get<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64, expect: &[u8]) {
+    fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect);
     }
 
-    fn must_get_none<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64) {
+    fn must_get_none(engine: &Engine, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         assert!(txn.get(&make_key(key)).unwrap().is_none());
     }
 
-    fn must_get_err<T: Engine + ?Sized>(engine: &T, key: &[u8], ts: u64) {
+    fn must_get_err(engine: &Engine, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         assert!(txn.get(&make_key(key)).is_err());
     }
 
-    fn must_prewrite_put<T: Engine + ?Sized>(engine: &T,
-                                             key: &[u8],
-                                             value: &[u8],
-                                             pk: &[u8],
-                                             ts: u64) {
+    fn must_prewrite_put(engine: &Engine, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
@@ -425,7 +421,7 @@ mod tests {
         txn.submit().unwrap();
     }
 
-    fn must_prewrite_delete<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
+    fn must_prewrite_delete(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
@@ -433,7 +429,7 @@ mod tests {
         txn.submit().unwrap();
     }
 
-    fn must_prewrite_lock<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
+    fn must_prewrite_lock(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
@@ -441,14 +437,14 @@ mod tests {
         txn.submit().unwrap();
     }
 
-    fn must_prewrite_lock_err<T: Engine + ?Sized>(engine: &T, key: &[u8], pk: &[u8], ts: u64) {
+    fn must_prewrite_lock_err(engine: &Engine, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
         assert!(txn.prewrite(Mutation::Lock(make_key(key)), pk).is_err());
     }
 
-    fn must_commit<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
+    fn must_commit(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
@@ -456,19 +452,19 @@ mod tests {
         txn.submit().unwrap();
     }
 
-    fn must_commit_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64, commit_ts: u64) {
+    fn must_commit_err(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
         assert!(txn.commit(&make_key(key), to_fake_ts(commit_ts)).is_err());
     }
 
-    fn must_commit_then_get<T: Engine + ?Sized>(engine: &T,
-                                                key: &[u8],
-                                                lock_ts: u64,
-                                                commit_ts: u64,
-                                                get_ts: u64,
-                                                expect: &[u8]) {
+    fn must_commit_then_get(engine: &Engine,
+                            key: &[u8],
+                            lock_ts: u64,
+                            commit_ts: u64,
+                            get_ts: u64,
+                            expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
@@ -479,11 +475,11 @@ mod tests {
         txn.submit().unwrap();
     }
 
-    fn must_commit_then_get_err<T: Engine + ?Sized>(engine: &T,
-                                                    key: &[u8],
-                                                    lock_ts: u64,
-                                                    commit_ts: u64,
-                                                    get_ts: u64) {
+    fn must_commit_then_get_err(engine: &Engine,
+                                key: &[u8],
+                                lock_ts: u64,
+                                commit_ts: u64,
+                                get_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
@@ -491,7 +487,7 @@ mod tests {
             .is_err());
     }
 
-    fn must_rollback<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
+    fn must_rollback(engine: &Engine, key: &[u8], start_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
@@ -499,17 +495,14 @@ mod tests {
         txn.submit().unwrap();
     }
 
-    fn must_rollback_err<T: Engine + ?Sized>(engine: &T, key: &[u8], start_ts: u64) {
+    fn must_rollback_err(engine: &Engine, key: &[u8], start_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(start_ts));
         assert!(txn.rollback(&make_key(key)).is_err());
     }
 
-    fn must_rollback_then_get<T: Engine + ?Sized>(engine: &T,
-                                                  key: &[u8],
-                                                  lock_ts: u64,
-                                                  expect: &[u8]) {
+    fn must_rollback_then_get(engine: &Engine, key: &[u8], lock_ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
@@ -518,7 +511,7 @@ mod tests {
         txn.submit().unwrap();
     }
 
-    fn must_rollback_then_get_err<T: Engine + ?Sized>(engine: &T, key: &[u8], lock_ts: u64) {
+    fn must_rollback_then_get_err(engine: &Engine, key: &[u8], lock_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
