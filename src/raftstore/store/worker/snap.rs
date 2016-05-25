@@ -12,10 +12,16 @@
 // limitations under the License.
 
 use raftstore::store::{self, RaftStorage, SnapState};
+use kvproto::raftpb::Snapshot;
+use protobuf::{ProtobufError, Message};
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
+use std::io::{self, Write};
 use std::error;
+use std::fs;
+use crc::{crc32, Hasher32};
+use byteorder::{ByteOrder, LittleEndian};
 
 use util::worker::Runnable;
 
@@ -45,13 +51,25 @@ quick_error! {
             description(err.description())
             display("snap failed {:?}", err)
         }
+        Io(err: io::Error) {
+            from()
+            cause(err)
+            description(err.description())
+            display("io error {}", err)
+        }
+        Protobuf(err: ProtobufError) {
+            from()
+            cause(err)
+            description(err.description())
+            display("Protobuf {}", err)
+        }
     }
 }
 
 pub struct Runner;
 
 impl Runner {
-    fn generate_snap(&self, task: &Task) -> Result<(), Error> {
+    fn generate_snap(&self, task: &Task) -> Result<(Snapshot, u64), Error> {
         // do we need to check leader here?
         let db = task.storage.rl().get_engine();
         let raw_snap;
@@ -70,16 +88,83 @@ impl Runner {
         }
 
         let snap = box_try!(store::do_snapshot(&raw_snap, region_id, ranges, applied_idx, term));
-        task.storage.wl().snap_state = SnapState::Snap(snap);
+        Ok((snap, region_id))
+    }
+
+    fn save_snapshot(&self, snapshot: &Snapshot, region_id: u64, dir: &str) -> Result<(), Error> {
+        let file_name = format!("{}{}_{}_{}",
+                                dir,
+                                region_id,
+                                snapshot.get_metadata().get_term(),
+                                snapshot.get_metadata().get_index());
+        let metadata = fs::metadata(&file_name);
+        if let Ok(attr) = metadata {
+            if attr.is_file() {
+                return Err(box_err!("snapshot {} already exist!", file_name));
+            }
+        }
+        let tmp_file_name = format!("{}.tmp", &file_name);
+        let f = box try!(fs::File::create(&tmp_file_name));
+        let mut crc_writer = CRCWriter::new(f);
+        let mut buf = [0; 4];
+        let header_len = snapshot.compute_size();
+        LittleEndian::write_u32(&mut buf, header_len);
+        try!(crc_writer.write(&buf));
+
+        // TODO file format will change
+        try!(snapshot.write_to_writer(&mut crc_writer));
+
+        let checksum = crc_writer.sum();
+        LittleEndian::write_u32(&mut buf, checksum);
+        try!(crc_writer.write(&buf));
+
+        try!(fs::rename(file_name, tmp_file_name));
         Ok(())
     }
 }
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
-        if let Err(e) = self.generate_snap(&task) {
+        let res = self.generate_snap(&task);
+        if let Err(e) = res {
             error!("failed to generate snap: {:?}!!!", e);
             task.storage.wl().snap_state = SnapState::Failed;
+            return;
         }
+
+        let (snap, region_id) = res.unwrap();
+        if let Err(e) = self.save_snapshot(&snap, region_id, "/tmp/") {
+            error!("save snapshot file failed: {:?}!!!", e);
+            task.storage.wl().snap_state = SnapState::Failed;
+            return;
+        }
+        task.storage.wl().snap_state = SnapState::Snap(snap);
+    }
+}
+
+struct CRCWriter<T: Write> {
+    digest: crc32::Digest,
+    writer: T,
+}
+
+impl<T: Write> CRCWriter<T> {
+    fn new(writer: T) -> CRCWriter<T> {
+        CRCWriter {
+            digest: crc32::Digest::new(crc32::IEEE),
+            writer: writer,
+        }
+    }
+    fn sum(&self) -> u32 {
+        self.digest.sum32()
+    }
+}
+
+impl<T: Write> Write for CRCWriter<T> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.digest.write(buf);
+        self.writer.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
     }
 }
