@@ -170,7 +170,7 @@ impl Conn {
               S: StoreAddrResolver
     {
         // TODO
-        Ok(vec![])
+        unimplemented!()
     }
 
     fn read_one_message(&mut self) -> Result<Option<Message>> {
