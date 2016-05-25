@@ -217,10 +217,9 @@ impl<C: PdClient> Engine for RaftKv<C> {
         snap.get(key)
     }
 
-    fn iter<'a>(&'a self, ctx: &Context, key: &Key) -> engine::Result<Box<Cursor + 'a>> {
+    fn iter<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Cursor + 'a>> {
         let snap = try!(self.raw_snapshot(ctx));
-        Ok(box RegionIterator::new(self.db.iter(key.encoded().as_slice().into()),
-                                   snap.get_region().clone()))
+        Ok(box RegionIterator::new(self.db.iter(), snap.get_region().clone()))
     }
 
     fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
@@ -264,10 +263,8 @@ impl<'a> Snapshot for RegionSnapshot<'a> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter<'b>(&'b self, key: &Key) -> engine::Result<Box<Cursor + 'b>> {
-        let mut iter = RegionSnapshot::iter(self);
-        try!(iter.seek(key.encoded()));
-        Ok(box iter)
+    fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
+        Ok(box RegionSnapshot::iter(self))
     }
 }
 

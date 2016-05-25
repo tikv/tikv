@@ -71,15 +71,15 @@ pub trait Peekable {
 
 // TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
-    fn new_iterator(&self, start_key: &[u8]) -> DBIterator;
+    fn new_iterator(&self) -> DBIterator;
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let mut it = self.new_iterator(start_key);
-
+        let mut it = self.new_iterator();
+        it.seek(start_key.into());
         while it.valid() {
             let r = {
                 let key = it.key();
@@ -100,7 +100,9 @@ pub trait Iterable {
 
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        Ok(self.new_iterator(key).kv())
+        let mut iter = self.new_iterator();
+        iter.seek(key.into());
+        Ok(iter.kv())
     }
 }
 
@@ -112,8 +114,8 @@ impl Peekable for DB {
 }
 
 impl Iterable for DB {
-    fn new_iterator(&self, start_key: &[u8]) -> DBIterator {
-        self.iter(start_key.into())
+    fn new_iterator(&self) -> DBIterator {
+        self.iter()
     }
 }
 
@@ -125,8 +127,8 @@ impl<'a> Peekable for Snapshot<'a> {
 }
 
 impl<'a> Iterable for Snapshot<'a> {
-    fn new_iterator(&self, start_key: &[u8]) -> DBIterator {
-        self.iter(start_key.into())
+    fn new_iterator(&self) -> DBIterator {
+        self.iter()
     }
 }
 
