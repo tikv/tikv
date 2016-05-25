@@ -135,18 +135,20 @@ impl Runnable<Task> for Runner {
         let (snap, region_id) = res.unwrap();
         if let Err(e) = self.save_snapshot(&snap, region_id, "/tmp/") {
             error!("save snapshot file failed: {:?}!!!", e);
+            task.storage.wl().snap_state = SnapState::Failed;
+            return;
         }
         task.storage.wl().snap_state = SnapState::Snap(snap);
     }
 }
 
-struct CRCWriter {
+struct CRCWriter<T: Write> {
     digest: crc32::Digest,
-    writer: Box<Write>,
+    writer: T,
 }
 
-impl CRCWriter {
-    fn new(writer: Box<Write>) -> CRCWriter {
+impl<T: Write> CRCWriter<T> {
+    fn new(writer: T) -> CRCWriter<T> {
         CRCWriter {
             digest: crc32::Digest::new(crc32::IEEE),
             writer: writer,
@@ -157,7 +159,7 @@ impl CRCWriter {
     }
 }
 
-impl Write for CRCWriter {
+impl<T: Write> Write for CRCWriter<T> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.digest.write(buf);
         self.writer.write(buf)
