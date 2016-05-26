@@ -110,11 +110,17 @@ impl EndPointHost {
     }
 }
 
-pub struct RequestTask(Request, OnResponse);
+pub struct RequestTask {
+    req: Request,
+    on_resp: OnResponse,
+}
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
-        RequestTask(req, on_resp)
+        RequestTask {
+            req: req,
+            on_resp: on_resp,
+        }
     }
 }
 
@@ -122,9 +128,9 @@ impl Display for RequestTask {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f,
                "request [context {:?}, tp: {}, ranges: {:?}]",
-               self.0.get_context(),
-               self.0.get_tp(),
-               self.0.get_ranges())
+               self.req.get_context(),
+               self.req.get_tp(),
+               self.req.get_ranges())
     }
 }
 
@@ -134,7 +140,7 @@ impl BatchRunnable<RequestTask> for EndPointHost {
         let mut grouped_reqs = map![];
         for req in reqs.drain(..) {
             let key = {
-                let ctx = req.0.get_context();
+                let ctx = req.req.get_context();
                 (ctx.get_region_id(),
                  ctx.get_region_epoch().get_conf_ver(),
                  ctx.get_region_epoch().get_version(),
@@ -177,7 +183,7 @@ impl TiDbEndPoint {
 impl TiDbEndPoint {
     fn handle_requests(&self, reqs: Vec<RequestTask>) {
         let ts = Instant::now();
-        let snap = match self.engine.snapshot(reqs[0].0.get_context()) {
+        let snap = match self.engine.snapshot(reqs[0].req.get_context()) {
             Ok(s) => s,
             Err(e) => {
                 error!("failed to get snapshot: {:?}", e);
@@ -186,18 +192,18 @@ impl TiDbEndPoint {
                     let mut resp_msg = Message::new();
                     resp_msg.set_msg_type(MessageType::CopResp);
                     resp_msg.set_cop_resp(r);
-                    for RequestTask(_, on_resp) in reqs {
-                        on_resp.call_box((resp_msg.clone(),));
+                    for t in reqs {
+                        t.on_resp.call_box((resp_msg.clone(),));
                     }
                 });
                 return;
             }
         };
         debug!("[TIME_SNAPSHOT] {:?}", ts.elapsed());
-        for RequestTask(req, on_resp) in reqs {
+        for t in reqs {
             let timer = SlowTimer::new();
-            let tp = req.get_tp();
-            self.handle_request(snap.as_ref(), req, on_resp);
+            let tp = t.req.get_tp();
+            self.handle_request(snap.as_ref(), t.req, t.on_resp);
             slow_log!(timer, "request type {} takes {:?}", tp, timer.elapsed());
         }
     }

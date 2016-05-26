@@ -38,7 +38,7 @@ use raft::SnapshotStatus;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
-const DEFAULT_COPROCESSOR_CONCURRENCY: usize = 50;
+const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 
 pub fn create_event_loop<T, S>() -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
@@ -120,7 +120,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         let end_point = EndPointHost::new(self.store.engine());
-        box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_CONCURRENCY));
+        box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         try!(event_loop.run(self));
         Ok(())
     }
