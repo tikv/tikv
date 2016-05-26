@@ -251,7 +251,7 @@ pub fn duration_to_ms(d: Duration) -> u64 {
     let nanos = d.subsec_nanos() as u64;
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     let ms = d.as_secs().checked_mul(1000).unwrap();
-    ms.checked_add(nanos / 1_000_000).unwrap()
+    ms + (nanos / 1_000_000)
 }
 
 #[cfg(test)]
