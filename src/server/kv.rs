@@ -307,6 +307,10 @@ impl StoreHandler {
     pub fn engine(&self) -> Arc<Box<Engine>> {
         self.store.get_engine()
     }
+
+    pub fn stop(&mut self) -> Result<()> {
+        self.store.stop().map_err(From::from)
+    }
 }
 
 fn extract_region_error<T>(res: &StorageResult<T>) -> Option<RegionError> {
