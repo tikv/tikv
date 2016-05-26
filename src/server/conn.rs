@@ -15,15 +15,21 @@ use std::vec::Vec;
 use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
+use std::sync::{Arc, RwLock};
+use std::fmt::{self, Display, Formatter};
+use std::io::Write;
+use std::{io, fs};
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
-use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
+use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc, RingBuf};
 
 use kvproto::msgpb::{Message, MessageType};
 use super::{Result, ConnData};
 use super::server::Server;
 use util::codec::rpc;
+use util::HandyRwLock;
+use util::worker::{Runnable, Worker};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 
@@ -53,11 +59,45 @@ pub struct Conn {
     // message
     payload: Option<MutByteBuf>,
 
+    snapshot_receiver: Option<SnapshotReceiver>,
+
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
 
     on_close: Option<OnClose>,
     on_write_complete: Option<OnWriteComplete>,
+}
+
+impl Display for Task {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "Snapshot File Receiver Task")
+    }
+}
+
+struct Runner {
+    file: fs::File,
+}
+
+// TODO make it zero copy
+struct Task {
+    buf: ByteBuf,
+}
+
+impl Runnable<Task> for Runner {
+    fn run(&mut self, task: Task) {
+        let mut x = task.buf;
+        io::copy(&mut x, &mut self.file);
+    }
+}
+
+struct SnapshotReceiver {
+    worker: Worker<Task>,
+    buf: RingBuf,
+    more: bool,
+}
+
+fn remaining_mutbuf<T: MutBuf>(r: &T) -> usize {
+    r.remaining()
 }
 
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
@@ -98,6 +138,7 @@ impl Conn {
             payload: None,
             res: VecDeque::new(),
             last_msg_id: 0,
+            snapshot_receiver: None,
             store_id: store_id,
             on_write_complete: None,
             on_close: None,
@@ -149,6 +190,15 @@ impl Conn {
         let msg = msg_or_none.unwrap();
         match msg.get_msg_type() {
             MessageType::Snapshot => {
+                let mut worker = Worker::new("snapshot receiver".to_owned());
+                let runner = Runner { file: try!(fs::File::create("/tmp/test.tmp")) };
+                worker.start(runner);
+                print!("receive a snapshot connection\n");
+                self.snapshot_receiver = Some(SnapshotReceiver {
+                    buf: RingBuf::new(10 * (1 << 20)),
+                    worker: worker,
+                    more: false,
+                });
                 self.conn_type = ConnType::Snapshot;
                 self.read_snapshot(event_loop)
             }
@@ -169,8 +219,17 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        // TODO
-        unimplemented!()
+        if let Some(ref mut receiver) = self.snapshot_receiver {
+            try!(try_read_data(&mut self.sock, &mut receiver.buf));
+            if remaining_mutbuf(&receiver.buf) == 0 {
+                receiver.more = true;
+            }
+            print!("receive data...ringbuf: {:?}\n",
+                   remaining_mutbuf(&receiver.buf));
+            receiver.worker.schedule(Task { buf: ByteBuf::from_slice(receiver.buf.bytes()) });
+            receiver.buf.reset();
+        }
+        Ok(vec![])
     }
 
     fn read_one_message(&mut self) -> Result<Option<Message>> {
