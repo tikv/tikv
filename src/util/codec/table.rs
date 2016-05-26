@@ -19,12 +19,16 @@ use super::datum::DatumDecoder;
 use super::{Result, Datum};
 use util::escape;
 
+// handle or index id
 pub const ID_LEN: usize = 8;
-pub const PREFIX_LEN: usize = 1 + ID_LEN /*table_id*/ + 2;
+pub const PREFIX_LEN: usize = TABLE_PREFIX_LEN + ID_LEN /*table_id*/ + SEP_LEN;
 pub const RECORD_ROW_KEY_LEN: usize = PREFIX_LEN + ID_LEN;
 pub const TABLE_PREFIX: &'static [u8] = b"t";
 pub const RECORD_PREFIX_SEP: &'static [u8] = b"_r";
 pub const INDEX_PREFIX_SEP: &'static [u8] = b"_i";
+pub const SEP_LEN: usize = 2;
+pub const TABLE_PREFIX_LEN: usize = 1;
+
 
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
