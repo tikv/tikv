@@ -15,7 +15,6 @@ use rocksdb::DBCompressionType;
 
 pub fn get_compression_by_string(tp: &str) -> DBCompressionType {
     match &*tp.to_owned().to_lowercase() {
-        "no" => DBCompressionType::DBNo,
         "snappy" => DBCompressionType::DBSnappy,
         "zlib" => DBCompressionType::DBZlib,
         "bzip2" => DBCompressionType::DBBz2,
