@@ -52,7 +52,6 @@ type Key = Vec<u8>;
 const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
-    cluster_meta: metapb::Cluster,
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
@@ -91,7 +90,6 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 
 impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn new(event_loop: &mut EventLoop<Self>,
-               cluster_meta: metapb::Cluster,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
@@ -101,41 +99,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
-        let ident: StoreIdent = try!(load_store_ident(engine.as_ref()).and_then(|res| {
-            match res {
-                None => Err(box_err!("store must be bootstrapped first")),
-                Some(ident) => Ok(ident),
-            }
-        }));
-
-        if ident.get_cluster_id() != cluster_meta.get_id() {
-            return Err(box_err!("cluster id {} mismatches with ident {}",
-                                cluster_meta.get_id(),
-                                ident.get_cluster_id()));
-        }
-
-        if ident.get_store_id() != meta.get_id() {
-            return Err(box_err!("store id {} mismatches with ident {}",
-                                meta.get_id(),
-                                ident.get_store_id()));
-        }
-
         let sendch = SendCh::new(event_loop.channel());
 
         let peer_cache = HashMap::new();
 
         Ok(Store {
-            cluster_meta: cluster_meta,
             cfg: cfg,
             store: meta,
             engine: engine,
             sendch: sendch,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
-            split_check_worker: Worker::new("split check worker".to_owned()),
-            snap_worker: Worker::new("snapshot worker".to_owned()),
-            compact_worker: Worker::new("compact worker".to_owned()),
-            pd_worker: Worker::new("pd worker".to_owned()),
+            split_check_worker: Worker::new("split check worker"),
+            snap_worker: Worker::new("snapshot worker"),
+            compact_worker: Worker::new("compact worker"),
+            pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
             stopped: Arc::new(RwLock::new(false)),
             trans: trans,

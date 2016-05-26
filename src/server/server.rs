@@ -479,18 +479,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
     }
 
-    fn send_snapshot_file(&mut self,
-                          file_name: &str,
-                          sock_addr: SocketAddr) {
-        // let's keep things simple first.
-        let mut to = net::TcpStream::connect(&sock_addr).unwrap();
-        let mut msg = Message::new();
-        msg.set_msg_type(MessageType::Snapshot);
-        msg.write_to_writer(stream);
-        let mut from = fs::File::open(file_name).unwrap();
-        io::copy(to, from).unwrap();
-    }
-
     fn send_snapshot_sock(&mut self,
                           event_loop: &mut EventLoop<Self>,
                           store_id: u64,

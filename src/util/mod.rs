@@ -36,6 +36,7 @@ pub mod worker;
 pub mod codec;
 pub mod xeval;
 pub mod event;
+pub mod rocksdb_option;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {

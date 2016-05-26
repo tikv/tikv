@@ -165,12 +165,6 @@ impl Conn {
         }
     }
 
-    fn recv_snapshot_file(file_name: &str,
-                          from: TcpStream) {
-        let mut to = fs::File::open(file_name);
-        io::copy(to, from).unwrap();
-    }
-
     fn read_snapshot<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
         where T: RaftStoreRouter,
               S: StoreAddrResolver

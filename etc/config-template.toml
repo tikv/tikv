@@ -13,14 +13,12 @@ log-level = "info"
 [metric]
 # There are two type of statsd client implemented: `log` and `udp. The default statsd client is
 # `log` which will output to log.
-# log level: trace, debug, info, warn, error, off.
+# log level: trace, debug, info, warn, error.
 level = "info"
-# if log level is off then `udp` will be activated.
+# if host applied then `udp` will be activated.
 # remote statsd server address.
 host = ""
-# local statsd client address.
-addr = ""
-# metric prefix: trace, debug, info, warn, error, off.
+# metric prefix.
 prefix = "tikv"
 
 [raft]
@@ -28,3 +26,50 @@ prefix = "tikv"
 #cluster-id = 1
 # set pd address, host:port
 #pd = 
+
+# For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/options.h
+[rocksdb]
+# compression method (if any) is used to compress a block.
+#   no: kNoCompression
+#   snappy: kSnappyCompression
+#   zlib: kZlibCompression
+#   bzip2: kBZip2Compression
+#   lz4: kLZ4Compression
+#   lz4hc: kLZ4HCCompression
+compression = "lz4"
+
+# Amount of data to build up in memory (backed by an unsorted log
+# on disk) before converting to a sorted on-disk file.
+write-buffer-size = 67108864 # 64 * 1024 * 1024
+
+# The maximum number of write buffers that are built up in memory.
+max-write-buffer-number = 5
+
+# The minimum number of write buffers that will be merged together
+# before writing to storage.
+min-write-buffer-number-to-merge = 2
+
+# Maximum number of concurrent background compaction jobs, submitted to
+# the default LOW priority thread pool.
+max-background-compactions = 3
+
+# Control maximum total data size for a level.
+max-bytes-for-level-base = 67108864 # 64 * 1024 * 1024
+
+# Target file size for compaction.
+target-file-size-base = 67108864 # 64 * 1024 * 1024
+
+# If true, the database will be created if it is missing.
+create-if-missing = true
+
+# Soft limit on number of level-0 files. We start slowing down writes at this point.
+level0-slowdown-writes-trigger = 12
+
+# Maximum number of level-0 files.  We stop writes at this point.
+level0-stop-writes-trigger = 24
+
+# For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/table.h
+[rocksdb.block-based-table]
+# Approximate size of user data packed per block.  Note that the 
+# block size specified here corresponds to uncompressed data.
+block-size = 65536 # 64 * 1024

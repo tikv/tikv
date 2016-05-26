@@ -203,7 +203,6 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         info!("start raft store {} thread", store_id);
-        let meta = try!(self.pd_client.get_cluster_config());
 
         if self.store_handle.is_some() {
             return Err(box_err!("{} is already started", store_id));
@@ -212,7 +211,6 @@ impl<C> Node<C>
         let cfg = self.store_cfg.clone();
         let pd_client = self.pd_client.clone();
         let mut store = try!(Store::new(&mut event_loop,
-                                        meta,
                                         self.store.clone(),
                                         cfg,
                                         engine,

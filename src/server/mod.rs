@@ -34,6 +34,7 @@ pub mod coprocessor;
 pub mod transport;
 pub mod node;
 pub mod resolve;
+pub mod snapshot_receiver;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Result, Error};
