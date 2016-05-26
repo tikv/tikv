@@ -179,20 +179,24 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                               |v| v.as_integer());
     opts.set_write_buffer_size(write_buffer_size as u64);
 
-    let max_write_buffer_number = get_integer_value("",
-                                                    "rocksdb.max-write-buffer-number",
-                                                    matches,
-                                                    config,
-                                                    Some(5),
-                                                    |v| v.as_integer());
+    let max_write_buffer_number = {
+        get_integer_value("",
+                          "rocksdb.max-write-buffer-number",
+                          matches,
+                          config,
+                          Some(5),
+                          |v| v.as_integer())
+    };
     opts.set_max_write_buffer_number(max_write_buffer_number as i32);
 
-    let min_write_buffer_number_to_merge = get_integer_value("",
-                                                             "rocksdb.min-write-buffer-number-to-merge",
-                                                             matches,
-                                                             config,
-                                                             Some(2),
-                                                             |v| v.as_integer());
+    let min_write_buffer_number_to_merge = {
+        get_integer_value("",
+                          "rocksdb.min-write-buffer-number-to-merge",
+                          matches,
+                          config,
+                          Some(2),
+                          |v| v.as_integer())
+    };
     opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
 
     let max_background_compactions = get_integer_value("",
@@ -225,12 +229,14 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
         .unwrap_or(true);
     opts.create_if_missing(create_if_missing);
 
-    let level_zero_slowdown_writes_trigger = get_integer_value("",
-                                                               "rocksdb.level0-slowdown-writes-trigger",
-                                                               matches,
-                                                               config,
-                                                               Some(12),
-                                                               |v| v.as_integer());
+    let level_zero_slowdown_writes_trigger = {
+        get_integer_value("",
+                          "rocksdb.level0-slowdown-writes-trigger",
+                          matches,
+                          config,
+                          Some(12),
+                          |v| v.as_integer())
+    };
     opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
 
     let level_zero_stop_writes_trigger = get_integer_value("",
