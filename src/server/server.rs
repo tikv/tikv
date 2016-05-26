@@ -28,15 +28,17 @@ use super::{Msg, SendCh, ConnData};
 use super::conn::{Conn, OnWriteComplete};
 use super::{Result, OnResponse};
 use util::HandyRwLock;
+use util::worker::Worker;
 use storage::Storage;
 use super::kv::StoreHandler;
-use super::coprocessor::EndPointHost;
+use super::coprocessor::{RequestTask, EndPointHost};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use raft::SnapshotStatus;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
+const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 
 pub fn create_event_loop<T, S>() -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
@@ -74,7 +76,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     raft_router: Arc<RwLock<T>>,
 
     store: StoreHandler,
-    end_point: EndPointHost,
+    end_point_worker: Worker<RequestTask>,
 
     resolver: S,
 }
@@ -97,9 +99,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  PollOpt::edge()));
 
         let sendch = SendCh::new(event_loop.channel());
-        let engine = storage.get_engine();
         let store_handler = StoreHandler::new(storage);
-        let end_point = EndPointHost::new(engine);
+        let end_point_worker = Worker::new("end-point-worker");
 
         let svr = Server {
             listener: listener,
@@ -110,7 +111,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store_resolving: HashSet::new(),
             raft_router: raft_router,
             store: store_handler,
-            end_point: end_point,
+            end_point_worker: end_point_worker,
             resolver: resolver,
         };
 
@@ -118,6 +119,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
+        let end_point = EndPointHost::new(self.store.engine());
+        box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         try!(event_loop.run(self));
         Ok(())
     }
@@ -238,7 +241,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
             MessageType::CopReq => {
                 let on_resp = self.make_response_cb(token, msg_id);
-                self.end_point.on_request(msg.take_cop_req(), on_resp);
+                box_try!(self.end_point_worker
+                    .schedule(RequestTask::new(msg.take_cop_req(), on_resp)));
                 Ok(())
             }
             _ => {
@@ -566,13 +570,15 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         event_loop.shutdown();
     }
 
-    fn tick(&mut self, _: &mut EventLoop<Self>) {
+    fn tick(&mut self, el: &mut EventLoop<Self>) {
         // tick is called in the end of the loop, so if we notify to quit,
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
-        // if !el.is_running() {
-        // }
-
+        if !el.is_running() {
+            if let Err(e) = self.end_point_worker.stop() {
+                error!("failed to stop end point: {:?}", e);
+            }
+        }
     }
 }
 

@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::boxed::Box;
+use std::sync::Arc;
 
 use protobuf::RepeatedField;
 
@@ -21,7 +22,7 @@ use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, Cmd
                        MessageType, KvPair as RpcKvPair, KeyError, LockInfo, Op};
 use kvproto::msgpb;
 use kvproto::errorpb::Error as RegionError;
-use storage::{Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
+use storage::{Engine, Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
 use storage::Error as StorageError;
 use storage::txn::Error as TxnError;
 use storage::mvcc::Error as MvccError;
@@ -301,6 +302,10 @@ impl StoreHandler {
         }
 
         Ok(())
+    }
+
+    pub fn engine(&self) -> Arc<Box<Engine>> {
+        self.store.get_engine()
     }
 }
 
