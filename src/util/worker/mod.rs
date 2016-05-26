@@ -115,18 +115,14 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
             Ok(Some(t)) => buffer.push(t),
             _ => return,
         }
-        if buffer.len() < batch_size {
-            while let Ok(opt) = rx.try_recv() {
-                match opt {
-                    None => {
-                        keep_going = false;
-                        break;
-                    }
-                    Some(t) => buffer.push(t),
-                }
-                if buffer.len() == batch_size {
+        while buffer.len() < batch_size {
+            match rx.try_recv() {
+                Ok(None) => {
+                    keep_going = false;
                     break;
                 }
+                Ok(Some(t)) => buffer.push(t),
+                _ => break,
             }
         }
         counter.fetch_sub(buffer.len(), Ordering::SeqCst);
@@ -152,10 +148,9 @@ impl<T: Display + Send + 'static> Worker<T> {
         self.start_batch(runner, 1)
     }
 
-    pub fn start_batch<R: BatchRunnable<T> + Send + 'static>(&mut self,
-                                                             runner: R,
-                                                             batch_size: usize)
-                                                             -> Result<()> {
+    pub fn start_batch<R>(&mut self, runner: R, batch_size: usize) -> Result<()>
+        where R: BatchRunnable<T> + Send + 'static
+    {
         info!("starting working thread: {}", self.name);
         if self.receiver.is_none() {
             warn!("worker {} has been started.", self.name);
