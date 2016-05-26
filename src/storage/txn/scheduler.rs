@@ -68,6 +68,14 @@ impl Scheduler {
                     .commit(ctx, keys, lock_ts, commit_ts)
                     .map_err(::storage::Error::from));
             }
+            Command::FastCommit { ctx, mutations, start_ts, commit_ts, callback } => {
+                callback(match self.store.fast_commit(ctx, mutations, start_ts, commit_ts) {
+                    Ok(mut results) => {
+                        Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
+                    }
+                    Err(e) => Err(e.into()),
+                });
+            }
             Command::CommitThenGet { ctx, key, lock_ts, commit_ts, get_ts, callback } => {
                 callback(self.store
                     .commit_then_get(ctx, key, lock_ts, commit_ts, get_ts)

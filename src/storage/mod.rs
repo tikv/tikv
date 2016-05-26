@@ -89,6 +89,13 @@ pub enum Command {
         commit_ts: u64,
         callback: Callback<()>,
     },
+    FastCommit {
+        ctx: Context,
+        mutations: Vec<Mutation>,
+        start_ts: u64,
+        commit_ts: u64,
+        callback: Callback<Vec<Result<()>>>,
+    },
     CommitThenGet {
         ctx: Context,
         key: Key,
@@ -145,6 +152,12 @@ impl fmt::Debug for Command {
                        keys.len(),
                        lock_ts,
                        commit_ts)
+            }
+            Command::FastCommit { ref mutations, start_ts, .. } => {
+                write!(f,
+                       "kv::command::fast_commit mutations({}) @ {}",
+                       mutations.len(),
+                       start_ts)
             }
             Command::CommitThenGet { ref key, lock_ts, commit_ts, get_ts, .. } => {
                 write!(f,
@@ -301,6 +314,24 @@ impl Storage {
             ctx: ctx,
             keys: keys,
             lock_ts: lock_ts,
+            commit_ts: commit_ts,
+            callback: callback,
+        };
+        try!(self.tx.send(Message::Command(cmd)));
+        Ok(())
+    }
+
+    pub fn async_fast_commit(&self,
+                             ctx: Context,
+                             mutations: Vec<Mutation>,
+                             start_ts: u64,
+                             commit_ts: u64,
+                             callback: Callback<Vec<Result<()>>>)
+                             -> Result<()> {
+        let cmd = Command::FastCommit {
+            ctx: ctx,
+            mutations: mutations,
+            start_ts: start_ts,
             commit_ts: commit_ts,
             callback: callback,
         };

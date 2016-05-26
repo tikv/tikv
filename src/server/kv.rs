@@ -17,8 +17,8 @@ use protobuf::RepeatedField;
 
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
                        CmdBatchRollbackResponse, CmdCleanupResponse, CmdRollbackThenGetResponse,
-                       CmdCommitThenGetResponse, CmdBatchGetResponse, Request, Response,
-                       MessageType, KvPair as RpcKvPair, KeyError, LockInfo, Op};
+                       CmdCommitThenGetResponse, CmdBatchGetResponse, CmdFastCommitResponse,
+                       Request, Response, MessageType, KvPair as RpcKvPair, KeyError, LockInfo, Op};
 use kvproto::msgpb;
 use kvproto::errorpb::Error as RegionError;
 use storage::{Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
@@ -109,6 +109,31 @@ impl StoreHandler {
                           req.get_start_version(),
                           req.get_commit_version(),
                           cb)
+            .map_err(Error::Storage)
+    }
+
+    fn on_fast_commit(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
+        if !msg.has_cmd_fast_commit_req() {
+            return Err(box_err!("msg doesn't contain a CmdFastCommitRequets"));
+        }
+        let mut req = msg.take_cmd_fast_commit_req();
+        let mutations = req.take_mutations()
+            .into_iter()
+            .map(|mut x| {
+                match x.get_op() {
+                    Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
+                    Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
+                    Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+                }
+            })
+            .collect();
+        let cb = self.make_cb(StoreHandler::cmd_fast_commit_done, on_resp);
+        self.store
+            .async_fast_commit(msg.take_context(),
+                               mutations,
+                               req.get_start_version(),
+                               req.get_commit_version(),
+                               cb)
             .map_err(Error::Storage)
     }
 
@@ -240,6 +265,13 @@ impl StoreHandler {
         resp.set_cmd_commit_resp(cmd_commit_resp);
     }
 
+    fn cmd_fast_commit_done(results: StorageResult<Vec<StorageResult<()>>>, resp: &mut Response) {
+        resp.set_field_type(MessageType::CmdFastCommit);
+        let mut fast_commit_resp = CmdFastCommitResponse::new();
+        fast_commit_resp.set_errors(RepeatedField::from_vec(extract_key_errors(results)));
+        resp.set_cmd_fast_commit_resp(fast_commit_resp);
+    }
+
     fn cmd_batch_rollback_done(r: StorageResult<()>, resp: &mut Response) {
         resp.set_field_type(MessageType::CmdBatchRollback);
         let mut cmd_batch_rollback_resp = CmdBatchRollbackResponse::new();
@@ -290,6 +322,7 @@ impl StoreHandler {
             MessageType::CmdScan => self.on_scan(req, on_resp),
             MessageType::CmdPrewrite => self.on_prewrite(req, on_resp),
             MessageType::CmdCommit => self.on_commit(req, on_resp),
+            MessageType::CmdFastCommit => self.on_fast_commit(req, on_resp),
             MessageType::CmdCleanup => self.on_cleanup(req, on_resp),
             MessageType::CmdCommitThenGet => self.on_commit_then_get(req, on_resp),
             MessageType::CmdRollbackThenGet => self.on_rollback_then_get(req, on_resp),
@@ -526,6 +559,23 @@ mod tests {
         assert_eq!(MessageType::CmdCommit, resp.get_field_type());
         let cmd = resp.get_cmd_commit_resp();
         assert!(cmd.has_error());
+    }
+
+    #[test]
+    fn test_fast_commit_done_ok() {
+        let resp = build_resp(Ok(Vec::new()), StoreHandler::cmd_fast_commit_done);
+        assert_eq!(MessageType::CmdFastCommit, resp.get_field_type());
+        let cmd = resp.get_cmd_fast_commit_resp();
+        assert_eq!(cmd.get_errors().len(), 0);
+    }
+
+    #[test]
+    fn test_fast_commit_done_err() {
+        let resp = build_resp(Ok(vec![Err(box_err!("error"))]),
+                              StoreHandler::cmd_fast_commit_done);
+        assert_eq!(MessageType::CmdFastCommit, resp.get_field_type());
+        let cmd = resp.get_cmd_fast_commit_resp();
+        assert_eq!(cmd.get_errors().len(), 1);
     }
 
     #[test]
