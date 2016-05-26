@@ -16,7 +16,7 @@ use std::option::Option;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
-use std::net::{self, SocketAddr};
+use std::net::SocketAddr;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
@@ -138,6 +138,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let conn = self.conns.remove(&token);
         match conn {
             Some(mut conn) => {
+                // TODO release according to conn_type
+                // snapshot connection should stop it's worker
                 debug!("remove connection token {:?}", token);
                 // if connected to remote store, remove this too.
                 if let Some(store_id) = conn.store_id {

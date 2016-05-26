@@ -15,23 +15,20 @@ use std::vec::Vec;
 use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
-use std::sync::{Arc, RwLock};
-use std::fmt::{self, Display, Formatter};
-use std::io::Write;
-use std::{io, fs};
+use std::fs;
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
-use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc, RingBuf};
+use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 
 use kvproto::msgpb::{Message, MessageType};
 use super::{Result, ConnData};
 use super::server::Server;
 use util::codec::rpc;
-use util::HandyRwLock;
-use util::worker::{Runnable, Worker};
+use util::worker::Worker;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
+use super::snapshot_receiver::{SnapshotReceiver, Task, Runner};
 
 pub type OnClose = Box<FnBox() + Send>;
 pub type OnWriteComplete = Box<FnBox() + Send>;
@@ -68,38 +65,11 @@ pub struct Conn {
     on_write_complete: Option<OnWriteComplete>,
 }
 
-impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Snapshot File Receiver Task")
-    }
-}
-
-struct Runner {
-    file: fs::File,
-}
-
-// TODO make it zero copy
-struct Task {
-    buf: ByteBuf,
-}
-
-impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
-        let mut x = task.buf;
-        io::copy(&mut x, &mut self.file);
-    }
-}
-
-struct SnapshotReceiver {
-    worker: Worker<Task>,
-    buf: RingBuf,
-    more: bool,
-}
-
 fn remaining_mutbuf<T: MutBuf>(r: &T) -> usize {
     r.remaining()
 }
 
+// TODO: this API is disgusting, it's semantic vagueness.
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
     if buf.remaining() == 0 {
         return Ok(());
@@ -110,6 +80,7 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
         // header is not full read, we will try read more.
         if let Some(n) = try!(r.try_read(buf.mut_bytes())) {
             if n == 0 {
+                print!("remote close the conn\n");
                 // 0 means remote has closed the socket.
                 return Err(box_err!("remote has closed the connection"));
             }
@@ -192,10 +163,10 @@ impl Conn {
             MessageType::Snapshot => {
                 let mut worker = Worker::new("snapshot receiver".to_owned());
                 let runner = Runner { file: try!(fs::File::create("/tmp/test.tmp")) };
-                worker.start(runner);
+                try!(worker.start(runner));
                 print!("receive a snapshot connection\n");
                 self.snapshot_receiver = Some(SnapshotReceiver {
-                    buf: RingBuf::new(10 * (1 << 20)),
+                    buf: create_mem_buf(10 * (1 << 20)),
                     worker: worker,
                     more: false,
                 });
@@ -220,14 +191,46 @@ impl Conn {
               S: StoreAddrResolver
     {
         if let Some(ref mut receiver) = self.snapshot_receiver {
-            try!(try_read_data(&mut self.sock, &mut receiver.buf));
-            if remaining_mutbuf(&receiver.buf) == 0 {
-                receiver.more = true;
+            let mut finish = false;
+            loop {
+                let closed = try_read_data(&mut self.sock, &mut receiver.buf);
+                let remaining = remaining_mutbuf(&receiver.buf);
+                if remaining == 0{
+                    receiver.more = true;
+                    finish = true;
+                }
+
+                // TODO should distinguish between close and error
+                if let Err(e) = closed {
+                    let cb = box move |_| {
+                        print!("!!!!!!!!!!connection closed!! now send callback\n");
+                        // if let Err(e) = ch.send(Msg::ResolveResult {
+                        //     store_id: store_id,
+                        //     sock_addr: r,
+                        //     data: data,
+                        // }) {
+                        //     error!("send store sock msg err {:?}", e);
+                        // }
+                    };
+                    print!("close connection should go here\n");
+                    try!(receiver.worker.schedule(Task::new(receiver.buf.bytes(), cb)));
+                    return Err(e);
+                }
+
+                if remaining == receiver.buf.capacity() {
+                    print!("no more available data to be read?\n");
+                    break;
+                }
+
+                print!("receive data...ringbuf: {:?}\n",
+                       remaining_mutbuf(&receiver.buf));
+                try!(receiver.worker.schedule(Task::new(receiver.buf.bytes(), box move |_| {})));
+                receiver.buf.clear();
+
+                if finish {
+                    break;
+                }
             }
-            print!("receive data...ringbuf: {:?}\n",
-                   remaining_mutbuf(&receiver.buf));
-            receiver.worker.schedule(Task { buf: ByteBuf::from_slice(receiver.buf.bytes()) });
-            receiver.buf.reset();
         }
         Ok(vec![])
     }
