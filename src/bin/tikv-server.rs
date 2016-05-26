@@ -133,8 +133,7 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
             error!("{}", r);
         }
     } else {
-        let sink = NopMetricSink;
-        let client = StatsdClient::from_sink(&prefix, sink);
+        let client = StatsdClient::from_sink(&prefix, NopMetricSink);
 
         if let Err(r) = metric::set_metric_client(Box::new(client)) {
             error!("{}", r);
