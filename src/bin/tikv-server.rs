@@ -33,7 +33,7 @@ use std::net::UdpSocket;
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
-use cadence::{StatsdClient, LoggingMetricSink, UdpMetricSink};
+use cadence::{StatsdClient, NopMetricSink, UdpMetricSink};
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
 use tikv::util::{self, logger, panic_hook, metric};
@@ -111,12 +111,6 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
 }
 
 fn initial_metric(matches: &Matches, config: &toml::Value) {
-    let level = get_string_value("M",
-                                 "metric.level",
-                                 &matches,
-                                 &config,
-                                 Some("info".to_owned()),
-                                 |v| v.as_str().map(|s| s.to_owned()));
     let host = get_string_value("metric-host",
                                 "metric.host",
                                 &matches,
@@ -139,9 +133,7 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
             error!("{}", r);
         }
     } else {
-        let sink = LoggingMetricSink::new(logger::get_level_by_string(&level)
-            .to_log_level()
-            .unwrap());
+        let sink = NopMetricSink;
         let client = StatsdClient::from_sink(&prefix, sink);
 
         if let Err(r) = metric::set_metric_client(Box::new(client)) {
