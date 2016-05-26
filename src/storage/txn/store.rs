@@ -36,7 +36,7 @@ impl TxnStore {
 
     pub fn get(&self, ctx: Context, key: &Key, start_ts: u64) -> Result<Option<Value>> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
-        let snap_store = SnapshotStore::new(snapshot, start_ts);
+        let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
         snap_store.get(key)
     }
 
@@ -46,7 +46,7 @@ impl TxnStore {
                      start_ts: u64)
                      -> Result<Vec<Result<Option<Value>>>> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
-        let snap_store = SnapshotStore::new(snapshot, start_ts);
+        let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
         snap_store.batch_get(keys)
     }
 
@@ -57,7 +57,7 @@ impl TxnStore {
                 start_ts: u64)
                 -> Result<Vec<Result<KvPair>>> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
-        let snap_store = SnapshotStore::new(snapshot, start_ts);
+        let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
         let mut scanner = try!(snap_store.scanner());
         scanner.scan(key, limit)
     }
@@ -69,7 +69,7 @@ impl TxnStore {
                         start_ts: u64)
                         -> Result<Vec<Result<KvPair>>> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
-        let snap_store = SnapshotStore::new(snapshot, start_ts);
+        let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
         let mut scanner = try!(snap_store.scanner());
         scanner.reverse_scan(key, limit)
     }
@@ -180,12 +180,12 @@ impl TxnStore {
 }
 
 pub struct SnapshotStore<'a> {
-    snapshot: Box<Snapshot + 'a>,
+    snapshot: &'a Snapshot,
     start_ts: u64,
 }
 
 impl<'a> SnapshotStore<'a> {
-    pub fn new(snapshot: Box<Snapshot + 'a>, start_ts: u64) -> SnapshotStore {
+    pub fn new(snapshot: &'a Snapshot, start_ts: u64) -> SnapshotStore {
         SnapshotStore {
             snapshot: snapshot,
             start_ts: start_ts,
@@ -193,12 +193,12 @@ impl<'a> SnapshotStore<'a> {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
+        let txn = MvccSnapshot::new(self.snapshot, self.start_ts);
         Ok(try!(txn.get(key)))
     }
 
     pub fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
-        let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
+        let txn = MvccSnapshot::new(self.snapshot, self.start_ts);
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
             results.push(txn.get(k).map_err(Error::from));
@@ -208,7 +208,7 @@ impl<'a> SnapshotStore<'a> {
 
     pub fn scanner(&self) -> Result<StoreScanner> {
         let cursor = try!(self.snapshot.iter());
-        let txn = MvccSnapshot::new(self.snapshot.as_ref(), self.start_ts);
+        let txn = MvccSnapshot::new(self.snapshot, self.start_ts);
         Ok(StoreScanner {
             cursor: cursor,
             txn: txn,
