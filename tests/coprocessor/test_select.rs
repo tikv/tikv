@@ -100,9 +100,9 @@ impl Store {
     }
 }
 
-fn gen_values(h: i64, tbl: &TableInfo) -> Vec<Datum> {
-    let mut values = Vec::with_capacity(tbl.c_types.len());
-    for &tp in &tbl.c_types {
+fn gen_values(h: i64, ti: &TableInfo) -> Vec<Datum> {
+    let mut values = Vec::with_capacity(ti.c_types.len());
+    for &tp in &ti.c_types {
         match tp {
             TYPE_LONG => values.push(Datum::I64(h)),
             TYPE_VAR_CHAR => values.push(Datum::Bytes(format!("varchar:{}", h).into_bytes())),
@@ -118,34 +118,34 @@ fn encode_col_kv(t_id: i64, h: i64, c_id: i64, v: &Datum) -> (Vec<u8>, Vec<u8>) 
     (key, val)
 }
 
-fn get_row(h: i64, tbl: &TableInfo) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let col_values = gen_values(h, tbl);
+fn get_row(h: i64, ti: &TableInfo) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let col_values = gen_values(h, ti);
     let mut kvs = vec![];
-    for (v, &id) in col_values.iter().zip(&tbl.c_ids) {
-        let (k, v) = encode_col_kv(tbl.t_id, h, id, v);
+    for (v, &id) in col_values.iter().zip(&ti.c_ids) {
+        let (k, v) = encode_col_kv(ti.t_id, h, id, v);
         kvs.push((k, v));
     }
-    for (&off, &i_id) in tbl.idx_off.iter().zip(&tbl.i_ids) {
+    for (&off, &i_id) in ti.idx_off.iter().zip(&ti.i_ids) {
         let v = col_values[off as usize].clone();
 
         let encoded = datum::encode_key(&[v, Datum::I64(h)]).unwrap();
-        let idx_key = table::encode_index_seek_key(tbl.t_id, i_id, &encoded);
+        let idx_key = table::encode_index_seek_key(ti.t_id, i_id, &encoded);
         kvs.push((idx_key, vec![0]));
     }
     kvs
 }
 
-fn prepare_table_data(store: &mut Store, tbl: &TableInfo, count: i64) {
+fn prepare_table_data(store: &mut Store, ti: &TableInfo, count: i64) {
     store.begin();
     for i in 1..count + 1 {
         let mut mutations = vec![];
 
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(i).unwrap();
-        let row_key = table::encode_row_key(tbl.t_id, &buf);
+        let row_key = table::encode_row_key(ti.t_id, &buf);
 
         mutations.push((row_key, vec![]));
-        mutations.extend(get_row(i, tbl));
+        mutations.extend(get_row(i, ti));
         store.put(mutations);
     }
     store.commit();
@@ -169,12 +169,12 @@ fn build_basic_sel(store: &mut Store, limit: Option<i64>, desc: Option<bool>) ->
 }
 
 fn prepare_sel(store: &mut Store,
-               tbl: &TableInfo,
+               ti: &TableInfo,
                limit: Option<i64>,
                desc: Option<bool>)
                -> Request {
     let mut sel = build_basic_sel(store, limit, desc);
-    sel.set_table_info(tbl.as_pb_table_info());
+    sel.set_table_info(ti.as_pb_table_info());
 
     let mut req = Request::new();
     req.set_tp(REQ_TYPE_SELECT);
@@ -184,11 +184,11 @@ fn prepare_sel(store: &mut Store,
 
     let mut buf = Vec::with_capacity(8);
     buf.encode_i64(i64::MIN).unwrap();
-    range.set_start(table::encode_row_key(tbl.t_id, &buf));
+    range.set_start(table::encode_row_key(ti.t_id, &buf));
 
     buf.clear();
     buf.encode_i64(i64::MAX).unwrap();
-    range.set_end(table::encode_row_key(tbl.t_id, &buf));
+    range.set_end(table::encode_row_key(ti.t_id, &buf));
     req.set_ranges(RepeatedField::from_vec(vec![range]));
     req
 }
@@ -196,26 +196,26 @@ fn prepare_sel(store: &mut Store,
 fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
     let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap());
     let mut store = Store::new(engine.clone());
-    let tbl = TableInfo {
+    let ti = TableInfo {
         t_id: 1,
         c_types: vec![TYPE_VAR_CHAR, TYPE_LONG],
         c_ids: vec![3, 4],
         idx_off: vec![0],
         i_ids: vec![5],
     };
-    prepare_table_data(&mut store, &tbl, count);
+    prepare_table_data(&mut store, &ti, count);
 
     let end_point = EndPointHost::new(engine);
     let mut worker = Worker::new("test select worker");
     worker.start_batch(end_point, 5).unwrap();
-    (store, worker, tbl)
+    (store, worker, ti)
 }
 
 #[test]
 fn test_select() {
     let count = 10;
-    let (mut store, mut end_point, tbl) = initial_data(count);
-    let req = prepare_sel(&mut store, &tbl, None, None);
+    let (mut store, mut end_point, ti) = initial_data(count);
+    let req = prepare_sel(&mut store, &ti, None, None);
 
     let resp = handle_select(&end_point, req);
 
@@ -223,7 +223,7 @@ fn test_select() {
     for (i, row) in resp.get_rows().iter().enumerate() {
         let handle = i as i64 + 1;
         let mut expected_datum = vec![Datum::I64(handle)];
-        expected_datum.extend(gen_values(handle, &tbl));
+        expected_datum.extend(gen_values(handle, &ti));
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -234,8 +234,8 @@ fn test_select() {
 #[test]
 fn test_limit() {
     let count = 10;
-    let (mut store, mut end_point, tbl) = initial_data(count);
-    let req = prepare_sel(&mut store, &tbl, Some(5), None);
+    let (mut store, mut end_point, ti) = initial_data(count);
+    let req = prepare_sel(&mut store, &ti, Some(5), None);
 
     let resp = handle_select(&end_point, req);
 
@@ -244,7 +244,7 @@ fn test_limit() {
     for (i, row) in resp.get_rows().iter().enumerate() {
         let handle = i as i64 + 1;
         let mut expected_datum = vec![Datum::I64(handle)];
-        expected_datum.extend(gen_values(handle, &tbl));
+        expected_datum.extend(gen_values(handle, &ti));
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -255,8 +255,8 @@ fn test_limit() {
 #[test]
 fn test_reverse() {
     let count = 10;
-    let (mut store, mut end_point, tbl) = initial_data(count);
-    let req = prepare_sel(&mut store, &tbl, Some(5), Some(true));
+    let (mut store, mut end_point, ti) = initial_data(count);
+    let req = prepare_sel(&mut store, &ti, Some(5), Some(true));
 
     let resp = handle_select(&end_point, req);
 
@@ -265,7 +265,7 @@ fn test_reverse() {
     for (i, row) in resp.get_rows().iter().enumerate() {
         let handle = 10 - i as i64;
         let mut expected_datum = vec![Datum::I64(handle)];
-        expected_datum.extend(gen_values(handle, &tbl));
+        expected_datum.extend(gen_values(handle, &ti));
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -274,12 +274,12 @@ fn test_reverse() {
 }
 
 fn prepare_idx(store: &mut Store,
-               tbl: &TableInfo,
+               ti: &TableInfo,
                limit: Option<i64>,
                desc: Option<bool>)
                -> Request {
     let mut sel = build_basic_sel(store, limit, desc);
-    sel.set_index_info(tbl.as_pb_index_info(0));
+    sel.set_index_info(ti.as_pb_index_info(0));
 
     let mut req = Request::new();
     req.set_tp(REQ_TYPE_INDEX);
@@ -287,8 +287,8 @@ fn prepare_idx(store: &mut Store,
 
     let mut range = KeyRange::new();
 
-    range.set_start(table::encode_index_seek_key(tbl.t_id, tbl.i_ids[0], &[0]));
-    range.set_end(table::encode_index_seek_key(tbl.t_id, tbl.i_ids[0], &[255]));
+    range.set_start(table::encode_index_seek_key(ti.t_id, ti.i_ids[0], &[0]));
+    range.set_end(table::encode_index_seek_key(ti.t_id, ti.i_ids[0], &[255]));
 
     req.set_ranges(RepeatedField::from_vec(vec![range]));
     req
@@ -313,8 +313,8 @@ fn handle_select(end_point: &Worker<RequestTask>, req: Request) -> SelectRespons
 #[test]
 fn test_index() {
     let count = 10;
-    let (mut store, mut end_point, tbl) = initial_data(count);
-    let req = prepare_idx(&mut store, &tbl, None, None);
+    let (mut store, mut end_point, ti) = initial_data(count);
+    let req = prepare_idx(&mut store, &ti, None, None);
 
     let resp = handle_select(&end_point, req);
 
@@ -339,8 +339,8 @@ fn test_index() {
 #[test]
 fn test_index_reverse_limit() {
     let count = 10;
-    let (mut store, mut end_point, tbl) = initial_data(count);
-    let req = prepare_idx(&mut store, &tbl, Some(5), Some(true));
+    let (mut store, mut end_point, ti) = initial_data(count);
+    let req = prepare_idx(&mut store, &ti, Some(5), Some(true));
 
     let resp = handle_select(&end_point, req);
 
