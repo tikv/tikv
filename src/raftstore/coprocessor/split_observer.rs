@@ -14,7 +14,6 @@
 use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
 use util::codec::table;
 use util::codec::bytes::{encode_bytes, BytesDecoder};
-use util::escape;
 
 use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
                           AdminCmdType};
@@ -114,8 +113,6 @@ mod test {
     use raftstore::coprocessor::ObserverContext;
     use raftstore::coprocessor::RegionObserver;
     use kvproto::metapb::Region;
-    use rocksdb::Writable;
-    use raftstore::store::keys::*;
     use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
     use util::codec::{datum, table, Datum};
     use util::codec::number::NumberEncoder;
@@ -158,24 +155,23 @@ mod test {
 
     #[test]
     fn test_forget_encode() {
-        let region_start_key = vec![128, 0, 0, 0, 0, 0, 1, 255, 18, 95, 114, 128, 0, 0, 0, 0, 255,
-                                    0, 16, 154, 0, 0, 0, 0, 0, 250];
-        let key = vec![128, 0, 0, 0, 0, 0, 1, 255, 18, 95, 114, 128, 0, 0, 0, 0, 255, 0, 36, 130,
-                       0, 0, 0, 0, 0, 250];
+        let region_start_key = new_row_key(256, 1, 0, 0);
+        let key = new_row_key(256, 2, 1, 0);
         let path = TempDir::new("test-split").unwrap();
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        engine.put(&data_key(&key), b"x").expect("");
         let mut r = Region::new();
         r.set_id(10);
-        r.set_start_key(data_key(&region_start_key));
+        r.set_start_key(region_start_key);
 
         let ps = PeerStorage::new(Arc::new(engine), &r).unwrap();
         let mut ctx = ObserverContext::new(&ps);
         let mut observer = SplitObserver;
 
-        let mut req = new_split_request(&data_key(&key));
-        assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
-        assert_eq!(req.get_split().get_split_key(), &*data_key(&key));
+        let mut req = new_split_request(&key);
+        observer.pre_admin(&mut ctx, &mut req).unwrap();
+        let expect_key = new_row_key(256, 2, 0, 0);
+        let len = expect_key.len();
+        assert_eq!(req.get_split().get_split_key(), &expect_key[..len - 8]);
     }
 
     #[test]
