@@ -21,8 +21,11 @@ use util::worker::{Runnable, Worker};
 use bytes::{ByteBuf, MutByteBuf};
 use byteorder::{ByteOrder, LittleEndian};
 use protobuf::Message;
+use raftstore::store::worker::snap::snapshot_file_path;
 
 use kvproto::raftpb::Snapshot;
+use kvproto::msgpb::SnapshotFile;
+use kvproto::raft_serverpb::RaftMessage;
 
 pub type Callback = Box<FnBox(Result<u64>) + Send>;
 
@@ -52,13 +55,18 @@ impl Display for Task {
 pub struct Runner {
     file_name: String,
     pub file: fs::File,
+    msg: RaftMessage,
+    file_info: SnapshotFile,
 }
 
 impl Runner {
-    pub fn new(file_name: &str) -> Runner {
+    pub fn new(path: &str, file_info: SnapshotFile, msg: RaftMessage) -> Runner {
+        let file_name = snapshot_file_path(path, 0, &file_info);
         Runner {
             file_name: file_name.to_owned(),
             file: fs::File::create(file_name).unwrap(),
+            msg: msg,
+            file_info: file_info,
         }
     }
 }
@@ -71,7 +79,7 @@ impl Runnable<Task> for Runner {
             // self.file.flush();
 
             // // TODO change here when region size goes to 1G
-            // let snapshot = load_snapshot("/tmp/1000_5_5.tmp");
+            // let snapshot = load_snapshot(&self.file_name, &self.file_info);
             // ch.send(Msg::Snapshot{snapshot});
         }
         task.cb.call_box((resp.map_err(Error::Io),))

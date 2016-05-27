@@ -157,11 +157,12 @@ impl Conn {
             return Ok(vec![]);
         }
 
-        let msg = msg_or_none.unwrap();
+        let mut msg = msg_or_none.unwrap();
         match msg.get_msg_type() {
             MessageType::Snapshot => {
                 let mut worker = Worker::new("snapshot receiver".to_owned());
-                let runner = Runner::new("/tmp/test.tmp");
+                // TODO we need store id here!!
+                let runner = Runner::new("/tmp/", msg.take_snapshot(), msg.take_raft());
                 try!(worker.start(runner));
                 print!("receive a snapshot connection\n");
                 self.snapshot_receiver = Some(SnapshotReceiver {

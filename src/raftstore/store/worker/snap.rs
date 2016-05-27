@@ -183,10 +183,8 @@ impl<T: Write> Write for CRCWriter<T> {
 }
 
 pub fn snapshot_file_path(dir: &str, store_id: u64, file: &SnapshotFile) -> String {
-    // let file_name: String = format!("{}{}/{}_{}_{}",
-    let file_name: String = format!("{}{}/{}_{}_{}",
+    let file_name: String = format!("{}{}_{}_{}",
                             dir,
-                            store_id,
                             file.get_region(),
                             file.get_term(),
                             file.get_index());

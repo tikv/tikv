@@ -23,11 +23,12 @@ use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::msgpb::{MessageType, Message};
+use kvproto::msgpb::{MessageType, Message, SnapshotFile};
 use kvproto::raftpb::MessageType as RaftMessageType;
 use super::{Msg, SendCh, ConnData};
 use super::conn::{Conn, OnWriteComplete};
 use super::{Result, OnResponse};
+use raftstore::store::worker::snap::snapshot_file_path;
 use util::HandyRwLock;
 use util::codec::rpc;
 use storage::Storage;
@@ -484,19 +485,54 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn send_snapshot_sock(&mut self, store_id: u64, sock_addr: SocketAddr, data: ConnData) {
-        let raft_msg = data.msg.get_raft();
-        let region_id = raft_msg.get_region_id();
-        let raftpb_msg = raft_msg.get_message();
-        let term1 = raftpb_msg.get_term();
-        let index1 = raftpb_msg.get_index();
-        print!("in raftpb_msg: term = {}, index = {}\n", term1, index1);
+        let region_id: u64;
+        let term: u64;
+        let index: u64;
+        {
+            let raft_msg = data.msg.get_raft();
+            region_id = raft_msg.get_region_id();
+            let snapshot = raft_msg.get_message().get_snapshot();
+            term = snapshot.get_metadata().get_term();
+            index = snapshot.get_metadata().get_index();
+        }
 
-        let snapshot = raftpb_msg.get_snapshot();
-        let term = snapshot.get_metadata().get_term();
-        let index = snapshot.get_metadata().get_index();
+        let mut final_data = data;
+        final_data.msg.set_msg_type(MessageType::Snapshot);
 
+        let mut file_info = SnapshotFile::new();
+        file_info.set_region(region_id);
+        file_info.set_term(term);
+        file_info.set_index(index);
 
-        send_snapshot_thread(store_id, region_id, term, index, sock_addr);
+        final_data.msg.set_snapshot(file_info);
+
+        // snapshot message consistent of two part:
+        // one is snapshot file, the other is the message itself
+        // we use separate connection for snapshot file and also the message
+        // because if we send them separately in different connection
+        // receiver can't assure their order!
+        thread::spawn(move || {
+            let file_name = snapshot_file_path("/tmp/",
+                                               store_id,
+                                               &final_data.msg.get_snapshot());
+            print!("send_snapshot_sock, new thread to send file: {}\n", &file_name);
+            let mut file = fs::File::open(&file_name).unwrap();
+
+            let mut conn = TcpStream::connect(&sock_addr).unwrap();
+            rpc::encode_msg(&mut conn, final_data.msg_id, &final_data.msg);
+
+            let resp = io::copy(&mut file, &mut conn);
+            // let reporter = Arc::new(self.new_snapshot_reporter(&data));
+            // match resp {
+            //     Err(e) => {
+            //         error!("connect store {} err {:?}", store_id, e);
+            //         reporter.report(SnapshotStatus::Failure);
+            //     }
+            //     Ok(_) => reporter.report(SnapshotStatus::Finish),
+            // }
+
+            print!("send snapshot socket finish!!\n");
+        });
 
         // let token = match self.try_connect(event_loop, sock_addr, None) {
         //     Ok(token) => token,
@@ -716,41 +752,4 @@ mod tests {
         ch.send(Msg::Quit).unwrap();
         h.join().unwrap();
     }
-}
-
-fn send_snapshot_thread(store_id: u64,
-                        region_id: u64,
-                        term: u64,
-                        index: u64,
-                        sock_addr: SocketAddr) {
-    thread::spawn(move || {
-        print!("send_snapshot_sock, new thread to send file\n");
-        print!("store={:?}, region={:?}, term={:?}, index={:?}\n",
-               store_id,
-               region_id,
-               term,
-               index);
-        let file_name = format!("/tmp/{}_{}_{}", region_id, term, index);
-        let mut file = fs::File::open(file_name).unwrap();
-
-        let mut conn = TcpStream::connect(&sock_addr).unwrap();
-
-        let mut msg = Message::new();
-        msg.set_msg_type(MessageType::Snapshot);
-        // TODO let msg_id = self.alloc_msg_id();
-        rpc::encode_msg(&mut conn, 42, &msg);
-
-        let resp = io::copy(&mut file, &mut conn);
-
-        // let reporter = Arc::new(self.new_snapshot_reporter(&data));
-        // match resp {
-        //     Err(e) => {
-        //         error!("connect store {} err {:?}", store_id, e);
-        //         reporter.report(SnapshotStatus::Failure);
-        //     }
-        //     Ok(_) => reporter.report(SnapshotStatus::Finish),
-        // }
-
-        print!("send snapshot socket finish!!\n");
-    });
 }

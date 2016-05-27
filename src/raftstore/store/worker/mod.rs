@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod snap;
+pub mod snap;
 mod split_check;
 mod compact;
 mod pd;
