@@ -97,6 +97,7 @@ impl Runner {
                                 region_id,
                                 snapshot.get_metadata().get_term(),
                                 snapshot.get_metadata().get_index());
+        print!("save_snapshot file name: {}\n", file_name);
         let metadata = fs::metadata(&file_name);
         if let Ok(attr) = metadata {
             if attr.is_file() {
@@ -118,7 +119,7 @@ impl Runner {
         LittleEndian::write_u32(&mut buf, checksum);
         try!(crc_writer.write(&buf));
 
-        try!(fs::rename(file_name, tmp_file_name));
+        try!(fs::rename(tmp_file_name, file_name));
         Ok(())
     }
 }
@@ -139,6 +140,8 @@ impl Runnable<Task> for Runner {
             return;
         }
         task.storage.wl().snap_state = SnapState::Snap(snap);
+
+        print!("write snapshot file success!\n");
     }
 }
 
@@ -166,5 +169,37 @@ impl<T: Write> Write for CRCWriter<T> {
     }
     fn flush(&mut self) -> io::Result<()> {
         self.writer.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Read};
+    use std::fs;
+    use super::*;
+    use kvproto::raftpb::Snapshot;
+    use byteorder::{ByteOrder, LittleEndian};
+    use protobuf::Message;
+
+    #[test]
+    fn test_save_snapshot() {
+        let runner = Runner;
+        let mut snapshot = Snapshot::new();
+        snapshot.mut_metadata().set_term(32);
+        snapshot.mut_metadata().set_index(2);
+        runner.save_snapshot(&snapshot, 4, "./").unwrap();
+
+        let file_name = "./4_32_2";
+        let metadata = fs::metadata(&file_name);
+        let attr = metadata.unwrap();
+        assert!(attr.is_file());
+
+        let mut f = fs::File::open(&file_name).unwrap();
+        let mut buf: [u8; 4] = [0; 4];
+        f.read(&mut buf);
+        let head_len = LittleEndian::read_u32(&mut buf);
+        let should_be = snapshot.compute_size();
+        assert_eq!(should_be, head_len);
+        fs::remove_file(&file_name);
     }
 }

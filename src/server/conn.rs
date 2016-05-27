@@ -162,7 +162,7 @@ impl Conn {
         match msg.get_msg_type() {
             MessageType::Snapshot => {
                 let mut worker = Worker::new("snapshot receiver".to_owned());
-                let runner = Runner { file: try!(fs::File::create("/tmp/test.tmp")) };
+                let runner = Runner::new("/tmp/test.tmp");
                 try!(worker.start(runner));
                 print!("receive a snapshot connection\n");
                 self.snapshot_receiver = Some(SnapshotReceiver {
@@ -195,7 +195,7 @@ impl Conn {
             loop {
                 let closed = try_read_data(&mut self.sock, &mut receiver.buf);
                 let remaining = remaining_mutbuf(&receiver.buf);
-                if remaining == 0{
+                if remaining == 0 {
                     receiver.more = true;
                     finish = true;
                 }
@@ -213,7 +213,7 @@ impl Conn {
                         // }
                     };
                     print!("close connection should go here\n");
-                    try!(receiver.worker.schedule(Task::new(receiver.buf.bytes(), cb)));
+                    try!(receiver.worker.schedule(Task::new(receiver.buf.bytes(), cb, true)));
                     return Err(e);
                 }
 
@@ -224,7 +224,8 @@ impl Conn {
 
                 print!("receive data...ringbuf: {:?}\n",
                        remaining_mutbuf(&receiver.buf));
-                try!(receiver.worker.schedule(Task::new(receiver.buf.bytes(), box move |_| {})));
+                try!(receiver.worker
+                    .schedule(Task::new(receiver.buf.bytes(), box move |_| {}, false)));
                 receiver.buf.clear();
 
                 if finish {

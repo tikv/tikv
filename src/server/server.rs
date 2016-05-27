@@ -17,6 +17,7 @@ use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
 use std::net::SocketAddr;
+use std::{io, thread, fs};
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
@@ -28,6 +29,7 @@ use super::{Msg, SendCh, ConnData};
 use super::conn::{Conn, OnWriteComplete};
 use super::{Result, OnResponse};
 use util::HandyRwLock;
+use util::codec::rpc;
 use storage::Storage;
 use super::kv::StoreHandler;
 use super::coprocessor::EndPointHost;
@@ -454,7 +456,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         info!("resolve store {} address ok, addr {}", store_id, sock_addr);
 
         if data.is_snapshot() {
-            return self.send_snapshot_sock(event_loop, store_id, sock_addr, data);
+            return self.send_snapshot_sock(store_id, sock_addr, data);
         }
 
         let token = match self.connect_store(event_loop, store_id, sock_addr) {
@@ -481,35 +483,39 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
     }
 
-    fn send_snapshot_sock(&mut self,
-                          event_loop: &mut EventLoop<Self>,
-                          store_id: u64,
-                          sock_addr: SocketAddr,
-                          data: ConnData) {
-        let token = match self.try_connect(event_loop, sock_addr, None) {
-            Ok(token) => token,
-            Err(e) => {
-                error!("connect store {} err {:?}", store_id, e);
-                self.report_unreachable(data);
-                return;
-            }
-        };
+    fn send_snapshot_sock(&mut self, store_id: u64, sock_addr: SocketAddr, data: ConnData) {
+        let raft_msg = data.msg.get_raft();
+        let region_id = raft_msg.get_region_id();
+        let raftpb_msg = raft_msg.get_message();
+        let term = raftpb_msg.get_term();
+        let index = raftpb_msg.get_index();
 
-        let reporter = Arc::new(self.new_snapshot_reporter(&data));
+        send_snapshot_thread(store_id, region_id, term, index, sock_addr);
 
-        if let Some(conn) = self.conns.get_mut(&token) {
-            let reporter = reporter.clone();
-            conn.set_close_callback(Some(box move || {
-                reporter.report(SnapshotStatus::Failure);
-            }));
-        };
+        // let token = match self.try_connect(event_loop, sock_addr, None) {
+        //     Ok(token) => token,
+        //     Err(e) => {
+        //         error!("connect store {} err {:?}", store_id, e);
+        //         self.report_unreachable(data);
+        //         return;
+        //     }
+        // };
 
-        self.write_data(event_loop,
-                        token,
-                        data,
-                        Some(box move || {
-                            reporter.report(SnapshotStatus::Finish);
-                        }))
+        // let reporter = Arc::new(self.new_snapshot_reporter(&data));
+
+        // if let Some(conn) = self.conns.get_mut(&token) {
+        //     let reporter = reporter.clone();
+        //     conn.set_close_callback(Some(box move || {
+        //         reporter.report(SnapshotStatus::Failure);
+        //     }));
+        // };
+
+        // self.write_data(event_loop,
+        //                 token,
+        //                 data,
+        //                 Some(box move || {
+        //                     reporter.report(SnapshotStatus::Finish);
+        //                 }))
     }
 
     fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
@@ -551,6 +557,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
+            // Msg::Snapshot { data } => self.on_conn_msg(Token::from_usize(0), data),
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data, None),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
@@ -703,4 +710,41 @@ mod tests {
         ch.send(Msg::Quit).unwrap();
         h.join().unwrap();
     }
+}
+
+fn send_snapshot_thread(store_id: u64,
+                        region_id: u64,
+                        term: u64,
+                        index: u64,
+                        sock_addr: SocketAddr) {
+    thread::spawn(move || {
+        print!("send_snapshot_sock, new thread to send file\n");
+        print!("store={:?}, region={:?}, term={:?}, index={:?}\n",
+               store_id,
+               region_id,
+               term,
+               index);
+        let file_name = format!("/tmp/{}{}{}", region_id, term, index);
+        let mut file = fs::File::open(file_name).unwrap();
+
+        let mut conn = TcpStream::connect(&sock_addr).unwrap();
+
+        let mut msg = Message::new();
+        msg.set_msg_type(MessageType::Snapshot);
+        // TODO let msg_id = self.alloc_msg_id();
+        rpc::encode_msg(&mut conn, 42, &msg);
+
+        let resp = io::copy(&mut file, &mut conn);
+
+        // let reporter = Arc::new(self.new_snapshot_reporter(&data));
+        // match resp {
+        //     Err(e) => {
+        //         error!("connect store {} err {:?}", store_id, e);
+        //         reporter.report(SnapshotStatus::Failure);
+        //     }
+        //     Ok(_) => reporter.report(SnapshotStatus::Finish),
+        // }
+
+        print!("send snapshot socket finish!!\n");
+    });
 }
