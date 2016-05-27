@@ -487,8 +487,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let raft_msg = data.msg.get_raft();
         let region_id = raft_msg.get_region_id();
         let raftpb_msg = raft_msg.get_message();
-        let term = raftpb_msg.get_term();
-        let index = raftpb_msg.get_index();
+        let term1 = raftpb_msg.get_term();
+        let index1 = raftpb_msg.get_index();
+        print!("in raftpb_msg: term = {}, index = {}\n", term1, index1);
+
+        let snapshot = raftpb_msg.get_snapshot();
+        let term = snapshot.get_metadata().get_term();
+        let index = snapshot.get_metadata().get_index();
+
 
         send_snapshot_thread(store_id, region_id, term, index, sock_addr);
 
@@ -724,7 +730,7 @@ fn send_snapshot_thread(store_id: u64,
                region_id,
                term,
                index);
-        let file_name = format!("/tmp/{}{}{}", region_id, term, index);
+        let file_name = format!("/tmp/{}_{}_{}", region_id, term, index);
         let mut file = fs::File::open(file_name).unwrap();
 
         let mut conn = TcpStream::connect(&sock_addr).unwrap();
