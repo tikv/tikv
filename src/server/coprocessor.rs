@@ -199,12 +199,12 @@ impl TiDbEndPoint {
                 return;
             }
         };
-        debug!("[TIME_SNAPSHOT] {:?}", ts.elapsed());
+        metric_time!("COPR_SNAPSHOT", ts.elapsed());
         for t in reqs {
             let timer = SlowTimer::new();
             let tp = t.req.get_tp();
             self.handle_request(snap.as_ref(), t.req, t.on_resp);
-            slow_log!(timer, "request type {} takes {:?}", tp, timer.elapsed());
+            metric_time!(&format!("COPR_REQUEST_{}", tp), timer.elapsed());
         }
     }
 
@@ -255,7 +255,7 @@ impl TiDbEndPoint {
         } else {
             ctx.get_rows_from_idx(range, limit, desc)
         };
-        debug!("[TIME_SELECT] {:?} {:?}", req.get_tp(), sel_ts.elapsed());
+        metric_time!(&format!("COPR_SELECT_{}", req.get_tp()), sel_ts.elapsed());
         let resp_ts = Instant::now();
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
@@ -275,7 +275,7 @@ impl TiDbEndPoint {
         }
         let data = box_try!(sel_resp.write_to_bytes());
         resp.set_data(data);
-        debug!("[TIME_COMPOSE_RESP] {:?}", resp_ts.elapsed());
+        metric_time!("COPR_COMPOSE_RESP", resp_ts.elapsed());
         Ok(resp)
     }
 }

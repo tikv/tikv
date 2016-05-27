@@ -123,7 +123,7 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
                                   &config,
                                   Some("tikv".to_owned()),
                                   |v| v.as_str().map(|s| s.to_owned()));
-    if host != "" {
+    if !host.is_empty() {
         // We only need a unique UDP bind, so 0.0.0.0:0 is enough.
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
         let sink = UdpMetricSink::from(&*host, socket).unwrap();
@@ -371,15 +371,7 @@ fn main() {
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
     opts.optopt("", "pd", "set pd address", "host:port");
-    opts.optopt("M",
-                "metric",
-                "set metric level",
-                "metric level: trace, debug, info, warn, error, off");
     opts.optopt("", "metric-host", "set statsd server address", "host:port");
-    opts.optopt("",
-                "metric-addr",
-                "set local statsd client address",
-                "host:port");
     opts.optopt("",
                 "metric-prefix",
                 "set metric prefix",
