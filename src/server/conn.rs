@@ -15,7 +15,6 @@ use std::vec::Vec;
 use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
-use std::fs;
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;

@@ -81,14 +81,14 @@ impl Runnable<Task> for Runner {
 fn load_snapshot(file_name: &str) -> Result<Snapshot> {
     let mut file = fs::File::open(file_name).unwrap();
     let mut buf = [0; 4];
-    file.read(&mut buf);
+    try!(file.read(&mut buf));
     let len = LittleEndian::read_u32(&buf);
 
     let mut vec: Vec<u8> = Vec::with_capacity(10);
-    file.read(vec.as_mut_slice());
+    try!(file.read(vec.as_mut_slice()));
 
     let mut msg = Snapshot::new();
-    msg.merge_from_bytes(vec.as_slice());
+    try!(msg.merge_from_bytes(vec.as_slice()));
     Ok(msg)
 }
 
