@@ -566,8 +566,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         // nothing to do now.
     }
 
-    fn interrupted(&mut self, event_loop: &mut EventLoop<Self>) {
-        event_loop.shutdown();
+    fn interrupted(&mut self, _: &mut EventLoop<Self>) {
+        // To be able to be attached by gdb, we should not shutdown.
+        // TODO: find a grace way to shutdown.
+        // event_loop.shutdown();
     }
 
     fn tick(&mut self, el: &mut EventLoop<Self>) {
@@ -577,6 +579,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         if !el.is_running() {
             if let Err(e) = self.end_point_worker.stop() {
                 error!("failed to stop end point: {:?}", e);
+            }
+            if let Err(e) = self.store.stop() {
+                error!("failed to stop store: {:?}", e);
             }
         }
     }
