@@ -14,14 +14,17 @@
 use std::fmt::{self, Formatter, Display};
 use std::{io, fs};
 use std::boxed::{Box, FnBox};
+use std::sync::{RwLock, Arc};
 use std::io::Read;
 
 use super::{Result, Error};
 use util::worker::{Runnable, Worker};
+use util::HandyRwLock;
 use bytes::{ByteBuf, MutByteBuf};
 use byteorder::{ByteOrder, LittleEndian};
 use protobuf::Message;
 use raftstore::store::worker::snap::snapshot_file_path;
+use super::transport::RaftStoreRouter;
 
 use kvproto::raftpb::Snapshot;
 use kvproto::msgpb::SnapshotFile;
@@ -52,35 +55,44 @@ impl Display for Task {
     }
 }
 
-pub struct Runner {
+pub struct Runner<T: RaftStoreRouter> {
     file_name: String,
     pub file: fs::File,
     msg: RaftMessage,
     file_info: SnapshotFile,
+    raft_router: Arc<RwLock<T>>,
 }
 
-impl Runner {
-    pub fn new(path: &str, file_info: SnapshotFile, msg: RaftMessage) -> Runner {
+impl<F: RaftStoreRouter> Runner<F> {
+    pub fn new(path: &str,
+                file_info: SnapshotFile,
+                msg: RaftMessage,
+                raft_router: Arc<RwLock<F>>) -> Runner<F> {
         let file_name = snapshot_file_path(path, 0, &file_info);
         Runner {
             file_name: file_name.to_owned(),
             file: fs::File::create(file_name).unwrap(),
             msg: msg,
             file_info: file_info,
+            raft_router: raft_router,
         }
     }
 }
 
-impl Runnable<Task> for Runner {
+impl<T: RaftStoreRouter> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
         let mut buf = task.buf;
         let resp = io::copy(&mut buf, &mut self.file);
         if task.last {
             // self.file.flush();
 
-            // // TODO change here when region size goes to 1G
-            // let snapshot = load_snapshot(&self.file_name, &self.file_info);
-            // ch.send(Msg::Snapshot{snapshot});
+            // TODO change here when region size goes to 1G
+            print!("send snapshot to store...\n");
+            let snapshot = load_snapshot(&self.file_name).unwrap();
+            self.msg.mut_message().set_snapshot(snapshot);
+            if let Err(e) = self.raft_router.rl().send_(self.msg) {
+                error!("send snapshot raft message failed, err={:?}", e);
+            }
         }
         task.cb.call_box((resp.map_err(Error::Io),))
     }
@@ -88,7 +100,7 @@ impl Runnable<Task> for Runner {
 
 fn load_snapshot(file_name: &str) -> Result<Snapshot> {
     let mut file = fs::File::open(file_name).unwrap();
-    let mut buf = [0; 4];
+    let mut buf: [u8; 4] = [0; 4];
     try!(file.read(&mut buf));
     let len = LittleEndian::read_u32(&buf);
 

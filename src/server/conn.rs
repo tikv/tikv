@@ -15,6 +15,7 @@ use std::vec::Vec;
 use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
+use std::sync::{Arc, RwLock};
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
@@ -38,7 +39,7 @@ enum ConnType {
     Snapshot,
 }
 
-pub struct Conn {
+pub struct Conn<T: RaftStoreRouter> {
     pub sock: TcpStream,
     pub token: Token,
     pub interest: EventSet,
@@ -56,6 +57,7 @@ pub struct Conn {
     payload: Option<MutByteBuf>,
 
     snapshot_receiver: Option<SnapshotReceiver>,
+    raft_router: Arc<RwLock<T>>,
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
@@ -97,9 +99,12 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 }
 
 
-impl Conn {
-    pub fn new(sock: TcpStream, token: Token, store_id: Option<u64>) -> Conn {
-        Conn {
+impl<F: RaftStoreRouter> Conn<F> {
+    pub fn new(sock: TcpStream,
+               token: Token,
+               store_id: Option<u64>,
+               raft_router: Arc<RwLock<F>>) -> Conn<F> {
+        Conn{
             sock: sock,
             token: token,
             interest: EventSet::readable() | EventSet::hup(),
@@ -112,6 +117,7 @@ impl Conn {
             store_id: store_id,
             on_write_complete: None,
             on_close: None,
+            raft_router: raft_router,
         }
     }
 
@@ -162,7 +168,10 @@ impl Conn {
             MessageType::Snapshot => {
                 let mut worker = Worker::new("snapshot receiver".to_owned());
                 // TODO we need store id here!!
-                let runner = Runner::new("/tmp/", msg.take_snapshot(), msg.take_raft());
+                let runner = Runner::new("/tmp/",
+                                         msg.take_snapshot(),
+                                         msg.take_raft(),
+                                         self.raft_router.clone());
                 try!(worker.start(runner));
                 print!("receive a snapshot connection\n");
                 self.snapshot_receiver = Some(SnapshotReceiver {
@@ -176,9 +185,9 @@ impl Conn {
             _ => {
                 self.conn_type = ConnType::Rpc;
                 let mut first = vec![ConnData {
-                                         msg_id: self.last_msg_id,
-                                         msg: msg,
-                                     }];
+                    msg_id: self.last_msg_id,
+                    msg: msg,
+                }];
                 let mut rem = try!(self.read_rpc(event_loop));
                 first.append(&mut rem);
                 Ok(first)
@@ -225,7 +234,7 @@ impl Conn {
                 print!("receive data...ringbuf: {:?}\n",
                        remaining_mutbuf(&receiver.buf));
                 try!(receiver.worker
-                    .schedule(Task::new(receiver.buf.bytes(), box move |_| {}, false)));
+                     .schedule(Task::new(receiver.buf.bytes(), box move |_| {}, false)));
                 receiver.buf.clear();
 
                 if finish {
@@ -246,7 +255,7 @@ impl Conn {
 
             // we have already read whole header, parse it and begin to read payload.
             let (msg_id, payload_len) = try!(rpc::decode_msg_header(self.header
-                .bytes()));
+                                                                    .bytes()));
             self.last_msg_id = msg_id;
             self.payload = Some(create_mem_buf(payload_len));
         }

@@ -65,7 +65,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     // response will be sent to the new client.
     // To avoid this, we use the HashMap instead and can guarantee the token id is
     // unique and can't be reused.
-    conns: HashMap<Token, Conn>,
+    conns: HashMap<Token, Conn<T>>,
     conn_token_counter: usize,
     sendch: SendCh,
 
@@ -164,7 +164,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn add_new_conn(&mut self,
                     event_loop: &mut EventLoop<Self>,
                     sock: TcpStream,
-                    store_id: Option<u64>)
+                    store_id: Option<u64>,
+                    raft_router: Arc<RwLock<T>>)
                     -> Result<Token> {
         let new_token = Token(self.conn_token_counter);
         self.conn_token_counter += 1;
@@ -178,7 +179,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  EventSet::readable() | EventSet::hup(),
                                  PollOpt::edge()));
 
-        let conn = Conn::new(sock, new_token, store_id);
+        let conn = Conn::new(sock, new_token, store_id, self.raft_router.clone());
         self.conns.insert(new_token, conn);
 
         Ok(new_token)
@@ -292,7 +293,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                         }
                     };
 
-                    if let Err(e) = self.add_new_conn(event_loop, sock, None) {
+                    if let Err(e) = self.add_new_conn(event_loop,
+                                                      sock,
+                                                      None,
+                                                      self.raft_router.clone()) {
                         error!("register conn err {:?}", e);
                     }
                 }
@@ -347,7 +351,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                    store_id_opt: Option<u64>)
                    -> Result<Token> {
         let sock = try!(TcpStream::connect(&sock_addr));
-        let token = try!(self.add_new_conn(event_loop, sock, store_id_opt));
+        let token = try!(self.add_new_conn(event_loop, sock, store_id_opt, self.raft_router.clone()));
         Ok(token)
     }
 
