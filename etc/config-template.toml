@@ -13,7 +13,7 @@ log-level = "info"
 [metric]
 # if host applied then `udp` will be activated.
 # remote statsd server address.
-host = ""
+addr = ""
 # metric prefix.
 prefix = "tikv"
 

@@ -111,8 +111,8 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
 }
 
 fn initial_metric(matches: &Matches, config: &toml::Value) {
-    let host = get_string_value("metric-host",
-                                "metric.host",
+    let host = get_string_value("metric-addr",
+                                "metric.addr",
                                 &matches,
                                 &config,
                                 Some("".to_owned()),
@@ -371,7 +371,7 @@ fn main() {
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
     opts.optopt("", "pd", "set pd address", "host:port");
-    opts.optopt("", "metric-host", "set statsd server address", "host:port");
+    opts.optopt("", "metric-addr", "set statsd server address", "host:port");
     opts.optopt("",
                 "metric-prefix",
                 "set metric prefix",
