@@ -130,6 +130,8 @@ pub struct Peer {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     penging_remove: bool,
+    // cache metric prefix, enchance performance.
+    metric_prefix: String,
 }
 
 impl Peer {
@@ -221,6 +223,7 @@ impl Peer {
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             penging_remove: false,
+            metric_prefix: format!("raftstore.{}", store_id),
         };
 
         peer.load_all_coprocessors();
@@ -326,7 +329,7 @@ impl Peer {
         }
 
         debug!("propose command with uuid {:?}", cmd.uuid);
-        metric_incr!(&format!("raftstore.{}.propose", self.peer.get_store_id()));
+        metric_incr!(&self.format_metric("propose"));
 
         if let Err(e) = self.check_epoch(&req) {
             cmd_resp::bind_error(&mut err_resp, e);
@@ -364,7 +367,7 @@ impl Peer {
             self.pending_cmds.append_normal(cmd);
         }
 
-        metric_incr!(&format!("raftstore.{}.propose.success", self.peer.get_store_id()));
+        metric_incr!(&self.format_metric("propose.success"));
         Ok(())
     }
 
@@ -393,7 +396,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&cmd).unwrap();
         let peer = transfer_leader.get_peer();
 
-        metric_incr!(&format!("raftstore.{}.transfer_leader", self.peer.get_store_id()));
+        metric_incr!(&self.format_metric("transfer_leader"));
 
         info!("transfer leader from {:?} to {:?} at region {}",
               self.peer,
@@ -412,7 +415,7 @@ impl Peer {
     }
 
     fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
-        metric_incr!(&format!("raftstore.{}.propose.conf_change", self.peer.get_store_id()));
+        metric_incr!(&self.format_metric("propose.conf_change"));
         let data = try!(cmd.write_to_bytes());
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
 
@@ -495,7 +498,7 @@ impl Peer {
                                        msg: &raftpb::Message,
                                        trans: &Arc<RwLock<T>>)
                                        -> Result<()> {
-        metric_incr!(&format!("raftstore.{}.send_raft_message", self.peer.get_store_id()));
+        metric_incr!(&self.format_metric("send_raft_message"));
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         send_msg.set_message(msg.clone());
@@ -554,7 +557,7 @@ impl Peer {
     fn handle_raft_commit_entries(&mut self,
                                   committed_entries: &[raftpb::Entry])
                                   -> Result<Vec<ExecResult>> {
-        metric_incr!(&format!("raftstore.{}.handle_raft_commit_entries", self.peer.get_store_id()));
+        metric_incr!(&self.format_metric("handle_raft_commit_entries"));
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -609,7 +612,7 @@ impl Peer {
         };
 
         self.raft_group.apply_conf_change(conf_change);
-        metric_incr!(&format!("raftstore.{}.handle_raft_entry_conf_change", self.peer.get_store_id()));
+        metric_incr!(&self.format_metric("handle_raft_entry_conf_change"));
 
         res
     }
@@ -743,6 +746,15 @@ impl Peer {
     }
 }
 
+impl Peer {
+    fn format_metric(&self, s: &str) -> String {
+        let mut m = self.metric_prefix.clone();
+        m.push('.');
+        m.push_str(s);
+        m
+    }
+}
+
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
     if !msg.has_admin_request() {
         return None;
@@ -834,7 +846,7 @@ impl Peer {
 
         match change_type {
             raftpb::ConfChangeType::AddNode => {
-                metric_incr!(&format!("raftstore.{}.add_peer", self.peer.get_store_id()));
+                metric_incr!(&self.format_metric("add_peer"));
                 if exists {
                     error!("my peer id {}, can't add duplicated peer {:?} to store {}, region \
                             {:?}",
@@ -852,7 +864,7 @@ impl Peer {
                 self.peer_cache.wl().insert(peer.get_id(), peer.clone());
                 region.mut_peers().push(peer.clone());
 
-                metric_incr!(&format!("raftstore.{}.add_peer.success", self.peer.get_store_id()));
+                metric_incr!(&self.format_metric("add_peer.success"));
 
                 warn!("my peer id {}, add peer {:?}, region {:?}",
                       self.peer_id(),
@@ -860,7 +872,7 @@ impl Peer {
                       self.region());
             }
             raftpb::ConfChangeType::RemoveNode => {
-                metric_incr!(&format!("raftstore.{}.remove_peer", self.peer.get_store_id()));
+                metric_incr!(&self.format_metric("remove_peer"));
                 if !exists {
                     error!("remove missing peer {:?} from store {}", peer, store_id);
                     return Err(box_err!("remove missing peer {:?} from store {}", peer, store_id));
@@ -876,7 +888,7 @@ impl Peer {
                 self.peer_cache.wl().remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
-                metric_incr!(&format!("raftstore.{}.remove_peer.success", self.peer.get_store_id()));
+                metric_incr!(&self.format_metric("remove_peer.success"));
                 warn!("my peer_id {}, remove {}, region:{:?}",
                       self.peer_id(),
                       peer.get_id(),
@@ -901,7 +913,7 @@ impl Peer {
                   ctx: &ExecContext,
                   req: &AdminRequest)
                   -> Result<(AdminResponse, Option<ExecResult>)> {
-        metric_incr!(&format!("raftstore.{}.split", self.peer.get_store_id()));
+        metric_incr!(&self.format_metric("split"));
         let split_req = req.get_split();
         if !split_req.has_split_key() {
             return Err(box_err!("missing split key"));
@@ -968,7 +980,7 @@ impl Peer {
                         ctx: &ExecContext,
                         req: &AdminRequest)
                         -> Result<(AdminResponse, Option<ExecResult>)> {
-        metric_incr!(&format!("raftstore.{}.compact", self.peer.get_store_id()));
+        metric_incr!(&self.format_metric("compact"));
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::new();
 
