@@ -173,7 +173,7 @@ impl fmt::Debug for Command {
 pub struct Storage {
     engine: Arc<Box<Engine>>,
     tx: Sender<Message>,
-    thread: JoinHandle<Result<()>>,
+    thread: Option<JoinHandle<Result<()>>>,
 }
 
 impl Storage {
@@ -201,7 +201,7 @@ impl Storage {
         Ok(Storage {
             engine: engine,
             tx: tx,
-            thread: handle,
+            thread: Some(handle),
         })
     }
 
@@ -210,9 +210,12 @@ impl Storage {
         Storage::from_engine(engine)
     }
 
-    pub fn stop(self) -> Result<()> {
+    pub fn stop(&mut self) -> Result<()> {
+        if self.thread.is_none() {
+            return Ok(());
+        }
         try!(self.tx.send(Message::Close));
-        if self.thread.join().is_err() {
+        if self.thread.take().unwrap().join().is_err() {
             return Err(box_err!("failed to wait storage thread quit"));
         }
         Ok(())
@@ -449,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
+        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_get(Context::new(), make_key(b"x"), 100, expect_get_none()).unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
@@ -470,7 +473,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
+        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_prewrite(Context::new(),
                             vec![
             Mutation::Put((make_key(b"a"), b"aa".to_vec())),
@@ -502,7 +505,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
+        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
