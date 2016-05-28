@@ -16,6 +16,7 @@ use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
 use std::sync::{Arc, RwLock};
+use std::sync::mpsc::{Sender, Receiver, channel};
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
@@ -39,7 +40,7 @@ enum ConnType {
     Snapshot,
 }
 
-pub struct Conn<T: RaftStoreRouter> {
+pub struct Conn {
     pub sock: TcpStream,
     pub token: Token,
     pub interest: EventSet,
@@ -57,7 +58,8 @@ pub struct Conn<T: RaftStoreRouter> {
     payload: Option<MutByteBuf>,
 
     snapshot_receiver: Option<SnapshotReceiver>,
-    raft_router: Arc<RwLock<T>>,
+    tx: Sender<ConnData>,
+    rx: Receiver<ConnData>,
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
@@ -99,11 +101,11 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 }
 
 
-impl<F: RaftStoreRouter> Conn<F> {
+impl Conn {
     pub fn new(sock: TcpStream,
                token: Token,
-               store_id: Option<u64>,
-               raft_router: Arc<RwLock<F>>) -> Conn<F> {
+               store_id: Option<u64>) -> Conn {
+        let (tx, rx) = channel();
         Conn{
             sock: sock,
             token: token,
@@ -114,10 +116,11 @@ impl<F: RaftStoreRouter> Conn<F> {
             res: VecDeque::new(),
             last_msg_id: 0,
             snapshot_receiver: None,
+            tx: tx,
+            rx: rx,
             store_id: store_id,
             on_write_complete: None,
             on_close: None,
-            raft_router: raft_router,
         }
     }
 
@@ -171,7 +174,8 @@ impl<F: RaftStoreRouter> Conn<F> {
                 let runner = Runner::new("/tmp/",
                                          msg.take_snapshot(),
                                          msg.take_raft(),
-                                         self.raft_router.clone());
+                                         self.last_msg_id,
+                                         self.tx.clone());
                 try!(worker.start(runner));
                 print!("receive a snapshot connection\n");
                 self.snapshot_receiver = Some(SnapshotReceiver {
@@ -212,7 +216,7 @@ impl<F: RaftStoreRouter> Conn<F> {
                 // TODO should distinguish between close and error
                 if let Err(e) = closed {
                     let cb = box move |_| {
-                        print!("!!!!!!!!!!connection closed!! now send callback\n");
+                        warn!("!!!!!!!!!!connection closed!! now send callback\n");
                         // if let Err(e) = ch.send(Msg::ResolveResult {
                         //     store_id: store_id,
                         //     sock_addr: r,
@@ -280,6 +284,10 @@ impl<F: RaftStoreRouter> Conn<F> {
               S: StoreAddrResolver
     {
         let mut bufs = vec![];
+
+        if let Ok(snapshot) = self.rx.try_recv() {
+            bufs.push(snapshot);
+        }
 
         loop {
             // Because we use the edge trigger, so here we must read whole data.

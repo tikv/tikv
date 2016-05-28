@@ -15,9 +15,10 @@ use std::fmt::{self, Formatter, Display};
 use std::{io, fs};
 use std::boxed::{Box, FnBox};
 use std::sync::{RwLock, Arc};
+use std::sync::mpsc::Sender;
 use std::io::Read;
 
-use super::{Result, Error};
+use super::{Result, Error, ConnData};
 use util::worker::{Runnable, Worker};
 use util::HandyRwLock;
 use bytes::{ByteBuf, MutByteBuf};
@@ -27,7 +28,7 @@ use raftstore::store::worker::snap::snapshot_file_path;
 use super::transport::RaftStoreRouter;
 
 use kvproto::raftpb::Snapshot;
-use kvproto::msgpb::SnapshotFile;
+use kvproto::msgpb::{self, SnapshotFile};
 use kvproto::raft_serverpb::RaftMessage;
 
 pub type Callback = Box<FnBox(Result<u64>) + Send>;
@@ -55,31 +56,34 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<T: RaftStoreRouter> {
+pub struct Runner {
     file_name: String,
     pub file: fs::File,
     msg: RaftMessage,
+    msg_id: u64,
     file_info: SnapshotFile,
-    raft_router: Arc<RwLock<T>>,
+    tx: Sender<ConnData>,
 }
 
-impl<F: RaftStoreRouter> Runner<F> {
+impl Runner {
     pub fn new(path: &str,
-                file_info: SnapshotFile,
-                msg: RaftMessage,
-                raft_router: Arc<RwLock<F>>) -> Runner<F> {
+               file_info: SnapshotFile,
+               msg: RaftMessage,
+               msg_id: u64,
+               tx: Sender<ConnData>) -> Runner {
         let file_name = snapshot_file_path(path, 0, &file_info);
         Runner {
             file_name: file_name.to_owned(),
             file: fs::File::create(file_name).unwrap(),
             msg: msg,
+            msg_id: msg_id,
             file_info: file_info,
-            raft_router: raft_router,
+            tx: tx,
         }
     }
 }
 
-impl<T: RaftStoreRouter> Runnable<Task> for Runner<T> {
+impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         let mut buf = task.buf;
         let resp = io::copy(&mut buf, &mut self.file);
@@ -90,7 +94,14 @@ impl<T: RaftStoreRouter> Runnable<Task> for Runner<T> {
             print!("send snapshot to store...\n");
             let snapshot = load_snapshot(&self.file_name).unwrap();
             self.msg.mut_message().set_snapshot(snapshot);
-            if let Err(e) = self.raft_router.rl().send_(self.msg) {
+
+            let mut msg = msgpb::Message::new();
+            msg.set_msg_type(msgpb::MessageType::Raft);
+            msg.set_raft(self.msg.clone());
+            if let Err(e) = self.tx.send(ConnData{
+                    msg_id: self.msg_id,
+                    msg: msg,
+            }) {
                 error!("send snapshot raft message failed, err={:?}", e);
             }
         }
