@@ -22,6 +22,7 @@ use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder};
 use protobuf;
 use uuid::Uuid;
+use rand::{self, Rng};
 
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData, RaftTruncatedState};
 use kvproto::raftpb::ConfChangeType;
@@ -686,10 +687,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+    fn on_pd_region_heartbeat_tick(&self, region_id: u64) {
+        if let Some(peer) = self.region_peers.get(&region_id) {
+            if peer.is_leader() {
+                self.heartbeat_pd(peer)
+            }
+        }
+    }
+
+    fn on_pd_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values() {
             if peer.is_leader() {
-                self.heartbeat_pd(peer);
+                self.register_pd_region_heartbeat_tick(event_loop, peer.region_id);
             }
         }
 
@@ -702,6 +711,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        Tick::PdHeartbeat,
                                        self.cfg.pd_heartbeat_tick_interval) {
             error!("register pd heartbeat tick err: {:?}", e);
+        };
+    }
+
+    fn register_pd_region_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>, region_id: u64) {
+        // Randomly generate a timeout in [0, self.cfg.pd_heartbeat_tick_interval)
+        // to scatter all leader region heartbeat.
+        let next_ms = rand::thread_rng().gen_range(0, self.cfg.pd_heartbeat_tick_interval);
+        if let Err(e) = register_timer(event_loop, Tick::PdRegionHeartbeat(region_id), next_ms) {
+            error!("register pd region {} heartbeat tick err: {:?}",
+                   region_id,
+                   e);
         };
     }
 
@@ -797,6 +817,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
+            Tick::PdRegionHeartbeat(region_id) => self.on_pd_region_heartbeat_tick(region_id),
         }
         slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }
