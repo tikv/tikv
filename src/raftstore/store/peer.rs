@@ -748,7 +748,8 @@ impl Peer {
 
 impl Peer {
     fn format_metric(&self, s: &str) -> String {
-        let mut m = self.metric_prefix.clone();
+        let mut m = String::with_capacity(self.metric_prefix.len() + 1 + s.len());
+        m.push_str(&self.metric_prefix);
         m.push('.');
         m.push_str(s);
         m
