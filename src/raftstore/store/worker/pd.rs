@@ -49,8 +49,11 @@ impl Display for Task {
                        region.get_id(),
                        escape(&split_key))
             }
-            Task::Heartbeat { ref region, .. } => {
-                write!(f, "heartbeat for region {}", region.get_id())
+            Task::Heartbeat { ref region, ref peer } => {
+                write!(f,
+                       "heartbeat for region {:?}, leader {}",
+                       region,
+                       peer.get_id())
             }
         }
     }
