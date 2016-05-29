@@ -1,7 +1,7 @@
 /// Worker contains all workers that do the expensive job in background.
 
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle, Builder};
 use std::io;
 use std::fmt::Display;
@@ -95,28 +95,23 @@ impl<T: Display> Clone for Scheduler<T> {
     }
 }
 
-/// A worker that can schedule time consuming tasks.
-pub struct Worker<T: Display> {
-    name: String,
-    scheduler: Scheduler<T>,
-    receiver: Option<Receiver<Option<T>>>,
-    handle: Option<JoinHandle<()>>,
-}
-
-fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
+fn poll<R, T>(mut runner: R,
+              rx: Arc<Mutex<Receiver<Option<T>>>>,
+              counter: Arc<AtomicUsize>,
+              batch_size: usize)
     where R: BatchRunnable<T> + Send + 'static,
           T: Display + Send + 'static
 {
     let mut keep_going = true;
     let mut buffer = Vec::with_capacity(batch_size);
     while keep_going {
-        let t = rx.recv();
-        match t {
+        match rx.lock().unwrap().recv() {
             Ok(Some(t)) => buffer.push(t),
             _ => return,
         }
+
         while buffer.len() < batch_size {
-            match rx.try_recv() {
+            match rx.lock().unwrap().try_recv() {
                 Ok(None) => {
                     keep_going = false;
                     break;
@@ -131,38 +126,65 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
     }
 }
 
-impl<T: Display + Send + 'static> Worker<T> {
-    /// Create a worker.
-    pub fn new<S: Into<String>>(name: S) -> Worker<T> {
+/// A worker pool that can schedule time consuming tasks in multi workers.
+/// This is commonly used for MPMC.
+pub struct WorkerPool<T: Display> {
+    name: String,
+    scheduler: Scheduler<T>,
+    receiver: Arc<Mutex<Receiver<Option<T>>>>,
+    handles: Vec<JoinHandle<()>>,
+    pool_size: usize,
+}
+
+impl<T: Display + Send + 'static> WorkerPool<T> {
+    /// Create a worker pool.
+    pub fn new<S: Into<String>>(name: S, pool_size: usize) -> WorkerPool<T> {
         let (tx, rx) = mpsc::channel();
-        Worker {
+        WorkerPool {
             name: name.into(),
             scheduler: Scheduler::new(AtomicUsize::new(0), tx),
-            receiver: Some(rx),
-            handle: None,
+            receiver: Arc::new(Mutex::new(rx)),
+            handles: vec![],
+            pool_size: pool_size,
         }
     }
 
-    /// Start the worker.
-    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<()> {
+    /// Start all workers.
+    pub fn start<R>(&mut self, runner: R) -> Result<()>
+        where R: Clone + BatchRunnable<T> + Send + 'static
+    {
         self.start_batch(runner, 1)
     }
 
     pub fn start_batch<R>(&mut self, runner: R, batch_size: usize) -> Result<()>
+        where R: Clone + BatchRunnable<T> + Send + 'static
+    {
+        let pool_size = self.pool_size;
+        for _ in 0..pool_size {
+            let r = runner.clone();
+            try!(self.start_one(r, batch_size));
+        }
+
+        Ok(())
+    }
+
+    fn start_one<R>(&mut self, runner: R, batch_size: usize) -> Result<()>
         where R: BatchRunnable<T> + Send + 'static
     {
         info!("starting working thread: {}", self.name);
-        if self.receiver.is_none() {
-            warn!("worker {} has been started.", self.name);
+        if self.handles.len() >= self.pool_size {
+            warn!("can't start more than {} workers for {}",
+                  self.pool_size,
+                  self.name);
             return Ok(());
         }
 
-        let rx = self.receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
+        let rx = self.receiver.clone();
         let h = try!(Builder::new()
             .name(self.name.clone())
             .spawn(move || poll(runner, rx, counter, batch_size)));
-        self.handle = Some(h);
+        self.handles.push(h);
         Ok(())
     }
 
@@ -180,22 +202,70 @@ impl<T: Display + Send + 'static> Worker<T> {
 
     /// Check if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.handle.is_none() || self.scheduler.is_busy()
+        self.handles.is_empty() || self.scheduler.is_busy()
     }
 
     /// Stop the worker thread.
     pub fn stop(&mut self) -> thread::Result<()> {
-        let handler = match self.handle.take() {
-            Some(h) => h,
-            None => return Ok(()),
-        };
-
-        // close sender explicitly so the background thread will exit.
-        info!("stoping {}", self.name);
-        if let Err(e) = self.scheduler.sender.send(None) {
-            warn!("failed to stop worker thread: {:?}", e);
+        let handlers: Vec<_> = self.handles.drain(..).collect();
+        for _ in 0..handlers.len() {
+            // close sender explicitly so the background thread will exit.
+            if let Err(e) = self.scheduler.sender.send(None) {
+                warn!("failed to stop worker thread: {:?}", e);
+            }
         }
-        handler.join()
+
+        for h in handlers {
+            try!(h.join());
+        }
+
+        Ok(())
+    }
+}
+
+/// A worker that can schedule time consuming tasks.
+/// This is commonly used for MPSC.
+pub struct Worker<T: Display> {
+    pool: WorkerPool<T>,
+}
+
+impl<T: Display + Send + 'static> Worker<T> {
+    /// Create a worker.
+    pub fn new<S: Into<String>>(name: S) -> Worker<T> {
+        Worker { pool: WorkerPool::new(name, 1) }
+    }
+
+    /// Start the worker.
+    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<()> {
+        self.start_batch(runner, 1)
+    }
+
+    pub fn start_batch<R>(&mut self, runner: R, batch_size: usize) -> Result<()>
+        where R: BatchRunnable<T> + Send + 'static
+    {
+        self.pool.start_one(runner, batch_size)
+    }
+
+    /// Get a scheduler to schedule task.
+    pub fn scheduler(&self) -> Scheduler<T> {
+        self.pool.scheduler()
+    }
+
+    /// Schedule a task to run.
+    ///
+    /// If the worker is stopped, an error will return.
+    pub fn schedule(&self, task: T) -> Result<()> {
+        self.pool.schedule(task)
+    }
+
+    /// Check if underlying worker can't handle task immediately.
+    pub fn is_busy(&self) -> bool {
+        self.pool.is_busy()
+    }
+
+    /// Stop the worker thread.
+    pub fn stop(&mut self) -> thread::Result<()> {
+        self.pool.stop()
     }
 }
 
@@ -203,9 +273,13 @@ impl<T: Display + Send + 'static> Worker<T> {
 mod test {
     use std::thread;
     use std::sync::Arc;
+    use std::sync::mpsc::{self, Sender};
     use std::sync::atomic::*;
     use std::cmp;
     use std::time::Duration;
+    use std::collections::HashSet;
+
+    use rand;
 
     use super::*;
 
@@ -286,5 +360,65 @@ mod test {
         }
         worker.stop().unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 20 * 50);
+    }
+
+    struct PoolRunner {
+        count: Arc<AtomicUsize>,
+        id: u64,
+        tx: Sender<u64>,
+    }
+
+    impl Clone for PoolRunner {
+        fn clone(&self) -> PoolRunner {
+            PoolRunner {
+                count: self.count.clone(),
+                id: rand::random::<u64>(),
+                tx: self.tx.clone(),
+            }
+        }
+    }
+
+    impl Runnable<u64> for PoolRunner {
+        fn run(&mut self, step: u64) {
+            self.count.fetch_add(step as usize, Ordering::SeqCst);
+            self.tx.send(self.id).unwrap();
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn test_mpmc() {
+        let mut pool = WorkerPool::new("test-worker-mpmc", 3);
+        let (tx, rx) = mpsc::channel();
+        let count = Arc::new(AtomicUsize::new(0));
+        let runner = PoolRunner {
+            count: count.clone(),
+            id: 0,
+            tx: tx.clone(),
+        };
+
+        pool.start(runner).unwrap();
+
+        for _ in 0..3 {
+            let scheduler = pool.scheduler();
+            thread::spawn(move || {
+                for _ in 0..3 {
+                    scheduler.schedule(10).unwrap();
+                }
+            });
+        }
+
+        thread::sleep(Duration::from_millis(500));
+
+        pool.stop().unwrap();
+
+        assert_eq!(count.load(Ordering::SeqCst), 3 * 30);
+
+        let mut m = HashSet::new();
+        while let Ok(id) = rx.try_recv() {
+            m.insert(id);
+        }
+
+        assert_eq!(m.len(), 3);
     }
 }
