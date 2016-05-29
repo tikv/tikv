@@ -209,6 +209,7 @@ impl<T: Display + Send + 'static> WorkerPool<T> {
     pub fn stop(&mut self) -> thread::Result<()> {
         let handlers: Vec<_> = self.handles.drain(..).collect();
         for _ in 0..handlers.len() {
+            info!("stoping {}", self.name);
             // close sender explicitly so the background thread will exit.
             if let Err(e) = self.scheduler.sender.send(None) {
                 warn!("failed to stop worker thread: {:?}", e);
