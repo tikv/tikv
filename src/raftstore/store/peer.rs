@@ -119,7 +119,7 @@ impl PendingCmdQueue {
 pub struct Peer {
     engine: Arc<DB>,
     pub peer: metapb::Peer,
-    region_id: u64,
+    pub region_id: u64,
     pub raft_group: RawNode<RaftStorage>,
     pub storage: Arc<RaftStorage>,
     pending_cmds: PendingCmdQueue,
