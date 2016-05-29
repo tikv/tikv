@@ -39,6 +39,7 @@ threadpool = "1.0.0"
 toml = "0.1"
 num = "0.1"
 cadence = "0.5.0"
+walkdir = "0.1"
 clippy = {version = "*", optional = true}
 
 # The getopts in crate.io is outdated, use the latest getopts instead.
@@ -56,6 +57,7 @@ git = "https://github.com/carllerche/bytes"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
+branch = "siddontang/store-heartbeat"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

@@ -37,6 +37,9 @@ pub mod codec;
 pub mod xeval;
 pub mod event;
 pub mod rocksdb_option;
+pub mod fs;
+
+pub use self::fs::total_size_in_path;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {

@@ -19,6 +19,7 @@ use uuid::Uuid;
 use kvproto::metapb;
 use kvproto::raftpb::ConfChangeType;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, AdminRequest, AdminCmdType};
+use kvproto::pdpb;
 
 use util::worker::Runnable;
 use util::escape;
@@ -37,6 +38,9 @@ pub enum Task {
         region: metapb::Region,
         peer: metapb::Peer,
     },
+    StoreHeartbeat {
+        stats: pdpb::StoreStats,
+    },
 }
 
 
@@ -52,6 +56,7 @@ impl Display for Task {
             Task::Heartbeat { ref region, .. } => {
                 write!(f, "heartbeat for region {}", region.get_id())
             }
+            Task::StoreHeartbeat { ref stats } => write!(f, "store heartbeat stats: {:?}", stats),
         }
     }
 }
@@ -129,6 +134,11 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                                                           change_peer.take_peer());
                         self.send_admin_request(region, peer, req);
                     }
+                }
+            }
+            Task::StoreHeartbeat { stats } => {
+                if let Err(e) = self.pd_client.store_heartbeat(stats) {
+                    error!("store heartbeat failed {:?}", e);
                 }
             }
         };

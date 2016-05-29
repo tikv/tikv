@@ -25,8 +25,7 @@ impl super::PdClient for RpcClient {
         req.set_bootstrap(bootstrap);
 
         let resp = try!(self.send(&req));
-        try!(check_resp(&resp));
-        Ok(())
+        check_resp(&resp)
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
@@ -55,8 +54,7 @@ impl super::PdClient for RpcClient {
         req.set_put_store(put_store);
 
         let resp = try!(self.send(&req));
-        try!(check_resp(&resp));
-        Ok(())
+        check_resp(&resp)
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
@@ -118,6 +116,17 @@ impl super::PdClient for RpcClient {
         let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
         Ok(resp.take_ask_split())
+    }
+
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
+        let mut heartbeat = pdpb::StoreHeartbeatRequest::new();
+        heartbeat.set_stats(stats);
+
+        let mut req = self.new_request(pdpb::CommandType::StoreHeartbeat);
+        req.set_store_heartbeat(heartbeat);
+
+        let resp = try!(self.send(&req));
+        check_resp(&resp)
     }
 }
 

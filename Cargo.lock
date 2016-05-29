@@ -7,7 +7,7 @@ dependencies = [
  "cadence 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "clippy 0.0.65 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (git+https://github.com/rust-lang-nursery/getopts)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto?branch=siddontang/store-heartbeat)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.0 (git+https://github.com/carllerche/mio.git)",
  "num 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -21,6 +21,7 @@ dependencies = [
  "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
  "toml 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid 0.1.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "walkdir 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -85,7 +86,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#a07a261984d0cc41a77c285b8b07685909c7abd3"
+source = "git+https://github.com/pingcap/kvproto?branch=siddontang/store-heartbeat#b85c71f67534df600caf454567e12af797a57d3e"
 dependencies = [
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]
@@ -103,7 +104,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#791fc15fd93fabbbde2d44f5b5e270662fdf57e9"
+source = "git+https://github.com/ngaut/rust-rocksdb.git#5b805d745d14746dc766ff61d5ae7a8e26bba46d"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -263,7 +264,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#791fc15fd93fabbbde2d44f5b5e270662fdf57e9"
+source = "git+https://github.com/ngaut/rust-rocksdb.git#5b805d745d14746dc766ff61d5ae7a8e26bba46d"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
@@ -339,6 +340,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-serialize 0.3.19 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "walkdir"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]

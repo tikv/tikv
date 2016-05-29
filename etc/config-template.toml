@@ -10,6 +10,9 @@ store = "/tmp/tikv/store"
 # log level: trace, debug, info, warn, error, off.
 log-level = "info"
 
+# set store capacity, if no set, use default or disk size. 
+# capacity = 1099511627776 # 1TB
+
 [metric]
 # if host applied then `udp` will be activated.
 # remote statsd server address.

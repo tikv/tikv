@@ -25,7 +25,8 @@ use uuid::Uuid;
 
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData, RaftTruncatedState};
 use kvproto::raftpb::ConfChangeType;
-use util::{HandyRwLock, SlowTimer};
+use kvproto::pdpb::StoreStats;
+use util::{HandyRwLock, SlowTimer, total_size_in_path};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -156,6 +157,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
         self.register_pd_heartbeat_tick(event_loop);
+        self.register_pd_store_heartbeat_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -436,7 +438,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.region_peers.insert(new_region_id, new_peer);
             }
         }
-
     }
 
     fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
@@ -705,6 +706,48 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    fn store_heartbeat_pd(&self) {
+        let mut stats = StoreStats::new();
+        stats.set_capacity(self.cfg.capacity);
+
+        let used_size = match total_size_in_path(self.engine.path()) {
+            Ok(used_size) => used_size,
+            Err(e) => {
+                error!("get store used size err {:?}", e);
+                return;
+            }
+        };
+
+        let available = if self.cfg.capacity > used_size {
+            self.cfg.capacity - used_size
+        } else {
+            warn!("no available space for store {}", self.store_id());
+            0
+        };
+
+        stats.set_store_id(self.store_id());
+        stats.set_available(available);
+        stats.set_region_count(self.region_peers.len() as u32);
+
+        if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
+            error!("failed to notify pd: {}", e);
+        }
+    }
+
+    fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        self.store_heartbeat_pd();
+        self.register_pd_store_heartbeat_tick(event_loop);
+    }
+
+
+    fn register_pd_store_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::PdStoreHeartbeat,
+                                       self.cfg.pd_store_heartbeat_tick_interval) {
+            error!("register pd store heartbeat tick err: {:?}", e);
+        };
+    }
+
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             info!("report to snapshot {} for {} {:?}",
@@ -797,6 +840,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
+            Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
         }
         slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }
