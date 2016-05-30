@@ -282,7 +282,7 @@ impl<'a> MvccCursor<'a> {
     }
 
     pub fn get_version(&mut self, key: &Key) -> Result<Option<u64>> {
-        let meta = try!(self.load_meta(key, FIRST_META_INDEX));
+        let mut meta = try!(self.load_meta(key, FIRST_META_INDEX));
         // Check for locks that signal concurrent writes.
         if let Some(lock) = meta.get_lock() {
             if lock.get_start_ts() <= self.start_ts {
@@ -294,20 +294,15 @@ impl<'a> MvccCursor<'a> {
                 });
             }
         }
-        // Find the latest write below our start timestamp.
-        if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= self.start_ts) {
-            return Ok(Some(x.get_start_ts()));
-        }
-        let mut next = meta.next_index();
         loop {
-            let meta = match next {
-                Some(x) => try!(self.load_meta(key, x)),
-                None => break,
-            };
+            // Find the latest write below our start timestamp.
             if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= self.start_ts) {
                 return Ok(Some(x.get_start_ts()));
             }
-            next = meta.next_index();
+            meta = match meta.next_index() {
+                Some(x) => try!(self.load_meta(key, x)),
+                None => break,
+            };
         }
         Ok(None)
     }

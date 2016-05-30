@@ -14,6 +14,7 @@
 mod meta;
 mod txn;
 
+pub use self::meta::FIRST_META_INDEX;
 pub use self::txn::{MvccTxn, MvccSnapshot, MvccCursor};
 use util::escape;
 

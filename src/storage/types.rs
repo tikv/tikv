@@ -12,11 +12,13 @@
 // limitations under the License.
 
 use std::hash::{Hash, Hasher};
-use std::mem;
 use std::fmt::{self, Formatter, Display};
-use byteorder::{BigEndian, WriteBytesExt};
+use std::u64;
+
 use util::{escape, codec};
+use util::codec::number::{self, NumberEncoder};
 use util::codec::bytes::BytesDecoder;
+use super::mvcc;
 
 pub type Value = Vec<u8>;
 pub type KvPair = (Vec<u8>, Value);
@@ -43,16 +45,20 @@ impl Key {
 
     pub fn append_ts(&self, ts: u64) -> Key {
         let mut encoded = self.0.clone();
-        encoded.write_u64::<BigEndian>(ts).unwrap();
+        if ts == mvcc::FIRST_META_INDEX || ts == u64::MAX {
+            encoded.encode_u64(ts).unwrap();
+        } else {
+            encoded.encode_u64_desc(ts).unwrap();
+        }
         Key(encoded)
     }
 
     pub fn truncate_ts(&self) -> Result<Key, codec::Error> {
         let len = self.0.len();
-        if len < mem::size_of::<u64>() {
+        if len < number::U64_SIZE {
             return Err(codec::Error::KeyLength);
         }
-        Ok(Key::from_encoded(self.0[..len - mem::size_of::<u64>()].to_vec()))
+        Ok(Key::from_encoded(self.0[..len - number::U64_SIZE].to_vec()))
     }
 }
 
