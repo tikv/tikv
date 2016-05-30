@@ -24,6 +24,8 @@ pub mod raftkv;
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &'static str = "";
 
+const SEEK_BOUND: usize = 30;
+
 #[derive(Debug)]
 pub enum Modify {
     Delete(Key),
@@ -73,12 +75,24 @@ pub trait Cursor {
         if self.key() == &**key.encoded() {
             return Ok(true);
         }
-        while self.key() > &**key.encoded() && self.prev() {}
+        let mut cnt = 0;
+        while self.key() > &**key.encoded() && self.prev() {
+            cnt += 1;
+            if cnt >= SEEK_BOUND {
+                return self.seek(key);
+            }
+        }
         if !self.valid() {
             // TODO: check region range.
             return Ok(false);
         }
-        while self.key() < &**key.encoded() && self.next() {}
+        cnt = 0;
+        while self.key() < &**key.encoded() && self.next() {
+            cnt += 1;
+            if cnt >= SEEK_BOUND {
+                return self.seek(key);
+            }
+        }
         // TODO: check region range.
         Ok(self.valid())
     }
@@ -117,12 +131,24 @@ pub trait Cursor {
         if self.key() == &**key.encoded() {
             return Ok(self.prev());
         }
-        while self.key() < &**key.encoded() && self.next() {}
+        let mut cnt = 0;
+        while self.key() < &**key.encoded() && self.next() {
+            cnt += 1;
+            if cnt >= SEEK_BOUND {
+                return self.reverse_seek(key);
+            }
+        }
         if !self.valid() {
             // TODO: check region range.
             return Ok(false);
         }
-        while self.key() >= &**key.encoded() && self.prev() {}
+        cnt = 0;
+        while self.key() >= &**key.encoded() && self.prev() {
+            cnt += 1;
+            if cnt >= SEEK_BOUND {
+                return self.reverse_seek(key);
+            }
+        }
         // TODO: check region range.
         Ok(self.valid())
     }
