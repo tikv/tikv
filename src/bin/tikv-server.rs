@@ -118,11 +118,11 @@ fn initial_metric(matches: &Matches, config: &toml::Value, postfix: Option<Strin
                                 Some("".to_owned()),
                                 |v| v.as_str().map(|s| s.to_owned()));
     let mut prefix = get_string_value("metric-prefix",
-                                  "metric.prefix",
-                                  matches,
-                                  config,
-                                  Some("tikv".to_owned()),
-                                  |v| v.as_str().map(|s| s.to_owned()));
+                                      "metric.prefix",
+                                      matches,
+                                      config,
+                                      Some("tikv".to_owned()),
+                                      |v| v.as_str().map(|s| s.to_owned()));
 
     if let Some(s) = postfix {
         prefix.push('.');
@@ -318,7 +318,7 @@ fn run_local_server(listener: TcpListener, store: Storage) {
     svr.run(&mut event_loop).unwrap();
 }
 
-fn run_raft_server(listener: TcpListener, matches: &Matches, config: &mut toml::Value) {
+fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value) {
     let mut event_loop = create_event_loop().unwrap();
     let ch = SendCh::new(event_loop.channel());
 
@@ -391,7 +391,7 @@ fn main() {
         return;
     }
 
-    let mut config = match matches.opt_str("C") {
+    let config = match matches.opt_str("C") {
         Some(path) => {
             let mut config_file = fs::File::open(&path).expect("config open filed");
             let mut s = String::new();
@@ -430,7 +430,7 @@ fn main() {
             run_local_server(listener, store);
         }
         RAFTKV_DSN => {
-            run_raft_server(listener, &matches, &mut config);
+            run_raft_server(listener, &matches, &config);
         }
         n => panic!("unrecognized dns name: {}", n),
     };
