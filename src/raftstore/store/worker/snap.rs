@@ -144,7 +144,7 @@ impl Runnable<Task> for Runner {
         }
 
         let (snap, region_id) = res.unwrap();
-        match self.save_snapshot(&snap, region_id, "/tmp/") {
+        match self.save_snapshot(&snap, region_id, task.storage.get_snap_path()) {
             Err(e) => {
                 error!("save snapshot file failed: {:?}!!!", e);
                 task.storage.wl().snap_state = SnapState::Failed;

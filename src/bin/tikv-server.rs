@@ -22,10 +22,11 @@ extern crate rocksdb;
 extern crate mio;
 extern crate toml;
 extern crate cadence;
+extern crate tempdir;
 
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::io::Read;
 use std::net::UdpSocket;
@@ -34,6 +35,7 @@ use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use cadence::{StatsdClient, NopMetricSink, UdpMetricSink};
+use tempdir::TempDir;
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
 use tikv::util::{self, logger, panic_hook, metric};
@@ -247,10 +249,11 @@ fn build_raftkv(matches: &Matches,
                 cluster_id: u64,
                 addr: String,
                 pd_client: Arc<RpcClient>)
-                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>) {
+                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, String) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
     let path = get_store_path(matches, config);
+    let snap_path = Path::new(&path).join("/snapshot/");
 
     let opts = get_rocksdb_option(matches, config);
 
@@ -271,10 +274,12 @@ fn build_raftkv(matches: &Matches,
 
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
-    node.start(event_loop, engine.clone(), trans).unwrap();
+    node.start(event_loop, engine.clone(), trans, &snap_path).unwrap();
     let raft_router = node.raft_store_router();
 
-    (create_raft_storage(node, engine).unwrap(), raft_router)
+    (create_raft_storage(node, engine).unwrap(),
+     raft_router,
+     snap_path.into_os_string().into_string().unwrap())
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -299,6 +304,10 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
+fn path_to_string(p: PathBuf) -> String {
+    p.into_os_string().into_string().unwrap()
+}
+
 fn run_local_server(listener: TcpListener, store: Storage) {
     let mut event_loop = create_event_loop().unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
@@ -306,7 +315,8 @@ fn run_local_server(listener: TcpListener, store: Storage) {
                               listener,
                               store,
                               router,
-                              MockStoreAddrResolver)
+                              MockStoreAddrResolver,
+                              TempDir::new("snapshot").unwrap().path().to_str().unwrap())
         .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
@@ -332,14 +342,21 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
-    let (store, raft_router) = build_raftkv(matches,
-                                            config,
-                                            ch,
-                                            cluster_id,
-                                            format!("{}", listener.local_addr().unwrap()),
-                                            pd_client);
+    let (store, raft_router, snap_path) = build_raftkv(matches,
+                                                       config,
+                                                       ch,
+                                                       cluster_id,
+                                                       format!("{}",
+                                                               listener.local_addr().unwrap()),
+                                                       pd_client);
 
-    let mut svr = Server::new(&mut event_loop, listener, store, raft_router, resolver).unwrap();
+    let mut svr = Server::new(&mut event_loop,
+                              listener,
+                              store,
+                              raft_router,
+                              resolver,
+                              &snap_path)
+        .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 

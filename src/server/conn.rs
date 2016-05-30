@@ -63,6 +63,7 @@ pub struct Conn {
     snapshot_receiver: Option<SnapshotReceiver>,
     tx: Sender<ConnData>,
     rx: Receiver<ConnData>,
+    snap_path: String,
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
@@ -105,7 +106,7 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 
 
 impl Conn {
-    pub fn new(sock: TcpStream, token: Token, store_id: Option<u64>) -> Conn {
+    pub fn new(sock: TcpStream, token: Token, store_id: Option<u64>, snap_path: &str) -> Conn {
         let (tx, rx) = channel();
         Conn {
             sock: sock,
@@ -117,6 +118,7 @@ impl Conn {
             res: VecDeque::new(),
             last_msg_id: 0,
             snapshot_receiver: None,
+            snap_path: snap_path.to_owned(),
             tx: tx,
             rx: rx,
             store_id: store_id,
@@ -172,7 +174,7 @@ impl Conn {
             MessageType::Snapshot => {
                 let mut worker = Worker::new("snapshot receiver".to_owned());
                 // TODO we need store id here!!
-                let runner = Runner::new("/tmp/",
+                let runner = Runner::new(&self.snap_path,
                                          msg.take_snapshot_file(),
                                          msg.take_raft(),
                                          self.last_msg_id,

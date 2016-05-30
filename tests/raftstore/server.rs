@@ -32,6 +32,7 @@ use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
+use tempdir::TempDir;
 
 
 type SimulateServerTransport = SimulateTransport<ServerTransport>;
@@ -122,7 +123,11 @@ impl Simulator for ServerCluster {
         let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
 
-        node.start(store_event_loop, engine.clone(), simulate_trans.clone()).unwrap();
+        node.start(store_event_loop,
+                   engine.clone(),
+                   simulate_trans.clone(),
+                   TempDir::new("snapshot").unwrap().path())
+            .unwrap();
         let router = node.raft_store_router();
 
         assert!(node_id == 0 || node_id == node.id());
@@ -132,7 +137,14 @@ impl Simulator for ServerCluster {
         self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
 
-        let mut server = Server::new(&mut event_loop, listener, store, router, resolver).unwrap();
+        let mut server =
+            Server::new(&mut event_loop,
+                        listener,
+                        store,
+                        router,
+                        resolver,
+                        TempDir::new("test_cluster").unwrap().path().to_str().unwrap())
+                .unwrap();
 
         let ch = server.get_sendch();
 

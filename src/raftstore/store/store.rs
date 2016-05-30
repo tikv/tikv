@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
+use std::path::Path;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::Duration;
 
@@ -53,6 +54,7 @@ const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
+    snap_path: String,
     store: metapb::Store,
     engine: Arc<DB>,
     sendch: SendCh,
@@ -105,6 +107,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         Ok(Store {
             cfg: cfg,
+            snap_path: "".to_owned(),
             store: meta,
             engine: engine,
             sendch: sendch,
@@ -123,7 +126,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     // Do something before store runs.
-    fn prepare(&mut self) -> Result<()> {
+    fn prepare(&mut self, snap_path: &str) -> Result<()> {
+        self.snap_path = snap_path.to_owned();
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
@@ -137,7 +141,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
-            let peer = try!(Peer::create(self, &region));
+            let peer = try!(Peer::create(self, &region, snap_path));
 
             self.region_ranges.insert(enc_end_key(&region), region_id);
             // No need to check duplicated here, because we use region id as the key
@@ -149,8 +153,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        try!(self.prepare());
+    pub fn run(&mut self, event_loop: &mut EventLoop<Self>, snap_path: &Path) -> Result<()> {
+        try!(self.prepare(snap_path.to_str().unwrap()));
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
@@ -271,8 +275,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // TODO: we may encounter a message with larger peer id, which
         // means current peer is stale, then we should remove current peer
 
+        let snap_path = self.snap_path.clone();
         if !self.region_peers.contains_key(&region_id) {
-            let peer = try!(Peer::replicate(self, region_id, msg.get_region_epoch(), to.get_id()));
+            let peer = try!(Peer::replicate(self,
+                                            region_id,
+                                            msg.get_region_epoch(),
+                                            to.get_id(),
+                                            &snap_path));
             // We don't have start_key of the region, so there is no need to insert into
             // region_ranges
             self.region_peers.insert(region_id, peer);
@@ -401,7 +410,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        match Peer::create(self, &right) {
+        let snap_path = self.snap_path.clone();
+        match Peer::create(self, &right, &snap_path) {
             Err(e) => {
                 error!("create new split region {:?} err {:?}", right, e);
             }

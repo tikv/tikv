@@ -84,6 +84,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     end_point_worker: Worker<RequestTask>,
 
     resolver: S,
+    snap_path: String,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -96,7 +97,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                listener: TcpListener,
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
-               resolver: S)
+               resolver: S,
+               snap_path: &str)
                -> Result<Server<T, S>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
@@ -118,6 +120,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store: store_handler,
             end_point_worker: end_point_worker,
             resolver: resolver,
+            snap_path: snap_path.to_owned(),
         };
 
         Ok(svr)
@@ -183,7 +186,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  EventSet::readable() | EventSet::hup(),
                                  PollOpt::edge()));
 
-        let conn = Conn::new(sock, new_token, store_id);
+        let conn = Conn::new(sock, new_token, store_id, &self.snap_path);
         self.conns.insert(new_token, conn);
 
         Ok(new_token)
@@ -690,6 +693,7 @@ mod tests {
     use std::net::SocketAddr;
 
     use mio::tcp::TcpListener;
+    use tempdir::TempDir;
 
     use super::*;
     use super::super::{Msg, ConnData, Result};
@@ -753,7 +757,8 @@ mod tests {
                         listener,
                         Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
-                        resolver)
+                        resolver,
+                        TempDir::new("snapshot").unwrap().path().to_str().unwrap())
                 .unwrap();
 
         let ch = server.get_sendch();

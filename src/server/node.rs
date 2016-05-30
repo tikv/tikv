@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::thread;
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use mio::EventLoop;
@@ -81,7 +82,8 @@ impl<C> Node<C>
     pub fn start<T>(&mut self,
                     event_loop: EventLoop<Store<T, C>>,
                     engine: Arc<DB>,
-                    trans: Arc<RwLock<T>>)
+                    trans: Arc<RwLock<T>>,
+                    snap_path: &Path)
                     -> Result<()>
         where T: Transport + 'static
     {
@@ -107,7 +109,7 @@ impl<C> Node<C>
         }
 
         // inform pd.
-        try!(self.start_store(event_loop, store_id, engine, trans));
+        try!(self.start_store(event_loop, store_id, engine, trans, snap_path));
         try!(self.pd_client
             .put_store(self.store.clone()));
         Ok(())
@@ -198,7 +200,8 @@ impl<C> Node<C>
                       mut event_loop: EventLoop<Store<T, C>>,
                       store_id: u64,
                       engine: Arc<DB>,
-                      trans: Arc<RwLock<T>>)
+                      trans: Arc<RwLock<T>>,
+                      snap_path: &Path)
                       -> Result<()>
         where T: Transport + 'static
     {
@@ -217,9 +220,10 @@ impl<C> Node<C>
                                         trans.clone(),
                                         pd_client));
 
+        let path = snap_path.to_owned();
         let builder = thread::Builder::new().name(format!("raftstore-{}", store_id));
         let h = try!(builder.spawn(move || {
-            if let Err(e) = store.run(&mut event_loop) {
+            if let Err(e) = store.run(&mut event_loop, &path) {
                 error!("store {} run err {:?}", store_id, e);
             };
         }));
