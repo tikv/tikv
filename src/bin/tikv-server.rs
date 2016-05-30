@@ -247,7 +247,7 @@ fn build_raftkv(matches: &Matches,
                 cluster_id: u64,
                 addr: String,
                 pd_client: Arc<RpcClient>)
-                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>) {
+                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
     let path = get_store_path(matches, config);
@@ -273,8 +273,9 @@ fn build_raftkv(matches: &Matches,
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
     node.start(event_loop, engine.clone(), trans).unwrap();
     let raft_router = node.raft_store_router();
+    let node_id = node.id();
 
-    (create_raft_storage(node, engine).unwrap(), raft_router)
+    (create_raft_storage(node, engine).unwrap(), raft_router, node_id)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -311,7 +312,7 @@ fn run_local_server(listener: TcpListener, store: Storage) {
     svr.run(&mut event_loop).unwrap();
 }
 
-fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value) {
+fn run_raft_server(listener: TcpListener, matches: &Matches, config: &mut toml::Value) {
     let mut event_loop = create_event_loop().unwrap();
     let ch = SendCh::new(event_loop.channel());
 
@@ -332,12 +333,25 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
-    let (store, raft_router) = build_raftkv(matches,
-                                            config,
-                                            ch,
-                                            cluster_id,
-                                            format!("{}", listener.local_addr().unwrap()),
-                                            pd_client);
+    let (store, raft_router, node_id) = build_raftkv(matches,
+                                                     config,
+                                                     ch,
+                                                     cluster_id,
+                                                     format!("{}", listener.local_addr().unwrap()),
+                                                     pd_client);
+
+    // append node id to metric prefix.
+    let mut prefix = get_string_value("metric-prefix",
+                                      "metric.prefix",
+                                      matches,
+                                      config,
+                                      Some("tikv".to_owned()),
+                                      |v| v.as_str().map(|s| s.to_owned()));
+    prefix.push_str(&format!(".{}", node_id));
+    if let Some(mut prefix_with_id) = config.lookup_mut("metric.prefix") {
+        *prefix_with_id = toml::Value::String(prefix);
+    }
+    initial_metric(matches, config);
 
     let mut svr = Server::new(&mut event_loop, listener, store, raft_router, resolver).unwrap();
     svr.run(&mut event_loop).unwrap();
@@ -382,7 +396,7 @@ fn main() {
         return;
     }
 
-    let config = match matches.opt_str("C") {
+    let mut config = match matches.opt_str("C") {
         Some(path) => {
             let mut config_file = fs::File::open(&path).expect("config open filed");
             let mut s = String::new();
@@ -394,8 +408,6 @@ fn main() {
     };
 
     initial_log(&matches, &config);
-
-    initial_metric(&matches, &config);
 
     let addr = get_string_value("A",
                                 "server.addr",
@@ -417,12 +429,13 @@ fn main() {
 
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
+            initial_metric(&matches, &config);
             let path = get_store_path(&matches, &config);
             let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();
             run_local_server(listener, store);
         }
         RAFTKV_DSN => {
-            run_raft_server(listener, &matches, &config);
+            run_raft_server(listener, &matches, &mut config);
         }
         n => panic!("unrecognized dns name: {}", n),
     };
