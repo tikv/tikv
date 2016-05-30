@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::u64;
+
 use raftstore::Result;
 
 const RAFT_BASE_TICK_INTERVAL: u64 = 100;
@@ -27,7 +29,7 @@ const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
 const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 30000;
-const STORE_CAPACITY: u64 = 1024 * 1024 * 1024 * 1024;
+const STORE_CAPACITY: u64 = u64::MAX;
 
 #[derive(Debug, Clone)]
 pub struct Config {

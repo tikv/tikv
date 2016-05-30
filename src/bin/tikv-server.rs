@@ -264,10 +264,12 @@ fn build_raftkv(matches: &Matches,
                                      "server.capacity",
                                      matches,
                                      config,
-                                     Some(1024 * 1024 * 1024 * 1024),
+                                     Some(0),
                                      |v| v.as_integer());
-    assert!(capacity > 0);
-    cfg.store_cfg.capacity = capacity as u64;
+    assert!(capacity >= 0);
+    if capacity > 0 {
+        cfg.store_cfg.capacity = capacity as u64;
+    }
 
     // Set advertise address for outer node and client use.
     // If no advertise listening address set, use the associated listening address.
@@ -374,7 +376,10 @@ fn main() {
                 "store",
                 "set the path to rocksdb directory",
                 "/tmp/tikv/store");
-    opts.optopt("", "capacity", "set the store capacity", "1099511627776");
+    opts.optopt("",
+                "capacity",
+                "set the store capacity",
+                "default: 0 (unlimited)");
     opts.optopt("S",
                 "dsn",
                 "set which dsn to use, warning: default is rocksdb without persistent",
