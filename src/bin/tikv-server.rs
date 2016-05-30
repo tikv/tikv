@@ -113,14 +113,14 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
 fn initial_metric(matches: &Matches, config: &toml::Value) {
     let host = get_string_value("metric-addr",
                                 "metric.addr",
-                                &matches,
-                                &config,
+                                matches,
+                                config,
                                 Some("".to_owned()),
                                 |v| v.as_str().map(|s| s.to_owned()));
     let prefix = get_string_value("metric-prefix",
                                   "metric.prefix",
-                                  &matches,
-                                  &config,
+                                  matches,
+                                  config,
                                   Some("tikv".to_owned()),
                                   |v| v.as_str().map(|s| s.to_owned()));
     if !host.is_empty() {
