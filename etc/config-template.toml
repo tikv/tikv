@@ -11,13 +11,9 @@ store = "/tmp/tikv/store"
 log-level = "info"
 
 [metric]
-# There are two type of statsd client implemented: `log` and `udp. The default statsd client is
-# `log` which will output to log.
-# log level: trace, debug, info, warn, error.
-level = "info"
 # if host applied then `udp` will be activated.
 # remote statsd server address.
-host = ""
+addr = ""
 # metric prefix.
 prefix = "tikv"
 

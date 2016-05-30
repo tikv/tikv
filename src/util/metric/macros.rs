@@ -48,7 +48,7 @@ macro_rules! metric_decr {
 macro_rules! metric_time {
     ($key:expr, $time:expr) => {
         if let Some(client) = $crate::util::metric::client() {
-            if let Err(e) = client.time($key, $time) {
+            if let Err(e) = client.time($key, $crate::util::duration_to_ms($time)) {
                 warn!("{}", e);
             }
         }

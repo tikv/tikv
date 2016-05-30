@@ -102,11 +102,9 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 
 
 impl Conn {
-    pub fn new(sock: TcpStream,
-               token: Token,
-               store_id: Option<u64>) -> Conn {
+    pub fn new(sock: TcpStream, token: Token, store_id: Option<u64>) -> Conn {
         let (tx, rx) = channel();
-        Conn{
+        Conn {
             sock: sock,
             token: token,
             interest: EventSet::readable() | EventSet::hup(),
@@ -189,9 +187,9 @@ impl Conn {
             _ => {
                 self.conn_type = ConnType::Rpc;
                 let mut first = vec![ConnData {
-                    msg_id: self.last_msg_id,
-                    msg: msg,
-                }];
+                                         msg_id: self.last_msg_id,
+                                         msg: msg,
+                                     }];
                 let mut rem = try!(self.read_rpc(event_loop));
                 first.append(&mut rem);
                 Ok(first)
@@ -238,7 +236,7 @@ impl Conn {
                 print!("receive data...ringbuf: {:?}\n",
                        remaining_mutbuf(&receiver.buf));
                 try!(receiver.worker
-                     .schedule(Task::new(receiver.buf.bytes(), box move |_| {}, false)));
+                    .schedule(Task::new(receiver.buf.bytes(), box move |_| {}, false)));
                 receiver.buf.clear();
 
                 if finish {
@@ -259,7 +257,7 @@ impl Conn {
 
             // we have already read whole header, parse it and begin to read payload.
             let (msg_id, payload_len) = try!(rpc::decode_msg_header(self.header
-                                                                    .bytes()));
+                .bytes()));
             self.last_msg_id = msg_id;
             self.payload = Some(create_mem_buf(payload_len));
         }

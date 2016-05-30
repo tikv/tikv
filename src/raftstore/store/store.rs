@@ -347,6 +347,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(p) = self.region_peers.get(&region_id) {
             if p.is_leader() {
                 // Notify pd immediately.
+                info!("notify pd with change peer region {:?}", p.region());
                 self.heartbeat_pd(p);
             }
         }
@@ -420,7 +421,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 if is_leader {
                     // Notify pd immediately to let it update the region meta.
-                    self.heartbeat_pd(self.region_peers.get(&region_id).unwrap());
+                    let left = self.region_peers.get(&region_id).unwrap();
+                    info!("notify pd with split left {:?}, right {:?}",
+                          left.region(),
+                          new_peer.region());
+                    self.heartbeat_pd(left);
                     self.heartbeat_pd(&new_peer);
                 }
 

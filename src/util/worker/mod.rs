@@ -243,12 +243,17 @@ mod test {
         worker.schedule(50).unwrap();
         worker.schedule(50).unwrap();
         assert!(worker.is_busy());
-        thread::sleep(Duration::from_millis(60));
+        for _ in 0..100 {
+            if !worker.is_busy() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
         assert!(!worker.is_busy());
+        assert_eq!(count.load(Ordering::SeqCst), 150);
         worker.stop().unwrap();
         // now worker can't handle any task
         assert!(worker.is_busy());
-        assert_eq!(count.load(Ordering::SeqCst), 150);
     }
 
     #[test]

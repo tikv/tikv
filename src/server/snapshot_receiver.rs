@@ -70,7 +70,8 @@ impl Runner {
                file_info: SnapshotFile,
                msg: RaftMessage,
                msg_id: u64,
-               tx: Sender<ConnData>) -> Runner {
+               tx: Sender<ConnData>)
+               -> Runner {
         let file_name = snapshot_file_path(path, 0, &file_info);
         Runner {
             file_name: file_name.to_owned(),
@@ -98,9 +99,9 @@ impl Runnable<Task> for Runner {
             let mut msg = msgpb::Message::new();
             msg.set_msg_type(msgpb::MessageType::Raft);
             msg.set_raft(self.msg.clone());
-            if let Err(e) = self.tx.send(ConnData{
-                    msg_id: self.msg_id,
-                    msg: msg,
+            if let Err(e) = self.tx.send(ConnData {
+                msg_id: self.msg_id,
+                msg: msg,
             }) {
                 error!("send snapshot raft message failed, err={:?}", e);
             }

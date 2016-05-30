@@ -18,6 +18,7 @@ use std::{result, error};
 use std::time::Instant;
 use std::boxed::FnBox;
 use std::cell::RefCell;
+use std::fmt::{self, Display, Formatter};
 
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
 use tipb::schema::ColumnInfo;
@@ -27,16 +28,17 @@ use byteorder::{BigEndian, ReadBytesExt};
 use threadpool::ThreadPool;
 
 use storage::{Engine, SnapshotStore, engine, txn, mvcc};
-use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::kvrpcpb::LockInfo;
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb;
-use storage::Key;
+use storage::{Snapshot, Key};
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
 use util::{as_slice, escape};
+use util::worker::BatchRunnable;
 use util::SlowTimer;
 use super::OnResponse;
 
@@ -106,15 +108,52 @@ impl EndPointHost {
             pool: ThreadPool::new(DEFAULT_POOL_SIZE),
         }
     }
+}
 
-    pub fn on_request(&self, req: Request, on_resp: OnResponse) {
-        let end_point = self.snap_endpoint.clone();
-        self.pool.execute(move || {
-            let timer = SlowTimer::new();
-            let tp = req.get_tp();
-            end_point.handle_request(req, on_resp);
-            slow_log!(timer, "request type {} takes {:?}", tp, timer.elapsed());
-        });
+pub struct RequestTask {
+    req: Request,
+    on_resp: OnResponse,
+}
+
+impl RequestTask {
+    pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
+        RequestTask {
+            req: req,
+            on_resp: on_resp,
+        }
+    }
+}
+
+impl Display for RequestTask {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f,
+               "request [context {:?}, tp: {}, ranges: {:?}]",
+               self.req.get_context(),
+               self.req.get_tp(),
+               self.req.get_ranges())
+    }
+}
+
+impl BatchRunnable<RequestTask> for EndPointHost {
+    #[allow(for_kv_map)]
+    fn run_batch(&mut self, reqs: &mut Vec<RequestTask>) {
+        let mut grouped_reqs = map![];
+        for req in reqs.drain(..) {
+            let key = {
+                let ctx = req.req.get_context();
+                (ctx.get_region_id(),
+                 ctx.get_region_epoch().get_conf_ver(),
+                 ctx.get_region_epoch().get_version(),
+                 ctx.get_peer().get_id(),
+                 ctx.get_peer().get_store_id())
+            };
+            let mut group = grouped_reqs.entry(key).or_insert_with(|| vec![]);
+            group.push(req);
+        }
+        for (_, reqs) in grouped_reqs {
+            let end_point = self.snap_endpoint.clone();
+            self.pool.execute(move || end_point.handle_requests(reqs));
+        }
     }
 }
 
@@ -139,15 +178,37 @@ impl TiDbEndPoint {
         // TODO: Spawn a new thread for handling requests asynchronously.
         TiDbEndPoint { engine: engine }
     }
-
-    fn new_snapshot<'a>(&'a self, ctx: &Context, start_ts: u64) -> Result<SnapshotStore<'a>> {
-        let snapshot = try!(self.engine.snapshot(ctx));
-        Ok(SnapshotStore::new(snapshot, start_ts))
-    }
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, req: Request, on_resp: OnResponse) {
+    fn handle_requests(&self, reqs: Vec<RequestTask>) {
+        let ts = Instant::now();
+        let snap = match self.engine.snapshot(reqs[0].req.get_context()) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("failed to get snapshot: {:?}", e);
+                on_error(e.into(),
+                         box move |r| {
+                    let mut resp_msg = Message::new();
+                    resp_msg.set_msg_type(MessageType::CopResp);
+                    resp_msg.set_cop_resp(r);
+                    for t in reqs {
+                        t.on_resp.call_box((resp_msg.clone(),));
+                    }
+                });
+                return;
+            }
+        };
+        metric_time!("copr.snapshot", ts.elapsed());
+        for t in reqs {
+            let timer = SlowTimer::new();
+            let tp = t.req.get_tp();
+            self.handle_request(snap.as_ref(), t.req, t.on_resp);
+            metric_time!(&format!("copr.request.{}", tp), timer.elapsed());
+        }
+    }
+
+    fn handle_request(&self, snap: &Snapshot, req: Request, on_resp: OnResponse) {
         let cb = box move |r| {
             let mut resp_msg = Message::new();
             resp_msg.set_msg_type(MessageType::CopResp);
@@ -161,7 +222,7 @@ impl TiDbEndPoint {
                     on_error(box_err!(e), cb);
                     return;
                 }
-                match self.handle_select(req, sel) {
+                match self.handle_select(snap, req, sel) {
                     Ok(r) => cb(r),
                     Err(e) => on_error(e, cb),
                 }
@@ -170,10 +231,12 @@ impl TiDbEndPoint {
         }
     }
 
-    pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
-        let ts = Instant::now();
-        let snap = try!(self.new_snapshot(req.get_context(), sel.get_start_ts()));
-        debug!("[TIME_SNAPSHOT] {:?}", ts.elapsed());
+    pub fn handle_select(&self,
+                         snap: &Snapshot,
+                         mut req: Request,
+                         sel: SelectRequest)
+                         -> Result<Response> {
+        let snap = SnapshotStore::new(snap, sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap));
         let mut range = req.take_ranges().into_vec();
         let desc = ctx.sel.get_order_by().first().map_or(false, |o| o.get_desc());
@@ -192,7 +255,7 @@ impl TiDbEndPoint {
         } else {
             ctx.get_rows_from_idx(range, limit, desc)
         };
-        debug!("[TIME_SELECT] {:?} {:?}", req.get_tp(), sel_ts.elapsed());
+        metric_time!(&format!("copr.select.{}", req.get_tp()), sel_ts.elapsed());
         let resp_ts = Instant::now();
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
@@ -212,7 +275,7 @@ impl TiDbEndPoint {
         }
         let data = box_try!(sel_resp.write_to_bytes());
         resp.set_data(data);
-        debug!("[TIME_COMPOSE_RESP] {:?}", resp_ts.elapsed());
+        metric_time!("copr.compose_resp", resp_ts.elapsed());
         Ok(resp)
     }
 }

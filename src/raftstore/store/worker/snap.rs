@@ -19,7 +19,7 @@ use protobuf::{ProtobufError, Message};
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::io::Write;
-use std::path::{Path};
+use std::path::Path;
 use std::{error, io, fs};
 use crc::{crc32, Hasher32};
 use byteorder::{ByteOrder, LittleEndian};
@@ -34,7 +34,10 @@ pub struct Task {
 
 impl Task {
     pub fn new(store_id: u64, storage: Arc<RaftStorage>) -> Task {
-        Task { storage: storage, store_id: store_id}
+        Task {
+            storage: storage,
+            store_id: store_id,
+        }
     }
 }
 
@@ -93,10 +96,12 @@ impl Runner {
         Ok((snap, region_id))
     }
 
-    fn save_snapshot(&self, snapshot: &Snapshot,
+    fn save_snapshot(&self,
+                     snapshot: &Snapshot,
                      store_id: u64,
                      region_id: u64,
-                     dir: &str) -> Result<SnapshotFile, Error> {
+                     dir: &str)
+                     -> Result<SnapshotFile, Error> {
         let mut snapshot_file = SnapshotFile::new();
         snapshot_file.set_region(region_id);
         snapshot_file.set_term(snapshot.get_metadata().get_term());
@@ -145,10 +150,10 @@ impl Runnable<Task> for Runner {
                 error!("save snapshot file failed: {:?}!!!", e);
                 task.storage.wl().snap_state = SnapState::Failed;
                 return;
-            },
+            }
             Ok(_) => {
                 task.storage.wl().snap_state = SnapState::Snap(snap);
-            },
+            }
         }
 
         print!("write snapshot file success!\n");
@@ -184,10 +189,10 @@ impl<T: Write> Write for CRCWriter<T> {
 
 pub fn snapshot_file_path(dir: &str, store_id: u64, file: &SnapshotFile) -> String {
     let file_name: String = format!("{}{}_{}_{}",
-                            dir,
-                            file.get_region(),
-                            file.get_term(),
-                            file.get_index());
+                                    dir,
+                                    file.get_region(),
+                                    file.get_term(),
+                                    file.get_index());
     {
         let path = Path::new(&file_name);
         let _ = fs::create_dir_all(path.parent().unwrap());
