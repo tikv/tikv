@@ -16,6 +16,7 @@ use raftstore::store::{self, RaftStorage, SnapState};
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
+use std::time::Instant;
 
 use util::worker::Runnable;
 
@@ -77,9 +78,14 @@ impl Runner {
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
+        metric_incr!("raftstore.generate_snap");
+        let ts = Instant::now();
         if let Err(e) = self.generate_snap(&task) {
             error!("failed to generate snap: {:?}!!!", e);
             task.storage.wl().snap_state = SnapState::Failed;
+            return;
         }
+        metric_incr!("raftstore.generate_snap.success");
+        metric_time!("raftstore.generate_snap.cost", ts.elapsed());
     }
 }
