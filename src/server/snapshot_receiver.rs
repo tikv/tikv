@@ -72,7 +72,7 @@ impl Runner {
                msg_id: u64,
                tx: Sender<ConnData>)
                -> Runner {
-        let file_name = snapshot_file_path(path, 0, &file_info);
+        let file_name = snapshot_file_path(path, &file_info);
         Runner {
             file_name: file_name.to_owned(),
             file: fs::File::create(file_name).unwrap(),
@@ -128,4 +128,6 @@ pub struct SnapshotReceiver {
     pub worker: Worker<Task>,
     pub buf: MutByteBuf,
     pub more: bool,
+    pub file_size: usize,
+    pub read_size: usize,
 }

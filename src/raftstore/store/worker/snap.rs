@@ -22,7 +22,7 @@ use std::io::Write;
 use std::path::Path;
 use std::{error, io, fs};
 use crc::{crc32, Hasher32};
-use byteorder::{ByteOrder, LittleEndian};
+use byteorder::{ByteOrder, BigEndian};
 
 use util::worker::Runnable;
 
@@ -98,7 +98,6 @@ impl Runner {
 
     fn save_snapshot(&self,
                      snapshot: &Snapshot,
-                     store_id: u64,
                      region_id: u64,
                      dir: &str)
                      -> Result<SnapshotFile, Error> {
@@ -107,7 +106,7 @@ impl Runner {
         snapshot_file.set_term(snapshot.get_metadata().get_term());
         snapshot_file.set_index(snapshot.get_metadata().get_index());
 
-        let file_name = snapshot_file_path(dir, store_id, &snapshot_file);
+        let file_name = snapshot_file_path(dir, &snapshot_file);
         print!("save_snapshot file name: {}\n", file_name);
         let metadata = fs::metadata(&file_name);
         if let Ok(attr) = metadata {
@@ -120,14 +119,14 @@ impl Runner {
         let mut crc_writer = CRCWriter::new(f);
         let mut buf = [0; 4];
         let header_len = snapshot.compute_size();
-        LittleEndian::write_u32(&mut buf, header_len);
+        BigEndian::write_u32(&mut buf, header_len);
         try!(crc_writer.write(&buf));
 
         // TODO file format will change
         try!(snapshot.write_to_writer(&mut crc_writer));
 
         let checksum = crc_writer.sum();
-        LittleEndian::write_u32(&mut buf, checksum);
+        BigEndian::write_u32(&mut buf, checksum);
         try!(crc_writer.write(&buf));
 
         try!(fs::rename(tmp_file_name, file_name));
@@ -145,7 +144,7 @@ impl Runnable<Task> for Runner {
         }
 
         let (snap, region_id) = res.unwrap();
-        match self.save_snapshot(&snap, task.store_id, region_id, "/tmp/") {
+        match self.save_snapshot(&snap, region_id, "/tmp/") {
             Err(e) => {
                 error!("save snapshot file failed: {:?}!!!", e);
                 task.storage.wl().snap_state = SnapState::Failed;
@@ -187,7 +186,7 @@ impl<T: Write> Write for CRCWriter<T> {
     }
 }
 
-pub fn snapshot_file_path(dir: &str, store_id: u64, file: &SnapshotFile) -> String {
+pub fn snapshot_file_path(dir: &str, file: &SnapshotFile) -> String {
     let file_name: String = format!("{}{}_{}_{}",
                                     dir,
                                     file.get_region(),

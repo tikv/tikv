@@ -16,12 +16,14 @@ use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
 use std::sync::{Arc, RwLock};
+use std::net::Shutdown;
 use std::sync::mpsc::{Sender, Receiver, channel};
+// use std::io::Read;
+
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
-
 use kvproto::msgpb::{Message, MessageType};
 use super::{Result, ConnData};
 use super::server::Server;
@@ -30,6 +32,7 @@ use util::worker::Worker;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snapshot_receiver::{SnapshotReceiver, Task, Runner};
+use byteorder::{ByteOrder, BigEndian};
 
 pub type OnClose = Box<FnBox() + Send>;
 pub type OnWriteComplete = Box<FnBox() + Send>;
@@ -170,7 +173,7 @@ impl Conn {
                 let mut worker = Worker::new("snapshot receiver".to_owned());
                 // TODO we need store id here!!
                 let runner = Runner::new("/tmp/",
-                                         msg.take_snapshot(),
+                                         msg.take_snapshot_file(),
                                          msg.take_raft(),
                                          self.last_msg_id,
                                          self.tx.clone());
@@ -180,6 +183,8 @@ impl Conn {
                     buf: create_mem_buf(10 * (1 << 20)),
                     worker: worker,
                     more: false,
+                    file_size: 0,
+                    read_size: 0,
                 });
                 self.conn_type = ConnType::Snapshot;
                 self.read_snapshot(event_loop)
@@ -209,6 +214,17 @@ impl Conn {
                 if remaining == 0 {
                     receiver.more = true;
                     finish = true;
+                }
+                receiver.read_size += remaining;
+
+                if receiver.file_size == 0 {
+                    if receiver.read_size >= 4 {
+                        receiver.file_size = BigEndian::read_u32(&receiver.buf.bytes()) as usize;
+                        receiver.read_size -= 4;
+                        unsafe {
+                            receiver.buf.advance(4);
+                        }
+                    }
                 }
 
                 // TODO should distinguish between close and error
@@ -241,6 +257,11 @@ impl Conn {
 
                 if finish {
                     break;
+                }
+
+                // close connection after reading the whole data
+                if receiver.read_size >= receiver.file_size {
+                    self.sock.shutdown(Shutdown::Both);
                 }
             }
         }

@@ -17,7 +17,8 @@ use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
 use std::net::SocketAddr;
-use std::{io, thread, fs};
+use std::{io, thread, fs, net};
+use std::io::{Read, Write};
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
@@ -38,6 +39,7 @@ use super::coprocessor::{RequestTask, EndPointHost};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use raft::SnapshotStatus;
+use byteorder::{ByteOrder, LittleEndian};
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
@@ -508,7 +510,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         file_info.set_term(term);
         file_info.set_index(index);
 
-        final_data.msg.set_snapshot(file_info);
+        final_data.msg.set_snapshot_file(file_info);
 
         // snapshot message consistent of two part:
         // one is snapshot file, the other is the message itself
@@ -516,13 +518,19 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         // because if we send them separately in different connection
         // receiver can't assure their order!
         thread::spawn(move || {
-            let file_name = snapshot_file_path("/tmp/", store_id, &final_data.msg.get_snapshot());
+            let file_name = snapshot_file_path("/tmp/", &final_data.msg.get_snapshot_file());
+            let attr = fs::metadata(&file_name).unwrap();
             print!("send_snapshot_sock, new thread to send file: {}\n",
                    &file_name);
             let mut file = fs::File::open(&file_name).unwrap();
 
-            let mut conn = TcpStream::connect(&sock_addr).unwrap();
+            let mut conn = net::TcpStream::connect(&sock_addr).unwrap();
             rpc::encode_msg(&mut conn, final_data.msg_id, &final_data.msg);
+
+            let mut buf: [u8; 4] = [0; 4];
+            LittleEndian::write_u32(&mut buf, attr.len() as u32);
+
+            conn.write(&mut buf);
 
             let resp = io::copy(&mut file, &mut conn);
             // let reporter = Arc::new(self.new_snapshot_reporter(&data));
@@ -533,6 +541,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             //     }
             //     Ok(_) => reporter.report(SnapshotStatus::Finish),
             // }
+
+            // wait for reader to consume the data and close connection
+            if let Err(e) = conn.read(&mut buf) {
+                error!("reader should consume the whole data and close connection");
+            }
 
             print!("send snapshot socket finish!!\n");
         });
