@@ -33,7 +33,7 @@ use std::net::UdpSocket;
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
-use cadence::{StatsdClient, NopMetricSink, UdpMetricSink};
+use cadence::{StatsdClient, NopMetricSink};
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
 use tikv::util::{self, logger, panic_hook, metric};
@@ -126,7 +126,7 @@ fn initial_metric(matches: &Matches, config: &toml::Value) {
     if !host.is_empty() {
         // We only need a unique UDP bind, so 0.0.0.0:0 is enough.
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
-        let sink = UdpMetricSink::from(&*host, socket).unwrap();
+        let sink = metric::NonblockUdpMetricSink::from(&*host, socket).unwrap();
         let client = StatsdClient::from_sink(&prefix, sink);
 
         if let Err(r) = metric::set_metric_client(Box::new(client)) {
