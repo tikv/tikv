@@ -110,19 +110,25 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     util::init_log(logger::get_level_by_string(&level)).unwrap();
 }
 
-fn initial_metric(matches: &Matches, config: &toml::Value) {
+fn initial_metric(matches: &Matches, config: &toml::Value, postfix: Option<String>) {
     let host = get_string_value("metric-addr",
                                 "metric.addr",
                                 matches,
                                 config,
                                 Some("".to_owned()),
                                 |v| v.as_str().map(|s| s.to_owned()));
-    let prefix = get_string_value("metric-prefix",
+    let mut prefix = get_string_value("metric-prefix",
                                   "metric.prefix",
                                   matches,
                                   config,
                                   Some("tikv".to_owned()),
                                   |v| v.as_str().map(|s| s.to_owned()));
+
+    if let Some(s) = postfix {
+        prefix.push('.');
+        prefix.push_str(&s);
+    }
+
     if !host.is_empty() {
         // We only need a unique UDP bind, so 0.0.0.0:0 is enough.
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
@@ -340,18 +346,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &mut toml::
                                                      format!("{}", listener.local_addr().unwrap()),
                                                      pd_client);
 
-    // append node id to metric prefix.
-    let mut prefix = get_string_value("metric-prefix",
-                                      "metric.prefix",
-                                      matches,
-                                      config,
-                                      Some("tikv".to_owned()),
-                                      |v| v.as_str().map(|s| s.to_owned()));
-    prefix.push_str(&format!(".{}", node_id));
-    if let Some(mut prefix_with_id) = config.lookup_mut("metric.prefix") {
-        *prefix_with_id = toml::Value::String(prefix);
-    }
-    initial_metric(matches, config);
+    initial_metric(matches, config, Some(format!("{}", node_id)));
 
     let mut svr = Server::new(&mut event_loop, listener, store, raft_router, resolver).unwrap();
     svr.run(&mut event_loop).unwrap();
@@ -429,7 +424,7 @@ fn main() {
 
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
-            initial_metric(&matches, &config);
+            initial_metric(&matches, &config, None);
             let path = get_store_path(&matches, &config);
             let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();
             run_local_server(listener, store);
