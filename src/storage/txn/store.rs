@@ -15,7 +15,7 @@ use std::sync::Arc;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, KvPair, Mutation};
 use storage::{Engine, Snapshot, Cursor};
-use storage::mvcc::{MvccTxn, MvccSnapshot, Error as MvccError};
+use storage::mvcc::{MvccTxn, MvccSnapshot, Error as MvccError, MvccCursor};
 use super::shard_mutex::ShardMutex;
 use super::{Error, Result};
 
@@ -208,33 +208,79 @@ impl<'a> SnapshotStore<'a> {
 
     pub fn scanner(&self) -> Result<StoreScanner> {
         let cursor = try!(self.snapshot.iter());
-        let txn = MvccSnapshot::new(self.snapshot, self.start_ts);
         Ok(StoreScanner {
             cursor: cursor,
-            txn: txn,
+            start_ts: self.start_ts,
         })
     }
 }
 
 pub struct StoreScanner<'a> {
     cursor: Box<Cursor + 'a>,
-    txn: MvccSnapshot<'a>,
+    start_ts: u64,
 }
 
 impl<'a> StoreScanner<'a> {
+    pub fn seek(&mut self, mut key: Key) -> Result<Option<(Key, u64)>> {
+        loop {
+            if !try!(self.cursor.seek(&key)) {
+                return Ok(None);
+            }
+            key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
+            let cursor = self.cursor.as_mut();
+            let mut txn = MvccCursor::new(cursor, self.start_ts);
+            if let Some(ts) = try!(txn.get_version(&key)) {
+                return Ok(Some((key, ts)));
+            }
+            key = key.append_ts(u64::max_value());
+        }
+    }
+
+    pub fn reverse_seek(&mut self, mut key: Key) -> Result<Option<(Key, u64)>> {
+        loop {
+            if !try!(self.cursor.reverse_seek(&key)) {
+                return Ok(None);
+            }
+            key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
+            let cursor = self.cursor.as_mut();
+            let mut txn = MvccCursor::new(cursor, self.start_ts);
+            if let Some(ts) = try!(txn.get_version(&key)) {
+                return Ok(Some((key, ts)));
+            }
+        }
+    }
+
+    #[inline]
+    fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key> {
+        let key = if let MvccError::KeyIsLocked { key: ref k, .. } = e {
+            Some(Key::from_raw(k))
+        } else {
+            None
+        };
+        match key {
+            Some(k) => {
+                result.push(Err(e.into()));
+                Ok(k)
+            }
+            None => Err(e.into()),
+        }
+    }
+
     pub fn scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         while results.len() < limit {
-            if !try!(self.cursor.seek(&key)) {
-                break;
+            match self.seek(key) {
+                Ok(Some((k, ts))) => {
+                    // should we panic if None?
+                    if let Some(v) = try!(self.get(&k, ts)) {
+                        results.push(Ok((try!(k.raw()), v.to_vec())));
+                    }
+                    key = k;
+                }
+                Ok(None) => break,
+                Err(Error::Mvcc(e)) => key = try!(StoreScanner::handle_mvcc_err(e, &mut results)),
+                Err(e) => return Err(e),
             }
-            key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
-            match self.txn.get(&key) {
-                Ok(Some(value)) => results.push(Ok((try!(key.raw()), value))),
-                Ok(None) => {}
-                Err(e @ MvccError::KeyIsLocked { .. }) => results.push(Err(e.into())),
-                Err(e) => return Err(e.into()),
-            };
             key = key.append_ts(u64::max_value());
         }
         Ok(results)
@@ -243,20 +289,23 @@ impl<'a> StoreScanner<'a> {
     pub fn reverse_scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         while results.len() < limit {
-            if !try!(self.cursor.reverse_seek(&key)) {
-                break;
-            }
-            key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
-            match self.txn.get(&key) {
-                Ok(Some(value)) => results.push(Ok((try!(key.raw()), value))),
-                Ok(None) => {}
-                Err(e @ MvccError::KeyIsLocked { .. }) => {
-                    results.push(Err(e.into()));
+            match self.reverse_seek(key) {
+                Ok(Some((k, ts))) => {
+                    if let Some(v) = try!(self.get(&k, ts)) {
+                        results.push(Ok((try!(k.raw()), v.to_vec())));
+                    }
+                    key = k;
                 }
-                Err(e) => return Err(e.into()),
-            };
+                Ok(None) => break,
+                Err(Error::Mvcc(e)) => key = try!(StoreScanner::handle_mvcc_err(e, &mut results)),
+                Err(e) => return Err(e),
+            }
         }
         Ok(results)
+    }
+
+    pub fn get(&mut self, key: &Key, ts: u64) -> Result<Option<&[u8]>> {
+        self.cursor.get(&key.append_ts(ts)).map_err(From::from)
     }
 }
 

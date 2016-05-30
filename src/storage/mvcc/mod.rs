@@ -14,7 +14,7 @@
 mod meta;
 mod txn;
 
-pub use self::txn::{MvccTxn, MvccSnapshot};
+pub use self::txn::{MvccTxn, MvccSnapshot, MvccCursor};
 use util::escape;
 
 quick_error! {

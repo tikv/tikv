@@ -62,6 +62,39 @@ pub trait Cursor {
     fn key(&self) -> &[u8];
     fn value(&self) -> &[u8];
 
+    /// Seek the specified key.
+    ///
+    /// This method assume the current position of cursor is
+    /// around `key`, otherwise you should use `seek` instead.
+    fn near_seek(&mut self, key: &Key) -> Result<bool> {
+        if !self.valid() {
+            return self.seek(key);
+        }
+        if self.key() == &**key.encoded() {
+            return Ok(true);
+        }
+        while self.key() > &**key.encoded() && self.prev() {}
+        if !self.valid() {
+            // TODO: check region range.
+            return Ok(false);
+        }
+        while self.key() < &**key.encoded() && self.next() {}
+        // TODO: check region range.
+        Ok(self.valid())
+    }
+
+    /// Get the value of specified key.
+    ///
+    /// This method assume the current position of cursor is
+    /// around `key`, otherwise you should `seek` first.
+    fn get(&mut self, key: &Key) -> Result<Option<&[u8]>> {
+        if try!(self.near_seek(key)) && self.key() == &**key.encoded() {
+            Ok(Some(self.value()))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
         if !try!(self.seek(key)) && !self.seek_to_last() {
             return Ok(false);
@@ -70,6 +103,27 @@ pub trait Cursor {
         while self.key() >= key.encoded().as_slice() && self.prev() {
         }
 
+        Ok(self.valid())
+    }
+
+    /// Reverse seek the specified key.
+    ///
+    /// This method assume the current position of cursor is
+    /// around `key`, otherwise you should use `reverse_seek` instead.
+    fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
+        if !self.valid() {
+            return self.reverse_seek(key);
+        }
+        if self.key() == &**key.encoded() {
+            return Ok(self.prev());
+        }
+        while self.key() < &**key.encoded() && self.next() {}
+        if !self.valid() {
+            // TODO: check region range.
+            return Ok(false);
+        }
+        while self.key() >= &**key.encoded() && self.prev() {}
+        // TODO: check region range.
         Ok(self.valid())
     }
 }
