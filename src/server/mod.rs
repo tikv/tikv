@@ -110,15 +110,15 @@ impl Display for ConnData {
             MessageType::Cmd => write!(f, "[{}] raft command request", self.msg_id),
             MessageType::CmdResp => write!(f, "[{}] raft command response", self.msg_id),
             MessageType::Raft => {
-                let from_store_id = self.msg.get_raft().get_message().get_from();
-                let to_store_id = self.msg.get_raft().get_message().get_to();
+                let from_peer = self.msg.get_raft().get_from_peer();
+                let to_peer = self.msg.get_raft().get_to_peer();
                 let msg_type = self.msg.get_raft().get_message().get_msg_type();
                 write!(f,
                        "[{}] raft {:?} from {:?} to {:?}",
                        self.msg_id,
                        msg_type,
-                       from_store_id,
-                       to_store_id)
+                       from_peer.get_id(),
+                       to_peer.get_id())
             }
             MessageType::KvReq => {
                 write!(f,
@@ -134,6 +134,8 @@ impl Display for ConnData {
             }
             MessageType::CopReq => write!(f, "[{}] coprocessor request", self.msg_id),
             MessageType::CopResp => write!(f, "[{}] coprocessor response", self.msg_id),
+            MessageType::PdReq => write!(f, "[{}] pd request", self.msg_id),
+            MessageType::PdResp => write!(f, "[{}] pd response", self.msg_id),
             MessageType::None => write!(f, "[{}] invalid message", self.msg_id),
         }
     }

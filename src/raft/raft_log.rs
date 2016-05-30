@@ -361,7 +361,7 @@ impl<T> RaftLog<T>
 
         if low < self.unstable.offset {
             let stored_entries = self.store
-                                     .entries(low, cmp::min(high, self.unstable.offset), max_size);
+                .entries(low, cmp::min(high, self.unstable.offset), max_size);
             if stored_entries.is_err() {
                 let e = stored_entries.unwrap_err();
                 match e {
@@ -407,7 +407,7 @@ impl<T> RaftLog<T>
 #[cfg(test)]
 mod test {
     use raft::raft_log::{self, RaftLog};
-    use raft::storage::{MemStorage, Storage};
+    use raft::storage::MemStorage;
     use std::sync::Arc;
     use kvproto::raftpb;
     use raft::errors::{Error, StorageError};
@@ -455,7 +455,7 @@ mod test {
             let store = MemStorage::new();
             let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&previous_ents);
-            let gconflict = raft_log.find_conflict(&ents);
+            let gconflict = raft_log.find_conflict(ents);
             if gconflict != wconflict {
                 panic!("#{}: conflict = {}, want {}", i, gconflict, wconflict)
             }
@@ -673,7 +673,7 @@ mod test {
             let store = MemStorage::new();
             store.wl().apply_snapshot(new_snapshot(snap_index, snap_term)).expect("");
             let mut raft_log = RaftLog::new(Arc::new(store));
-            raft_log.append(&new_ents);
+            raft_log.append(new_ents);
             raft_log.stable_to(stablei, stablet);
             if raft_log.unstable.offset != wunstable {
                 panic!("#{}: unstable = {}, want {}",
@@ -911,8 +911,8 @@ mod test {
              Some(last_index), last_index, false),
         ];
 
-        for (i, &(log_term, index, committed, ref ents, wlasti, wcommit, wpanic)) in
-            tests.iter().enumerate() {
+        for (i, &(log_term, index, committed, ref ents, wlasti, wcommit, wpanic)) in tests.iter()
+            .enumerate() {
             let store = MemStorage::new();
             let mut raft_log = RaftLog::new(Arc::new(store));
             raft_log.append(&previous_ents);
@@ -936,7 +936,7 @@ mod test {
             if glasti.is_some() && ents_len != 0 {
                 let (from, to) = (raft_log.last_index() - ents_len + 1, raft_log.last_index() + 1);
                 let gents = raft_log.slice(from, to, raft_log::NO_LIMIT)
-                                    .expect("");
+                    .expect("");
                 if &gents != ents {
                     panic!("#{}: appended entries = {:?}, want {:?}", i, gents, ents);
                 }

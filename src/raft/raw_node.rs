@@ -160,7 +160,7 @@ impl<T: Storage> RawNode<T> {
                     cc.set_context(peer.context.as_ref().unwrap().clone());
                 }
                 let data = protobuf::Message::write_to_bytes(&cc)
-                               .expect("unexpected marshal error");
+                    .expect("unexpected marshal error");
                 let mut e = Entry::new();
                 e.set_entry_type(EntryType::EntryConfChange);
                 e.set_term(1);
@@ -328,6 +328,14 @@ impl<T: Storage> RawNode<T> {
         m.set_from(id);
         m.set_reject(rej);
         // we don't care if it is ok actually
+        self.raft.step(m).is_ok();
+    }
+
+    // TransferLeader tries to transfer leadership to the given transferee.
+    pub fn transfer_leader(&mut self, transferee: u64) {
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgTransferLeader);
+        m.set_from(transferee);
         self.raft.step(m).is_ok();
     }
 }

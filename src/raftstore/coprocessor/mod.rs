@@ -16,7 +16,7 @@ pub mod dispatcher;
 pub mod split_observer;
 mod error;
 
-pub use self::region_snapshot::RegionSnapshot;
+pub use self::region_snapshot::{RegionSnapshot, RegionIterator};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 
 use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
@@ -44,7 +44,7 @@ pub struct ObserverContext<'a> {
 impl<'a> ObserverContext<'a> {
     pub fn new(peer: &'a PeerStorage) -> ObserverContext<'a> {
         ObserverContext {
-            snap: RegionSnapshot::new(&peer),
+            snap: RegionSnapshot::new(peer),
             bypass: false,
         }
     }

@@ -18,6 +18,7 @@ use tempdir::TempDir;
 use test_util::*;
 use tikv::storage::{self, Dsn, Mutation, Key};
 use tikv::storage::txn::TxnStore;
+use tikv::storage::mvcc::TEST_TS_BASE;
 use kvproto::kvrpcpb::Context;
 
 use super::print_result;
@@ -28,41 +29,41 @@ fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
     let engine = storage::new_engine(dsn).unwrap();
 
     let store = TxnStore::new(Arc::new(engine));
-    let mut ts_generator = 1..;
+    let mut ts_generator = TEST_TS_BASE..;
 
     let mut kvs = KvGenerator::new(100, 1000);
 
     for (k, v) in kvs.take(100000) {
         let mut ts = ts_generator.next().unwrap();
         store.prewrite(Context::new(),
-                       vec![Mutation::Put((Key::from_raw(k.clone()), v))],
-                       k.clone(),
-                       ts)
-             .expect("");
+                      vec![Mutation::Put((Key::from_raw(&k), v))],
+                      k.clone(),
+                      ts)
+            .expect("");
         store.commit(Context::new(),
-                     vec![Key::from_raw(k.clone())],
-                     ts,
-                     ts_generator.next().unwrap())
-             .expect("");
+                    vec![Key::from_raw(&k)],
+                    ts,
+                    ts_generator.next().unwrap())
+            .expect("");
 
         ts = ts_generator.next().unwrap();
         store.prewrite(Context::new(),
-                       vec![Mutation::Delete(Key::from_raw(k.clone()))],
-                       k.clone(),
-                       ts)
-             .expect("");
+                      vec![Mutation::Delete(Key::from_raw(&k))],
+                      k.clone(),
+                      ts)
+            .expect("");
         store.commit(Context::new(),
-                     vec![Key::from_raw(k.clone())],
-                     ts,
-                     ts_generator.next().unwrap())
-             .expect("");
+                    vec![Key::from_raw(&k)],
+                    ts,
+                    ts_generator.next().unwrap())
+            .expect("");
     }
 
     kvs = KvGenerator::new(100, 1000);
     bench!{
         let (k, _) = kvs.next().unwrap();
         assert!(store.scan(Context::new(),
-                           Key::from_raw(k.clone()),
+                           Key::from_raw(&k),
                            1,
                            ts_generator.next().unwrap())
                      .unwrap()

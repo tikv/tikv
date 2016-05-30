@@ -16,12 +16,23 @@
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::{Mutex, mpsc};
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kvproto::metapb;
 use kvproto::pdpb;
+use kvproto::raftpb;
 use tikv::pd::{PdClient, Result, Error, Key};
-use tikv::raftstore::store::keys::{enc_end_key, data_key};
+use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
+use tikv::util::{HandyRwLock, escape};
+use super::util::*;
+
+// Rule is just for special test which we want do more accurate control
+// instead of origin max_peer_count check.
+// E.g, for region a, change peers 1,2,3 -> 1,2,4.
+// But unlike real pd, Rule is global, and if you set rule,
+// we won't check the peer count later.
+pub type Rule = Box<Fn(&metapb::Region) -> Option<pdpb::ChangePeer> + Send + Sync>;
 
 #[derive(Default)]
 struct Store {
@@ -34,21 +45,27 @@ struct Cluster {
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
     region_id_keys: HashMap<u64, Key>,
+    base_id: AtomicUsize,
+    rule: Option<Rule>,
 }
 
 impl Cluster {
-    pub fn new(cluster_id: u64, store: metapb::Store, region: metapb::Region) -> Cluster {
+    fn new(cluster_id: u64) -> Cluster {
         let mut meta = metapb::Cluster::new();
         meta.set_id(cluster_id);
-        meta.set_max_peer_number(5);
+        meta.set_max_peer_count(5);
 
-        let mut c = Cluster {
+        Cluster {
             meta: meta,
             stores: HashMap::new(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
-        };
+            base_id: AtomicUsize::new(1000),
+            rule: None,
+        }
+    }
 
+    fn bootstrap(&mut self, store: metapb::Store, region: metapb::Region) {
         // Now, some tests use multi peers in bootstrap,
         // disable this check.
         // TODO: enable this check later.
@@ -62,12 +79,14 @@ impl Cluster {
 
         s.region_ids.insert(region.get_id());
 
-        c.stores.insert(store_id, s);
+        self.stores.insert(store_id, s);
 
-        c.region_id_keys.insert(region.get_id(), enc_end_key(&region));
-        c.regions.insert(enc_end_key(&region), region);
+        self.add_region(&region);
+    }
 
-        c
+    // We don't care cluster id here, so any value like 0 in tests is ok.
+    fn alloc_id(&self) -> Result<u64> {
+        Ok(self.base_id.fetch_add(1, Ordering::Relaxed) as u64)
     }
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
@@ -80,213 +99,426 @@ impl Cluster {
         Ok(self.stores.get(&store_id).unwrap().store.clone())
     }
 
-    fn get_region(&self, key: Vec<u8>) -> Result<metapb::Region> {
-        let (_, region) = self.regions
-                              .range::<Key, Key>(Excluded(&key), Unbounded)
-                              .next()
-                              .unwrap();
-        Ok(region.clone())
+    fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
+        self.regions
+            .range::<Key, Key>(Excluded(&key), Unbounded)
+            .next()
+            .map(|(_, region)| region.clone())
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
         let key = self.region_id_keys.get(&region_id).unwrap();
-        if self.regions.contains_key(key) {
-            Ok(self.regions[key].clone())
-        } else {
-            Err(box_err!("region of {} not exist!!!", region_id))
-        }
-    }
-
-    fn change_peer(&mut self, region: metapb::Region) -> Result<()> {
-        let end_key = enc_end_key(&region);
-        if !self.regions.contains_key(&end_key) {
-            return Err(box_err!("region {:?} doesn't exist", region));
-        }
-
-        for id in region.get_store_ids() {
-            let store = self.stores.get_mut(&id).unwrap();
-            store.region_ids.insert(region.get_id());
-        }
-
-        assert!(self.regions.insert(end_key, region).is_some());
-
-        Ok(())
-    }
-
-    fn split_region(&mut self, left: metapb::Region, right: metapb::Region) -> Result<()> {
-        let left_end_key = enc_end_key(&left);
-        let right_end_key = enc_end_key(&right);
-
-        assert!(left.get_start_key() < left.get_end_key());
-        assert_eq!(left.get_end_key(), right.get_start_key());
-        assert!(right.get_end_key().is_empty() || right.get_start_key() < right.get_end_key());
-
-        // origin pre-split region's end key is the same as right end key,
-        // and must exists.
-        if !self.regions.contains_key(&right_end_key) {
-            return Err(box_err!("region {:?} doesn't exist", right));
-        }
-
-        if self.regions.contains_key(&left_end_key) {
-            return Err(box_err!("region {:?} has already existed", left));
-        }
-
-        assert!(self.region_id_keys.insert(left.get_id(), left_end_key.clone()).is_some());
-        assert!(self.region_id_keys.insert(right.get_id(), right_end_key.clone()).is_none());
-
-        for id in right.get_store_ids() {
-            let store = self.stores.get_mut(&id).unwrap();
-            store.region_ids.insert(right.get_id());
-        }
-
-        assert!(self.regions.insert(left_end_key, left).is_none());
-        assert!(self.regions.insert(right_end_key, right).is_some());
-        debug!("cluster.regions: {:?}", self.regions);
-
-        Ok(())
+        Ok(self.regions.get(key).cloned().unwrap())
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
         self.stores.values().map(|s| s.store.clone()).collect()
     }
+
+    fn add_region(&mut self, region: &metapb::Region) {
+        let end_key = enc_end_key(region);
+        assert!(self.regions.insert(end_key.clone(), region.clone()).is_none());
+        assert!(self.region_id_keys.insert(region.get_id(), end_key.clone()).is_none());
+    }
+
+    fn remove_region(&mut self, region: &metapb::Region) {
+        let end_key = enc_end_key(region);
+        assert!(self.regions.remove(&end_key).is_some());
+        assert!(self.region_id_keys.remove(&region.get_id()).is_some());
+    }
+
+    fn handle_heartbeat_version(&mut self, region: metapb::Region) -> Result<()> {
+        // For split, we should handle heartbeat carefully.
+        // E.g, for region 1 [a, c) -> 1 [a, b) + 2 [b, c).
+        // after split, region 1 and 2 will do heartbeat independently.
+        let start_key = enc_start_key(&region);
+        let end_key = enc_end_key(&region);
+        assert!(end_key > start_key);
+
+        let version = region.get_region_epoch().get_version();
+        let conf_ver = region.get_region_epoch().get_conf_ver();
+
+        let search_key = data_key(region.get_start_key());
+        let search_region = match self.get_region(search_key) {
+            None => {
+                // Find no range after start key, insert directly.
+                self.add_region(&region);
+                return Ok(());
+            }
+            Some(search_region) => search_region,
+        };
+
+        let search_start_key = enc_start_key(&search_region);
+        let search_end_key = enc_end_key(&search_region);
+
+        let search_version = search_region.get_region_epoch().get_version();
+        let search_conf_ver = search_region.get_region_epoch().get_conf_ver();
+
+        if start_key == search_start_key && end_key == search_end_key {
+            // we are the same, must check epoch here.
+            return check_stale_region(&search_region, &region);
+        }
+
+        if search_start_key >= end_key {
+            // No range covers [start, end) now, insert directly.
+            self.add_region(&region);
+        } else {
+            // overlap, remove old, insert new.
+            // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
+            // is overlapped with origin [a, c).
+            assert!(version > search_version);
+            assert!(conf_ver >= search_conf_ver);
+
+            self.remove_region(&search_region);
+            self.add_region(&region);
+        }
+
+        Ok(())
+    }
+
+    fn handle_heartbeat_conf_ver(&mut self,
+                                 region: metapb::Region,
+                                 leader: metapb::Peer)
+                                 -> Result<pdpb::RegionHeartbeatResponse> {
+        let conf_ver = region.get_region_epoch().get_conf_ver();
+        let end_key = enc_end_key(&region);
+
+        let cur_region = self.get_region_by_id(region.get_id()).unwrap();
+
+        let cur_conf_ver = cur_region.get_region_epoch().get_conf_ver();
+        try!(check_stale_region(&cur_region, &region));
+
+        let region_peer_len = region.get_peers().len();
+        let cur_region_peer_len = cur_region.get_peers().len();
+
+        if conf_ver > cur_conf_ver {
+            // If ConfVer changed, TiKV has added/removed one peer already.
+            // So pd and TiKV can't have same peer count and can only have
+            // only one different peer.
+            // E.g, we can't meet following cases:
+            // 1) pd is (1, 2, 3), TiKV is (1)
+            // 2) pd is (1), TiKV is (1, 2, 3)
+            // 3) pd is (1, 2), TiKV is (3)
+            // 4) pd id (1), TiKV is (2, 3)
+
+            assert!(region_peer_len != cur_region_peer_len);
+
+            if cur_region_peer_len > region_peer_len {
+                // must pd is (1, 2), TiKV is (1)
+                assert_eq!(cur_region_peer_len - region_peer_len, 1);
+                let peers = setdiff_peers(&cur_region, &region);
+                assert_eq!(peers.len(), 1);
+                assert!(setdiff_peers(&region, &cur_region).is_empty());
+            } else {
+                // must pd is (1), TiKV is (1, 2)
+                assert_eq!(region_peer_len - cur_region_peer_len, 1);
+                let peers = setdiff_peers(&region, &cur_region);
+                assert_eq!(peers.len(), 1);
+                assert!(setdiff_peers(&cur_region, &region).is_empty());
+            }
+
+            // update the region.
+            assert!(self.regions.insert(end_key, region.clone()).is_some());
+        } else {
+            must_same_peers(&cur_region, &region);
+        }
+
+        let mut resp = pdpb::RegionHeartbeatResponse::new();
+
+        if let Some(ref rule) = self.rule {
+            if let Some(change_peer) = rule(&region) {
+                resp.set_change_peer(change_peer);
+            }
+
+            return Ok(resp);
+        }
+
+        // If no rule, use default max_peer_count check.
+        let mut change_peer = pdpb::ChangePeer::new();
+
+        let max_peer_count = self.meta.get_max_peer_count() as usize;
+        let peer_count = region.get_peers().len();
+
+        if peer_count < max_peer_count {
+            // find the first store which the region has not covered.
+            for store_id in self.stores.keys() {
+                if region.get_peers().iter().all(|x| x.get_store_id() != *store_id) {
+                    let peer = new_peer(*store_id, self.alloc_id().unwrap());
+                    change_peer.set_change_type(raftpb::ConfChangeType::AddNode);
+                    change_peer.set_peer(peer.clone());
+                    resp.set_change_peer(change_peer);
+                    break;
+                }
+            }
+        } else if peer_count > max_peer_count {
+            // find the first peer which not leader.
+            let pos = region.get_peers()
+                .iter()
+                .position(|x| x.get_store_id() != leader.get_store_id())
+                .unwrap();
+
+            change_peer.set_change_type(raftpb::ConfChangeType::RemoveNode);
+            change_peer.set_peer(region.get_peers()[pos].clone());
+            resp.set_change_peer(change_peer);
+
+        }
+
+        Ok(resp)
+    }
+
+    fn region_heartbeat(&mut self,
+                        region: metapb::Region,
+                        leader: metapb::Peer)
+                        -> Result<pdpb::RegionHeartbeatResponse> {
+        try!(self.handle_heartbeat_version(region.clone()));
+        self.handle_heartbeat_conf_ver(region, leader)
+    }
+}
+
+fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) -> Result<()> {
+    let epoch = region.get_region_epoch();
+    let check_epoch = check_region.get_region_epoch();
+    if check_epoch.get_conf_ver() >= epoch.get_conf_ver() &&
+       check_epoch.get_version() >= epoch.get_version() {
+        return Ok(());
+    }
+
+    Err(box_err!("stale epoch {:?}, we are now {:?}", check_epoch, epoch))
+}
+
+fn must_same_peers(left: &metapb::Region, right: &metapb::Region) {
+    assert_eq!(left.get_peers().len(), right.get_peers().len());
+    for peer in left.get_peers() {
+        let p = find_peer(&right, peer.get_store_id()).unwrap();
+        assert_eq!(p.get_id(), peer.get_id());
+    }
+}
+
+// Left - Right, left (1, 2, 3), right (1, 2), left - right = (3)
+fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::Peer> {
+    let mut peers = vec![];
+    for peer in left.get_peers() {
+        if let Some(p) = find_peer(&right, peer.get_store_id()) {
+            assert_eq!(p.get_id(), peer.get_id());
+            continue;
+        }
+
+        peers.push(peer.clone())
+    }
+
+    peers
 }
 
 pub struct TestPdClient {
-    // TODO: use only one cluster later.
-    clusters: HashMap<u64, Cluster>,
-
-    base_id: u64,
-
-    ask_tx: Mutex<mpsc::Sender<pdpb::Request>>,
+    cluster_id: u64,
+    cluster: RwLock<Cluster>,
 }
 
 impl TestPdClient {
-    pub fn new(tx: mpsc::Sender<pdpb::Request>) -> TestPdClient {
+    pub fn new(cluster_id: u64) -> TestPdClient {
         TestPdClient {
-            clusters: HashMap::new(),
-            base_id: 1000,
-            ask_tx: Mutex::new(tx),
+            cluster_id: cluster_id,
+            cluster: RwLock::new(Cluster::new(cluster_id)),
         }
     }
 
-    fn get_cluster(&self, cluster_id: u64) -> Result<&Cluster> {
-        match self.clusters.get(&cluster_id) {
-            None => Err(Error::ClusterNotBootstrapped(cluster_id)),
-            Some(cluster) => Ok(cluster),
+    pub fn get_stores(&self) -> Result<Vec<metapb::Store>> {
+        Ok(self.cluster.rl().get_stores())
+    }
+
+    pub fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
+        self.cluster.rl().get_region_by_id(region_id)
+    }
+
+    fn check_bootstrap(&self) -> Result<()> {
+        if !self.is_cluster_bootstrapped().unwrap() {
+            return Err(Error::ClusterNotBootstrapped(self.cluster_id));
         }
+
+        Ok(())
     }
 
-    fn get_mut_cluster(&mut self, cluster_id: u64) -> Result<&mut Cluster> {
-        match self.clusters.get_mut(&cluster_id) {
-            None => Err(Error::ClusterNotBootstrapped(cluster_id)),
-            Some(cluster) => Ok(cluster),
+    // Set a customized rule to overwrite default max peer count check rule.
+    pub fn set_rule(&self, rule: Rule) {
+        self.cluster.wl().rule = Some(rule);
+    }
+
+    // Clear the customized rule set before and use default rule again.
+    pub fn reset_rule(&self) {
+        self.cluster.wl().rule = None;
+    }
+
+    // Set an empty rule which nothing to do to disable default max peer count
+    // check rule, we can use reset_rule to enable default again.
+    pub fn disable_default_rule(&self) {
+        self.set_rule(box move |_| None);
+    }
+
+    pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
+        for _ in 1..500 {
+            sleep_ms(10);
+
+            let region = self.get_region_by_id(region_id)
+                .unwrap();
+
+            if let Some(p) = find_peer(&region, peer.get_store_id()) {
+                if p.get_id() == peer.get_id() {
+                    return;
+                }
+            }
         }
+
+        let region = self.get_region_by_id(region_id)
+            .unwrap();
+        panic!("region {:?} has no peer {:?}", region, peer);
     }
 
-    pub fn change_peer(&mut self, cluster_id: u64, region: metapb::Region) -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster(cluster_id));
-        cluster.change_peer(region)
+    pub fn must_none_peer(&self, region_id: u64, peer: metapb::Peer) {
+        for _ in 1..500 {
+            sleep_ms(10);
+
+            let region = self.get_region_by_id(region_id)
+                .unwrap();
+
+            if find_peer(&region, peer.get_store_id()).is_none() {
+                return;
+            }
+        }
+
+        let region = self.get_region_by_id(region_id)
+            .unwrap();
+        panic!("region {:?} has peer {:?}", region, peer);
     }
 
-    pub fn split_region(&mut self,
-                        cluster_id: u64,
-                        left: metapb::Region,
-                        right: metapb::Region)
-                        -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster(cluster_id));
-        cluster.split_region(left, right)
+    pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
+        let peer2 = peer.clone();
+        self.set_rule(box move |region: &metapb::Region| {
+            if region.get_id() != region_id {
+                return None;
+            }
+            new_add_change_peer(region, peer2.clone())
+        });
+        self.must_have_peer(region_id, peer);
     }
 
-    pub fn get_stores(&self, cluster_id: u64) -> Result<Vec<metapb::Store>> {
-        let cluster = try!(self.get_cluster(cluster_id));
-        Ok(cluster.get_stores())
+    pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
+        let peer2 = peer.clone();
+        self.set_rule(box move |region: &metapb::Region| {
+            if region.get_id() != region_id {
+                return None;
+            }
+            new_remove_change_peer(region, peer2.clone())
+        });
+        self.must_none_peer(region_id, peer);
     }
 
-    pub fn get_region_by_id(&self, cluster_id: u64, region_id: u64) -> Result<metapb::Region> {
-        let cluster = try!(self.get_cluster(cluster_id));
-        cluster.get_region_by_id(region_id)
+    // check whether region is split by split_key or not.
+    pub fn must_split(&self, region: &metapb::Region, split_key: &[u8]) {
+        for _ in 1..200 {
+            sleep_ms(10);
+            // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c)
+            // use a to find new [a, b).
+            // use b to find new [b, c)
+            let left = match self.get_region(region.get_start_key()) {
+                Err(_) => continue,
+                Ok(left) => left,
+            };
+
+            if left.get_end_key() != split_key {
+                continue;
+            }
+
+            let right = match self.get_region(split_key) {
+                Err(_) => continue,
+                Ok(right) => right,
+            };
+
+            if right.get_start_key() != split_key {
+                continue;
+            }
+
+            assert!(left.get_region_epoch().get_version() >
+                    region.get_region_epoch().get_version());
+            assert!(right.get_region_epoch().get_version() >
+                    region.get_region_epoch().get_version());
+            return;
+        }
+
+        assert!(false,
+                format!("region {:?} has not been split by {:?}",
+                        region,
+                        escape(split_key)));
     }
 }
 
 impl PdClient for TestPdClient {
-    fn bootstrap_cluster(&mut self,
-                         cluster_id: u64,
-                         store: metapb::Store,
-                         region: metapb::Region)
-                         -> Result<()> {
-        if self.is_cluster_bootstrapped(cluster_id).unwrap() {
-            return Err(Error::ClusterBootstrapped(cluster_id));
+    fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
+        if self.is_cluster_bootstrapped().unwrap() {
+            return Err(Error::ClusterBootstrapped(self.cluster_id));
         }
 
-        self.clusters.insert(cluster_id, Cluster::new(cluster_id, store, region));
+        self.cluster.wl().bootstrap(store, region);
 
         Ok(())
     }
 
-    fn is_cluster_bootstrapped(&self, cluster_id: u64) -> Result<bool> {
-        Ok(self.clusters.contains_key(&cluster_id))
+    fn is_cluster_bootstrapped(&self) -> Result<bool> {
+        Ok(!self.cluster.rl().stores.is_empty())
     }
 
-    // We don't care cluster id here, so any value like 0 in tests is ok.
-    fn alloc_id(&mut self, _: u64) -> Result<u64> {
-        self.base_id += 1;
-        Ok(self.base_id)
+    fn alloc_id(&self) -> Result<u64> {
+        self.cluster.rl().alloc_id()
     }
 
-    fn put_store(&mut self, cluster_id: u64, store: metapb::Store) -> Result<()> {
-        let mut cluster = try!(self.get_mut_cluster(cluster_id));
-        cluster.put_store(store)
+    fn put_store(&self, store: metapb::Store) -> Result<()> {
+        try!(self.check_bootstrap());
+        self.cluster.wl().put_store(store)
     }
 
-    fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store> {
-        let cluster = try!(self.get_cluster(cluster_id));
-        cluster.get_store(store_id)
+    fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
+        try!(self.check_bootstrap());
+        self.cluster.rl().get_store(store_id)
     }
 
 
-    fn get_region(&self, cluster_id: u64, key: &[u8]) -> Result<metapb::Region> {
-        let cluster = try!(self.get_cluster(cluster_id));
-        cluster.get_region(data_key(key))
+    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+        try!(self.check_bootstrap());
+        if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
+            return Ok(region);
+        }
+
+        Err(box_err!("no region contains key {:?}", escape(key)))
     }
 
-    fn get_cluster_meta(&self, cluster_id: u64) -> Result<metapb::Cluster> {
-        let cluster = try!(self.get_cluster(cluster_id));
-        Ok(cluster.meta.clone())
+    fn get_cluster_config(&self) -> Result<metapb::Cluster> {
+        try!(self.check_bootstrap());
+        Ok(self.cluster.rl().meta.clone())
     }
 
-    fn ask_change_peer(&self,
-                       cluster_id: u64,
-                       region: metapb::Region,
-                       leader_store_id: u64)
-                       -> Result<()> {
-        try!(self.get_cluster(cluster_id));
-        let mut req = pdpb::Request::new();
-        req.mut_header().set_cluster_id(cluster_id);
-        req.set_cmd_type(pdpb::CommandType::AskChangePeer);
-        req.mut_ask_change_peer().set_region(region);
-        req.mut_ask_change_peer().set_leader_store_id(leader_store_id);
 
-        self.ask_tx.lock().unwrap().send(req).unwrap();
-
-        Ok(())
+    fn region_heartbeat(&self,
+                        region: metapb::Region,
+                        leader: metapb::Peer)
+                        -> Result<pdpb::RegionHeartbeatResponse> {
+        try!(self.check_bootstrap());
+        self.cluster.wl().region_heartbeat(region, leader)
     }
 
-    fn ask_split(&self,
-                 cluster_id: u64,
-                 region: metapb::Region,
-                 split_key: &[u8],
-                 leader_store_id: u64)
-                 -> Result<()> {
-        try!(self.get_cluster(cluster_id));
-        let mut req = pdpb::Request::new();
-        req.mut_header().set_cluster_id(cluster_id);
-        req.set_cmd_type(pdpb::CommandType::AskSplit);
-        req.mut_ask_split().set_region(region);
-        req.mut_ask_split().set_leader_store_id(leader_store_id);
-        req.mut_ask_split().set_split_key(split_key.to_vec());
+    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
+        try!(self.check_bootstrap());
 
-        self.ask_tx.lock().unwrap().send(req).unwrap();
+        // Must ConfVer and Version be same?
+        let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap();
+        try!(check_stale_region(&cur_region, &region));
 
-        Ok(())
+        let mut resp = pdpb::AskSplitResponse::new();
+        resp.set_new_region_id(self.alloc_id().unwrap());
+        let mut peer_ids = vec![];
+        for _ in region.get_peers() {
+            peer_ids.push(self.alloc_id().unwrap());
+        }
+        resp.set_new_peer_ids(peer_ids);
+
+        Ok(resp)
     }
 }

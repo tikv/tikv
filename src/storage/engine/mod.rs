@@ -14,7 +14,7 @@
 use std::{error, result};
 use std::fmt::Debug;
 use self::rocksdb::EngineRocksdb;
-use storage::{Key, Value, KvPair};
+use storage::{Key, Value};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -32,8 +32,6 @@ pub enum Modify {
 
 pub trait Engine: Send + Sync + Debug {
     fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
-    /// Seeks for the first kv pair that is greater than or equals key.
-    fn seek(&self, ctx: &Context, key: &Key) -> Result<Option<KvPair>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
     fn snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
 
@@ -44,14 +42,36 @@ pub trait Engine: Send + Sync + Debug {
     fn delete(&self, ctx: &Context, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(key)])
     }
+
+    fn iter<'a>(&'a self, ctx: &Context) -> Result<Box<Cursor + 'a>>;
 }
 
 pub trait Snapshot {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
-    /// seeks for the first kv pair that is greater than or equals key.
-    fn seek(&self, key: &Key) -> Result<Option<KvPair>>;
-    /// seeks for the last kv pair that is less than key.
-    fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>>;
+    fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
+}
+
+pub trait Cursor {
+    fn next(&mut self) -> bool;
+    fn prev(&mut self) -> bool;
+    fn seek(&mut self, key: &Key) -> Result<bool>;
+    fn seek_to_first(&mut self) -> bool;
+    fn seek_to_last(&mut self) -> bool;
+    fn valid(&self) -> bool;
+
+    fn key(&self) -> &[u8];
+    fn value(&self) -> &[u8];
+
+    fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
+        if !try!(self.seek(key)) && !self.seek_to_last() {
+            return Ok(false);
+        }
+
+        while self.key() >= key.encoded().as_slice() && self.prev() {
+        }
+
+        Ok(self.valid())
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -107,29 +127,31 @@ mod tests {
         seek(e.as_ref());
     }
 
-    fn must_put<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
+    fn must_put(engine: &Engine, key: &[u8], value: &[u8]) {
         engine.put(&Context::new(), make_key(key), value.to_vec()).unwrap();
     }
 
-    fn must_delete<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
+    fn must_delete(engine: &Engine, key: &[u8]) {
         engine.delete(&Context::new(), make_key(key)).unwrap();
     }
 
-    fn assert_has<T: Engine + ?Sized>(engine: &T, key: &[u8], value: &[u8]) {
+    fn assert_has(engine: &Engine, key: &[u8], value: &[u8]) {
         assert_eq!(engine.get(&Context::new(), &make_key(key)).unwrap().unwrap(),
                    value);
     }
 
-    fn assert_none<T: Engine + ?Sized>(engine: &T, key: &[u8]) {
+    fn assert_none(engine: &Engine, key: &[u8]) {
         assert_eq!(engine.get(&Context::new(), &make_key(key)).unwrap(), None);
     }
 
-    fn assert_seek<T: Engine + ?Sized>(engine: &T, key: &[u8], pair: (&[u8], &[u8])) {
-        let (k, v) = engine.seek(&Context::new(), &make_key(key)).unwrap().unwrap();
-        assert_eq!((k, &v as &[u8]), (bytes::encode_bytes(pair.0), pair.1));
+    fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
+        let mut iter = engine.iter(&Context::new()).unwrap();
+        iter.seek(&make_key(key)).unwrap();
+        assert_eq!((iter.key(), iter.value()),
+                   (&*bytes::encode_bytes(pair.0), pair.1));
     }
 
-    fn get_put<T: Engine + ?Sized>(engine: &T) {
+    fn get_put(engine: &Engine) {
         assert_none(engine, b"x");
         must_put(engine, b"x", b"1");
         assert_has(engine, b"x", b"1");
@@ -137,30 +159,30 @@ mod tests {
         assert_has(engine, b"x", b"2");
     }
 
-    fn batch<T: Engine + ?Sized>(engine: &T) {
+    fn batch(engine: &Engine) {
         engine.write(&Context::new(),
-                     vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
-                          Modify::Put((make_key(b"y"), b"2".to_vec()))])
-              .unwrap();
+                   vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
+                        Modify::Put((make_key(b"y"), b"2".to_vec()))])
+            .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
         engine.write(&Context::new(),
-                     vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
-              .unwrap();
+                   vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
+            .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
     }
 
-    fn seek<T: Engine + ?Sized>(engine: &T) {
+    fn seek(engine: &Engine) {
         must_put(engine, b"x", b"1");
         assert_seek(engine, b"x", (b"x", b"1"));
         assert_seek(engine, b"a", (b"x", b"1"));
         must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
-        assert_eq!(engine.seek(&Context::new(), &make_key(b"z\x00")).unwrap(),
-                   None);
+        let mut iter = engine.iter(&Context::new()).unwrap();
+        assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }

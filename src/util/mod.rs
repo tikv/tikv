@@ -28,12 +28,15 @@ use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 #[macro_use]
 pub mod macros;
+#[macro_use]
+pub mod metric;
 pub mod logger;
 pub mod panic_hook;
 pub mod worker;
 pub mod codec;
 pub mod xeval;
 pub mod event;
+pub mod rocksdb_option;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
@@ -244,9 +247,17 @@ impl<'a, T: 'a, V: 'a, E> TryInsertWith<'a, V, E> for Entry<'a, T, V> {
     }
 }
 
+/// Convert Duration to milliseconds.
+pub fn duration_to_ms(d: Duration) -> u64 {
+    let nanos = d.subsec_nanos() as u64;
+    // Most of case, we can't have so large Duration, so here just panic if overflow now.
+    d.as_secs() * 1_000 + (nanos / 1_000_000)
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{SocketAddr, AddrParseError};
+    use std::time::Duration;
     use super::*;
 
     #[test]
@@ -271,6 +282,15 @@ mod tests {
         for (addr, ok) in tbls {
             let ret: Result<SocketAddr, AddrParseError> = addr.parse();
             assert_eq!(ret.is_ok(), ok);
+        }
+    }
+
+    #[test]
+    fn test_duration_to_ms() {
+        let tbl = vec![0, 100, 1_000, 5_000, 9999, 1_000_000, 1_000_000_000];
+        for ms in tbl {
+            let d = Duration::from_millis(ms);
+            assert_eq!(ms, duration_to_ms(d));
         }
     }
 }

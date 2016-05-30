@@ -33,12 +33,17 @@ byteorder = "0.5"
 rand = "0.3"
 quick-error = "0.2"
 tempdir = "0.3"
-getopts = "0.2"
 uuid = "0.1"
 time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"
+num = "0.1"
+cadence = "0.5.0"
 clippy = {version = "*", optional = true}
+
+# The getopts in crate.io is outdated, use the latest getopts instead.
+[dependencies.getopts]
+git = "https://github.com/rust-lang-nursery/getopts"
 
 [dependencies.rocksdb]
 git = "https://github.com/ngaut/rust-rocksdb.git"

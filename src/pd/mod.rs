@@ -19,18 +19,23 @@ mod protocol;
 pub use self::errors::{Result, Error};
 pub use self::client::RpcClient;
 
-pub fn new_rpc_client(addr: &str) -> Result<RpcClient> {
-    let client = try!(RpcClient::new(addr));
+pub fn new_rpc_client(addr: &str, cluster_id: u64) -> Result<RpcClient> {
+    let client = try!(RpcClient::new(addr, cluster_id));
     Ok(client)
 }
 
 use kvproto::metapb;
+use kvproto::pdpb;
 
 pub type Key = Vec<u8>;
 
 pub const INVALID_ID: u64 = 0;
 
-// Client to communicate with placement driver (pd).
+// Client to communicate with placement driver (pd) for special cluster.
+// Because now one pd only supports one cluster, so it is no need to pass
+// cluster id in trait interface every time, so passing the cluster id when
+// creating the PdClient is enough and the PdClient will use this cluster id
+// all the time.
 pub trait PdClient: Send + Sync {
     // Create the cluster with cluster ID, node, stores and first region.
     // If the cluster is already bootstrapped, return ClusterBootstrapped error.
@@ -40,24 +45,20 @@ pub trait PdClient: Send + Sync {
     // It may happen that multi nodes start at same time to try to
     // bootstrap, and only one can success, others will fail
     // and must remove their created local region data themselves.
-    fn bootstrap_cluster(&mut self,
-                         cluster_id: u64,
-                         stores: metapb::Store,
-                         region: metapb::Region)
-                         -> Result<()>;
+    fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()>;
 
     // Return whether the cluster is bootstrapped or not.
     // We must use the cluster after bootstrapped, so when the
     // node starts, it must check it with is_cluster_bootstrapped,
     // and panic if not bootstrapped.
-    fn is_cluster_bootstrapped(&self, cluster_id: u64) -> Result<bool>;
+    fn is_cluster_bootstrapped(&self) -> Result<bool>;
 
     // Allocate a unique positive id.
-    fn alloc_id(&mut self, cluster_id: u64) -> Result<u64>;
+    fn alloc_id(&self) -> Result<u64>;
 
     // When the store starts, or some store information changed, it
     // uses put_store to inform pd.
-    fn put_store(&mut self, cluster_id: u64, store: metapb::Store) -> Result<()>;
+    fn put_store(&self, store: metapb::Store) -> Result<()>;
 
     // We don't need to support region and peer put/delete,
     // because pd knows all region and peers itself.
@@ -71,29 +72,21 @@ pub trait PdClient: Send + Sync {
     // When doing auto-balance, pd determines how to move the region from one store to another.
 
     // Get store information.
-    fn get_store(&self, cluster_id: u64, store_id: u64) -> Result<metapb::Store>;
+    fn get_store(&self, store_id: u64) -> Result<metapb::Store>;
 
     // Get cluster meta information.
-    fn get_cluster_meta(&self, cluster_id: u64) -> Result<metapb::Cluster>;
+    fn get_cluster_config(&self) -> Result<metapb::Cluster>;
 
     // For route.
     // Get region which the key belong to.
-    fn get_region(&self, cluster_id: u64, key: &[u8]) -> Result<metapb::Region>;
+    fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
 
-    // Ask pd to change peer for the region.
-    // Pd will handle this request asynchronously.
-    fn ask_change_peer(&self,
-                       cluster_id: u64,
-                       region: metapb::Region,
-                       leader_store_id: u64)
-                       -> Result<()>;
+    // Leader for a region will use this to heartbeat Pd.
+    fn region_heartbeat(&self,
+                        region: metapb::Region,
+                        leader: metapb::Peer)
+                        -> Result<pdpb::RegionHeartbeatResponse>;
 
-    // Ask pd to split with given split_key for the region.
-    // Pd will handle this request asynchronously.
-    fn ask_split(&self,
-                 cluster_id: u64,
-                 region: metapb::Region,
-                 split_key: &[u8],
-                 leader_store_id: u64)
-                 -> Result<()>;
+    // Ask pd for split, pd will returns the new split region id.
+    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse>;
 }

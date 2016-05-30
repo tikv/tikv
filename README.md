@@ -1,29 +1,29 @@
-## TiKV is a distributed KV database powered by Rust.
+## TiKV is a distributed Key-Value (KV) database powered by Rust
 
 
-[![Build Status](https://travis-ci.org/pingcap/tikv.svg?branch=master)](https://travis-ci.org/pingcap/tikv)
+[![Build Status](https://travis-ci.org/pingcap/tikv.svg?branch=master)](https://travis-ci.org/pingcap/tikv) [![Coverage Status](https://coveralls.io/repos/github/pingcap/tikv/badge.svg?branch=master)](https://coveralls.io/github/pingcap/tikv)
 
 
-TiKV is a Distributed Key-Value Database which mainly refers to the design of Google Spanner and HBase, but much simpler (Don't depend on any distributed file system). We've implemented the Raft consensus algorithm in Rust and stored consensus state in RocksDB. It not only guarantees consistency for data but also makes use of placement driver to implement sharding (split && merge) and data migration automatically. The transaction model is similar to Google's Percolator, and with some performance improvements. In fact, we provide snapshot isolation (SI) and serializable snapshot isolation (SSI), and then externally consistent reads and writes in distributed transactions. Some details can see [Tikv-server software stack](#tikv-server-software-stack). And some primary features list as follow.
+TiKV is a distributed Key-Value database which is based on the design of Google Spanner and HBase, but is much simpler without dependency on any distributed file system. With the implementation of the Raft consensus algorithm in Rust and consensus state storing in RocksDB, it guarantees data consistency. Placement driver which is introduced to implement sharding enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), serializable snapshot isolation (SSI), and externally consistent reads and writes in distributed transactions. See [Tikv-server software stack](#tikv-server-software-stack) for more information. TiKV has the following primary features:
 
 - __Geo-Replication__  
-TiKV uses Raft to support Geo-Replication. We have ported [etcd's raft] (https://github.com/coreos/etcd/tree/master/raft) implementation to Rust. By using raft, Key-Value regions always stay consistent. Placement driver (or pd) is also important for Geo-Replication. Pd collects state information from heartbeats of all Raft groups' leaders regularly. According to load feedback and isolation judgment, pd can rebalance data automatically and smoothly. So Geo-Replication can be achieved, and makes TiKV always stable and balanced across regions. 
+TiKV uses Raft and placement driver to support Geo-Replication. 
 
 - __Horizontal scalability__  
-By carefully designing Raft groups and placement driver, we enable horizontal scalability in TiKV. A region, similar to spanner’s directory, is the base unit of data movement in TiKV. A region is controlled by one Raft group and its size is limited to 64 MBs . To achieve horizontal scalability, a region can split into two regions when the data size exceeds the limit automatically. Placement driver keeps the metadata of all regions. To ensure horizontal scalability, we ensure the metadata of each region is only 100s of bytes. Together with other techniques, TiKV can easily scale up to hold 100s of TBs of data.
+With carefully designed Raft groups and placement driver, TiKV excels in horizontal scalability and can easily scale up to hold 100s of TBs of data.
 
 - __Consistent distributed transactions__  
-Similar to Google's Spanner, TiKV supports externally-consistent distributed transactions. Placement driver plugs in a set of TS system, therefore timestamp oracle will be allocated in global. When TiKV client send transaction request to TiKV server, server will check relavant meta from the pd's etcd, and then TS generate two valid timestamps in two separated handling phase implying start timestamps and commit timestamps. Before transaction ends, the start timestamp will be carrying on util the transaction is committed. Once transaction is committed, externally-consistent transactions succeed.
+Similar to Google's Spanner, TiKV supports externally-consistent distributed transactions. 
 
 - __Coprocessor support__  
-TiKV will be accessiable and any application can develop on TiKV. We tend to provide a simple deployment solution soon after.
+Similar to Hbase, TiKV implements the coprocessor framework to support distributed computing.
 
 - __Working with [TiDB](https://github.com/pingcap/tidb)__  
-TiKV implements a set horizontal scalable and externally-consistent transactions-supported distributed Key-Value Database. And TiDB is focus on supporting both traditional RDBMS and NoSQL. TiDB prodive semantic translation in accessing Database. TiKV will be the best performance accessed database system thanks to internal optimization.
+Thanks to the internal optimization, TiKV and TiDB can work together to be the best database system that specializes in horizontal scalability, support for externally-consistent transactions, as well as a focus on supporting both traditional RDBMS and NoSQL.
 
-### Required rust version
+### Required Rust version
 
-This project requires rust nightly, otherwise project build will fail. We choose Rust instead of Go (with which we've developed TiDB ) to develop this project, because there are two critical facts: firstly, despite Go's excellent GC, it still introduces too much of latency time and instability; secondly, cgo's costs introduces another instable performance. Performance is our primary consideration, then development efficiency. So Rust comes to our sight. 
+Rust Nightly is required.
 
 ### Tikv-server software stack
 This figure represents tikv-server software stack. 

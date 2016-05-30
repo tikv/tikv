@@ -13,7 +13,7 @@
 
 use std::option::Option;
 
-use rocksdb::{DB, Writable, DBIterator, Direction, IteratorMode, DBVector, WriteBatch};
+use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch};
 use rocksdb::rocksdb::Snapshot;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
@@ -26,6 +26,7 @@ pub fn new_engine(path: &str) -> Result<DB> {
     Ok(db)
 }
 
+// TODO: refactor this trait into rocksdb trait.
 pub trait Peekable {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>>;
 
@@ -68,23 +69,28 @@ pub trait Peekable {
     }
 }
 
+// TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
-    fn new_iterator(&self, start_key: &[u8]) -> DBIterator;
+    fn new_iterator(&self) -> DBIterator;
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let it = self.new_iterator(start_key);
+        let mut it = self.new_iterator();
+        it.seek(start_key.into());
+        while it.valid() {
+            let r = {
+                let key = it.key();
+                if key >= end_key {
+                    break;
+                }
 
-        for (key, value) in it {
-            if key >= end_key {
-                break;
-            }
+                try!(f(key, it.value()))
+            };
 
-            let r = try!(f(key, value));
-            if !r {
+            if !r || !it.next() {
                 break;
             }
         }
@@ -94,8 +100,9 @@ pub trait Iterable {
 
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let pair = self.new_iterator(key).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
-        Ok(pair)
+        let mut iter = self.new_iterator();
+        iter.seek(key.into());
+        Ok(iter.kv())
     }
 }
 
@@ -107,8 +114,8 @@ impl Peekable for DB {
 }
 
 impl Iterable for DB {
-    fn new_iterator(&self, start_key: &[u8]) -> DBIterator {
-        self.iterator(IteratorMode::From(start_key, Direction::Forward))
+    fn new_iterator(&self) -> DBIterator {
+        self.iter()
     }
 }
 
@@ -120,8 +127,8 @@ impl<'a> Peekable for Snapshot<'a> {
 }
 
 impl<'a> Iterable for Snapshot<'a> {
-    fn new_iterator(&self, start_key: &[u8]) -> DBIterator {
-        self.iterator(IteratorMode::From(start_key, Direction::Forward))
+    fn new_iterator(&self) -> DBIterator {
+        self.iter()
     }
 }
 
@@ -151,7 +158,6 @@ pub trait Mutable: Writable {
 
 impl Mutable for DB {}
 impl Mutable for WriteBatch {}
-
 
 #[cfg(test)]
 mod tests {
@@ -212,12 +218,12 @@ mod tests {
 
         let mut data = vec![];
         engine.scan(b"",
-                    &[0xFF, 0xFF],
-                    &mut |key, value| {
-                        data.push((key.to_vec(), value.to_vec()));
-                        Ok(true)
-                    })
-              .unwrap();
+                  &[0xFF, 0xFF],
+                  &mut |key, value| {
+                      data.push((key.to_vec(), value.to_vec()));
+                      Ok(true)
+                  })
+            .unwrap();
 
         assert_eq!(data.len(), 2);
         let pair = engine.seek(b"a1").unwrap().unwrap();
@@ -227,13 +233,13 @@ mod tests {
         data.clear();
         let mut index = 0;
         engine.scan(b"",
-                    &[0xFF, 0xFF],
-                    &mut |key, value| {
-                        data.push((key.to_vec(), value.to_vec()));
-                        index += 1;
-                        Ok(index != 1)
-                    })
-              .unwrap();
+                  &[0xFF, 0xFF],
+                  &mut |key, value| {
+                      data.push((key.to_vec(), value.to_vec()));
+                      index += 1;
+                      Ok(index != 1)
+                  })
+            .unwrap();
 
         assert_eq!(data.len(), 1);
 

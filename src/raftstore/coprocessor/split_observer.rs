@@ -13,7 +13,7 @@
 
 use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
 use util::codec::table;
-use util::escape;
+use util::codec::bytes::{encode_bytes, BytesDecoder};
 
 use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
                           AdminCmdType};
@@ -34,32 +34,25 @@ impl SplitObserver {
         if !split.has_split_key() {
             return Err("split key is expected!".to_owned());
         }
-        let mut key = split.get_split_key().to_vec();
 
-        if key.len() < VERSION_LENGTH {
-            // bypass non-mvcc key.
-            return Ok(());
-        }
+        let mut key = match split.get_split_key().decode_bytes(false) {
+            Ok(x) => x,
+            Err(_) => return Ok(()),
+        };
 
-        // format of a key is TABLE_PREFIX + table_id + TABLE_ROW_MARK + handle + column_id
-        // + version or TABLE_PREFIX + table_id + TABLE_INDEX_MARK + index_id + values + version
+        // format of a key is TABLE_PREFIX + table_id + RECORD_PREFIX_SEP + handle + column_id
+        // + version or TABLE_PREFIX + table_id + INDEX_PREFIX_SEP + index_id + values + version
         // or meta_key + version
-
         let table_prefix_len = table::TABLE_PREFIX.len() + table::ID_LEN;
         if key.starts_with(table::TABLE_PREFIX) && key.len() > table::PREFIX_LEN + table::ID_LEN &&
            key[table_prefix_len..].starts_with(table::RECORD_PREFIX_SEP) {
             // row key, truncate to handle
             key.truncate(table::PREFIX_LEN + table::ID_LEN);
-        } else {
-            // index key or meta key, just remove the tailing version.
-            let key_len = key.len();
-            key.truncate(key_len - VERSION_LENGTH);
         }
 
         let region_start_key = ctx.snap.get_region().get_start_key();
-        info!("checking region_start_key {}, split key {}",
-              escape(region_start_key),
-              escape(&key));
+
+        let key = encode_bytes(&key);
         if &*key <= region_start_key {
             return Err("no need to split".to_owned());
         }
@@ -82,7 +75,7 @@ impl RegionObserver for SplitObserver {
         if !req.has_split() {
             box_try!(Err("cmd_type is Split but it doesn't have split request, message maybe \
                           corrupted!"
-                             .to_owned()));
+                .to_owned()));
         }
         if let Err(e) = self.on_split(ctx, req.mut_split()) {
             error!("failed to handle split req: {:?}", e);
@@ -123,7 +116,8 @@ mod test {
     use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
     use util::codec::{datum, table, Datum};
     use util::codec::number::NumberEncoder;
-    use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
+    use util::codec::bytes::encode_bytes;
+    use byteorder::{BigEndian, WriteBytesExt};
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
@@ -146,16 +140,38 @@ mod test {
         if column_id > 0 {
             key.write_u64::<BigEndian>(column_id).unwrap();
         }
+        key = encode_bytes(&key);
         key.write_u64::<BigEndian>(version_id).unwrap();
         key
     }
 
     fn new_index_key(table_id: i64, idx_id: i64, datums: &[Datum], version_id: u64) -> Vec<u8> {
-        let mut key = table::encode_index_seek_key(table_id,
-                                                   idx_id,
-                                                   &datum::encode_key(datums).unwrap());
+        let mut key =
+            table::encode_index_seek_key(table_id, idx_id, &datum::encode_key(datums).unwrap());
+        key = encode_bytes(&key);
         key.write_u64::<BigEndian>(version_id).unwrap();
         key
+    }
+
+    #[test]
+    fn test_forget_encode() {
+        let region_start_key = new_row_key(256, 1, 0, 0);
+        let key = new_row_key(256, 2, 1, 0);
+        let path = TempDir::new("test-split").unwrap();
+        let engine = new_engine(path.path().to_str().unwrap()).unwrap();
+        let mut r = Region::new();
+        r.set_id(10);
+        r.set_start_key(region_start_key);
+
+        let ps = PeerStorage::new(Arc::new(engine), &r).unwrap();
+        let mut ctx = ObserverContext::new(&ps);
+        let mut observer = SplitObserver;
+
+        let mut req = new_split_request(&key);
+        observer.pre_admin(&mut ctx, &mut req).unwrap();
+        let expect_key = new_row_key(256, 2, 0, 0);
+        let len = expect_key.len();
+        assert_eq!(req.get_split().get_split_key(), &expect_key[..len - 8]);
     }
 
     #[test]
@@ -176,14 +192,16 @@ mod test {
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), b"test");
 
-        let mut key = b"db:1\x00\x00\x00\x00\x00\x00\x00\x00".to_vec();
+        let mut key = encode_bytes(b"db:1");
+        key.write_u64::<BigEndian>(0).unwrap();
+        let mut expect_key = encode_bytes(b"db:1");
         req = new_split_request(&key);
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
-        assert_eq!(req.get_split().get_split_key(), b"db:1");
+        assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
         key = new_row_key(1, 2, 0, 0);
         req = new_split_request(&key);
-        let mut expect_key = key[..key.len() - 8].to_vec();
+        expect_key = key[..key.len() - 8].to_vec();
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
@@ -208,11 +226,12 @@ mod test {
         observer.pre_admin(&mut ctx, &mut req).unwrap();
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
-        let key = b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\
-    \x82\x7f\x80\x00\x00\x00\x00\x00\x00\xd3";
-        let expect_key = b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f";
-        req = new_split_request(key);
+        expect_key =
+            encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f");
+        key = expect_key.clone();
+        key.extend_from_slice(b"\x80\x00\x00\x00\x00\x00\x00\xd3");
+        req = new_split_request(&key);
         observer.pre_admin(&mut ctx, &mut req).unwrap();
-        assert_eq!(req.get_split().get_split_key(), expect_key);
+        assert_eq!(req.get_split().get_split_key(), &*expect_key);
     }
 }

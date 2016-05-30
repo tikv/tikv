@@ -21,23 +21,27 @@ extern crate log;
 extern crate rocksdb;
 extern crate mio;
 extern crate toml;
+extern crate cadence;
 
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::io::Read;
+use std::net::UdpSocket;
 
 use getopts::{Options, Matches};
-use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
+use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
+use cadence::{StatsdClient, NopMetricSink, UdpMetricSink};
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
-use tikv::util::{self, logger, panic_hook};
+use tikv::util::{self, logger, panic_hook, metric};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
+use tikv::raftstore::store;
 use tikv::pd::{new_rpc_client, RpcClient};
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -57,24 +61,184 @@ fn get_string_value<F>(short: &str,
                        -> String
     where F: Fn(&toml::Value) -> Option<String>
 {
-    matches.opt_str(short)
-           .or_else(|| {
-               config.lookup(long).and_then(|v| f(&v)).or_else(|| {
-                   info!("malformed or missing {}, use default", long);
-                   default
-               })
-           })
-           .expect(&format!("please specify {}", long))
+    let mut s = None;
+    // avoid panic if short is not defined.
+    if matches.opt_defined(short) {
+        s = matches.opt_str(short);
+    }
+
+    s.or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("malformed or missing {}, use default", long);
+                default
+            })
+        })
+        .expect(&format!("please specify {}", long))
+}
+
+fn get_integer_value<F>(short: &str,
+                        long: &str,
+                        matches: &Matches,
+                        config: &toml::Value,
+                        default: Option<i64>,
+                        f: F)
+                        -> i64
+    where F: Fn(&toml::Value) -> Option<i64>
+{
+    let mut i = None;
+    // avoid panic if short is not defined.
+    if matches.opt_defined(short) {
+        i = matches.opt_str(short).map(|x| x.parse::<i64>().unwrap());
+    };
+
+    i.or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("malformed or missing {}, use default", long);
+                default
+            })
+        })
+        .expect(&format!("please specify {}", long))
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
     let level = get_string_value("L",
                                  "server.log-level",
-                                 &matches,
-                                 &config,
+                                 matches,
+                                 config,
                                  Some("info".to_owned()),
                                  |v| v.as_str().map(|s| s.to_owned()));
     util::init_log(logger::get_level_by_string(&level)).unwrap();
+}
+
+fn initial_metric(matches: &Matches, config: &toml::Value) {
+    let host = get_string_value("metric-addr",
+                                "metric.addr",
+                                &matches,
+                                &config,
+                                Some("".to_owned()),
+                                |v| v.as_str().map(|s| s.to_owned()));
+    let prefix = get_string_value("metric-prefix",
+                                  "metric.prefix",
+                                  &matches,
+                                  &config,
+                                  Some("tikv".to_owned()),
+                                  |v| v.as_str().map(|s| s.to_owned()));
+    if !host.is_empty() {
+        // We only need a unique UDP bind, so 0.0.0.0:0 is enough.
+        let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+        let sink = UdpMetricSink::from(&*host, socket).unwrap();
+        let client = StatsdClient::from_sink(&prefix, sink);
+
+        if let Err(r) = metric::set_metric_client(Box::new(client)) {
+            error!("{}", r);
+        }
+    } else {
+        let client = StatsdClient::from_sink(&prefix, NopMetricSink);
+
+        if let Err(r) = metric::set_metric_client(Box::new(client)) {
+            error!("{}", r);
+        }
+    }
+}
+
+fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
+    let mut opts = RocksdbOptions::new();
+    let mut block_base_opts = BlockBasedOptions::new();
+    let block_size = get_integer_value("",
+                                       "rocksdb.block-based-table.block-size",
+                                       matches,
+                                       config,
+                                       Some(64 * 1024),
+                                       |v| v.as_integer());
+    block_base_opts.set_block_size(block_size as u64);
+    opts.set_block_based_table_factory(&block_base_opts);
+
+    let tp = get_string_value("",
+                              "rocksdb.compression",
+                              matches,
+                              config,
+                              Some("lz4".to_owned()),
+                              |v| v.as_str().map(|s| s.to_owned()));
+    let compression = util::rocksdb_option::get_compression_by_string(&tp);
+    opts.compression(compression);
+
+    let write_buffer_size = get_integer_value("",
+                                              "rocksdb.write-buffer-size",
+                                              matches,
+                                              config,
+                                              Some(64 * 1024 * 1024),
+                                              |v| v.as_integer());
+    opts.set_write_buffer_size(write_buffer_size as u64);
+
+    let max_write_buffer_number = {
+        get_integer_value("",
+                          "rocksdb.max-write-buffer-number",
+                          matches,
+                          config,
+                          Some(5),
+                          |v| v.as_integer())
+    };
+    opts.set_max_write_buffer_number(max_write_buffer_number as i32);
+
+    let min_write_buffer_number_to_merge = {
+        get_integer_value("",
+                          "rocksdb.min-write-buffer-number-to-merge",
+                          matches,
+                          config,
+                          Some(2),
+                          |v| v.as_integer())
+    };
+    opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
+
+    let max_background_compactions = get_integer_value("",
+                                                       "rocksdb.max-background-compactions",
+                                                       matches,
+                                                       config,
+                                                       Some(3),
+                                                       |v| v.as_integer());
+    opts.set_max_background_compactions(max_background_compactions as i32);
+
+    let max_bytes_for_level_base = get_integer_value("",
+                                                     "rocksdb.max-bytes-for-level-base",
+                                                     matches,
+                                                     config,
+                                                     Some(64 * 1024 * 1024),
+                                                     |v| v.as_integer());
+    opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
+
+    let target_file_size_base = get_integer_value("",
+                                                  "rocksdb.target-file-size-base",
+                                                  matches,
+                                                  config,
+                                                  Some(64 * 1024 * 1024),
+                                                  |v| v.as_integer());
+    opts.set_target_file_size_base(target_file_size_base as u64);
+
+    let create_if_missing = config.lookup("rocksdb.create-if-missing")
+        .unwrap_or(&toml::Value::Boolean(true))
+        .as_bool()
+        .unwrap_or(true);
+    opts.create_if_missing(create_if_missing);
+
+    let level_zero_slowdown_writes_trigger = {
+        get_integer_value("",
+                          "rocksdb.level0-slowdown-writes-trigger",
+                          matches,
+                          config,
+                          Some(12),
+                          |v| v.as_integer())
+    };
+    opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
+
+    let level_zero_stop_writes_trigger = get_integer_value("",
+                                                           "rocksdb.level0-stop-writes-trigger",
+                                                           matches,
+                                                           config,
+                                                           Some(24),
+                                                           |v| v.as_integer());
+    opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
+
+    opts
 }
 
 fn build_raftkv(matches: &Matches,
@@ -82,23 +246,13 @@ fn build_raftkv(matches: &Matches,
                 ch: SendCh,
                 cluster_id: u64,
                 addr: String,
-                pd_client: Arc<RwLock<RpcClient>>)
+                pd_client: Arc<RpcClient>)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
     let path = get_store_path(matches, config);
-    let mut opts = RocksdbOptions::new();
-    let mut block_base_opts = BlockBasedOptions::new();
-    block_base_opts.set_block_size(64 * 1024);
-    opts.set_block_based_table_factory(&block_base_opts);
-    opts.compression(DBCompressionType::DBNo);
-    opts.set_write_buffer_size(64 * 1024 * 1024);
-    opts.set_max_write_buffer_number(5);
-    opts.set_min_write_buffer_number_to_merge(2);
-    opts.set_max_background_compactions(3);
-    opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
-    opts.set_target_file_size_base(64 * 1024 * 1024);
-    opts.create_if_missing(true);
+
+    let opts = get_rocksdb_option(matches, config);
 
     let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
@@ -110,13 +264,14 @@ fn build_raftkv(matches: &Matches,
     // If no advertise listening address set, use the associated listening address.
     cfg.advertise_addr = get_string_value("advertise-addr",
                                           "server.advertise-addr",
-                                          &matches,
-                                          &config,
+                                          matches,
+                                          config,
                                           Some(addr),
                                           |v| v.as_str().map(|s| s.to_owned()));
 
-    let mut node = Node::new(&cfg, pd_client, trans.clone());
-    node.start(engine.clone()).unwrap();
+    let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+    let mut node = Node::new(&mut event_loop, &cfg, pd_client);
+    node.start(event_loop, engine.clone(), trans).unwrap();
     let raft_router = node.raft_store_router();
 
     (create_raft_storage(node, engine).unwrap(), raft_router)
@@ -152,7 +307,7 @@ fn run_local_server(listener: TcpListener, store: Storage) {
                               store,
                               router,
                               MockStoreAddrResolver)
-                      .unwrap();
+        .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
@@ -162,22 +317,22 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
 
     let id = get_string_value("I",
                               "raft.cluster-id",
-                              &matches,
-                              &config,
+                              matches,
+                              config,
                               None,
                               |v| v.as_integer().map(|i| i.to_string()));
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
 
     let pd_addr = get_string_value("pd",
                                    "raft.pd",
-                                   &matches,
-                                   &config,
+                                   matches,
+                                   config,
                                    None,
                                    |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(RwLock::new(new_rpc_client(&pd_addr).unwrap()));
-    let resolver = PdStoreAddrResolver::new(cluster_id, pd_client.clone()).unwrap();
+    let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
+    let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
-    let (store, raft_router) = build_raftkv(&matches,
+    let (store, raft_router) = build_raftkv(matches,
                                             config,
                                             ch,
                                             cluster_id,
@@ -216,6 +371,11 @@ fn main() {
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
     opts.optopt("", "pd", "set pd address", "host:port");
+    opts.optopt("", "metric-addr", "set statsd server address", "host:port");
+    opts.optopt("",
+                "metric-prefix",
+                "set metric prefix",
+                "metric prefix: tikv");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);
@@ -234,6 +394,8 @@ fn main() {
     };
 
     initial_log(&matches, &config);
+
+    initial_metric(&matches, &config);
 
     let addr = get_string_value("A",
                                 "server.addr",

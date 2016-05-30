@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::boxed::{Box, FnBox};
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
 use std::collections::HashMap;
 
 use super::Result;
-use util::{self, HandyRwLock, TryInsertWith};
+use util::{self, TryInsertWith};
 use util::worker::{Runnable, Worker};
 use pd::PdClient;
 
@@ -43,8 +43,7 @@ impl Display for Task {
 }
 
 pub struct Runner<T: PdClient> {
-    cluster_id: u64,
-    pd_client: Arc<RwLock<T>>,
+    pd_client: Arc<T>,
     store_addrs: HashMap<u64, String>,
 }
 
@@ -63,20 +62,18 @@ impl<T: PdClient> Runner<T> {
         // TODO: do we need re-update the cache sometimes?
         // Store address may be changed?
         let pd_client = self.pd_client.clone();
-        let cluster_id = self.cluster_id;
         let s = try!(self.store_addrs.entry(store_id).or_try_insert_with(|| {
-            pd_client.rl()
-                     .get_store(cluster_id, store_id)
-                     .and_then(|s| {
-                         let addr = s.get_address().to_owned();
-                         // In some tests, we use empty address for store first,
-                         // so we should ignore here.
-                         // TODO: we may remove this check after we refactor the test.
-                         if addr.len() == 0 {
-                             return Err(box_err!("invalid empty address for store {}", store_id));
-                         }
-                         Ok(addr)
-                     })
+            pd_client.get_store(store_id)
+                .and_then(|s| {
+                    let addr = s.get_address().to_owned();
+                    // In some tests, we use empty address for store first,
+                    // so we should ignore here.
+                    // TODO: we may remove this check after we refactor the test.
+                    if addr.len() == 0 {
+                        return Err(box_err!("invalid empty address for store {}", store_id));
+                    }
+                    Ok(addr)
+                })
         }));
 
         Ok(s)
@@ -96,15 +93,12 @@ pub struct PdStoreAddrResolver {
 }
 
 impl PdStoreAddrResolver {
-    pub fn new<T>(cluster_id: u64, pd_client: Arc<RwLock<T>>) -> Result<PdStoreAddrResolver>
+    pub fn new<T>(pd_client: Arc<T>) -> Result<PdStoreAddrResolver>
         where T: PdClient + 'static
     {
-        let mut r = PdStoreAddrResolver {
-            worker: Worker::new("store address resolve worker".to_owned()),
-        };
+        let mut r = PdStoreAddrResolver { worker: Worker::new("store address resolve worker") };
 
         let runner = Runner {
-            cluster_id: cluster_id,
             pd_client: pd_client,
             store_addrs: HashMap::new(),
         };

@@ -33,7 +33,7 @@ pub fn bytes_to_int(bytes: &[u8]) -> Result<i64> {
         }
 
         r = trimed.take_while(|&&c| c >= b'0' && c <= b'9')
-                  .fold(r, |l, &r| l * 10 + (r - b'0') as i64);
+            .fold(r, |l, &r| l * 10 + (r - b'0') as i64);
         if negative {
             r = -r;
         }

@@ -21,7 +21,6 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util;
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
 
@@ -35,40 +34,42 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();
-    let cluster_id = cluster.id();
 
-    let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
+    let tbls = vec![(b"a22", b"a11", b"a33"), (b"a11", b"a00", b"a11"), (b"a33", b"a22", b"a33")];
 
-    let a1 = b"a1";
-    cluster.must_put(a1, b"v1");
+    for (split_key, left_key, right_key) in tbls {
+        cluster.must_put(left_key, b"v1");
+        cluster.must_put(right_key, b"v3");
 
-    let a2 = b"a2";
+        // Left and right key must be in same region before split.
+        let region = pd_client.get_region(left_key).unwrap();
+        let region2 = pd_client.get_region(right_key).unwrap();
+        assert_eq!(region.get_id(), region2.get_id());
 
-    let a3 = b"a3";
-    cluster.must_put(a3, b"v3");
+        // Split with split_key, so left_key must in left, and right_key in right.
+        cluster.must_split(&region, split_key);
 
-    // Split with a2, so a1 must in left, and a3 in right.
-    cluster.split_region(region.get_id(), Some(a2.to_vec()));
+        let left = pd_client.get_region(left_key).unwrap();
+        let right = pd_client.get_region(right_key).unwrap();
 
-    let left = pd_client.rl().get_region(cluster_id, a1).unwrap();
-    let right = pd_client.rl().get_region(cluster_id, a3).unwrap();
+        assert_eq!(region.get_id(), left.get_id());
+        assert_eq!(region.get_start_key(), left.get_start_key());
+        assert_eq!(left.get_end_key(), right.get_start_key());
+        assert_eq!(region.get_end_key(), right.get_end_key());
 
-    assert_eq!(region.get_id(), left.get_id());
-    assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(left.get_end_key(), right.get_start_key());
-    assert_eq!(region.get_end_key(), right.get_end_key());
+        cluster.must_put(left_key, b"vv1");
+        assert_eq!(cluster.get(left_key).unwrap(), b"vv1".to_vec());
 
-    cluster.must_put(a1, b"vv1");
-    assert_eq!(cluster.get(a1).unwrap(), b"vv1".to_vec());
+        cluster.must_put(right_key, b"vv3");
+        assert_eq!(cluster.get(right_key).unwrap(), b"vv3".to_vec());
 
-    cluster.must_put(a3, b"vv3");
-    assert_eq!(cluster.get(a3).unwrap(), b"vv3".to_vec());
-
-    let epoch = left.get_region_epoch().clone();
-    let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(a3)]);
-    let resp = cluster.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().has_error());
-    assert!(resp.get_header().get_error().has_key_not_in_region());
+        let epoch = left.get_region_epoch().clone();
+        let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(right_key)]);
+        let resp = cluster.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
+        assert!(resp.get_header().has_error());
+        assert!(resp.get_header().get_error().has_key_not_in_region(),
+                format!("{:?}", resp));
+    }
 }
 
 #[test]
@@ -120,16 +121,15 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();
-    let cluster_id = cluster.id();
 
-    let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
+    let region = pd_client.get_region(b"").unwrap();
 
     let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
 
     // it should be finished in millis if split.
     thread::sleep(Duration::from_secs(1));
 
-    let target = pd_client.rl().get_region(cluster_id, &last_key).unwrap();
+    let target = pd_client.get_region(&last_key).unwrap();
 
     assert_eq!(region, target);
 
@@ -140,21 +140,19 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     thread::sleep(Duration::from_secs(1));
 
-    let left = pd_client.rl().get_region(cluster_id, b"").unwrap();
-    let right = pd_client.rl().get_region(cluster_id, &max_key).unwrap();
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
 
     assert!(left != right);
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
-    assert_eq!(pd_client.rl().get_region(cluster_id, &max_key).unwrap(),
-               right);
-    assert_eq!(pd_client.rl().get_region(cluster_id, left.get_end_key()).unwrap(),
-               right);
+    assert_eq!(pd_client.get_region(&max_key).unwrap(), right);
+    assert_eq!(pd_client.get_region(left.get_end_key()).unwrap(), right);
 
     let middle_key = left.get_end_key();
     let leader = cluster.leader_of_region(left.get_id()).unwrap();
-    let store_id = leader;
+    let store_id = leader.get_store_id();
     let mut size = 0;
     cluster.engines[&store_id]
         .scan(&data_key(b""),
@@ -197,9 +195,8 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();
-    let cluster_id = cluster.id();
 
-    let region = pd_client.rl().get_region(cluster_id, b"").unwrap();
+    let region = pd_client.get_region(b"").unwrap();
 
     let a1 = b"a1";
     cluster.must_put(a1, b"v1");
@@ -217,11 +214,11 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
 
     // Stop a not leader peer
-    let index = (1..4).find(|&x| x != leader).unwrap();
+    let index = (1..4).find(|&x| x != leader.get_store_id()).unwrap();
     cluster.stop_node(index);
 
     let a2 = b"a20";
-    cluster.split_region(region.get_id(), Some(a2.to_vec()));
+    cluster.must_split(&region, a2);
 
     // When the node starts, the region will try to join the raft group first,
     // so most of case, the new leader's heartbeat for split region may arrive

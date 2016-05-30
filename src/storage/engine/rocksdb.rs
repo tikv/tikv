@@ -13,12 +13,12 @@
 
 use std::fmt::{self, Display, Formatter, Debug};
 use std::error::Error;
-use rocksdb::{DB, Writable, WriteBatch, IteratorMode, Direction};
+use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
 use rocksdb::rocksdb::Snapshot as RocksSnapshot;
 use kvproto::kvrpcpb::Context;
-use storage::{Key, Value, KvPair};
+use storage::{Key, Value};
 use util::escape;
-use super::{Engine, Snapshot, Modify, TEMP_DIR, Result};
+use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result};
 use tempdir::TempDir;
 
 
@@ -61,16 +61,9 @@ impl Engine for EngineRocksdb {
     fn get(&self, _: &Context, key: &Key) -> Result<Option<Value>> {
         trace!("EngineRocksdb: get {}", key);
         self.db
-            .get(key.raw())
+            .get(key.encoded())
             .map(|r| r.map(|v| v.to_vec()))
             .map_err(|e| RocksDBError::new(e).into_engine_error())
-    }
-
-    fn seek(&self, _: &Context, key: &Key) -> Result<Option<KvPair>> {
-        trace!("EngineRocksdb: seek {}", key);
-        let mode = IteratorMode::From(key.raw(), Direction::Forward);
-        let pair = self.db.iterator(mode).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
-        Ok(pair)
     }
 
     fn write(&self, _: &Context, batch: Vec<Modify>) -> Result<()> {
@@ -79,13 +72,13 @@ impl Engine for EngineRocksdb {
             match rev {
                 Modify::Delete(k) => {
                     trace!("EngineRocksdb: delete {}", k);
-                    if let Err(msg) = wb.delete(k.raw()) {
+                    if let Err(msg) = wb.delete(k.encoded()) {
                         return Err(RocksDBError::new(msg).into_engine_error());
                     }
                 }
                 Modify::Put((k, v)) => {
                     trace!("EngineRocksdb: put {},{}", k, escape(&v));
-                    if let Err(msg) = wb.put(k.raw(), &v) {
+                    if let Err(msg) = wb.put(k.encoded(), &v) {
                         return Err(RocksDBError::new(msg).into_engine_error());
                     }
                 }
@@ -101,35 +94,57 @@ impl Engine for EngineRocksdb {
         let snapshot = RocksSnapshot::new(&self.db);
         Ok(box snapshot)
     }
+
+    fn iter<'a>(&'a self, _: &Context) -> Result<Box<Cursor + 'a>> {
+        Ok(box self.db.iter())
+    }
+}
+
+impl<'a> Cursor for DBIterator<'a> {
+    fn next(&mut self) -> bool {
+        DBIterator::next(self)
+    }
+
+    fn prev(&mut self) -> bool {
+        DBIterator::prev(self)
+    }
+
+    fn seek(&mut self, key: &Key) -> Result<bool> {
+        Ok(DBIterator::seek(self, key.encoded().as_slice().into()))
+    }
+
+    fn seek_to_first(&mut self) -> bool {
+        DBIterator::seek(self, SeekKey::Start)
+    }
+
+    fn seek_to_last(&mut self) -> bool {
+        DBIterator::seek(self, SeekKey::End)
+    }
+
+    fn valid(&self) -> bool {
+        DBIterator::valid(self)
+    }
+
+    fn key(&self) -> &[u8] {
+        DBIterator::key(self)
+    }
+
+    fn value(&self) -> &[u8] {
+        DBIterator::value(self)
+    }
 }
 
 impl<'a> Snapshot for RocksSnapshot<'a> {
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get {}", key);
-        self.get(key.raw())
+        self.get(key.encoded())
             .map(|r| r.map(|v| v.to_vec()))
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 
-    fn seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("RocksSnapshot: seek {}", key);
-        let mode = IteratorMode::From(key.raw(), Direction::Forward);
-        let pair = self.iterator(mode).next().map(|(k, v)| (k.to_vec(), v.to_vec()));
-        Ok(pair)
-    }
-
-    fn reverse_seek(&self, key: &Key) -> Result<Option<KvPair>> {
-        trace!("RocksSnapshot: seek {}", key);
-        let mut iter = self.iterator(IteratorMode::From(key.raw(), Direction::Reverse));
-        // iter will be positioned at `key` or the kv pair after it. If no such key exists, we need
-        // locate it to the end.
-        if !iter.valid() {
-            iter = self.iterator(IteratorMode::End);
-        }
-        let pair = iter.skip_while(|&(k, _)| k >= key.raw())
-                       .next()
-                       .map(|(k, v)| (k.to_vec(), v.to_vec()));
-        Ok(pair)
+    fn iter<'b>(&'b self) -> Result<Box<Cursor + 'b>> {
+        trace!("RocksSnapshot: create iterator");
+        Ok(box RocksSnapshot::iter(self))
     }
 }
 
