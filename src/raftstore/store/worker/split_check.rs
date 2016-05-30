@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
+use std::time::Instant;
 
 use rocksdb::DB;
 
@@ -70,8 +71,10 @@ impl Runnable<Task> for Runner {
         debug!("executing task {} {}",
                escape(&task.start_key),
                escape(&task.end_key));
+        metric_incr!("raftstore.check_split");
         let mut size = 0;
         let mut split_key = vec![];
+                let ts = Instant::now();
         let res = task.engine.scan(&task.start_key,
                                    &task.end_key,
                                    &mut |k, v| {
@@ -88,7 +91,10 @@ impl Runnable<Task> for Runner {
                    e);
             return;
         }
+        metric_time!("raftstore.check_split.cost", ts.elapsed());
+
         if size < self.region_max_size {
+            metric_incr!("raftstore.check_split.ignore");
             debug!("no need to send for {} < {}", size, self.region_max_size);
             return;
         }
@@ -96,6 +102,7 @@ impl Runnable<Task> for Runner {
         if let Err(e) = res {
             warn!("failed to send check result of {}: {}", task.region_id, e);
         }
+        metric_incr!("raftstore.check_split.success");
     }
 }
 
