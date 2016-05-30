@@ -74,7 +74,7 @@ impl Runnable<Task> for Runner {
         metric_incr!("raftstore.check_split");
         let mut size = 0;
         let mut split_key = vec![];
-                let ts = Instant::now();
+        let ts = Instant::now();
         let res = task.engine.scan(&task.start_key,
                                    &task.end_key,
                                    &mut |k, v| {
