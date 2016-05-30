@@ -247,7 +247,7 @@ pub fn new_change_peer(change_type: ConfChangeType, peer: metapb::Peer) -> Chang
 }
 
 pub fn new_add_change_peer(region: &metapb::Region, peer: metapb::Peer) -> Option<ChangePeer> {
-    if let Some(p) = find_peer(&region, peer.get_store_id()) {
+    if let Some(p) = find_peer(region, peer.get_store_id()) {
         assert_eq!(p.get_id(), peer.get_id());
         return None;
     }
@@ -256,7 +256,7 @@ pub fn new_add_change_peer(region: &metapb::Region, peer: metapb::Peer) -> Optio
 }
 
 pub fn new_remove_change_peer(region: &metapb::Region, peer: metapb::Peer) -> Option<ChangePeer> {
-    if find_peer(&region, peer.get_store_id()).is_none() {
+    if find_peer(region, peer.get_store_id()).is_none() {
         return None;
     }
 
