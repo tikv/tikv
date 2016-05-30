@@ -107,7 +107,9 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
 
         match task {
             Task::AskSplit { region, split_key, peer } => {
+                metric_incr!("pd.ask_split");
                 if let Ok(mut resp) = self.pd_client.ask_split(region.clone()) {
+                    metric_incr!("pd.ask_split.success");
                     info!("try to split with new region id {} for region {:?}",
                           resp.get_new_region_id(),
                           region);
@@ -119,10 +121,13 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 }
             }
             Task::Heartbeat { region, peer } => {
+                metric_incr!("pd.heartbeat");
                 // Now we use put region protocol for heartbeat.
                 if let Ok(mut resp) = self.pd_client
                     .region_heartbeat(region.clone(), peer.clone()) {
+                    metric_incr!("pd.heartbeat.success");
                     if resp.has_change_peer() {
+                        metric_incr!("pd.heartbeat.change_peer");
                         let mut change_peer = resp.take_change_peer();
                         info!("try to change peer {:?} {:?} for region {:?}",
                               change_peer.get_change_type(),
