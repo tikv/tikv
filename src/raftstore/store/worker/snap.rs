@@ -194,6 +194,13 @@ pub fn snapshot_file_path(dir: &Path, file: &SnapshotFile) -> PathBuf {
                            file.get_region(),
                            file.get_term(),
                            file.get_index()));
+    {
+        if let Some(parent)= file_path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).unwrap();
+            }
+        }
+    }
     file_path
 }
 

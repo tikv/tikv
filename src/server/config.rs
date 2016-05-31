@@ -44,8 +44,13 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn new() -> Config {
-        Config::default()
+    pub fn new(snap_path: &str) -> Config {
+        Config {
+            cluster_id: DEFAULT_CLUSTER_ID,
+            addr: DEFAULT_LISTENING_ADDR.to_owned(),
+            advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
+            store_cfg: StoreConfig::new(snap_path),
+        }
     }
 
     pub fn validate(&self) -> Result<()> {

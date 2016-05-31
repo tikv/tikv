@@ -253,12 +253,13 @@ fn build_raftkv(matches: &Matches,
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
     let path = get_store_path(matches, config);
-    let snap_path = Path::new(&path).join("/snapshot/");
+    let snap_path = Path::new(&path).join("/snapshot/").join(format!("{}/", cluster_id));
+    let snap_path_copy = snap_path.as_path().to_path_buf();
 
     let opts = get_rocksdb_option(matches, config);
 
     let engine = Arc::new(DB::open(&opts, &path).unwrap());
-    let mut cfg = Config::new();
+    let mut cfg = Config::new(&snap_path.into_os_string().into_string().unwrap());
     cfg.cluster_id = cluster_id;
 
     cfg.addr = addr.clone();
@@ -277,7 +278,7 @@ fn build_raftkv(matches: &Matches,
     node.start(event_loop, engine.clone(), trans).unwrap();
     let raft_router = node.raft_store_router();
 
-    (create_raft_storage(node, engine).unwrap(), raft_router, snap_path.to_path_buf())
+    (create_raft_storage(node, engine).unwrap(), raft_router, snap_path_copy)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
