@@ -37,7 +37,7 @@ use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
-use util::{as_slice, escape};
+use util::{as_slice, escape, duration_to_ms};
 use util::worker::BatchRunnable;
 use util::SlowTimer;
 use super::OnResponse;
@@ -375,7 +375,11 @@ impl<'a> SelectContext<'a> {
             if rows.len() >= limit {
                 break;
             }
+            let timer = Instant::now();
             let ran_rows = try!(self.get_rows_from_range(ran, limit - rows.len(), desc));
+            debug!("fetch {} rows takes {} ms",
+                   ran_rows.len(),
+                   duration_to_ms(timer.elapsed()));
             rows.extend(ran_rows);
         }
         Ok(rows)
@@ -414,18 +418,15 @@ impl<'a> SelectContext<'a> {
             };
             let mut scanner = try!(self.snap.scanner());
             while limit > rows.len() {
-                let timer = Instant::now();
-                let mut res = if desc {
-                    try!(scanner.reverse_scan(Key::from_raw(&seek_key), 1))
+                let key = if desc {
+                    try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
                 } else {
-                    try!(scanner.scan(Key::from_raw(&seek_key), 1))
+                    try!(scanner.seek(Key::from_raw(&seek_key)))
                 };
-                trace!("scan takes {:?}", timer.elapsed());
-                if res.is_empty() {
-                    debug!("no more data to scan.");
-                    break;
-                }
-                let (key, _) = try!(res.pop().unwrap());
+                let key = match key {
+                    Some((key, _)) => box_try!(key.raw()),
+                    None => break,
+                };
                 if range.get_start() > &key || range.get_end() <= &key {
                     debug!("key: {} out of range [{}, {})",
                            escape(&key),
@@ -542,19 +543,15 @@ impl<'a> SelectContext<'a> {
         };
         let mut scanner = try!(self.snap.scanner());
         while rows.len() < limit {
-            trace!("seek {}", escape(&seek_key));
-            let timer = Instant::now();
-            let mut nk = if desc {
-                try!(scanner.reverse_scan(Key::from_raw(&seek_key), 1))
+            let nk = if desc {
+                try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
             } else {
-                try!(scanner.scan(Key::from_raw(&seek_key), 1))
+                try!(scanner.seek(Key::from_raw(&seek_key)))
             };
-            trace!("scan takes {:?}", timer.elapsed());
-            if nk.is_empty() {
-                debug!("no more data to scan");
-                break;
-            }
-            let (key, value) = try!(nk.pop().unwrap());
+            let key = match nk {
+                Some((ref key, _)) => box_try!(key.raw()),
+                None => break,
+            };
             if r.get_start() > &key || r.get_end() <= &key {
                 debug!("key: {} out of range [{}, {})",
                        escape(&key),
@@ -566,7 +563,9 @@ impl<'a> SelectContext<'a> {
             let handle = if datums.len() > info.get_columns().len() {
                 datums.pop().unwrap()
             } else {
-                let h = box_try!((&*value).read_i64::<BigEndian>());
+                let (k, ts) = nk.unwrap();
+                let mut v = try!(scanner.get(&k, ts)).unwrap();
+                let h = box_try!(v.read_i64::<BigEndian>());
                 Datum::I64(h)
             };
             let data = box_try!(datum::encode_value(&datums));

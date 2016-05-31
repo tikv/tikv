@@ -13,7 +13,7 @@
 
 use std::fmt;
 use storage::{Key, Value, Mutation};
-use storage::engine::{Engine, Snapshot, Modify};
+use storage::engine::{Engine, Snapshot, Modify, Cursor};
 use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 use kvproto::kvrpcpb::Context;
 use super::meta::{Meta, FIRST_META_INDEX};
@@ -245,6 +245,64 @@ impl<'a> MvccSnapshot<'a> {
                 return Ok(try!(self.snapshot.get(&data_key)));
             }
             next = meta.next_index();
+        }
+        Ok(None)
+    }
+}
+
+pub struct MvccCursor<'a> {
+    cursor: &'a mut Cursor,
+    start_ts: u64,
+}
+
+impl<'a> MvccCursor<'a> {
+    pub fn new(cursor: &'a mut Cursor, start_ts: u64) -> MvccCursor {
+        MvccCursor {
+            cursor: cursor,
+            start_ts: start_ts,
+        }
+    }
+
+    fn load_meta(&mut self, key: &Key, index: u64) -> Result<Meta> {
+        let meta = match try!(self.cursor.get(&key.append_ts(index))) {
+            Some(x) => try!(Meta::parse(x)),
+            None => Meta::new(),
+        };
+        Ok(meta)
+    }
+
+    pub fn get(&mut self, key: &Key) -> Result<Option<&[u8]>> {
+        match try!(self.get_version(key)) {
+            Some(ts) => {
+                let key = key.append_ts(ts);
+                self.cursor.get(&key).map_err(From::from)
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_version(&mut self, key: &Key) -> Result<Option<u64>> {
+        let mut meta = try!(self.load_meta(key, FIRST_META_INDEX));
+        // Check for locks that signal concurrent writes.
+        if let Some(lock) = meta.get_lock() {
+            if lock.get_start_ts() <= self.start_ts {
+                // There is a pending lock. Client should wait or clean it.
+                return Err(Error::KeyIsLocked {
+                    key: try!(key.raw()),
+                    primary: lock.get_primary_key().to_vec(),
+                    ts: lock.get_start_ts(),
+                });
+            }
+        }
+        loop {
+            // Find the latest write below our start timestamp.
+            if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= self.start_ts) {
+                return Ok(Some(x.get_start_ts()));
+            }
+            meta = match meta.next_index() {
+                Some(x) => try!(self.load_meta(key, x)),
+                None => break,
+            };
         }
         Ok(None)
     }
