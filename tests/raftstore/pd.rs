@@ -24,6 +24,7 @@ use kvproto::pdpb;
 use kvproto::raftpb;
 use tikv::pd::{PdClient, Result, Error, Key};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
+use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{HandyRwLock, escape};
 use super::util::*;
 
@@ -484,7 +485,9 @@ impl PdClient for TestPdClient {
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
         try!(self.check_bootstrap());
         if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
-            return Ok(region);
+            if let Ok(_) = check_key_in_region(key, &region) {
+                return Ok(region);
+            }
         }
 
         Err(box_err!("no region contains key {:?}", escape(key)))
