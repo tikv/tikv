@@ -14,18 +14,15 @@
 use std::fmt::{self, Formatter, Display};
 use std::{io, fs};
 use std::boxed::{Box, FnBox};
-use std::sync::{RwLock, Arc};
 use std::sync::mpsc::Sender;
 use std::io::Read;
 
 use super::{Result, Error, ConnData};
 use util::worker::{Runnable, Worker};
-use util::HandyRwLock;
 use bytes::{ByteBuf, MutByteBuf};
 use byteorder::{ByteOrder, LittleEndian};
 use protobuf::Message;
 use raftstore::store::worker::snap::snapshot_file_path;
-use super::transport::RaftStoreRouter;
 
 use kvproto::raftpb::Snapshot;
 use kvproto::msgpb::{self, SnapshotFile};
@@ -61,7 +58,7 @@ pub struct Runner {
     pub file: fs::File,
     msg: RaftMessage,
     msg_id: u64,
-    file_info: SnapshotFile,
+    // file_info: SnapshotFile,
     tx: Sender<ConnData>,
 }
 
@@ -78,7 +75,7 @@ impl Runner {
             file: fs::File::create(file_name).unwrap(),
             msg: msg,
             msg_id: msg_id,
-            file_info: file_info,
+            // file_info: file_info,
             tx: tx,
         }
     }
@@ -92,7 +89,7 @@ impl Runnable<Task> for Runner {
             // self.file.flush();
 
             // TODO change here when region size goes to 1G
-            print!("send snapshot to store...\n");
+            debug!("send snapshot to store...\n");
             let snapshot = load_snapshot(&self.file_name).unwrap();
             self.msg.mut_message().set_snapshot(snapshot);
 
@@ -115,10 +112,8 @@ fn load_snapshot(file_name: &str) -> Result<Snapshot> {
     let mut buf: [u8; 4] = [0; 4];
     try!(file.read(&mut buf));
     let len = LittleEndian::read_u32(&buf);
-
-    let mut vec: Vec<u8> = Vec::with_capacity(10);
+    let mut vec: Vec<u8> = Vec::with_capacity(len as usize);
     try!(file.read(vec.as_mut_slice()));
-
     let mut msg = Snapshot::new();
     try!(msg.merge_from_bytes(vec.as_slice()));
     Ok(msg)

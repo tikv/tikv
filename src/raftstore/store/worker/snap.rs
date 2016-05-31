@@ -107,7 +107,7 @@ impl Runner {
         snapshot_file.set_index(snapshot.get_metadata().get_index());
 
         let file_name = snapshot_file_path(dir, &snapshot_file);
-        print!("save_snapshot file name: {}\n", file_name);
+        debug!("save_snapshot file name: {}\n", file_name);
         let metadata = fs::metadata(&file_name);
         if let Ok(attr) = metadata {
             if attr.is_file() {
@@ -155,7 +155,7 @@ impl Runnable<Task> for Runner {
             }
         }
 
-        print!("write snapshot file success!\n");
+        info!("write snapshot file success!\n");
     }
 }
 
@@ -201,7 +201,7 @@ pub fn snapshot_file_path(dir: &str, file: &SnapshotFile) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self, Read};
+    use std::io::Read;
     use std::fs;
     use super::*;
     use kvproto::raftpb::Snapshot;
@@ -223,10 +223,14 @@ mod tests {
 
         let mut f = fs::File::open(&file_name).unwrap();
         let mut buf: [u8; 4] = [0; 4];
-        f.read(&mut buf);
-        let head_len = LittleEndian::read_u32(&mut buf);
+        if let Err(e) = f.read(&mut buf) {
+            panic!("read failed: {}", e);
+        }
+        let head_len = LittleEndian::read_u32(&buf);
         let should_be = snapshot.compute_size();
         assert_eq!(should_be, head_len);
-        fs::remove_file(&file_name);
+        if let Err(e) = fs::remove_file(&file_name) {
+            panic!("remove file: {}", e);
+        }
     }
 }

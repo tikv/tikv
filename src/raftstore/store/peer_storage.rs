@@ -13,7 +13,6 @@
 
 use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::vec::Vec;
-use std::path::Path;
 use std::{error, mem};
 use std::time::Instant;
 

@@ -26,7 +26,7 @@ extern crate tempdir;
 
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::io::Read;
 use std::net::UdpSocket;
@@ -302,10 +302,6 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     }
     let absolute_path = p.canonicalize().unwrap();
     format!("{}", absolute_path.display())
-}
-
-fn path_to_string(p: PathBuf) -> String {
-    p.into_os_string().into_string().unwrap()
 }
 
 fn run_local_server(listener: TcpListener, store: Storage) {

@@ -549,7 +549,7 @@ mod test {
         let mut j = offset;
         while j <= raft_log.last_index() {
             assert_eq!(j, raft_log.term(j).expect(""));
-            j = j + 1;
+            j += 1;
         }
 
         j = offset;
@@ -557,7 +557,7 @@ mod test {
             if !raft_log.match_term(j, j) {
                 panic!("match_term({}) = false, want true", j);
             }
-            j = j + 1;
+            j += 1;
         }
 
         {

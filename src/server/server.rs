@@ -466,7 +466,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         info!("resolve store {} address ok, addr {}", store_id, sock_addr);
 
         if data.is_snapshot() {
-            return self.send_snapshot_sock(store_id, sock_addr, data);
+            return self.send_snapshot_sock(sock_addr, data);
         }
 
         let token = match self.connect_store(event_loop, store_id, sock_addr) {
@@ -493,7 +493,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
     }
 
-    fn send_snapshot_sock(&mut self, store_id: u64, sock_addr: SocketAddr, data: ConnData) {
+    fn send_snapshot_sock(&mut self, sock_addr: SocketAddr, data: ConnData) {
         let region_id: u64;
         let term: u64;
         let index: u64;
@@ -523,35 +523,36 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         // because if we send them separately in different connection
         // receiver can't assure their order!
         thread::spawn(move || {
-            let file_name = snapshot_file_path(&snap_path, &final_data.msg.get_snapshot_file());
+            let file_name = snapshot_file_path(&snap_path, final_data.msg.get_snapshot_file());
             let attr = fs::metadata(&file_name).unwrap();
 
-            print!("send_snapshot_sock, new thread to send file: {}\n",
+            debug!("send_snapshot_sock, new thread to send file: {}\n",
                    &file_name);
             let mut file = fs::File::open(&file_name).unwrap();
 
             let mut conn = net::TcpStream::connect(&sock_addr).unwrap();
-            rpc::encode_msg(&mut conn, final_data.msg_id, &final_data.msg);
-            // match resp {
-            //     Err(e) => {
-            //         error!("connect store {} err {:?}", store_id, e);
-            //         reporter.report(SnapshotStatus::Failure);
-            //     }
-            //     Ok(_) => reporter.report(SnapshotStatus::Finish),
-            // }
+            if let Err(e) = rpc::encode_msg(&mut conn, final_data.msg_id, &final_data.msg) {
+                error!("write handshake error err {:?}", e);
+                reporter.report(SnapshotStatus::Failure);
+                return;
+            }
 
             let mut buf: [u8; 4] = [0; 4];
             LittleEndian::write_u32(&mut buf, attr.len() as u32);
-            conn.write(&mut buf);
+            if let Err(e) = conn.write(&buf) {
+                error!("write data error: {}", e);
+                reporter.report(SnapshotStatus::Failure);
+            }
             if let Err(e) = io::copy(&mut file, &mut conn) {
-                let reporter = reporter.clone();
+                error!("write data error: {}", e);
                 reporter.report(SnapshotStatus::Failure);
             }
 
             // wait for reader to consume the data and close connection
             if let Err(e) = conn.read(&mut buf) {
                 reporter.report(SnapshotStatus::Failure);
-                error!("reader should consume the whole data and close connection");
+                error!("reader should consume the whole data and close connection: {}",
+                       e);
                 return;
             }
             reporter.report(SnapshotStatus::Finish);

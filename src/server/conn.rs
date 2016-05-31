@@ -15,7 +15,6 @@ use std::vec::Vec;
 use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
-use std::sync::{Arc, RwLock};
 use std::net::Shutdown;
 use std::sync::mpsc::{Sender, Receiver, channel};
 // use std::io::Read;
@@ -87,7 +86,7 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
         // header is not full read, we will try read more.
         if let Some(n) = try!(r.try_read(buf.mut_bytes())) {
             if n == 0 {
-                print!("remote close the conn\n");
+                debug!("remote close the conn\n");
                 // 0 means remote has closed the socket.
                 return Err(box_err!("remote has closed the connection"));
             }
@@ -134,9 +133,9 @@ impl Conn {
         }
     }
 
-    pub fn set_close_callback(&mut self, cb: Option<OnClose>) {
-        self.on_close = cb
-    }
+    // pub fn set_close_callback(&mut self, cb: Option<OnClose>) {
+    //     self.on_close = cb
+    // }
 
     pub fn reregister<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
         where T: RaftStoreRouter,
@@ -180,7 +179,7 @@ impl Conn {
                                          self.last_msg_id,
                                          self.tx.clone());
                 try!(worker.start(runner));
-                print!("receive a snapshot connection\n");
+                debug!("receive a snapshot connection\n");
                 self.snapshot_receiver = Some(SnapshotReceiver {
                     buf: create_mem_buf(10 * (1 << 20)),
                     worker: worker,
@@ -219,13 +218,11 @@ impl Conn {
                 }
                 receiver.read_size += remaining;
 
-                if receiver.file_size == 0 {
-                    if receiver.read_size >= 4 {
-                        receiver.file_size = BigEndian::read_u32(&receiver.buf.bytes()) as usize;
-                        receiver.read_size -= 4;
-                        unsafe {
-                            receiver.buf.advance(4);
-                        }
+                if receiver.file_size == 0 && receiver.read_size >= 4 {
+                    receiver.file_size = BigEndian::read_u32(receiver.buf.bytes()) as usize;
+                    receiver.read_size -= 4;
+                    unsafe {
+                        receiver.buf.advance(4);
                     }
                 }
 
@@ -251,7 +248,7 @@ impl Conn {
                     break;
                 }
 
-                print!("receive data...ringbuf: {:?}\n",
+                debug!("receive data...ringbuf: {:?}\n",
                        remaining_mutbuf(&receiver.buf));
                 try!(receiver.worker
                     .schedule(Task::new(receiver.buf.bytes(), box move |_| {}, false)));
@@ -263,7 +260,9 @@ impl Conn {
 
                 // close connection after reading the whole data
                 if receiver.read_size >= receiver.file_size {
-                    self.sock.shutdown(Shutdown::Both);
+                    if let Err(e) = self.sock.shutdown(Shutdown::Both) {
+                        error!("shutdown connection error: {}", e);
+                    }
                 }
             }
         }

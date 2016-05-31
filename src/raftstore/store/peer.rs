@@ -14,7 +14,6 @@
 use std::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
-use std::path::Path;
 use std::default::Default;
 
 use rocksdb::{DB, WriteBatch, Writable};
@@ -504,7 +503,7 @@ impl Peer {
         send_msg.set_region_id(self.region_id);
         send_msg.set_message(msg.clone());
         if msg.get_msg_type() == raftpb::MessageType::MsgSnapshot {
-            print!("send raft message: region={} term={} index={}\n",
+            debug!("send raft message: region={} term={} index={}\n",
                    self.region_id,
                    msg.get_term(),
                    msg.get_index());

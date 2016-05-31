@@ -325,7 +325,7 @@ impl<T: Storage> Raft<T> {
         if m.get_msg_type() != MessageType::MsgPropose {
             m.set_term(self.term);
         }
-        print!("in raft send, push msg term={} index={}\n",
+        debug!("in raft send, push msg term={} index={}\n",
                m.get_term(),
                m.get_index());
         self.msgs.push(m);
@@ -421,7 +421,7 @@ impl<T: Storage> Raft<T> {
             if !self.prepare_send_snapshot(&mut m, to) {
                 return;
             }
-            print!("send_append perpare to send snapshot\n");
+            debug!("send_append perpare to send snapshot\n");
         } else {
             self.prepare_send_entries(&mut m, to, term.unwrap(), ents.unwrap());
         }
