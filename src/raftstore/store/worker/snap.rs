@@ -19,7 +19,7 @@ use protobuf::{ProtobufError, Message};
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{error, io, fs};
 use crc::{crc32, Hasher32};
 use byteorder::{ByteOrder, BigEndian};
@@ -71,9 +71,15 @@ quick_error! {
     }
 }
 
-pub struct Runner;
+pub struct Runner {
+    snap_path: PathBuf,
+}
 
 impl Runner {
+    pub fn new(snap_path: &str) -> Runner {
+        let path_buf = Path::new(snap_path).to_path_buf();
+        Runner { snap_path: path_buf }
+    }
     fn generate_snap(&self, task: &Task) -> Result<(Snapshot, u64), Error> {
         // do we need to check leader here?
         let db = task.storage.rl().get_engine();
@@ -96,25 +102,21 @@ impl Runner {
         Ok((snap, region_id))
     }
 
-    fn save_snapshot(&self,
-                     snapshot: &Snapshot,
-                     region_id: u64,
-                     dir: &str)
-                     -> Result<SnapshotFile, Error> {
+    fn save_snapshot(&self, snapshot: &Snapshot, region_id: u64) -> Result<SnapshotFile, Error> {
         let mut snapshot_file = SnapshotFile::new();
         snapshot_file.set_region(region_id);
         snapshot_file.set_term(snapshot.get_metadata().get_term());
         snapshot_file.set_index(snapshot.get_metadata().get_index());
 
-        let file_name = snapshot_file_path(dir, &snapshot_file);
-        debug!("save_snapshot file name: {}\n", file_name);
+        let file_name = snapshot_file_path(&self.snap_path, &snapshot_file);
+        print!("save_snapshot file name: {:?}\n", file_name);
         let metadata = fs::metadata(&file_name);
         if let Ok(attr) = metadata {
             if attr.is_file() {
-                return Err(box_err!("snapshot {} already exist!", file_name));
+                return Err(box_err!("snapshot {:?} already exist!", file_name));
             }
         }
-        let tmp_file_name = format!("{}.tmp", &file_name);
+        let tmp_file_name = format!("{:?}.tmp", &file_name);
         let f = box try!(fs::File::create(&tmp_file_name));
         let mut crc_writer = CRCWriter::new(f);
         let mut buf = [0; 4];
@@ -144,7 +146,7 @@ impl Runnable<Task> for Runner {
         }
 
         let (snap, region_id) = res.unwrap();
-        match self.save_snapshot(&snap, region_id, task.storage.get_snap_path()) {
+        match self.save_snapshot(&snap, region_id) {
             Err(e) => {
                 error!("save snapshot file failed: {:?}!!!", e);
                 task.storage.wl().snap_state = SnapState::Failed;
@@ -186,17 +188,13 @@ impl<T: Write> Write for CRCWriter<T> {
     }
 }
 
-pub fn snapshot_file_path(dir: &str, file: &SnapshotFile) -> String {
-    let file_name: String = format!("{}{}_{}_{}",
-                                    dir,
-                                    file.get_region(),
-                                    file.get_term(),
-                                    file.get_index());
-    {
-        let path = Path::new(&file_name);
-        let _ = fs::create_dir_all(path.parent().unwrap());
-    }
-    file_name
+pub fn snapshot_file_path(dir: &Path, file: &SnapshotFile) -> PathBuf {
+    let mut file_path = dir.to_path_buf();
+    file_path.push(format!("{}_{}_{}.snap",
+                           file.get_region(),
+                           file.get_term(),
+                           file.get_index()));
+    file_path
 }
 
 #[cfg(test)]
@@ -210,11 +208,11 @@ mod tests {
 
     #[test]
     fn test_save_snapshot() {
-        let runner = Runner;
+        let runner = Runner::new("./");
         let mut snapshot = Snapshot::new();
         snapshot.mut_metadata().set_term(32);
         snapshot.mut_metadata().set_index(2);
-        runner.save_snapshot(&snapshot, 4, "./").unwrap();
+        runner.save_snapshot(&snapshot, 4).unwrap();
 
         let file_name = "./4_32_2";
         let metadata = fs::metadata(&file_name);

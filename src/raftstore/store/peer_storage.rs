@@ -596,15 +596,11 @@ pub fn save_last_index<T: Mutable>(w: &T, region_id: u64, last_index: u64) -> Re
 
 pub struct RaftStorage {
     store: RwLock<PeerStorage>,
-    snap_path: String,
 }
 
 impl RaftStorage {
-    pub fn new(store: PeerStorage, snap_path: &str) -> RaftStorage {
-        RaftStorage {
-            store: RwLock::new(store),
-            snap_path: snap_path.to_owned(),
-        }
+    pub fn new(store: PeerStorage) -> RaftStorage {
+        RaftStorage { store: RwLock::new(store) }
     }
 
     pub fn rl(&self) -> RwLockReadGuard<PeerStorage> {
@@ -613,12 +609,6 @@ impl RaftStorage {
 
     pub fn wl(&self) -> RwLockWriteGuard<PeerStorage> {
         self.store.wl()
-    }
-}
-
-impl RaftStorage {
-    pub fn get_snap_path(&self) -> &str {
-        &self.snap_path
     }
 }
 
@@ -661,12 +651,11 @@ mod test {
     use raftstore::store::bootstrap;
 
     fn new_storage(path: &TempDir) -> RaftStorage {
-        let pathbuf = path.path().to_str().unwrap().to_owned();
-        let db = DB::open_default(&pathbuf).unwrap();
+        let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
         let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
-        RaftStorage::new(PeerStorage::new(db, &region).unwrap(), &pathbuf)
+        RaftStorage::new(PeerStorage::new(db, &region).unwrap())
     }
 
     fn new_storage_from_ents(path: &TempDir, ents: &[Entry]) -> RaftStorage {

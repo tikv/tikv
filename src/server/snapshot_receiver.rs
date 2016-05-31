@@ -13,6 +13,7 @@
 
 use std::fmt::{self, Formatter, Display};
 use std::{io, fs};
+use std::path::{Path, PathBuf};
 use std::boxed::{Box, FnBox};
 use std::sync::mpsc::Sender;
 use std::io::Read;
@@ -54,7 +55,7 @@ impl Display for Task {
 }
 
 pub struct Runner {
-    file_name: String,
+    file_path: PathBuf,
     pub file: fs::File,
     msg: RaftMessage,
     msg_id: u64,
@@ -63,16 +64,16 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(path: &str,
+    pub fn new(path: &Path,
                file_info: SnapshotFile,
                msg: RaftMessage,
                msg_id: u64,
                tx: Sender<ConnData>)
                -> Runner {
-        let file_name = snapshot_file_path(path, &file_info);
+        let file_path = snapshot_file_path(path, &file_info);
         Runner {
-            file_name: file_name.to_owned(),
-            file: fs::File::create(file_name).unwrap(),
+            file_path: file_path.to_path_buf(),
+            file: fs::File::create(file_path).unwrap(),
             msg: msg,
             msg_id: msg_id,
             // file_info: file_info,
@@ -90,7 +91,7 @@ impl Runnable<Task> for Runner {
 
             // TODO change here when region size goes to 1G
             debug!("send snapshot to store...\n");
-            let snapshot = load_snapshot(&self.file_name).unwrap();
+            let snapshot = load_snapshot(&self.file_path).unwrap();
             self.msg.mut_message().set_snapshot(snapshot);
 
             let mut msg = msgpb::Message::new();
@@ -107,8 +108,8 @@ impl Runnable<Task> for Runner {
     }
 }
 
-fn load_snapshot(file_name: &str) -> Result<Snapshot> {
-    let mut file = fs::File::open(file_name).unwrap();
+fn load_snapshot(file_path: &Path) -> Result<Snapshot> {
+    let mut file = fs::File::open(file_path).unwrap();
     let mut buf: [u8; 4] = [0; 4];
     try!(file.read(&mut buf));
     let len = LittleEndian::read_u32(&buf);

@@ -26,7 +26,7 @@ extern crate tempdir;
 
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::io::Read;
 use std::net::UdpSocket;
@@ -249,7 +249,7 @@ fn build_raftkv(matches: &Matches,
                 cluster_id: u64,
                 addr: String,
                 pd_client: Arc<RpcClient>)
-                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, String) {
+                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, PathBuf) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
     let path = get_store_path(matches, config);
@@ -274,12 +274,10 @@ fn build_raftkv(matches: &Matches,
 
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
-    node.start(event_loop, engine.clone(), trans, &snap_path).unwrap();
+    node.start(event_loop, engine.clone(), trans).unwrap();
     let raft_router = node.raft_store_router();
 
-    (create_raft_storage(node, engine).unwrap(),
-     raft_router,
-     snap_path.into_os_string().into_string().unwrap())
+    (create_raft_storage(node, engine).unwrap(), raft_router, snap_path.to_path_buf())
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -312,7 +310,7 @@ fn run_local_server(listener: TcpListener, store: Storage) {
                               store,
                               router,
                               MockStoreAddrResolver,
-                              TempDir::new("snapshot").unwrap().path().to_str().unwrap())
+                              TempDir::new("snapshot").unwrap().path())
         .unwrap();
     svr.run(&mut event_loop).unwrap();
 }

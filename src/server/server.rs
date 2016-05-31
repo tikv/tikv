@@ -16,6 +16,7 @@ use std::option::Option;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
+use std::path::{Path, PathBuf};
 use std::net::SocketAddr;
 use std::{io, thread, fs, net};
 use std::io::{Read, Write};
@@ -84,7 +85,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     end_point_worker: Worker<RequestTask>,
 
     resolver: S,
-    snap_path: String,
+    snap_path: PathBuf,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -98,7 +99,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
                resolver: S,
-               snap_path: &str)
+               snap_path: &Path)
                -> Result<Server<T, S>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
@@ -120,7 +121,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store: store_handler,
             end_point_worker: end_point_worker,
             resolver: resolver,
-            snap_path: snap_path.to_owned(),
+            snap_path: snap_path.to_path_buf(),
         };
 
         Ok(svr)
@@ -524,10 +525,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         // receiver can't assure their order!
         thread::spawn(move || {
             let file_name = snapshot_file_path(&snap_path, final_data.msg.get_snapshot_file());
+            print!("send_snapshot_sock, new thread to send file: {:?}\n",
+                   file_name);
             let attr = fs::metadata(&file_name).unwrap();
 
-            debug!("send_snapshot_sock, new thread to send file: {}\n",
-                   &file_name);
             let mut file = fs::File::open(&file_name).unwrap();
 
             let mut conn = net::TcpStream::connect(&sock_addr).unwrap();
@@ -542,10 +543,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             if let Err(e) = conn.write(&buf) {
                 error!("write data error: {}", e);
                 reporter.report(SnapshotStatus::Failure);
+                return;
             }
             if let Err(e) = io::copy(&mut file, &mut conn) {
                 error!("write data error: {}", e);
                 reporter.report(SnapshotStatus::Failure);
+                return;
             }
 
             // wait for reader to consume the data and close connection
@@ -556,7 +559,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 return;
             }
             reporter.report(SnapshotStatus::Finish);
-            debug!("send snapshot socket finish!!\n");
+            debug!("send snapshot socket finish!!");
         });
     }
 
@@ -739,7 +742,7 @@ mod tests {
                         Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
                         resolver,
-                        TempDir::new("snapshot").unwrap().path().to_str().unwrap())
+                        TempDir::new("snapshot").unwrap().path())
                 .unwrap();
 
         let ch = server.get_sendch();

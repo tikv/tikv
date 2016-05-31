@@ -30,7 +30,6 @@ use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
-use tempdir::TempDir;
 
 pub struct ChannelTransport {
     pub routers: HashMap<u64, Arc<RwLock<ServerRaftStoreRouter>>>,
@@ -84,10 +83,7 @@ impl Simulator for NodeCluster {
         let trans = Arc::new(RwLock::new(simulate_trans));
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
 
-        node.start(event_loop,
-                   engine,
-                   trans.clone(),
-                   TempDir::new("snapshot").unwrap().path())
+        node.start(event_loop, engine, trans.clone())
             .unwrap();
         assert!(node_id == 0 || node_id == node.id());
 

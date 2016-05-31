@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::vec::Vec;
+use std::path::{Path, PathBuf};
 use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
@@ -62,7 +63,7 @@ pub struct Conn {
     snapshot_receiver: Option<SnapshotReceiver>,
     tx: Sender<ConnData>,
     rx: Receiver<ConnData>,
-    snap_path: String,
+    snap_path: PathBuf,
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
@@ -105,7 +106,7 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 
 
 impl Conn {
-    pub fn new(sock: TcpStream, token: Token, store_id: Option<u64>, snap_path: &str) -> Conn {
+    pub fn new(sock: TcpStream, token: Token, store_id: Option<u64>, snap_path: &Path) -> Conn {
         let (tx, rx) = channel();
         Conn {
             sock: sock,
@@ -117,7 +118,7 @@ impl Conn {
             res: VecDeque::new(),
             last_msg_id: 0,
             snapshot_receiver: None,
-            snap_path: snap_path.to_owned(),
+            snap_path: snap_path.to_path_buf(),
             tx: tx,
             rx: rx,
             store_id: store_id,

@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use raftstore::Result;
+use std::env::temp_dir;
 
 const RAFT_BASE_TICK_INTERVAL: u64 = 100;
 const RAFT_HEARTBEAT_TICKS: usize = 3;
@@ -54,6 +55,9 @@ pub struct Config {
     /// will be checked again whether it should be split.
     pub region_check_size_diff: u64,
     pub pd_heartbeat_tick_interval: u64,
+
+    /// Directory for snapshot files
+    pub snap_path: String,
 }
 
 impl Default for Config {
@@ -72,13 +76,16 @@ impl Default for Config {
             region_split_size: REGION_SPLIT_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
+            snap_path: temp_dir().into_os_string().into_string().unwrap(),
         }
     }
 }
 
 impl Config {
-    pub fn new() -> Config {
-        Config::default()
+    pub fn new(snap_path: &str) -> Config {
+        let mut cfg = Config::default();
+        cfg.snap_path = snap_path.to_owned();
+        cfg
     }
 
     pub fn validate(&self) -> Result<()> {

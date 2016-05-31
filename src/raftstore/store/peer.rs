@@ -137,8 +137,7 @@ impl Peer {
     // use this function to create the peer. The region must contain the peer info
     // for this store.
     pub fn create<T: Transport, C: PdClient>(store: &mut Store<T, C>,
-                                             region: &metapb::Region,
-                                             snap_path: &str)
+                                             region: &metapb::Region)
                                              -> Result<Peer> {
         let store_id = store.store_id();
         let peer_id = match util::find_peer(region, store_id) {
@@ -148,7 +147,7 @@ impl Peer {
             Some(peer) => peer.get_id(),
         };
 
-        Peer::new(store, region, peer_id, snap_path)
+        Peer::new(store, region, peer_id)
     }
 
     // The peer can be created from another node with raft membership changes, and we only
@@ -157,8 +156,7 @@ impl Peer {
     pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                                 region_id: u64,
                                                 from_epoch: &metapb::RegionEpoch,
-                                                peer_id: u64,
-                                                snap_path: &str)
+                                                peer_id: u64)
                                                 -> Result<Peer> {
         let tombstone_key = &keys::region_tombstone_key(region_id);
         if let Some(region) = try!(store.engine().get_msg::<metapb::Region>(tombstone_key)) {
@@ -181,13 +179,12 @@ impl Peer {
 
         let mut region = metapb::Region::new();
         region.set_id(region_id);
-        Peer::new(store, &region, peer_id, snap_path)
+        Peer::new(store, &region, peer_id)
     }
 
     fn new<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                       region: &metapb::Region,
-                                      peer_id: u64,
-                                      snap_path: &str)
+                                      peer_id: u64)
                                       -> Result<Peer> {
         if peer_id == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -196,7 +193,7 @@ impl Peer {
         let store_id = store.store_id();
         let ps = try!(PeerStorage::new(store.engine(), &region));
         let applied_index = ps.applied_index();
-        let storage = Arc::new(RaftStorage::new(ps, snap_path));
+        let storage = Arc::new(RaftStorage::new(ps));
 
         let cfg = store.config();
         let raft_cfg = raft::Config {
