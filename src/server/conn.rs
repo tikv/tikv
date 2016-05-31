@@ -241,13 +241,13 @@ impl Conn {
                         //     error!("send store sock msg err {:?}", e);
                         // }
                     };
-                    print!("close connection should go here\n");
+                    debug!("close connection should go here\n");
                     try!(receiver.worker.schedule(Task::new(receiver.buf.bytes(), cb, true)));
                     return Err(e);
                 }
 
                 if remaining == receiver.buf.capacity() {
-                    print!("no more available data to be read?\n");
+                    debug!("no more available data to be read?\n");
                     break;
                 }
 

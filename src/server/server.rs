@@ -505,6 +505,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             index = snapshot.get_metadata().get_index();
         }
 
+        let reporter = Arc::new(self.new_snapshot_reporter(&data));
         let mut final_data = data;
         final_data.msg.set_msg_type(MessageType::Snapshot);
 
@@ -515,28 +516,22 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
         final_data.msg.set_snapshot_file(file_info);
 
+        let snap_path = self.snap_path.clone();
         // snapshot message consistent of two part:
         // one is snapshot file, the other is the message itself
         // we use separate connection for snapshot file and also the message
         // because if we send them separately in different connection
         // receiver can't assure their order!
         thread::spawn(move || {
-            let file_name = snapshot_file_path("/tmp/", &final_data.msg.get_snapshot_file());
+            let file_name = snapshot_file_path(&snap_path, &final_data.msg.get_snapshot_file());
             let attr = fs::metadata(&file_name).unwrap();
+
             print!("send_snapshot_sock, new thread to send file: {}\n",
                    &file_name);
             let mut file = fs::File::open(&file_name).unwrap();
 
             let mut conn = net::TcpStream::connect(&sock_addr).unwrap();
             rpc::encode_msg(&mut conn, final_data.msg_id, &final_data.msg);
-
-            let mut buf: [u8; 4] = [0; 4];
-            LittleEndian::write_u32(&mut buf, attr.len() as u32);
-
-            conn.write(&mut buf);
-
-            let resp = io::copy(&mut file, &mut conn);
-            // let reporter = Arc::new(self.new_snapshot_reporter(&data));
             // match resp {
             //     Err(e) => {
             //         error!("connect store {} err {:?}", store_id, e);
@@ -545,38 +540,23 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             //     Ok(_) => reporter.report(SnapshotStatus::Finish),
             // }
 
-            // wait for reader to consume the data and close connection
-            if let Err(e) = conn.read(&mut buf) {
-                error!("reader should consume the whole data and close connection");
+            let mut buf: [u8; 4] = [0; 4];
+            LittleEndian::write_u32(&mut buf, attr.len() as u32);
+            conn.write(&mut buf);
+            if let Err(e) = io::copy(&mut file, &mut conn) {
+                let reporter = reporter.clone();
+                reporter.report(SnapshotStatus::Failure);
             }
 
-            print!("send snapshot socket finish!!\n");
+            // wait for reader to consume the data and close connection
+            if let Err(e) = conn.read(&mut buf) {
+                reporter.report(SnapshotStatus::Failure);
+                error!("reader should consume the whole data and close connection");
+                return;
+            }
+            reporter.report(SnapshotStatus::Finish);
+            debug!("send snapshot socket finish!!\n");
         });
-
-        // let token = match self.try_connect(event_loop, sock_addr, None) {
-        //     Ok(token) => token,
-        //     Err(e) => {
-        //         error!("connect store {} err {:?}", store_id, e);
-        //         self.report_unreachable(data);
-        //         return;
-        //     }
-        // };
-
-        // let reporter = Arc::new(self.new_snapshot_reporter(&data));
-
-        // if let Some(conn) = self.conns.get_mut(&token) {
-        //     let reporter = reporter.clone();
-        //     conn.set_close_callback(Some(box move || {
-        //         reporter.report(SnapshotStatus::Failure);
-        //     }));
-        // };
-
-        // self.write_data(event_loop,
-        //                 token,
-        //                 data,
-        //                 Some(box move || {
-        //                     reporter.report(SnapshotStatus::Finish);
-        //                 }))
     }
 
     fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
