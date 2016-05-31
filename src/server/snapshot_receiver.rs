@@ -16,16 +16,12 @@ use std::{io, fs};
 use std::path::{Path, PathBuf};
 use std::boxed::{Box, FnBox};
 use std::sync::mpsc::Sender;
-use std::io::Read;
 
 use super::{Result, Error, ConnData};
 use util::worker::{Runnable, Worker};
-use bytes::{ByteBuf, MutByteBuf};
-use byteorder::{ByteOrder, LittleEndian};
-use protobuf::Message;
+use bytes::ByteBuf;
 use raftstore::store::worker::snap::{snapshot_file_path, load_snapshot};
 
-use kvproto::raftpb::Snapshot;
 use kvproto::msgpb::{self, SnapshotFile};
 use kvproto::raft_serverpb::RaftMessage;
 
@@ -71,7 +67,8 @@ impl Runner {
                tx: Sender<ConnData>)
                -> Runner {
         let file_path = snapshot_file_path(path, &file_info);
-        print!("runner save the file path to {:?} should not same!!\n", &file_path);
+        print!("runner save the file path to {:?} should not same!!\n",
+               &file_path);
         Runner {
             file_path: file_path.to_path_buf(),
             file: fs::File::create(file_path).unwrap(),
@@ -89,7 +86,7 @@ impl Runnable<Task> for Runner {
         let resp = io::copy(&mut buf, &mut self.file);
         if task.last {
             // self.file.flush();
-
+            print!("snapshot receiver finish\n");
             // TODO change here when region size goes to 1G
             let snapshot = load_snapshot(&self.file_path).unwrap();
             self.msg.mut_message().set_snapshot(snapshot);
@@ -111,7 +108,8 @@ impl Runnable<Task> for Runner {
 
 pub struct SnapshotReceiver {
     pub worker: Worker<Task>,
-    pub buf: MutByteBuf,
+    pub buf: Vec<u8>,
+    pub pos: usize,
     pub more: bool,
     pub file_size: usize,
     pub read_size: usize,

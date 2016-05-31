@@ -198,7 +198,7 @@ pub fn snapshot_file_path(dir: &Path, file: &SnapshotFile) -> PathBuf {
                            file.get_term(),
                            file.get_index()));
     {
-        if let Some(parent)= file_path.parent() {
+        if let Some(parent) = file_path.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).unwrap();
             }
@@ -224,7 +224,7 @@ pub fn load_snapshot(file_path: &Path) -> Result<Snapshot, Error> {
 mod tests {
     use std::io::Read;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use super::*;
     use kvproto::raftpb::Snapshot;
     use byteorder::{ByteOrder, LittleEndian};
@@ -276,19 +276,15 @@ mod tests {
 
     #[test]
     fn test_snapshot_read_write() {
-        // let mut vec = Vec::new();
-
-        let mut file = fs::File::create("./xxx").unwrap();
-
+        let mut vec = Vec::new();
         let mut snapshot = Snapshot::new();
         snapshot.mut_metadata().set_term(32);
         snapshot.mut_metadata().set_index(2);
-        snapshot.write_to_writer(&mut file);
+        snapshot.write_to_writer(&mut vec).unwrap();
 
-
-        // let mut msg = Snapshot::new();
-        // msg.merge_from_bytes(vec.as_slice()).unwrap();
-        // assert_eq!(msg.get_metadata().get_term(), 32);
-        // assert_eq!(msg.get_metadata().get_index(), 2);
+        let mut msg = Snapshot::new();
+        msg.merge_from_bytes(vec.as_slice()).unwrap();
+        assert_eq!(msg.get_metadata().get_term(), 32);
+        assert_eq!(msg.get_metadata().get_index(), 2);
     }
 }

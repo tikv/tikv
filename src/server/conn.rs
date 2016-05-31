@@ -72,10 +72,6 @@ pub struct Conn {
     on_write_complete: Option<OnWriteComplete>,
 }
 
-fn remaining_mutbuf<T: MutBuf>(r: &T) -> usize {
-    r.remaining()
-}
-
 // TODO: this API is disgusting, it's semantic vagueness.
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
     if buf.remaining() == 0 {
@@ -182,7 +178,8 @@ impl Conn {
                 try!(worker.start(runner));
                 debug!("receive a snapshot connection\n");
                 self.snapshot_receiver = Some(SnapshotReceiver {
-                    buf: create_mem_buf(10 * (1 << 20)),
+                    buf: vec![0; 10 * (1 << 20)],
+                    pos: 0,
                     worker: worker,
                     more: false,
                     file_size: 0,
@@ -209,64 +206,45 @@ impl Conn {
               S: StoreAddrResolver
     {
         if let Some(ref mut receiver) = self.snapshot_receiver {
-            let mut finish = false;
+            let (mut pos, len) = (receiver.pos, receiver.buf.len());
             loop {
-                let closed = try_read_data(&mut self.sock, &mut receiver.buf);
-                let remaining = remaining_mutbuf(&receiver.buf);
-                if remaining == 0 {
-                    receiver.more = true;
-                    finish = true;
-                }
-                receiver.read_size += remaining;
-
-                if receiver.file_size == 0 && receiver.read_size >= 4 {
-                    receiver.file_size = LittleEndian::read_u32(receiver.buf.bytes()) as usize;
-                    receiver.read_size -= 4;
-                    unsafe {
-                        receiver.buf.advance(4);
+                match try!(self.sock.try_read(&mut receiver.buf[pos..len])) {
+                    None => {
+                        break;
                     }
-                    print!("read file size: {}\n", receiver.file_size);
+                    Some(0) => {
+                        info!("snapshot connection closed");
+                        return Ok(vec![]);
+                    }
+                    Some(n) => {
+                        pos += n;
+                        if pos == len {
+                            // TODO be careful, edge trigger notify one time
+                            receiver.more = true;
+                            break;
+                        }
+                    }
                 }
+            }
 
-                // TODO should distinguish between close and error
-                if let Err(e) = closed {
-                    let cb = box move |_| {
-                        warn!("!!!!!!!!!!connection closed!! now send callback\n");
-                        // if let Err(e) = ch.send(Msg::ResolveResult {
-                        //     store_id: store_id,
-                        //     sock_addr: r,
-                        //     data: data,
-                        // }) {
-                        //     error!("send store sock msg err {:?}", e);
-                        // }
-                    };
-                    print!("close connection should go here\n");
-                    try!(receiver.worker.schedule(Task::new(receiver.buf.bytes(), cb, true)));
-                    return Err(e);
-                }
+            let mut beg = 0;
+            if receiver.file_size == 0 && pos >= 4 {
+                receiver.file_size = LittleEndian::read_u32(&receiver.buf[..]) as usize;
+                beg = 4;
+                print!("read file size: {}\n", receiver.file_size);
+            }
 
-                if remaining == receiver.buf.capacity() {
-                    debug!("no more available data to be read?\n");
-                    break;
-                }
-
-                debug!("receive data...ringbuf: {:?}\n",
-                       remaining_mutbuf(&receiver.buf));
-                try!(receiver.worker
-                    .schedule(Task::new(receiver.buf.bytes(), box move |_| {}, false)));
-                receiver.buf.clear();
-
+            if beg < pos {
+                receiver.read_size += pos - beg;
+                receiver.pos = 0;
+                let finish = receiver.read_size >= receiver.file_size;
                 if finish {
-                    break;
-                }
-
-                // close connection after reading the whole data
-                if receiver.read_size >= receiver.file_size {
-                    print!("read sufficient data\n");
                     if let Err(e) = self.sock.shutdown(Shutdown::Both) {
                         error!("shutdown connection error: {}", e);
                     }
                 }
+                let task = Task::new(&receiver.buf[beg..pos], box move |_| {}, finish);
+                try!(receiver.worker.schedule(task));
             }
         }
         Ok(vec![])
@@ -309,6 +287,7 @@ impl Conn {
         let mut bufs = vec![];
 
         if let Ok(snapshot) = self.rx.try_recv() {
+            print!("yes, push message!!!!!!\n");
             bufs.push(snapshot);
         }
 
