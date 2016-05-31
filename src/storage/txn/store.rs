@@ -271,10 +271,10 @@ impl<'a> StoreScanner<'a> {
         while results.len() < limit {
             match self.seek(key) {
                 Ok(Some((k, ts))) => {
-                    // should we panic if None?
                     if let Some(v) = try!(self.get(&k, ts)) {
                         results.push(Ok((try!(k.raw()), v.to_vec())));
                     }
+                    // None means value is deleted at ts, so just continue.
                     key = k;
                 }
                 Ok(None) => break,
