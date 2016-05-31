@@ -23,7 +23,7 @@ use util::worker::{Runnable, Worker};
 use bytes::{ByteBuf, MutByteBuf};
 use byteorder::{ByteOrder, LittleEndian};
 use protobuf::Message;
-use raftstore::store::worker::snap::snapshot_file_path;
+use raftstore::store::worker::snap::{snapshot_file_path, load_snapshot};
 
 use kvproto::raftpb::Snapshot;
 use kvproto::msgpb::{self, SnapshotFile};
@@ -91,7 +91,6 @@ impl Runnable<Task> for Runner {
             // self.file.flush();
 
             // TODO change here when region size goes to 1G
-            print!("send snapshot to store...\n");
             let snapshot = load_snapshot(&self.file_path).unwrap();
             self.msg.mut_message().set_snapshot(snapshot);
 
@@ -104,21 +103,10 @@ impl Runnable<Task> for Runner {
             }) {
                 error!("send snapshot raft message failed, err={:?}", e);
             }
+            print!("send snapshot to store...\n");
         }
         task.cb.call_box((resp.map_err(Error::Io),))
     }
-}
-
-fn load_snapshot(file_path: &Path) -> Result<Snapshot> {
-    let mut file = fs::File::open(file_path).unwrap();
-    let mut buf: [u8; 4] = [0; 4];
-    try!(file.read(&mut buf));
-    let len = LittleEndian::read_u32(&buf);
-    let mut vec: Vec<u8> = Vec::with_capacity(len as usize);
-    try!(file.read(vec.as_mut_slice()));
-    let mut msg = Snapshot::new();
-    try!(msg.merge_from_bytes(vec.as_slice()));
-    Ok(msg)
 }
 
 pub struct SnapshotReceiver {

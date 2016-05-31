@@ -18,11 +18,11 @@ use protobuf::{ProtobufError, Message};
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
-use std::io::Write;
+use std::io::{Write, Read};
 use std::path::{Path, PathBuf};
 use std::{error, io, fs};
 use crc::{crc32, Hasher32};
-use byteorder::{ByteOrder, BigEndian};
+use byteorder::{ByteOrder, LittleEndian};
 
 use util::worker::Runnable;
 
@@ -49,7 +49,7 @@ impl Display for Task {
 
 quick_error! {
     #[derive(Debug)]
-    enum Error {
+    pub enum Error {
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -123,14 +123,15 @@ impl Runner {
         let mut crc_writer = CRCWriter::new(f);
         let mut buf = [0; 4];
         let header_len = snapshot.compute_size();
-        BigEndian::write_u32(&mut buf, header_len);
+        print!("write header_len = {}\n", header_len);
+        LittleEndian::write_u32(&mut buf, header_len);
         try!(crc_writer.write(&buf));
 
         // TODO file format will change
         try!(snapshot.write_to_writer(&mut crc_writer));
 
         let checksum = crc_writer.sum();
-        BigEndian::write_u32(&mut buf, checksum);
+        LittleEndian::write_u32(&mut buf, checksum);
         try!(crc_writer.write(&buf));
 
         try!(fs::rename(tmp_file_name, file_name));
@@ -163,13 +164,13 @@ impl Runnable<Task> for Runner {
     }
 }
 
-struct CRCWriter<T: Write> {
+pub struct CRCWriter<T: Write> {
     digest: crc32::Digest,
     writer: T,
 }
 
 impl<T: Write> CRCWriter<T> {
-    fn new(writer: T) -> CRCWriter<T> {
+    pub fn new(writer: T) -> CRCWriter<T> {
         CRCWriter {
             digest: crc32::Digest::new(crc32::IEEE),
             writer: writer,
@@ -206,10 +207,24 @@ pub fn snapshot_file_path(dir: &Path, file: &SnapshotFile) -> PathBuf {
     file_path
 }
 
+pub fn load_snapshot(file_path: &Path) -> Result<Snapshot, Error> {
+    let mut file = fs::File::open(file_path).unwrap();
+    let mut buf: [u8; 4] = [0; 4];
+    try!(file.read(&mut buf));
+    let len = LittleEndian::read_u32(&buf);
+    print!("load_snapshot, header say size: {}\n", len);
+    let mut vec: Vec<u8> = vec![0; len as usize];
+    try!(file.read(vec.as_mut_slice()));
+    let mut msg = Snapshot::new();
+    try!(msg.merge_from_bytes(vec.as_slice()));
+    Ok(msg)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Read;
     use std::fs;
+    use std::path::{Path, PathBuf};
     use super::*;
     use kvproto::raftpb::Snapshot;
     use byteorder::{ByteOrder, LittleEndian};
@@ -223,7 +238,7 @@ mod tests {
         snapshot.mut_metadata().set_index(2);
         runner.save_snapshot(&snapshot, 4).unwrap();
 
-        let file_name = "./4_32_2";
+        let file_name = "./4_32_2.snap";
         let metadata = fs::metadata(&file_name);
         let attr = metadata.unwrap();
         assert!(attr.is_file());
@@ -239,5 +254,41 @@ mod tests {
         if let Err(e) = fs::remove_file(&file_name) {
             panic!("remove file: {}", e);
         }
+    }
+
+    #[test]
+    fn test_load_snapshot() {
+        let runner = Runner::new("./");
+        let mut snapshot = Snapshot::new();
+        snapshot.mut_metadata().set_term(32);
+        snapshot.mut_metadata().set_index(2);
+        runner.save_snapshot(&snapshot, 4).unwrap();
+
+        let file_name = "./4_32_2.snap";
+        let metadata = fs::metadata(&file_name);
+        let attr = metadata.unwrap();
+        assert!(attr.is_file());
+
+        let readback = load_snapshot(Path::new(file_name)).unwrap();
+        assert_eq!(readback.get_metadata().get_index(), 2);
+        assert_eq!(readback.get_metadata().get_term(), 32);
+    }
+
+    #[test]
+    fn test_snapshot_read_write() {
+        // let mut vec = Vec::new();
+
+        let mut file = fs::File::create("./xxx").unwrap();
+
+        let mut snapshot = Snapshot::new();
+        snapshot.mut_metadata().set_term(32);
+        snapshot.mut_metadata().set_index(2);
+        snapshot.write_to_writer(&mut file);
+
+
+        // let mut msg = Snapshot::new();
+        // msg.merge_from_bytes(vec.as_slice()).unwrap();
+        // assert_eq!(msg.get_metadata().get_term(), 32);
+        // assert_eq!(msg.get_metadata().get_index(), 2);
     }
 }
