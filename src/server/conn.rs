@@ -32,7 +32,7 @@ use util::worker::Worker;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snapshot_receiver::{SnapshotReceiver, Task, Runner};
-use byteorder::{ByteOrder, BigEndian};
+use byteorder::{ByteOrder, LittleEndian};
 
 pub type OnClose = Box<FnBox() + Send>;
 pub type OnWriteComplete = Box<FnBox() + Send>;
@@ -220,11 +220,12 @@ impl Conn {
                 receiver.read_size += remaining;
 
                 if receiver.file_size == 0 && receiver.read_size >= 4 {
-                    receiver.file_size = BigEndian::read_u32(receiver.buf.bytes()) as usize;
+                    receiver.file_size = LittleEndian::read_u32(receiver.buf.bytes()) as usize;
                     receiver.read_size -= 4;
                     unsafe {
                         receiver.buf.advance(4);
                     }
+                    print!("read file size: {}\n", receiver.file_size);
                 }
 
                 // TODO should distinguish between close and error
@@ -239,7 +240,7 @@ impl Conn {
                         //     error!("send store sock msg err {:?}", e);
                         // }
                     };
-                    debug!("close connection should go here\n");
+                    print!("close connection should go here\n");
                     try!(receiver.worker.schedule(Task::new(receiver.buf.bytes(), cb, true)));
                     return Err(e);
                 }
@@ -261,6 +262,7 @@ impl Conn {
 
                 // close connection after reading the whole data
                 if receiver.read_size >= receiver.file_size {
+                    print!("read sufficient data\n");
                     if let Err(e) = self.sock.shutdown(Shutdown::Both) {
                         error!("shutdown connection error: {}", e);
                     }

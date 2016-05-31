@@ -539,6 +539,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
 
             let mut buf: [u8; 4] = [0; 4];
+            print!("write file size: {}\n", attr.len());
             LittleEndian::write_u32(&mut buf, attr.len() as u32);
             if let Err(e) = conn.write(&buf) {
                 error!("write data error: {}", e);
@@ -551,6 +552,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 return;
             }
 
+            print!("send data finish, wait for close connection\n");
             // wait for reader to consume the data and close connection
             if let Err(e) = conn.read(&mut buf) {
                 reporter.report(SnapshotStatus::Failure);
@@ -559,7 +561,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 return;
             }
             reporter.report(SnapshotStatus::Finish);
-            debug!("send snapshot socket finish!!");
+            print!("send snapshot socket finish!!\n");
         });
     }
 

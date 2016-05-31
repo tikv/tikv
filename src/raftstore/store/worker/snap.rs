@@ -113,10 +113,12 @@ impl Runner {
         let metadata = fs::metadata(&file_name);
         if let Ok(attr) = metadata {
             if attr.is_file() {
-                return Err(box_err!("snapshot {:?} already exist!", file_name));
+                return Ok(snapshot_file);
+                // print!("should not save snapshot data several times??\n");
+                // return Err(box_err!("snapshot {:?} already exist!", file_name));
             }
         }
-        let tmp_file_name = format!("{:?}.tmp", &file_name);
+        let tmp_file_name = file_name.with_extension("tmp");
         let f = box try!(fs::File::create(&tmp_file_name));
         let mut crc_writer = CRCWriter::new(f);
         let mut buf = [0; 4];

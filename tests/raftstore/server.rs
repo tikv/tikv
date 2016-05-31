@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::thread;
+use std::path::Path;
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};
@@ -32,8 +33,6 @@ use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
-use tempdir::TempDir;
-
 
 type SimulateServerTransport = SimulateTransport<ServerTransport>;
 
@@ -139,7 +138,7 @@ impl Simulator for ServerCluster {
                                      store,
                                      router,
                                      resolver,
-                                     TempDir::new("test_cluster").unwrap().path())
+                                     Path::new(&cfg.store_cfg.snap_path))
             .unwrap();
 
         let ch = server.get_sendch();

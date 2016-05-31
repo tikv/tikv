@@ -71,6 +71,7 @@ impl Runner {
                tx: Sender<ConnData>)
                -> Runner {
         let file_path = snapshot_file_path(path, &file_info);
+        print!("runner save the file path to {:?} should not same!!\n", &file_path);
         Runner {
             file_path: file_path.to_path_buf(),
             file: fs::File::create(file_path).unwrap(),
@@ -90,7 +91,7 @@ impl Runnable<Task> for Runner {
             // self.file.flush();
 
             // TODO change here when region size goes to 1G
-            debug!("send snapshot to store...\n");
+            print!("send snapshot to store...\n");
             let snapshot = load_snapshot(&self.file_path).unwrap();
             self.msg.mut_message().set_snapshot(snapshot);
 
