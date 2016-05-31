@@ -13,6 +13,8 @@
 
 use std::{error, result};
 use std::fmt::Debug;
+use std::cmp::Ordering;
+
 use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value};
 use kvproto::kvrpcpb::Context;
@@ -75,19 +77,13 @@ pub trait Cursor {
         if self.key() == &**key.encoded() {
             return Ok(true);
         }
+        let (nav, ord): (fn(&mut _) -> bool, Ordering) = if self.key() > &**key.encoded() {
+            (Cursor::prev, Ordering::Greater)
+        } else {
+            (Cursor::next, Ordering::Less)
+        };
         let mut cnt = 0;
-        while self.key() > &**key.encoded() && self.prev() {
-            cnt += 1;
-            if cnt >= SEEK_BOUND {
-                return self.seek(key);
-            }
-        }
-        if !self.valid() {
-            // TODO: check region range.
-            return Ok(false);
-        }
-        cnt = 0;
-        while self.key() < &**key.encoded() && self.next() {
+        while self.key().cmp(&key.encoded()) == ord && nav(self) {
             cnt += 1;
             if cnt >= SEEK_BOUND {
                 return self.seek(key);
@@ -125,31 +121,13 @@ pub trait Cursor {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
     fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
-        if !self.valid() {
-            return self.reverse_seek(key);
-        }
-        if self.key() == &**key.encoded() {
-            return Ok(self.prev());
-        }
-        let mut cnt = 0;
-        while self.key() < &**key.encoded() && self.next() {
-            cnt += 1;
-            if cnt >= SEEK_BOUND {
-                return self.reverse_seek(key);
-            }
-        }
-        if !self.valid() {
-            // TODO: check region range.
+        if !try!(self.near_seek(key)) && !self.seek_to_last() {
             return Ok(false);
         }
-        cnt = 0;
-        while self.key() >= &**key.encoded() && self.prev() {
-            cnt += 1;
-            if cnt >= SEEK_BOUND {
-                return self.reverse_seek(key);
-            }
+
+        while self.key() >= key.encoded().as_slice() && self.prev() {
         }
-        // TODO: check region range.
+
         Ok(self.valid())
     }
 }
