@@ -17,15 +17,12 @@ use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
 use std::net::Shutdown;
-use std::sync::mpsc::{Sender, Receiver, channel};
-// use std::io::Read;
-
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 use kvproto::msgpb::{Message, MessageType};
-use super::{Result, ConnData};
+use super::{Result, ConnData, SendCh};
 use super::server::Server;
 use util::codec::rpc;
 use util::worker::Worker;
@@ -61,8 +58,7 @@ pub struct Conn {
     payload: Option<MutByteBuf>,
 
     snapshot_receiver: Option<SnapshotReceiver>,
-    tx: Sender<ConnData>,
-    rx: Receiver<ConnData>,
+    ch: SendCh,
     snap_path: PathBuf,
 
     // write buffer, including msg header already.
@@ -102,8 +98,12 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 
 
 impl Conn {
-    pub fn new(sock: TcpStream, token: Token, store_id: Option<u64>, snap_path: &Path) -> Conn {
-        let (tx, rx) = channel();
+    pub fn new(sock: TcpStream,
+               token: Token,
+               store_id: Option<u64>,
+               snap_path: &Path,
+               ch: SendCh)
+               -> Conn {
         Conn {
             sock: sock,
             token: token,
@@ -115,8 +115,7 @@ impl Conn {
             last_msg_id: 0,
             snapshot_receiver: None,
             snap_path: snap_path.to_path_buf(),
-            tx: tx,
-            rx: rx,
+            ch: ch,
             store_id: store_id,
             on_write_complete: None,
             on_close: None,
@@ -174,7 +173,8 @@ impl Conn {
                                          msg.take_snapshot_file(),
                                          msg.take_raft(),
                                          self.last_msg_id,
-                                         self.tx.clone());
+                                         self.token,
+                                         self.ch.clone());
                 try!(worker.start(runner));
                 debug!("receive a snapshot connection\n");
                 self.snapshot_receiver = Some(SnapshotReceiver {
@@ -285,12 +285,6 @@ impl Conn {
               S: StoreAddrResolver
     {
         let mut bufs = vec![];
-
-        if let Ok(snapshot) = self.rx.try_recv() {
-            print!("yes, push message!!!!!!\n");
-            bufs.push(snapshot);
-        }
-
         loop {
             // Because we use the edge trigger, so here we must read whole data.
             let msg = try!(self.read_one_message());

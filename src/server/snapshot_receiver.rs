@@ -15,10 +15,10 @@ use std::fmt::{self, Formatter, Display};
 use std::{io, fs};
 use std::path::{Path, PathBuf};
 use std::boxed::{Box, FnBox};
-use std::sync::mpsc::Sender;
 
-use super::{Result, Error, ConnData};
+use super::{Result, Error, ConnData, SendCh, Msg};
 use util::worker::{Runnable, Worker};
+use mio::Token;
 use bytes::ByteBuf;
 use raftstore::store::worker::snap::{snapshot_file_path, load_snapshot};
 
@@ -55,8 +55,8 @@ pub struct Runner {
     pub file: fs::File,
     msg: RaftMessage,
     msg_id: u64,
-    // file_info: SnapshotFile,
-    tx: Sender<ConnData>,
+    token: Token,
+    ch: SendCh,
 }
 
 impl Runner {
@@ -64,7 +64,8 @@ impl Runner {
                file_info: SnapshotFile,
                msg: RaftMessage,
                msg_id: u64,
-               tx: Sender<ConnData>)
+               token: Token,
+               ch: SendCh)
                -> Runner {
         let file_path = snapshot_file_path(path, &file_info);
         print!("runner save the file path to {:?} should not same!!\n",
@@ -74,8 +75,8 @@ impl Runner {
             file: fs::File::create(file_path).unwrap(),
             msg: msg,
             msg_id: msg_id,
-            // file_info: file_info,
-            tx: tx,
+            token: token,
+            ch: ch,
         }
     }
 }
@@ -94,9 +95,12 @@ impl Runnable<Task> for Runner {
             let mut msg = msgpb::Message::new();
             msg.set_msg_type(msgpb::MessageType::Raft);
             msg.set_raft(self.msg.clone());
-            if let Err(e) = self.tx.send(ConnData {
-                msg_id: self.msg_id,
-                msg: msg,
+            if let Err(e) = self.ch.send(Msg::Snapshot {
+                token: self.token,
+                data: ConnData {
+                    msg_id: self.msg_id,
+                    msg: msg,
+                },
             }) {
                 error!("send snapshot raft message failed, err={:?}", e);
             }

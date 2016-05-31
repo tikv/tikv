@@ -162,6 +162,10 @@ pub enum Msg {
         sock_addr: Result<SocketAddr>,
         data: ConnData,
     },
+    Snapshot {
+        token: Token,
+        data: ConnData,
+    },
 }
 
 #[derive(Debug)]

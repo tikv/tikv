@@ -187,7 +187,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  EventSet::readable() | EventSet::hup(),
                                  PollOpt::edge()));
 
-        let conn = Conn::new(sock, new_token, store_id, &self.snap_path);
+        let conn = Conn::new(sock,
+                             new_token,
+                             store_id,
+                             &self.snap_path,
+                             self.sendch.clone());
         self.conns.insert(new_token, conn);
 
         Ok(new_token)
@@ -606,6 +610,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         match msg {
             // Msg::Snapshot { data } => self.on_conn_msg(Token::from_usize(0), data),
             Msg::Quit => event_loop.shutdown(),
+            Msg::Snapshot { token, data } => {
+                let _ = self.on_conn_msg(token, data);
+            }
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data, None),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {
