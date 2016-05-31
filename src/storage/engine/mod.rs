@@ -13,6 +13,8 @@
 
 use std::{error, result};
 use std::fmt::Debug;
+use std::cmp::Ordering;
+
 use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value};
 use kvproto::kvrpcpb::Context;
@@ -23,6 +25,8 @@ pub mod raftkv;
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &'static str = "";
+
+const SEEK_BOUND: usize = 30;
 
 #[derive(Debug)]
 pub enum Modify {
@@ -62,8 +66,62 @@ pub trait Cursor {
     fn key(&self) -> &[u8];
     fn value(&self) -> &[u8];
 
+    /// Seek the specified key.
+    ///
+    /// This method assume the current position of cursor is
+    /// around `key`, otherwise you should use `seek` instead.
+    fn near_seek(&mut self, key: &Key) -> Result<bool> {
+        if !self.valid() {
+            return self.seek(key);
+        }
+        if self.key() == &**key.encoded() {
+            return Ok(true);
+        }
+        let (nav, ord): (fn(&mut _) -> bool, Ordering) = if self.key() > &**key.encoded() {
+            (Cursor::prev, Ordering::Greater)
+        } else {
+            (Cursor::next, Ordering::Less)
+        };
+        let mut cnt = 0;
+        while self.key().cmp(&key.encoded()) == ord && nav(self) {
+            cnt += 1;
+            if cnt >= SEEK_BOUND {
+                return self.seek(key);
+            }
+        }
+        // TODO: check region range.
+        Ok(self.valid())
+    }
+
+    /// Get the value of specified key.
+    ///
+    /// This method assume the current position of cursor is
+    /// around `key`, otherwise you should `seek` first.
+    fn get(&mut self, key: &Key) -> Result<Option<&[u8]>> {
+        if try!(self.near_seek(key)) && self.key() == &**key.encoded() {
+            Ok(Some(self.value()))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
         if !try!(self.seek(key)) && !self.seek_to_last() {
+            return Ok(false);
+        }
+
+        while self.key() >= key.encoded().as_slice() && self.prev() {
+        }
+
+        Ok(self.valid())
+    }
+
+    /// Reverse seek the specified key.
+    ///
+    /// This method assume the current position of cursor is
+    /// around `key`, otherwise you should use `reverse_seek` instead.
+    fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
+        if !try!(self.near_seek(key)) && !self.seek_to_last() {
             return Ok(false);
         }
 
