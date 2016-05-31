@@ -2,7 +2,7 @@
 name = "tikv"
 version = "0.0.1"
 dependencies = [
- "byteorder 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "byteorder 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes 0.3.0 (git+https://github.com/carllerche/bytes)",
  "cadence 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "clippy 0.0.70 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -11,15 +11,15 @@ dependencies = [
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.0 (git+https://github.com/carllerche/mio.git)",
  "num 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf 1.0.21 (git+https://github.com/stepancheg/rust-protobuf.git)",
+ "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "threadpool 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "threadpool 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
- "toml 0.1.30 (registry+https://github.com/rust-lang/crates.io-index)",
+ "toml 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid 0.1.18 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -30,7 +30,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "byteorder"
-version = "0.5.2"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -63,9 +63,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "clippy_lints 0.0.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "quine-mc_cluskey 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "regex-syntax 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "regex-syntax 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "semver 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "toml 0.1.30 (registry+https://github.com/rust-lang/crates.io-index)",
+ "toml 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)",
  "unicode-normalization 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -75,9 +75,9 @@ version = "0.0.70"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "quine-mc_cluskey 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "regex-syntax 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "regex-syntax 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "semver 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "toml 0.1.30 (registry+https://github.com/rust-lang/crates.io-index)",
+ "toml 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)",
  "unicode-normalization 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -91,16 +91,16 @@ name = "kernel32-sys"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "winapi 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi-build 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#f9d9087942a3b714dffeee3441fdc0c88d45aed9"
+source = "git+https://github.com/pingcap/kvproto#a07a261984d0cc41a77c285b8b07685909c7abd3"
 dependencies = [
- "protobuf 1.0.21 (git+https://github.com/stepancheg/rust-protobuf.git)",
+ "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]
 
 [[package]]
@@ -116,7 +116,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#5b805d745d14746dc766ff61d5ae7a8e26bba46d"
+source = "git+https://github.com/ngaut/rust-rocksdb.git#791fc15fd93fabbbde2d44f5b5e270662fdf57e9"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -129,7 +129,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "mio"
 version = "0.5.0"
-source = "git+https://github.com/carllerche/mio.git#f4aa49a9d2c4507fb33a4533d5238e0365f67c99"
+source = "git+https://github.com/carllerche/mio.git#7d4778f226e3f2479e802ccb0934e1e8db3b31a1"
 dependencies = [
  "bytes 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -139,7 +139,7 @@ dependencies = [
  "nix 0.5.0-pre (git+https://github.com/carllerche/nix-rust?rev=c4257f8a76)",
  "slab 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
- "winapi 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -149,7 +149,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "net2 0.2.23 (registry+https://github.com/rust-lang/crates.io-index)",
- "winapi 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "ws2_32-sys 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -161,7 +161,7 @@ dependencies = [
  "cfg-if 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
- "winapi 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "ws2_32-sys 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "nom"
-version = "1.2.3"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -247,8 +247,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "protobuf"
-version = "1.0.21"
-source = "git+https://github.com/stepancheg/rust-protobuf.git#6dd23e401449f3fdc14402db40401bb0bd083381"
+version = "1.0.20"
+source = "git+https://github.com/stepancheg/rust-protobuf.git#668cbcd4a4eaf8c3c2d3c1c5c43879aacbc815a6"
 
 [[package]]
 name = "quick-error"
@@ -270,13 +270,13 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.3.3"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#5b805d745d14746dc766ff61d5ae7a8e26bba46d"
+source = "git+https://github.com/ngaut/rust-rocksdb.git#791fc15fd93fabbbde2d44f5b5e270662fdf57e9"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
@@ -293,7 +293,7 @@ name = "semver"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "nom 1.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "nom 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "threadpool"
-version = "1.3.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -321,7 +321,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
- "winapi 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -329,12 +329,12 @@ name = "tipb"
 version = "0.0.1"
 source = "git+https://github.com/pingcap/tipb.git#3df1b085b45f13659d318b492e9aeaaeb5fedd20"
 dependencies = [
- "protobuf 1.0.21 (git+https://github.com/stepancheg/rust-protobuf.git)",
+ "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]
 
 [[package]]
 name = "toml"
-version = "0.1.30"
+version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "rustc-serialize 0.3.19 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "winapi"
-version = "0.2.7"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -369,7 +369,7 @@ name = "ws2_32-sys"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "winapi 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi-build 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
