@@ -61,6 +61,7 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, Arc<RwLock<SimulateChannelTransport>>>,
+    snap_paths: HashMap<u64, TempDir>,
 }
 
 impl NodeCluster {
@@ -71,6 +72,7 @@ impl NodeCluster {
             pd_client: pd_client,
             nodes: HashMap::new(),
             simulate_trans: HashMap::new(),
+            snap_paths: HashMap::new(),
         }
     }
 }
@@ -82,6 +84,7 @@ impl Simulator for NodeCluster {
         let mut cfg = cfg;
         let tmp = TempDir::new("test_cluster").unwrap();
         cfg.store_cfg.snap_path = tmp.path().to_str().unwrap().to_owned();
+        self.snap_paths.insert(node_id, tmp);
 
         let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
         let simulate_trans = SimulateTransport::new(self.trans.clone());

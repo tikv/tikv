@@ -45,6 +45,7 @@ pub struct ServerCluster {
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
     store_chs: HashMap<u64, StoreSendCh>,
+    snap_paths: HashMap<u64, TempDir>,
 
     msg_id: AtomicUsize,
     pd_client: Arc<TestPdClient>,
@@ -61,6 +62,7 @@ impl ServerCluster {
             msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
             store_chs: HashMap::new(),
+            snap_paths: HashMap::new(),
         }
     }
 
@@ -110,6 +112,7 @@ impl Simulator for ServerCluster {
         let mut cfg = cfg;
         let tmp = TempDir::new("test_cluster").unwrap();
         cfg.store_cfg.snap_path = tmp.path().to_str().unwrap().to_owned();
+        self.snap_paths.insert(node_id, tmp);
 
         // Now we cache the store address, so here we should re-use last
         // listening address for the same store. Maybe we should enable
