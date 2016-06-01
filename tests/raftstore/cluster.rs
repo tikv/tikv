@@ -121,11 +121,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn run_node(&mut self, node_id: u64) {
         let engine = self.engines.get(&node_id).unwrap();
-        let mut cfg = self.cfg.clone();
-        // store_config.snap_path should be different,
-        // otherwise they will be overwrite each other!
-        cfg.store_cfg = new_store_cfg();
-        self.sim.wl().run_node(node_id, cfg, engine.clone());
+        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
     }
 
     pub fn stop_node(&mut self, node_id: u64) {

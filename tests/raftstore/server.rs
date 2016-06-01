@@ -21,6 +21,8 @@ use std::time::Duration;
 use std::io::ErrorKind;
 
 use rocksdb::DB;
+use tempdir::TempDir;
+
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
@@ -106,6 +108,8 @@ impl Simulator for ServerCluster {
         let trans = Arc::new(RwLock::new(ServerTransport::new(sendch)));
 
         let mut cfg = cfg;
+        let tmp = TempDir::new("test_cluster").unwrap();
+        cfg.store_cfg.snap_path = tmp.path().to_str().unwrap().to_owned();
 
         // Now we cache the store address, so here we should re-use last
         // listening address for the same store. Maybe we should enable

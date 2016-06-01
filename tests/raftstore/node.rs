@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use rocksdb::DB;
+use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
@@ -77,6 +78,10 @@ impl NodeCluster {
 impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
+
+        let mut cfg = cfg;
+        let tmp = TempDir::new("test_cluster").unwrap();
+        cfg.store_cfg.snap_path = tmp.path().to_str().unwrap().to_owned();
 
         let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
         let simulate_trans = SimulateTransport::new(self.trans.clone());
