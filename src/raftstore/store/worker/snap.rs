@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::{error, io, fs};
 use crc::{crc32, Hasher32};
 use byteorder::{ByteOrder, LittleEndian};
+use std::time::Instant;
 
 use util::worker::Runnable;
 
@@ -141,6 +142,8 @@ impl Runner {
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
+        metric_incr!("raftstore.generate_snap");
+        let ts = Instant::now();
         let res = self.generate_snap(&task);
         if let Err(e) = res {
             error!("failed to generate snap: {:?}!!!", e);
@@ -160,6 +163,8 @@ impl Runnable<Task> for Runner {
             }
         }
 
+        metric_incr!("raftstore.generate_snap.success");
+        metric_time!("raftstore.generate_snap.cost", ts.elapsed());
         info!("write snapshot file success!\n");
     }
 }

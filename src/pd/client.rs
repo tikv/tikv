@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -37,6 +37,7 @@ struct RpcClientCore {
 }
 
 fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u64, Response)> {
+    let ts = Instant::now();
     let mut req = Message::new();
     req.set_msg_type(MessageType::PdReq);
     // TODO: optimize clone later in HTTP refactor.
@@ -51,6 +52,7 @@ fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u
     if resp.get_msg_type() != MessageType::PdResp {
         return Err(box_err!("invalid pd response type {:?}", resp.get_msg_type()));
     }
+    metric_time!("pd.send_msg", ts.elapsed());
     Ok((id, resp.take_pd_resp()))
 }
 
