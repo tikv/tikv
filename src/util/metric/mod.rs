@@ -13,9 +13,12 @@
 
 use std::error;
 use std::fmt;
+use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::{ToSocketAddrs, SocketAddr, UdpSocket};
 
 use cadence::prelude::*;
+use cadence::{MetricSink, MetricResult, ErrorKind};
 
 #[macro_use]
 pub mod macros;
@@ -64,4 +67,35 @@ pub fn client() -> Option<&'static Metric> {
     }
 
     unsafe { CLIENT.map(|c| &*c) }
+}
+
+/// Implementation of a `MetricSink` that emits metrics over UDP with nonblocking mode.
+// TODO: add buffer.
+pub struct NonblockUdpMetricSink {
+    sink_addr: SocketAddr,
+    socket: UdpSocket,
+}
+
+impl NonblockUdpMetricSink {
+    pub fn from<A>(sink_addr: A, socket: UdpSocket) -> MetricResult<NonblockUdpMetricSink>
+        where A: ToSocketAddrs
+    {
+        let mut addr_iter = try!(sink_addr.to_socket_addrs());
+        let addr = try!(addr_iter.next()
+            .ok_or((ErrorKind::InvalidInput, "No socket addresses yielded")));
+
+        // Moves this UDP stream into nonblocking mode.
+        let _ = socket.set_nonblocking(true).unwrap();
+
+        Ok(NonblockUdpMetricSink {
+            sink_addr: addr,
+            socket: socket,
+        })
+    }
+}
+
+impl MetricSink for NonblockUdpMetricSink {
+    fn emit(&self, metric: &str) -> io::Result<usize> {
+        self.socket.send_to(metric.as_bytes(), &self.sink_addr)
+    }
 }
