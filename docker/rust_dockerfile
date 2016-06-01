@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN cd / && \
     curl -L https://github.com/facebook/rocksdb/archive/v4.5.1.tar.gz | tar xz && \
     cd rocksdb-4.5.1 && \
-    make shared_lib && \
+    PORTABLE=1 make shared_lib && \
     make install && \
     cd / && \
     rm -rf /rocksdb-4.5.1
