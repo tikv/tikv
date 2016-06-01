@@ -159,17 +159,20 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
 /// ```
 /// use tikv::util::escape;
 ///
-/// assert_eq!("ab", escape(b"ab"));
-/// assert_eq!("a\\015\\012\\011 \\'\\\"\\", escape(b"a\r\n\t '\"\\"));
-/// assert_eq!("\\342\\235\\244\\360\\237\\220\\267", escape("❤🐷".as_bytes()));
+/// assert_eq!(r"ab", escape(b"ab"));
+/// assert_eq!(r"a\\023", escape(b"a\\023"));
+/// assert_eq!("a\\r\\n\\t '\\\"\\\\", escape(b"a\r\n\t '\"\\"));
+/// assert_eq!(r"\342\235\244\360\237\220\267", escape("❤🐷".as_bytes()));
 /// ```
-///
 pub fn escape(data: &[u8]) -> String {
     let mut escaped = Vec::with_capacity(data.len() * 4);
     for &c in data {
         match c {
-            b'\'' => escaped.extend_from_slice(b"\\'"),
+            b'\n' => escaped.extend_from_slice(br"\n"),
+            b'\r' => escaped.extend_from_slice(br"\r"),
+            b'\t' => escaped.extend_from_slice(br"\t"),
             b'"' => escaped.extend_from_slice(b"\\\""),
+            b'\\' => escaped.extend_from_slice(br"\\"),
             b'\x20'...b'\x7e' => escaped.push(c),
             _ => {
                 escaped.push(b'\\');
@@ -181,6 +184,54 @@ pub fn escape(data: &[u8]) -> String {
     }
     escaped.shrink_to_fit();
     unsafe { String::from_utf8_unchecked(escaped) }
+}
+
+/// A function to unescape an escaped string to a byte array.
+///
+/// # Panic
+///
+/// If s is not a properly encoded string.
+///
+/// # Examples
+///
+/// ```
+/// use tikv::util::unescape;
+///
+/// assert_eq!(unescape(r"ab"), b"ab");
+/// assert_eq!(unescape(r"a\\023"), b"a\\023");
+/// assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
+/// assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
+/// ```
+///
+pub fn unescape(s: &str) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(s.len());
+    let mut bytes = s.bytes();
+    loop {
+        let b = match bytes.next() {
+            None => break,
+            Some(t) => t,
+        };
+        if b != b'\\' {
+            buf.push(b);
+            continue;
+        }
+        match bytes.next().unwrap() {
+            b'"' => buf.push(b'"'),
+            b'\'' => buf.push(b'\''),
+            b'\\' => buf.push(b'\\'),
+            b'n' => buf.push(b'\n'),
+            b't' => buf.push(b'\t'),
+            b'r' => buf.push(b'\r'),
+            b => {
+                let b1 = b - b'0';
+                let b2 = bytes.next().unwrap() - b'0';
+                let b3 = bytes.next().unwrap() - b'0';
+                buf.push((b1 << 6) + (b2 << 3) + b3);
+            }
+        }
+    }
+    buf.shrink_to_fit();
+    buf
 }
 
 /// Convert a borrow to a slice.

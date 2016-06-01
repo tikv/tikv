@@ -27,9 +27,9 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
 use kvproto::raftpb::Entry;
 use rocksdb::DB;
-use tikv::util::escape;
+use tikv::util::{escape, unescape};
 use tikv::raftstore::store::keys;
-use tikv::raftstore::store::engine::Peekable;
+use tikv::raftstore::store::engine::{Peekable, Iterable};
 
 /// # Message dump tool
 ///
@@ -53,7 +53,13 @@ fn main() {
     opts.optflag("h", "help", "print this help menu");
     opts.optflag("", "info", "print the region info");
     opts.optopt("i", "index", "set the raft log index", "");
-    opts.optopt("k", "key", "set the query raw key, in hex format", "");
+    opts.optopt("k", "key", "set the query raw key, in escape format", "");
+    opts.optopt("f",
+                "from",
+                "set the scan from raw key, in escaped format",
+                "");
+    opts.optopt("t", "to", "set the scan end raw key, in escaped format", "");
+    opts.optopt("l", "limit", "set the scan limit kesy", "");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);
@@ -63,33 +69,28 @@ fn main() {
     let db_str = matches.opt_str("db").unwrap();
     let db = DB::open_default(&db_str).unwrap();
     let key = matches.opt_str("k");
+    let from = matches.opt_str("f");
+    let to = matches.opt_str("t");
+    let limit = matches.opt_str("l").map(|s| s.parse().unwrap());
     let idx = matches.opt_str("i");
     let region = matches.opt_str("r");
-    if key.is_some() {
-        dump_raw_value(db, key.unwrap());
-    } else if idx.is_some() {
-        dump_raft_log_entry(db, region.unwrap(), idx.unwrap());
+    if let Some(key) = key {
+        dump_raw_value(db, key);
+    } else if let Some(idx) = idx {
+        dump_raft_log_entry(db, region.unwrap(), idx);
     } else if matches.opt_present("info") {
         dump_region_info(db, region.unwrap());
+    } else if let Some(from) = from {
+        dump_range(db, from, to, limit);
     } else {
         panic!("currently only random key-value and raft log entry query are supported.");
     }
 }
 
-fn dump_raw_value(db: DB, mut key_str: String) {
-    key_str = key_str.to_lowercase();
-    let mut key = key_str.trim();
-    if key.starts_with("0x") {
-        key = key.split_at(2).1;
-    }
-    let key_bytes = key.as_bytes();
-    let mut key = Vec::with_capacity(key.len() / 2);
-    for chunk in key_bytes.chunks(2) {
-        let b = u8::from_str_radix(str::from_utf8(chunk).unwrap(), 16).unwrap();
-        key.push(b);
-    }
+fn dump_raw_value(db: DB, key: String) {
+    let key = unescape(&key);
     let value = db.get_value(&key).unwrap();
-    println!("value: {:?}", value.map(|v| escape(&v)));
+    println!("value: {}", value.map_or("None".to_owned(), |v| escape(&v)));
 }
 
 fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
@@ -112,4 +113,24 @@ fn dump_region_info(db: DB, region_id_str: String) {
     println!("info_key: {}", escape(&region_info_key));
     let region: Option<Region> = db.get_msg(&region_info_key).unwrap();
     println!("info: {:?}", region);
+}
+
+fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>) {
+    let from = unescape(&from);
+    let to = to.map_or_else(|| vec![0xff], |s| unescape(&s));
+    let limit = limit.unwrap_or(u64::MAX);
+
+    if limit == 0 {
+        return;
+    }
+
+    let mut cnt = 0;
+    db.scan(&from,
+              &to,
+              &mut |k, v| {
+                  println!("key: {}, value: {}", escape(k), escape(v));
+                  cnt += 1;
+                  Ok(cnt < limit)
+              })
+        .unwrap();
 }
