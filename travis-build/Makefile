@@ -37,6 +37,7 @@ ${KCOV_DIR}/kcov:
 prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov
 
 prepare_osx:
+	brew update && \
 	brew install gflags snappy rocksdb
 
 test_linux:

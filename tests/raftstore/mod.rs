@@ -27,3 +27,4 @@ mod test_status_command;
 mod test_tombstone;
 mod test_transport;
 mod test_transfer_leader;
+mod test_stats;
