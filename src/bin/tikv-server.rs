@@ -110,7 +110,7 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     util::init_log(logger::get_level_by_string(&level)).unwrap();
 }
 
-fn initial_metric(matches: &Matches, config: &toml::Value, postfix: Option<String>) {
+fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>) {
     let host = get_string_value("metric-addr",
                                 "metric.addr",
                                 matches,
@@ -124,9 +124,8 @@ fn initial_metric(matches: &Matches, config: &toml::Value, postfix: Option<Strin
                                       Some("tikv".to_owned()),
                                       |v| v.as_str().map(|s| s.to_owned()));
 
-    if let Some(s) = postfix {
-        prefix.push('.');
-        prefix.push_str(&s);
+    if let Some(node_id) = node_id {
+        prefix.push_str(&format!(".{}", node_id));
     }
 
     if !host.is_empty() {
@@ -346,7 +345,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                                      format!("{}", listener.local_addr().unwrap()),
                                                      pd_client);
 
-    initial_metric(matches, config, Some(format!("{}", node_id)));
+    initial_metric(matches, config, Some(node_id));
 
     let mut svr = Server::new(&mut event_loop, listener, store, raft_router, resolver).unwrap();
     svr.run(&mut event_loop).unwrap();
