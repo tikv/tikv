@@ -485,7 +485,7 @@ impl PdClient for TestPdClient {
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
         try!(self.check_bootstrap());
         if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
-            if let Ok(_) = check_key_in_region(key, &region) {
+            if check_key_in_region(key, &region).is_ok() {
                 return Ok(region);
             }
         }
