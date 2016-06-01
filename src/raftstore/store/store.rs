@@ -35,6 +35,7 @@ use raft::SnapshotStatus;
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::Worker;
+use util::get_disk_stat;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::util;
@@ -714,17 +715,37 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&self) {
         let mut stats = StoreStats::new();
-        stats.set_capacity(self.cfg.capacity);
+        let disk_stat = match get_disk_stat(self.engine.path()) {
+            Ok(disk_stat) => disk_stat,
+            Err(_) => {
+                error!("get disk stat for rocksdb {} failed", self.engine.path());
+                return;
+            }
+        };
+
+        let capacity = if disk_stat.capacity > self.cfg.capacity {
+            disk_stat.capacity
+        } else {
+            self.cfg.capacity
+        };
+
+        stats.set_capacity(capacity);
 
         // Must get the total SST file size here.
         let used_size = self.engine.get_property_int(ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY).unwrap();
 
-        let available = if self.cfg.capacity > used_size {
-            self.cfg.capacity - used_size
+        let mut available = if capacity > used_size {
+            capacity - used_size
         } else {
             warn!("no available space for store {}", self.store_id());
             0
         };
+
+        // We only care rocksdb SST file size, so we should
+        // check disk available here.
+        if available > disk_stat.available {
+            available = disk_stat.available
+        }
 
         stats.set_store_id(self.store_id());
         stats.set_available(available);
