@@ -40,6 +40,8 @@ enum ConnType {
     Snapshot,
 }
 
+const SNAPSHOT_PAYLOAD_BUF: usize = 4 * (1 << 20);
+
 pub struct Conn {
     pub sock: TcpStream,
     pub token: Token,
@@ -186,6 +188,7 @@ impl Conn {
                     read_size: 0,
                 });
                 self.conn_type = ConnType::Snapshot;
+                self.payload = Some(create_mem_buf(4));
                 self.read_snapshot(event_loop)
             }
             _ => {
@@ -205,49 +208,47 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        if let Some(ref mut receiver) = self.snapshot_receiver {
-            let (mut pos, len) = (receiver.pos, receiver.buf.len());
-            loop {
-                match try!(self.sock.try_read(&mut receiver.buf[pos..len])) {
-                    None => {
-                        break;
-                    }
-                    Some(0) => {
-                        info!("snapshot connection closed");
-                        return Ok(vec![]);
-                    }
-                    Some(n) => {
-                        pos += n;
-                        if pos == len {
-                            // TODO be careful, edge trigger notify one time
-                            receiver.more = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            let mut beg = 0;
-            if receiver.file_size == 0 && pos >= 4 {
-                receiver.file_size = LittleEndian::read_u32(&receiver.buf[..]) as usize;
-                beg = 4;
-                debug!("read file size: {}\n", receiver.file_size);
-            }
-
-            if beg < pos {
-                receiver.read_size += pos - beg;
-                receiver.pos = 0;
-                let finish = receiver.read_size >= receiver.file_size;
-                if finish {
-                    if let Err(e) = self.sock.shutdown(Shutdown::Both) {
-                        error!("shutdown connection error: {}", e);
-                    }
-                }
-                let task = Task::new(&receiver.buf[beg..pos], box move |_| {}, finish);
-                try!(receiver.worker.schedule(task));
-            }
+        while try!(self.read_payload()) {
+            try!(self.handle_snapshot_payload());
         }
         Ok(vec![])
+    }
+
+    fn handle_snapshot_payload(&mut self) -> Result<()> {
+        let mut payload = self.payload.take().unwrap();
+        if let Some(ref mut receiver) = self.snapshot_receiver {
+            let mut finish = false;
+            if receiver.file_size == 0 {
+                // header
+                receiver.file_size = LittleEndian::read_u32(payload.bytes()) as usize;
+                debug!("read file size: {}\n", receiver.file_size);
+                payload = create_mem_buf(SNAPSHOT_PAYLOAD_BUF);
+            } else if receiver.read_size + payload.capacity() == receiver.file_size {
+                // last chunk
+                finish = true;
+                if let Err(e) = self.sock.shutdown(Shutdown::Both) {
+                    error!("shutdown connection error: {}", e);
+                }
+            }
+
+            let task = Task::new(payload.bytes(), box move |_| {}, finish);
+            try!(receiver.worker.schedule(task));
+
+            if receiver.read_size + payload.capacity() >= receiver.file_size {
+                payload = create_mem_buf(receiver.file_size - receiver.read_size);
+            }
+            payload.clear();
+            self.payload = Some(payload);
+        }
+        Ok(())
+    }
+
+    fn read_payload(&mut self) -> Result<bool> {
+        let mut payload = self.payload.take().unwrap();
+        try!(try_read_data(&mut self.sock, &mut payload));
+        let ret = payload.remaining() == 0;
+        self.payload = Some(payload);
+        Ok(ret)
     }
 
     fn read_one_message(&mut self) -> Result<Option<Message>> {
