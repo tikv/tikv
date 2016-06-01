@@ -47,6 +47,8 @@ struct Cluster {
     region_id_keys: HashMap<u64, Key>,
     base_id: AtomicUsize,
     rule: Option<Rule>,
+
+    store_stats: HashMap<u64, pdpb::StoreStats>,
 }
 
 impl Cluster {
@@ -62,6 +64,7 @@ impl Cluster {
             region_id_keys: HashMap::new(),
             base_id: AtomicUsize::new(1000),
             rule: None,
+            store_stats: HashMap::new(),
         }
     }
 
@@ -449,6 +452,10 @@ impl TestPdClient {
                         region,
                         escape(split_key)));
     }
+
+    pub fn get_store_stats(&self, store_id: u64) -> Option<pdpb::StoreStats> {
+        self.cluster.rl().store_stats.get(&store_id).cloned()
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -520,5 +527,15 @@ impl PdClient for TestPdClient {
         resp.set_new_peer_ids(peer_ids);
 
         Ok(resp)
+    }
+
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
+        try!(self.check_bootstrap());
+
+        // Cache it directly now.
+        let store_id = stats.get_store_id();
+        self.cluster.wl().store_stats.insert(store_id, stats);
+
+        Ok(())
     }
 }

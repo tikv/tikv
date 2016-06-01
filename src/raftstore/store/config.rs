@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::u64;
+
 use raftstore::Result;
 
 const RAFT_BASE_TICK_INTERVAL: u64 = 100;
@@ -26,9 +28,16 @@ const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
+const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 30000;
+const STORE_CAPACITY: u64 = u64::MAX;
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    // store capacity.
+    // TODO: if not set, we will use disk capacity instead.
+    // Now we will use a default capacity if not set.
+    pub capacity: u64,
+
     // raft_base_tick_interval is a base tick interval (ms).
     pub raft_base_tick_interval: u64,
     pub raft_heartbeat_ticks: usize,
@@ -54,11 +63,13 @@ pub struct Config {
     /// will be checked again whether it should be split.
     pub region_check_size_diff: u64,
     pub pd_heartbeat_tick_interval: u64,
+    pub pd_store_heartbeat_tick_interval: u64,
 }
 
 impl Default for Config {
     fn default() -> Config {
         Config {
+            capacity: STORE_CAPACITY,
             raft_base_tick_interval: RAFT_BASE_TICK_INTERVAL,
             raft_heartbeat_ticks: RAFT_HEARTBEAT_TICKS,
             raft_election_timeout_ticks: RAFT_ELECTION_TIMEOUT_TICKS,
@@ -72,6 +83,7 @@ impl Default for Config {
             region_split_size: REGION_SPLIT_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
+            pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL_MS,
         }
     }
 }

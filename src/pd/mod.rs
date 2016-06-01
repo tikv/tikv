@@ -89,4 +89,7 @@ pub trait PdClient: Send + Sync {
 
     // Ask pd for split, pd will returns the new split region id.
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse>;
+
+    // Send store statistics regularly.
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()>;
 }
