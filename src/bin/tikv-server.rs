@@ -112,19 +112,24 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     util::init_log(logger::get_level_by_string(&level)).unwrap();
 }
 
-fn initial_metric(matches: &Matches, config: &toml::Value) {
+fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>) {
     let host = get_string_value("metric-addr",
                                 "metric.addr",
                                 matches,
                                 config,
                                 Some("".to_owned()),
                                 |v| v.as_str().map(|s| s.to_owned()));
-    let prefix = get_string_value("metric-prefix",
-                                  "metric.prefix",
-                                  matches,
-                                  config,
-                                  Some("tikv".to_owned()),
-                                  |v| v.as_str().map(|s| s.to_owned()));
+    let mut prefix = get_string_value("metric-prefix",
+                                      "metric.prefix",
+                                      matches,
+                                      config,
+                                      Some("tikv".to_owned()),
+                                      |v| v.as_str().map(|s| s.to_owned()));
+
+    if let Some(node_id) = node_id {
+        prefix.push_str(&format!(".{}", node_id));
+    }
+
     if !host.is_empty() {
         // We only need a unique UDP bind, so 0.0.0.0:0 is enough.
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
@@ -249,7 +254,7 @@ fn build_raftkv(matches: &Matches,
                 cluster_id: u64,
                 addr: String,
                 pd_client: Arc<RpcClient>)
-                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, PathBuf) {
+                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, PathBuf) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
 
     let path = get_store_path(matches, config);
@@ -277,8 +282,9 @@ fn build_raftkv(matches: &Matches,
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
     node.start(event_loop, engine.clone(), trans).unwrap();
     let raft_router = node.raft_store_router();
+    let node_id = node.id();
 
-    (create_raft_storage(node, engine).unwrap(), raft_router, snap_path_copy)
+    (create_raft_storage(node, engine).unwrap(), raft_router, node_id, snap_path_copy)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -337,13 +343,15 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
-    let (store, raft_router, snap_path) = build_raftkv(matches,
-                                                       config,
-                                                       ch,
-                                                       cluster_id,
-                                                       format!("{}",
-                                                               listener.local_addr().unwrap()),
-                                                       pd_client);
+    let (store, raft_router, node_id, snap_path) =
+        build_raftkv(matches,
+                     config,
+                     ch,
+                     cluster_id,
+                     format!("{}", listener.local_addr().unwrap()),
+                     pd_client);
+
+    initial_metric(matches, config, Some(node_id));
 
     let mut svr = Server::new(&mut event_loop,
                               listener,
@@ -407,8 +415,6 @@ fn main() {
 
     initial_log(&matches, &config);
 
-    initial_metric(&matches, &config);
-
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,
@@ -429,6 +435,7 @@ fn main() {
 
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
+            initial_metric(&matches, &config, None);
             let path = get_store_path(&matches, &config);
             let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();
             run_local_server(listener, store);
