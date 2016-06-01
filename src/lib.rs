@@ -47,7 +47,6 @@ extern crate tipb;
 extern crate threadpool;
 extern crate num;
 extern crate cadence;
-extern crate walkdir;
 
 #[macro_use]
 pub mod util;

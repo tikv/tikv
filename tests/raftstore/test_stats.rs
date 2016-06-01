@@ -33,6 +33,8 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
         }
     }
 
+    let engine = cluster.get_engine(1);
+    engine.flush(true).unwrap();
     let last_stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(last_stats.get_region_count(), 1);
 
@@ -41,6 +43,7 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region = pd_client.get_region(b"").unwrap();
     cluster.must_split(&region, b"a2");
+    engine.flush(true).unwrap();
 
     // wait report region count after split
     for _ in 0..100 {

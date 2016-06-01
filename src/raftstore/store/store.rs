@@ -26,7 +26,7 @@ use uuid::Uuid;
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData, RaftTruncatedState};
 use kvproto::raftpb::ConfChangeType;
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer, total_size_in_path};
+use util::{HandyRwLock, SlowTimer};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -51,6 +51,7 @@ use super::transport::Transport;
 type Key = Vec<u8>;
 
 const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
+const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
@@ -715,13 +716,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut stats = StoreStats::new();
         stats.set_capacity(self.cfg.capacity);
 
-        let used_size = match total_size_in_path(self.engine.path()) {
-            Ok(used_size) => used_size,
-            Err(e) => {
-                error!("get store used size err {:?}", e);
-                return;
-            }
-        };
+        // Must get the total SST file size here.
+        let used_size = self.engine.get_property_int(ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY).unwrap();
 
         let available = if self.cfg.capacity > used_size {
             self.cfg.capacity - used_size

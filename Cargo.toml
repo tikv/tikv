@@ -39,7 +39,6 @@ threadpool = "1.0.0"
 toml = "0.1"
 num = "0.1"
 cadence = "0.5.0"
-walkdir = "0.1"
 clippy = {version = "*", optional = true}
 
 # The getopts in crate.io is outdated, use the latest getopts instead.
