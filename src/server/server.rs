@@ -529,7 +529,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         // receiver can't assure their order!
         thread::spawn(move || {
             let file_name = snapshot_file_path(&snap_path, final_data.msg.get_snapshot_file());
-            print!("send_snapshot_sock, new thread to send file: {:?}\n",
+            debug!("send_snapshot_sock, new thread to send file: {:?}\n",
                    file_name);
             let attr = fs::metadata(&file_name).unwrap();
 
@@ -543,7 +543,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
 
             let mut buf: [u8; 4] = [0; 4];
-            print!("write file size: {}\n", attr.len());
+            debug!("write file size: {}\n", attr.len());
             LittleEndian::write_u32(&mut buf, attr.len() as u32);
             if let Err(e) = conn.write(&buf) {
                 error!("write data error: {}", e);
@@ -556,7 +556,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 return;
             }
 
-            print!("send data finish, wait for close connection\n");
+            debug!("send data finish, wait for close connection\n");
             // wait for reader to consume the data and close connection
             if let Err(e) = conn.read(&mut buf) {
                 reporter.report(SnapshotStatus::Failure);
@@ -565,7 +565,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 return;
             }
             reporter.report(SnapshotStatus::Finish);
-            print!("send snapshot socket finish!!\n");
+            debug!("send snapshot socket finish!!\n");
         });
     }
 

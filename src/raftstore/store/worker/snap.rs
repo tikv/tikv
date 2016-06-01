@@ -110,13 +110,12 @@ impl Runner {
         snapshot_file.set_index(snapshot.get_metadata().get_index());
 
         let file_name = snapshot_file_path(&self.snap_path, &snapshot_file);
-        print!("save_snapshot file name: {:?}\n", file_name);
+        debug!("save_snapshot file name: {:?}\n", file_name);
         let metadata = fs::metadata(&file_name);
         if let Ok(attr) = metadata {
             if attr.is_file() {
+                // no need to save snapshot several times
                 return Ok(snapshot_file);
-                // print!("should not save snapshot data several times??\n");
-                // return Err(box_err!("snapshot {:?} already exist!", file_name));
             }
         }
         let tmp_file_name = file_name.with_extension("tmp");
@@ -124,7 +123,7 @@ impl Runner {
         let mut crc_writer = CRCWriter::new(f);
         let mut buf = [0; 4];
         let header_len = snapshot.compute_size();
-        print!("write header_len = {}\n", header_len);
+        debug!("write header_len = {}\n", header_len);
         LittleEndian::write_u32(&mut buf, header_len);
         try!(crc_writer.write(&buf));
 
@@ -217,7 +216,7 @@ pub fn load_snapshot(file_path: &Path) -> Result<Snapshot, Error> {
     let mut buf: [u8; 4] = [0; 4];
     try!(file.read(&mut buf));
     let len = LittleEndian::read_u32(&buf);
-    print!("load_snapshot, header say size: {}\n", len);
+    debug!("load_snapshot, header say size: {}\n", len);
     let mut vec: Vec<u8> = vec![0; len as usize];
     try!(file.read(vec.as_mut_slice()));
     let mut msg = Snapshot::new();

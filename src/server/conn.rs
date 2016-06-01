@@ -231,7 +231,7 @@ impl Conn {
             if receiver.file_size == 0 && pos >= 4 {
                 receiver.file_size = LittleEndian::read_u32(&receiver.buf[..]) as usize;
                 beg = 4;
-                print!("read file size: {}\n", receiver.file_size);
+                debug!("read file size: {}\n", receiver.file_size);
             }
 
             if beg < pos {

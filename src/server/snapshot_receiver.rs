@@ -68,7 +68,7 @@ impl Runner {
                ch: SendCh)
                -> Runner {
         let file_path = snapshot_file_path(path, &file_info);
-        print!("runner save the file path to {:?} should not same!!\n",
+        debug!("runner save the file path to {:?} should not same!!\n",
                &file_path);
         Runner {
             file_path: file_path.to_path_buf(),
@@ -87,7 +87,7 @@ impl Runnable<Task> for Runner {
         let resp = io::copy(&mut buf, &mut self.file);
         if task.last {
             // self.file.flush();
-            print!("snapshot receiver finish\n");
+            debug!("snapshot receiver finish\n");
             // TODO change here when region size goes to 1G
             let snapshot = load_snapshot(&self.file_path).unwrap();
             self.msg.mut_message().set_snapshot(snapshot);
@@ -104,7 +104,7 @@ impl Runnable<Task> for Runner {
             }) {
                 error!("send snapshot raft message failed, err={:?}", e);
             }
-            print!("send snapshot to store...\n");
+            debug!("send snapshot to store...\n");
         }
         task.cb.call_box((resp.map_err(Error::Io),))
     }
