@@ -85,7 +85,7 @@ impl NonblockUdpMetricSink {
             .ok_or((ErrorKind::InvalidInput, "No socket addresses yielded")));
 
         // Moves this UDP stream into nonblocking mode.
-        let _ = socket.set_nonblocking(true).unwrap();
+        try!(socket.set_nonblocking(true));
 
         Ok(NonblockUdpMetricSink {
             sink_addr: addr,
