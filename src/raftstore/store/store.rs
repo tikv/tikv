@@ -732,7 +732,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_capacity(capacity);
 
         // Must get the total SST file size here.
-        let used_size = self.engine.get_property_int(ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY).unwrap();
+        let used_size = self.engine
+            .get_property_int(ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
+            .expect("rocksdb is too old, missing total-sst-files-size property");
 
         let mut available = if capacity > used_size {
             capacity - used_size
