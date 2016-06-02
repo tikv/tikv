@@ -89,6 +89,15 @@ pub trait Cursor {
                 return self.seek(key);
             }
         }
+        if ord == Ordering::Greater {
+            if self.valid() {
+                if self.key() < &**key.encoded() {
+                    self.next();
+                }
+            } else {
+                self.seek_to_first();
+            }
+        }
         // TODO: check region range.
         Ok(self.valid())
     }
@@ -173,6 +182,7 @@ mod tests {
     use tempdir::TempDir;
     use storage::make_key;
     use util::codec::bytes;
+    use util::escape;
     use kvproto::kvrpcpb::Context;
 
     #[test]
@@ -183,6 +193,7 @@ mod tests {
         get_put(e.as_ref());
         batch(e.as_ref());
         seek(e.as_ref());
+        near_seek(e.as_ref());
     }
 
     fn must_put(engine: &Engine, key: &[u8], value: &[u8]) {
@@ -206,6 +217,19 @@ mod tests {
         let mut iter = engine.iter(&Context::new()).unwrap();
         iter.seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
+                   (&*bytes::encode_bytes(pair.0), pair.1));
+    }
+
+    fn assert_near_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
+        assert!(cursor.near_seek(&make_key(key)).unwrap(), escape(key));
+        assert_eq!((cursor.key(), cursor.value()),
+                   (&*bytes::encode_bytes(pair.0), pair.1));
+    }
+
+    fn assert_near_reverse_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
+        assert!(cursor.near_reverse_seek(&make_key(key)).unwrap(),
+                escape(key));
+        assert_eq!((cursor.key(), cursor.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
     }
 
@@ -241,6 +265,22 @@ mod tests {
         assert_seek(engine, b"x\x00", (b"z", b"2"));
         let mut iter = engine.iter(&Context::new()).unwrap();
         assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
+        must_delete(engine, b"x");
+        must_delete(engine, b"z");
+    }
+
+    fn near_seek(engine: &Engine) {
+        must_put(engine, b"x", b"1");
+        must_put(engine, b"z", b"2");
+        let mut cursor = engine.iter(&Context::new()).unwrap();
+        let cursor_mut = cursor.as_mut();
+        assert_near_seek(cursor_mut, b"x", (b"x", b"1"));
+        assert_near_seek(cursor_mut, b"a", (b"x", b"1"));
+        assert_near_reverse_seek(cursor_mut, b"z1", (b"z", b"2"));
+        assert_near_reverse_seek(cursor_mut, b"x1", (b"x", b"1"));
+        assert_near_seek(cursor_mut, b"y", (b"z", b"2"));
+        assert_near_seek(cursor_mut, b"x\x00", (b"z", b"2"));
+        assert!(!cursor_mut.near_seek(&make_key(b"z\x00")).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
