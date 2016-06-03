@@ -491,7 +491,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn send_snapshot_sock(&mut self, sock_addr: SocketAddr, data: ConnData) {
         let reporter = Arc::new(self.new_snapshot_reporter(&data));
-        self.snap_manager.rl().send_snap(sock_addr, data);
+        let cb = box move |res: Result<()>| {
+            if let Err(_) = res {
+                reporter.report(SnapshotStatus::Failure);
+            } else {
+                reporter.report(SnapshotStatus::Finish);
+            }
+        };
+        self.snap_manager.rl().send_snap(sock_addr, data, cb);
     }
 
     fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
@@ -612,7 +619,6 @@ mod tests {
     use std::net::SocketAddr;
 
     use mio::tcp::TcpListener;
-    use tempdir::TempDir;
 
     use super::*;
     use super::super::{Msg, ConnData, Result, SnapshotManager, SendCh};

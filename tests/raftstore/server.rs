@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::thread;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};

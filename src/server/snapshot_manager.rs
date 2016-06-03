@@ -29,7 +29,7 @@ use mio::Token;
 use bytes::ByteBuf;
 use raftstore::store::worker::snap::{snapshot_file_path, load_snapshot};
 
-use kvproto::msgpb::{self, SnapshotFile, Message, MessageType};
+use kvproto::msgpb::{self, SnapshotFile, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
 
 pub type Callback = Box<FnBox(Result<u64>) + Send>;
@@ -135,7 +135,10 @@ impl SnapshotManager {
     }
 
     // , reporter: SnapshotReporter
-    pub fn send_snap(&self, sock_addr: SocketAddr, data: ConnData) {
+    pub fn send_snap(&self,
+                     sock_addr: SocketAddr,
+                     data: ConnData,
+                     cb: Box<FnBox(Result<()>) + Send>) {
         let region_id: u64;
         let term: u64;
         let index: u64;
@@ -174,7 +177,7 @@ impl SnapshotManager {
             let mut conn = net::TcpStream::connect(&sock_addr).unwrap();
             if let Err(e) = rpc::encode_msg(&mut conn, final_data.msg_id, &final_data.msg) {
                 error!("write handshake error err {:?}", e);
-                // reporter.report(SnapshotStatus::Failure);
+                cb.call_box((Err(Error::Codec(e)),));
                 return;
             }
 
@@ -183,24 +186,24 @@ impl SnapshotManager {
             LittleEndian::write_u32(&mut buf, attr.len() as u32);
             if let Err(e) = conn.write(&buf) {
                 error!("write data error: {}", e);
-                // reporter.report(SnapshotStatus::Failure);
+                cb.call_box((Err(Error::Io(e)),));
                 return;
             }
             if let Err(e) = io::copy(&mut file, &mut conn) {
                 error!("write data error: {}", e);
-                // reporter.report(SnapshotStatus::Failure);
+                cb.call_box((Err(Error::Io(e)),));
                 return;
             }
 
             debug!("send data finish, wait for close connection\n");
             // wait for reader to consume the data and close connection
             if let Err(e) = conn.read(&mut buf) {
-                // reporter.report(SnapshotStatus::Failure);
                 error!("reader should consume the whole data and close connection: {}",
                        e);
+                cb.call_box((Err(Error::Io(e)),));
                 return;
             }
-            // reporter.report(SnapshotStatus::Finish);
+            cb.call_box((Ok(()),));
             debug!("send snapshot socket finish!!\n");
         });
     }
@@ -209,7 +212,8 @@ impl SnapshotManager {
                       token: Token,
                       file_info: SnapshotFile,
                       raft: RaftMessage,
-                      msg_id: u64) {
+                      msg_id: u64)
+                      -> Result<()> {
         let mut worker = Worker::new("snapshot receiver".to_owned());
         let runner = Runner::new(&self.snap_path,
                                  file_info,
@@ -217,11 +221,13 @@ impl SnapshotManager {
                                  msg_id,
                                  token,
                                  self.ch.clone());
-        worker.start(runner);
+        try!(worker.start(runner));
         self.workers.insert(token, Mutex::new(worker));
+        Ok(())
     }
 
-    pub fn add_task(&self, token: &Token, task: Task) {
-        self.workers[token].lock().unwrap().schedule(task);
+    pub fn add_task(&self, token: &Token, task: Task) -> Result<()> {
+        try!(self.workers[token].lock().unwrap().schedule(task));
+        Ok(())
     }
 }

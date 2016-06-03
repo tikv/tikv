@@ -22,7 +22,7 @@ use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
 use kvproto::msgpb::{Message, MessageType};
-use super::{Result, ConnData, SendCh};
+use super::{Result, ConnData};
 use super::server::Server;
 use util::codec::rpc;
 use util::HandyRwLock;
@@ -168,10 +168,10 @@ impl Conn {
         let mut msg = msg_or_none.unwrap();
         match msg.get_msg_type() {
             MessageType::Snapshot => {
-                self.snap_manager.wl().new_worker(self.token,
-                                                  msg.take_snapshot_file(),
-                                                  msg.take_raft(),
-                                                  self.last_msg_id);
+                try!(self.snap_manager.wl().new_worker(self.token,
+                                                       msg.take_snapshot_file(),
+                                                       msg.take_raft(),
+                                                       self.last_msg_id));
                 self.conn_type = ConnType::Snapshot;
                 self.payload = Some(create_mem_buf(4));
                 self.read_snapshot(event_loop)
@@ -215,7 +215,7 @@ impl Conn {
         }
 
         let task = Task::new(payload.bytes(), box move |_| {}, finish);
-        self.snap_manager.rl().add_task(&self.token, task);
+        try!(self.snap_manager.rl().add_task(&self.token, task));
 
         if self.read_size + payload.capacity() >= self.file_size {
             payload = create_mem_buf(self.file_size - self.read_size);
