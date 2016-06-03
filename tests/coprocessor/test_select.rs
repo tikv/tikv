@@ -92,6 +92,13 @@ impl Store {
         self.store.prewrite(Context::new(), kv, pk, self.current_ts).unwrap();
     }
 
+    fn delete(&mut self, mut keys: Vec<Vec<u8>>) {
+        self.handles.extend(keys.clone());
+        let pk = keys[0].clone();
+        let mutations = keys.drain(..).map(|k| Mutation::Delete(Key::from_raw(&k))).collect();
+        self.store.prewrite(Context::new(), mutations, pk, self.current_ts).unwrap();
+    }
+
     fn commit(&mut self) {
         let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
         self.store
@@ -135,14 +142,18 @@ fn get_row(h: i64, ti: &TableInfo) -> Vec<(Vec<u8>, Vec<u8>)> {
     kvs
 }
 
+fn build_row_key(table_id: i64, id: i64) -> Vec<u8> {
+    let mut buf = [0; 8];
+    (&mut buf as &mut [u8]).encode_i64(id).unwrap();
+    table::encode_row_key(table_id, &buf)
+}
+
 fn prepare_table_data(store: &mut Store, ti: &TableInfo, count: i64) {
     store.begin();
     for i in 1..count + 1 {
         let mut mutations = vec![];
 
-        let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(i).unwrap();
-        let row_key = table::encode_row_key(ti.t_id, &buf);
+        let row_key = build_row_key(ti.t_id, i as i64);
 
         mutations.push((row_key, vec![]));
         mutations.extend(get_row(i, ti));
@@ -358,5 +369,27 @@ fn test_index_reverse_limit() {
     for (i, &h) in handles.iter().enumerate() {
         assert_eq!(9 - i as i64, h);
     }
+    end_point.stop().unwrap();
+}
+
+#[test]
+fn test_del_select() {
+    let count = 10;
+    let (mut store, mut end_point, ti) = initial_data(count);
+
+    store.begin();
+    let handle = count / 2;
+    let row_key = build_row_key(ti.t_id, handle);
+    store.delete(vec![row_key]);
+    let mut rows = get_row(handle, &ti);
+    store.delete(rows.drain(..).map(|(k, _)| k).collect());
+    store.commit();
+
+    let req = prepare_sel(&mut store, &ti, None, None);
+
+    let resp = handle_select(&end_point, req);
+
+    assert_eq!(resp.get_rows().len(), count as usize - 1);
+
     end_point.stop().unwrap();
 }
