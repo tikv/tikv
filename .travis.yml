@@ -14,7 +14,7 @@ matrix:
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
-            packages: ['gcc-4.8', 'g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'libjemalloc-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
+            packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'libjemalloc-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
     - os: osx
       rust: nightly
 
