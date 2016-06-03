@@ -150,7 +150,7 @@ impl Runnable<Task> for Runner {
             return;
         }
 
-        let (snap, region_id) = res.unwrap();
+        let (mut snap, region_id) = res.unwrap();
         match self.save_snapshot(&snap, region_id) {
             Err(e) => {
                 error!("save snapshot file failed: {:?}!!!", e);
@@ -158,6 +158,8 @@ impl Runnable<Task> for Runner {
                 return;
             }
             Ok(_) => {
+                // TODO kvproto Snapshot will change, only contain meta info!
+                snap.set_data(vec![]);
                 task.storage.wl().snap_state = SnapState::Snap(snap);
             }
         }

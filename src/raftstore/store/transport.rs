@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
 use kvproto::raft_serverpb::RaftMessage;
 
 use raftstore::Result;

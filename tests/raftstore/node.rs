@@ -16,6 +16,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use std::path::Path;
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -31,14 +32,19 @@ use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
+use raftstore::store::worker::snap::{snapshot_file_path, load_snapshot};
 
 pub struct ChannelTransport {
     pub routers: HashMap<u64, Arc<RwLock<ServerRaftStoreRouter>>>,
+    pub snap_paths: HashMap<u64, PathBuf>,
 }
 
 impl ChannelTransport {
     pub fn new() -> Arc<RwLock<ChannelTransport>> {
-        Arc::new(RwLock::new(ChannelTransport { routers: HashMap::new() }))
+        Arc::new(RwLock::new(ChannelTransport {
+            routers: HashMap::new(),
+            snap_path: HashMap::new(),
+        }))
     }
 }
 
@@ -54,6 +60,13 @@ impl Transport for ChannelTransport {
 
     fn send_snapshot(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         let to_store = msg.get_to_peer().get_store_id();
+        if let Some(snap_path) =  self.snap_paths.get(&to_store) {
+
+
+            let file_path = snapshot_file_path(snap_path, msg.);
+            let snapshot = load_snapshot();
+            msg.get_message().set_snapshot(snapshot);
+        }
 
         match self.routers.get(&to_store) {
             Some(h) => h.rl().send_raft_msg(msg),
@@ -106,6 +119,7 @@ impl Simulator for NodeCluster {
 
         let node_id = node.id();
         self.trans.wl().routers.insert(node_id, node.raft_store_router());
+        self.trans.wl().snap_paths.insert(node_id, cfg.store_cfg.snap_path.clone());
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, trans);
 

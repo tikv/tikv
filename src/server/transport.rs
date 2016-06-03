@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
 
 use raftstore::store::{Msg as StoreMsg, Transport, Callback, SendCh};
 use raftstore::Result as RaftStoreResult;

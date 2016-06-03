@@ -17,6 +17,7 @@ use tikv::raftstore::store::Transport;
 use rand;
 use std::sync::{Arc, RwLock};
 use std::time;
+use std::path::Path;
 use std::thread;
 use std::vec::Vec;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -103,9 +104,24 @@ impl<T: Transport> Transport for SimulateTransport<T> {
         res
     }
 
-    // TODO implement filter
-    fn send_snapshot(&self, msg: RaftMessage) -> Result<()> {
-        self.trans.rl().send_snapshot(msg)
+    fn send_snapshot(&self, snap_path: &Path, msg: RaftMessage) -> Result<()> {
+        let mut discard = false;
+        for filter in &self.filters {
+            if filter.before(&msg) {
+                discard = true;
+            }
+        }
+
+        let mut res = Ok(());
+        if !discard {
+            res = self.trans.rl().send_snapshot(snap_path, msg)
+        }
+
+        for filter in self.filters.iter().rev() {
+            res = filter.after(res);
+        }
+
+        res
     }
 }
 
