@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ffi::CString;
+use std::ffi::{CString, CStr};
 use std::mem;
 use libc;
 
@@ -28,7 +28,9 @@ pub fn get_disk_stat(path: &str) -> Result<DiskStat, String> {
         let mut stat: libc::statfs = mem::zeroed();
         let ret = libc::statfs(cpath.as_ptr(), &mut stat);
         if ret != 0 {
-            return Err(format!("get stats for {} failed", path));
+            return Err(format!("get stats for {} failed {}",
+                               path,
+                               CStr::from_ptr(libc::strerror(ret)).to_str().unwrap()));
         }
 
         Ok(DiskStat {
