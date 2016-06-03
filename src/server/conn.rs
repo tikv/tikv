@@ -12,11 +12,11 @@
 // limitations under the License.
 
 use std::vec::Vec;
-use std::path::{Path, PathBuf};
 use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
 use std::net::Shutdown;
+use std::sync::{Arc, RwLock};
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
@@ -25,10 +25,10 @@ use kvproto::msgpb::{Message, MessageType};
 use super::{Result, ConnData, SendCh};
 use super::server::Server;
 use util::codec::rpc;
-use util::worker::Worker;
+use util::HandyRwLock;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
-use super::snapshot_receiver::{SnapshotReceiver, Task, Runner};
+use super::snapshot_manager::{SnapshotManager, Task};
 use byteorder::{ByteOrder, LittleEndian};
 
 pub type OnClose = Box<FnBox() + Send>;
@@ -59,9 +59,9 @@ pub struct Conn {
     // message
     payload: Option<MutByteBuf>,
 
-    snapshot_receiver: Option<SnapshotReceiver>,
-    ch: SendCh,
-    snap_path: PathBuf,
+    file_size: usize,
+    read_size: usize,
+    snap_manager: Arc<RwLock<SnapshotManager>>,
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
@@ -103,8 +103,7 @@ impl Conn {
     pub fn new(sock: TcpStream,
                token: Token,
                store_id: Option<u64>,
-               snap_path: &Path,
-               ch: SendCh)
+               snap_manager: Arc<RwLock<SnapshotManager>>)
                -> Conn {
         Conn {
             sock: sock,
@@ -112,12 +111,12 @@ impl Conn {
             interest: EventSet::readable() | EventSet::hup(),
             conn_type: ConnType::HandShake,
             header: create_mem_buf(rpc::MSG_HEADER_LEN),
+            read_size: 0,
+            file_size: 0,
             payload: None,
             res: VecDeque::new(),
             last_msg_id: 0,
-            snapshot_receiver: None,
-            snap_path: snap_path.to_path_buf(),
-            ch: ch,
+            snap_manager: snap_manager,
             store_id: store_id,
             on_write_complete: None,
             on_close: None,
@@ -169,24 +168,10 @@ impl Conn {
         let mut msg = msg_or_none.unwrap();
         match msg.get_msg_type() {
             MessageType::Snapshot => {
-                let mut worker = Worker::new("snapshot receiver".to_owned());
-                // TODO we need store id here!!
-                let runner = Runner::new(&self.snap_path,
-                                         msg.take_snapshot_file(),
-                                         msg.take_raft(),
-                                         self.last_msg_id,
-                                         self.token,
-                                         self.ch.clone());
-                try!(worker.start(runner));
-                debug!("receive a snapshot connection\n");
-                self.snapshot_receiver = Some(SnapshotReceiver {
-                    buf: vec![0; 10 * (1 << 20)],
-                    pos: 0,
-                    worker: worker,
-                    more: false,
-                    file_size: 0,
-                    read_size: 0,
-                });
+                self.snap_manager.wl().new_worker(self.token,
+                                                  msg.take_snapshot_file(),
+                                                  msg.take_raft(),
+                                                  self.last_msg_id);
                 self.conn_type = ConnType::Snapshot;
                 self.payload = Some(create_mem_buf(4));
                 self.read_snapshot(event_loop)
@@ -216,30 +201,27 @@ impl Conn {
 
     fn handle_snapshot_payload(&mut self) -> Result<()> {
         let mut payload = self.payload.take().unwrap();
-        if let Some(ref mut receiver) = self.snapshot_receiver {
-            let mut finish = false;
-            if receiver.file_size == 0 {
-                // header
-                receiver.file_size = LittleEndian::read_u32(payload.bytes()) as usize;
-                debug!("read file size: {}\n", receiver.file_size);
-                payload = create_mem_buf(SNAPSHOT_PAYLOAD_BUF);
-            } else if receiver.read_size + payload.capacity() == receiver.file_size {
-                // last chunk
-                finish = true;
-                if let Err(e) = self.sock.shutdown(Shutdown::Both) {
-                    error!("shutdown connection error: {}", e);
-                }
+        let mut finish = false;
+        if self.file_size == 0 {
+            // header
+            self.file_size = LittleEndian::read_u32(payload.bytes()) as usize;
+            payload = create_mem_buf(SNAPSHOT_PAYLOAD_BUF);
+        } else if self.read_size + payload.capacity() == self.file_size {
+            // last chunk
+            finish = true;
+            if let Err(e) = self.sock.shutdown(Shutdown::Both) {
+                error!("shutdown connection error: {}", e);
             }
-
-            let task = Task::new(payload.bytes(), box move |_| {}, finish);
-            try!(receiver.worker.schedule(task));
-
-            if receiver.read_size + payload.capacity() >= receiver.file_size {
-                payload = create_mem_buf(receiver.file_size - receiver.read_size);
-            }
-            payload.clear();
-            self.payload = Some(payload);
         }
+
+        let task = Task::new(payload.bytes(), box move |_| {}, finish);
+        self.snap_manager.rl().add_task(&self.token, task);
+
+        if self.read_size + payload.capacity() >= self.file_size {
+            payload = create_mem_buf(self.file_size - self.read_size);
+        }
+        payload.clear();
+        self.payload = Some(payload);
         Ok(())
     }
 

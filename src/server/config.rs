@@ -44,12 +44,12 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn new(snap_path: &str) -> Config {
+    pub fn new() -> Config {
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
-            store_cfg: StoreConfig::new(snap_path),
+            store_cfg: StoreConfig::new(),
         }
     }
 

@@ -16,31 +16,26 @@ use std::option::Option;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
-use std::path::{Path, PathBuf};
 use std::net::SocketAddr;
-use std::{io, thread, fs, net};
-use std::io::{Read, Write};
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::msgpb::{MessageType, Message, SnapshotFile};
+use kvproto::msgpb::{MessageType, Message};
 use kvproto::raftpb::MessageType as RaftMessageType;
 use super::{Msg, SendCh, ConnData};
 use super::conn::{Conn, OnWriteComplete};
 use super::{Result, OnResponse};
-use raftstore::store::worker::snap::snapshot_file_path;
 use util::HandyRwLock;
-use util::codec::rpc;
 use util::worker::Worker;
 use storage::Storage;
 use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
+use super::snapshot_manager::SnapshotManager;
 use raft::SnapshotStatus;
-use byteorder::{ByteOrder, LittleEndian};
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
@@ -85,7 +80,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     end_point_worker: Worker<RequestTask>,
 
     resolver: S,
-    snap_path: PathBuf,
+    snap_manager: Arc<RwLock<SnapshotManager>>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -99,7 +94,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
                resolver: S,
-               snap_path: &Path)
+               snap_manager: Arc<RwLock<SnapshotManager>>)
                -> Result<Server<T, S>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
@@ -121,7 +116,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store: store_handler,
             end_point_worker: end_point_worker,
             resolver: resolver,
-            snap_path: snap_path.to_path_buf(),
+            snap_manager: snap_manager,
         };
 
         Ok(svr)
@@ -187,11 +182,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  EventSet::readable() | EventSet::hup(),
                                  PollOpt::edge()));
 
-        let conn = Conn::new(sock,
-                             new_token,
-                             store_id,
-                             &self.snap_path,
-                             self.sendch.clone());
+        let conn = Conn::new(sock, new_token, store_id, self.snap_manager.clone());
         self.conns.insert(new_token, conn);
 
         Ok(new_token)
@@ -499,74 +490,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn send_snapshot_sock(&mut self, sock_addr: SocketAddr, data: ConnData) {
-        let region_id: u64;
-        let term: u64;
-        let index: u64;
-        {
-            let raft_msg = data.msg.get_raft();
-            region_id = raft_msg.get_region_id();
-            let snapshot = raft_msg.get_message().get_snapshot();
-            term = snapshot.get_metadata().get_term();
-            index = snapshot.get_metadata().get_index();
-        }
-
         let reporter = Arc::new(self.new_snapshot_reporter(&data));
-        let mut final_data = data;
-        final_data.msg.set_msg_type(MessageType::Snapshot);
-
-        let mut file_info = SnapshotFile::new();
-        file_info.set_region(region_id);
-        file_info.set_term(term);
-        file_info.set_index(index);
-
-        final_data.msg.set_snapshot_file(file_info);
-
-        let snap_path = self.snap_path.clone();
-        // snapshot message consistent of two part:
-        // one is snapshot file, the other is the message itself
-        // we use separate connection for snapshot file and also the message
-        // because if we send them separately in different connection
-        // receiver can't assure their order!
-        thread::spawn(move || {
-            let file_name = snapshot_file_path(&snap_path, final_data.msg.get_snapshot_file());
-            debug!("send_snapshot_sock, new thread to send file: {:?}\n",
-                   file_name);
-            let attr = fs::metadata(&file_name).unwrap();
-
-            let mut file = fs::File::open(&file_name).unwrap();
-
-            let mut conn = net::TcpStream::connect(&sock_addr).unwrap();
-            if let Err(e) = rpc::encode_msg(&mut conn, final_data.msg_id, &final_data.msg) {
-                error!("write handshake error err {:?}", e);
-                reporter.report(SnapshotStatus::Failure);
-                return;
-            }
-
-            let mut buf: [u8; 4] = [0; 4];
-            debug!("write file size: {}\n", attr.len());
-            LittleEndian::write_u32(&mut buf, attr.len() as u32);
-            if let Err(e) = conn.write(&buf) {
-                error!("write data error: {}", e);
-                reporter.report(SnapshotStatus::Failure);
-                return;
-            }
-            if let Err(e) = io::copy(&mut file, &mut conn) {
-                error!("write data error: {}", e);
-                reporter.report(SnapshotStatus::Failure);
-                return;
-            }
-
-            debug!("send data finish, wait for close connection\n");
-            // wait for reader to consume the data and close connection
-            if let Err(e) = conn.read(&mut buf) {
-                reporter.report(SnapshotStatus::Failure);
-                error!("reader should consume the whole data and close connection: {}",
-                       e);
-                return;
-            }
-            reporter.report(SnapshotStatus::Finish);
-            debug!("send snapshot socket finish!!\n");
-        });
+        self.snap_manager.rl().send_snap(sock_addr, data);
     }
 
     fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
@@ -683,13 +608,14 @@ mod tests {
     use std::thread;
     use std::sync::{Arc, RwLock, Mutex};
     use std::sync::mpsc::{self, Sender};
+    use std::path::PathBuf;
     use std::net::SocketAddr;
 
     use mio::tcp::TcpListener;
     use tempdir::TempDir;
 
     use super::*;
-    use super::super::{Msg, ConnData, Result};
+    use super::super::{Msg, ConnData, Result, SnapshotManager, SendCh};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::{Storage, Dsn};
@@ -745,13 +671,15 @@ mod tests {
 
         let mut event_loop = create_event_loop().unwrap();
         let (tx, rx) = mpsc::channel();
+        let snapshot_manager = SnapshotManager::new(PathBuf::from("/tmp/"),
+                                                    SendCh::new(event_loop.channel()));
         let mut server =
             Server::new(&mut event_loop,
                         listener,
                         Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
                         resolver,
-                        TempDir::new("snapshot").unwrap().path())
+                        Arc::new(RwLock::new(snapshot_manager)))
                 .unwrap();
 
         let ch = server.get_sendch();

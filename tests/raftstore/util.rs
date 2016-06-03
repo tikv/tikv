@@ -67,16 +67,16 @@ pub fn new_engine(path: &TempDir) -> Arc<DB> {
 }
 
 pub fn new_store_cfg() -> Config {
-    let tmp = TempDir::new("test_cluster").unwrap();
-    let mut cfg = Config::new(tmp.path().to_str().unwrap());
-    cfg.raft_base_tick_interval = 10;
-    cfg.raft_heartbeat_ticks = 2;
-    cfg.raft_election_timeout_ticks = 20;
-    cfg.raft_log_gc_tick_interval = 100;
-    cfg.raft_log_gc_threshold = 1;
-    cfg.pd_heartbeat_tick_interval = 20;
-    cfg.region_check_size_diff = 10000;
-    cfg
+    Config {
+        raft_base_tick_interval: 10,
+        raft_heartbeat_ticks: 2,
+        raft_election_timeout_ticks: 20,
+        raft_log_gc_tick_interval: 100,
+        raft_log_gc_threshold: 1,
+        pd_heartbeat_tick_interval: 20,
+        region_check_size_diff: 10000,
+        ..Config::default()
+    }
 }
 
 pub fn new_server_config(cluster_id: u64) -> ServerConfig {

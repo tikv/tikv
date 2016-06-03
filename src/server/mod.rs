@@ -34,7 +34,7 @@ pub mod coprocessor;
 pub mod transport;
 pub mod node;
 pub mod resolve;
-pub mod snapshot_receiver;
+pub mod snapshot_manager;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Result, Error};
@@ -42,6 +42,7 @@ pub use self::server::{Server, create_event_loop, bind};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
 pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver, MockStoreAddrResolver};
+pub use self::snapshot_manager::SnapshotManager;
 
 pub type OnResponse = Box<FnBox(msgpb::Message) + Send>;
 

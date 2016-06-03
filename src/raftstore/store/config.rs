@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use raftstore::Result;
-use std::env::temp_dir;
 
 const RAFT_BASE_TICK_INTERVAL: u64 = 100;
 const RAFT_HEARTBEAT_TICKS: usize = 3;
@@ -76,22 +75,23 @@ impl Default for Config {
             region_split_size: REGION_SPLIT_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
-            snap_path: temp_dir().into_os_string().into_string().unwrap(),
+            snap_path: "".to_owned(),
         }
     }
 }
 
 impl Config {
-    pub fn new(snap_path: &str) -> Config {
-        let mut cfg = Config::default();
-        cfg.snap_path = snap_path.to_owned();
-        cfg
+    pub fn new() -> Config {
+        Config::default()
     }
 
     pub fn validate(&self) -> Result<()> {
         if self.raft_log_gc_threshold < 1 {
             return Err(box_err!("raft log gc threshold must >= 1, not {}",
                                 self.raft_log_gc_threshold));
+        }
+        if self.snap_path == "" {
+            return Err(box_err!("invalid snap path"));
         }
 
         Ok(())

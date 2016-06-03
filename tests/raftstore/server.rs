@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::thread;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};
@@ -25,7 +25,7 @@ use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
-use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
+use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, SnapshotManager};
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::{self, SendCh as StoreSendCh};
 use tikv::util::codec::{Error as CodecError, rpc};
@@ -107,7 +107,7 @@ impl Simulator for ServerCluster {
         let mut event_loop = create_event_loop().unwrap();
         let sendch = SendCh::new(event_loop.channel());
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
-        let trans = Arc::new(RwLock::new(ServerTransport::new(sendch)));
+        let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
 
         let mut cfg = cfg;
         let tmp = TempDir::new("test_cluster").unwrap();
@@ -140,12 +140,13 @@ impl Simulator for ServerCluster {
         self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
 
+        let snap_manager = SnapshotManager::new(PathBuf::from(cfg.store_cfg.snap_path), sendch);
         let mut server = Server::new(&mut event_loop,
                                      listener,
                                      store,
                                      router,
                                      resolver,
-                                     Path::new(&cfg.store_cfg.snap_path))
+                                     Arc::new(RwLock::new(snap_manager)))
             .unwrap();
 
         let ch = server.get_sendch();
