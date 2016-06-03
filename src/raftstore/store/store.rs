@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::Duration;
+use std::cmp;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder};
@@ -723,11 +724,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         };
 
-        let capacity = if disk_stat.capacity > self.cfg.capacity {
-            disk_stat.capacity
-        } else {
-            self.cfg.capacity
-        };
+        let capacity = cmp::min(disk_stat.capacity, self.cfg.capacity);
 
         stats.set_capacity(capacity);
 
