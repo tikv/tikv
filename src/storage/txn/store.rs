@@ -221,7 +221,7 @@ pub struct StoreScanner<'a> {
 }
 
 impl<'a> StoreScanner<'a> {
-    pub fn seek(&mut self, mut key: Key) -> Result<Option<(Key, u64)>> {
+    pub fn seek(&mut self, mut key: Key) -> Result<Option<(Key, Value)>> {
         loop {
             if !try!(self.cursor.seek(&key)) {
                 return Ok(None);
@@ -229,14 +229,16 @@ impl<'a> StoreScanner<'a> {
             key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
             let cursor = self.cursor.as_mut();
             let mut txn = MvccCursor::new(cursor, self.start_ts);
-            if let Some(ts) = try!(txn.get_version(&key)) {
-                return Ok(Some((key, ts)));
+            if let Some(v) = try!(txn.get(&key)) {
+                // TODO: find a way to avoid copy.
+                return Ok(Some((key, v.to_vec())));
             }
+            // None means value is deleted, so just continue.
             key = key.append_ts(u64::max_value());
         }
     }
 
-    pub fn reverse_seek(&mut self, mut key: Key) -> Result<Option<(Key, u64)>> {
+    pub fn reverse_seek(&mut self, mut key: Key) -> Result<Option<(Key, Value)>> {
         loop {
             if !try!(self.cursor.reverse_seek(&key)) {
                 return Ok(None);
@@ -244,8 +246,8 @@ impl<'a> StoreScanner<'a> {
             key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
             let cursor = self.cursor.as_mut();
             let mut txn = MvccCursor::new(cursor, self.start_ts);
-            if let Some(ts) = try!(txn.get_version(&key)) {
-                return Ok(Some((key, ts)));
+            if let Some(v) = try!(txn.get(&key)) {
+                return Ok(Some((key, v.to_vec())));
             }
         }
     }
@@ -270,11 +272,8 @@ impl<'a> StoreScanner<'a> {
         let mut results = vec![];
         while results.len() < limit {
             match self.seek(key) {
-                Ok(Some((k, ts))) => {
-                    if let Some(v) = try!(self.get(&k, ts)) {
-                        results.push(Ok((try!(k.raw()), v.to_vec())));
-                    }
-                    // None means value is deleted at ts, so just continue.
+                Ok(Some((k, v))) => {
+                    results.push(Ok((try!(k.raw()), v)));
                     key = k;
                 }
                 Ok(None) => break,
@@ -290,10 +289,8 @@ impl<'a> StoreScanner<'a> {
         let mut results = vec![];
         while results.len() < limit {
             match self.reverse_seek(key) {
-                Ok(Some((k, ts))) => {
-                    if let Some(v) = try!(self.get(&k, ts)) {
-                        results.push(Ok((try!(k.raw()), v.to_vec())));
-                    }
+                Ok(Some((k, v))) => {
+                    results.push(Ok((try!(k.raw()), v)));
                     key = k;
                 }
                 Ok(None) => break,

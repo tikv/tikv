@@ -548,8 +548,8 @@ impl<'a> SelectContext<'a> {
             } else {
                 try!(scanner.seek(Key::from_raw(&seek_key)))
             };
-            let key = match nk {
-                Some((ref key, _)) => box_try!(key.raw()),
+            let (key, val) = match nk {
+                Some((key, val)) => (box_try!(key.raw()), val),
                 None => break,
             };
             if r.get_start() > &key || r.get_end() <= &key {
@@ -563,9 +563,7 @@ impl<'a> SelectContext<'a> {
             let handle = if datums.len() > info.get_columns().len() {
                 datums.pop().unwrap()
             } else {
-                let (k, ts) = nk.unwrap();
-                let mut v = try!(scanner.get(&k, ts)).unwrap();
-                let h = box_try!(v.read_i64::<BigEndian>());
+                let h = box_try!(val.as_slice().read_i64::<BigEndian>());
                 Datum::I64(h)
             };
             let data = box_try!(datum::encode_value(&datums));
