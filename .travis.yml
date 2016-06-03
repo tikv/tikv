@@ -9,8 +9,8 @@ matrix:
   include:
     - os: linux
       rust: nightly
-      compiler: clang
-      env: COMPILER=gcc-4.8
+      compiler: g++
+      env: COMPILER=g++-4.8
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
