@@ -59,7 +59,7 @@ fn main() {
                 "set the scan from raw key, in escaped format",
                 "");
     opts.optopt("t", "to", "set the scan end raw key, in escaped format", "");
-    opts.optopt("l", "limit", "set the scan limit kesy", "");
+    opts.optopt("l", "limit", "set the scan limit", "");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);
