@@ -51,6 +51,15 @@ impl Transport for ChannelTransport {
             _ => Err(box_err!("missing sender for store {}", to_store)),
         }
     }
+
+    fn send_snapshot(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+        let to_store = msg.get_to_peer().get_store_id();
+
+        match self.routers.get(&to_store) {
+            Some(h) => h.rl().send_raft_msg(msg),
+            _ => Err(box_err!("missing sender for store {}", to_store)),
+        }
+    }
 }
 
 type SimulateChannelTransport = SimulateTransport<ChannelTransport>;

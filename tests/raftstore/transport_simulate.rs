@@ -102,6 +102,11 @@ impl<T: Transport> Transport for SimulateTransport<T> {
 
         res
     }
+
+    // TODO implement filter
+    fn send_snapshot(&self, msg: RaftMessage) -> Result<()> {
+        self.trans.rl().send_snapshot(msg)
+    }
 }
 
 pub trait FilterFactory {
