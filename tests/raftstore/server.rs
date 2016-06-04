@@ -21,7 +21,7 @@ use std::io::ErrorKind;
 
 use rocksdb::DB;
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
+use tikv::server::{self, Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::{self, SendCh as StoreSendCh};
@@ -30,7 +30,9 @@ use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
+
 use super::pd::TestPdClient;
+use super::util::sleep_ms;
 use super::transport_simulate::{SimulateTransport, Filter};
 
 
@@ -114,7 +116,20 @@ impl Simulator for ServerCluster {
             cfg.addr = format!("{}", addr)
         }
 
-        let listener = bind(&cfg.addr).unwrap();
+        let listener;
+        let mut try_cnt = 0;
+        loop {
+            match bind(&cfg.addr) {
+                Err(server::Error::Io(ref e)) if e.kind() == ErrorKind::AddrInUse &&
+                                                 try_cnt < 100 => sleep_ms(10),
+                Ok(l) => {
+                    listener = l;
+                    break;
+                }
+                Err(e) => panic!(e),
+            }
+            try_cnt += 1;
+        }
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
 
