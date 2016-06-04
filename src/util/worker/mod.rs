@@ -250,8 +250,8 @@ mod test {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(!worker.is_busy());
-        assert_eq!(count.load(Ordering::SeqCst), 150);
         worker.stop().unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 150);
         // now worker can't handle any task
         assert!(worker.is_busy());
     }
