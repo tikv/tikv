@@ -97,6 +97,16 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
         }
 
         assert_eq!(cluster.leader_of_region(1), Some(new_peer(id, id)));
+
+        // call command on this leader directly, must successfully.
+        let mut region = cluster.get_region(b"");
+        let mut req = new_request(region.get_id(),
+                                  region.take_region_epoch(),
+                                  vec![new_get_cmd(b"k")]);
+        req.mut_header().set_peer(new_peer(id, id));
+        let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error());
+        assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
     }
 }
 
