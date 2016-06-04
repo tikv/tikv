@@ -30,7 +30,7 @@ use tikv::server::Config as ServerConfig;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_cmdpb::{CmdType, StatusCmdType, AdminCmdType};
-use kvproto::pdpb::ChangePeer;
+use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
 use kvproto::raftpb::ConfChangeType;
 use tikv::raft::INVALID_ID;
 
@@ -239,26 +239,44 @@ pub fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>,
     cluster.leader_of_region(1).unwrap();
 }
 
-pub fn new_change_peer(change_type: ConfChangeType, peer: metapb::Peer) -> ChangePeer {
+pub fn new_pd_change_peer(change_type: ConfChangeType,
+                          peer: metapb::Peer)
+                          -> RegionHeartbeatResponse {
     let mut change_peer = ChangePeer::new();
     change_peer.set_change_type(change_type);
     change_peer.set_peer(peer);
-    change_peer
+
+    let mut resp = RegionHeartbeatResponse::new();
+    resp.set_change_peer(change_peer);
+    resp
 }
 
-pub fn new_add_change_peer(region: &metapb::Region, peer: metapb::Peer) -> Option<ChangePeer> {
+pub fn new_pd_add_change_peer(region: &metapb::Region,
+                              peer: metapb::Peer)
+                              -> Option<RegionHeartbeatResponse> {
     if let Some(p) = find_peer(region, peer.get_store_id()) {
         assert_eq!(p.get_id(), peer.get_id());
         return None;
     }
 
-    Some(new_change_peer(ConfChangeType::AddNode, peer))
+    Some(new_pd_change_peer(ConfChangeType::AddNode, peer))
 }
 
-pub fn new_remove_change_peer(region: &metapb::Region, peer: metapb::Peer) -> Option<ChangePeer> {
+pub fn new_pd_remove_change_peer(region: &metapb::Region,
+                                 peer: metapb::Peer)
+                                 -> Option<RegionHeartbeatResponse> {
     if find_peer(region, peer.get_store_id()).is_none() {
         return None;
     }
 
-    Some(new_change_peer(ConfChangeType::RemoveNode, peer))
+    Some(new_pd_change_peer(ConfChangeType::RemoveNode, peer))
+}
+
+pub fn new_pd_transfer_leader(peer: metapb::Peer) -> Option<RegionHeartbeatResponse> {
+    let mut transfer_leader = TransferLeader::new();
+    transfer_leader.set_peer(peer);
+
+    let mut resp = RegionHeartbeatResponse::new();
+    resp.set_transfer_leader(transfer_leader);
+    Some(resp)
 }
