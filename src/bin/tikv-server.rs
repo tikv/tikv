@@ -124,7 +124,6 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
                                       config,
                                       Some("tikv".to_owned()),
                                       |v| v.as_str().map(|s| s.to_owned()));
-
     if let Some(node_id) = node_id {
         prefix.push_str(&format!(".{}", node_id));
     }
@@ -134,13 +133,11 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
         let sink = NonblockUdpMetricSink::from(&*host, socket).unwrap();
         let client = StatsdClient::from_sink(&prefix, sink);
-
         if let Err(r) = metric::set_metric_client(Box::new(client)) {
             error!("{}", r);
         }
     } else {
         let client = StatsdClient::from_sink(&prefix, NopMetricSink);
-
         if let Err(r) = metric::set_metric_client(Box::new(client)) {
             error!("{}", r);
         }
@@ -255,17 +252,12 @@ fn build_raftkv(matches: &Matches,
                 pd_client: Arc<RpcClient>)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
-
     let path = get_store_path(matches, config);
-
     let opts = get_rocksdb_option(matches, config);
-
     let engine = Arc::new(DB::open(&opts, &path).unwrap());
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
-
     cfg.addr = addr.clone();
-
     let capacity = get_integer_value("capacity",
                                      "server.capacity",
                                      matches,
@@ -332,7 +324,6 @@ fn run_local_server(listener: TcpListener, store: Storage) {
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value) {
     let mut event_loop = create_event_loop().unwrap();
     let ch = SendCh::new(event_loop.channel());
-
     let id = get_string_value("I",
                               "raft.cluster-id",
                               matches,
@@ -340,7 +331,6 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                               None,
                               |v| v.as_integer().map(|i| i.to_string()));
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
-
     let pd_addr = get_string_value("pd",
                                    "raft.pd",
                                    matches,
@@ -349,16 +339,13 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                    |v| v.as_str().map(|s| s.to_owned()));
     let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
-
     let (store, raft_router, node_id) = build_raftkv(matches,
                                                      config,
                                                      ch,
                                                      cluster_id,
                                                      format!("{}", listener.local_addr().unwrap()),
                                                      pd_client);
-
     initial_metric(matches, config, Some(node_id));
-
     let mut svr = Server::new(&mut event_loop, listener, store, raft_router, resolver).unwrap();
     svr.run(&mut event_loop).unwrap();
 }
@@ -418,7 +405,6 @@ fn main() {
     };
 
     initial_log(&matches, &config);
-
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,
@@ -427,16 +413,13 @@ fn main() {
                                 |v| v.as_str().map(|s| s.to_owned()));
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
-
     let dsn_name = get_string_value("S",
                                     "server.dsn",
                                     &matches,
                                     &config,
                                     Some(ROCKSDB_DSN.to_owned()),
                                     |v| v.as_str().map(|s| s.to_owned()));
-
     panic_hook::set_exit_hook();
-
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
             initial_metric(&matches, &config, None);
