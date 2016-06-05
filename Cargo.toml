@@ -40,6 +40,7 @@ toml = "0.1"
 num = "0.1"
 cadence = "0.5.0"
 libc = "0.2.11"
+crc = "1.2.0"
 clippy = {version = "*", optional = true}
 
 # The getopts in crate.io is outdated, use the latest getopts instead.
@@ -57,6 +58,7 @@ git = "https://github.com/carllerche/bytes"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
+branch = "tiancaiamao/handshake-dispatch-conn"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

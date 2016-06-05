@@ -64,6 +64,9 @@ pub struct Config {
     pub region_check_size_diff: u64,
     pub pd_heartbeat_tick_interval: u64,
     pub pd_store_heartbeat_tick_interval: u64,
+
+    /// Directory for snapshot files
+    pub snap_path: String,
 }
 
 impl Default for Config {
@@ -84,6 +87,7 @@ impl Default for Config {
             region_check_size_diff: REGION_CHECK_DIFF,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
             pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL_MS,
+            snap_path: "".to_owned(),
         }
     }
 }
@@ -97,6 +101,9 @@ impl Config {
         if self.raft_log_gc_threshold < 1 {
             return Err(box_err!("raft log gc threshold must >= 1, not {}",
                                 self.raft_log_gc_threshold));
+        }
+        if self.snap_path == "" {
+            return Err(box_err!("invalid snap path"));
         }
 
         Ok(())

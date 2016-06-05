@@ -167,7 +167,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        box_try!(self.snap_worker.start(SnapRunner));
+        box_try!(self.snap_worker.start(SnapRunner::new(&self.cfg.snap_path)));
 
         box_try!(self.compact_worker.start(CompactRunner));
 
@@ -208,13 +208,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let store_id = {
+            self.store_id()
+        };
         for (region_id, peer) in &mut self.region_peers {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(*region_id);
             // ALERT!!! patern matching won't release lock here.
             if peer.is_leader() && SnapState::Pending == peer.storage.rl().snap_state {
                 debug!("handling snapshot for {}", region_id);
-                let task = SnapTask::new(peer.storage.clone());
+                let task = SnapTask::new(store_id, peer.storage.clone());
                 debug!("task generated");
                 peer.storage.wl().snap_state = SnapState::Generating;
                 if let Err(e) = self.snap_worker.schedule(task) {

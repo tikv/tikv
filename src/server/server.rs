@@ -34,6 +34,7 @@ use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
+use super::snapshot_manager::SnapshotManager;
 use raft::SnapshotStatus;
 
 const SERVER_TOKEN: Token = Token(1);
@@ -79,6 +80,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     end_point_worker: Worker<RequestTask>,
 
     resolver: S,
+    snap_manager: Arc<RwLock<SnapshotManager>>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -91,7 +93,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                listener: TcpListener,
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
-               resolver: S)
+               resolver: S,
+               snap_manager: Arc<RwLock<SnapshotManager>>)
                -> Result<Server<T, S>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
@@ -113,6 +116,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store: store_handler,
             end_point_worker: end_point_worker,
             resolver: resolver,
+            snap_manager: snap_manager,
         };
 
         Ok(svr)
@@ -141,6 +145,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let conn = self.conns.remove(&token);
         match conn {
             Some(mut conn) => {
+                // TODO release according to conn_type
+                // snapshot connection should stop it's worker
                 debug!("remove connection token {:?}", token);
                 // if connected to remote store, remove this too.
                 if let Some(store_id) = conn.store_id {
@@ -176,7 +182,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  EventSet::readable() | EventSet::hup(),
                                  PollOpt::edge()));
 
-        let conn = Conn::new(sock, new_token, store_id);
+        let conn = Conn::new(sock, new_token, store_id, self.snap_manager.clone());
         self.conns.insert(new_token, conn);
 
         Ok(new_token)
@@ -188,7 +194,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 warn!("missing conn for token {:?}", token);
                 return Ok(());
             }
-            Some(conn) => conn.read(event_loop),
+            Some(conn) => conn.on_readable(event_loop),
         });
 
         if msgs.is_empty() {
@@ -456,7 +462,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         info!("resolve store {} address ok, addr {}", store_id, sock_addr);
 
         if data.is_snapshot() {
-            return self.send_snapshot_sock(event_loop, store_id, sock_addr, data);
+            return self.send_snapshot_sock(sock_addr, data);
         }
 
         let token = match self.connect_store(event_loop, store_id, sock_addr) {
@@ -483,35 +489,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
     }
 
-    fn send_snapshot_sock(&mut self,
-                          event_loop: &mut EventLoop<Self>,
-                          store_id: u64,
-                          sock_addr: SocketAddr,
-                          data: ConnData) {
-        let token = match self.try_connect(event_loop, sock_addr, None) {
-            Ok(token) => token,
-            Err(e) => {
-                error!("connect store {} err {:?}", store_id, e);
-                self.report_unreachable(data);
-                return;
+    fn send_snapshot_sock(&mut self, sock_addr: SocketAddr, data: ConnData) {
+        let reporter = Arc::new(self.new_snapshot_reporter(&data));
+        let cb = box move |res: Result<()>| {
+            if let Err(_) = res {
+                reporter.report(SnapshotStatus::Failure);
+            } else {
+                reporter.report(SnapshotStatus::Finish);
             }
         };
-
-        let reporter = Arc::new(self.new_snapshot_reporter(&data));
-
-        if let Some(conn) = self.conns.get_mut(&token) {
-            let reporter = reporter.clone();
-            conn.set_close_callback(Some(box move || {
-                reporter.report(SnapshotStatus::Failure);
-            }));
-        };
-
-        self.write_data(event_loop,
-                        token,
-                        data,
-                        Some(box move || {
-                            reporter.report(SnapshotStatus::Finish);
-                        }))
+        self.snap_manager.rl().send_snap(sock_addr, data, cb);
     }
 
     fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
@@ -553,7 +540,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
+            // Msg::Snapshot { data } => self.on_conn_msg(Token::from_usize(0), data),
             Msg::Quit => event_loop.shutdown(),
+            Msg::Snapshot { token, data } => {
+                let _ = self.on_conn_msg(token, data);
+            }
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data, None),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {
@@ -624,12 +615,13 @@ mod tests {
     use std::thread;
     use std::sync::{Arc, RwLock, Mutex};
     use std::sync::mpsc::{self, Sender};
+    use std::path::PathBuf;
     use std::net::SocketAddr;
 
     use mio::tcp::TcpListener;
 
     use super::*;
-    use super::super::{Msg, ConnData, Result};
+    use super::super::{Msg, ConnData, Result, SnapshotManager, SendCh};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::{Storage, Dsn};
@@ -685,12 +677,15 @@ mod tests {
 
         let mut event_loop = create_event_loop().unwrap();
         let (tx, rx) = mpsc::channel();
+        let snapshot_manager = SnapshotManager::new(PathBuf::from("/tmp/"),
+                                                    SendCh::new(event_loop.channel()));
         let mut server =
             Server::new(&mut event_loop,
                         listener,
                         Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
-                        resolver)
+                        resolver,
+                        Arc::new(RwLock::new(snapshot_manager)))
                 .unwrap();
 
         let ch = server.get_sendch();

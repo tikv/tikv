@@ -22,10 +22,11 @@ extern crate rocksdb;
 extern crate mio;
 extern crate toml;
 extern crate cadence;
+extern crate tempdir;
 
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::io::Read;
 use std::net::UdpSocket;
@@ -41,7 +42,7 @@ use tikv::util::metric::{self, NonblockUdpMetricSink};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
-use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
+use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver, SnapshotManager};
 use tikv::raftstore::store;
 use tikv::pd::{new_rpc_client, RpcClient};
 
@@ -251,7 +252,7 @@ fn build_raftkv(matches: &Matches,
                 cluster_id: u64,
                 addr: String,
                 pd_client: Arc<RpcClient>)
-                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64) {
+                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, String) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
     let path = get_store_path(matches, config);
     let opts = get_rocksdb_option(matches, config);
@@ -279,13 +280,19 @@ fn build_raftkv(matches: &Matches,
                                           Some(addr),
                                           |v| v.as_str().map(|s| s.to_owned()));
 
+    let snap_path = get_snap_path(matches, config);
+    cfg.store_cfg.snap_path = snap_path;
+
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
     node.start(event_loop, engine.clone(), trans).unwrap();
     let raft_router = node.raft_store_router();
     let node_id = node.id();
 
-    (create_raft_storage(node, engine).unwrap(), raft_router, node_id)
+    (create_raft_storage(node, engine).unwrap(),
+     raft_router,
+     node_id,
+     cfg.store_cfg.snap_path.clone())
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -310,14 +317,39 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
+fn get_snap_path(matches: &Matches, config: &toml::Value) -> String {
+    let path = get_string_value("",
+                                "server.snapshot",
+                                matches,
+                                config,
+                                Some(TEMP_DIR.to_owned()),
+                                |v| v.as_str().map(|s| s.to_owned()));
+    if path == TEMP_DIR {
+        return path;
+    }
+
+    let p = Path::new(&path);
+    if p.exists() && p.is_file() {
+        panic!("{} is not a directory!", path);
+    }
+    if !p.exists() {
+        fs::create_dir_all(p).unwrap();
+    }
+    let absolute_path = p.canonicalize().unwrap();
+    format!("{}", absolute_path.display())
+}
+
 fn run_local_server(listener: TcpListener, store: Storage) {
     let mut event_loop = create_event_loop().unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
+    let snap_manager = SnapshotManager::new(PathBuf::from("/tmp/"),
+                                            SendCh::new(event_loop.channel()));
     let mut svr = Server::new(&mut event_loop,
                               listener,
                               store,
                               router,
-                              MockStoreAddrResolver)
+                              MockStoreAddrResolver,
+                              Arc::new(RwLock::new(snap_manager)))
         .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
@@ -340,14 +372,23 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                    |v| v.as_str().map(|s| s.to_owned()));
     let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
-    let (store, raft_router, node_id) = build_raftkv(matches,
-                                                     config,
-                                                     ch,
-                                                     cluster_id,
-                                                     format!("{}", listener.local_addr().unwrap()),
-                                                     pd_client);
+
+    let (store, raft_router, node_id, snap_path) =
+        build_raftkv(matches,
+                     config,
+                     ch.clone(),
+                     cluster_id,
+                     format!("{}", listener.local_addr().unwrap()),
+                     pd_client);
     initial_metric(matches, config, Some(node_id));
-    let mut svr = Server::new(&mut event_loop, listener, store, raft_router, resolver).unwrap();
+    let snap_manager = SnapshotManager::new(PathBuf::from(&snap_path), ch);
+    let mut svr = Server::new(&mut event_loop,
+                              listener,
+                              store,
+                              raft_router,
+                              resolver,
+                              Arc::new(RwLock::new(snap_manager)))
+        .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 

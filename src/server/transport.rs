@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
 
 use raftstore::store::{Msg as StoreMsg, Transport, Callback, SendCh};
 use raftstore::Result as RaftStoreResult;
@@ -109,6 +110,22 @@ impl ServerTransport {
 
 impl Transport for ServerTransport {
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+        let to_store_id = msg.get_to_peer().get_store_id();
+
+        let mut req = Message::new();
+        req.set_msg_type(MessageType::Raft);
+        req.set_raft(msg);
+
+        if let Err(e) = self.ch.send(Msg::SendStore {
+            store_id: to_store_id,
+            data: ConnData::new(self.alloc_msg_id(), req),
+        }) {
+            return Err(box_err!("send data to store {} err {:?}", to_store_id, e));
+        }
+        Ok(())
+    }
+
+    fn send_snapshot(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
 
         let mut req = Message::new();

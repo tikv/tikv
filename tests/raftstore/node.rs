@@ -16,8 +16,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use std::path::Path;
 
 use rocksdb::DB;
+use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
@@ -30,20 +32,41 @@ use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
+use raftstore::store::worker::snap::{snapshot_file_path, load_snapshot};
 
 pub struct ChannelTransport {
     pub routers: HashMap<u64, Arc<RwLock<ServerRaftStoreRouter>>>,
+    pub snap_paths: HashMap<u64, PathBuf>,
 }
 
 impl ChannelTransport {
     pub fn new() -> Arc<RwLock<ChannelTransport>> {
-        Arc::new(RwLock::new(ChannelTransport { routers: HashMap::new() }))
+        Arc::new(RwLock::new(ChannelTransport {
+            routers: HashMap::new(),
+            snap_path: HashMap::new(),
+        }))
     }
 }
 
 impl Transport for ChannelTransport {
     fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         let to_store = msg.get_to_peer().get_store_id();
+
+        match self.routers.get(&to_store) {
+            Some(h) => h.rl().send_raft_msg(msg),
+            _ => Err(box_err!("missing sender for store {}", to_store)),
+        }
+    }
+
+    fn send_snapshot(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+        let to_store = msg.get_to_peer().get_store_id();
+        if let Some(snap_path) =  self.snap_paths.get(&to_store) {
+
+
+            let file_path = snapshot_file_path(snap_path, msg.);
+            let snapshot = load_snapshot();
+            msg.get_message().set_snapshot(snapshot);
+        }
 
         match self.routers.get(&to_store) {
             Some(h) => h.rl().send_raft_msg(msg),
@@ -60,6 +83,7 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, Arc<RwLock<SimulateChannelTransport>>>,
+    snap_paths: HashMap<u64, TempDir>,
 }
 
 impl NodeCluster {
@@ -70,6 +94,7 @@ impl NodeCluster {
             pd_client: pd_client,
             nodes: HashMap::new(),
             simulate_trans: HashMap::new(),
+            snap_paths: HashMap::new(),
         }
     }
 }
@@ -78,16 +103,23 @@ impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
+        let mut cfg = cfg;
+        let tmp = TempDir::new("test_cluster").unwrap();
+        cfg.store_cfg.snap_path = tmp.path().to_str().unwrap().to_owned();
+        self.snap_paths.insert(node_id, tmp);
+
         let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let trans = Arc::new(RwLock::new(simulate_trans));
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
 
-        node.start(event_loop, engine, trans.clone()).unwrap();
+        node.start(event_loop, engine, trans.clone())
+            .unwrap();
         assert!(node_id == 0 || node_id == node.id());
 
         let node_id = node.id();
         self.trans.wl().routers.insert(node_id, node.raft_store_router());
+        self.trans.wl().snap_paths.insert(node_id, cfg.store_cfg.snap_path.clone());
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, trans);
 
