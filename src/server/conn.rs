@@ -17,6 +17,7 @@ use std::option::Option;
 use std::boxed::{Box, FnBox};
 use std::net::Shutdown;
 use std::sync::{Arc, RwLock};
+use std::cmp;
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
@@ -28,19 +29,20 @@ use util::codec::rpc;
 use util::HandyRwLock;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
-use super::snapshot_manager::{SnapshotManager, Task};
+use super::snap::Task as SnapTask;
+use util::worker::Scheduler;
 use byteorder::{ByteOrder, LittleEndian};
 
 pub type OnClose = Box<FnBox() + Send>;
 pub type OnWriteComplete = Box<FnBox() + Send>;
 
 enum ConnType {
-    HandShake,
+    Handshake,
     Rpc,
     Snapshot,
 }
 
-const SNAPSHOT_PAYLOAD_BUF: usize = 4 * (1 << 20);
+const SNAPSHOT_PAYLOAD_BUF: usize = 4 * 1024 * 1024;
 
 pub struct Conn {
     pub sock: TcpStream,
@@ -61,7 +63,7 @@ pub struct Conn {
 
     file_size: usize,
     read_size: usize,
-    snap_manager: Arc<RwLock<SnapshotManager>>,
+    snap_scheduler: Scheduler<SnapTask>,
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
@@ -103,20 +105,20 @@ impl Conn {
     pub fn new(sock: TcpStream,
                token: Token,
                store_id: Option<u64>,
-               snap_manager: Arc<RwLock<SnapshotManager>>)
+               snap_scheduler: Scheduler<SnapTask>)
                -> Conn {
         Conn {
             sock: sock,
             token: token,
             interest: EventSet::readable() | EventSet::hup(),
-            conn_type: ConnType::HandShake,
+            conn_type: ConnType::Handshake,
             header: create_mem_buf(rpc::MSG_HEADER_LEN),
             read_size: 0,
             file_size: 0,
             payload: None,
             res: VecDeque::new(),
             last_msg_id: 0,
-            snap_manager: snap_manager,
+            snap_scheduler: snap_scheduler,
             store_id: store_id,
             on_write_complete: None,
             on_close: None,
@@ -150,8 +152,12 @@ impl Conn {
               S: StoreAddrResolver
     {
         match self.conn_type {
-            ConnType::HandShake => self.handshake(event_loop),
-            ConnType::Rpc => self.read_rpc(event_loop),
+            ConnType::Handshake => self.handshake(event_loop),
+            ConnType::Rpc => {
+                let mut bufs = vec![];
+                try!(self.read_rpc(event_loop, &mut bufs));
+                Ok(bufs)
+            }
             ConnType::Snapshot => self.read_snapshot(event_loop),
         }
     }
@@ -160,31 +166,27 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        let msg_or_none = try!(self.read_one_message());
-        if msg_or_none.is_none() {
-            return Ok(vec![]);
-        }
-
-        let mut msg = msg_or_none.unwrap();
+        let mut msg = match try!(self.read_one_message()) {
+            Some(msg) => msg,
+            None => return Ok(vec![]),
+        };
         match msg.get_msg_type() {
             MessageType::Snapshot => {
-                try!(self.snap_manager.wl().new_worker(self.token,
-                                                       msg.take_snapshot_file(),
-                                                       msg.take_raft(),
-                                                       self.last_msg_id));
                 self.conn_type = ConnType::Snapshot;
-                self.payload = Some(create_mem_buf(4));
+                self.file_size = msg.get_snap_file_meta().get_size() as usize;
+                self.payload = Some(create_mem_buf(cmp::min(SNAPSHOT_PAYLOAD_BUF, self.file_size)));
+                self.snap_scheduler
+                    .schedule(SnapTask::Register(self.token, msg.take_snap_file_meta()));
                 self.read_snapshot(event_loop)
             }
             _ => {
                 self.conn_type = ConnType::Rpc;
-                let mut first = vec![ConnData {
-                                         msg_id: self.last_msg_id,
-                                         msg: msg,
-                                     }];
-                let mut rem = try!(self.read_rpc(event_loop));
-                first.append(&mut rem);
-                Ok(first)
+                let mut data = vec![ConnData {
+                                        msg_id: self.last_msg_id,
+                                        msg: msg,
+                                    }];
+                try!(self.read_rpc(event_loop, &mut data));
+                Ok(data)
             }
         }
     }
@@ -193,6 +195,7 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
+        // TODO: limit rate
         while try!(self.read_payload()) {
             try!(self.handle_snapshot_payload());
         }
@@ -201,12 +204,9 @@ impl Conn {
 
     fn handle_snapshot_payload(&mut self) -> Result<()> {
         let mut payload = self.payload.take().unwrap();
+        let cap = payload.capacity();
         let mut finish = false;
-        if self.file_size == 0 {
-            // header
-            self.file_size = LittleEndian::read_u32(payload.bytes()) as usize;
-            payload = create_mem_buf(SNAPSHOT_PAYLOAD_BUF);
-        } else if self.read_size + payload.capacity() == self.file_size {
+        if self.read_size + cap == self.file_size {
             // last chunk
             finish = true;
             if let Err(e) = self.sock.shutdown(Shutdown::Both) {
@@ -214,13 +214,14 @@ impl Conn {
             }
         }
 
-        let task = Task::new(payload.bytes(), box move |_| {}, finish);
-        try!(self.snap_manager.rl().add_task(&self.token, task));
+        let task = SnapTask::Write(self.token, payload.flip());
+        box_try!(self.snap_scheduler.schedule(task));
 
-        if self.read_size + payload.capacity() >= self.file_size {
-            payload = create_mem_buf(self.file_size - self.read_size);
-        }
-        payload.clear();
+        payload = if self.read_size + cap >= self.file_size {
+            create_mem_buf(self.file_size - self.read_size)
+        } else {
+            create_mem_buf(cap)
+        };
         self.payload = Some(payload);
         Ok(())
     }
@@ -263,11 +264,13 @@ impl Conn {
         Ok(Some(msg))
     }
 
-    fn read_rpc<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
+    fn read_rpc<T, S>(&mut self,
+                      _: &mut EventLoop<Server<T, S>>,
+                      bufs: &mut Vec<ConnData>)
+                      -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        let mut bufs = vec![];
         loop {
             // Because we use the edge trigger, so here we must read whole data.
             let msg = try!(self.read_one_message());
@@ -280,7 +283,7 @@ impl Conn {
             })
         }
 
-        Ok(bufs)
+        Ok(())
     }
 
     fn write_buf(&mut self) -> Result<usize> {

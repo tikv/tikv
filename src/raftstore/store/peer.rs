@@ -173,7 +173,7 @@ impl Peer {
         }
 
         // We will remove tombstone key when apply snapshot
-        info!("replicate peer, peer id {}, region_id {} \n",
+        info!("replicate peer, peer id {}, region_id {}",
               peer_id,
               region_id);
 
@@ -505,7 +505,7 @@ impl Peer {
         send_msg.set_region_id(self.region_id);
         send_msg.set_message(msg.clone());
         if msg.get_msg_type() == raftpb::MessageType::MsgSnapshot {
-            debug!("send raft message: region={} term={} index={}\n",
+            debug!("send raft message: region={} term={} index={}",
                    self.region_id,
                    msg.get_term(),
                    msg.get_index());
@@ -838,7 +838,7 @@ impl Peer {
         let change_type = request.get_change_type();
         let mut region = self.region();
 
-        warn!("my peer id {}, {}, {:?}, epoch: {:?}\n",
+        warn!("my peer id {}, {}, {:?}, epoch: {:?}",
               self.peer_id(),
               peer.get_id(),
               util::conf_change_type_str(&change_type),

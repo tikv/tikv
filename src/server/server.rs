@@ -34,7 +34,7 @@ use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
-use super::snapshot_manager::SnapshotManager;
+use super::snap::{Task as SnapTask, Runner as SnapHandler};
 use raft::SnapshotStatus;
 
 const SERVER_TOKEN: Token = Token(1);
@@ -79,8 +79,10 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     store: StoreHandler,
     end_point_worker: Worker<RequestTask>,
 
+    snap_path: String,
+    snap_worker: Worker<SnapTask>,
+
     resolver: S,
-    snap_manager: Arc<RwLock<SnapshotManager>>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -94,7 +96,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
                resolver: S,
-               snap_manager: Arc<RwLock<SnapshotManager>>)
+               snap_path: String)
                -> Result<Server<T, S>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
@@ -104,6 +106,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let sendch = SendCh::new(event_loop.channel());
         let store_handler = StoreHandler::new(storage);
         let end_point_worker = Worker::new("end-point-worker");
+        let snap_worker = Worker::new("snap-handler");
 
         let svr = Server {
             listener: listener,
@@ -115,8 +118,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             raft_router: raft_router,
             store: store_handler,
             end_point_worker: end_point_worker,
+            snap_path: snap_path,
+            snap_worker: snap_worker,
             resolver: resolver,
-            snap_manager: snap_manager,
         };
 
         Ok(svr)
@@ -125,6 +129,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         let end_point = EndPointHost::new(self.store.engine());
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
+
+        let snap_runner = SnapHandler::new(self.snap_path.clone());
+        box_try!(self.snap_worker.start(snap_runner));
+
         try!(event_loop.run(self));
         Ok(())
     }
@@ -182,7 +190,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  EventSet::readable() | EventSet::hup(),
                                  PollOpt::edge()));
 
-        let conn = Conn::new(sock, new_token, store_id, self.snap_manager.clone());
+        let conn = Conn::new(sock, new_token, store_id, self.snap_worker.scheduler());
         self.conns.insert(new_token, conn);
 
         Ok(new_token)
@@ -491,14 +499,22 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn send_snapshot_sock(&mut self, sock_addr: SocketAddr, data: ConnData) {
         let reporter = Arc::new(self.new_snapshot_reporter(&data));
+        let rep = reporter.clone();
         let cb = box move |res: Result<()>| {
             if let Err(_) = res {
-                reporter.report(SnapshotStatus::Failure);
+                rep.report(SnapshotStatus::Failure);
             } else {
-                reporter.report(SnapshotStatus::Finish);
+                rep.report(SnapshotStatus::Finish);
             }
         };
-        self.snap_manager.rl().send_snap(sock_addr, data, cb);
+        if let Err(e) = self.snap_worker.schedule(SnapTask::SendTo {
+            addr: sock_addr,
+            data: data,
+            cb: cb,
+        }) {
+            error!("failed to schedule snapshot: {:?}", e);
+            reporter.report(SnapshotStatus::Failure);
+        }
     }
 
     fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
@@ -542,9 +558,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         match msg {
             // Msg::Snapshot { data } => self.on_conn_msg(Token::from_usize(0), data),
             Msg::Quit => event_loop.shutdown(),
-            Msg::Snapshot { token, data } => {
-                let _ = self.on_conn_msg(token, data);
-            }
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data, None),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {

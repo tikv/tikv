@@ -325,9 +325,6 @@ impl<T: Storage> Raft<T> {
         if m.get_msg_type() != MessageType::MsgPropose {
             m.set_term(self.term);
         }
-        debug!("in raft send, push msg term={} index={}\n",
-               m.get_term(),
-               m.get_index());
         self.msgs.push(m);
     }
 
@@ -360,22 +357,22 @@ impl<T: Storage> Raft<T> {
         let (sindex, sterm) = (snapshot.get_metadata().get_index(),
                                snapshot.get_metadata().get_term());
         m.set_snapshot(snapshot);
-        info!("{} {} [firstindex: {}, commit: {}] sent snapshot[index: {}, term: {}] to {} \
+        debug!("{} {} [firstindex: {}, commit: {}] sent snapshot[index: {}, term: {}] to {} \
                 [{:?}]",
-              self.tag,
-              self.id,
-              self.raft_log.first_index(),
-              self.raft_log.committed,
-              sindex,
-              sterm,
-              to,
-              pr);
+               self.tag,
+               self.id,
+               self.raft_log.first_index(),
+               self.raft_log.committed,
+               sindex,
+               sterm,
+               to,
+               pr);
         pr.become_snapshot(sindex);
-        info!("{} {} paused sending replication messages to {} [{:?}]",
-              self.tag,
-              self.id,
-              to,
-              pr);
+        debug!("{} {} paused sending replication messages to {} [{:?}]",
+               self.tag,
+               self.id,
+               to,
+               pr);
         true
     }
 
@@ -421,7 +418,6 @@ impl<T: Storage> Raft<T> {
             if !self.prepare_send_snapshot(&mut m, to) {
                 return;
             }
-            debug!("send_append perpare to send snapshot\n");
         } else {
             self.prepare_send_entries(&mut m, to, term.unwrap(), ents.unwrap());
         }

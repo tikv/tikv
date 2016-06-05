@@ -13,9 +13,14 @@
 
 use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::vec::Vec;
+use std::io::{self, Write, ErrorKind};
+use std::fs::{self, File, Metadata};
+use std::path::{Path, PathBuf};
 use std::{error, mem};
 use std::time::Instant;
 
+use crc::crc32::{self, Digest, Hasher32};
+use byteorder::{BigEndian, WriteBytesExt};
 use rocksdb::{DB, WriteBatch, Writable};
 use rocksdb::rocksdb::Snapshot as RocksDbSnapshot;
 use protobuf::{self, Message};
@@ -24,6 +29,7 @@ use kvproto::metapb;
 use kvproto::raftpb::{Entry, Snapshot, HardState, ConfState};
 use kvproto::raft_serverpb::{RaftSnapshotData, KeyValue, RaftTruncatedState};
 use util::HandyRwLock;
+use util::codec::bytes::BytesEncoder;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::keys::{self, enc_start_key, enc_end_key};
@@ -503,7 +509,107 @@ impl PeerStorage {
     }
 }
 
-pub fn do_snapshot(snap: &RocksDbSnapshot,
+const RETRY_CNT: u32 = 1024;
+
+// TODO: cleanup when applied
+pub struct SnapFile {
+    file: PathBuf,
+    digest: Digest,
+    tmp_file: Option<(File, PathBuf)>,
+}
+
+impl SnapFile {
+    pub fn new(snap_dir: &Path, region_id: u64, term: u64, idx: u64) -> io::Result<SnapFile> {
+        let mut file_path = snap_dir.to_path_buf();
+        let file_name = format!("{}_{}_{}.snap", region_id, term, idx);
+        file_path.push(file_name);
+
+        let mut f = SnapFile {
+            file: file_path,
+            digest: Digest::new(crc32::IEEE),
+            tmp_file: None,
+        };
+
+        if f.exists() {
+            return Ok(f);
+        }
+
+        let mut try_cnt = 0;
+        loop {
+            if try_cnt == RETRY_CNT {
+                return Err(io::Error::new(ErrorKind::Other,
+                                          format!("failed to create temporary file after {} \
+                                                   tries",
+                                                  try_cnt)));
+            }
+            let mut file = f.file.clone();
+            file.push(format!(".{}", try_cnt));
+            if !file.exists() {
+                f.tmp_file = Some((try!(File::create(file.as_path())), file));
+                break;
+            }
+            try_cnt += 1;
+        }
+
+        Ok(f)
+    }
+
+    pub fn meta(&self) -> io::Result<Metadata> {
+        self.file.metadata()
+    }
+
+    pub fn exists(&self) -> bool {
+        self.file.exists() && self.file.is_file()
+    }
+
+    pub fn save(&mut self, append_crc: bool) -> io::Result<()> {
+        if let Some((mut f, path)) = self.tmp_file.take() {
+            if append_crc {
+                try!(f.write_u32::<BigEndian>(self.digest.sum32()));
+            }
+            try!(fs::rename(path, self.file.as_path()));
+        }
+        Ok(())
+    }
+
+    pub fn path(&self) -> &Path {
+        self.file.as_path()
+    }
+}
+
+impl Write for SnapFile {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.tmp_file.is_none() {
+            return Ok(0);
+        }
+        let written = try!(self.tmp_file.as_mut().unwrap().0.write(buf));
+        self.digest.write(&buf[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.tmp_file.is_none() {
+            return Ok(());
+        }
+        self.tmp_file.as_mut().unwrap().0.flush()
+    }
+}
+
+impl Drop for SnapFile {
+    fn drop(&mut self) {
+        if let Some((_, path)) = self.tmp_file.take() {
+            if let Err(e) = fs::remove_file(path.as_path()) {
+                warn!("failed to delete temporary file {}: {:?}",
+                      path.display(),
+                      e);
+            }
+        }
+    }
+}
+
+
+pub fn do_snapshot(snap_dir: &Path,
+                   snap: &RocksDbSnapshot,
                    region_id: u64,
                    ranges: Vec<(Vec<u8>, Vec<u8>)>,
                    applied_idx: u64,
@@ -536,9 +642,19 @@ pub fn do_snapshot(snap: &RocksDbSnapshot,
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(region);
 
+    let mut v = vec![];
+    box_try!(snap_data.write_to_vec(&mut v));
+    snapshot.set_data(v);
+
+    let mut snap_file = try!(SnapFile::new(snap_dir, region_id, term, applied_idx));
+    if snap_file.exists() {
+        // TODO: maybe we should validate the file.
+        return Ok(snapshot);
+    }
+    box_try!(snapshot.write_to_writer(&mut snap_file));
+
     // Scan everything except raft logs for this region.
     let log_prefix = keys::raft_log_prefix(region_id);
-    let mut data = vec![];
     let mut snap_size = 0;
     let mut snap_key_cnt = 0;
     for (begin, end) in ranges {
@@ -554,19 +670,14 @@ pub fn do_snapshot(snap: &RocksDbSnapshot,
             snap_size += value.len();
             snap_key_cnt += 1;
 
-            let mut kv = KeyValue::new();
-            kv.set_key(key.to_vec());
-            kv.set_value(value.to_vec());
-            data.push(kv);
+            try!(snap_file.encode_compact_bytes(key));
+            try!(snap_file.encode_compact_bytes(value));
             Ok(true)
         }));
     }
-
-    snap_data.set_data(protobuf::RepeatedField::from_vec(data));
-
-    let mut v = vec![];
-    box_try!(snap_data.write_to_vec(&mut v));
-    snapshot.set_data(v);
+    // use an empty byte array to indicate that kvpair reach an end.
+    box_try!(snap_file.encode_compact_bytes(b""));
+    try!(snap_file.save(true));
 
     info!("generate snapshot ok for region {}, size {}, key count {}",
           region_id,

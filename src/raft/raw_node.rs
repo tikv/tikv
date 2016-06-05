@@ -124,7 +124,6 @@ impl Ready {
         }
         if raft.raft_log.get_unstable().snapshot.is_some() {
             rd.snapshot = raft.raft_log.get_unstable().snapshot.clone().unwrap();
-            debug!("raft_node Ready::new find a snapshot {:?}\n", rd.snapshot);
         }
         rd
     }

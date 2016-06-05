@@ -24,7 +24,6 @@ use raftstore::Error as RaftServerError;
 use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
 use pd::Error as PdError;
-use util::worker::Error as WorkerError;
 
 quick_error!{
     #[derive(Debug)]
@@ -37,11 +36,6 @@ quick_error!{
         }
         // Following is for From other errors.
         Io(err: IoError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        Worker(err: WorkerError) {
             from()
             cause(err)
             description(err.description())
