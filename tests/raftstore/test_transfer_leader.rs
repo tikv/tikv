@@ -62,3 +62,62 @@ fn test_node_transfer_leader() {
     let mut cluster = new_server_cluster(0, 5);
     test_transfer_leader(&mut cluster);
 }
+
+fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_rule();
+
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+
+    cluster.must_put(b"k", b"v");
+
+    for i in 1..4 {
+        let id = i as u64;
+        // select a new leader to transfer
+        pd_client.set_rule(box move |_, peer| {
+            if peer.get_id() == id {
+                return None;
+            }
+            new_pd_transfer_leader(new_peer(id, id))
+        });
+
+
+        for _ in 0..100 {
+            // reset leader and wait transfer successfully.
+            cluster.reset_leader_of_region(1);
+
+            sleep_ms(20);
+
+            if let Some(leader) = cluster.leader_of_region(1) {
+                if leader.get_id() == id {
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(cluster.leader_of_region(1), Some(new_peer(id, id)));
+
+        // call command on this leader directly, must successfully.
+        let mut region = cluster.get_region(b"");
+        let mut req = new_request(region.get_id(),
+                                  region.take_region_epoch(),
+                                  vec![new_get_cmd(b"k")]);
+        req.mut_header().set_peer(new_peer(id, id));
+        let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error());
+        assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
+    }
+}
+
+#[test]
+fn test_server_pd_transfer_leader() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_pd_transfer_leader(&mut cluster);
+}
+
+#[test]
+fn test_node_pd_transfer_leader() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_pd_transfer_leader(&mut cluster);
+}
