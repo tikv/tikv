@@ -633,6 +633,10 @@ mod test {
              Ordering::Greater),
             (Datum::Dec("-12340".parse().unwrap()), Datum::Dec("-123400".parse().unwrap()),
              Ordering::Greater),
+            (Datum::Dec(Decimal::new(1.into(), 2, 2)), Datum::I64(1), Ordering::Greater),
+            (Datum::Dec(Decimal::new((-1).into(), 2, 2)), Datum::I64(-1), Ordering::Less),
+            (Datum::Dec(Decimal::new((-1).into(), 2, 2)), Datum::I64(-100), Ordering::Equal),
+            (Datum::Dec(Decimal::new(1.into(), 2, 2)), Datum::I64(100), Ordering::Equal),
 
             // Test for int type decimal.
             (Datum::Dec((-1i64).into()), Datum::Dec(1i64.into()), Ordering::Less),
