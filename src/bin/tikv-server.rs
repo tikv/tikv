@@ -62,11 +62,12 @@ fn get_string_value<F>(short: &str,
                        -> String
     where F: Fn(&toml::Value) -> Option<String>
 {
-    let mut s = None;
     // avoid panic if short is not defined.
-    if matches.opt_defined(short) {
-        s = matches.opt_str(short);
-    }
+    let s = if matches.opt_defined(short) {
+        matches.opt_str(short)
+    } else {
+        None
+    };
 
     s.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {

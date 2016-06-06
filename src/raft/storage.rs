@@ -136,11 +136,12 @@ impl MemStorageCore {
             return Ok(());
         }
         // truncate compacted entries
-        let mut te: &[Entry] = ents;
-        if first > ents[0].get_index() {
+        let te: &[Entry] = if first > ents[0].get_index() {
             let start = (first - ents[0].get_index()) as usize;
-            te = &ents[start..ents.len()];
-        }
+            &ents[start..ents.len()]
+        } else {
+            ents
+        };
 
 
         let offset = te[0].get_index() - self.entries[0].get_index();
