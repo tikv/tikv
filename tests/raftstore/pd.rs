@@ -33,7 +33,8 @@ use super::util::*;
 // E.g, for region a, change peers 1,2,3 -> 1,2,4.
 // But unlike real pd, Rule is global, and if you set rule,
 // we won't check the peer count later.
-pub type Rule = Box<Fn(&metapb::Region) -> Option<pdpb::ChangePeer> + Send + Sync>;
+pub type Rule =
+    Box<Fn(&metapb::Region, &metapb::Peer) -> Option<pdpb::RegionHeartbeatResponse> + Send + Sync>;
 
 #[derive(Default)]
 struct Store {
@@ -230,11 +231,7 @@ impl Cluster {
         let mut resp = pdpb::RegionHeartbeatResponse::new();
 
         if let Some(ref rule) = self.rule {
-            if let Some(change_peer) = rule(&region) {
-                resp.set_change_peer(change_peer);
-            }
-
-            return Ok(resp);
+            return Ok(rule(&region, &leader).unwrap_or(resp));
         }
 
         // If no rule, use default max_peer_count check.
@@ -355,7 +352,7 @@ impl TestPdClient {
     // Set an empty rule which nothing to do to disable default max peer count
     // check rule, we can use reset_rule to enable default again.
     pub fn disable_default_rule(&self) {
-        self.set_rule(box move |_| None);
+        self.set_rule(box move |_, _| None);
     }
 
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
@@ -396,22 +393,22 @@ impl TestPdClient {
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         let peer2 = peer.clone();
-        self.set_rule(box move |region: &metapb::Region| {
+        self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
             if region.get_id() != region_id {
                 return None;
             }
-            new_add_change_peer(region, peer2.clone())
+            new_pd_add_change_peer(region, peer2.clone())
         });
         self.must_have_peer(region_id, peer);
     }
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         let peer2 = peer.clone();
-        self.set_rule(box move |region: &metapb::Region| {
+        self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
             if region.get_id() != region_id {
                 return None;
             }
-            new_remove_change_peer(region, peer2.clone())
+            new_pd_remove_change_peer(region, peer2.clone())
         });
         self.must_none_peer(region_id, peer);
     }

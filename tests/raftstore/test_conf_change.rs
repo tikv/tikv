@@ -354,7 +354,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.stop_node(3);
 
-    pd_client.set_rule(box move |region| new_remove_change_peer(region, new_peer(1, 1)));
+    pd_client.set_rule(box move |region, _| new_pd_remove_change_peer(region, new_peer(1, 1)));
 
     let epoch = cluster.pd_client
         .get_region_by_id(1)

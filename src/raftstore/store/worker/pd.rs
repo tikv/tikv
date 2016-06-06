@@ -122,7 +122,6 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                                                        resp.get_new_region_id(),
                                                        resp.take_new_peer_ids());
                     self.send_admin_request(region, peer, req);
-
                 }
             }
             Task::Heartbeat { region, peer } => {
@@ -141,6 +140,14 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         let req = new_change_peer_request(change_peer.get_change_type(),
                                                           change_peer.take_peer());
                         self.send_admin_request(region, peer, req);
+                    } else if resp.has_transfer_leader() {
+                        metric_incr!("pd.heartbeat.transfer_leader");
+                        let mut transfer_leader = resp.take_transfer_leader();
+                        info!("try to transfer leader from {:?} to {:?}",
+                              peer,
+                              transfer_leader.get_peer());
+                        let req = new_transfer_leader_request(transfer_leader.take_peer());
+                        self.send_admin_request(region, peer, req)
                     }
                 }
             }
@@ -170,5 +177,12 @@ fn new_split_region_request(split_key: Vec<u8>,
     req.mut_split().set_split_key(split_key);
     req.mut_split().set_new_region_id(new_region_id);
     req.mut_split().set_new_peer_ids(peer_ids);
+    req
+}
+
+fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::TransferLeader);
+    req.mut_transfer_leader().set_peer(peer);
     req
 }
