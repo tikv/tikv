@@ -150,24 +150,25 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
+        let mut bufs = vec![];
         match self.conn_type {
-            ConnType::Handshake => self.handshake(event_loop),
-            ConnType::Rpc => {
-                let mut bufs = vec![];
-                try!(self.read_rpc(event_loop, &mut bufs));
-                Ok(bufs)
-            }
-            ConnType::Snapshot => self.read_snapshot(event_loop),
-        }
+            ConnType::Handshake => try!(self.handshake(event_loop, &mut bufs)),
+            ConnType::Rpc => try!(self.read_rpc(event_loop, &mut bufs)),
+            ConnType::Snapshot => try!(self.read_snapshot(event_loop)),
+        };
+        Ok(bufs)
     }
 
-    fn handshake<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
+    fn handshake<T, S>(&mut self,
+                       event_loop: &mut EventLoop<Server<T, S>>,
+                       bufs: &mut Vec<ConnData>)
+                       -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
         let mut data = match try!(self.read_one_message()) {
             Some(data) => data,
-            None => return Ok(vec![]),
+            None => return Ok(()),
         };
         if data.is_snapshot() {
             self.conn_type = ConnType::Snapshot;
@@ -183,13 +184,12 @@ impl Conn {
 
             return self.read_snapshot(event_loop);
         }
+        bufs.push(data);
         self.conn_type = ConnType::Rpc;
-        let mut data = vec![data];
-        try!(self.read_rpc(event_loop, &mut data));
-        Ok(data)
+        self.read_rpc(event_loop, bufs)
     }
 
-    fn read_snapshot<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
+    fn read_snapshot<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
@@ -197,7 +197,7 @@ impl Conn {
         while try!(self.read_payload()) {
             try!(self.handle_snapshot_payload());
         }
-        Ok(vec![])
+        Ok(())
     }
 
     fn handle_snapshot_payload(&mut self) -> Result<()> {
@@ -227,10 +227,9 @@ impl Conn {
     }
 
     fn read_payload(&mut self) -> Result<bool> {
-        let mut payload = self.payload.take().unwrap();
-        try!(try_read_data(&mut self.sock, &mut payload));
+        let payload = self.payload.as_mut().unwrap();
+        try!(try_read_data(&mut self.sock, payload));
         let ret = payload.remaining() == 0;
-        self.payload = Some(payload);
         Ok(ret)
     }
 

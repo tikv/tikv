@@ -22,7 +22,6 @@ extern crate rocksdb;
 extern crate mio;
 extern crate toml;
 extern crate cadence;
-extern crate tempdir;
 
 use std::env;
 use std::fs;
@@ -35,7 +34,6 @@ use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use cadence::{StatsdClient, NopMetricSink};
-use tempdir::TempDir;
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
 use tikv::util::{self, logger, panic_hook};
@@ -337,16 +335,19 @@ fn get_snap_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
-fn run_local_server(listener: TcpListener, store: Storage) {
+fn run_local_server(listener: TcpListener,
+                    store: Storage,
+                    matches: &Matches,
+                    config: &toml::Value) {
     let mut event_loop = create_event_loop().unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
-    let tmp_dir = TempDir::new("snap_dir").unwrap();
+    let path = get_snap_path(matches, config);
     let mut svr = Server::new(&mut event_loop,
                               listener,
                               store,
                               router,
                               MockStoreAddrResolver,
-                              tmp_dir.path().to_str().unwrap().to_owned())
+                              path)
         .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
@@ -463,7 +464,7 @@ fn main() {
             initial_metric(&matches, &config, None);
             let path = get_store_path(&matches, &config);
             let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();
-            run_local_server(listener, store);
+            run_local_server(listener, store, &matches, &config);
         }
         RAFTKV_DSN => {
             run_raft_server(listener, &matches, &config);

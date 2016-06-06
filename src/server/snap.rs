@@ -14,7 +14,7 @@
 use std::fmt::{self, Formatter, Display};
 use std::io;
 use std::fs::File;
-use std::net::{SocketAddr, TcpStream, Shutdown};
+use std::net::{SocketAddr, TcpStream};
 use std::io::{Read, Write};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -72,14 +72,13 @@ fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> 
     if !f.exists() {
         return Err(box_err!("missing snap file: {:?}", f.path()));
     }
-    // TODO: validation.
+    // snapshot file has been validated when created, so no need validate again.
 
     let mut f = try!(File::open(f.path()));
     let mut conn = try!(TcpStream::connect(&addr));
 
     rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
         .and_then(|_| io::copy(&mut f, &mut conn).map_err(From::from))
-        .and_then(|_| conn.shutdown(Shutdown::Write).map_err(From::from))
         .and_then(|_| conn.read(&mut []).map_err(From::from))
         .map(|_| ())
         .map_err(From::from)
@@ -113,6 +112,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                                           meta.get_message().get_snapshot(),
                                           SNAP_REV_PREFIX) {
                     Ok(mut f) => {
+                        debug!("begin to receive snap {:?}", meta);
                         let mut res = f.encode_u64(meta.compute_size() as u64);
                         if res.is_ok() {
                             res = meta.write_to_writer(&mut f).map_err(From::from);
@@ -145,6 +145,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         if let Err(e) = self.raft_router.rl().send_raft_msg(msg) {
                             error!("send snapshot for token {:?} err {:?}", token, e);
                         }
+                        info!("snapshot saved to {}", writer.path().display());
                     }
                     None => error!("invalid snap token {:?}", token),
                 }
@@ -152,10 +153,11 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             Task::SendTo { addr, data, cb } => {
                 let path = self.snap_dir.clone();
                 self.pool.execute(move || {
-                    match send_snap(path, addr, data) {
-                        Err(e) => error!("failed to send snap to {}: {:?}", addr, e),
-                        res => cb(res),
+                    let res = send_snap(path, addr, data);
+                    if res.is_err() {
+                        error!("failed to send snap to {}: {:?}", addr, res);
                     }
+                    cb(res)
                 });
             }
         }

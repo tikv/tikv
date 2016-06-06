@@ -40,7 +40,7 @@ toml = "0.1"
 num = "0.1"
 cadence = "0.5.0"
 libc = "0.2.11"
-crc = "1.2.0"
+crc = "1.2"
 clippy = {version = "*", optional = true}
 
 # The getopts in crate.io is outdated, use the latest getopts instead.

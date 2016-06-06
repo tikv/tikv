@@ -191,6 +191,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
         let conn = Conn::new(sock, new_token, store_id, self.snap_worker.scheduler());
         self.conns.insert(new_token, conn);
+        debug!("register conn {:?}", new_token);
 
         Ok(new_token)
     }
@@ -403,7 +404,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn send_store(&mut self, event_loop: &mut EventLoop<Self>, store_id: u64, data: ConnData) {
         if data.is_snapshot() {
-            return self.send_snapshot(event_loop, store_id, data);
+            return self.resolve_store(store_id, data);
         }
 
         // check the corresponding token for store.
@@ -424,14 +425,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         info!("begin to resolve store {} address", store_id);
         self.store_resolving.insert(store_id);
         self.resolve_store(store_id, data);
-    }
-
-    fn send_snapshot(&mut self, _: &mut EventLoop<Self>, store_id: u64, data: ConnData) {
-        // We use another connection to avoid blocking other
-        // raft messages when sending huge snapshot.
-        // Now we create the connection every time and close it after sending
-        // successfully.
-        self.resolve_store(store_id, data)
     }
 
     fn on_resolve_failed(&mut self, store_id: u64, sock_addr: Result<SocketAddr>, data: ConnData) {
@@ -529,7 +522,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
     type Message = Msg;
 
     fn ready(&mut self, event_loop: &mut EventLoop<Self>, token: Token, events: EventSet) {
-        if events.is_hup() || events.is_error() {
+        if events.is_error() {
             self.remove_conn(event_loop, token);
             return;
         }
@@ -540,6 +533,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 
         if events.is_writable() {
             self.on_writable(event_loop, token);
+        }
+
+        if events.is_hup() {
+            self.remove_conn(event_loop, token);
         }
     }
 

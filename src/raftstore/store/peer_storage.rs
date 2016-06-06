@@ -13,14 +13,14 @@
 
 use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::vec::Vec;
-use std::io::{self, Write, ErrorKind, Seek, SeekFrom};
+use std::io::{self, Write, ErrorKind, Seek, SeekFrom, Read};
 use std::fs::{self, File, Metadata};
 use std::path::{Path, PathBuf};
 use std::{error, mem};
 use std::time::Instant;
 
 use crc::crc32::{self, Digest, Hasher32};
-use byteorder::{BigEndian, WriteBytesExt};
+use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use rocksdb::{DB, WriteBatch, Writable};
 use rocksdb::rocksdb::Snapshot as RocksDbSnapshot;
 use protobuf::Message;
@@ -42,6 +42,8 @@ use super::engine::{Peekable, Iterable, Mutable};
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: u8 = 5;
+
+pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
 #[derive(PartialEq, Debug)]
 pub enum SnapState {
@@ -463,7 +465,7 @@ impl PeerStorage {
     // [region raft start, region raft end) -> saving raft entries, applied index, etc.
     // [region meta start, region meta end) -> saving region meta information except raft.
     // [region data start, region data end) -> saving region data.
-    pub fn region_key_ranges(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+    pub fn region_key_ranges(&self) -> Ranges {
         let (start_key, end_key) = (enc_start_key(self.get_region()),
                                     enc_end_key(self.get_region()));
 
@@ -605,6 +607,33 @@ impl SnapFile {
         self.file.metadata()
     }
 
+    pub fn validate(&self) -> io::Result<()> {
+        let mut reader = try!(File::open(self.path()));
+        let mut digest = Digest::new(crc32::IEEE);
+        let len = try!(reader.metadata()).len();
+        if len < 4 {
+            return Err(io::Error::new(ErrorKind::InvalidInput, format!("file length {} < 4", len)));
+        }
+        let to_read = len as usize - 4;
+        let mut total_readed = 0;
+        let mut buffer = vec![0; 1024];
+        loop {
+            let readed = try!(reader.read(&mut buffer));
+            if total_readed + readed >= to_read {
+                digest.write(&buffer[..to_read - total_readed]);
+                try!(reader.seek(SeekFrom::End(-4)));
+                break;
+            }
+            total_readed += readed;
+        }
+        let sum = try!(reader.read_u32::<BigEndian>());
+        if sum != digest.sum32() {
+            return Err(io::Error::new(ErrorKind::InvalidData,
+                                      format!("crc not correct: {} != {}", sum, digest.sum32())));
+        }
+        Ok(())
+    }
+
     pub fn exists(&self) -> bool {
         self.file.exists() && self.file.is_file()
     }
@@ -656,7 +685,7 @@ impl Drop for SnapFile {
 fn build_snap_file(f: &mut SnapFile,
                    snap: &RocksDbSnapshot,
                    region_id: u64,
-                   ranges: Vec<(Vec<u8>, Vec<u8>)>)
+                   ranges: Ranges)
                    -> raft::Result<()> {
     // Scan everything except raft logs for this region.
     let log_prefix = keys::raft_log_prefix(region_id);
@@ -694,7 +723,7 @@ fn build_snap_file(f: &mut SnapFile,
 pub fn do_snapshot(snap_dir: &Path,
                    snap: &RocksDbSnapshot,
                    region_id: u64,
-                   ranges: Vec<(Vec<u8>, Vec<u8>)>,
+                   ranges: Ranges,
                    applied_idx: u64,
                    term: u64)
                    -> raft::Result<Snapshot> {
@@ -727,10 +756,11 @@ pub fn do_snapshot(snap_dir: &Path,
 
     let mut snap_file =
         try!(SnapFile::new(snap_dir, SNAP_GEN_PREFIX, region_id, term, applied_idx));
-    if !snap_file.exists() {
+    if snap_file.exists() {
+        try!(snap_file.validate());
+    } else {
         try!(build_snap_file(&mut snap_file, snap, region_id, ranges));
     }
-    // TODO: maybe we should validate the file.
     let len = try!(snap_file.meta()).len();
     snap_data.set_len(len);
 
