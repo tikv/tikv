@@ -86,8 +86,12 @@ impl Decimal {
     ///
     /// If constucted decimal contains more fraction digit than fsp, they will be
     /// rounded.
-    pub fn new(coeff: BigInt, exp: i32, mut fsp: usize) -> Decimal {
+    pub fn new(coeff: BigInt, mut exp: i32, mut fsp: usize) -> Decimal {
         fsp = cmp::min(fsp, MAX_FSP);
+
+        if coeff.is_zero() {
+            exp = 0;
+        }
 
         let d = Decimal {
             coeff: coeff,
@@ -207,7 +211,7 @@ impl FromStr for Decimal {
     /// Parse the decimal value from string.
     fn from_str(s: &str) -> Result<Decimal> {
         let bytes = s.as_bytes();
-        let (mut dot_pos, mut e_pos) = (-1, bytes.len());
+        let (mut dot_pos, mut e_pos) = (bytes.len(), bytes.len());
         let mut filtered_bytes = Vec::with_capacity(bytes.len());
         for (i, &c) in bytes.iter().enumerate() {
             if (c >= b'0' && c <= b'9') || c == b'-' || c == b'+' {
@@ -215,10 +219,10 @@ impl FromStr for Decimal {
                 continue;
             }
             if c == b'.' {
-                if dot_pos >= 0 {
+                if dot_pos < bytes.len() {
                     return Err(invalid_type!("{} contains at least 2 dot", s));
                 }
-                dot_pos = i as i32;
+                dot_pos = i;
                 continue;
             } else if c == b'e' || c == b'E' {
                 e_pos = i;
@@ -234,14 +238,18 @@ impl FromStr for Decimal {
             return Err(invalid_type!("{} is invalid decimal", s));
         }
 
+        if dot_pos < bytes.len() && dot_pos > e_pos {
+            return Err(invalid_type!("{} is invalid decimal", s));
+        }
+
         let mut exp = if e_pos < bytes.len() {
             let s = unsafe { str::from_utf8_unchecked(&bytes[e_pos + 1..]) };
             box_try!(i32::from_str(s))
         } else {
-            0i32
+            0
         };
-        if dot_pos >= 0 {
-            exp += dot_pos + 1 - e_pos as i32;
+        if dot_pos < bytes.len() {
+            exp += dot_pos as i32 + 1 - e_pos as i32;
         }
 
         let fsp = if exp < 0 {
@@ -283,8 +291,8 @@ impl Display for Decimal {
                 let exp_len = v.len() + self.exp as usize;
                 v.resize(exp_len, b'0');
             } else {
-                let point_pos = v.len();
-                let exp_len = v.len() + self.exp as usize + self.fsp + 1;
+                let point_pos = v.len() + self.exp as usize;
+                let exp_len = point_pos + self.fsp + 1;
                 v.resize(exp_len, b'0');
                 v[point_pos] = b'.';
             }
@@ -465,19 +473,28 @@ mod test {
     #[test]
     fn test_decimal_parse() {
         let cases = vec![
-            ("1.21", 1.21),
-            (".21", 0.21),
-            ("1.00", 1.0),
-            ("-0.00", 0f64),
-            ("-2.010", -2.01),
-            ("12345", 12345f64),
-            ("-12345", -12345f64),
-            ("-3.", -3f64),
-            ("3.", 3f64),
+            ("1.21", 1.21, "1.21"),
+            (".21", 0.21, "0.21"),
+            ("1.00", 1.0, "1.00"),
+            ("100", 100f64, "100"),
+            ("-100", -100f64, "-100"),
+            ("100.00", 100.00, "100.00"),
+            ("00100.00", 100.00, "100.00"),
+            ("-100.00", -100.00, "-100.00"),
+            ("-0.00", 0f64, "0.00"),
+            ("00.00", 0f64, "0.00"),
+            ("0.00", 0f64, "0.00"),
+            ("-2.010", -2.01, "-2.010"),
+            ("12345", 12345f64, "12345"),
+            ("-12345", -12345f64, "-12345"),
+            ("-3.", -3f64, "-3"),
+            ("1.456e3", 1456f64, "1456"),
+            ("3.", 3f64, "3"),
         ];
 
-        for (s, f) in cases {
+        for (s, f, t) in cases {
             let d = Decimal::from_str(s).unwrap();
+            assert_eq!(format!("{}", d), t);
             assert_f64_eq!(s, d.to_f64().unwrap(), f);
         }
     }
@@ -566,6 +583,7 @@ mod test {
             ("2E-1", 0.2),
             ("2E0", 2f64),
             ("2.2E-1", 0.22),
+            ("2.23E2", 223f64),
         ];
 
         for (s, f) in cases {
