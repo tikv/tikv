@@ -234,19 +234,21 @@ impl FromStr for Decimal {
             return Err(invalid_type!("{} is invalid decimal", s));
         }
 
-        let mut exp = 0i32;
-        if e_pos < bytes.len() {
+        let mut exp = if e_pos < bytes.len() {
             let s = unsafe { str::from_utf8_unchecked(&bytes[e_pos + 1..]) };
-            exp = box_try!(i32::from_str(s));
-        }
+            box_try!(i32::from_str(s))
+        } else {
+            0i32
+        };
         if dot_pos >= 0 {
             exp += dot_pos + 1 - e_pos as i32;
         }
 
-        let mut fsp = 0;
-        if exp < 0 {
-            fsp = -exp as usize;
-        }
+        let fsp = if exp < 0 {
+            -exp as usize
+        } else {
+            0
+        };
 
         let mut last_pos = filtered_bytes.len() - 1;
         while last_pos > 0 && filtered_bytes[last_pos] == b'0' {
@@ -377,10 +379,11 @@ pub trait DecimalEncoder: BytesEncoder {
         }
 
         let s = format!("{}", d.coeff).into_bytes();
-        let mut truncated = s.as_slice();
-        if s[0] == b'-' || s[0] == b'+' {
-            truncated = &s[1..];
-        }
+        let mut truncated = if s[0] == b'-' || s[0] == b'+' {
+            &s[1..]
+        } else {
+            s.as_slice()
+        };
 
         // To make the decimal encoded bytes compareable, we
         // need to encode decimal to only contains fraction part.

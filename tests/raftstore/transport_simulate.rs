@@ -91,10 +91,11 @@ impl<T: Transport> Transport for SimulateTransport<T> {
             }
         }
 
-        let mut res = Ok(());
-        if !discard {
-            res = self.trans.rl().send(msg);
-        }
+        let mut res = if !discard {
+            self.trans.rl().send(msg)
+        } else {
+            Ok(())
+        };
 
         for filter in self.filters.iter().rev() {
             res = filter.after(res);
