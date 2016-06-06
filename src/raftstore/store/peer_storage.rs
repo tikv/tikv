@@ -424,10 +424,11 @@ impl PeerStorage {
     }
 
     pub fn load_applied_index<T: Peekable>(&self, db: &T) -> Result<u64> {
-        let mut applied_index: u64 = 0;
-        if self.is_initialized() {
-            applied_index = RAFT_INIT_LOG_INDEX;
-        }
+        let applied_index: u64 = if self.is_initialized() {
+            RAFT_INIT_LOG_INDEX
+        } else {
+            0
+        };
 
         let n = try!(db.get_u64(&keys::raft_applied_index_key(self.get_region_id())));
         Ok(n.unwrap_or(applied_index))

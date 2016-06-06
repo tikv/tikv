@@ -691,10 +691,11 @@ impl<T: Storage> Raft<T> {
         if m.get_term() == 0 {
             // local message
         } else if m.get_term() > self.term {
-            let mut leader_id = m.get_from();
-            if m.get_msg_type() == MessageType::MsgRequestVote {
-                leader_id = INVALID_ID;
-            }
+            let leader_id = if m.get_msg_type() == MessageType::MsgRequestVote {
+                INVALID_ID
+            } else {
+                m.get_from()
+            };
             info!("{} {} [term: {}] received a {:?} message with higher term from {} [term: {}]",
                   self.tag,
                   self.id,
