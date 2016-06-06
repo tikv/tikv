@@ -17,6 +17,32 @@ use super::server::new_server_cluster;
 use super::util::*;
 use tikv::pd::PdClient;
 
+fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    let engine = cluster.get_engine(1);
+
+    let stats = pd_client.get_store_stats(1).unwrap();
+    assert_eq!(stats.get_region_count(), 2);
+
+    let value = vec![0;1024];
+    for i in 0..1000 {
+        let last_available = stats.get_available();
+        cluster.must_put(format!("a{}", i).as_bytes(), &value);
+        engine.flush(true).unwrap();
+        sleep_ms(20);
+
+        let stats = pd_client.get_store_stats(1).unwrap();
+        // Because the available is for disk size, even we add data
+        // other process may reduce data too. so here we try to
+        // check available size changed.
+        if stats.get_available() != last_available {
+            return;
+        }
+    }
+
+    panic!("available not changed")
+}
+
 fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
@@ -57,8 +83,8 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(stats.get_region_count(), 2);
-    // We must use some space, so available must reduce.
-    assert!(stats.get_available() < last_stats.get_available());
+
+    check_available(cluster);
 }
 
 #[test]
