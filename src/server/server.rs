@@ -19,11 +19,10 @@ use std::boxed::Box;
 use std::net::SocketAddr;
 
 use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
-use mio::tcp::{TcpListener, TcpStream, Shutdown};
+use mio::tcp::{TcpListener, TcpStream};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
-use kvproto::raftpb::MessageType as RaftMessageType;
 use super::{Msg, SendCh, ConnData};
 use super::conn::{Conn, OnWriteComplete};
 use super::{Result, OnResponse};
@@ -130,7 +129,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let end_point = EndPointHost::new(self.store.engine());
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
-        let snap_runner = SnapHandler::new(self.snap_path.clone());
+        let snap_runner = SnapHandler::new(self.snap_path.clone(), self.raft_router.clone());
         box_try!(self.snap_worker.start(snap_runner));
 
         try!(event_loop.run(self));
@@ -224,22 +223,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let msg_type = msg.get_msg_type();
         match msg_type {
             MessageType::Raft => {
-                let msg_type = msg.get_raft().get_message().get_msg_type();
                 if let Err(e) = self.raft_router.rl().send_raft_msg(msg.take_raft()) {
                     // Should we return error to let outer close this connection later?
                     error!("send raft message for token {:?} with msg id {} err {:?}",
                            token,
                            msg_id,
                            e);
-                }
-                if msg_type == RaftMessageType::MsgSnapshot {
-                    // Now we use new connection for every snapshot sending,
-                    // but it is not safe to close the connection after sending OK,
-                    // so we close it here after receiving whole snapshot.
-                    // We use shutdown here for a graceful close.
-                    if let Some(conn) = self.conns.get(&token) {
-                        try!(conn.sock.shutdown(Shutdown::Write));
-                    }
                 }
                 Ok(())
             }
@@ -628,13 +617,13 @@ mod tests {
     use std::thread;
     use std::sync::{Arc, RwLock, Mutex};
     use std::sync::mpsc::{self, Sender};
-    use std::path::PathBuf;
     use std::net::SocketAddr;
 
     use mio::tcp::TcpListener;
+    use tempdir::TempDir;
 
     use super::*;
-    use super::super::{Msg, ConnData, Result, SnapshotManager, SendCh};
+    use super::super::{Msg, ConnData, Result};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::{Storage, Dsn};
@@ -690,15 +679,14 @@ mod tests {
 
         let mut event_loop = create_event_loop().unwrap();
         let (tx, rx) = mpsc::channel();
-        let snapshot_manager = SnapshotManager::new(PathBuf::from("/tmp/"),
-                                                    SendCh::new(event_loop.channel()));
+        let tmp_dir = TempDir::new("test").unwrap();
         let mut server =
             Server::new(&mut event_loop,
                         listener,
                         Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
                         resolver,
-                        Arc::new(RwLock::new(snapshot_manager)))
+                        tmp_dir.path().to_str().unwrap().to_owned())
                 .unwrap();
 
         let ch = server.get_sendch();

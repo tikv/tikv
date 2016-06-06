@@ -111,7 +111,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto?branch=tiancaiamao/handshake-dispatch-conn#a0cdd3eb06b3ee702443615e049ac172474b3ec8"
+source = "git+https://github.com/pingcap/kvproto?branch=tiancaiamao/handshake-dispatch-conn#549a869844c137d8bf84cd74a862b70b9f1d4b29"
 dependencies = [
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]

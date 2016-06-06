@@ -159,7 +159,7 @@ impl Simulator for ServerCluster {
                                      store,
                                      router,
                                      resolver,
-                                     self.snap_paths[&node_id].path().to_str().unwrap().to_owned())
+                                     cfg.store_cfg.snap_path)
             .unwrap();
 
         let ch = server.get_sendch();

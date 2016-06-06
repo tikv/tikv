@@ -16,22 +16,22 @@ use std::collections::VecDeque;
 use std::option::Option;
 use std::boxed::{Box, FnBox};
 use std::net::Shutdown;
-use std::sync::{Arc, RwLock};
 use std::cmp;
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
-use kvproto::msgpb::{Message, MessageType};
+use protobuf::Message as PbMessage;
+
+use kvproto::msgpb::Message;
+use kvproto::raft_serverpb::RaftSnapshotData;
 use super::{Result, ConnData};
 use super::server::Server;
 use util::codec::rpc;
-use util::HandyRwLock;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use util::worker::Scheduler;
-use byteorder::{ByteOrder, LittleEndian};
 
 pub type OnClose = Box<FnBox() + Send>;
 pub type OnWriteComplete = Box<FnBox() + Send>;
@@ -72,7 +72,6 @@ pub struct Conn {
     on_write_complete: Option<OnWriteComplete>,
 }
 
-// TODO: this API is disgusting, it's semantic vagueness.
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
     if buf.remaining() == 0 {
         return Ok(());
@@ -166,29 +165,28 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        let mut msg = match try!(self.read_one_message()) {
-            Some(msg) => msg,
+        let mut data = match try!(self.read_one_message()) {
+            Some(data) => data,
             None => return Ok(vec![]),
         };
-        match msg.get_msg_type() {
-            MessageType::Snapshot => {
-                self.conn_type = ConnType::Snapshot;
-                self.file_size = msg.get_snap_file_meta().get_size() as usize;
-                self.payload = Some(create_mem_buf(cmp::min(SNAPSHOT_PAYLOAD_BUF, self.file_size)));
-                self.snap_scheduler
-                    .schedule(SnapTask::Register(self.token, msg.take_snap_file_meta()));
-                self.read_snapshot(event_loop)
-            }
-            _ => {
-                self.conn_type = ConnType::Rpc;
-                let mut data = vec![ConnData {
-                                        msg_id: self.last_msg_id,
-                                        msg: msg,
-                                    }];
-                try!(self.read_rpc(event_loop, &mut data));
-                Ok(data)
-            }
+        if data.is_snapshot() {
+            self.conn_type = ConnType::Snapshot;
+
+            let mut snap_data = RaftSnapshotData::new();
+            try!(snap_data.merge_from_bytes(
+                data.msg.get_raft().get_message().get_snapshot().get_data()));
+            self.file_size = snap_data.get_len() as usize;
+            self.payload = Some(create_mem_buf(cmp::min(SNAPSHOT_PAYLOAD_BUF, self.file_size)));
+
+            let register_task = SnapTask::Register(self.token, data.msg.take_raft());
+            box_try!(self.snap_scheduler.schedule(register_task));
+
+            return self.read_snapshot(event_loop);
         }
+        self.conn_type = ConnType::Rpc;
+        let mut data = vec![data];
+        try!(self.read_rpc(event_loop, &mut data));
+        Ok(data)
     }
 
     fn read_snapshot<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
@@ -205,19 +203,21 @@ impl Conn {
     fn handle_snapshot_payload(&mut self) -> Result<()> {
         let mut payload = self.payload.take().unwrap();
         let cap = payload.capacity();
-        let mut finish = false;
+
+        let task = SnapTask::Write(self.token, payload.flip());
+        box_try!(self.snap_scheduler.schedule(task));
+
         if self.read_size + cap == self.file_size {
             // last chunk
-            finish = true;
+            box_try!(self.snap_scheduler.schedule(SnapTask::Close(self.token)));
             if let Err(e) = self.sock.shutdown(Shutdown::Both) {
                 error!("shutdown connection error: {}", e);
             }
         }
 
-        let task = SnapTask::Write(self.token, payload.flip());
-        box_try!(self.snap_scheduler.schedule(task));
-
-        payload = if self.read_size + cap >= self.file_size {
+        payload = if self.read_size == self.file_size {
+            create_mem_buf(1)
+        } else if self.read_size + cap >= self.file_size {
             create_mem_buf(self.file_size - self.read_size)
         } else {
             create_mem_buf(cap)
@@ -234,7 +234,7 @@ impl Conn {
         Ok(ret)
     }
 
-    fn read_one_message(&mut self) -> Result<Option<Message>> {
+    fn read_one_message(&mut self) -> Result<Option<ConnData>> {
         if self.payload.is_none() {
             try!(try_read_data(&mut self.sock, &mut self.header));
             if self.header.remaining() > 0 {
@@ -261,7 +261,10 @@ impl Conn {
         let mut msg = Message::new();
         try!(rpc::decode_body(payload.bytes(), &mut msg));
         self.header.clear();
-        Ok(Some(msg))
+        Ok(Some(ConnData {
+            msg_id: self.last_msg_id,
+            msg: msg,
+        }))
     }
 
     fn read_rpc<T, S>(&mut self,
@@ -273,14 +276,10 @@ impl Conn {
     {
         loop {
             // Because we use the edge trigger, so here we must read whole data.
-            let msg = try!(self.read_one_message());
-            if msg.is_none() {
-                break;
-            }
-            bufs.push(ConnData {
-                msg_id: self.last_msg_id,
-                msg: msg.unwrap(),
-            })
+            match try!(self.read_one_message()) {
+                None => break,
+                Some(d) => bufs.push(d),
+            };
         }
 
         Ok(())

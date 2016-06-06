@@ -212,9 +212,12 @@ mod test {
         }
     }
 
-    fn new_peer_storage(path: &TempDir) -> PeerStorage {
+    fn new_peer_storage(path: &TempDir, snap_dir: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        PeerStorage::new(Arc::new(engine), &Region::new()).unwrap()
+        PeerStorage::new(Arc::new(engine),
+                         &Region::new(),
+                         snap_dir.path().to_str().unwrap().to_owned())
+            .unwrap()
     }
 
     fn share<T>(t: T) -> Arc<RwLock<T>> {
@@ -245,7 +248,8 @@ mod test {
         let mut host = CoprocessorHost::default();
         host.registry.register_observer(3, Box::new(observer1));
         let path = TempDir::new("test-raftstore").unwrap();
-        let ps = new_peer_storage(&path);
+        let snap_dir = TempDir::new("snap_dir").unwrap();
+        let ps = new_peer_storage(&path, &snap_dir);
         let mut admin_req = RaftCmdRequest::new();
         admin_req.set_admin_request(AdminRequest::new());
         let mut query_req = RaftCmdRequest::new();

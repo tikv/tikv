@@ -190,12 +190,13 @@ impl Peer {
             return Err(box_err!("invalid peer id"));
         }
 
+        let cfg = store.config();
+
         let store_id = store.store_id();
-        let ps = try!(PeerStorage::new(store.engine(), &region));
+        let ps = try!(PeerStorage::new(store.engine(), &region, cfg.snap_path.clone()));
         let applied_index = ps.applied_index();
         let storage = Arc::new(RaftStorage::new(ps));
 
-        let cfg = store.config();
         let raft_cfg = raft::Config {
             id: peer_id,
             peers: vec![],

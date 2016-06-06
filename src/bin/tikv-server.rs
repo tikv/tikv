@@ -34,7 +34,7 @@ use std::net::UdpSocket;
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
-use cadence::{StatsdClient, NopMetricSink, UdpMetricSink};
+use cadence::{StatsdClient, NopMetricSink};
 use tempdir::TempDir;
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
