@@ -776,7 +776,7 @@ pub fn do_snapshot(snap_dir: &Path,
         try!(build_snap_file(&mut snap_file, snap, region_id, ranges));
     }
     let len = try!(snap_file.meta()).len();
-    snap_data.set_len(len);
+    snap_data.set_file_size(len);
 
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));

@@ -75,7 +75,6 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
         // header is not full read, we will try read more.
         if let Some(n) = try!(r.try_read(buf.mut_bytes())) {
             if n == 0 {
-                debug!("remote close the conn\n");
                 // 0 means remote has closed the socket.
                 return Err(box_err!("remote has closed the connection"));
             }
@@ -164,7 +163,7 @@ impl Conn {
             let mut snap_data = RaftSnapshotData::new();
             try!(snap_data.merge_from_bytes(
                 data.msg.get_raft().get_message().get_snapshot().get_data()));
-            self.file_size = snap_data.get_len() as usize;
+            self.file_size = snap_data.get_file_size() as usize;
             self.payload = Some(create_mem_buf(cmp::min(SNAPSHOT_PAYLOAD_BUF, self.file_size)));
 
             let register_task = SnapTask::Register(self.token, data.msg.take_raft());
