@@ -146,20 +146,13 @@ impl<T> RaftLog<T>
                 if e.get_index() <= self.last_index() {
                     info!("found conflict at index {}, [existing term:{}, conflicting term:{}]",
                           e.get_index(),
-                          self.zero_term_on_err_compacted(self.term(e.get_index())),
+                          self.term(e.get_index()).unwrap_or(0),
                           e.get_term());
                 }
                 return e.get_index();
             }
         }
         0
-    }
-
-    pub fn zero_term_on_err_compacted(&self, res: Result<u64>) -> u64 {
-        if let Err(Error::Store(StorageError::Compacted)) = res {
-            panic!(res.unwrap_err());
-        }
-        res.unwrap_or(0)
     }
 
     pub fn match_term(&self, idx: u64, term: u64) -> bool {
@@ -338,8 +331,7 @@ impl<T> RaftLog<T>
     }
 
     pub fn maybe_commit(&mut self, max_index: u64, term: u64) -> bool {
-        if max_index > self.committed &&
-           self.zero_term_on_err_compacted(self.term(max_index)) == term {
+        if max_index > self.committed && self.term(max_index).unwrap_or(0) == term {
             self.commit_to(max_index);
             true
         } else {

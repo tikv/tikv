@@ -1168,7 +1168,7 @@ impl<T: Storage> Raft<T> {
                         from {}",
                        self.tag,
                        self.id,
-                       self.raft_log.zero_term_on_err_compacted(self.raft_log.term(m.get_index())),
+                       self.raft_log.term(m.get_index()).unwrap_or(0),
                        m.get_index(),
                        m.get_log_term(),
                        m.get_index(),
