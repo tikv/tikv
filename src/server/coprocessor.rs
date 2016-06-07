@@ -105,7 +105,7 @@ impl EndPointHost {
     pub fn new(engine: Arc<Box<Engine>>) -> EndPointHost {
         EndPointHost {
             snap_endpoint: Arc::new(TiDbEndPoint::new(engine)),
-            pool: ThreadPool::new_with_name("endpoint-worker".to_owned(), DEFAULT_POOL_SIZE),
+            pool: ThreadPool::new_with_name("endpoint-pool".to_owned(), DEFAULT_POOL_SIZE),
         }
     }
 }
