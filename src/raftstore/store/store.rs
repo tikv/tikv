@@ -696,11 +696,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let mut leader_count = 0;
         for peer in self.region_peers.values() {
             if peer.is_leader() {
+                leader_count += 1;
                 self.heartbeat_pd(peer);
             }
         }
+
+        metric_gauge!("raftstore.leader_count", leader_count);
+        metric_gauge!("raftstore.region_count", self.region_peers.len() as u64);
 
         self.register_pd_heartbeat_tick(event_loop);
     }
@@ -749,6 +754,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_store_id(self.store_id());
         stats.set_available(available);
         stats.set_region_count(self.region_peers.len() as u32);
+
+        metric_gauge!("raftstore.capacity", capacity);
+        metric_gauge!("raftstore.available", available);
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("failed to notify pd: {}", e);
