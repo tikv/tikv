@@ -166,11 +166,12 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     Some((mut writer, msg)) => {
                         if let Err(e) = writer.save() {
                             error!("failed to save file {:?}: {:?}", token, e);
+                            return;
                         }
+                        info!("snapshot saved to {}", writer.path().display());
                         if let Err(e) = self.raft_router.rl().send_raft_msg(msg) {
                             error!("send snapshot for token {:?} err {:?}", token, e);
                         }
-                        info!("snapshot saved to {}", writer.path().display());
                     }
                     None => error!("invalid snap token {:?}", token),
                 }

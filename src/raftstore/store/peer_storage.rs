@@ -617,16 +617,16 @@ impl SnapFile {
             return Err(io::Error::new(ErrorKind::InvalidInput, format!("file length {} < 4", len)));
         }
         let to_read = len as usize - 4;
-        let mut total_readed = 0;
-        let mut buffer = vec![0; 1024];
+        let mut total_read = 0;
+        let mut buffer = vec![0; 4098];
         loop {
             let readed = try!(reader.read(&mut buffer));
-            if total_readed + readed >= to_read {
-                digest.write(&buffer[..to_read - total_readed]);
+            if total_read + readed >= to_read {
+                digest.write(&buffer[..to_read - total_read]);
                 try!(reader.seek(SeekFrom::End(-4)));
                 break;
             }
-            total_readed += readed;
+            total_read += readed;
         }
         let sum = try!(reader.read_u32::<BigEndian>());
         if sum != digest.sum32() {
