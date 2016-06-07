@@ -532,9 +532,16 @@ impl PeerStorage {
 }
 
 const RETRY_CNT: u32 = 1024;
+/// Name prefix for the self-generated snapshot file.
 pub const SNAP_GEN_PREFIX: &'static str = "gen";
+/// Name prefix for the received snapshot file.
 pub const SNAP_REV_PREFIX: &'static str = "rev";
 
+/// A structure represent the snapshot file.
+///
+/// All changes to the file will be written to `tmp_file` first, and use
+/// `save` method to make them persistent. When saving a crc32 checksum
+/// will be appended to the file end automatically.
 pub struct SnapFile {
     file: PathBuf,
     delete_when_drop: bool,
@@ -601,6 +608,7 @@ impl SnapFile {
         self.file.metadata()
     }
 
+    /// Validate whether current file is broken.
     pub fn validate(&self) -> io::Result<()> {
         let mut reader = try!(File::open(self.path()));
         let mut digest = Digest::new(crc32::IEEE);
@@ -636,6 +644,9 @@ impl SnapFile {
         fs::remove_file(self.path())
     }
 
+    /// Use the content in temporary files replace the target file.
+    ///
+    /// Please note that this method can only be called once.
     pub fn save(&mut self) -> io::Result<()> {
         if let Some((mut f, path)) = self.tmp_file.take() {
             try!(f.write_u32::<BigEndian>(self.digest.sum32()));

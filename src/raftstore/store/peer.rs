@@ -505,12 +505,6 @@ impl Peer {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         send_msg.set_message(msg.clone());
-        if msg.get_msg_type() == raftpb::MessageType::MsgSnapshot {
-            debug!("send raft message: region={} term={} index={}",
-                   self.region_id,
-                   msg.get_term(),
-                   msg.get_index());
-        }
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
         let mut unreachable = false;

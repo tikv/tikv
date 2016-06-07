@@ -18,7 +18,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::io::{Read, Write};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::boxed::{Box, FnBox};
+use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
 use threadpool::ThreadPool;
 use mio::Token;
@@ -39,6 +39,13 @@ pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_SENDER_POOL_SIZE: usize = 3;
 
+/// `Task` that `Runner` can handle.
+///
+/// `Register` register a pending snapshot file with token;
+/// `Write` write data to snapshot file;
+/// `Close` save the snapshot file;
+/// `Discard` discard all the unsaved changes made to snapshot file;
+/// `SendTo` send the snapshot file to specified address.
 pub enum Task {
     Register(Token, RaftMessage),
     Write(Token, ByteBuf),
@@ -65,6 +72,9 @@ impl Display for Task {
     }
 }
 
+/// Send the snapshot to specified address.
+///
+/// It will first send the normal raft snapshot message and then send the snapshot file.
 fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> {
     assert!(data.is_snapshot());
 

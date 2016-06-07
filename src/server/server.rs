@@ -24,7 +24,7 @@ use mio::tcp::{TcpListener, TcpStream};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
-use super::conn::{Conn, OnWriteComplete};
+use super::conn::Conn;
 use super::{Result, OnResponse};
 use util::HandyRwLock;
 use util::worker::Worker;
@@ -323,17 +323,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
     }
 
-    fn write_data(&mut self,
-                  event_loop: &mut EventLoop<Self>,
-                  token: Token,
-                  data: ConnData,
-                  cb: Option<OnWriteComplete>) {
+    fn write_data(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
         let res = match self.conns.get_mut(&token) {
             None => {
                 warn!("missing conn for token {:?}", token);
                 return;
             }
-            Some(conn) => conn.append_write_buf(event_loop, data, cb),
+            Some(conn) => conn.append_write_buf(event_loop, data),
         };
 
         if let Err(e) = res {
@@ -407,7 +403,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
         // check the corresponding token for store.
         if let Some(token) = self.store_tokens.get(&store_id).cloned() {
-            return self.write_data(event_loop, token, data, None);
+            return self.write_data(event_loop, token, data);
         }
 
         // No connection, try to resolve it.
@@ -462,7 +458,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
         };
 
-        self.write_data(event_loop, token, data, None)
+        self.write_data(event_loop, token, data)
     }
 
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter<T> {
@@ -540,9 +536,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
-            // Msg::Snapshot { data } => self.on_conn_msg(Token::from_usize(0), data),
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData { token, data } => self.write_data(event_loop, token, data, None),
+            Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {
                 self.on_resolve_result(event_loop, store_id, sock_addr, data)

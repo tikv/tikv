@@ -11,10 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::vec::Vec;
 use std::collections::VecDeque;
-use std::option::Option;
-use std::boxed::{Box, FnBox};
 use std::net::Shutdown;
 use std::cmp;
 
@@ -33,8 +30,6 @@ use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use util::worker::Scheduler;
 
-pub type OnClose = Box<FnBox() + Send>;
-pub type OnWriteComplete = Box<FnBox() + Send>;
 
 #[derive(PartialEq)]
 enum ConnType {
@@ -68,9 +63,6 @@ pub struct Conn {
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
-
-    on_close: Option<OnClose>,
-    on_write_complete: Option<OnWriteComplete>,
 }
 
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
@@ -120,8 +112,6 @@ impl Conn {
             last_msg_id: 0,
             snap_scheduler: snap_scheduler,
             store_id: store_id,
-            on_write_complete: None,
-            on_close: None,
         }
     }
 
@@ -131,15 +121,7 @@ impl Conn {
                 error!("failed to cleanup snapshot: {:?}", e);
             }
         }
-        if self.on_close.is_some() {
-            let cb = self.on_close.take().unwrap();
-            cb.call_box(());
-        }
     }
-
-    // pub fn set_close_callback(&mut self, cb: Option<OnClose>) {
-    //     self.on_close = cb
-    // }
 
     pub fn reregister<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
         where T: RaftStoreRouter,
@@ -320,19 +302,13 @@ impl Conn {
         self.interest.remove(EventSet::writable());
         try!(self.reregister(event_loop));
 
-        if self.on_write_complete.is_some() {
-            let cb = self.on_write_complete.take().unwrap();
-            cb.call_box(());
-        }
-
         Ok(())
     }
 
 
     pub fn append_write_buf<T, S>(&mut self,
                                   event_loop: &mut EventLoop<Server<T, S>>,
-                                  msg: ConnData,
-                                  cb: Option<OnWriteComplete>)
+                                  msg: ConnData)
                                   -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
@@ -352,8 +328,6 @@ impl Conn {
             self.interest.insert(EventSet::writable());
             try!(self.reregister(event_loop));
         }
-
-        self.on_write_complete = cb;
 
         Ok(())
     }
