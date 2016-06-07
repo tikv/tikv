@@ -62,12 +62,12 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Register(token, ref meta) => write!(f, "snap {:?} token: {:?}", meta, token),
-            Task::Write(token, _) => write!(f, "Snap Write Task for {:?}", token),
+            Task::Register(token, ref meta) => write!(f, "Register {:?} token: {:?}", meta, token),
+            Task::Write(token, _) => write!(f, "Write snap for {:?}", token),
             Task::Close(token) => write!(f, "Close file {:?}", token),
             Task::Discard(token) => write!(f, "Discard file {:?}", token),
             Task::SendTo { ref addr, ref data, .. } => {
-                write!(f, "Snap[to: {}, snap: {:?}]", addr, data.msg)
+                write!(f, "SendTo Snap[to: {}, snap: {:?}]", addr, data.msg)
             }
         }
     }
@@ -92,7 +92,7 @@ fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> 
 
     let res = rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
         .and_then(|_| io::copy(&mut f, &mut conn).map_err(From::from))
-        .and_then(|_| conn.read(&mut []).map_err(From::from))
+        .and_then(|_| conn.read(&mut [0]).map_err(From::from))
         .map(|_| ())
         .map_err(From::from);
     if let Ok(meta) = snap_file.meta() {

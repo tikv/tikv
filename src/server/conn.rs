@@ -180,36 +180,32 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
+        // all content should be read, ignore any read operation.
+        if self.payload.is_none() {
+            return Ok(());
+        }
         // TODO: limit rate
         while try!(self.read_payload()) {
-            try!(self.handle_snapshot_payload());
+            let payload = self.payload.take().unwrap();
+            let cap = payload.capacity();
+            self.read_size += cap;
+
+            let task = SnapTask::Write(self.token, payload.flip());
+            box_try!(self.snap_scheduler.schedule(task));
+
+            if self.read_size == self.file_size {
+                // last chunk
+                box_try!(self.snap_scheduler.schedule(SnapTask::Close(self.token)));
+                if let Err(e) = self.sock.shutdown(Shutdown::Both) {
+                    error!("shutdown connection error: {}", e);
+                }
+                break;
+            } else if self.read_size + cap >= self.file_size {
+                self.payload = Some(create_mem_buf(self.file_size - self.read_size))
+            } else {
+                self.payload = Some(create_mem_buf(cap))
+            };
         }
-        Ok(())
-    }
-
-    fn handle_snapshot_payload(&mut self) -> Result<()> {
-        let mut payload = self.payload.take().unwrap();
-        let cap = payload.capacity();
-
-        let task = SnapTask::Write(self.token, payload.flip());
-        box_try!(self.snap_scheduler.schedule(task));
-
-        if self.read_size + cap == self.file_size {
-            // last chunk
-            box_try!(self.snap_scheduler.schedule(SnapTask::Close(self.token)));
-            if let Err(e) = self.sock.shutdown(Shutdown::Both) {
-                error!("shutdown connection error: {}", e);
-            }
-        }
-
-        payload = if self.read_size == self.file_size {
-            create_mem_buf(1)
-        } else if self.read_size + cap >= self.file_size {
-            create_mem_buf(self.file_size - self.read_size)
-        } else {
-            create_mem_buf(cap)
-        };
-        self.payload = Some(payload);
         Ok(())
     }
 

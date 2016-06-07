@@ -523,12 +523,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 
         if events.is_readable() {
             self.on_readable(event_loop, token);
-        } else if events.is_hup() {
-            self.remove_conn(event_loop, token);
         }
 
         if events.is_writable() {
             self.on_writable(event_loop, token);
+        }
+
+        if events.is_hup() {
+            self.remove_conn(event_loop, token);
         }
     }
 
