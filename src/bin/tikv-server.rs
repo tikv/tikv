@@ -314,15 +314,12 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
 }
 
 fn get_snap_path(matches: &Matches, config: &toml::Value) -> String {
-    let path = get_string_value("",
+    let path = get_string_value("snap-dir",
                                 "server.snapshot",
                                 matches,
                                 config,
-                                Some(TEMP_DIR.to_owned()),
+                                None,
                                 |v| v.as_str().map(|s| s.to_owned()));
-    if path == TEMP_DIR {
-        return path;
-    }
 
     let p = Path::new(&path);
     if p.exists() && p.is_file() {
@@ -418,6 +415,7 @@ fn main() {
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
     opts.optopt("", "pd", "set pd address", "host:port");
     opts.optopt("", "metric-addr", "set statsd server address", "host:port");
+    opts.optopt("", "snap-dir", "set the snapshot directory", "");
     opts.optopt("",
                 "metric-prefix",
                 "set metric prefix",

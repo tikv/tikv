@@ -95,6 +95,12 @@ fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> 
         .and_then(|_| conn.read(&mut []).map_err(From::from))
         .map(|_| ())
         .map_err(From::from);
+    if let Ok(meta) = snap_file.meta() {
+        debug!("sending snapshot[path: {}, size: {}] takes {:?}",
+               snap_file.path().display(),
+               meta.len(),
+               timer.elapsed());
+    }
     metric_time!("server.send_snap", timer.elapsed());
     res
 }
