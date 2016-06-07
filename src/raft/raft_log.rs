@@ -106,7 +106,7 @@ impl<T> RaftLog<T>
             _ => {
                 self.store.term(idx).map_err(|e| {
                     if e != Error::Store(StorageError::Compacted) {
-                        panic!(e)
+                        panic!("unexpected error: {:?}", e);
                     }
                     e
                 })
@@ -273,7 +273,7 @@ impl<T> RaftLog<T>
                 if e == Error::Store(StorageError::Compacted) {
                     return self.all_entries();
                 }
-                panic!(e)
+                panic!("unexpected error: {:?}", e);
             }
             Ok(ents) => ents,
         }
@@ -371,7 +371,7 @@ impl<T> RaftLog<T>
                                low,
                                cmp::min(high, self.unstable.offset))
                     }
-                    _ => panic!(e),
+                    _ => panic!("unexpected error: {:?}", e),
                 }
             }
             ents = stored_entries.unwrap();

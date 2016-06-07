@@ -126,7 +126,7 @@ impl Simulator for ServerCluster {
                     listener = l;
                     break;
                 }
-                Err(e) => panic!(e),
+                Err(e) => panic!("unexpected error: {:?}", e),
             }
             try_cnt += 1;
         }
