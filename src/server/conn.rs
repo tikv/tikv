@@ -36,6 +36,7 @@ use util::worker::Scheduler;
 pub type OnClose = Box<FnBox() + Send>;
 pub type OnWriteComplete = Box<FnBox() + Send>;
 
+#[derive(PartialEq)]
 enum ConnType {
     Handshake,
     Rpc,
@@ -125,6 +126,11 @@ impl Conn {
     }
 
     pub fn close(&mut self) {
+        if self.conn_type == ConnType::Snapshot {
+            if let Err(e) = self.snap_scheduler.schedule(SnapTask::Discard(self.token)) {
+                error!("failed to cleanup snapshot: {:?}", e);
+            }
+        }
         if self.on_close.is_some() {
             let cb = self.on_close.take().unwrap();
             cb.call_box(());

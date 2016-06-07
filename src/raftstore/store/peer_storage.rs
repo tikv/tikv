@@ -14,7 +14,7 @@
 use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::vec::Vec;
 use std::io::{self, Write, ErrorKind, Seek, SeekFrom, Read};
-use std::fs::{self, File, Metadata};
+use std::fs::{self, File, Metadata, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::{error, mem};
 use std::time::Instant;
@@ -303,7 +303,8 @@ impl PeerStorage {
         info!("begin to apply snapshot for region {}",
               self.get_region_id());
 
-        let snap_file = try!(SnapFile::from_snap(self.snap_dir.clone(), snap, SNAP_REV_PREFIX));
+        let mut snap_file = try!(SnapFile::from_snap(self.snap_dir.clone(), snap, SNAP_REV_PREFIX));
+        snap_file.delete_when_drop();
         if !snap_file.exists() {
             return Err(box_err!("missing snap file {}", snap_file.path().display()));
         }
@@ -534,9 +535,9 @@ const RETRY_CNT: u32 = 1024;
 pub const SNAP_GEN_PREFIX: &'static str = "gen";
 pub const SNAP_REV_PREFIX: &'static str = "rev";
 
-// TODO: cleanup when applied
 pub struct SnapFile {
     file: PathBuf,
+    delete_when_drop: bool,
     digest: Digest,
     tmp_file: Option<(File, PathBuf)>,
 }
@@ -575,6 +576,7 @@ impl SnapFile {
 
         let mut f = SnapFile {
             file: file_path,
+            delete_when_drop: false,
             digest: Digest::new(crc32::IEEE),
             tmp_file: None,
         };
@@ -583,24 +585,16 @@ impl SnapFile {
             return Ok(f);
         }
 
-        let mut try_cnt = 0;
-        loop {
-            if try_cnt == RETRY_CNT {
-                return Err(io::Error::new(ErrorKind::Other,
-                                          format!("failed to create temporary file after {} \
-                                                   tries",
-                                                  try_cnt)));
-            }
-            let mut file = f.file.clone();
-            file.set_file_name(format!("{}.{}", file_name, try_cnt));
-            if !file.exists() {
-                f.tmp_file = Some((try!(File::create(file.as_path())), file));
-                break;
-            }
-            try_cnt += 1;
-        }
+        let mut tmp_p = f.file.clone();
+        tmp_p.set_file_name(format!("{}.tmp", file_name));
+        let tmp_f = try!(OpenOptions::new().write(true).create_new(true).open(tmp_p.as_path()));
+        f.tmp_file = Some((tmp_f, tmp_p));
 
         Ok(f)
+    }
+
+    pub fn delete_when_drop(&mut self) {
+        self.delete_when_drop = true;
     }
 
     pub fn meta(&self) -> io::Result<Metadata> {
@@ -636,6 +630,10 @@ impl SnapFile {
 
     pub fn exists(&self) -> bool {
         self.file.exists() && self.file.is_file()
+    }
+
+    pub fn delete(&self) -> io::Result<()> {
+        fs::remove_file(self.path())
     }
 
     pub fn save(&mut self) -> io::Result<()> {
@@ -677,6 +675,11 @@ impl Drop for SnapFile {
                 warn!("failed to delete temporary file {}: {:?}",
                       path.display(),
                       e);
+            }
+        }
+        if self.delete_when_drop {
+            if let Err(e) = self.delete() {
+                warn!("failed to delete file {}: {:?}", self.path().display(), e);
             }
         }
     }

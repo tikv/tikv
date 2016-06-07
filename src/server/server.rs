@@ -152,8 +152,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let conn = self.conns.remove(&token);
         match conn {
             Some(mut conn) => {
-                // TODO release according to conn_type
-                // snapshot connection should stop it's worker
                 debug!("remove connection token {:?}", token);
                 // if connected to remote store, remove this too.
                 if let Some(store_id) = conn.store_id {

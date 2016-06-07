@@ -39,11 +39,11 @@ pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_SENDER_POOL_SIZE: usize = 3;
 
-// TODO make it zero copy
 pub enum Task {
     Register(Token, RaftMessage),
     Write(Token, ByteBuf),
     Close(Token),
+    Discard(Token),
     SendTo {
         addr: SocketAddr,
         data: ConnData,
@@ -57,6 +57,7 @@ impl Display for Task {
             Task::Register(token, ref meta) => write!(f, "snap {:?} token: {:?}", meta, token),
             Task::Write(token, _) => write!(f, "Snap Write Task for {:?}", token),
             Task::Close(token) => write!(f, "Close file {:?}", token),
+            Task::Discard(token) => write!(f, "Discard file {:?}", token),
             Task::SendTo { ref addr, ref data, .. } => {
                 write!(f, "Snap[to: {}, snap: {:?}]", addr, data.msg)
             }
@@ -68,13 +69,14 @@ fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> 
     assert!(data.is_snapshot());
 
     let snap = data.msg.get_raft().get_message().get_snapshot();
-    let f = box_try!(SnapFile::from_snap(snap_dir.as_path(), &snap, SNAP_GEN_PREFIX));
-    if !f.exists() {
-        return Err(box_err!("missing snap file: {:?}", f.path()));
+    let mut snap_file = box_try!(SnapFile::from_snap(snap_dir.as_path(), &snap, SNAP_GEN_PREFIX));
+    if !snap_file.exists() {
+        return Err(box_err!("missing snap file: {:?}", snap_file.path()));
     }
     // snapshot file has been validated when created, so no need validate again.
 
-    let mut f = try!(File::open(f.path()));
+    let mut f = try!(File::open(snap_file.path()));
+    snap_file.delete_when_drop();
     let mut conn = try!(TcpStream::connect(&addr));
 
     rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
@@ -84,7 +86,6 @@ fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> 
         .map_err(From::from)
 }
 
-// TODO: check if files can lead to memory leak
 pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_dir: PathBuf,
     files: HashMap<Token, (SnapFile, RaftMessage)>,
@@ -107,11 +108,16 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Register(token, meta) => {
-                // TODO: forbid concurrent write.
                 match SnapFile::from_snap(self.snap_dir.as_path(),
                                           meta.get_message().get_snapshot(),
                                           SNAP_REV_PREFIX) {
                     Ok(mut f) => {
+                        if f.exists() {
+                            // Maybe we can just use this file to apply.
+                            if let Err(e) = f.delete() {
+                                error!("delete stale file failed: {:?}", e);
+                            }
+                        }
                         debug!("begin to receive snap {:?}", meta);
                         let mut res = f.encode_u64(meta.compute_size() as u64);
                         if res.is_ok() {
@@ -148,6 +154,11 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         info!("snapshot saved to {}", writer.path().display());
                     }
                     None => error!("invalid snap token {:?}", token),
+                }
+            }
+            Task::Discard(token) => {
+                if let Some((_, msg)) = self.files.remove(&token) {
+                    debug!("discard snapshot: {:?}", msg);
                 }
             }
             Task::SendTo { addr, data, cb } => {
