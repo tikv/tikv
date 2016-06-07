@@ -109,7 +109,7 @@ impl Simulator for NodeCluster {
 
         let mut cfg = cfg;
         let tmp = TempDir::new("test_cluster").unwrap();
-        cfg.store_cfg.snap_path = tmp.path().to_str().unwrap().to_owned();
+        cfg.store_cfg.snap_dir = tmp.path().to_str().unwrap().to_owned();
 
         let mut event_loop = create_event_loop(&cfg.store_cfg).unwrap();
         let simulate_trans = SimulateTransport::new(self.trans.clone());

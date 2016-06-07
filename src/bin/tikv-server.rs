@@ -280,7 +280,7 @@ fn build_raftkv(matches: &Matches,
                                           |v| v.as_str().map(|s| s.to_owned()));
 
     let snap_path = get_snap_path(matches, config);
-    cfg.store_cfg.snap_path = snap_path.clone();
+    cfg.store_cfg.snap_dir = snap_path.clone();
 
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);

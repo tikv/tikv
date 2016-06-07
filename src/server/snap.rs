@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use threadpool::ThreadPool;
 use mio::Token;
 use bytes::{Buf, ByteBuf};
@@ -77,7 +78,7 @@ impl Display for Task {
 /// It will first send the normal raft snapshot message and then send the snapshot file.
 fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> {
     assert!(data.is_snapshot());
-
+    let timer = Instant::now();
     let snap = data.msg.get_raft().get_message().get_snapshot();
     let mut snap_file = box_try!(SnapFile::from_snap(snap_dir.as_path(), &snap, SNAP_GEN_PREFIX));
     if !snap_file.exists() {
@@ -89,11 +90,13 @@ fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> 
     snap_file.delete_when_drop();
     let mut conn = try!(TcpStream::connect(&addr));
 
-    rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
+    let res = rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
         .and_then(|_| io::copy(&mut f, &mut conn).map_err(From::from))
         .and_then(|_| conn.read(&mut []).map_err(From::from))
         .map(|_| ())
-        .map_err(From::from)
+        .map_err(From::from);
+    metric_time!("server.send_snap", timer.elapsed());
+    res
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {

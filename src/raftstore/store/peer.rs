@@ -193,7 +193,7 @@ impl Peer {
         let cfg = store.config();
 
         let store_id = store.store_id();
-        let ps = try!(PeerStorage::new(store.engine(), &region, cfg.snap_path.clone()));
+        let ps = try!(PeerStorage::new(store.engine(), &region, cfg.snap_dir.clone()));
         let applied_index = ps.applied_index();
         let storage = Arc::new(RaftStorage::new(ps));
 

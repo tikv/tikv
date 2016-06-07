@@ -167,7 +167,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        box_try!(self.snap_worker.start(SnapRunner::new(&self.cfg.snap_path)));
+        box_try!(self.snap_worker.start(SnapRunner::new(&self.cfg.snap_dir)));
 
         box_try!(self.compact_worker.start(CompactRunner));
 

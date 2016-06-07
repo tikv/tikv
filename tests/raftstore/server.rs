@@ -112,7 +112,7 @@ impl Simulator for ServerCluster {
 
         let mut cfg = cfg;
         let tmp = TempDir::new("test_cluster").unwrap();
-        cfg.store_cfg.snap_path = tmp.path().to_str().unwrap().to_owned();
+        cfg.store_cfg.snap_dir = tmp.path().to_str().unwrap().to_owned();
         self.snap_paths.insert(node_id, tmp);
 
         // Now we cache the store address, so here we should re-use last
@@ -159,7 +159,7 @@ impl Simulator for ServerCluster {
                                      store,
                                      router,
                                      resolver,
-                                     cfg.store_cfg.snap_path)
+                                     cfg.store_cfg.snap_dir)
             .unwrap();
 
         let ch = server.get_sendch();
