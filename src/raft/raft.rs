@@ -348,7 +348,7 @@ impl<T: Storage> Raft<T> {
                        to);
                 return false;
             }
-            panic!(e);
+            panic!("unexpected error: {:?}", e);
         }
         let snapshot = snapshot_r.unwrap();
         if snapshot.get_metadata().get_index() == 0 {
