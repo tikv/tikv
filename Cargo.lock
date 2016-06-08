@@ -4,7 +4,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes 0.3.0 (git+https://github.com/carllerche/bytes)",
- "cadence 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cadence 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "clippy 0.0.73 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (git+https://github.com/rust-lang-nursery/getopts)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto)",
@@ -46,7 +46,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "cadence"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
