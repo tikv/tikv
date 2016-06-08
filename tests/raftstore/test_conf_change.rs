@@ -416,8 +416,13 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_remove_peer(r1, new_peer(2, 2));
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
-    // refresh region info, maybe no need
     cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(6), b"k2", b"v2");
+    let region_detail = cluster.region_detail(r1, 1);
+    for peer in region_detail.get_region().get_peers() {
+        assert!(peer.get_id() < 4);
+    }
+    assert!(region_detail.get_leader().get_id() < 4);
 
     // when network recovers, 1 will send request vote to [2,3]
     cluster.reset_transport_hooks();
