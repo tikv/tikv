@@ -314,7 +314,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_ready(&mut self) -> Result<()> {
+        let t = SlowTimer::new();
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
+        let pending_count = ids.len();
 
         for region_id in ids {
             let mut ready_result = None;
@@ -338,6 +340,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
+
+        slow_log!(t,
+                  "on {} regions raft ready takes {:?}",
+                  pending_count,
+                  t.elapsed());
 
         Ok(())
     }
@@ -453,6 +460,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_ranges.insert(enc_end_key(&region), region.get_id());
         }
 
+        let t = SlowTimer::new();
+        let result_count = ready_result.exec_results.len();
         // handle executing committed log results
         for result in ready_result.exec_results {
             match result {
@@ -465,6 +474,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
+        slow_log!(t,
+                  "on region {} ready {} results takes {:?}",
+                  region_id,
+                  result_count,
+                  t.elapsed());
 
         Ok(())
     }
@@ -898,13 +912,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             return;
         }
 
-        let t = SlowTimer::new();
         // We handle raft ready in event loop.
         if let Err(e) = self.on_raft_ready() {
             // TODO: should we panic here or shutdown the store?
             error!("handle raft ready err: {:?}", e);
         }
-        slow_log!(t, "handle raft ready takes {:?}", t.elapsed());
     }
 }
 
