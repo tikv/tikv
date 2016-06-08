@@ -89,6 +89,7 @@ fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> 
     let mut f = try!(File::open(snap_file.path()));
     snap_file.delete_when_drop();
     let mut conn = try!(TcpStream::connect(&addr));
+    try!(conn.set_nodelay(true));
 
     let res = rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
         .and_then(|_| io::copy(&mut f, &mut conn).map_err(From::from))
@@ -133,9 +134,8 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     Ok(mut f) => {
                         if f.exists() {
                             // Maybe we can just use this file to apply.
-                            if let Err(e) = f.delete() {
-                                error!("delete stale file failed: {:?}", e);
-                            }
+                            error!("file {} already exists!", f.path().display());
+                            return;
                         }
                         debug!("begin to receive snap {:?}", meta);
                         let mut res = f.encode_u64(meta.compute_size() as u64);
