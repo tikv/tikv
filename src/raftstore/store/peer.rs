@@ -31,7 +31,7 @@ use raft::{self, RawNode, StateRole};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use util::{escape, HandyRwLock};
+use util::{escape, HandyRwLock, SlowTimer};
 use pd::PdClient;
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage};
@@ -236,6 +236,7 @@ impl Peer {
     pub fn destroy(&mut self) -> Result<()> {
         // TODO maybe very slow
         // Delete all data in this peer.
+        let t = SlowTimer::new();
         let wb = WriteBatch::new();
         try!(self.storage.wl().scan_region(self.engine.as_ref(),
                                            &mut |key, _| {
@@ -247,6 +248,10 @@ impl Peer {
         try!(self.engine.write(wb));
 
         self.coprocessor_host.shutdown();
+        slow_log!(t,
+                  "destroy region {} takes {:?}",
+                  self.region_id,
+                  t.elapsed());
 
         Ok(())
     }
@@ -558,7 +563,9 @@ impl Peer {
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
+        let t = SlowTimer::new();
         let mut results = vec![];
+        let committed_count = committed_entries.len();
         for entry in committed_entries {
             let res = try!(match entry.get_entry_type() {
                 raftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
@@ -570,6 +577,11 @@ impl Peer {
             }
         }
 
+        slow_log!(t,
+                  "handle region {} {} committed entries takes {:?}",
+                  self.region_id,
+                  committed_count,
+                  t.elapsed());
         Ok(results)
     }
 
