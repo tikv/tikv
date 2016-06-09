@@ -1031,7 +1031,7 @@ fn test_handle_msg_append() {
 fn test_handle_heartbeat() {
     let commit = 2u64;
     let nw = |f, to, term, commit| {
-        let mut m = new_message(f, to, MessageType::MsgAppend, 0);
+        let mut m = new_message(f, to, MessageType::MsgHeartbeat, 0);
         m.set_term(term);
         m.set_commit(commit);
         m
