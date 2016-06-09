@@ -1,4 +1,4 @@
-## TiKV is a distributed Key-Value (KV) database powered by Rust
+## TiKV is a distributed Key-Value database powered by Rust and Raft
 
 
 [![Build Status](https://travis-ci.org/pingcap/tikv.svg?branch=master)](https://travis-ci.org/pingcap/tikv) [![Coverage Status](https://coveralls.io/repos/github/pingcap/tikv/badge.svg?branch=master)](https://coveralls.io/github/pingcap/tikv)
