@@ -913,7 +913,7 @@ fn test_commit() {
 }
 
 #[test]
-fn test_pass_election_timeout() {
+fn test_past_election_timeout() {
     let tests = vec![
         (5, 0f64, false),
         (10, 0.1, true),
@@ -929,7 +929,7 @@ fn test_pass_election_timeout() {
         let mut c = 0;
         for _ in 0..10000 {
             sm.reset_randomized_election_timeout();
-            if sm.pass_election_timeout() {
+            if sm.past_election_timeout() {
                 c += 1;
             }
         }
@@ -1345,6 +1345,174 @@ fn test_leader_stepdown_when_quorum_lost() {
     }
 
     assert_eq!(sm.state, StateRole::Follower);
+}
+
+#[test]
+fn test_leader_superseding_with_check_quorum() {
+    let mut a = new_test_raft(1, vec![1, 2, 3], 5, 1, new_storage());
+    let mut b = new_test_raft(2, vec![1, 2, 3], 5, 1, new_storage());
+    let mut c = new_test_raft(3, vec![1, 2, 3], 5, 1, new_storage());
+
+    a.check_quorum = true;
+    b.check_quorum = true;
+    c.check_quorum = true;
+
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+
+    // Prevent campaigning from b
+    {
+        let election_timeout = nt.peers[&2].get_election_timeout();
+        let b = nt.peers.get_mut(&2).unwrap();
+        b.set_randomized_election_timeout(election_timeout + 1);
+        for _ in 0..election_timeout {
+            b.tick();
+        }
+    }
+
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&3].state, StateRole::Follower);
+
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+    // Peer b rejected c's vote since its electionElapsed had not reached to electionTimeout
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
+
+    // Letting b's electionElapsed reach to electionTimeout
+    {
+        let election_timeout = nt.peers[&2].get_election_timeout();
+        let b = nt.peers.get_mut(&2).unwrap();
+        for _ in 0..election_timeout {
+            b.tick();
+        }
+    }
+
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+    assert_eq!(nt.peers[&3].state, StateRole::Leader);
+}
+
+#[test]
+fn test_leader_election_with_check_quorum() {
+    let mut a = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let mut b = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let mut c = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+
+    a.check_quorum = true;
+    b.check_quorum = true;
+    c.check_quorum = true;
+
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+
+    // Letting b's electionElapsed reach to timeout so that it can vote for a
+    {
+        let election_timeout = nt.peers[&2].get_election_timeout();
+        let b = nt.peers.get_mut(&2).unwrap();
+        for _ in 0..election_timeout {
+            b.tick()
+        }
+    }
+
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&3].state, StateRole::Follower);
+
+    {
+        let election_timeout = nt.peers[&1].get_election_timeout();
+        let a = nt.peers.get_mut(&1).unwrap();
+        for _ in 0..election_timeout {
+            a.tick()
+        }
+    }
+    {
+        let election_timeout = nt.peers[&2].get_election_timeout();
+        let b = nt.peers.get_mut(&2).unwrap();
+        for _ in 0..election_timeout {
+            b.tick()
+        }
+    }
+
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+    assert_eq!(nt.peers[&1].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::Leader);
+}
+
+// test_free_stuck_candidate_with_check_quorum ensures that a candidate with a higher term
+// can disrupt the leader even if the leader still "officially" holds the lease, The
+// leader is expected to step down and adopt the candidate's term
+#[test]
+fn test_free_stuck_candidate_with_check_quorum() {
+    let mut a = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let mut b = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let mut c = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+
+    a.check_quorum = true;
+    b.check_quorum = true;
+    c.check_quorum = true;
+
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+
+    {
+        let election_timeout = nt.peers[&2].get_election_timeout();
+        let b = nt.peers.get_mut(&2).unwrap();
+        for _ in 0..election_timeout {
+            b.tick()
+        }
+    }
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    nt.isolate(1);
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
+    assert_eq!(nt.peers[&3].term, nt.peers[&2].term + 1);
+
+    // Vote again for safety
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
+    assert_eq!(nt.peers[&3].term, nt.peers[&2].term + 2);
+
+    nt.recover();
+    let mut m = new_message(1, 3, MessageType::MsgHeartbeat, 0);
+    m.set_term(nt.peers[&1].term);
+    nt.send(vec![m]);
+
+    // Disrupt the leader so that the stuck peer is freed
+    assert_eq!(nt.peers[&1].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].term, nt.peers[&1].term);
+}
+
+#[test]
+fn test_non_promotable_voter_with_check_quorum() {
+    let mut a = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
+    let mut b = new_test_raft(2, vec![1], 10, 1, new_storage());
+
+    a.check_quorum = true;
+    b.check_quorum = true;
+
+    let mut nt = Network::new(vec![Some(a), Some(b)]);
+    // Need to remove 2 again to make it a non-promotable node
+    // since newNetwork overwritten some internal states
+    nt.peers.get_mut(&2).unwrap().del_progress(2);
+    assert!(nt.peers[&2].promotable(), false);
+
+    {
+        let election_timeout = nt.peers[&2].get_election_timeout();
+        let b = nt.peers.get_mut(&2).unwrap();
+        for _ in 0..election_timeout {
+            b.tick()
+        }
+    }
+
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&2].leader_id, 1);
 }
 
 #[test]

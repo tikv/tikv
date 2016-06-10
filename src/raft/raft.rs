@@ -305,6 +305,14 @@ impl<T: Storage> Raft<T> {
         self.election_timeout
     }
 
+    pub fn set_randomized_election_timeout(&mut self, v: usize) {
+        self.randomized_election_timeout = v
+    }
+
+    pub fn get_randomized_election_timeout(&self) -> usize {
+        self.election_timeout
+    }
+
     pub fn get_heartbeat_timeout(&self) -> usize {
         self.heartbeat_timeout
     }
@@ -528,12 +536,8 @@ impl<T: Storage> Raft<T> {
     // tick_election is run by followers and candidates after self.election_timeout.
     // TODO: revoke pub when there is a better way to test.
     pub fn tick_election(&mut self) {
-        if !self.promotable() {
-            self.election_elapsed = 0;
-            return;
-        }
         self.election_elapsed += 1;
-        if self.pass_election_timeout() {
+        if self.promotable() && self.past_election_timeout() {
             self.election_elapsed = 0;
             let m = new_message(INVALID_ID, MessageType::MsgHup, Some(self.id));
             self.step(m).is_ok();
@@ -692,6 +696,25 @@ impl<T: Storage> Raft<T> {
             // local message
         } else if m.get_term() > self.term {
             let leader_id = if m.get_msg_type() == MessageType::MsgRequestVote {
+                if self.check_quorum && self.state != StateRole::Candidate &&
+                   self.election_elapsed < self.election_timeout {
+                    // If a server receives a RequestVote request within the minimum
+                    // election timeout of hearing from a current leader, it does not
+                    // update its term or grant its vote
+                    info!("{} {} [logterm: {}, index: {}, vote: {}] ignored from {} [logterm: \
+                           {}, index: {}] at term {}: lease is not expired (remaining ticks: {})",
+                          self.tag,
+                          self.id,
+                          self.raft_log.last_term(),
+                          self.raft_log.last_index(),
+                          self.vote,
+                          m.get_from(),
+                          m.get_log_term(),
+                          m.get_index(),
+                          self.term,
+                          self.election_timeout - self.election_elapsed);
+                    return Ok(());
+                }
                 INVALID_ID
             } else {
                 m.get_from()
@@ -705,14 +728,32 @@ impl<T: Storage> Raft<T> {
                   m.get_term());
             self.become_follower(m.get_term(), leader_id);
         } else if m.get_term() < self.term {
-            // ignore
-            info!("{} {} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
-                  self.tag,
-                  self.id,
-                  self.term,
-                  m.get_msg_type(),
-                  m.get_from(),
-                  m.get_term());
+            if self.check_quorum &&
+               (m.get_msg_type() == MessageType::MsgHeartbeat ||
+                m.get_msg_type() == MessageType::MsgAppend) {
+                // We have received messages from a leader at a lower term. It is possible
+                // that these messages were simply delayed in the network, but this
+                // could also mean that this node has advanced its term number during a
+                // network partition, and it is now unable to either win an election or
+                // to rejoin the majority on the old term. If checkQuorum is false, this
+                // will be handled by incrementing term numbers in response to MsgVote
+                // with a higher term, but if checkQuorum is true we may not advance the
+                // term on MsgVote and must generate other messages to advance the term.
+                // The net result of these two features is to minimize the disruption caused
+                // by nodes that have been removed from the cluster's configuration: a
+                // removed node will send MsgVotes which will be ignored, but it will not
+                // receive MsgApp or MsgHeartbeat, so it will not create disruptive term increases
+                self.send(new_message(m.get_from(), MessageType::MsgAppendResponse, None));
+            } else {
+                // ignore other cases
+                info!("{} {} [term: {}] ignored a {:?} message with lower term from {} [term: {}]",
+                      self.tag,
+                      self.id,
+                      self.term,
+                      m.get_msg_type(),
+                      m.get_from(),
+                      m.get_term());
+            }
             return Ok(());
         }
 
@@ -1323,7 +1364,7 @@ impl<T: Storage> Raft<T> {
         self.prs.insert(id, p);
     }
 
-    fn del_progress(&mut self, id: u64) {
+    pub fn del_progress(&mut self, id: u64) {
         self.prs.remove(&id);
     }
 
@@ -1343,10 +1384,10 @@ impl<T: Storage> Raft<T> {
         self.vote = hs.get_vote();
     }
 
-    /// `pass_election_timeout` returns true iff `election_elapsed` is greater
+    /// `past_election_timeout` returns true iff `election_elapsed` is greater
     /// than or equal to the randomized election timeout in
     /// [`election_timeout`, 2 * `election_timeout` - 1].
-    pub fn pass_election_timeout(&self) -> bool {
+    pub fn past_election_timeout(&self) -> bool {
         self.election_elapsed >= self.randomized_election_timeout
     }
 
