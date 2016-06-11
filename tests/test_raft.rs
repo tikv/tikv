@@ -1497,9 +1497,9 @@ fn test_non_promotable_voter_with_check_quorum() {
 
     let mut nt = Network::new(vec![Some(a), Some(b)]);
     // Need to remove 2 again to make it a non-promotable node
-    // since newNetwork overwritten some internal states
+    // since new Network overwritten some internal states
     nt.peers.get_mut(&2).unwrap().del_progress(2);
-    assert!(nt.peers[&2].promotable(), false);
+    assert_eq!(nt.peers[&2].promotable(), false);
 
     {
         let election_timeout = nt.peers[&2].get_election_timeout();

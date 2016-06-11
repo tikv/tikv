@@ -310,7 +310,7 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn get_randomized_election_timeout(&self) -> usize {
-        self.election_timeout
+        self.randomized_election_timeout
     }
 
     pub fn get_heartbeat_timeout(&self) -> usize {
