@@ -60,7 +60,6 @@ git = "https://github.com/pingcap/kvproto"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
-branch = "busyjay/gen-rust"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio.git"
