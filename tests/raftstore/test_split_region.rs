@@ -20,6 +20,7 @@ use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util;
+use super::transport_simulate::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
@@ -248,4 +249,63 @@ fn test_node_delay_split_region() {
 fn test_server_delay_split_region() {
     let mut cluster = new_server_cluster(0, 3);
     test_delay_split_region(&mut cluster);
+}
+
+fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+    // disable log GC.
+    cluster.cfg.store_cfg.raft_log_gc_threshold = 300000;
+
+    util::init_log();
+
+    // We use three nodes 1, 2, 3 for this test.
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+
+    // guarantee 1 is leader
+    cluster.transfer_leader(1, util::new_peer(1, 1));
+    cluster.reset_leader_of_region(1);
+
+    util::sleep_ms(200);
+    assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
+
+    let pd_client = cluster.pd_client.clone();
+
+    // isolate 3 for region 1.
+    cluster.hook_transport(IsolateRegionStore::new(1, 3));
+    cluster.must_put(b"a1", b"v1");
+
+    let region = pd_client.get_region(b"").unwrap();
+
+    // split (-inf, +inf) -> (-inf, a2), [a2, +inf]
+    cluster.must_split(&region, b"a2");
+
+    cluster.must_put(b"a2", b"v2");
+
+    // 1 and 2 must have a2, but 3 must not.
+    for i in 1..3 {
+        let engine = cluster.get_engine(i);
+        util::must_get_equal(&engine, b"a2", b"v2");
+    }
+
+    let engine = cluster.get_engine(3);
+    util::must_get_none(&engine, b"a2");
+
+    cluster.reset_transport_hooks();
+    cluster.must_put(b"a22", b"v22");
+
+    util::sleep_ms(2000);
+    // 3 must have a22.
+    util::must_get_equal(&engine, b"a22", b"v22");
+}
+
+#[test]
+fn test_node_split_overlap_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_split_overlap_snapshot(&mut cluster);
+}
+
+#[test]
+fn test_server_split_overlap_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_split_overlap_snapshot(&mut cluster);
 }

@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
-use tikv::util::{self as tikv_util, logger};
+use tikv::util::{self as tikv_util, logger, escape};
 use std::env;
 
 use rocksdb::{DB, WriteBatch, Writable};
@@ -46,7 +46,9 @@ pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
             thread::sleep(Duration::from_millis(10));
         }
     }
-    assert!(false);
+    panic!("can't get value {:?} for key {:?}",
+           escape(value),
+           escape(key))
 }
 
 pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
@@ -58,7 +60,7 @@ pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
             thread::sleep(Duration::from_millis(10));
         }
     }
-    assert!(false);
+    panic!("get value for key {:?}, not none", escape(key));
 }
 
 pub fn new_engine(path: &TempDir) -> Arc<DB> {
