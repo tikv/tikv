@@ -34,6 +34,15 @@ pub struct Evaluator {
 }
 
 impl Evaluator {
+    pub fn batch_eval(&mut self, exprs: &[Expr]) -> Result<Vec<Datum>> {
+        let mut res = Vec::with_capacity(exprs.len());
+        for expr in exprs {
+            let r = try!(self.eval(expr));
+            res.push(r);
+        }
+        Ok(res)
+    }
+
     /// Eval evaluates expr to a Datum.
     pub fn eval(&mut self, expr: &Expr) -> Result<Datum> {
         match expr.get_tp() {
