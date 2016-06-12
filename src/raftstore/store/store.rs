@@ -368,7 +368,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return true;
             }
 
-            // we receive another different message (not heartbeat), it indicates
+            // we received another different message (not heartbeat), it indicates
             // the leader terminates snapshot pause state and enter probe state.
             peer.rejecting_snapshot = false;
         }

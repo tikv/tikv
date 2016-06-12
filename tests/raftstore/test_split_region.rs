@@ -271,8 +271,6 @@ impl Filter for DropSnapshotFailure {
 
 fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>,
                                              drop_snapshot_failure: bool) {
-    // util::init_log();
-
     // We use three nodes 1, 2, 3 for this test.
     cluster.bootstrap_region().expect("");
     cluster.start();
