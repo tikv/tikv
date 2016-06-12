@@ -62,10 +62,17 @@ mod tests {
 
         let s1 = get_disk_stat(dir).unwrap();
 
-        create_size_file(dir, "1.log", 1000);
-        let s2 = get_disk_stat(dir).unwrap();
+        let cnt = 100;
+        for i in 0..cnt {
+            create_size_file(dir, &format!("{}.log", i), 1000);
+            let s2 = get_disk_stat(dir).unwrap();
+            assert_eq!(s2.capacity, s1.capacity);
 
-        assert_eq!(s2.capacity, s1.capacity);
-        assert!(s2.available < s1.available);
+            if s2.available != s1.available {
+                return;
+            }
+        }
+
+        panic!("available not changed after {} tries.", cnt);
     }
 }
