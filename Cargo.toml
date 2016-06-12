@@ -58,7 +58,7 @@ git = "https://github.com/carllerche/bytes"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
-branch = "tiancaiamao/handshake-dispatch-conn"
+branch = "busyjay/send-snapshot-via-file"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

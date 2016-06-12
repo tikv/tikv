@@ -8,7 +8,7 @@ dependencies = [
  "clippy 0.0.73 (registry+https://github.com/rust-lang/crates.io-index)",
  "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (git+https://github.com/rust-lang-nursery/getopts)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto?branch=tiancaiamao/handshake-dispatch-conn)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto?branch=busyjay/send-snapshot-via-file)",
  "libc 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.0 (git+https://github.com/carllerche/mio.git)",
@@ -111,7 +111,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto?branch=tiancaiamao/handshake-dispatch-conn#3c0b81a9ff542ef7706a7d0ddb325dd4ea5e137e"
+source = "git+https://github.com/pingcap/kvproto?branch=busyjay/send-snapshot-via-file#fdcc6e716385f89aeb9d464e6bde4a9fe11b816e"
 dependencies = [
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]
