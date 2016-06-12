@@ -31,9 +31,9 @@ This figure represents tikv-server software stack.
 ![image](images/tikv_stack.png)
 
 - Placement driver: With tikv-server, Placement driver is the most important part which merges placement driver and zonemaster in google's Spanner. pd maintains metas of all regions via etcd. A Timestamp system plugs in pd, which provide time oracle in global.
-- Node：A physical node in cluster. Node id must be unique in global.
-- Store：A node has one or some stores. Generally a store involves one disk. Each store maps to different paths, and store id must be unique in global either. Multiple stores primarily support a plurality of disks in one node.
-- Region：Region is a logical concept. Key-Value datas are grouped by region. Region is the smallest unit of data movement, that's geographic-replication unit. Every region is supported by a raft group and region id must be unique in global. 
+- Node: A physical node in cluster. Node id must be unique in global.
+- Store: A node has one or some stores. Generally a store involves one disk. Each store maps to different paths, and store id must be unique in global either. Multiple stores primarily support a plurality of disks in one node.
+- Region: Region is a logical concept. Key-Value datas are grouped by region. Region is the smallest unit of data movement, that's geographic-replication unit. Every region is supported by a raft group and region id must be unique in global. 
 - Peer: Peer is a logical concept. It stands for a raft-worked participant in a raft group. A peer in raft-worked group maybe turn up three roles, which are candidate, leader and follower.
 
 When node starts, the ids of node, store and region must be registered into pd as well as their metas. Leaders of raft groups regularly report region state to pd. Pd control split/merge between regions.
