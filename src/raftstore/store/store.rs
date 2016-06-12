@@ -232,7 +232,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     // may fail, so we allow map_entry.
     #[allow(map_entry)]
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
-        if !self.check_raft_msg_valid(&msg) {
+        if !self.is_raft_msg_valid(&msg) {
             return Ok(());
         }
 
@@ -250,7 +250,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
         }
 
-        if try!(self.check_snapshot_overlapped(&msg)) {
+        if try!(self.is_snapshot_overlapped(&msg)) {
             return Ok(());
         }
 
@@ -269,7 +269,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     // return false means the message is invalid, and can be ignored.
-    fn check_raft_msg_valid(&self, msg: &RaftMessage) -> bool {
+    fn is_raft_msg_valid(&self, msg: &RaftMessage) -> bool {
         let region_id = msg.get_region_id();
         let from = msg.get_from_peer();
         let to = msg.get_to_peer();
@@ -312,7 +312,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         true
     }
 
-    fn check_snapshot_overlapped(&self, msg: &RaftMessage) -> Result<bool> {
+    fn is_snapshot_overlapped(&self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
