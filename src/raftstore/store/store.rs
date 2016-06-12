@@ -354,8 +354,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     // If the peer is in rejecting snapshot state, it will ignore following heartbeat messages
     // and reply SnapshotFailure message.
-    // If the peer meet another not heartbeat message, it will terminate rejecting snapshot state.
-    // Return true means that we ignore the message and will reply snapshot failure.
+    // If the peer meet another non heartbeat message, it will terminate rejecting snapshot state.
+    // Return true means we will ignore the message and reply snapshot failure.
     fn need_reply_snapshot_failure(&mut self, msg: &RaftMessage) -> bool {
         let region_id = msg.get_region_id();
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
