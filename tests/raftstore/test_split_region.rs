@@ -15,6 +15,7 @@ use std::time::Duration;
 use std::thread;
 use std::cmp;
 use rand::{self, Rng};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -24,6 +25,8 @@ use super::transport_simulate::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
+use kvproto::raftpb;
+use kvproto::raft_serverpb::RaftMessage;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -251,11 +254,27 @@ fn test_server_delay_split_region() {
     test_delay_split_region(&mut cluster);
 }
 
-fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+struct DropSnapshotFailure {
+    count: AtomicUsize,
+}
+
+impl Filter for DropSnapshotFailure {
+    fn before(&self, m: &RaftMessage) -> bool {
+        if m.get_message().get_msg_type() != raftpb::MessageType::MsgSnapStatus {
+            return false;
+        }
+
+        // ignore the first snapshot failure message
+        self.count.fetch_add(1, Ordering::SeqCst) < 1
+    }
+}
+
+fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>,
+                                             drop_snapshot_failure: bool) {
     // disable log GC.
     cluster.cfg.store_cfg.raft_log_gc_threshold = 300000;
 
-    util::init_log();
+    // util::init_log();
 
     // We use three nodes 1, 2, 3 for this test.
     cluster.bootstrap_region().expect("");
@@ -273,6 +292,19 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // isolate 3 for region 1.
     cluster.hook_transport(IsolateRegionStore::new(1, 3));
     cluster.must_put(b"a1", b"v1");
+
+    if drop_snapshot_failure {
+        // when region 1 split, node 1 will send snapshot to 2 for region 2,
+        // but node 2 will returns a snapshot failure message. We should drop
+        // the first one to guarantee node 1 sends heartbeat to 2, and then
+        // we can return snapshot failure message again.
+        cluster.hook_node_transport(3,
+                                    vec![box FilterRegionPacket {
+                                             region_id: 1,
+                                             store_id: 3,
+                                         },
+                                         box DropSnapshotFailure { count: AtomicUsize::new(0) }]);
+    }
 
     let region = pd_client.get_region(b"").unwrap();
 
@@ -293,7 +325,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.reset_transport_hooks();
     cluster.must_put(b"a22", b"v22");
 
-    util::sleep_ms(2000);
+    util::sleep_ms(3000);
     // 3 must have a22.
     util::must_get_equal(&engine, b"a22", b"v22");
 }
@@ -301,11 +333,23 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 #[test]
 fn test_node_split_overlap_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
-    test_split_overlap_snapshot(&mut cluster);
+    test_split_overlap_snapshot(&mut cluster, false);
 }
 
 #[test]
 fn test_server_split_overlap_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
-    test_split_overlap_snapshot(&mut cluster);
+    test_split_overlap_snapshot(&mut cluster, false);
+}
+
+#[test]
+fn test_node_split_overlap_snapshot_with_drop() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_split_overlap_snapshot(&mut cluster, true);
+}
+
+#[test]
+fn test_server_split_overlap_snapshot_with_drop() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_split_overlap_snapshot(&mut cluster, true);
 }

@@ -27,7 +27,9 @@ pub trait Filter: Send + Sync {
     // in a SimulateTransport, if any filter's before return true, msg will be discard
     fn before(&self, msg: &RaftMessage) -> bool;
     // with after provided, one can change the return value arbitrarily
-    fn after(&self, Result<()>) -> Result<()>;
+    fn after(&self, r: Result<()>) -> Result<()> {
+        r
+    }
 }
 
 struct FilterDropPacket {
@@ -58,9 +60,6 @@ impl Filter for FilterDelay {
     fn before(&self, _: &RaftMessage) -> bool {
         thread::sleep(self.duration);
         false
-    }
-    fn after(&self, x: Result<()>) -> Result<()> {
-        x
     }
 }
 
@@ -216,8 +215,8 @@ impl FilterFactory for Isolate {
 
 // Drop all packages for the store with special region.
 pub struct FilterRegionPacket {
-    region_id: u64,
-    store_id: u64,
+    pub region_id: u64,
+    pub store_id: u64,
 }
 
 impl Filter for FilterRegionPacket {
@@ -228,10 +227,6 @@ impl Filter for FilterRegionPacket {
 
         self.region_id == region_id &&
         (self.store_id == from_store_id || self.store_id == to_store_id)
-    }
-
-    fn after(&self, x: Result<()>) -> Result<()> {
-        x
     }
 }
 

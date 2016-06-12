@@ -130,6 +130,13 @@ pub struct Peer {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     penging_remove: bool,
+
+    // Sometimes we may receive an overlapped snapshot and will ignore it.
+    // But the sender process is still in pause state and will sends heartbeat
+    // until receives a AppendResp which we won't return.
+    // If we ignore the snapshot, following heartbeat will also be ignored, but
+    // we should return a reject message to let leader process enter probe state.
+    pub rejecting_snapshot: bool,
 }
 
 impl Peer {
@@ -221,6 +228,7 @@ impl Peer {
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             penging_remove: false,
+            rejecting_snapshot: false,
         };
 
         peer.load_all_coprocessors();
