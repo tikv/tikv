@@ -27,7 +27,9 @@ pub trait Filter: Send + Sync {
     // in a SimulateTransport, if any filter's before return true, msg will be discard
     fn before(&self, msg: &RaftMessage) -> bool;
     // with after provided, one can change the return value arbitrarily
-    fn after(&self, Result<()>) -> Result<()>;
+    fn after(&self, r: Result<()>) -> Result<()> {
+        r
+    }
 }
 
 struct FilterDropPacket {
@@ -58,9 +60,6 @@ impl Filter for FilterDelay {
     fn before(&self, _: &RaftMessage) -> bool {
         thread::sleep(self.duration);
         false
-    }
-    fn after(&self, x: Result<()>) -> Result<()> {
-        x
     }
 }
 
@@ -210,6 +209,46 @@ impl FilterFactory for Isolate {
         vec![box PartitionFilter {
                  node_ids: vec![node_id],
                  drop: AtomicBool::new(false),
+             }]
+    }
+}
+
+// Drop all packages for the store with special region.
+pub struct FilterRegionPacket {
+    pub region_id: u64,
+    pub store_id: u64,
+}
+
+impl Filter for FilterRegionPacket {
+    fn before(&self, m: &RaftMessage) -> bool {
+        let region_id = m.get_region_id();
+        let from_store_id = m.get_from_peer().get_store_id();
+        let to_store_id = m.get_to_peer().get_store_id();
+
+        self.region_id == region_id &&
+        (self.store_id == from_store_id || self.store_id == to_store_id)
+    }
+}
+
+pub struct IsolateRegionStore {
+    region_id: u64,
+    store_id: u64,
+}
+
+impl IsolateRegionStore {
+    pub fn new(region_id: u64, store_id: u64) -> IsolateRegionStore {
+        IsolateRegionStore {
+            region_id: region_id,
+            store_id: store_id,
+        }
+    }
+}
+
+impl FilterFactory for IsolateRegionStore {
+    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+        vec![box FilterRegionPacket {
+                 region_id: self.region_id,
+                 store_id: self.store_id,
              }]
     }
 }

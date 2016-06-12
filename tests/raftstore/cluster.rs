@@ -478,6 +478,9 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn hook_node_transport(&self, node_id: u64, filters: Vec<Box<Filter>>) {
+        self.sim.wl().hook_transport(node_id, filters);
+    }
 
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
