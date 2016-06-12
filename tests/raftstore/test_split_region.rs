@@ -287,9 +287,9 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>,
     cluster.must_put(b"k1", b"v1");
 
     if drop_snapshot_failure {
-        // when region 1 split, node 1 will send snapshot to node 2 for region 2,
-        // but node 2 will returns a snapshot failure message. We should drop
-        // the first one to guarantee node 1 sends heartbeat to node 2, and then
+        // when region 1 split, node 1 will send snapshot to node 3 for region 2,
+        // but node 3 will returns a snapshot failure message. We should drop
+        // the first one to guarantee node 1 sends heartbeat to node 3, and then
         // we can return snapshot failure message again.
         cluster.hook_node_transport(3,
                                     vec![box FilterRegionPacket {
