@@ -277,16 +277,14 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>,
 
     // guarantee 1 is leader
     cluster.transfer_leader(1, util::new_peer(1, 1));
-    cluster.reset_leader_of_region(1);
-
-    util::sleep_ms(200);
+    cluster.must_put(b"k0", b"v0");
     assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
 
     let pd_client = cluster.pd_client.clone();
 
     // isolate 3 for region 1.
     cluster.hook_transport(IsolateRegionStore::new(1, 3));
-    cluster.must_put(b"a1", b"v1");
+    cluster.must_put(b"k1", b"v1");
 
     if drop_snapshot_failure {
         // when region 1 split, node 1 will send snapshot to node 2 for region 2,
@@ -303,26 +301,26 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>,
 
     let region = pd_client.get_region(b"").unwrap();
 
-    // split (-inf, +inf) -> (-inf, a2), [a2, +inf]
-    cluster.must_split(&region, b"a2");
+    // split (-inf, +inf) -> (-inf, k2), [k2, +inf]
+    cluster.must_split(&region, b"k2");
 
-    cluster.must_put(b"a2", b"v2");
+    cluster.must_put(b"k2", b"v2");
 
-    // node 1 and node 2 must have a2, but node 3 must not.
+    // node 1 and node 2 must have k2, but node 3 must not.
     for i in 1..3 {
         let engine = cluster.get_engine(i);
-        util::must_get_equal(&engine, b"a2", b"v2");
+        util::must_get_equal(&engine, b"k2", b"v2");
     }
 
     let engine = cluster.get_engine(3);
-    util::must_get_none(&engine, b"a2");
+    util::must_get_none(&engine, b"k2");
 
     cluster.reset_transport_hooks();
-    cluster.must_put(b"a22", b"v22");
+    cluster.must_put(b"k3", b"v3");
 
     util::sleep_ms(3000);
-    // node 3 must have a22.
-    util::must_get_equal(&engine, b"a22", b"v22");
+    // node 3 must have k3.
+    util::must_get_equal(&engine, b"k3", b"v3");
 }
 
 #[test]
