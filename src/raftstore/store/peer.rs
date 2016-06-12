@@ -132,8 +132,8 @@ pub struct Peer {
     penging_remove: bool,
 
     // Sometimes we may receive an overlapped snapshot and will ignore it.
-    // But the sender process is still in pause state and will sends heartbeat
-    // until receives a AppendResp which we won't return.
+    // But the sender process is still in pause state and will send heartbeat
+    // until receives an AppendResp which we won't return.
     // If we ignore the snapshot, following heartbeat will also be ignored, but
     // we should return a reject message to let leader process enter probe state.
     pub rejecting_snapshot: bool,
