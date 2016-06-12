@@ -314,7 +314,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 warn!("missing conn for token {:?}", token);
                 return;
             }
-            Some(conn) => conn.write(event_loop),
+            Some(conn) => conn.on_writable(event_loop),
         };
 
         if let Err(e) = res {
