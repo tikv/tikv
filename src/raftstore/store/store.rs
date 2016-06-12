@@ -232,9 +232,48 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     // may fail, so we allow map_entry.
     #[allow(map_entry)]
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
+        if !self.check_raft_msg_valid(&msg) {
+            return Ok(());
+        }
+
         let region_id = msg.get_region_id();
-        let from = msg.take_from_peer();
-        let to = msg.take_to_peer();
+        // TODO: we may encounter a message with larger peer id, which
+        // means current peer is stale, then we should remove current peer
+
+        if !self.region_peers.contains_key(&region_id) {
+            let peer = try!(Peer::replicate(self,
+                                            region_id,
+                                            msg.get_region_epoch(),
+                                            msg.get_to_peer().get_id()));
+            // We don't have start_key of the region, so there is no need to insert into
+            // region_ranges
+            self.region_peers.insert(region_id, peer);
+        }
+
+        if try!(self.check_snapshot_overlapped(&msg)) {
+            return Ok(());
+        }
+
+        self.insert_peer_cache(msg.take_from_peer());
+        self.insert_peer_cache(msg.take_to_peer());
+
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
+        let timer = SlowTimer::new();
+        try!(peer.raft_group.step(msg.take_message()));
+        slow_log!(timer, "step takes {:?}", timer.elapsed());
+
+        // Add into pending raft groups for later handling ready.
+        self.pending_raft_groups.insert(region_id);
+
+        Ok(())
+    }
+
+    // return false means the message is invalid, and can be ignored.
+    fn check_raft_msg_valid(&self, msg: &RaftMessage) -> bool {
+        let region_id = msg.get_region_id();
+        let from = msg.get_from_peer();
+        let to = msg.get_to_peer();
+
         debug!("handle raft message {:?} for region {}, from {} to {}",
                msg.get_message().get_msg_type(),
                region_id,
@@ -245,12 +284,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             warn!("store not match, to store id {}, mine {}, ignore it",
                   to.get_store_id(),
                   self.store_id());
-            return Ok(());
+            return false;
         }
 
         if !msg.has_region_epoch() {
             error!("missing epoch in raft message, ignore it");
-            return Ok(());
+            return false;
         }
 
         // If we receive a message whose sender peer is not in current region and
@@ -266,51 +305,40 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 warn!("raft message {:?} is stale {:?}, ignore it",
                       msg.get_message().get_msg_type(),
                       from_epoch);
-                return Ok(());
+                return false;
             }
         }
 
-        // TODO: we may encounter a message with larger peer id, which
-        // means current peer is stale, then we should remove current peer
+        true
+    }
 
-        if !self.region_peers.contains_key(&region_id) {
-            let peer = try!(Peer::replicate(self, region_id, msg.get_region_epoch(), to.get_id()));
-            // We don't have start_key of the region, so there is no need to insert into
-            // region_ranges
-            self.region_peers.insert(region_id, peer);
-        }
-
-        self.peer_cache.wl().insert(from.get_id(), from);
-        self.peer_cache.wl().insert(to.get_id(), to);
+    fn check_snapshot_overlapped(&self, msg: &RaftMessage) -> Result<bool> {
+        let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
-        // TODO: we need to inject failure or re-order network packet to test the situtain
+        // TODO: we need to inject failure or re-order network packet to test the situation
         if !self.region_peers[&region_id].storage.rl().is_initialized() &&
            msg.get_message().has_snapshot() {
             let snap = msg.get_message().get_snapshot();
             let mut snap_data = RaftSnapshotData::new();
             try!(snap_data.merge_from_bytes(snap.get_data()));
             let snap_region = snap_data.get_region();
-            if let Some((_, &region_id)) = self.region_ranges
+            if let Some((_, &exist_region_id)) = self.region_ranges
                 .range(Excluded(&enc_start_key(snap_region)), Unbounded::<&Key>)
                 .next() {
-                let exist_region = self.region_peers[&region_id].region();
+                let exist_region = self.region_peers[&exist_region_id].region();
                 if enc_start_key(&exist_region) < enc_end_key(snap_region) {
                     warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
-                    return Ok(());
+                    return Ok(true);
                 }
             }
         }
 
-        let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let timer = SlowTimer::new();
-        try!(peer.raft_group.step(msg.take_message()));
-        slow_log!(timer, "step takes {:?}", timer.elapsed());
+        Ok(false)
+    }
 
-        // Add into pending raft groups for later handling ready.
-        self.pending_raft_groups.insert(region_id);
-
-        Ok(())
+    fn insert_peer_cache(&mut self, peer: metapb::Peer) {
+        self.peer_cache.wl().insert(peer.get_id(), peer);
     }
 
     fn on_raft_ready(&mut self) -> Result<()> {
