@@ -44,7 +44,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     must_get_equal(&engine_2, key, value);
 
-    // now peer 2 must have v1 and v2;
+    // now snapshot must be applied on peer 2;
     let key = format!("{:01024}", 0);
     let value = format!("{:01024}", 0);
     must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());

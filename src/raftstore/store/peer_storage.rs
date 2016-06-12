@@ -531,7 +531,6 @@ impl PeerStorage {
     }
 }
 
-const RETRY_CNT: u32 = 1024;
 /// Name prefix for the self-generated snapshot file.
 pub const SNAP_GEN_PREFIX: &'static str = "gen";
 /// Name prefix for the received snapshot file.
