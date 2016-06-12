@@ -291,9 +291,9 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>,
     cluster.must_put(b"a1", b"v1");
 
     if drop_snapshot_failure {
-        // when region 1 split, node 1 will send snapshot to 2 for region 2,
+        // when region 1 split, node 1 will send snapshot to node 2 for region 2,
         // but node 2 will returns a snapshot failure message. We should drop
-        // the first one to guarantee node 1 sends heartbeat to 2, and then
+        // the first one to guarantee node 1 sends heartbeat to node 2, and then
         // we can return snapshot failure message again.
         cluster.hook_node_transport(3,
                                     vec![box FilterRegionPacket {
@@ -310,7 +310,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>,
 
     cluster.must_put(b"a2", b"v2");
 
-    // 1 and 2 must have a2, but 3 must not.
+    // node 1 and node 2 must have a2, but node 3 must not.
     for i in 1..3 {
         let engine = cluster.get_engine(i);
         util::must_get_equal(&engine, b"a2", b"v2");
@@ -323,7 +323,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>,
     cluster.must_put(b"a22", b"v22");
 
     util::sleep_ms(3000);
-    // 3 must have a22.
+    // node 3 must have a22.
     util::must_get_equal(&engine, b"a22", b"v22");
 }
 
