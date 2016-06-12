@@ -337,7 +337,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#3df1b085b45f13659d318b492e9aeaaeb5fedd20"
+source = "git+https://github.com/pingcap/tipb.git#4140a6e68c29009b7477e224f1cc88fdac323332"
 dependencies = [
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]

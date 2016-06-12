@@ -416,8 +416,8 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
 }
 
 pub fn encode(values: &[Datum], comparable: bool) -> Result<Vec<u8>> {
-    let mut buf = Vec::with_capacity(approximate_size(values, comparable));
-    try!(buf.encode(values, comparable));
+    let mut buf = vec![];
+    try!(encode_to(&mut buf, values, comparable));
     buf.shrink_to_fit();
     Ok(buf)
 }
@@ -428,6 +428,12 @@ pub fn encode_key(values: &[Datum]) -> Result<Vec<u8>> {
 
 pub fn encode_value(values: &[Datum]) -> Result<Vec<u8>> {
     encode(values, false)
+}
+
+pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Result<()> {
+    buf.reserve(approximate_size(values, comparable));
+    try!(buf.encode(values, comparable));
+    Ok(())
 }
 
 #[cfg(test)]
