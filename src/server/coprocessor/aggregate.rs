@@ -16,7 +16,7 @@ pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
 pub trait AggrFunc {
     /// `update` is used for update aggregate context.
     fn update(&mut self, args: &[Datum]) -> Result<()>;
-    /// `calc` calculate the aggregate result on gk.
+    /// `calc` calculates the aggregated result.
     ///
     /// First value is the rows count that has handle with function, second datum
     /// is the evaluated value of this aggregate function.

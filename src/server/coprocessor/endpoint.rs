@@ -271,6 +271,47 @@ fn is_point(range: &KeyRange) -> bool {
     range.get_end() == &*prefix_next(range.get_start())
 }
 
+#[inline]
+fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
+    if mysql::has_unsigned_flag(col.get_flag() as u64) {
+        // PK column is unsigned
+        Datum::U64(h as u64)
+    } else {
+        Datum::I64(h)
+    }
+}
+
+#[inline]
+fn inflate_with_col<'a, T>(eval: &mut Evaluator,
+                           snap: &SnapshotStore,
+                           t_id: i64,
+                           cols: T,
+                           h: i64)
+                           -> Result<()>
+    where T: IntoIterator<Item = &'a ColumnInfo>
+{
+    for col in cols {
+        let col_id = col.get_column_id();
+        if let Entry::Vacant(e) = eval.row.entry(col_id) {
+            if col.get_pk_handle() {
+                let v = get_pk(col, h);
+                e.insert(v);
+            } else {
+                let key = table::encode_column_key(t_id, h, col_id);
+                let value = match try!(snap.get(&Key::from_raw(&key))) {
+                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                        return Err(box_err!("key {} not exists", escape(&key)));
+                    }
+                    None => Datum::Null,
+                    Some(bs) => box_try!(bs.as_slice().decode_col_value(col)),
+                };
+                e.insert(value);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub struct SelectContextCore {
     sel: SelectRequest,
     eval: Evaluator,
@@ -316,8 +357,10 @@ impl SelectContextCore {
         if try!(self.should_skip(snap, h)) {
             return Ok(());
         }
-        if let Some(r) = try!(self.get_row_by_handle(snap, h)) {
-            dest.push(r);
+        if self.aggr_cnt > 0 {
+            try!(self.aggregate(snap, h));
+        } else {
+            dest.push(try!(self.get_row_by_handle(snap, h)))
         }
         Ok(())
     }
@@ -327,47 +370,24 @@ impl SelectContextCore {
             return Ok(false);
         }
         let t_id = self.sel.get_table_info().get_table_id();
-        for (&col_id, col) in &self.cond_cols {
-            if col.get_pk_handle() {
-                if mysql::has_unsigned_flag(col.get_flag() as u64) {
-                    self.eval.row.insert(col_id, Datum::U64(h as u64));
-                } else {
-                    self.eval.row.insert(col_id, Datum::I64(h));
-                }
-            } else {
-                let key = table::encode_column_key(t_id, h, col_id);
-                let data = try!(snap.get(&Key::from_raw(&key)));
-                let value = match data {
-                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
-                        return Err(box_err!("key {} not exists", escape(&key)));
-                    }
-                    None => Datum::Null,
-                    Some(bs) => box_try!(bs.as_slice().decode_col_value(col)),
-                };
-                self.eval.row.insert(col_id, value);
-            }
-        }
+        try!(inflate_with_col(&mut self.eval, snap, t_id, self.cond_cols.values(), h));
         let res = box_try!(self.eval.eval(self.sel.get_field_where()));
         let b = box_try!(res.into_bool());
         Ok(b.map_or(true, |v| !v))
     }
 
-    fn get_row_by_handle(&mut self, snap: &SnapshotStore, h: i64) -> Result<Option<Row>> {
+    fn get_row_by_handle(&mut self, snap: &SnapshotStore, h: i64) -> Result<Row> {
         let tid = self.sel.get_table_info().get_table_id();
-        let mut data = vec![];
-        let mut encoded = vec![];
+        let mut row = Row::new();
+        let handle = box_try!(datum::encode_value(&[Datum::I64(h)]));
+        row.set_handle(handle);
         for col in self.sel.get_table_info().get_columns() {
             if col.get_pk_handle() {
-                if mysql::has_unsigned_flag(col.get_flag() as u64) {
-                    // PK column is unsigned
-                    data.push(Datum::U64(h as u64));
-                } else {
-                    data.push(Datum::I64(h));
-                }
+                box_try!(datum::encode_to(row.mut_data(), &[get_pk(col, h)], false));
             } else {
                 let col_id = col.get_column_id();
                 if let Some(d) = self.eval.row.remove(&col_id) {
-                    data.push(d);
+                    box_try!(datum::encode_to(row.mut_data(), &[d], false));
                 } else {
                     let raw_key = table::encode_column_key(tid, h, col.get_column_id());
                     let key = Key::from_raw(&raw_key);
@@ -375,34 +395,13 @@ impl SelectContextCore {
                         None if mysql::has_not_null_flag(col.get_flag() as u64) => {
                             return Err(box_err!("key {} not exists", escape(&raw_key)));
                         }
-                        None => data.push(Datum::Null),
-                        Some(bs) => {
-                            if self.aggr_cnt > 0 {
-                                data.push(box_try!(bs.as_slice().decode_datum()));
-                            } else {
-                                if !data.is_empty() {
-                                    box_try!(datum::encode_to(&mut encoded, &data, false));
-                                    data.clear();
-                                }
-                                encoded.extend(bs);
-                            }
-                        }
+                        None => box_try!(datum::encode_to(row.mut_data(), &[Datum::Null], false)),
+                        Some(bs) => row.mut_data().extend(bs),
                     }
                 }
             }
         }
-        if self.aggr_cnt > 0 {
-            try!(self.aggregate(data));
-            return Ok(None);
-        }
-        let mut row = Row::new();
-        let handle = box_try!(datum::encode_value(&[Datum::I64(h)]));
-        row.set_handle(handle);
-        if !data.is_empty() {
-            box_try!(datum::encode_to(&mut encoded, &data, false));
-        }
-        row.set_data(encoded);
-        Ok(Some(row))
+        Ok(row)
     }
 
     fn get_group_key(&mut self) -> Result<Vec<u8>> {
@@ -419,9 +418,11 @@ impl SelectContextCore {
         Ok(res)
     }
 
-    fn aggregate(&mut self, row: Vec<Datum>) -> Result<()> {
-        for (col, d) in self.sel.get_table_info().get_columns().iter().zip(row) {
-            self.eval.row.insert(col.get_column_id(), d);
+    fn aggregate(&mut self, snap: &SnapshotStore, h: i64) -> Result<()> {
+        let t_id = self.sel.get_table_info().get_table_id();
+        {
+            let cols = self.sel.get_table_info().get_columns();
+            try!(inflate_with_col(&mut self.eval, snap, t_id, cols, h));
         }
         let gk = Rc::new(try!(self.get_group_key()));
         let aggr_exprs = self.sel.get_aggregates();
@@ -489,10 +490,12 @@ fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
                        -> Result<()> {
     if expr.get_tp() == ExprType::ColumnRef {
         let i = box_try!(expr.get_val().decode_i64());
-        for c in col_meta {
-            if c.get_column_id() == i {
-                cols.insert(i, c.clone());
-                return Ok(());
+        if let Entry::Vacant(e) = cols.entry(i) {
+            for c in col_meta {
+                if c.get_column_id() == i {
+                    e.insert(c.clone());
+                    return Ok(());
+                }
             }
         }
         return Err(box_err!("column meta of {} is missing", i));
