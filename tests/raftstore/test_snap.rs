@@ -35,19 +35,19 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     let engine_2 = cluster.get_engine(2);
-    must_get_none(&engine_2, b"key1");
+    must_get_none(&engine_2, &format!("{:01024}", 0).into_bytes());
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
-    let (key, value) = (b"a2", b"v2");
+    let (key, value) = (b"k2", b"v2");
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
+    must_get_equal(&engine_2, key, value);
 
     // now peer 2 must have v1 and v2;
     let key = format!("{:01024}", 0);
     let value = format!("{:01024}", 0);
     must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
-    must_get_equal(&engine_2, b"a2", b"v2");
 
     // TODO: add more tests.
 }
