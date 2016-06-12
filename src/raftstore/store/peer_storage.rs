@@ -537,7 +537,7 @@ pub const SNAP_GEN_PREFIX: &'static str = "gen";
 /// Name prefix for the received snapshot file.
 pub const SNAP_REV_PREFIX: &'static str = "rev";
 
-/// A structure represent the snapshot file.
+/// A structure represents the snapshot file.
 ///
 /// All changes to the file will be written to `tmp_file` first, and use
 /// `save` method to make them persistent. When saving a crc32 checksum
@@ -620,13 +620,13 @@ impl SnapFile {
         let mut total_read = 0;
         let mut buffer = vec![0; 4098];
         loop {
-            let readed = try!(reader.read(&mut buffer));
-            if total_read + readed >= to_read {
+            let read = try!(reader.read(&mut buffer));
+            if total_read + read >= to_read {
                 digest.write(&buffer[..to_read - total_read]);
                 try!(reader.seek(SeekFrom::End(-4)));
                 break;
             }
-            total_read += readed;
+            total_read += read;
         }
         let sum = try!(reader.read_u32::<BigEndian>());
         if sum != digest.sum32() {
@@ -723,7 +723,7 @@ fn build_snap_file(f: &mut SnapFile,
             Ok(true)
         }));
     }
-    // use an empty byte array to indicate that kvpair reach an end.
+    // use an empty byte array to indicate that kvpair reaches an end.
     box_try!(f.encode_compact_bytes(b""));
     try!(f.save());
 

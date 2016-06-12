@@ -84,7 +84,7 @@ fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> 
     if !snap_file.exists() {
         return Err(box_err!("missing snap file: {:?}", snap_file.path()));
     }
-    // snapshot file has been validated when created, so no need validate again.
+    // snapshot file has been validated when created, so no need to validate again.
 
     let mut f = try!(File::open(snap_file.path()));
     snap_file.delete_when_drop();
