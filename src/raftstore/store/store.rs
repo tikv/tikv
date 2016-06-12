@@ -369,7 +369,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             // we receive another different message (not heartbeat), and it indicates
-            // the leader terminates snapshot pause state and enter probe state again.
+            // the leader terminates snapshot pause state and enter probe state.
             peer.rejecting_snapshot = false;
         }
 
@@ -379,7 +379,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn reject_overlapped_snapshot(&mut self, msg: &RaftMessage) {
         // If we receive a overlapped snapshot or following heartbeat,
         // we should return a Snapshot Failure message to let leader
-        // break the snapshot state and enter probe again.
+        // break the snapshot state and enter probe state.
         let region_id = msg.get_region_id();
         if let Some(peer) = self.region_peers.get_mut(&region_id) {
             peer.rejecting_snapshot = true;
