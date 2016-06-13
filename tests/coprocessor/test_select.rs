@@ -293,9 +293,7 @@ fn test_aggr_count() {
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_rows().len(), 1);
     let mut expected_encoded =
-        datum::encode_value(&[Datum::Bytes(coprocessor::SINGLE_GROUP.to_vec()),
-                              Datum::U64(10),
-                              Datum::Null])
+        datum::encode_value(&[Datum::Bytes(coprocessor::SINGLE_GROUP.to_vec()), Datum::U64(10)])
             .unwrap();
     assert_eq!(resp.get_rows()[0].get_data(), &*expected_encoded);
 
@@ -309,7 +307,7 @@ fn test_aggr_count() {
             2
         };
         let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
-        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(count), Datum::Null];
+        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(count)];
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }

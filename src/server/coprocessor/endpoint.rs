@@ -452,10 +452,10 @@ impl SelectContextCore {
 
     /// Convert aggregate partial result to rows.
     /// Data layout example:
-    /// SQL:	select count(c1), sum(c2) from t;
-    /// Aggs:	count(c1), sum(c2)
-    /// Rows:	groupKey1, count1, value1, count2, value2
-    /// 	groupKey2, count1, value1, count2, value2
+    /// SQL: select count(c1), sum(c2), avg(c3) from t;
+    /// Aggs: count(c1), sum(c2), avg(c3)
+    /// Rows: groupKey1, count1, value2, count3, value3
+    ///       groupKey2, count1, value2, count3, value3
     fn aggr_rows(&mut self) -> Result<Vec<Row>> {
         let mut rows = Vec::with_capacity(self.gk_aggrs.len());
         // Each aggregate partial result will be converted to two datum.
@@ -467,9 +467,7 @@ impl SelectContextCore {
             // The first column is group key.
             row_data.push(Datum::Bytes(Rc::try_unwrap(gk).unwrap()));
             for mut aggr in aggrs {
-                let (cnt, value) = try!(aggr.calc());
-                row_data.push(Datum::U64(cnt as u64));
-                row_data.push(value);
+                try!(aggr.calc(&mut row_data));
             }
             row.set_data(box_try!(datum::encode_value(&row_data)));
             rows.push(row);
