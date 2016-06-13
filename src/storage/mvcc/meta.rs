@@ -59,8 +59,8 @@ impl Meta {
         self.pb.set_lock(lock);
     }
 
-    pub fn clear_lock(&mut self) {
-        self.pb.clear_lock();
+    pub fn clear_lock(&mut self) -> MetaLock {
+        self.pb.take_lock()
     }
 
     pub fn iter_items(&self) -> Iter<MetaItem> {
@@ -106,7 +106,8 @@ impl Meta {
 mod tests {
     use super::*;
     use std::ops::RangeFrom;
-    use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
+    use kvproto::kvpb::Op;
+    use kvproto::mvccpb::{MetaLock, MetaItem, MetaColumn};
     use storage::mvcc::TEST_TS_BASE;
 
     #[test]
@@ -147,16 +148,21 @@ mod tests {
         let mut meta = Meta::new();
         assert!(meta.get_lock().is_none());
         let mut lock = MetaLock::new();
-        lock.set_field_type(MetaLockType::ReadWrite);
         lock.set_start_ts(1);
         lock.set_primary_key(b"pk".to_vec());
+        let mut col = MetaColumn::new();
+        col.set_name(b"col".to_vec());
+        col.set_op(Op::Put);
+        lock.mut_columns().push(col);
         meta.set_lock(lock);
 
         {
             let lock = meta.get_lock().unwrap();
             assert_eq!(lock.get_start_ts(), 1);
             assert_eq!(lock.get_primary_key(), b"pk");
-            assert_eq!(lock.get_field_type(), MetaLockType::ReadWrite);
+            let ref col = lock.get_columns()[0];
+            assert_eq!(col.get_name(), b"col");
+            assert_eq!(col.get_op(), Op::Put);
         }
 
         meta.clear_lock();

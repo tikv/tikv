@@ -3,9 +3,10 @@ use kvproto::kvrpcpb::Context;
 use tikv::util::codec::{table, Datum, datum};
 use tikv::util::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
-use tikv::storage::{Dsn, Mutation, Key};
+use tikv::storage::Dsn;
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::storage::txn::TxnStore;
+use tikv::storage::mvcc;
 use tikv::util;
 use tikv::util::event::Event;
 use tikv::util::worker::Worker;
@@ -88,19 +89,19 @@ impl Store {
     fn put(&mut self, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
         self.handles.extend(kv.iter().map(|&(ref k, _)| k.clone()));
         let pk = kv[0].0.clone();
-        let kv = kv.drain(..).map(|(k, v)| Mutation::Put((Key::from_raw(&k), v))).collect();
+        let kv = kv.drain(..).map(|(k, v)| mvcc::default_put(&k, &v)).collect();
         self.store.prewrite(Context::new(), kv, pk, self.current_ts).unwrap();
     }
 
     fn delete(&mut self, mut keys: Vec<Vec<u8>>) {
         self.handles.extend(keys.clone());
         let pk = keys[0].clone();
-        let mutations = keys.drain(..).map(|k| Mutation::Delete(Key::from_raw(&k))).collect();
+        let mutations = keys.drain(..).map(|k| mvcc::default_del(&k)).collect();
         self.store.prewrite(Context::new(), mutations, pk, self.current_ts).unwrap();
     }
 
     fn commit(&mut self) {
-        let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
+        let handles = self.handles.drain(..).collect();
         self.store
             .commit(Context::new(), handles, self.current_ts, self.ts_g.gen())
             .unwrap();
