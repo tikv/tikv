@@ -183,7 +183,7 @@ impl Storage {
         let mut scheduler = Scheduler::new(engine.clone());
 
         let (tx, rx) = mpsc::channel::<Message>();
-        let builder = thread::Builder::new().name(format!("storage-{:?}", desc));
+        let builder = thread::Builder::new().name(th_name!(format!("storage-{:?}", desc)));
         let handle = box_try!(builder.spawn(move || {
             info!("storage: [{}] started.", desc);
             loop {

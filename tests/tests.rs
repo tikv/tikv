@@ -30,6 +30,7 @@ extern crate uuid;
 extern crate mio;
 extern crate kvproto;
 extern crate tipb;
+extern crate time;
 
 mod test_raft;
 mod test_raft_snap;
