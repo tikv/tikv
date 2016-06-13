@@ -24,10 +24,12 @@ use tikv::server::Node;
 use tikv::raftstore::store::{self, Transport, msg, SendCh};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
+use kvproto::raftpb;
 use tikv::raftstore::Result;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
+use tikv::raft::SnapshotStatus;
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
 
@@ -43,10 +45,26 @@ impl ChannelTransport {
 
 impl Transport for ChannelTransport {
     fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+        let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
+        let to_peer_id = msg.get_to_peer().get_id();
+        let region_id = msg.get_region_id();
+        let is_snapshot = msg.get_message().get_msg_type() == raftpb::MessageType::MsgSnapshot;
 
         match self.routers.get(&to_store) {
-            Some(h) => h.rl().send_raft_msg(msg),
+            Some(h) => {
+                try!(h.rl().send_raft_msg(msg));
+                if is_snapshot {
+                    // should report snapshot finish.
+                    self.routers
+                        .get(&from_store)
+                        .unwrap()
+                        .rl()
+                        .report_snapshot(region_id, to_peer_id, SnapshotStatus::Finish)
+                        .unwrap();
+                }
+                Ok(())
+            }
             _ => Err(box_err!("missing sender for store {}", to_store)),
         }
     }
