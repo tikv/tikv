@@ -112,7 +112,7 @@ impl<T: Simulator> Cluster<T> {
             }
         } else {
             // recover from last shutdown.
-            let node_ids: Vec<u64> = self.engines.keys().cloned().collect();
+            let node_ids = self.engines.keys().cloned().collect::<Vec<_>>();
             for node_id in node_ids {
                 self.run_node(node_id);
             }
@@ -216,7 +216,7 @@ impl<T: Simulator> Cluster<T> {
         let mut leader = None;
         let mut retry_cnt = 500;
 
-        let node_ids: HashSet<u64> = self.sim.rl().get_node_ids();
+        let node_ids = self.sim.rl().get_node_ids();
         let mut count = 0;
         while (leader.is_none() || count < store_ids.len()) && retry_cnt > 0 {
             count = 0;
@@ -323,7 +323,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn shutdown(&mut self) {
-        let keys: HashSet<u64> = self.sim.rl().get_node_ids();
+        let keys = self.sim.rl().get_node_ids();
         for id in keys {
             self.stop_node(id);
         }
