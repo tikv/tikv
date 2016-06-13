@@ -716,7 +716,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let p = self.region_peers.get(&region_id);
         if p.is_none() || !p.unwrap().is_leader() {
             // region on this store is no longer leader, skipped.
-            info!("{} doesn't exist or is not leader, skip.", region_id);
+            info!("{} on {} doesn't exist or is not leader, skip.",
+                  region_id,
+                  self.store_id());
             return;
         }
 

@@ -509,9 +509,25 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
-        self.ask_split(region, split_key);
+        let mut try_cnt = 0;
+        loop {
+            // In case ask split message is ignored, we should retry.
+            if try_cnt % 50 == 0 {
+                self.ask_split(region, split_key);
+            }
 
-        self.pd_client.must_split(region, split_key)
+            if self.pd_client.check_split(region, split_key) {
+                return;
+            }
+
+            if try_cnt > 250 {
+                panic!("region {:?} has not been split by {:?}",
+                       region,
+                       escape(split_key));
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
     }
 
     // it's so common that we provide an API for it
