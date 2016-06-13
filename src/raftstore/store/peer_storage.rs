@@ -318,7 +318,7 @@ impl PeerStorage {
                                       try!(w.delete(key));
                                       Ok(true)
                                   }));
-            info!("clean old data takes {:?}", timer.elapsed());
+            info!("clean old region takes {:?}", timer.elapsed());
         }
 
         let timer = Instant::now();

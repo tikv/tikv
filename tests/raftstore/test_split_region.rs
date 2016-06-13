@@ -253,7 +253,7 @@ fn test_server_delay_split_region() {
 
 
 fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    // We use three nodes 1, 2, 3 for this test.
+    // We use three nodes([1, 2, 3]) for this test.
     cluster.bootstrap_region().expect("");
     cluster.start();
 
@@ -281,15 +281,15 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         util::must_get_equal(&engine, b"k2", b"v2");
     }
 
-    let engine = cluster.get_engine(3);
-    util::must_get_none(&engine, b"k2");
+    let engine3 = cluster.get_engine(3);
+    util::must_get_none(&engine3, b"k2");
 
     cluster.reset_transport_hooks();
     cluster.must_put(b"k3", b"v3");
 
     util::sleep_ms(3000);
     // node 3 must have k3.
-    util::must_get_equal(&engine, b"k3", b"v3");
+    util::must_get_equal(&engine3, b"k3", b"v3");
 }
 
 #[test]
@@ -309,7 +309,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20;
     cluster.cfg.store_cfg.raft_log_gc_limit = 2;
 
-    // We use three nodes 1, 2, 3 for this test.
+    // We use three nodes([1, 2, 3]) for this test.
     cluster.bootstrap_region().expect("");
     cluster.start();
 
@@ -336,8 +336,8 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         util::must_get_equal(&engine, b"k2", b"v2");
     }
 
-    let engine = cluster.get_engine(3);
-    util::must_get_none(&engine, b"k2");
+    let engine3 = cluster.get_engine(3);
+    util::must_get_none(&engine3, b"k2");
 
     for _ in 0..100 {
         // write many logs to force log GC for region 1 and region 2.
@@ -349,8 +349,8 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     util::sleep_ms(3000);
     // node 3 must have k1, k2.
-    util::must_get_equal(&engine, b"k1", b"v1");
-    util::must_get_equal(&engine, b"k2", b"v2");
+    util::must_get_equal(&engine3, b"k1", b"v1");
+    util::must_get_equal(&engine3, b"k2", b"v2");
 }
 
 #[test]
