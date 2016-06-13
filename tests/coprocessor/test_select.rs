@@ -265,6 +265,23 @@ fn test_select() {
 }
 
 #[test]
+fn test_group_by() {
+    let count = 10;
+    let (mut store, mut end_point, ti) = initial_data(count);
+
+    let req = prepare_sel(&mut store, &ti, None, None, vec![], vec![3]);
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 6);
+    for (i, row) in resp.get_rows().iter().enumerate() {
+        let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
+        let expected_encoded = datum::encode_value(&[Datum::Bytes(gk.unwrap())]).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap();
+}
+
+#[test]
 fn test_aggr_count() {
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);

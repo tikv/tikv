@@ -316,7 +316,7 @@ pub struct SelectContextCore {
     sel: SelectRequest,
     eval: Evaluator,
     cond_cols: HashMap<i64, ColumnInfo>,
-    aggr_cnt: usize,
+    aggr: bool,
     gks: Vec<Rc<Vec<u8>>>,
     gk_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
 }
@@ -324,7 +324,7 @@ pub struct SelectContextCore {
 impl SelectContextCore {
     fn new(sel: SelectRequest) -> Result<SelectContextCore> {
         let mut core = SelectContextCore {
-            aggr_cnt: sel.get_aggregates().len(),
+            aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
             sel: sel,
             eval: Default::default(),
             cond_cols: Default::default(),
@@ -357,7 +357,7 @@ impl SelectContextCore {
         if try!(self.should_skip(snap, h)) {
             return Ok(());
         }
-        if self.aggr_cnt > 0 {
+        if self.aggr {
             try!(self.aggregate(snap, h));
         } else {
             dest.push(try!(self.get_row_by_handle(snap, h)))
@@ -459,7 +459,7 @@ impl SelectContextCore {
     fn aggr_rows(&mut self) -> Result<Vec<Row>> {
         let mut rows = Vec::with_capacity(self.gk_aggrs.len());
         // Each aggregate partial result will be converted to two datum.
-        let mut row_data = Vec::with_capacity(1 + 2 * self.aggr_cnt);
+        let mut row_data = Vec::with_capacity(1 + 2 * self.sel.get_aggregates().len());
         for gk in self.gks.drain(..) {
             let aggrs = self.gk_aggrs.remove(&gk).unwrap();
 
@@ -580,7 +580,7 @@ impl<'a> SelectContext<'a> {
                 };
             }
         }
-        if self.core.aggr_cnt > 0 {
+        if self.core.aggr {
             self.core.aggr_rows()
         } else {
             Ok(rows)
