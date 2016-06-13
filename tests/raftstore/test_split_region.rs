@@ -253,7 +253,7 @@ fn test_server_delay_split_region() {
 
 
 fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    // We use three nodes 1, 2, 3 for this test.
+    // We use three nodes([1, 2, 3]) for this test.
     cluster.bootstrap_region().expect("");
     cluster.start();
 
@@ -281,15 +281,15 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         util::must_get_equal(&engine, b"k2", b"v2");
     }
 
-    let engine = cluster.get_engine(3);
-    util::must_get_none(&engine, b"k2");
+    let engine3 = cluster.get_engine(3);
+    util::must_get_none(&engine3, b"k2");
 
     cluster.reset_transport_hooks();
     cluster.must_put(b"k3", b"v3");
 
-    util::sleep_ms(10000);
+    util::sleep_ms(3000);
     // node 3 must have k3.
-    util::must_get_equal(&engine, b"k3", b"v3");
+    util::must_get_equal(&engine3, b"k3", b"v3");
 }
 
 #[test]
@@ -302,4 +302,65 @@ fn test_node_split_overlap_snapshot() {
 fn test_server_split_overlap_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
     test_split_overlap_snapshot(&mut cluster);
+}
+
+fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+    // truncate the log quickly so that we can force sending snapshot.
+    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20;
+    cluster.cfg.store_cfg.raft_log_gc_limit = 2;
+
+    // We use three nodes([1, 2, 3]) for this test.
+    cluster.bootstrap_region().expect("");
+    cluster.start();
+
+    // guarantee node 1 is leader
+    cluster.transfer_leader(1, util::new_peer(1, 1));
+    cluster.must_put(b"k0", b"v0");
+    assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
+
+    let pd_client = cluster.pd_client.clone();
+
+    // isolate node 3 for region 1.
+    cluster.hook_transport(IsolateRegionStore::new(1, 3));
+    cluster.must_put(b"k1", b"v1");
+
+    let region = pd_client.get_region(b"").unwrap();
+
+    // split (-inf, +inf) -> (-inf, k2), [k2, +inf]
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k2", b"v2");
+
+    // node 1 and node 2 must have k2, but node 3 must not.
+    for i in 1..3 {
+        let engine = cluster.get_engine(i);
+        util::must_get_equal(&engine, b"k2", b"v2");
+    }
+
+    let engine3 = cluster.get_engine(3);
+    util::must_get_none(&engine3, b"k2");
+
+    for _ in 0..100 {
+        // write many logs to force log GC for region 1 and region 2.
+        cluster.get(b"k1").unwrap();
+        cluster.get(b"k2").unwrap();
+    }
+
+    cluster.reset_transport_hooks();
+
+    util::sleep_ms(3000);
+    // node 3 must have k1, k2.
+    util::must_get_equal(&engine3, b"k1", b"v1");
+    util::must_get_equal(&engine3, b"k2", b"v2");
+}
+
+#[test]
+fn test_node_apply_new_version_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_apply_new_version_snapshot(&mut cluster);
+}
+
+#[test]
+fn test_server_apply_new_version_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_apply_new_version_snapshot(&mut cluster);
 }
