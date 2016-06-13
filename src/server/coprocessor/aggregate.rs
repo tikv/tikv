@@ -16,14 +16,11 @@ pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
 pub trait AggrFunc {
     /// `update` is used for update aggregate context.
     fn update(&mut self, args: &[Datum]) -> Result<()>;
-    /// `calc` calculates the aggregated result.
-    ///
-    /// First value is the rows count that has handle with function, second datum
-    /// is the evaluated value of this aggregate function.
-    fn calc(&mut self) -> Result<(usize, Datum)>;
+    /// `calc` calculates the aggregated result and push it to collector.
+    fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()>;
 }
 
-type Count = usize;
+type Count = u64;
 
 impl AggrFunc for Count {
     fn update(&mut self, args: &[Datum]) -> Result<()> {
@@ -36,7 +33,8 @@ impl AggrFunc for Count {
         Ok(())
     }
 
-    fn calc(&mut self) -> Result<(usize, Datum)> {
-        Ok((*self, Datum::Null))
+    fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
+        collector.push(Datum::U64(*self));
+        Ok(())
     }
 }
