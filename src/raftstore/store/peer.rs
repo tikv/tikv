@@ -34,7 +34,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer};
 use pd::PdClient;
 use super::store::Store;
-use super::peer_storage::{self, PeerStorage, RaftStorage};
+use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -71,8 +71,8 @@ pub struct ReadyResult {
     // We can execute multi commands like 1, conf change, 2 split region, ...
     // in one ready, and outer store should handle these results sequentially too.
     pub exec_results: Vec<ExecResult>,
-    // snap_applied_region should be set when we apply snapshot
-    pub snap_applied_region: Option<metapb::Region>,
+    // apply_snap_result is set after snapshot applied.
+    pub apply_snap_result: Option<ApplySnapResult>,
 }
 
 #[derive(Default)]
@@ -305,7 +305,7 @@ impl Peer {
 
         let ready = self.raft_group.ready();
 
-        let applied_region = try!(self.storage.wl().handle_raft_ready(&ready));
+        let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
         for msg in &ready.messages {
             try!(self.send_raft_message(&msg, trans));
@@ -315,7 +315,7 @@ impl Peer {
 
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
-            snap_applied_region: applied_region,
+            apply_snap_result: apply_result,
             exec_results: exec_results,
         }))
     }

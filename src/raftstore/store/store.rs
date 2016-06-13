@@ -45,7 +45,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::SnapState;
+use super::peer_storage::{SnapState, ApplySnapResult};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -483,9 +483,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn on_ready_apply_snapshot(&mut self, apply_result: ApplySnapResult) {
+        let prev_region = apply_result.prev_region;
+        let region = apply_result.region;
+
+        info!("snapshot for region {:?} is applied ready", region);
+
+        if !prev_region.get_peers().is_empty() {
+            info!("region changed from {:?} -> {:?} after applying snapshot",
+                  prev_region,
+                  region);
+            // we have already initialized the peer, so must in region_ranges.
+            if self.region_ranges.remove(&enc_end_key(&prev_region)).is_none() {
+                panic!("region should exist {:?}", prev_region);
+            }
+        }
+
+        self.region_ranges.insert(enc_end_key(&region), region.get_id());
+    }
+
     fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
-        if let Some(region) = ready_result.snap_applied_region {
-            self.region_ranges.insert(enc_end_key(&region), region.get_id());
+        if let Some(apply_result) = ready_result.apply_snap_result {
+            self.on_ready_apply_snapshot(apply_result);
         }
 
         let t = SlowTimer::new();
