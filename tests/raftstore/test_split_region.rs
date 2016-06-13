@@ -264,7 +264,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    // isolate 3 for region 1.
+    // isolate node 3 for region 1.
     cluster.hook_transport(IsolateRegionStore::new(1, 3));
     cluster.must_put(b"k1", b"v1");
 

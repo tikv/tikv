@@ -502,8 +502,8 @@ impl Peer {
                                        -> Result<()> {
         metric_incr!("raftstore.send_raft_message");
         let mut send_msg = RaftMessage::new();
-        let is_snapshot = msg.get_msg_type() == raftpb::MessageType::MsgSnapshot;
         send_msg.set_region_id(self.region_id);
+        // TODO: can we use move instead?
         send_msg.set_message(msg.clone());
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
@@ -529,9 +529,9 @@ impl Peer {
 
         let to_peer_id = to_peer.get_id();
         let to_store_id = to_peer.get_store_id();
-
+        let msg_type = msg.get_msg_type();
         debug!("send raft msg {:?}[size: {}] from {} to {}",
-               msg.get_msg_type(),
+               msg_type,
                msg.compute_size(),
                from_peer.get_id(),
                to_peer_id);
@@ -553,6 +553,7 @@ impl Peer {
         if unreachable {
             self.raft_group.report_unreachable(to_peer_id);
 
+            let is_snapshot = msg_type == raftpb::MessageType::MsgSnapshot;
             if is_snapshot {
                 self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
