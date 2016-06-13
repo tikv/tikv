@@ -822,7 +822,7 @@ mod tests {
     // Implements exponential backoff with full jitter.
     // See: http://www.awsarchitectureblog.com/2015/03/backoff.html.
     fn backoff(attempts: usize) {
-        let upper_ms: u64 = match attempts {
+        let upper_ms = match attempts {
             0...6 => 2u64.pow(attempts as u32),
             _ => BACK_OFF_CAP,
         };
