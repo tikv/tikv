@@ -487,7 +487,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let prev_region = apply_result.prev_region;
         let region = apply_result.region;
 
-        info!("snapshot for region {:?} is applied ready", region);
+        info!("snapshot for region {:?} is applied", region);
 
         if !prev_region.get_peers().is_empty() {
             info!("region changed from {:?} -> {:?} after applying snapshot",

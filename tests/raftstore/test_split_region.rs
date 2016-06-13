@@ -345,26 +345,12 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.get(b"k2").unwrap();
     }
 
-    let region2 = pd_client.get_region(b"k2").unwrap();
-    // split [k2, +inf) -> [k2, k3), [k3, +inf)
-    cluster.must_split(&region2, b"k3");
-    cluster.must_put(b"k3", b"v3");
-
-    // node 1 and node 2 must have k3, but node 3 must not.
-    for i in 1..3 {
-        let engine = cluster.get_engine(i);
-        util::must_get_equal(&engine, b"k3", b"v3");
-    }
-
-    let engine = cluster.get_engine(3);
-    util::must_get_none(&engine, b"k3");
-
     cluster.reset_transport_hooks();
 
     util::sleep_ms(3000);
-    // node 3 must have k2, k3.
+    // node 3 must have k1, k2.
+    util::must_get_equal(&engine, b"k1", b"v1");
     util::must_get_equal(&engine, b"k2", b"v2");
-    util::must_get_equal(&engine, b"k3", b"v3");
 }
 
 #[test]
