@@ -27,7 +27,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
-use raft::{self, RawNode, StateRole};
+use raft::{self, RawNode, StateRole, SnapshotStatus};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -502,6 +502,7 @@ impl Peer {
                                        -> Result<()> {
         metric_incr!("raftstore.send_raft_message");
         let mut send_msg = RaftMessage::new();
+        let is_snapshot = msg.get_msg_type() == raftpb::MessageType::MsgSnapshot;
         send_msg.set_region_id(self.region_id);
         send_msg.set_message(msg.clone());
         // set current epoch
@@ -551,6 +552,10 @@ impl Peer {
 
         if unreachable {
             self.raft_group.report_unreachable(to_peer_id);
+
+            if is_snapshot {
+                self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
+            }
         }
 
         Ok(())
