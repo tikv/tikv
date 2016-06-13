@@ -493,7 +493,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("region changed from {:?} -> {:?} after applying snapshot",
                   prev_region,
                   region);
-            // we have already initialized the peer, so must in region_ranges.
+            // we have already initialized the peer, so it must be in region_ranges.
             if self.region_ranges.remove(&enc_end_key(&prev_region)).is_none() {
                 panic!("region should exist {:?}", prev_region);
             }
