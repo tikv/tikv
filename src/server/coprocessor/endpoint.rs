@@ -432,7 +432,7 @@ impl SelectContextCore {
                 for (expr, func) in aggr_exprs.iter().zip(funcs) {
                     // TODO: cache args
                     let args = box_try!(self.eval.batch_eval(expr.get_children()));
-                    try!(func.update(&args));
+                    try!(func.update(args));
                 }
             }
             Entry::Vacant(e) => {
@@ -440,7 +440,7 @@ impl SelectContextCore {
                 for expr in aggr_exprs {
                     let mut aggr = try!(aggregate::build_aggr_func(expr));
                     let args = box_try!(self.eval.batch_eval(expr.get_children()));
-                    try!(aggr.update(&args));
+                    try!(aggr.update(args));
                     aggrs.push(aggr);
                 }
                 self.gks.push(gk);

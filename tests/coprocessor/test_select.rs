@@ -316,6 +316,36 @@ fn test_aggr_count() {
 }
 
 #[test]
+fn test_aggr_first() {
+    let count = 10;
+    let (mut store, mut end_point, ti) = initial_data(count);
+
+    let mut col = Expr::new();
+    col.set_tp(ExprType::ColumnRef);
+    col.mut_val().encode_i64(1).unwrap();
+    let mut expr = Expr::new();
+    expr.set_tp(ExprType::First);
+    expr.mut_children().push(col);
+
+    let req = prepare_sel(&mut store, &ti, None, None, vec![expr], vec![3]);
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 6);
+    for (i, row) in resp.get_rows().iter().enumerate() {
+        let idx = if i == 0 {
+            1
+        } else {
+            i * 2
+        };
+        let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
+        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::I64(idx as i64)];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap();
+}
+
+#[test]
 fn test_limit() {
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
