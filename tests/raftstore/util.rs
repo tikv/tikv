@@ -233,8 +233,7 @@ pub fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
 
 pub fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>,
                                      initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
     for engine in cluster.engines.values() {
         enc_write_kvs(engine, initial_kvs);
     }

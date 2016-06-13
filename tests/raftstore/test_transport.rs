@@ -17,8 +17,7 @@ use super::server::new_server_cluster;
 use super::util::{must_get_equal, new_peer};
 
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     let (key, value) = (b"k1", b"v1");
     let region_id = cluster.get_region_id(key);
