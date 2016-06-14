@@ -18,6 +18,11 @@ use super::server::new_server_cluster;
 use std::time::Duration;
 
 fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
+    // TODO transfer leader conflicts with leader lease feature, which
+    // is enabled when check_quorum on.
+    // After etcd solve it, we'll port and may remove this line then.
+    cluster.cfg.store_cfg.check_quorum = false;
+
     // test a cluster with five nodes [1, 5], only one region (region 1).
     // every node has a store and a peer with same id as node's.
     cluster.bootstrap_region().expect("");

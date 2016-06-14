@@ -14,9 +14,14 @@
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use super::util::{must_get_equal, new_peer};
+use super::util::{must_get_equal, new_peer, sleep_ms};
 
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
+    // TODO transfer leader conflicts with leader lease feature, which
+    // is enabled when check_quorum on.
+    // After etcd solve it, we'll port and may remove this line then.
+    cluster.cfg.store_cfg.check_quorum = false;
+
     cluster.bootstrap_region().expect("");
     cluster.start();
 
@@ -38,6 +43,10 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // leader in minority, new leader should be elected
     cluster.partition(vec![1, 2], vec![3, 4, 5]);
+    // leader lease make it take longer to elect the new leader
+    // so we must wait for a while here
+    sleep_ms(2000);
+    cluster.reset_leader_of_region(region_id);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
     assert!(cluster.leader_of_region(region_id).unwrap().get_id() != 1);
     cluster.must_put(key, b"changed");
