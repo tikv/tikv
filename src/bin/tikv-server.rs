@@ -322,10 +322,10 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
 
 fn get_snap_path(matches: &Matches, config: &toml::Value) -> String {
     let path = get_string_value("snap-dir",
-                                "server.snapshot",
+                                "server.snap-dir",
                                 matches,
                                 config,
-                                None,
+                                Some("/tmp/tikv/snapshots".to_owned()),
                                 |v| v.as_str().map(|s| s.to_owned()));
 
     let p = Path::new(&path);
