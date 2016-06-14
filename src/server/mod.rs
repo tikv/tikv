@@ -44,7 +44,7 @@ pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver, MockStoreAddrRes
 
 pub type OnResponse = Box<FnBox(msgpb::Message) + Send>;
 
-const MAX_SEND_RETRY_CNT: i32 = 20;
+const MAX_SEND_RETRY_CNT: i32 = 3;
 
 // send_msg wraps Sender and retries some times if queue is full.
 pub fn send_msg<M: Send>(ch: &mio::Sender<M>, mut msg: M) -> Result<()> {

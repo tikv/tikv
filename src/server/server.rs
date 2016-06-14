@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
 use std::net::SocketAddr;
 
-use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
+use mio::{Token, Handler, EventLoop, EventSet, PollOpt, EventLoopBuilder};
 use mio::tcp::{TcpListener, TcpStream, Shutdown};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -39,12 +39,15 @@ use raft::SnapshotStatus;
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
+const DEFAULT_NOFITY_CAPACITY: usize = 40960;
 
 pub fn create_event_loop<T, S>() -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
           S: StoreAddrResolver
 {
-    let event_loop = try!(EventLoop::new());
+    let mut builder = EventLoopBuilder::new();
+    builder.notify_capacity(DEFAULT_NOFITY_CAPACITY);
+    let event_loop = try!(builder.build());
     Ok(event_loop)
 }
 

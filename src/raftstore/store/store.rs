@@ -54,6 +54,7 @@ type Key = Vec<u8>;
 
 const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
+const DEFAULT_NOFITY_CAPACITY: usize = 40960;
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
@@ -88,6 +89,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     // We use base raft tick as the event loop timer tick.
     let mut builder = EventLoopBuilder::new();
     builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval));
+    builder.notify_capacity(DEFAULT_NOFITY_CAPACITY);
     let event_loop = try!(builder.build());
     Ok(event_loop)
 }
