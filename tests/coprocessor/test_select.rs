@@ -226,6 +226,11 @@ fn prepare_sel(store: &mut Store,
     req
 }
 
+// This function will insert `count` rows data into table.
+// each row contains 3 column, first column primary key, which
+// id is 1. Second column's type is a varchar, id is 3, value is
+// `varchar$((handle / 2))`. Third column's type is long, id is 4,
+// value is the same as handle.
 fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
     let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap());
     let mut store = Store::new(engine.clone());
@@ -309,6 +314,36 @@ fn test_aggr_count() {
         let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
         let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(count)];
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap();
+}
+
+#[test]
+fn test_aggr_first() {
+    let count = 10;
+    let (mut store, mut end_point, ti) = initial_data(count);
+
+    let mut col = Expr::new();
+    col.set_tp(ExprType::ColumnRef);
+    col.mut_val().encode_i64(1).unwrap();
+    let mut expr = Expr::new();
+    expr.set_tp(ExprType::First);
+    expr.mut_children().push(col);
+
+    let req = prepare_sel(&mut store, &ti, None, None, vec![expr], vec![3]);
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 6);
+    for (i, row) in resp.get_rows().iter().enumerate() {
+        let idx = if i == 0 {
+            1
+        } else {
+            i * 2
+        };
+        let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
+        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::I64(idx as i64)];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
