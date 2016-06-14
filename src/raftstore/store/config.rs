@@ -52,6 +52,8 @@ pub struct Config {
     // When entry count exceed this value, gc will be forced trigger.
     pub raft_log_gc_limit: u64,
 
+    pub check_quorum: bool,
+
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: u64,
     /// When region [a, b) size meets region_max_size, it will be split
@@ -84,6 +86,7 @@ impl Default for Config {
             region_check_size_diff: REGION_CHECK_DIFF,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
             pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL_MS,
+            check_quorum: true,
         }
     }
 }

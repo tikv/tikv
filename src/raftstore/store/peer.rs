@@ -204,7 +204,7 @@ impl Peer {
             max_size_per_msg: cfg.raft_max_size_per_msg,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
-            check_quorum: true,
+            check_quorum: cfg.check_quorum,
             tag: format!("[region {}]", region.get_id()),
         };
 
