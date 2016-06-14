@@ -478,7 +478,6 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
@@ -486,6 +485,23 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
                 format!("{:?}", resp));
+    }
+
+    pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
+        let mut try_cnt = 0;
+        loop {
+            self.reset_leader_of_region(region_id);
+            if self.leader_of_region(region_id).as_ref().unwrap() == &leader {
+                return;
+            }
+            if try_cnt > 250 {
+                panic!("failed to transfer leader to [{}] {:?}", region_id, leader);
+            }
+            if try_cnt % 50 == 0 {
+                self.transfer_leader(region_id, leader.clone());
+            }
+            try_cnt += 1;
+        }
     }
 
     pub fn reset_transport_hooks(&mut self) {

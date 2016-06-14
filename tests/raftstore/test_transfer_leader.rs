@@ -24,7 +24,7 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     // transfer leader to (2, 2)
-    cluster.transfer_leader(1, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
     // wait for leader transfer finish
     let (k1, v1) = (b"k1", b"v1");
     cluster.must_put(k1, v1);
@@ -33,7 +33,7 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.leader_of_region(1), Some(new_peer(2, 2)));
 
     // transfer leader to (3, 3)
-    cluster.transfer_leader(1, new_peer(3, 3));
+    cluster.must_transfer_leader(1, new_peer(3, 3));
     let (k2, v2) = (b"k2", b"v2");
     cluster.must_put(k2, v2);
     must_get_equal(&cluster.engines[&3], k2, v2);
@@ -45,7 +45,7 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
                               vec![new_put_cmd(b"k3", b"v3")]);
     req.mut_header().set_peer(new_peer(3, 3));
     // transfer leader to (4, 4)
-    cluster.transfer_leader(1, new_peer(4, 4));
+    cluster.must_transfer_leader(1, new_peer(4, 4));
     // send request to old leader (3, 3) directly and verify it fails
     let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().get_error().has_not_leader());
