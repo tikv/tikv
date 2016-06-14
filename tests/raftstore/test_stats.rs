@@ -27,7 +27,7 @@ fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let value = vec![0;1024];
     for i in 0..1000 {
         let last_available = stats.get_available();
-        cluster.must_put(format!("a{}", i).as_bytes(), &value);
+        cluster.must_put(format!("k{}", i).as_bytes(), &value);
         engine.flush(true).unwrap();
         sleep_ms(20);
 
@@ -47,8 +47,7 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
     cluster.cfg.store_cfg.pd_store_heartbeat_tick_interval = 20;
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     // wait store reports stats.
     for _ in 0..100 {
@@ -64,11 +63,11 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     let last_stats = pd_client.get_store_stats(1).unwrap();
     assert_eq!(last_stats.get_region_count(), 1);
 
-    cluster.must_put(b"a1", b"v1");
-    cluster.must_put(b"a3", b"v3");
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
 
     let region = pd_client.get_region(b"").unwrap();
-    cluster.must_split(&region, b"a2");
+    cluster.must_split(&region, b"k2");
     engine.flush(true).unwrap();
 
     // wait report region count after split

@@ -21,24 +21,21 @@ use super::server::new_server_cluster;
 use super::util::*;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_log();
-
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
-    let r1 = cluster.bootstrap_conf_change();
-    cluster.start();
+    let r1 = cluster.run_conf_change();
 
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
-    let (key, value) = (b"a1", b"v1");
+    let (key, value) = (b"k1", b"v1");
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
-    must_get_equal(&engine_2, b"a1", b"v1");
+    must_get_equal(&engine_2, b"k1", b"v1");
 
     let region_status = new_status_request(1, new_peer(2, 2), new_region_leader_cmd());
     let resp = cluster.call_command(region_status, Duration::from_secs(3)).unwrap();
@@ -48,20 +45,20 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let engine_3 = cluster.get_engine(3);
-    must_get_equal(&engine_3, b"a1", b"v1");
+    must_get_equal(&engine_3, b"k1", b"v1");
 
     // Remove peer (2, 2) from region 1.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
 
     // After new leader is elected, the change peer must be finished.
     cluster.leader_of_region(1).unwrap();
-    let (key, value) = (b"a3", b"v3");
+    let (key, value) = (b"k3", b"v3");
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
-    must_get_none(&engine_2, b"a1");
-    must_get_none(&engine_2, b"a3");
+    must_get_none(&engine_2, b"k1");
+    must_get_none(&engine_2, b"k3");
 
     let epoch = cluster.pd_client
         .get_region_by_id(1)

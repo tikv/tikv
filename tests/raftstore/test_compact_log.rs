@@ -22,12 +22,7 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
 fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_log();
-
-    // test a cluster with five nodes [1, 5], only one region (region 1).
-    // every node has a store and a peer with same id as node's.
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     let mut before_states = HashMap::new();
 
@@ -70,10 +65,9 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.store_cfg.raft_log_gc_limit = 1000;
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
-    cluster.must_put(b"a1", b"v1");
+    cluster.must_put(b"k1", b"v1");
 
     let mut before_states = HashMap::new();
 

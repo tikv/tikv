@@ -119,6 +119,21 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
+    // initialize first region in all stores, then start the cluster.
+    pub fn run(&mut self) {
+        self.bootstrap_region().unwrap();
+        self.start();
+    }
+
+    // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
+    // initialize first region in store 1, then start the cluster.
+    pub fn run_conf_change(&mut self) -> u64 {
+        let region_id = self.bootstrap_conf_change();
+        self.start();
+        region_id
+    }
+
     pub fn run_node(&mut self, node_id: u64) {
         let engine = self.engines.get(&node_id).unwrap();
         self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
@@ -253,7 +268,7 @@ impl<T: Simulator> Cluster<T> {
     // Multiple nodes with fixed node id, like node 1, 2, .. 5,
     // First region 1 is in all stores with peer 1, 2, .. 5.
     // Peer 1 is in node 1, store 1, etc.
-    pub fn bootstrap_region(&mut self) -> Result<()> {
+    fn bootstrap_region(&mut self) -> Result<()> {
         for (id, engine) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engine.clone());
@@ -282,7 +297,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // Return first region id.
-    pub fn bootstrap_conf_change(&mut self) -> u64 {
+    fn bootstrap_conf_change(&mut self) -> u64 {
         for (id, engine) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engine.clone());
