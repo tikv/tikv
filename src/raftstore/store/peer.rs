@@ -173,7 +173,7 @@ impl Peer {
         }
 
         // We will remove tombstone key when apply snapshot
-        info!("replicate peer, peer id {}, region_id {} \n",
+        info!("replicate peer, peer id {}, region_id {}",
               peer_id,
               region_id);
 
@@ -190,12 +190,13 @@ impl Peer {
             return Err(box_err!("invalid peer id"));
         }
 
+        let cfg = store.config();
+
         let store_id = store.store_id();
-        let ps = try!(PeerStorage::new(store.engine(), &region));
+        let ps = try!(PeerStorage::new(store.engine(), &region, cfg.snap_dir.clone()));
         let applied_index = ps.applied_index();
         let storage = Arc::new(RaftStorage::new(ps));
 
-        let cfg = store.config();
         let raft_cfg = raft::Config {
             id: peer_id,
             peers: vec![],
@@ -838,7 +839,7 @@ impl Peer {
         let change_type = request.get_change_type();
         let mut region = self.region();
 
-        warn!("my peer id {}, {}, {:?}, epoch: {:?}\n",
+        warn!("my peer id {}, {}, {:?}, epoch: {:?}",
               self.peer_id(),
               peer.get_id(),
               util::conf_change_type_str(&change_type),

@@ -222,15 +222,15 @@ mod tests {
         Arc::new(engine)
     }
 
-    fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
-        PeerStorage::new(engine, r).unwrap()
+    fn new_peer_storage(snap_dir: &TempDir, engine: Arc<DB>, r: &Region) -> PeerStorage {
+        PeerStorage::new(engine, r, snap_dir.path().to_str().unwrap().to_owned()).unwrap()
     }
 
     fn new_snapshot(peer_storage: &PeerStorage) -> RegionSnapshot {
         RegionSnapshot::new(peer_storage)
     }
 
-    fn load_default_dataset(engine: Arc<DB>) -> (PeerStorage, DataSet) {
+    fn load_default_dataset(engine: Arc<DB>, snap_dir: &TempDir) -> (PeerStorage, DataSet) {
         let mut r = Region::new();
         r.set_id(10);
         r.set_start_key(b"a2".to_vec());
@@ -246,19 +246,20 @@ mod tests {
         for &(ref k, ref v) in &base_data {
             engine.put(&data_key(k), v).expect("");
         }
-        let store = new_peer_storage(engine.clone(), &r);
+        let store = new_peer_storage(snap_dir, engine.clone(), &r);
         (store, base_data)
     }
 
     #[test]
     fn test_peekable() {
         let path = TempDir::new("test-raftstore").unwrap();
+        let snap_dir = TempDir::new("snap_dir").unwrap();
         let engine = new_temp_engine(&path);
         let mut r = Region::new();
         r.set_id(10);
         r.set_start_key(b"key0".to_vec());
         r.set_end_key(b"key4".to_vec());
-        let store = new_peer_storage(engine.clone(), &r);
+        let store = new_peer_storage(&snap_dir, engine.clone(), &r);
 
         let (key1, value1) = (b"key1", 2u64);
         engine.put_u64(&data_key(key1), value1).expect("");
@@ -285,8 +286,9 @@ mod tests {
     #[test]
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
+        let snap_dir = TempDir::new("snap_dir").unwrap();
         let engine = new_temp_engine(&path);
-        let (store, base_data) = load_default_dataset(engine.clone());
+        let (store, base_data) = load_default_dataset(engine.clone(), &snap_dir);
 
         let snap = RegionSnapshot::new(&store);
         let mut data = vec![];
@@ -332,7 +334,7 @@ mod tests {
         assert_eq!(res, base_data[1..3].to_vec());
 
         // test last region
-        let store = new_peer_storage(engine.clone(), &Region::new());
+        let store = new_peer_storage(&snap_dir, engine.clone(), &Region::new());
         let snap = RegionSnapshot::new(&store);
         data.clear();
         snap.scan(b"",
@@ -363,8 +365,9 @@ mod tests {
     #[test]
     fn test_reverse_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
+        let snap_dir = TempDir::new("snap_dir").unwrap();
         let engine = new_temp_engine(&path);
-        let (store, test_data) = load_default_dataset(engine.clone());
+        let (store, test_data) = load_default_dataset(engine.clone(), &snap_dir);
 
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter();
@@ -392,7 +395,7 @@ mod tests {
         assert_eq!(res, expect);
 
         // test last region
-        let store = new_peer_storage(engine.clone(), &Region::new());
+        let store = new_peer_storage(&snap_dir, engine.clone(), &Region::new());
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter();
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());

@@ -16,30 +16,39 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use std::fs::File;
+use std::io;
 
 use rocksdb::DB;
+use tempdir::TempDir;
+use protobuf::Message;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
-use tikv::raftstore::store::{self, Transport, msg, SendCh};
+use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
-use kvproto::raftpb;
+use kvproto::raftpb::MessageType;
 use tikv::raftstore::Result;
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
+use tikv::util::codec::number::NumberEncoder;
 use tikv::raft::SnapshotStatus;
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
 
 pub struct ChannelTransport {
-    pub routers: HashMap<u64, Arc<RwLock<ServerRaftStoreRouter>>>,
+    snap_paths: HashMap<u64, TempDir>,
+    routers: HashMap<u64, Arc<RwLock<ServerRaftStoreRouter>>>,
 }
 
 impl ChannelTransport {
     pub fn new() -> Arc<RwLock<ChannelTransport>> {
-        Arc::new(RwLock::new(ChannelTransport { routers: HashMap::new() }))
+        Arc::new(RwLock::new(ChannelTransport {
+            snap_paths: HashMap::new(),
+            routers: HashMap::new(),
+        }))
     }
 }
 
@@ -49,7 +58,28 @@ impl Transport for ChannelTransport {
         let to_store = msg.get_to_peer().get_store_id();
         let to_peer_id = msg.get_to_peer().get_id();
         let region_id = msg.get_region_id();
-        let is_snapshot = msg.get_message().get_msg_type() == raftpb::MessageType::MsgSnapshot;
+        let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
+
+        if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+            let snap = msg.get_message().get_snapshot();
+            let source_file = match self.snap_paths.get(&from_store) {
+                Some(p) => SnapFile::from_snap(p.path(), snap, SNAP_GEN_PREFIX).unwrap(),
+                None => return Err(box_err!("missing temp dir for store {}", from_store)),
+            };
+            let mut dst_file = match self.snap_paths.get(&to_store) {
+                Some(p) => SnapFile::from_snap(p.path(), snap, SNAP_REV_PREFIX).unwrap(),
+                None => return Err(box_err!("missing temp dir for store {}", to_store)),
+            };
+
+            if !dst_file.exists() {
+                let mut reader = File::open(source_file.path()).unwrap();
+
+                dst_file.encode_u64(msg.compute_size() as u64).unwrap();
+                msg.write_to_writer(&mut dst_file).unwrap();
+                io::copy(&mut reader, &mut dst_file).unwrap();
+                dst_file.save().unwrap();
+            }
+        }
 
         match self.routers.get(&to_store) {
             Some(h) => {
@@ -96,18 +126,24 @@ impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
-        let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+        let mut cfg = cfg;
+        let tmp = TempDir::new("test_cluster").unwrap();
+        cfg.store_cfg.snap_dir = tmp.path().to_str().unwrap().to_owned();
+
+        let mut event_loop = create_event_loop(&cfg.store_cfg).unwrap();
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let trans = Arc::new(RwLock::new(simulate_trans));
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
 
-        node.start(event_loop, engine, trans.clone()).unwrap();
+        node.start(event_loop, engine, trans.clone())
+            .unwrap();
         assert!(node_id == 0 || node_id == node.id());
 
         let node_id = node.id();
         self.trans.wl().routers.insert(node_id, node.raft_store_router());
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, trans);
+        self.trans.wl().snap_paths.insert(node_id, tmp);
 
         node_id
     }
@@ -115,6 +151,7 @@ impl Simulator for NodeCluster {
     fn stop_node(&mut self, node_id: u64) {
         let node = self.nodes.remove(&node_id).unwrap();
         self.trans.wl().routers.remove(&node_id).unwrap();
+        self.trans.wl().snap_paths.remove(&node_id).unwrap();
 
         drop(node);
     }
