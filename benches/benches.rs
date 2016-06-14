@@ -24,6 +24,7 @@ extern crate mio;
 extern crate rand;
 #[macro_use]
 extern crate tikv;
+extern crate time;
 
 mod channel;
 

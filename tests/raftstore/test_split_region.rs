@@ -252,7 +252,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
     // guarantee node 1 is leader
-    cluster.transfer_leader(1, util::new_peer(1, 1));
+    cluster.must_transfer_leader(1, util::new_peer(1, 1));
     cluster.must_put(b"k0", b"v0");
     assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
 
@@ -307,7 +307,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
     // guarantee node 1 is leader
-    cluster.transfer_leader(1, util::new_peer(1, 1));
+    cluster.must_transfer_leader(1, util::new_peer(1, 1));
     cluster.must_put(b"k0", b"v0");
     assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
 

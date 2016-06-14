@@ -16,8 +16,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
-use tikv::util::{self as tikv_util, logger, escape};
-use std::env;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use tempdir::TempDir;
@@ -25,14 +23,16 @@ use uuid::Uuid;
 use protobuf;
 use super::cluster::{Cluster, Simulator};
 
-use tikv::raftstore::store::*;
-use tikv::server::Config as ServerConfig;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_cmdpb::{CmdType, StatusCmdType, AdminCmdType};
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
 use kvproto::raftpb::ConfChangeType;
+
+use tikv::raftstore::store::*;
+use tikv::server::Config as ServerConfig;
 use tikv::raft::INVALID_ID;
+use tikv::util::escape;
 
 pub use tikv::raftstore::store::util::find_peer;
 
@@ -199,12 +199,6 @@ pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
 
 pub fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
-}
-
-// A help function to initial logger.
-pub fn init_log() {
-    let level = logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or("debug".to_owned()));
-    tikv_util::init_log(level).unwrap();
 }
 
 pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
