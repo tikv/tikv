@@ -43,6 +43,8 @@ use super::transport::Transport;
 use super::keys;
 use super::engine::{Peekable, Iterable, Mutable};
 
+const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
+
 pub struct PendingCmd {
     pub uuid: Uuid,
     pub cb: Callback,
@@ -341,8 +343,13 @@ impl Peer {
         }
 
         if get_transfer_leader_cmd(&req).is_some() {
-            if !any_snapshot_progress_state(&self.raft_group) {
-                self.transfer_leader(req);
+            let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
+            let peer = transfer_leader.get_peer();
+
+            if is_tranfer_leader_allowed(&self.raft_group, peer.get_id()) {
+                self.transfer_leader(peer);
+            } else {
+                info!("transfer leader message {:?} ignored directly.", req);
             }
 
             // transfer leader command doesn't need to replicate log and apply, so we
@@ -398,10 +405,7 @@ impl Peer {
         Ok(())
     }
 
-    fn transfer_leader(&mut self, cmd: RaftCmdRequest) {
-        let transfer_leader = get_transfer_leader_cmd(&cmd).unwrap();
-        let peer = transfer_leader.get_peer();
-
+    fn transfer_leader(&mut self, peer: &metapb::Peer) {
         metric_incr!("raftstore.transfer_leader");
 
         info!("transfer leader from {:?} to {:?} at region {}",
@@ -758,13 +762,19 @@ impl Peer {
     }
 }
 
-fn any_snapshot_progress_state<T: Storage>(raw_node: &RawNode<T>) -> bool {
-    for progress in raw_node.raft.prs.values() {
+fn is_tranfer_leader_allowed<T: Storage>(raw_node: &RawNode<T>, peer_id: u64) -> bool {
+    let status = raw_node.status();
+    for progress in status.progress.values() {
         if progress.state == ProgressState::Snapshot {
-            return true;
+            return false;
         }
     }
-    false
+
+    let last_index = raw_node.raft.raft_log.last_index();
+    if last_index - status.progress[&peer_id].matched > TRANSFER_LEADER_ALLOW_LOG_LAG {
+        return false;
+    }
+    true
 }
 
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {

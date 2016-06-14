@@ -121,3 +121,41 @@ fn test_node_pd_transfer_leader() {
     let mut cluster = new_server_cluster(0, 3);
     test_pd_transfer_leader(&mut cluster);
 }
+
+fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_rule();
+
+    let r1 = cluster.bootstrap_conf_change();
+    cluster.start();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    // at least 4m data
+    for i in 0..2 * 1024 {
+        let key = format!("{:01024}", i);
+        let value = format!("{:01024}", i);
+        cluster.must_put(key.as_bytes(), value.as_bytes());
+    }
+
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.transfer_leader(r1, new_peer(3, 3));
+
+    cluster.must_put(b"k4", b"v4");
+    let leader = cluster.leader_of_region(r1).unwrap();
+    must_get_equal(&cluster.engines[&3], b"k4", b"v4");
+    assert!(leader.get_store_id() != 3);
+}
+
+#[test]
+fn test_server_transfer_leader_during_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_transfer_leader_during_snapshot(&mut cluster);
+}
+
+#[test]
+fn test_node_transfer_leader_during_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_transfer_leader_during_snapshot(&mut cluster);
+}
