@@ -9,6 +9,8 @@ dsn = "rocksdb"
 store = "/tmp/tikv/store"
 # log level: trace, debug, info, warn, error, off.
 log-level = "info"
+# directory of snapshots
+snap-dir= "/tmp/tikv/snapshots"
 
 # set store capacity, if no set, use unlimited or disk size later.
 # capacity = 0 # 0 is unlimited.
