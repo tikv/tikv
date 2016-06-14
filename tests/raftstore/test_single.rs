@@ -18,8 +18,7 @@ use super::server::new_server_cluster;
 // TODO add stale epoch test cases.
 
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
@@ -41,8 +40,7 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
@@ -62,8 +60,7 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     for i in 100..200 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));

@@ -18,10 +18,7 @@ use super::server::new_server_cluster;
 use std::time::Duration;
 
 fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
-    // test a cluster with five nodes [1, 5], only one region (region 1).
-    // every node has a store and a peer with same id as node's.
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     // transfer leader to (2, 2)
     cluster.transfer_leader(1, new_peer(2, 2));
@@ -67,8 +64,7 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_rule();
 
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     cluster.must_put(b"k", b"v");
 
