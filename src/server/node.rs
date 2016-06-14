@@ -217,7 +217,7 @@ impl<C> Node<C>
                                         trans.clone(),
                                         pd_client));
 
-        let builder = thread::Builder::new().name(th_name!(format!("raftstore-{}", store_id)));
+        let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);

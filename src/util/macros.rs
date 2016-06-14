@@ -134,9 +134,9 @@ macro_rules! slow_log {
     }}
 }
 
-/// make a thread name with additional tag inherit from current thread.
+/// make a thread name with additional tag inheriting from current thread.
 #[macro_export]
-macro_rules! th_name {
+macro_rules! thd_name {
     ($name:expr) => ({
         $crate::util::get_tag_from_thread_name().map(|tag| {
             format!("{}::{}", $name, tag)
