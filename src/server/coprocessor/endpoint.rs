@@ -62,7 +62,7 @@ impl Host {
     pub fn new(engine: Arc<Box<Engine>>) -> Host {
         Host {
             snap_endpoint: Arc::new(TiDbEndPoint::new(engine)),
-            pool: ThreadPool::new_with_name("endpoint-pool".to_owned(), DEFAULT_POOL_SIZE),
+            pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), DEFAULT_POOL_SIZE),
         }
     }
 }
