@@ -226,6 +226,11 @@ fn prepare_sel(store: &mut Store,
     req
 }
 
+// This function will insert `count` rows data into table.
+// each row contains 3 column, first column primary key, which
+// id is 1. Second column's type is a varchar, id is 3, value is
+// `varchar$((handle / 2))`. Third column's type is long, id is 4,
+// value is the same as handle.
 fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
     let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap());
     let mut store = Store::new(engine.clone());
