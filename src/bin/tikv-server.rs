@@ -22,9 +22,11 @@ extern crate rocksdb;
 extern crate mio;
 extern crate toml;
 extern crate cadence;
+extern crate libc;
+extern crate fs2;
 
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::io::Read;
@@ -33,6 +35,7 @@ use std::net::UdpSocket;
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
 use mio::tcp::TcpListener;
+use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
@@ -260,9 +263,11 @@ fn build_raftkv(matches: &Matches,
                 pd_client: Arc<RpcClient>)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, String) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
-    let path = get_store_path(matches, config);
+    let path = Path::new(&get_store_path(matches, config)).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
-    let engine = Arc::new(DB::open(&opts, &path).unwrap());
+    let mut db_path = path.clone();
+    db_path.push("db");
+    let engine = Arc::new(DB::open(&opts, db_path.to_str().unwrap()).unwrap());
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.clone();
@@ -286,7 +291,9 @@ fn build_raftkv(matches: &Matches,
                                           Some(addr),
                                           |v| v.as_str().map(|s| s.to_owned()));
 
-    let snap_path = get_snap_path(matches, config);
+    let mut snap_path = path.clone();
+    snap_path.push("snap");
+    let snap_path = snap_path.to_str().unwrap().to_owned();
     cfg.store_cfg.snap_dir = snap_path.clone();
 
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
@@ -308,25 +315,6 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     if path == TEMP_DIR {
         return path;
     }
-
-    let p = Path::new(&path);
-    if p.exists() && p.is_file() {
-        panic!("{} is not a directory!", path);
-    }
-    if !p.exists() {
-        fs::create_dir_all(p).unwrap();
-    }
-    let absolute_path = p.canonicalize().unwrap();
-    format!("{}", absolute_path.display())
-}
-
-fn get_snap_path(matches: &Matches, config: &toml::Value) -> String {
-    let path = get_string_value("snap-dir",
-                                "server.snapshot",
-                                matches,
-                                config,
-                                None,
-                                |v| v.as_str().map(|s| s.to_owned()));
 
     let p = Path::new(&path);
     if p.exists() && p.is_file() {
@@ -371,6 +359,15 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
+    let store_path = get_store_path(matches, config);
+    let mut lock_path = Path::new(&store_path).to_path_buf();
+    lock_path.push("LOCK");
+    let f = File::create(lock_path).unwrap();
+    if f.try_lock_exclusive().is_err() {
+        panic!("lock {} failed, maybe another instance is using this directory.",
+               store_path);
+    }
+
     let (store, raft_router, node_id, snap_path) =
         build_raftkv(matches,
                      config,
@@ -409,7 +406,7 @@ fn main() {
     opts.optopt("C", "config", "set configuration file", "file path");
     opts.optopt("s",
                 "store",
-                "set the path to rocksdb directory",
+                "set the path to store directory",
                 "/tmp/tikv/store");
     opts.optopt("",
                 "capacity",
@@ -422,7 +419,6 @@ fn main() {
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
     opts.optopt("", "pd", "set pd address", "host:port");
     opts.optopt("", "metric-addr", "set statsd server address", "host:port");
-    opts.optopt("", "snap-dir", "set the snapshot directory", "");
     opts.optopt("",
                 "metric-prefix",
                 "set metric prefix",
