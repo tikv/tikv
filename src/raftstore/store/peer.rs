@@ -27,7 +27,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
-use raft::{self, RawNode, StateRole, SnapshotStatus};
+use raft::{self, RawNode, StateRole, SnapshotStatus, Storage};
+use raft::progress::ProgressState;
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -340,11 +341,13 @@ impl Peer {
         }
 
         if get_transfer_leader_cmd(&req).is_some() {
-            let resp = self.transfer_leader(req);
+            if !any_snapshot_progress_state(&self.raft_group) {
+                self.transfer_leader(req);
+            }
 
             // transfer leader command doesn't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
-            return cmd.cb.call_box((resp,));
+            return cmd.cb.call_box((make_transfer_leader_response(),));
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
                 return Err(box_err!("there is a pending conf change, try later."));
@@ -395,7 +398,7 @@ impl Peer {
         Ok(())
     }
 
-    fn transfer_leader(&mut self, cmd: RaftCmdRequest) -> RaftCmdResponse {
+    fn transfer_leader(&mut self, cmd: RaftCmdRequest) {
         let transfer_leader = get_transfer_leader_cmd(&cmd).unwrap();
         let peer = transfer_leader.get_peer();
 
@@ -408,13 +411,6 @@ impl Peer {
         );
 
         self.raft_group.transfer_leader(peer.get_id());
-
-        let mut response = AdminResponse::new();
-        response.set_cmd_type(AdminCmdType::TransferLeader);
-        response.set_transfer_leader(TransferLeaderResponse::new());
-        let mut resp = RaftCmdResponse::new();
-        resp.set_admin_response(response);
-        resp
     }
 
     fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
@@ -762,6 +758,15 @@ impl Peer {
     }
 }
 
+fn any_snapshot_progress_state<T: Storage>(raw_node: &RawNode<T>) -> bool {
+    for progress in raw_node.raft.prs.values() {
+        if progress.state == ProgressState::Snapshot {
+            return true;
+        }
+    }
+    false
+}
+
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
     if !msg.has_admin_request() {
         return None;
@@ -1099,4 +1104,13 @@ impl Peer {
         resp.mut_snap().set_region(self.storage.rl().get_region().clone());
         Ok(resp)
     }
+}
+
+fn make_transfer_leader_response() -> RaftCmdResponse {
+    let mut response = AdminResponse::new();
+    response.set_cmd_type(AdminCmdType::TransferLeader);
+    response.set_transfer_leader(TransferLeaderResponse::new());
+    let mut resp = RaftCmdResponse::new();
+    resp.set_admin_response(response);
+    resp
 }
