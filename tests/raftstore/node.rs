@@ -34,6 +34,7 @@ use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use tikv::util::codec::number::NumberEncoder;
+use tikv::raft::SnapshotStatus;
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
 
@@ -55,6 +56,9 @@ impl Transport for ChannelTransport {
     fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
+        let to_peer_id = msg.get_to_peer().get_id();
+        let region_id = msg.get_region_id();
+        let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
         if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
             let snap = msg.get_message().get_snapshot();
@@ -66,16 +70,31 @@ impl Transport for ChannelTransport {
                 Some(p) => SnapFile::from_snap(p.path(), snap, SNAP_REV_PREFIX).unwrap(),
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
-            let mut reader = File::open(source_file.path()).unwrap();
 
-            dst_file.encode_u64(msg.compute_size() as u64).unwrap();
-            msg.write_to_writer(&mut dst_file).unwrap();
-            io::copy(&mut reader, &mut dst_file).unwrap();
-            dst_file.save().unwrap();
+            if !dst_file.exists() {
+                let mut reader = File::open(source_file.path()).unwrap();
+
+                dst_file.encode_u64(msg.compute_size() as u64).unwrap();
+                msg.write_to_writer(&mut dst_file).unwrap();
+                io::copy(&mut reader, &mut dst_file).unwrap();
+                dst_file.save().unwrap();
+            }
         }
 
         match self.routers.get(&to_store) {
-            Some(h) => h.rl().send_raft_msg(msg),
+            Some(h) => {
+                try!(h.rl().send_raft_msg(msg));
+                if is_snapshot {
+                    // should report snapshot finish.
+                    self.routers
+                        .get(&from_store)
+                        .unwrap()
+                        .rl()
+                        .report_snapshot(region_id, to_peer_id, SnapshotStatus::Finish)
+                        .unwrap();
+                }
+                Ok(())
+            }
             _ => Err(box_err!("missing sender for store {}", to_store)),
         }
     }

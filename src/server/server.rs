@@ -257,7 +257,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn on_raft_command(&mut self, msg: RaftCmdRequest, token: Token, msg_id: u64) -> Result<()> {
-        debug!("handle raft command {:?}", msg);
+        trace!("handle raft command {:?}", msg);
         let on_resp = self.make_response_cb(token, msg_id);
         let cb = box move |resp| {
             let mut resp_msg = Message::new();

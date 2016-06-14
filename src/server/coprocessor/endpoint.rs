@@ -14,10 +14,10 @@
 use std::sync::Arc;
 use std::usize;
 use std::collections::HashMap;
-use std::{result, error};
+use std::collections::hash_map::Entry;
 use std::time::Instant;
 use std::boxed::FnBox;
-use std::cell::RefCell;
+use std::rc::Rc;
 use std::fmt::{self, Display, Formatter};
 
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
@@ -27,20 +27,21 @@ use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use threadpool::ThreadPool;
 
-use storage::{Engine, SnapshotStore, engine, txn, mvcc};
-use kvproto::kvrpcpb::LockInfo;
+use storage::{Engine, SnapshotStore};
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
-use kvproto::errorpb;
 use storage::{Snapshot, Key};
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
-use util::{as_slice, escape, duration_to_ms};
+use util::{escape, duration_to_ms};
 use util::worker::BatchRunnable;
 use util::SlowTimer;
-use super::OnResponse;
+use server::OnResponse;
+
+use super::{Error, Result};
+use super::aggregate::{self, AggrFunc};
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
@@ -50,60 +51,16 @@ const DEFAULT_ERROR_CODE: i32 = 1;
 // TODO: make this number configurable.
 const DEFAULT_POOL_SIZE: usize = 8;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Region(err: errorpb::Error) {
-            description("region related failure")
-            display("region {:?}", err)
-        }
-        Locked(l: LockInfo) {
-            description("key is locked")
-            display("locked {:?}", l)
-        }
-        Other(err: Box<error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("unknown error {:?}", err)
-        }
-    }
-}
+pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
 
-pub type Result<T> = result::Result<T, Error>;
-
-impl From<engine::Error> for Error {
-    fn from(e: engine::Error) -> Error {
-        match e {
-            engine::Error::Request(e) => Error::Region(e),
-            _ => Error::Other(box e),
-        }
-    }
-}
-
-impl From<txn::Error> for Error {
-    fn from(e: txn::Error) -> Error {
-        match e {
-            txn::Error::Mvcc(mvcc::Error::KeyIsLocked { primary, ts, key }) => {
-                let mut info = LockInfo::new();
-                info.set_primary_lock(primary);
-                info.set_lock_version(ts);
-                info.set_key(key);
-                Error::Locked(info)
-            }
-            _ => Error::Other(box e),
-        }
-    }
-}
-
-pub struct EndPointHost {
+pub struct Host {
     snap_endpoint: Arc<TiDbEndPoint>,
     pool: ThreadPool,
 }
 
-impl EndPointHost {
-    pub fn new(engine: Arc<Box<Engine>>) -> EndPointHost {
-        EndPointHost {
+impl Host {
+    pub fn new(engine: Arc<Box<Engine>>) -> Host {
+        Host {
             snap_endpoint: Arc::new(TiDbEndPoint::new(engine)),
             pool: ThreadPool::new_with_name("endpoint-pool".to_owned(), DEFAULT_POOL_SIZE),
         }
@@ -134,7 +91,7 @@ impl Display for RequestTask {
     }
 }
 
-impl BatchRunnable<RequestTask> for EndPointHost {
+impl BatchRunnable<RequestTask> for Host {
     #[allow(for_kv_map)]
     fn run_batch(&mut self, reqs: &mut Vec<RequestTask>) {
         let mut grouped_reqs = map![];
@@ -175,7 +132,6 @@ pub struct TiDbEndPoint {
 
 impl TiDbEndPoint {
     pub fn new(engine: Arc<Box<Engine>>) -> TiDbEndPoint {
-        // TODO: Spawn a new thread for handling requests asynchronously.
         TiDbEndPoint { engine: engine }
     }
 }
@@ -239,13 +195,13 @@ impl TiDbEndPoint {
         let snap = SnapshotStore::new(snap, sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap));
         let mut range = req.take_ranges().into_vec();
-        let desc = ctx.sel.get_order_by().first().map_or(false, |o| o.get_desc());
+        let desc = ctx.core.sel.get_order_by().first().map_or(false, |o| o.get_desc());
         debug!("scanning range: {:?}", range);
         if desc {
             range.reverse();
         }
-        let limit = if ctx.sel.has_limit() {
-            ctx.sel.get_limit() as usize
+        let limit = if ctx.core.sel.has_limit() {
+            ctx.core.sel.get_limit() as usize
         } else {
             usize::MAX
         };
@@ -315,12 +271,215 @@ fn is_point(range: &KeyRange) -> bool {
     range.get_end() == &*prefix_next(range.get_start())
 }
 
-struct SelectContext<'a> {
+#[inline]
+fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
+    if mysql::has_unsigned_flag(col.get_flag() as u64) {
+        // PK column is unsigned
+        Datum::U64(h as u64)
+    } else {
+        Datum::I64(h)
+    }
+}
+
+#[inline]
+fn inflate_with_col<'a, T>(eval: &mut Evaluator,
+                           snap: &SnapshotStore,
+                           t_id: i64,
+                           cols: T,
+                           h: i64)
+                           -> Result<()>
+    where T: IntoIterator<Item = &'a ColumnInfo>
+{
+    for col in cols {
+        let col_id = col.get_column_id();
+        if let Entry::Vacant(e) = eval.row.entry(col_id) {
+            if col.get_pk_handle() {
+                let v = get_pk(col, h);
+                e.insert(v);
+            } else {
+                let key = table::encode_column_key(t_id, h, col_id);
+                let value = match try!(snap.get(&Key::from_raw(&key))) {
+                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                        return Err(box_err!("key {} not exists", escape(&key)));
+                    }
+                    None => Datum::Null,
+                    Some(bs) => box_try!(bs.as_slice().decode_col_value(col)),
+                };
+                e.insert(value);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub struct SelectContextCore {
     sel: SelectRequest,
-    snap: SnapshotStore<'a>,
-    // TODO: remove refcell.
-    eval: RefCell<Evaluator>,
+    eval: Evaluator,
     cond_cols: HashMap<i64, ColumnInfo>,
+    aggr: bool,
+    gks: Vec<Rc<Vec<u8>>>,
+    gk_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
+}
+
+impl SelectContextCore {
+    fn new(sel: SelectRequest) -> Result<SelectContextCore> {
+        let mut core = SelectContextCore {
+            aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
+            sel: sel,
+            eval: Default::default(),
+            cond_cols: Default::default(),
+            gks: vec![],
+            gk_aggrs: map![],
+        };
+
+        if !core.sel.has_field_where() {
+            return Ok(core);
+        }
+        {
+            let cols = if core.sel.has_table_info() {
+                core.sel.get_table_info().get_columns()
+            } else {
+                core.sel.get_index_info().get_columns()
+            };
+            try!(collect_col_in_expr(&mut core.cond_cols, cols, core.sel.get_field_where()));
+        }
+        Ok(core)
+    }
+
+    fn load_row_with_key(&mut self,
+                         snap: &SnapshotStore,
+                         key: &[u8],
+                         dest: &mut Vec<Row>)
+                         -> Result<()> {
+        let h = box_try!(table::decode_handle(key));
+        // if aggregate is enabled, eval may contain dirty values.
+        self.eval.row.clear();
+        if try!(self.should_skip(snap, h)) {
+            return Ok(());
+        }
+        if self.aggr {
+            try!(self.aggregate(snap, h));
+        } else {
+            dest.push(try!(self.get_row_by_handle(snap, h)))
+        }
+        Ok(())
+    }
+
+    fn should_skip(&mut self, snap: &SnapshotStore, h: i64) -> Result<bool> {
+        if !self.sel.has_field_where() {
+            return Ok(false);
+        }
+        let t_id = self.sel.get_table_info().get_table_id();
+        try!(inflate_with_col(&mut self.eval, snap, t_id, self.cond_cols.values(), h));
+        let res = box_try!(self.eval.eval(self.sel.get_field_where()));
+        let b = box_try!(res.into_bool());
+        Ok(b.map_or(true, |v| !v))
+    }
+
+    fn get_row_by_handle(&mut self, snap: &SnapshotStore, h: i64) -> Result<Row> {
+        let tid = self.sel.get_table_info().get_table_id();
+        let mut row = Row::new();
+        let handle = box_try!(datum::encode_value(&[Datum::I64(h)]));
+        row.set_handle(handle);
+        for col in self.sel.get_table_info().get_columns() {
+            if col.get_pk_handle() {
+                box_try!(datum::encode_to(row.mut_data(), &[get_pk(col, h)], false));
+            } else {
+                let col_id = col.get_column_id();
+                if let Some(d) = self.eval.row.remove(&col_id) {
+                    box_try!(datum::encode_to(row.mut_data(), &[d], false));
+                } else {
+                    let raw_key = table::encode_column_key(tid, h, col.get_column_id());
+                    let key = Key::from_raw(&raw_key);
+                    match try!(snap.get(&key)) {
+                        None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                            return Err(box_err!("key {} not exists", escape(&raw_key)));
+                        }
+                        None => box_try!(datum::encode_to(row.mut_data(), &[Datum::Null], false)),
+                        Some(bs) => row.mut_data().extend(bs),
+                    }
+                }
+            }
+        }
+        Ok(row)
+    }
+
+    fn get_group_key(&mut self) -> Result<Vec<u8>> {
+        let items = self.sel.get_group_by();
+        if items.is_empty() {
+            return Ok(SINGLE_GROUP.to_vec());
+        }
+        let mut vals = Vec::with_capacity(items.len());
+        for item in items {
+            let v = box_try!(self.eval.eval(item.get_expr()));
+            vals.push(v);
+        }
+        let res = box_try!(datum::encode_value(&vals));
+        Ok(res)
+    }
+
+    fn aggregate(&mut self, snap: &SnapshotStore, h: i64) -> Result<()> {
+        let t_id = self.sel.get_table_info().get_table_id();
+        {
+            let cols = self.sel.get_table_info().get_columns();
+            try!(inflate_with_col(&mut self.eval, snap, t_id, cols, h));
+        }
+        let gk = Rc::new(try!(self.get_group_key()));
+        let aggr_exprs = self.sel.get_aggregates();
+        match self.gk_aggrs.entry(gk.clone()) {
+            Entry::Occupied(e) => {
+                let funcs = e.into_mut();
+                for (expr, func) in aggr_exprs.iter().zip(funcs) {
+                    // TODO: cache args
+                    let args = box_try!(self.eval.batch_eval(expr.get_children()));
+                    try!(func.update(args));
+                }
+            }
+            Entry::Vacant(e) => {
+                let mut aggrs = Vec::with_capacity(aggr_exprs.len());
+                for expr in aggr_exprs {
+                    let mut aggr = try!(aggregate::build_aggr_func(expr));
+                    let args = box_try!(self.eval.batch_eval(expr.get_children()));
+                    try!(aggr.update(args));
+                    aggrs.push(aggr);
+                }
+                self.gks.push(gk);
+                e.insert(aggrs);
+            }
+        }
+        Ok(())
+    }
+
+    /// Convert aggregate partial result to rows.
+    /// Data layout example:
+    /// SQL: select count(c1), sum(c2), avg(c3) from t;
+    /// Aggs: count(c1), sum(c2), avg(c3)
+    /// Rows: groupKey1, count1, value2, count3, value3
+    ///       groupKey2, count1, value2, count3, value3
+    fn aggr_rows(&mut self) -> Result<Vec<Row>> {
+        let mut rows = Vec::with_capacity(self.gk_aggrs.len());
+        // Each aggregate partial result will be converted to two datum.
+        let mut row_data = Vec::with_capacity(1 + 2 * self.sel.get_aggregates().len());
+        for gk in self.gks.drain(..) {
+            let aggrs = self.gk_aggrs.remove(&gk).unwrap();
+
+            let mut row = Row::new();
+            // The first column is group key.
+            row_data.push(Datum::Bytes(Rc::try_unwrap(gk).unwrap()));
+            for mut aggr in aggrs {
+                try!(aggr.calc(&mut row_data));
+            }
+            row.set_data(box_try!(datum::encode_value(&row_data)));
+            rows.push(row);
+            row_data.clear();
+        }
+        Ok(rows)
+    }
+}
+
+pub struct SelectContext<'a> {
+    snap: SnapshotStore<'a>,
+    core: SelectContextCore,
 }
 
 fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
@@ -329,10 +488,12 @@ fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
                        -> Result<()> {
     if expr.get_tp() == ExprType::ColumnRef {
         let i = box_try!(expr.get_val().decode_i64());
-        for c in col_meta {
-            if c.get_column_id() == i {
-                cols.insert(i, c.clone());
-                return Ok(());
+        if let Entry::Vacant(e) = cols.entry(i) {
+            for c in col_meta {
+                if c.get_column_id() == i {
+                    e.insert(c.clone());
+                    return Ok(());
+                }
             }
         }
         return Err(box_err!("column meta of {} is missing", i));
@@ -345,24 +506,10 @@ fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
 
 impl<'a> SelectContext<'a> {
     fn new(sel: SelectRequest, snap: SnapshotStore<'a>) -> Result<SelectContext<'a>> {
-        let mut ctx = SelectContext {
-            sel: sel,
+        Ok(SelectContext {
+            core: try!(SelectContextCore::new(sel)),
             snap: snap,
-            eval: Default::default(),
-            cond_cols: Default::default(),
-        };
-        if !ctx.sel.has_field_where() {
-            return Ok(ctx);
-        }
-        {
-            let cols = if ctx.sel.has_table_info() {
-                ctx.sel.get_table_info().get_columns()
-            } else {
-                ctx.sel.get_index_info().get_columns()
-            };
-            try!(collect_col_in_expr(&mut ctx.cond_cols, cols, ctx.sel.get_field_where()));
-        }
-        Ok(ctx)
+        })
     }
 
     fn get_rows_from_sel(&mut self,
@@ -385,17 +532,6 @@ impl<'a> SelectContext<'a> {
         Ok(rows)
     }
 
-    fn load_row_with_key(&self, key: &[u8], dest: &mut Vec<Row>) -> Result<()> {
-        let h = box_try!(table::decode_handle(key));
-        if try!(self.should_skip(h)) {
-            return Ok(());
-        }
-        if let Some(r) = try!(self.get_row_by_handle(h)) {
-            dest.push(r);
-        }
-        Ok(())
-    }
-
     fn get_rows_from_range(&mut self,
                            range: KeyRange,
                            limit: usize,
@@ -409,7 +545,7 @@ impl<'a> SelectContext<'a> {
             if let None = try!(self.snap.get(&Key::from_raw(range.get_start()))) {
                 return Ok(rows);
             }
-            try!(self.load_row_with_key(range.get_start(), &mut rows));
+            try!(self.core.load_row_with_key(&self.snap, range.get_start(), &mut rows));
         } else {
             let mut seek_key = if desc {
                 range.get_end().to_vec()
@@ -434,7 +570,7 @@ impl<'a> SelectContext<'a> {
                            escape(range.get_end()));
                     break;
                 }
-                try!(self.load_row_with_key(&key, &mut rows));
+                try!(self.core.load_row_with_key(&self.snap, &key, &mut rows));
                 seek_key = if desc {
                     box_try!(table::truncate_as_row_key(&key)).to_vec()
                 } else {
@@ -442,79 +578,11 @@ impl<'a> SelectContext<'a> {
                 };
             }
         }
-        Ok(rows)
-    }
-
-    fn should_skip(&self, h: i64) -> Result<bool> {
-        if !self.sel.has_field_where() {
-            return Ok(false);
+        if self.core.aggr {
+            self.core.aggr_rows()
+        } else {
+            Ok(rows)
         }
-        let t_id = self.sel.get_table_info().get_table_id();
-        let mut eval = self.eval.borrow_mut();
-        for (&col_id, col) in &self.cond_cols {
-            if col.get_pk_handle() {
-                if mysql::has_unsigned_flag(col.get_flag() as u64) {
-                    eval.row.insert(col_id, Datum::U64(h as u64));
-                } else {
-                    eval.row.insert(col_id, Datum::I64(h));
-                }
-            } else {
-                let key = table::encode_column_key(t_id, h, col_id);
-                let data = try!(self.snap.get(&Key::from_raw(&key)));
-                let value = match data {
-                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
-                        return Err(box_err!("key {} not exists", escape(&key)));
-                    }
-                    None => Datum::Null,
-                    Some(bs) => box_try!(bs.as_slice().decode_col_value(col)),
-                };
-                eval.row.insert(col_id, value);
-            }
-        }
-        let res = box_try!(eval.eval(self.sel.get_field_where()));
-        let b = box_try!(res.into_bool());
-        Ok(b.map_or(true, |v| !v))
-    }
-
-    fn get_row_by_handle(&self, h: i64) -> Result<Option<Row>> {
-        let tid = self.sel.get_table_info().get_table_id();
-        let columns = self.sel.get_table_info().get_columns();
-        let mut row = Row::new();
-        let handle = box_try!(datum::encode_value(&[Datum::I64(h)]));
-        for col in columns {
-            if col.get_pk_handle() {
-                if mysql::has_unsigned_flag(col.get_flag() as u64) {
-                    // PK column is unsigned
-                    let ud = Datum::U64(h as u64);
-                    let handle = box_try!(datum::encode_value(&[ud]));
-                    row.mut_data().extend(handle);
-                } else {
-                    row.mut_data().extend(handle.clone());
-                }
-            } else {
-                let col_id = col.get_column_id();
-                if self.cond_cols.contains_key(&col_id) {
-                    let d = &self.eval.borrow().row[&col_id];
-                    let bytes = box_try!(datum::encode_value(as_slice(d)));
-                    row.mut_data().extend(bytes);
-                } else {
-                    let raw_key = table::encode_column_key(tid, h, col.get_column_id());
-                    let key = Key::from_raw(&raw_key);
-                    match try!(self.snap.get(&key)) {
-                        None if mysql::has_not_null_flag(col.get_flag() as u64) => {
-                            return Err(box_err!("key {} not exists", escape(&raw_key)));
-                        }
-                        None => {
-                            let bs = box_try!(datum::encode_value(&[Datum::Null]));
-                            row.mut_data().extend(bs);
-                        }
-                        Some(bs) => row.mut_data().extend(bs),
-                    }
-                }
-            }
-        }
-        row.set_handle(handle);
-        Ok(Some(row))
     }
 
     fn get_rows_from_idx(&self,
@@ -535,7 +603,7 @@ impl<'a> SelectContext<'a> {
 
     fn get_idx_row_from_range(&self, r: KeyRange, limit: usize, desc: bool) -> Result<Vec<Row>> {
         let mut rows = vec![];
-        let info = self.sel.get_index_info();
+        let info = self.core.sel.get_index_info();
         let mut seek_key = if desc {
             r.get_end().to_vec()
         } else {

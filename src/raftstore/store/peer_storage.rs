@@ -90,6 +90,8 @@ impl<T> From<sync::PoisonError<T>> for RaftError {
 pub struct ApplySnapResult {
     pub last_index: u64,
     pub applied_index: u64,
+    // prev_region is the region before snapshot applied.
+    pub prev_region: metapb::Region,
     pub region: metapb::Region,
     pub truncated_state: RaftTruncatedState,
 }
@@ -308,6 +310,7 @@ impl PeerStorage {
         if !snap_file.exists() {
             return Err(box_err!("missing snap file {}", snap_file.path().display()));
         }
+        try!(snap_file.validate());
         let mut reader = try!(File::open(snap_file.path()));
         let len = try!(reader.decode_u64());
         // do we need to check RaftMsg here?
@@ -328,15 +331,20 @@ impl PeerStorage {
         if region.get_id() != region_id {
             return Err(box_err!("mismatch region id {} != {}", region_id, region.get_id()));
         }
-        let mut timer = Instant::now();
-        // Delete everything in the region for this peer.
-        try!(self.scan_region(self.engine.as_ref(),
-                              &mut |key, _| {
-                                  try!(w.delete(key));
-                                  Ok(true)
-                              }));
-        info!("clean old data takes {:?}", timer.elapsed());
-        timer = Instant::now();
+
+        if self.is_initialized() {
+            // we can only delete the old data when the peer is initialized.
+            let timer = Instant::now();
+            // Delete everything in the region for this peer.
+            try!(self.scan_region(self.engine.as_ref(),
+                                  &mut |key, _| {
+                                      try!(w.delete(key));
+                                      Ok(true)
+                                  }));
+            info!("clean old region takes {:?}", timer.elapsed());
+        }
+
+        let timer = Instant::now();
         // Write the snapshot into the region.
         loop {
             // TODO: avoid too many allocation
@@ -369,6 +377,7 @@ impl PeerStorage {
         Ok(ApplySnapResult {
             last_index: last_index,
             applied_index: last_index,
+            prev_region: self.region.clone(),
             region: region.clone(),
             truncated_state: truncated_state,
         })
@@ -496,7 +505,7 @@ impl PeerStorage {
         self.region.get_id()
     }
 
-    pub fn handle_raft_ready(&mut self, ready: &Ready) -> Result<Option<metapb::Region>> {
+    pub fn handle_raft_ready(&mut self, ready: &Ready) -> Result<Option<ApplySnapResult>> {
         let wb = WriteBatch::new();
         let mut last_index = self.last_index();
         let mut apply_snap_res = None;
@@ -524,7 +533,7 @@ impl PeerStorage {
             self.set_applied_index(res.applied_index);
             self.set_region(&res.region);
             self.set_truncated_state(&res.truncated_state);
-            return Ok(Some(res.region.clone()));
+            return Ok(Some(res));
         }
 
         Ok(None)
@@ -625,6 +634,7 @@ impl SnapFile {
                 try!(reader.seek(SeekFrom::End(-4)));
                 break;
             }
+            digest.write(&buffer);
             total_read += read;
         }
         let sum = try!(reader.read_u32::<BigEndian>());
@@ -770,7 +780,15 @@ pub fn do_snapshot(snap_dir: &Path,
     let mut snap_file =
         try!(SnapFile::new(snap_dir, SNAP_GEN_PREFIX, region_id, term, applied_idx));
     if snap_file.exists() {
-        try!(snap_file.validate());
+        if let Err(e) = snap_file.validate() {
+            error!("file {} is invalid, will regenerate: {:?}",
+                   snap_file.path().display(),
+                   e);
+            try!(snap_file.delete());
+            snap_file =
+                try!(SnapFile::new(snap_dir, SNAP_GEN_PREFIX, region_id, term, applied_idx));
+            try!(build_snap_file(&mut snap_file, snap, region_id, ranges));
+        }
     } else {
         try!(build_snap_file(&mut snap_file, snap, region_id, ranges));
     }

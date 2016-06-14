@@ -133,8 +133,10 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                                           SNAP_REV_PREFIX) {
                     Ok(mut f) => {
                         if f.exists() {
-                            // Maybe we can just use this file to apply.
-                            error!("file {} already exists!", f.path().display());
+                            info!("file {} already exists, just apply.", f.path().display());
+                            if let Err(e) = self.raft_router.rl().send_raft_msg(meta) {
+                                error!("send snapshot for token {:?} err {:?}", token, e);
+                            }
                             return;
                         }
                         debug!("begin to receive snap {:?}", meta);

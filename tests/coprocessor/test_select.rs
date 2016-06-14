@@ -1,4 +1,5 @@
 use tikv::server::coprocessor::*;
+use tikv::server::coprocessor;
 use kvproto::kvrpcpb::Context;
 use tikv::util::codec::{table, Datum, datum};
 use tikv::util::codec::datum::DatumDecoder;
@@ -12,6 +13,7 @@ use tikv::util::worker::Worker;
 use kvproto::coprocessor::{Request, KeyRange};
 use tipb::select::{ByItem, SelectRequest, SelectResponse};
 use tipb::schema::{self, ColumnInfo};
+use tipb::expression::{Expr, ExprType};
 
 use std::sync::Arc;
 use std::i64;
@@ -112,7 +114,7 @@ fn gen_values(h: i64, ti: &TableInfo) -> Vec<Datum> {
     for &tp in &ti.c_types {
         match tp {
             TYPE_LONG => values.push(Datum::I64(h)),
-            TYPE_VAR_CHAR => values.push(Datum::Bytes(format!("varchar:{}", h).into_bytes())),
+            TYPE_VAR_CHAR => values.push(Datum::Bytes(format!("varchar:{}", h / 2).into_bytes())),
             _ => values.push(Datum::Null),
         }
     }
@@ -162,7 +164,12 @@ fn prepare_table_data(store: &mut Store, ti: &TableInfo, count: i64) {
     store.commit();
 }
 
-fn build_basic_sel(store: &mut Store, limit: Option<i64>, desc: Option<bool>) -> SelectRequest {
+fn build_basic_sel(store: &mut Store,
+                   limit: Option<i64>,
+                   desc: Option<bool>,
+                   aggrs: Vec<Expr>,
+                   group_by: Vec<i64>)
+                   -> SelectRequest {
     let mut sel = SelectRequest::new();
     sel.set_start_ts(store.ts_g.gen());
 
@@ -176,15 +183,30 @@ fn build_basic_sel(store: &mut Store, limit: Option<i64>, desc: Option<bool>) ->
         sel.mut_order_by().push(item);
     }
 
+    if !aggrs.is_empty() {
+        sel.set_aggregates(RepeatedField::from_vec(aggrs));
+    }
+
+    for col in group_by {
+        let mut item = ByItem::new();
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ColumnRef);
+        expr.mut_val().encode_i64(col).unwrap();
+        item.set_expr(expr);
+        sel.mut_group_by().push(item);
+    }
+
     sel
 }
 
 fn prepare_sel(store: &mut Store,
                ti: &TableInfo,
                limit: Option<i64>,
-               desc: Option<bool>)
+               desc: Option<bool>,
+               aggrs: Vec<Expr>,
+               group_by: Vec<i64>)
                -> Request {
-    let mut sel = build_basic_sel(store, limit, desc);
+    let mut sel = build_basic_sel(store, limit, desc, aggrs, group_by);
     sel.set_table_info(ti.as_pb_table_info());
 
     let mut req = Request::new();
@@ -204,6 +226,11 @@ fn prepare_sel(store: &mut Store,
     req
 }
 
+// This function will insert `count` rows data into table.
+// each row contains 3 column, first column primary key, which
+// id is 1. Second column's type is a varchar, id is 3, value is
+// `varchar$((handle / 2))`. Third column's type is long, id is 4,
+// value is the same as handle.
 fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
     let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap());
     let mut store = Store::new(engine.clone());
@@ -226,7 +253,7 @@ fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
 fn test_select() {
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
-    let req = prepare_sel(&mut store, &ti, None, None);
+    let req = prepare_sel(&mut store, &ti, None, None, vec![], vec![]);
 
     let resp = handle_select(&end_point, req);
 
@@ -243,10 +270,91 @@ fn test_select() {
 }
 
 #[test]
+fn test_group_by() {
+    let count = 10;
+    let (mut store, mut end_point, ti) = initial_data(count);
+
+    let req = prepare_sel(&mut store, &ti, None, None, vec![], vec![3]);
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 6);
+    for (i, row) in resp.get_rows().iter().enumerate() {
+        let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
+        let expected_encoded = datum::encode_value(&[Datum::Bytes(gk.unwrap())]).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap();
+}
+
+#[test]
+fn test_aggr_count() {
+    let count = 10;
+    let (mut store, mut end_point, ti) = initial_data(count);
+
+    let mut expr = Expr::new();
+    expr.set_tp(ExprType::Count);
+    let req = prepare_sel(&mut store, &ti, None, None, vec![expr.clone()], vec![]);
+
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 1);
+    let mut expected_encoded =
+        datum::encode_value(&[Datum::Bytes(coprocessor::SINGLE_GROUP.to_vec()), Datum::U64(10)])
+            .unwrap();
+    assert_eq!(resp.get_rows()[0].get_data(), &*expected_encoded);
+
+    let req = prepare_sel(&mut store, &ti, None, None, vec![expr], vec![3]);
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 6);
+    for (i, row) in resp.get_rows().iter().enumerate() {
+        let count = if i == 0 || i == 5 {
+            1
+        } else {
+            2
+        };
+        let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
+        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(count)];
+        expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap();
+}
+
+#[test]
+fn test_aggr_first() {
+    let count = 10;
+    let (mut store, mut end_point, ti) = initial_data(count);
+
+    let mut col = Expr::new();
+    col.set_tp(ExprType::ColumnRef);
+    col.mut_val().encode_i64(1).unwrap();
+    let mut expr = Expr::new();
+    expr.set_tp(ExprType::First);
+    expr.mut_children().push(col);
+
+    let req = prepare_sel(&mut store, &ti, None, None, vec![expr], vec![3]);
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 6);
+    for (i, row) in resp.get_rows().iter().enumerate() {
+        let idx = if i == 0 {
+            1
+        } else {
+            i * 2
+        };
+        let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
+        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::I64(idx as i64)];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap();
+}
+
+#[test]
 fn test_limit() {
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
-    let req = prepare_sel(&mut store, &ti, Some(5), None);
+    let req = prepare_sel(&mut store, &ti, Some(5), None, vec![], vec![]);
 
     let resp = handle_select(&end_point, req);
 
@@ -267,7 +375,7 @@ fn test_limit() {
 fn test_reverse() {
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
-    let req = prepare_sel(&mut store, &ti, Some(5), Some(true));
+    let req = prepare_sel(&mut store, &ti, Some(5), Some(true), vec![], vec![]);
 
     let resp = handle_select(&end_point, req);
 
@@ -289,7 +397,7 @@ fn prepare_idx(store: &mut Store,
                limit: Option<i64>,
                desc: Option<bool>)
                -> Request {
-    let mut sel = build_basic_sel(store, limit, desc);
+    let mut sel = build_basic_sel(store, limit, desc, vec![], vec![]);
     sel.set_index_info(ti.as_pb_index_info(0));
 
     let mut req = Request::new();
@@ -367,7 +475,7 @@ fn test_index_reverse_limit() {
         }
     }
     for (i, &h) in handles.iter().enumerate() {
-        assert_eq!(9 - i as i64, h);
+        assert_eq!(10 - i as i64, h);
     }
     end_point.stop().unwrap();
 }
@@ -385,7 +493,7 @@ fn test_del_select() {
     store.delete(rows.drain(..).map(|(k, _)| k).collect());
     store.commit();
 
-    let req = prepare_sel(&mut store, &ti, None, None);
+    let req = prepare_sel(&mut store, &ti, None, None, vec![], vec![]);
 
     let resp = handle_select(&end_point, req);
 

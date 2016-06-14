@@ -27,14 +27,14 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
-use raft::{self, RawNode, StateRole};
+use raft::{self, RawNode, StateRole, SnapshotStatus};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer};
 use pd::PdClient;
 use super::store::Store;
-use super::peer_storage::{self, PeerStorage, RaftStorage};
+use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -71,8 +71,8 @@ pub struct ReadyResult {
     // We can execute multi commands like 1, conf change, 2 split region, ...
     // in one ready, and outer store should handle these results sequentially too.
     pub exec_results: Vec<ExecResult>,
-    // snap_applied_region should be set when we apply snapshot
-    pub snap_applied_region: Option<metapb::Region>,
+    // apply_snap_result is set after snapshot applied.
+    pub apply_snap_result: Option<ApplySnapResult>,
 }
 
 #[derive(Default)]
@@ -306,7 +306,7 @@ impl Peer {
 
         let ready = self.raft_group.ready();
 
-        let applied_region = try!(self.storage.wl().handle_raft_ready(&ready));
+        let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
         for msg in &ready.messages {
             try!(self.send_raft_message(&msg, trans));
@@ -316,7 +316,7 @@ impl Peer {
 
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
-            snap_applied_region: applied_region,
+            apply_snap_result: apply_result,
             exec_results: exec_results,
         }))
     }
@@ -504,6 +504,7 @@ impl Peer {
         metric_incr!("raftstore.send_raft_message");
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
+        // TODO: can we use move instead?
         send_msg.set_message(msg.clone());
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
@@ -529,9 +530,9 @@ impl Peer {
 
         let to_peer_id = to_peer.get_id();
         let to_store_id = to_peer.get_store_id();
-
+        let msg_type = msg.get_msg_type();
         debug!("send raft msg {:?}[size: {}] from {} to {}",
-               msg.get_msg_type(),
+               msg_type,
                msg.compute_size(),
                from_peer.get_id(),
                to_peer_id);
@@ -552,6 +553,11 @@ impl Peer {
 
         if unreachable {
             self.raft_group.report_unreachable(to_peer_id);
+
+            let is_snapshot = msg_type == raftpb::MessageType::MsgSnapshot;
+            if is_snapshot {
+                self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
+            }
         }
 
         Ok(())
