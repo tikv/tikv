@@ -48,6 +48,7 @@ extern crate threadpool;
 extern crate num;
 extern crate cadence;
 extern crate libc;
+extern crate crc;
 
 #[macro_use]
 pub mod util;

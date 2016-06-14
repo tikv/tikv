@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
 use std::time::Instant;
+use std::path::PathBuf;
 
 use util::worker::Runnable;
 
@@ -49,9 +50,15 @@ quick_error! {
     }
 }
 
-pub struct Runner;
+pub struct Runner {
+    snap_dir: PathBuf,
+}
 
 impl Runner {
+    pub fn new<T: Into<PathBuf>>(snap_dir: T) -> Runner {
+        Runner { snap_dir: snap_dir.into() }
+    }
+
     fn generate_snap(&self, task: &Task) -> Result<(), Error> {
         // do we need to check leader here?
         let db = task.storage.rl().get_engine();
@@ -70,7 +77,12 @@ impl Runner {
             term = box_try!(storage.term(applied_idx));
         }
 
-        let snap = box_try!(store::do_snapshot(&raw_snap, region_id, ranges, applied_idx, term));
+        let snap = box_try!(store::do_snapshot(self.snap_dir.as_path(),
+                                               &raw_snap,
+                                               region_id,
+                                               ranges,
+                                               applied_idx,
+                                               term));
         task.storage.wl().snap_state = SnapState::Snap(snap);
         Ok(())
     }
