@@ -11,29 +11,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::vec::Vec;
 use std::collections::VecDeque;
-use std::option::Option;
-use std::boxed::{Box, FnBox};
+use std::net::Shutdown;
+use std::cmp;
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
 use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
+use protobuf::Message as PbMessage;
 
 use kvproto::msgpb::Message;
+use kvproto::raft_serverpb::RaftSnapshotData;
 use super::{Result, ConnData};
 use super::server::Server;
 use util::codec::rpc;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
+use super::snap::Task as SnapTask;
+use util::worker::Scheduler;
 
-pub type OnClose = Box<FnBox() + Send>;
-pub type OnWriteComplete = Box<FnBox() + Send>;
+
+#[derive(PartialEq)]
+enum ConnType {
+    Handshake,
+    Rpc,
+    Snapshot,
+}
+
+const SNAPSHOT_PAYLOAD_BUF: usize = 4 * 1024 * 1024;
 
 pub struct Conn {
     pub sock: TcpStream,
     pub token: Token,
     pub interest: EventSet,
+
+    conn_type: ConnType,
 
     // store id is for remote store, we only set this
     // when we connect to the remote store.
@@ -45,11 +57,12 @@ pub struct Conn {
     // message
     payload: Option<MutByteBuf>,
 
+    file_size: usize,
+    read_size: usize,
+    snap_scheduler: Scheduler<SnapTask>,
+
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
-
-    on_close: Option<OnClose>,
-    on_write_complete: Option<OnWriteComplete>,
 }
 
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
@@ -80,30 +93,33 @@ fn create_mem_buf(s: usize) -> MutByteBuf {
 
 
 impl Conn {
-    pub fn new(sock: TcpStream, token: Token, store_id: Option<u64>) -> Conn {
+    pub fn new(sock: TcpStream,
+               token: Token,
+               store_id: Option<u64>,
+               snap_scheduler: Scheduler<SnapTask>)
+               -> Conn {
         Conn {
             sock: sock,
             token: token,
             interest: EventSet::readable() | EventSet::hup(),
+            conn_type: ConnType::Handshake,
             header: create_mem_buf(rpc::MSG_HEADER_LEN),
+            read_size: 0,
+            file_size: 0,
             payload: None,
             res: VecDeque::new(),
             last_msg_id: 0,
+            snap_scheduler: snap_scheduler,
             store_id: store_id,
-            on_write_complete: None,
-            on_close: None,
         }
     }
 
     pub fn close(&mut self) {
-        if self.on_close.is_some() {
-            let cb = self.on_close.take().unwrap();
-            cb.call_box(());
+        if self.conn_type == ConnType::Snapshot {
+            if let Err(e) = self.snap_scheduler.schedule(SnapTask::Discard(self.token)) {
+                error!("failed to cleanup snapshot: {:?}", e);
+            }
         }
-    }
-
-    pub fn set_close_callback(&mut self, cb: Option<OnClose>) {
-        self.on_close = cb
     }
 
     pub fn reregister<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
@@ -114,48 +130,141 @@ impl Conn {
         Ok(())
     }
 
-    pub fn read<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<Vec<ConnData>>
+
+    pub fn on_readable<T, S>(&mut self,
+                             event_loop: &mut EventLoop<Server<T, S>>)
+                             -> Result<Vec<ConnData>>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
         let mut bufs = vec![];
+        match self.conn_type {
+            ConnType::Handshake => try!(self.handshake(event_loop, &mut bufs)),
+            ConnType::Rpc => try!(self.read_rpc(event_loop, &mut bufs)),
+            ConnType::Snapshot => try!(self.read_snapshot(event_loop)),
+        };
+        Ok(bufs)
+    }
 
-        loop {
-            // Because we use the edge trigger, so here we must read whole data.
-            if self.payload.is_none() {
-                try!(try_read_data(&mut self.sock, &mut self.header));
-                if self.header.remaining() > 0 {
-                    // we need to read more data for header
-                    break;
+    fn handshake<T, S>(&mut self,
+                       event_loop: &mut EventLoop<Server<T, S>>,
+                       bufs: &mut Vec<ConnData>)
+                       -> Result<()>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
+        let mut data = match try!(self.read_one_message()) {
+            Some(data) => data,
+            None => return Ok(()),
+        };
+        if data.is_snapshot() {
+            self.conn_type = ConnType::Snapshot;
+
+            let mut snap_data = RaftSnapshotData::new();
+            try!(snap_data.merge_from_bytes(
+                data.msg.get_raft().get_message().get_snapshot().get_data()));
+            self.file_size = snap_data.get_file_size() as usize;
+            self.payload = Some(create_mem_buf(cmp::min(SNAPSHOT_PAYLOAD_BUF, self.file_size)));
+
+            let register_task = SnapTask::Register(self.token, data.msg.take_raft());
+            box_try!(self.snap_scheduler.schedule(register_task));
+
+            return self.read_snapshot(event_loop);
+        }
+        bufs.push(data);
+        self.conn_type = ConnType::Rpc;
+        self.read_rpc(event_loop, bufs)
+    }
+
+    fn read_snapshot<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<()>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
+        // all content should be read, ignore any read operation.
+        if self.payload.is_none() {
+            return Ok(());
+        }
+        // TODO: limit rate
+        while try!(self.read_payload()) {
+            let payload = self.payload.take().unwrap();
+            let cap = payload.capacity();
+            self.read_size += cap;
+
+            let task = SnapTask::Write(self.token, payload.flip());
+            box_try!(self.snap_scheduler.schedule(task));
+
+            if self.read_size == self.file_size {
+                // last chunk
+                box_try!(self.snap_scheduler.schedule(SnapTask::Close(self.token)));
+                if let Err(e) = self.sock.shutdown(Shutdown::Both) {
+                    error!("shutdown connection error: {}", e);
                 }
-
-                // we have already read whole header, parse it and begin to read payload.
-                let (msg_id, payload_len) = try!(rpc::decode_msg_header(self.header
-                    .bytes()));
-                self.last_msg_id = msg_id;
-                self.payload = Some(create_mem_buf(payload_len));
-            }
-
-            // payload here can't be None.
-            let mut payload = self.payload.take().unwrap();
-            try!(try_read_data(&mut self.sock, &mut payload));
-            if payload.remaining() > 0 {
-                // we need to read more data for payload
-                self.payload = Some(payload);
                 break;
+            } else if self.read_size + cap >= self.file_size {
+                self.payload = Some(create_mem_buf(self.file_size - self.read_size))
+            } else {
+                self.payload = Some(create_mem_buf(cap))
+            };
+        }
+        Ok(())
+    }
+
+    fn read_payload(&mut self) -> Result<bool> {
+        let payload = self.payload.as_mut().unwrap();
+        try!(try_read_data(&mut self.sock, payload));
+        let ret = payload.remaining() == 0;
+        Ok(ret)
+    }
+
+    fn read_one_message(&mut self) -> Result<Option<ConnData>> {
+        if self.payload.is_none() {
+            try!(try_read_data(&mut self.sock, &mut self.header));
+            if self.header.remaining() > 0 {
+                // we need to read more data for header
+                return Ok(None);
             }
 
-            let mut msg = Message::new();
-            try!(rpc::decode_body(payload.bytes(), &mut msg));
-            bufs.push(ConnData {
-                msg_id: self.last_msg_id,
-                msg: msg,
-            });
-
-            self.header.clear();
+            // we have already read whole header, parse it and begin to read payload.
+            let (msg_id, payload_len) = try!(rpc::decode_msg_header(self.header
+                .bytes()));
+            self.last_msg_id = msg_id;
+            self.payload = Some(create_mem_buf(payload_len));
         }
 
-        Ok(bufs)
+        // payload here can't be None.
+        let mut payload = self.payload.take().unwrap();
+        try!(try_read_data(&mut self.sock, &mut payload));
+        if payload.remaining() > 0 {
+            // we need to read more data for payload
+            self.payload = Some(payload);
+            return Ok(None);
+        }
+
+        let mut msg = Message::new();
+        try!(rpc::decode_body(payload.bytes(), &mut msg));
+        self.header.clear();
+        Ok(Some(ConnData {
+            msg_id: self.last_msg_id,
+            msg: msg,
+        }))
+    }
+
+    fn read_rpc<T, S>(&mut self,
+                      _: &mut EventLoop<Server<T, S>>,
+                      bufs: &mut Vec<ConnData>)
+                      -> Result<()>
+        where T: RaftStoreRouter,
+              S: StoreAddrResolver
+    {
+        loop {
+            // Because we use the edge trigger, so here we must read whole data.
+            match try!(self.read_one_message()) {
+                None => break,
+                Some(d) => bufs.push(d),
+            };
+        }
+
+        Ok(())
     }
 
     fn write_buf(&mut self) -> Result<usize> {
@@ -169,7 +278,7 @@ impl Conn {
         Ok(buf.remaining())
     }
 
-    pub fn write<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
+    pub fn on_writable<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
@@ -188,19 +297,13 @@ impl Conn {
         self.interest.remove(EventSet::writable());
         try!(self.reregister(event_loop));
 
-        if self.on_write_complete.is_some() {
-            let cb = self.on_write_complete.take().unwrap();
-            cb.call_box(());
-        }
-
         Ok(())
     }
 
 
     pub fn append_write_buf<T, S>(&mut self,
                                   event_loop: &mut EventLoop<Server<T, S>>,
-                                  msg: ConnData,
-                                  cb: Option<OnWriteComplete>)
+                                  msg: ConnData)
                                   -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
@@ -220,8 +323,6 @@ impl Conn {
             self.interest.insert(EventSet::writable());
             try!(self.reregister(event_loop));
         }
-
-        self.on_write_complete = cb;
 
         Ok(())
     }

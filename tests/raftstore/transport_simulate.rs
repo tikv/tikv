@@ -213,3 +213,55 @@ impl FilterFactory for Isolate {
              }]
     }
 }
+
+// Drop all packages for the store with special region.
+pub struct FilterRegionPacket {
+    region_id: u64,
+    store_id: u64,
+    drop: AtomicBool,
+}
+
+impl Filter for FilterRegionPacket {
+    fn before(&self, m: &RaftMessage) -> bool {
+        let region_id = m.get_region_id();
+        let from_store_id = m.get_from_peer().get_store_id();
+        let to_store_id = m.get_to_peer().get_store_id();
+
+        let drop = self.region_id == region_id &&
+                   (self.store_id == from_store_id || self.store_id == to_store_id);
+        self.drop.store(drop, Ordering::Relaxed);
+        drop
+    }
+
+    fn after(&self, r: Result<()>) -> Result<()> {
+        if self.drop.load(Ordering::Relaxed) {
+            return Err(Error::Timeout("drop by FilterRegionPacket in SimulateTransport"
+                .to_string()));
+        }
+        r
+    }
+}
+
+pub struct IsolateRegionStore {
+    region_id: u64,
+    store_id: u64,
+}
+
+impl IsolateRegionStore {
+    pub fn new(region_id: u64, store_id: u64) -> IsolateRegionStore {
+        IsolateRegionStore {
+            region_id: region_id,
+            store_id: store_id,
+        }
+    }
+}
+
+impl FilterFactory for IsolateRegionStore {
+    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+        vec![box FilterRegionPacket {
+                 region_id: self.region_id,
+                 store_id: self.store_id,
+                 drop: AtomicBool::new(false),
+             }]
+    }
+}

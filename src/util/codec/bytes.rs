@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::vec::Vec;
-use std::io::Write;
+use std::io::{Read, Write};
 
 use super::{Result, Error};
 use util::codec::number::{NumberEncoder, NumberDecoder};
@@ -90,7 +90,19 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
     encoded
 }
 
-pub trait BytesDecoder: NumberDecoder {
+pub trait CompactBytesDecoder: NumberDecoder {
+    /// `decode_compact_bytes` decodes bytes which is encoded by `encode_compact_bytes` before.
+    fn decode_compact_bytes(&mut self) -> Result<Vec<u8>> {
+        let vn = try!(self.decode_var_i64()) as usize;
+        let mut data = vec![0; vn];
+        try!(self.read_exact(&mut data));
+        Ok(data)
+    }
+}
+
+impl<T: Read> CompactBytesDecoder for T {}
+
+pub trait BytesDecoder: NumberDecoder + CompactBytesDecoder {
     /// Get the remaining length in bytes of current reader.
     fn remaining(&self) -> usize;
 
@@ -130,14 +142,6 @@ pub trait BytesDecoder: NumberDecoder {
             }
             return Ok(key);
         }
-    }
-
-    /// `decode_compact_bytes` decodes bytes which is encoded by `encode_compact_bytes` before.
-    fn decode_compact_bytes(&mut self) -> Result<Vec<u8>> {
-        let vn = try!(self.decode_var_i64()) as usize;
-        let mut data = vec![0; vn];
-        try!(self.read_exact(&mut data));
-        Ok(data)
     }
 }
 

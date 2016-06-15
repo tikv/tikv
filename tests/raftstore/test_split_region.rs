@@ -23,19 +23,17 @@ use super::util;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
+use super::transport_simulate::IsolateRegionStore;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
 
 fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_log();
-
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     let pd_client = cluster.pd_client.clone();
 
-    let tbls = vec![(b"a22", b"a11", b"a33"), (b"a11", b"a00", b"a11"), (b"a33", b"a22", b"a33")];
+    let tbls = vec![(b"k22", b"k11", b"k33"), (b"k11", b"k00", b"k11"), (b"k33", b"k22", b"k33")];
 
     for (split_key, left_key, right_key) in tbls {
         cluster.must_put(left_key, b"v1");
@@ -117,8 +115,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let check_size_diff = cluster.cfg.store_cfg.region_check_size_diff;
     let mut range = 1..;
 
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     let pd_client = cluster.pd_client.clone();
 
@@ -191,24 +188,23 @@ fn test_server_auto_split_region() {
 
 fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // We use three nodes for this test.
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     let pd_client = cluster.pd_client.clone();
 
     let region = pd_client.get_region(b"").unwrap();
 
-    let a1 = b"a1";
-    cluster.must_put(a1, b"v1");
+    let k1 = b"k1";
+    cluster.must_put(k1, b"v1");
 
-    let a3 = b"a3";
-    cluster.must_put(a3, b"v3");
+    let k3 = b"k3";
+    cluster.must_put(k3, b"v3");
 
     // check all nodes apply the logs.
     for i in 0..3 {
         let engine = cluster.get_engine(i + 1);
-        util::must_get_equal(&engine, a1, b"v1");
-        util::must_get_equal(&engine, a3, b"v3");
+        util::must_get_equal(&engine, k1, b"v1");
+        util::must_get_equal(&engine, k3, b"v3");
     }
 
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
@@ -217,8 +213,8 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let index = (1..4).find(|&x| x != leader.get_store_id()).unwrap();
     cluster.stop_node(index);
 
-    let a2 = b"a20";
-    cluster.must_split(&region, a2);
+    let k2 = b"k2";
+    cluster.must_split(&region, k2);
 
     // When the node starts, the region will try to join the raft group first,
     // so most of case, the new leader's heartbeat for split region may arrive
@@ -229,13 +225,13 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // TODO: we should think a better to check instead of sleep.
     util::sleep_ms(3000);
 
-    let a4 = b"a4";
-    cluster.must_put(a4, b"v4");
+    let k4 = b"k4";
+    cluster.must_put(k4, b"v4");
 
-    assert_eq!(cluster.get(a4).unwrap(), b"v4".to_vec());
+    assert_eq!(cluster.get(k4).unwrap(), b"v4".to_vec());
 
     let engine = cluster.get_engine(index);
-    util::must_get_equal(&engine, a4, b"v4");
+    util::must_get_equal(&engine, k4, b"v4");
 }
 
 #[test]
@@ -248,4 +244,116 @@ fn test_node_delay_split_region() {
 fn test_server_delay_split_region() {
     let mut cluster = new_server_cluster(0, 3);
     test_delay_split_region(&mut cluster);
+}
+
+
+fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+    // We use three nodes([1, 2, 3]) for this test.
+    cluster.run();
+
+    // guarantee node 1 is leader
+    cluster.must_transfer_leader(1, util::new_peer(1, 1));
+    cluster.must_put(b"k0", b"v0");
+    assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
+
+    let pd_client = cluster.pd_client.clone();
+
+    // isolate node 3 for region 1.
+    cluster.hook_transport(IsolateRegionStore::new(1, 3));
+    cluster.must_put(b"k1", b"v1");
+
+    let region = pd_client.get_region(b"").unwrap();
+
+    // split (-inf, +inf) -> (-inf, k2), [k2, +inf]
+    cluster.must_split(&region, b"k2");
+
+    cluster.must_put(b"k2", b"v2");
+
+    // node 1 and node 2 must have k2, but node 3 must not.
+    for i in 1..3 {
+        let engine = cluster.get_engine(i);
+        util::must_get_equal(&engine, b"k2", b"v2");
+    }
+
+    let engine3 = cluster.get_engine(3);
+    util::must_get_none(&engine3, b"k2");
+
+    cluster.reset_transport_hooks();
+    cluster.must_put(b"k3", b"v3");
+
+    util::sleep_ms(3000);
+    // node 3 must have k3.
+    util::must_get_equal(&engine3, b"k3", b"v3");
+}
+
+#[test]
+fn test_node_split_overlap_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_split_overlap_snapshot(&mut cluster);
+}
+
+#[test]
+fn test_server_split_overlap_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_split_overlap_snapshot(&mut cluster);
+}
+
+fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+    // truncate the log quickly so that we can force sending snapshot.
+    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20;
+    cluster.cfg.store_cfg.raft_log_gc_limit = 2;
+
+    // We use three nodes([1, 2, 3]) for this test.
+    cluster.run();
+
+    // guarantee node 1 is leader
+    cluster.must_transfer_leader(1, util::new_peer(1, 1));
+    cluster.must_put(b"k0", b"v0");
+    assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
+
+    let pd_client = cluster.pd_client.clone();
+
+    // isolate node 3 for region 1.
+    cluster.hook_transport(IsolateRegionStore::new(1, 3));
+    cluster.must_put(b"k1", b"v1");
+
+    let region = pd_client.get_region(b"").unwrap();
+
+    // split (-inf, +inf) -> (-inf, k2), [k2, +inf]
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k2", b"v2");
+
+    // node 1 and node 2 must have k2, but node 3 must not.
+    for i in 1..3 {
+        let engine = cluster.get_engine(i);
+        util::must_get_equal(&engine, b"k2", b"v2");
+    }
+
+    let engine3 = cluster.get_engine(3);
+    util::must_get_none(&engine3, b"k2");
+
+    for _ in 0..100 {
+        // write many logs to force log GC for region 1 and region 2.
+        cluster.get(b"k1").unwrap();
+        cluster.get(b"k2").unwrap();
+    }
+
+    cluster.reset_transport_hooks();
+
+    util::sleep_ms(3000);
+    // node 3 must have k1, k2.
+    util::must_get_equal(&engine3, b"k1", b"v1");
+    util::must_get_equal(&engine3, b"k2", b"v2");
+}
+
+#[test]
+fn test_node_apply_new_version_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_apply_new_version_snapshot(&mut cluster);
+}
+
+#[test]
+fn test_server_apply_new_version_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_apply_new_version_snapshot(&mut cluster);
 }

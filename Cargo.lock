@@ -6,6 +6,8 @@ dependencies = [
  "bytes 0.3.0 (git+https://github.com/carllerche/bytes)",
  "cadence 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "clippy 0.0.73 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "fs2 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (git+https://github.com/rust-lang-nursery/getopts)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto)",
  "libc 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -86,6 +88,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "lazy_static 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "fs2"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "getopts"
 version = "0.2.14"
 source = "git+https://github.com/rust-lang-nursery/getopts#4dfc197aa8253e7b0961fa05a594adbf8276209b"
@@ -108,6 +128,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "libc"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -120,7 +145,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#6ce859856b4dd23d4a6eeee7fdc9fd1c9c6520f4"
+source = "git+https://github.com/ngaut/rust-rocksdb.git#c78df78c386a8818285353f79eb0665122331d26"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -286,7 +311,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#6ce859856b4dd23d4a6eeee7fdc9fd1c9c6520f4"
+source = "git+https://github.com/ngaut/rust-rocksdb.git#c78df78c386a8818285353f79eb0665122331d26"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
@@ -337,7 +362,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#3df1b085b45f13659d318b492e9aeaaeb5fedd20"
+source = "git+https://github.com/pingcap/tipb.git#4140a6e68c29009b7477e224f1cc88fdac323332"
 dependencies = [
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
 ]

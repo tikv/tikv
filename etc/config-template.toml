@@ -2,7 +2,7 @@
 # set listening address.
 addr = "127.0.0.1:20160"
 # if not set, use addr instead. set advertise listening address for client communication.
-advertise-addr = "127.0.0.1:20161"
+advertise-addr = ""
 # set which dsn to use, warning: default is rocksdb without persistent.
 dsn = "rocksdb"
 # set the path to rocksdb directory.
@@ -39,14 +39,14 @@ compression = "lz4"
 
 # Amount of data to build up in memory (backed by an unsorted log
 # on disk) before converting to a sorted on-disk file.
-write-buffer-size = 67108864 # 64 * 1024 * 1024
+write-buffer-size = 16777216 # 16 * 1024 * 1024
 
 # The maximum number of write buffers that are built up in memory.
 max-write-buffer-number = 5
 
 # The minimum number of write buffers that will be merged together
 # before writing to storage.
-min-write-buffer-number-to-merge = 2
+min-write-buffer-number-to-merge = 1
 
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
@@ -56,7 +56,7 @@ max-background-compactions = 3
 max-bytes-for-level-base = 67108864 # 64 * 1024 * 1024
 
 # Target file size for compaction.
-target-file-size-base = 67108864 # 64 * 1024 * 1024
+target-file-size-base = 16777216 # 64 * 1024 * 1024
 
 # If true, the database will be created if it is missing.
 create-if-missing = true

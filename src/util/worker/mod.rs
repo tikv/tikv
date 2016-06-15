@@ -160,7 +160,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         let rx = self.receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
         let h = try!(Builder::new()
-            .name(self.name.clone())
+            .name(thd_name!(self.name.clone()))
             .spawn(move || poll(runner, rx, counter, batch_size)));
         self.handle = Some(h);
         Ok(())

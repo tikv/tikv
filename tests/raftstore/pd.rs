@@ -414,41 +414,31 @@ impl TestPdClient {
     }
 
     // check whether region is split by split_key or not.
-    pub fn must_split(&self, region: &metapb::Region, split_key: &[u8]) {
-        for _ in 1..200 {
-            sleep_ms(10);
-            // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c)
-            // use a to find new [a, b).
-            // use b to find new [b, c)
-            let left = match self.get_region(region.get_start_key()) {
-                Err(_) => continue,
-                Ok(left) => left,
-            };
+    pub fn check_split(&self, region: &metapb::Region, split_key: &[u8]) -> bool {
+        // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c)
+        // use a to find new [a, b).
+        // use b to find new [b, c)
+        let left = match self.get_region(region.get_start_key()) {
+            Err(_) => return false,
+            Ok(left) => left,
+        };
 
-            if left.get_end_key() != split_key {
-                continue;
-            }
-
-            let right = match self.get_region(split_key) {
-                Err(_) => continue,
-                Ok(right) => right,
-            };
-
-            if right.get_start_key() != split_key {
-                continue;
-            }
-
-            assert!(left.get_region_epoch().get_version() >
-                    region.get_region_epoch().get_version());
-            assert!(right.get_region_epoch().get_version() >
-                    region.get_region_epoch().get_version());
-            return;
+        if left.get_end_key() != split_key {
+            return false;
         }
 
-        assert!(false,
-                format!("region {:?} has not been split by {:?}",
-                        region,
-                        escape(split_key)));
+        let right = match self.get_region(split_key) {
+            Err(_) => return false,
+            Ok(right) => right,
+        };
+
+        if right.get_start_key() != split_key {
+            return false;
+        }
+
+        assert!(left.get_region_epoch().get_version() > region.get_region_epoch().get_version());
+        assert!(right.get_region_epoch().get_version() > region.get_region_epoch().get_version());
+        true
     }
 
     pub fn get_store_stats(&self, store_id: u64) -> Option<pdpb::StoreStats> {

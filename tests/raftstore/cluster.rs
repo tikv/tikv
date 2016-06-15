@@ -112,11 +112,26 @@ impl<T: Simulator> Cluster<T> {
             }
         } else {
             // recover from last shutdown.
-            let node_ids: Vec<u64> = self.engines.keys().cloned().collect();
+            let node_ids = self.engines.keys().cloned().collect::<Vec<_>>();
             for node_id in node_ids {
                 self.run_node(node_id);
             }
         }
+    }
+
+    // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
+    // initialize first region in all stores, then start the cluster.
+    pub fn run(&mut self) {
+        self.bootstrap_region().unwrap();
+        self.start();
+    }
+
+    // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
+    // initialize first region in store 1, then start the cluster.
+    pub fn run_conf_change(&mut self) -> u64 {
+        let region_id = self.bootstrap_conf_change();
+        self.start();
+        region_id
     }
 
     pub fn run_node(&mut self, node_id: u64) {
@@ -216,7 +231,7 @@ impl<T: Simulator> Cluster<T> {
         let mut leader = None;
         let mut retry_cnt = 500;
 
-        let node_ids: HashSet<u64> = self.sim.rl().get_node_ids();
+        let node_ids = self.sim.rl().get_node_ids();
         let mut count = 0;
         while (leader.is_none() || count < store_ids.len()) && retry_cnt > 0 {
             count = 0;
@@ -253,7 +268,7 @@ impl<T: Simulator> Cluster<T> {
     // Multiple nodes with fixed node id, like node 1, 2, .. 5,
     // First region 1 is in all stores with peer 1, 2, .. 5.
     // Peer 1 is in node 1, store 1, etc.
-    pub fn bootstrap_region(&mut self) -> Result<()> {
+    fn bootstrap_region(&mut self) -> Result<()> {
         for (id, engine) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engine.clone());
@@ -282,7 +297,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // Return first region id.
-    pub fn bootstrap_conf_change(&mut self) -> u64 {
+    fn bootstrap_conf_change(&mut self) -> u64 {
         for (id, engine) in self.dbs.iter().enumerate() {
             let id = id as u64 + 1;
             self.engines.insert(id, engine.clone());
@@ -323,7 +338,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn shutdown(&mut self) {
-        let keys: HashSet<u64> = self.sim.rl().get_node_ids();
+        let keys = self.sim.rl().get_node_ids();
         for id in keys {
             self.stop_node(id);
         }
@@ -478,7 +493,6 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
@@ -486,6 +500,23 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
                 format!("{:?}", resp));
+    }
+
+    pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
+        let mut try_cnt = 0;
+        loop {
+            self.reset_leader_of_region(region_id);
+            if self.leader_of_region(region_id).as_ref().unwrap() == &leader {
+                return;
+            }
+            if try_cnt > 250 {
+                panic!("failed to transfer leader to [{}] {:?}", region_id, leader);
+            }
+            if try_cnt % 50 == 0 {
+                self.transfer_leader(region_id, leader.clone());
+            }
+            try_cnt += 1;
+        }
     }
 
     pub fn reset_transport_hooks(&mut self) {
@@ -509,9 +540,25 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
-        self.ask_split(region, split_key);
+        let mut try_cnt = 0;
+        loop {
+            // In case ask split message is ignored, we should retry.
+            if try_cnt % 50 == 0 {
+                self.ask_split(region, split_key);
+            }
 
-        self.pd_client.must_split(region, split_key)
+            if self.pd_client.check_split(region, split_key) {
+                return;
+            }
+
+            if try_cnt > 250 {
+                panic!("region {:?} has not been split by {:?}",
+                       region,
+                       escape(split_key));
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
     }
 
     // it's so common that we provide an API for it

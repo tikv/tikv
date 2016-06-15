@@ -129,8 +129,8 @@ impl MemStorageCore {
         if ents.is_empty() {
             return Ok(());
         }
-        let first: u64 = self.entries[0].get_index() + 1;
-        let last: u64 = ents[0].get_index() + ents.len() as u64 - 1;
+        let first = self.entries[0].get_index() + 1;
+        let last = ents[0].get_index() + ents.len() as u64 - 1;
 
         if last < first {
             return Ok(());
