@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raftpb::MessageType;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::Transport;
 use rand;
@@ -263,5 +264,32 @@ impl FilterFactory for IsolateRegionStore {
                  store_id: self.store_id,
                  drop: AtomicBool::new(false),
              }]
+    }
+}
+
+struct SnapshotFilter {
+    drop: AtomicBool,
+}
+
+impl Filter for SnapshotFilter {
+    fn before(&self, msg: &RaftMessage) -> bool {
+        let drop = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
+        self.drop.store(drop, Ordering::Relaxed);
+        drop
+    }
+
+    fn after(&self, x: Result<()>) -> Result<()> {
+        if self.drop.load(Ordering::Relaxed) {
+            return Err(Error::Timeout("drop by SnapshotFilter in SimulateTransport".to_string()));
+        }
+        x
+    }
+}
+
+pub struct DropSnapshot;
+
+impl FilterFactory for DropSnapshot {
+    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+        vec![box SnapshotFilter { drop: AtomicBool::new(false) }]
     }
 }
