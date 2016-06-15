@@ -32,6 +32,8 @@ extern crate kvproto;
 extern crate tipb;
 extern crate time;
 
+use std::env;
+
 mod test_raft;
 mod test_raft_snap;
 mod test_raft_paper;
@@ -40,3 +42,12 @@ mod test_raw_node;
 mod raftstore;
 mod coprocessor;
 mod util;
+
+#[test]
+fn _travis_setup() {
+    // Set up travis test fail case log.
+    // The prefix "_" here is to guarantee running this case first.
+    if env::var("TRAVIS").is_ok() && env::var("LOG_FILE").is_ok() {
+        self::util::init_log();
+    }
+}
