@@ -312,10 +312,34 @@ pub fn get_tag_from_thread_name() -> Option<String> {
     thread::current().name().and_then(|name| name.split("::").skip(1).last()).map(From::from)
 }
 
+/// `DeferContext` will invoke the wrapped closure when dropped.
+pub struct DeferContext<T: FnOnce()> {
+    t: Option<T>,
+}
+
+impl<T: FnOnce()> DeferContext<T> {
+    pub fn new(t: T) -> DeferContext<T> {
+        DeferContext { t: Some(t) }
+    }
+}
+
+impl<T: FnOnce()> DeferContext<T> {
+    #[inline]
+    pub fn do_nothing(&self) {}
+}
+
+impl<T: FnOnce()> Drop for DeferContext<T> {
+    fn drop(&mut self) {
+        self.t.take().unwrap()()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{SocketAddr, AddrParseError};
     use std::time::Duration;
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use super::*;
 
     #[test]
@@ -350,5 +374,13 @@ mod tests {
             let d = Duration::from_millis(ms);
             assert_eq!(ms, duration_to_ms(d));
         }
+    }
+
+    #[test]
+    fn test_defer() {
+        let should_panic = Rc::new(AtomicBool::new(true));
+        let sp = should_panic.clone();
+        defer!(assert!(!sp.load(Ordering::Relaxed)));
+        should_panic.store(false, Ordering::Relaxed);
     }
 }
