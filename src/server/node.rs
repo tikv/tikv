@@ -20,7 +20,8 @@ use rocksdb::DB;
 use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
-use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport, SendCh};
+use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport, SendCh,
+                       SnapManager};
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
@@ -81,7 +82,8 @@ impl<C> Node<C>
     pub fn start<T>(&mut self,
                     event_loop: EventLoop<Store<T, C>>,
                     engine: Arc<DB>,
-                    trans: Arc<RwLock<T>>)
+                    trans: Arc<RwLock<T>>,
+                    snap_mgr: SnapManager)
                     -> Result<()>
         where T: Transport + 'static
     {
@@ -107,7 +109,7 @@ impl<C> Node<C>
         }
 
         // inform pd.
-        try!(self.start_store(event_loop, store_id, engine, trans));
+        try!(self.start_store(event_loop, store_id, engine, trans, snap_mgr));
         try!(self.pd_client
             .put_store(self.store.clone()));
         Ok(())
@@ -198,7 +200,8 @@ impl<C> Node<C>
                       mut event_loop: EventLoop<Store<T, C>>,
                       store_id: u64,
                       engine: Arc<DB>,
-                      trans: Arc<RwLock<T>>)
+                      trans: Arc<RwLock<T>>,
+                      snap_mgr: SnapManager)
                       -> Result<()>
         where T: Transport + 'static
     {
@@ -215,7 +218,8 @@ impl<C> Node<C>
                                         cfg,
                                         engine,
                                         trans.clone(),
-                                        pd_client));
+                                        pd_client,
+                                        snap_mgr));
 
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {

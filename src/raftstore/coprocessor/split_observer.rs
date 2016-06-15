@@ -109,7 +109,7 @@ mod test {
     use std::sync::Arc;
     use tempdir::TempDir;
     use raftstore::store::engine::*;
-    use raftstore::store::PeerStorage;
+    use raftstore::store::{self, PeerStorage};
     use raftstore::coprocessor::ObserverContext;
     use raftstore::coprocessor::RegionObserver;
     use kvproto::metapb::Region;
@@ -119,12 +119,9 @@ mod test {
     use util::codec::bytes::encode_bytes;
     use byteorder::{BigEndian, WriteBytesExt};
 
-    fn new_peer_storage(path: &TempDir, snap_dir: &TempDir) -> PeerStorage {
+    fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        PeerStorage::new(Arc::new(engine),
-                         &Region::new(),
-                         snap_dir.path().to_str().unwrap().to_owned())
-            .unwrap()
+        PeerStorage::new(Arc::new(engine), &Region::new(), store::new_snap_mgr("")).unwrap()
     }
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
@@ -161,16 +158,12 @@ mod test {
         let region_start_key = new_row_key(256, 1, 0, 0);
         let key = new_row_key(256, 2, 1, 0);
         let path = TempDir::new("test-split").unwrap();
-        let snap_dir = TempDir::new("snap_dir").unwrap();
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
         let mut r = Region::new();
         r.set_id(10);
         r.set_start_key(region_start_key);
 
-        let ps = PeerStorage::new(Arc::new(engine),
-                                  &r,
-                                  snap_dir.path().to_str().unwrap().to_owned())
-            .unwrap();
+        let ps = PeerStorage::new(Arc::new(engine), &r, store::new_snap_mgr("")).unwrap();
         let mut ctx = ObserverContext::new(&ps);
         let mut observer = SplitObserver;
 
@@ -184,8 +177,7 @@ mod test {
     #[test]
     fn test_split() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let snap_dir = TempDir::new("snap_dir").unwrap();
-        let storage = new_peer_storage(&path, &snap_dir);
+        let storage = new_peer_storage(&path);
         let mut ctx = ObserverContext::new(&storage);
         let mut req = AdminRequest::new();
 
