@@ -128,9 +128,7 @@ impl Drop for CaseTraceLogger {
 // A help function to initial logger.
 pub fn init_log() {
     let output = env::var("LOG_FILE").ok();
-    if output.is_none() {
-        return;
-    }
+
     // don't treat stderr as a filename.
     let output = output.iter().filter(|f| f.to_lowercase() != "stderr").next();
     let level = logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or("debug".to_owned()));

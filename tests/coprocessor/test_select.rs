@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::i64;
 use protobuf::{RepeatedField, Message};
 
-use util::{TsGenerator, init_log};
+use util::TsGenerator;
 
 const TYPE_VAR_CHAR: u8 = 1;
 const TYPE_LONG: u8 = 2;
@@ -251,7 +251,6 @@ fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
 
 #[test]
 fn test_select() {
-    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_sel(&mut store, &ti, None, None, vec![], vec![]);
@@ -272,7 +271,6 @@ fn test_select() {
 
 #[test]
 fn test_group_by() {
-    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
 
@@ -290,7 +288,6 @@ fn test_group_by() {
 
 #[test]
 fn test_aggr_count() {
-    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
 
@@ -355,7 +352,6 @@ fn test_aggr_first() {
 
 #[test]
 fn test_limit() {
-    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_sel(&mut store, &ti, Some(5), None, vec![], vec![]);
@@ -377,7 +373,6 @@ fn test_limit() {
 
 #[test]
 fn test_reverse() {
-    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_sel(&mut store, &ti, Some(5), Some(true), vec![], vec![]);
@@ -436,7 +431,6 @@ fn handle_select(end_point: &Worker<RequestTask>, req: Request) -> SelectRespons
 
 #[test]
 fn test_index() {
-    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_idx(&mut store, &ti, None, None);
@@ -463,7 +457,6 @@ fn test_index() {
 
 #[test]
 fn test_index_reverse_limit() {
-    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_idx(&mut store, &ti, Some(5), Some(true));
@@ -489,7 +482,6 @@ fn test_index_reverse_limit() {
 
 #[test]
 fn test_del_select() {
-    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
 
