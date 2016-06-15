@@ -14,7 +14,7 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io::{self, Write};
-use std::slice;
+use std::{slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
 use std::collections::hash_map::Entry;
@@ -306,6 +306,10 @@ pub fn duration_to_ms(d: Duration) -> u64 {
     let nanos = d.subsec_nanos() as u64;
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000 + (nanos / 1_000_000)
+}
+
+pub fn get_tag_from_thread_name() -> Option<String> {
+    thread::current().name().and_then(|name| name.split("::").skip(1).last()).map(From::from)
 }
 
 #[cfg(test)]

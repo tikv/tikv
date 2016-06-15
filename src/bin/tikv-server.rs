@@ -22,9 +22,11 @@ extern crate rocksdb;
 extern crate mio;
 extern crate toml;
 extern crate cadence;
+extern crate libc;
+extern crate fs2;
 
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::io::Read;
@@ -33,6 +35,7 @@ use std::net::UdpSocket;
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
 use mio::tcp::TcpListener;
+use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR};
@@ -165,12 +168,12 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                               |v| v.as_str().map(|s| s.to_owned()));
     let compression = util::rocksdb_option::get_compression_by_string(&tp);
     let per_level_compression: [DBCompressionType; 7] = [DBCompressionType::DBNo,
-                                                        DBCompressionType::DBNo,
-                                                        compression,
-                                                        compression,
-                                                        compression,
-                                                        compression,
-                                                        compression];
+                                                         DBCompressionType::DBNo,
+                                                         compression,
+                                                         compression,
+                                                         compression,
+                                                         compression,
+                                                         compression];
     opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_integer_value("",
@@ -258,11 +261,13 @@ fn build_raftkv(matches: &Matches,
                 cluster_id: u64,
                 addr: String,
                 pd_client: Arc<RpcClient>)
-                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64) {
+                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, String) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
-    let path = get_store_path(matches, config);
+    let path = Path::new(&get_store_path(matches, config)).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
-    let engine = Arc::new(DB::open(&opts, &path).unwrap());
+    let mut db_path = path.clone();
+    db_path.push("db");
+    let engine = Arc::new(DB::open(&opts, db_path.to_str().unwrap()).unwrap());
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.clone();
@@ -286,13 +291,18 @@ fn build_raftkv(matches: &Matches,
                                           Some(addr),
                                           |v| v.as_str().map(|s| s.to_owned()));
 
+    let mut snap_path = path.clone();
+    snap_path.push("snap");
+    let snap_path = snap_path.to_str().unwrap().to_owned();
+    cfg.store_cfg.snap_dir = snap_path.clone();
+
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
     node.start(event_loop, engine.clone(), trans).unwrap();
     let raft_router = node.raft_store_router();
     let node_id = node.id();
 
-    (create_raft_storage(node, engine).unwrap(), raft_router, node_id)
+    (create_raft_storage(node, engine).unwrap(), raft_router, node_id, snap_path)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -324,7 +334,8 @@ fn run_local_server(listener: TcpListener, store: Storage) {
                               listener,
                               store,
                               router,
-                              MockStoreAddrResolver)
+                              MockStoreAddrResolver,
+                              TEMP_DIR.to_owned())
         .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
@@ -347,14 +358,31 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                    |v| v.as_str().map(|s| s.to_owned()));
     let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
-    let (store, raft_router, node_id) = build_raftkv(matches,
-                                                     config,
-                                                     ch,
-                                                     cluster_id,
-                                                     format!("{}", listener.local_addr().unwrap()),
-                                                     pd_client);
+
+    let store_path = get_store_path(matches, config);
+    let mut lock_path = Path::new(&store_path).to_path_buf();
+    lock_path.push("LOCK");
+    let f = File::create(lock_path).unwrap();
+    if f.try_lock_exclusive().is_err() {
+        panic!("lock {} failed, maybe another instance is using this directory.",
+               store_path);
+    }
+
+    let (store, raft_router, node_id, snap_path) =
+        build_raftkv(matches,
+                     config,
+                     ch.clone(),
+                     cluster_id,
+                     format!("{}", listener.local_addr().unwrap()),
+                     pd_client);
     initial_metric(matches, config, Some(node_id));
-    let mut svr = Server::new(&mut event_loop, listener, store, raft_router, resolver).unwrap();
+    let mut svr = Server::new(&mut event_loop,
+                              listener,
+                              store,
+                              raft_router,
+                              resolver,
+                              snap_path)
+        .unwrap();
     svr.run(&mut event_loop).unwrap();
 }
 
@@ -378,7 +406,7 @@ fn main() {
     opts.optopt("C", "config", "set configuration file", "file path");
     opts.optopt("s",
                 "store",
-                "set the path to rocksdb directory",
+                "set the path to store directory",
                 "/tmp/tikv/store");
     opts.optopt("",
                 "capacity",

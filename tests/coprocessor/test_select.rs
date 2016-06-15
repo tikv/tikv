@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::i64;
 use protobuf::{RepeatedField, Message};
 
-use util::TsGenerator;
+use util::{TsGenerator, init_log};
 
 const TYPE_VAR_CHAR: u8 = 1;
 const TYPE_LONG: u8 = 2;
@@ -226,6 +226,11 @@ fn prepare_sel(store: &mut Store,
     req
 }
 
+// This function will insert `count` rows data into table.
+// each row contains 3 column, first column primary key, which
+// id is 1. Second column's type is a varchar, id is 3, value is
+// `varchar$((handle / 2))`. Third column's type is long, id is 4,
+// value is the same as handle.
 fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
     let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR)).unwrap());
     let mut store = Store::new(engine.clone());
@@ -246,6 +251,7 @@ fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
 
 #[test]
 fn test_select() {
+    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_sel(&mut store, &ti, None, None, vec![], vec![]);
@@ -266,6 +272,7 @@ fn test_select() {
 
 #[test]
 fn test_group_by() {
+    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
 
@@ -283,6 +290,7 @@ fn test_group_by() {
 
 #[test]
 fn test_aggr_count() {
+    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
 
@@ -316,7 +324,38 @@ fn test_aggr_count() {
 }
 
 #[test]
+fn test_aggr_first() {
+    let count = 10;
+    let (mut store, mut end_point, ti) = initial_data(count);
+
+    let mut col = Expr::new();
+    col.set_tp(ExprType::ColumnRef);
+    col.mut_val().encode_i64(1).unwrap();
+    let mut expr = Expr::new();
+    expr.set_tp(ExprType::First);
+    expr.mut_children().push(col);
+
+    let req = prepare_sel(&mut store, &ti, None, None, vec![expr], vec![3]);
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 6);
+    for (i, row) in resp.get_rows().iter().enumerate() {
+        let idx = if i == 0 {
+            1
+        } else {
+            i * 2
+        };
+        let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
+        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::I64(idx as i64)];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap();
+}
+
+#[test]
 fn test_limit() {
+    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_sel(&mut store, &ti, Some(5), None, vec![], vec![]);
@@ -338,6 +377,7 @@ fn test_limit() {
 
 #[test]
 fn test_reverse() {
+    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_sel(&mut store, &ti, Some(5), Some(true), vec![], vec![]);
@@ -396,6 +436,7 @@ fn handle_select(end_point: &Worker<RequestTask>, req: Request) -> SelectRespons
 
 #[test]
 fn test_index() {
+    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_idx(&mut store, &ti, None, None);
@@ -422,6 +463,7 @@ fn test_index() {
 
 #[test]
 fn test_index_reverse_limit() {
+    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
     let req = prepare_idx(&mut store, &ti, Some(5), Some(true));
@@ -447,6 +489,7 @@ fn test_index_reverse_limit() {
 
 #[test]
 fn test_del_select() {
+    init_log();
     let count = 10;
     let (mut store, mut end_point, ti) = initial_data(count);
 

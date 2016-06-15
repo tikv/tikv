@@ -24,18 +24,13 @@ use rand::Rng;
 use std::time::Duration;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_log();
-
-    // test a cluster with five nodes [1, 5], only one region (region 1).
-    // every node has a store and a peer with same id as node's.
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     test_multi_base_after_bootstrap(cluster);
 }
 
 fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
-    let (key, value) = (b"a1", b"v1");
+    let (key, value) = (b"k1", b"v1");
 
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
@@ -59,10 +54,9 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
-    let (key1, value1) = (b"a1", b"v1");
+    let (key1, value1) = (b"k1", b"v1");
 
     cluster.must_put(key1, value1);
 
@@ -76,7 +70,7 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     assert_eq!(cluster.get(key1), Some(value1.to_vec()));
 
-    let (key2, value2) = (b"a2", b"v2");
+    let (key2, value2) = (b"k2", b"v2");
 
     cluster.must_put(key2, value2);
     cluster.must_delete(key1);
@@ -92,10 +86,9 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
 
 fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
-    let (key, value) = (b"a1", b"v1");
+    let (key, value) = (b"k1", b"v1");
 
     assert_eq!(cluster.get(key), None);
     cluster.must_put(key, value);
@@ -113,8 +106,7 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     let half = (count as u64 + 1) / 2;
     for i in 1..half + 1 {
@@ -135,8 +127,7 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
 fn test_multi_random_restart<T: Simulator>(cluster: &mut Cluster<T>,
                                            node_count: usize,
                                            restart_count: u32) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     let mut rng = rand::thread_rng();
     let mut value = [0u8; 5];
@@ -170,8 +161,7 @@ fn test_multi_node_base() {
 }
 
 fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
     cluster.hook_transport(DropPacket::new(30));
     test_multi_base_after_bootstrap(cluster);
 }
@@ -199,8 +189,7 @@ fn test_multi_server_base() {
 
 
 fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
     cluster.hook_transport(Delay::new(Duration::from_millis(30)));
     test_multi_base_after_bootstrap(cluster);
 }

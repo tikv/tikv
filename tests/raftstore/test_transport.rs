@@ -17,14 +17,13 @@ use super::server::new_server_cluster;
 use super::util::{must_get_equal, new_peer};
 
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     let (key, value) = (b"k1", b"v1");
     let region_id = cluster.get_region_id(key);
 
     // transfer leader to (1, 1)
-    cluster.transfer_leader(1, new_peer(1, 1));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(key, value);
     must_get_equal(&cluster.engines[&1], key, value);
     assert_eq!(cluster.leader_of_region(region_id), Some(new_peer(1, 1)));
