@@ -323,13 +323,13 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
 fn run_local_server(listener: TcpListener, store: Storage) {
     let mut event_loop = create_event_loop().unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
-    let mgr = store::new_snap_mgr(TEMP_DIR);
+    let snap_mgr = store::new_snap_mgr(TEMP_DIR);
     let mut svr = Server::new(&mut event_loop,
                               listener,
                               store,
                               router,
                               MockStoreAddrResolver,
-                              mgr)
+                              snap_mgr)
         .unwrap();
     svr.run(&mut event_loop).unwrap();
 }

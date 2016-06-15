@@ -323,11 +323,6 @@ impl<T: FnOnce()> DeferContext<T> {
     }
 }
 
-impl<T: FnOnce()> DeferContext<T> {
-    #[inline]
-    pub fn do_nothing(&self) {}
-}
-
 impl<T: FnOnce()> Drop for DeferContext<T> {
     fn drop(&mut self) {
         self.t.take().unwrap()()

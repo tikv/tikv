@@ -150,7 +150,6 @@ macro_rules! thd_name {
 #[macro_export]
 macro_rules! defer {
     ($t:expr) => (
-        let ctx = $crate::util::DeferContext::new(|| $t);
-        ctx.do_nothing();
+        let __ctx = $crate::util::DeferContext::new(|| $t);
     );
 }
