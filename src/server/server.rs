@@ -155,6 +155,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 debug!("remove connection token {:?}", token);
                 // if connected to remote store, remove this too.
                 if let Some(store_id) = conn.store_id {
+                    warn!("remove store connection for store {} with token {:?}",
+                          store_id,
+                          token);
                     self.store_tokens.remove(&store_id);
                 }
 
