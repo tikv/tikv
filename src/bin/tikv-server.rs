@@ -168,14 +168,6 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                               |v| v.as_str().map(|s| s.to_owned()));
     let compression = util::rocksdb_option::get_compression_by_string(&tp);
     opts.compression(compression);
-    /*let per_level_compression: [DBCompressionType; 7] = [DBCompressionType::DBNo,
-                                                         DBCompressionType::DBNo,
-                                                         compression,
-                                                         compression,
-                                                         compression,
-                                                         compression,
-                                                         compression];
-    opts.compression_per_level(&per_level_compression);*/
 
     let write_buffer_size = get_integer_value("",
                                               "rocksdb.write-buffer-size",
