@@ -33,7 +33,7 @@ use std::io::Read;
 use std::net::UdpSocket;
 
 use getopts::{Options, Matches};
-use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
+use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
@@ -167,20 +167,13 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                               Some("lz4".to_owned()),
                               |v| v.as_str().map(|s| s.to_owned()));
     let compression = util::rocksdb_option::get_compression_by_string(&tp);
-    let per_level_compression: [DBCompressionType; 7] = [DBCompressionType::DBNo,
-                                                         DBCompressionType::DBNo,
-                                                         compression,
-                                                         compression,
-                                                         compression,
-                                                         compression,
-                                                         compression];
-    opts.compression_per_level(&per_level_compression);
+    opts.compression(compression);
 
     let write_buffer_size = get_integer_value("",
                                               "rocksdb.write-buffer-size",
                                               matches,
                                               config,
-                                              Some(16 * 1024 * 1024),
+                                              Some(96 * 1024 * 1024),
                                               |v| v.as_integer());
     opts.set_write_buffer_size(write_buffer_size as u64);
 
@@ -199,7 +192,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                           "rocksdb.min-write-buffer-number-to-merge",
                           matches,
                           config,
-                          Some(1),
+                          Some(2),
                           |v| v.as_integer())
     };
     opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
