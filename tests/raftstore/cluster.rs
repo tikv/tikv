@@ -544,6 +544,7 @@ impl<T: Simulator> Cluster<T> {
         loop {
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
+                self.reset_leader_of_region(region.get_id());
                 self.ask_split(region, split_key);
             }
 
