@@ -13,7 +13,6 @@
 
 use raftstore::store::{self, RaftStorage, SnapState};
 
-use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
 use std::time::Instant;
@@ -23,11 +22,11 @@ use util::worker::Runnable;
 
 /// Snapshot generating task.
 pub struct Task {
-    storage: Arc<RaftStorage>,
+    storage: RaftStorage,
 }
 
 impl Task {
-    pub fn new(storage: Arc<RaftStorage>) -> Task {
+    pub fn new(storage: RaftStorage) -> Task {
         Task { storage: storage }
     }
 }

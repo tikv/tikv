@@ -26,11 +26,10 @@
 // limitations under the License.
 
 
-#![allow(dead_code)]
-#![allow(deprecated)]
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
 use kvproto::raftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use util::{self, HandyRwLock};
 
 #[derive(Debug, Clone)]
@@ -162,8 +161,9 @@ impl MemStorageCore {
     }
 }
 
+#[derive(Clone, Default)]
 pub struct MemStorage {
-    core: RwLock<MemStorageCore>,
+    core: Arc<RwLock<MemStorageCore>>,
 }
 
 /// A thread-safe in-memory storage implementation.
@@ -179,12 +179,6 @@ impl MemStorage {
 
     pub fn wl(&self) -> RwLockWriteGuard<MemStorageCore> {
         self.core.wl()
-    }
-}
-
-impl Default for MemStorage {
-    fn default() -> MemStorage {
-        MemStorage { core: RwLock::new(MemStorageCore::default()) }
     }
 }
 
