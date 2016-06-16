@@ -317,8 +317,9 @@ impl Peer {
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
 
         slow_log!(t,
-                  "handle region {} ready, entries {}, committed entries {}, messages {}, \
-                   snapshot {}, takes {:?}",
+                  "handle peer {:?}, region {} ready, entries {}, committed entries {}, messages \
+                   {}, snapshot {}, takes {:?}",
+                  self.peer,
                   self.region_id,
                   ready.entries.len(),
                   ready.committed_entries.len(),
