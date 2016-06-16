@@ -280,10 +280,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
+        let prev_key = peer.raft_group.get_snap().map(|s| SnapKey::from_region_snap(region_id, s));
         try!(peer.raft_group.step(msg.take_message()));
-        if let Some(ref k) = k {
-            if peer.raft_group.has_ready() {
-                mgr.wl().register(k.clone(), false);
+        let cur_key = peer.raft_group.get_snap().map(|s| SnapKey::from_region_snap(region_id, s));
+        if k.is_some() && k == cur_key {
+            mgr.wl().register(cur_key.unwrap(), false);
+            assert!(prev_key != k);
+            if let Some(k) = prev_key {
+                mgr.wl().deregister(&k, false);
             }
         }
         slow_log!(timer, "step takes {:?}", timer.elapsed());

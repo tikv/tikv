@@ -278,6 +278,11 @@ impl<T: Storage> Raft<T> {
         self.raft_log.get_store()
     }
 
+    #[inline]
+    pub fn get_snap(&self) -> Option<&Snapshot> {
+        self.raft_log.get_unstable().snapshot.as_ref()
+    }
+
     fn has_leader(&self) -> bool {
         self.leader_id != INVALID_ID
     }

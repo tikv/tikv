@@ -245,7 +245,8 @@ impl SnapManagerCore {
                 if e.get().0 == is_sending {
                     e.get_mut().1 += 1;
                 } else {
-                    info!("seems leadership changed, cleanup old snapfiles");
+                    info!("seems leadership of {} changed, cleanup old snapfiles",
+                          e.key());
                     if let Ok(f) = SnapFile::new(&self.base, !is_sending, e.key()) {
                         f.delete();
                     }
