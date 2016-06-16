@@ -821,19 +821,22 @@ pub fn save_last_index<T: Mutable>(w: &T, region_id: u64, last_index: u64) -> Re
     w.put_u64(&keys::raft_last_index_key(region_id), last_index)
 }
 
+#[derive(Clone)]
 pub struct RaftStorage {
-    store: RwLock<PeerStorage>,
+    store: Arc<RwLock<PeerStorage>>,
 }
 
 impl RaftStorage {
     pub fn new(store: PeerStorage) -> RaftStorage {
-        RaftStorage { store: RwLock::new(store) }
+        RaftStorage { store: Arc::new(RwLock::new(store)) }
     }
 
+    #[inline]
     pub fn rl(&self) -> RwLockReadGuard<PeerStorage> {
         self.store.rl()
     }
 
+    #[inline]
     pub fn wl(&self) -> RwLockWriteGuard<PeerStorage> {
         self.store.wl()
     }
