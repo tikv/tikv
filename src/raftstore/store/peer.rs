@@ -121,7 +121,7 @@ pub struct Peer {
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<RaftStorage>,
-    pub storage: Arc<RaftStorage>,
+    pub storage: RaftStorage,
     pending_cmds: PendingCmdQueue,
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
     coprocessor_host: CoprocessorHost,
@@ -195,7 +195,7 @@ impl Peer {
         let store_id = store.store_id();
         let ps = try!(PeerStorage::new(store.engine(), &region, cfg.snap_dir.clone()));
         let applied_index = ps.applied_index();
-        let storage = Arc::new(RaftStorage::new(ps));
+        let storage = RaftStorage::new(ps);
 
         let raft_cfg = raft::Config {
             id: peer_id,

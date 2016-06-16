@@ -35,7 +35,6 @@ use raft::progress::{Progress, Inflights, ProgressState};
 use raft::errors::{Result, Error, StorageError};
 use std::collections::HashMap;
 use raft::raft_log::{self, RaftLog};
-use std::sync::Arc;
 
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -213,7 +212,7 @@ fn new_message(to: u64, field_type: MessageType, from: Option<u64>) -> Message {
 }
 
 impl<T: Storage> Raft<T> {
-    pub fn new(c: &Config, store: Arc<T>) -> Raft<T> {
+    pub fn new(c: &Config, store: T) -> Raft<T> {
         c.validate().expect("configuration is invalid");
         let rs = store.initial_state().expect("");
         let raft_log = RaftLog::new(store);
@@ -274,7 +273,8 @@ impl<T: Storage> Raft<T> {
         r
     }
 
-    pub fn get_store(&self) -> Arc<T> {
+    #[inline]
+    pub fn get_store(&self) -> &T {
         self.raft_log.get_store()
     }
 
