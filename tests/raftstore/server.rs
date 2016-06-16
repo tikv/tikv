@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::thread;
+use std::thread::{self, Builder};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};
@@ -164,9 +164,12 @@ impl Simulator for ServerCluster {
 
         let ch = server.get_sendch();
 
-        let t = thread::spawn(move || {
-            server.run(&mut event_loop).unwrap();
-        });
+        let t = Builder::new()
+            .name(thd_name!(format!("server-{}", node_id)))
+            .spawn(move || {
+                server.run(&mut event_loop).unwrap();
+            })
+            .unwrap();
 
         self.handles.insert(node_id, t);
         self.senders.insert(node_id, ch);

@@ -121,7 +121,7 @@ pub struct Peer {
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<RaftStorage>,
-    pub storage: Arc<RaftStorage>,
+    pub storage: RaftStorage,
     pending_cmds: PendingCmdQueue,
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
     coprocessor_host: CoprocessorHost,
@@ -195,7 +195,7 @@ impl Peer {
         let store_id = store.store_id();
         let ps = try!(PeerStorage::new(store.engine(), &region, cfg.snap_dir.clone()));
         let applied_index = ps.applied_index();
-        let storage = Arc::new(RaftStorage::new(ps));
+        let storage = RaftStorage::new(ps);
 
         let raft_cfg = raft::Config {
             id: peer_id,
@@ -306,6 +306,8 @@ impl Peer {
 
         let ready = self.raft_group.ready();
 
+        let t = SlowTimer::from_millis(500);
+
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
         for msg in &ready.messages {
@@ -313,6 +315,17 @@ impl Peer {
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
+
+        slow_log!(t,
+                  "handle peer {:?}, region {} ready, entries {}, committed entries {}, messages \
+                   {}, snapshot {}, takes {:?}",
+                  self.peer,
+                  self.region_id,
+                  ready.entries.len(),
+                  ready.committed_entries.len(),
+                  ready.messages.len(),
+                  apply_result.is_some(),
+                  t.elapsed());
 
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {

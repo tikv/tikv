@@ -29,7 +29,6 @@ use kvproto::raftpb::*;
 use protobuf::{self, ProtobufEnum};
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
-use std::sync::Arc;
 use test_raft::*;
 use test_raft_paper::*;
 
@@ -80,7 +79,7 @@ fn new_raw_node(id: u64,
                 peers: Vec<u64>,
                 election: usize,
                 heartbeat: usize,
-                storage: Arc<MemStorage>,
+                storage: MemStorage,
                 peer_nodes: Vec<Peer>)
                 -> RawNode<MemStorage> {
     RawNode::new(&new_test_config(id, peers, election, heartbeat),

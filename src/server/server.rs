@@ -155,6 +155,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 debug!("remove connection token {:?}", token);
                 // if connected to remote store, remove this too.
                 if let Some(store_id) = conn.store_id {
+                    warn!("remove store connection for store {} with token {:?}",
+                          store_id,
+                          token);
                     self.store_tokens.remove(&store_id);
                 }
 
@@ -222,13 +225,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let msg_type = msg.get_msg_type();
         match msg_type {
             MessageType::Raft => {
-                if let Err(e) = self.raft_router.rl().send_raft_msg(msg.take_raft()) {
-                    // Should we return error to let outer close this connection later?
-                    error!("send raft message for token {:?} with msg id {} err {:?}",
-                           token,
-                           msg_id,
-                           e);
-                }
+                try!(self.raft_router.rl().send_raft_msg(msg.take_raft()));
                 Ok(())
             }
             MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
