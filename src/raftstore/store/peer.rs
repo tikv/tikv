@@ -306,6 +306,8 @@ impl Peer {
 
         let ready = self.raft_group.ready();
 
+        let t = SlowTimer::from_millis(500);
+
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
         for msg in &ready.messages {
@@ -313,6 +315,17 @@ impl Peer {
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
+
+        slow_log!(t,
+                  "handle peer {:?}, region {} ready, entries {}, committed entries {}, messages \
+                   {}, snapshot {}, takes {:?}",
+                  self.peer,
+                  self.region_id,
+                  ready.entries.len(),
+                  ready.committed_entries.len(),
+                  ready.messages.len(),
+                  apply_result.is_some(),
+                  t.elapsed());
 
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
