@@ -493,7 +493,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("region changed from {:?} -> {:?} after applying snapshot",
                   prev_region,
                   region);
-            // we have already initialized the peer, so it must be in region_ranges.
+            // we have already initialized the peer, so it must exist in region_ranges.
             if self.region_ranges.remove(&enc_end_key(&prev_region)).is_none() {
                 panic!("region should exist {:?}", prev_region);
             }
@@ -842,9 +842,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
-            // The peer must be in peer_cache.
+            // The peer must exist in peer_cache.
             let to_peer = self.peer_cache.rl().get(&to_peer_id).cloned().unwrap();
-            info!("report to snapshot {:?} for {} {:?}",
+            info!("report snapshot status {:?} for {} {:?}",
                   to_peer,
                   region_id,
                   status);
