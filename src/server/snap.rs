@@ -19,6 +19,7 @@ use std::io::{Read, Write};
 use std::collections::HashMap;
 use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use threadpool::ThreadPool;
 use mio::Token;
@@ -47,7 +48,8 @@ const DEFAULT_SENDER_POOL_SIZE: usize = 3;
 /// `Discard` discard all the unsaved changes made to snapshot file;
 /// `SendTo` send the snapshot file to specified address.
 pub enum Task {
-    Register(Token, RaftMessage),
+    // bool indicate whether the initialization succeed.
+    Register(Token, RaftMessage, Arc<AtomicBool>),
     Write(Token, ByteBuf),
     Close(Token),
     Discard(Token),
@@ -61,7 +63,9 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Register(token, ref meta) => write!(f, "Register {:?} token: {:?}", meta, token),
+            Task::Register(token, ref meta, _) => {
+                write!(f, "Register {:?} token: {:?}", meta, token)
+            }
             Task::Write(token, _) => write!(f, "Write snap for {:?}", token),
             Task::Close(token) => write!(f, "Close file {:?}", token),
             Task::Discard(token) => write!(f, "Discard file {:?}", token),
@@ -127,12 +131,13 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
 impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Register(token, meta) => {
+            Task::Register(token, meta, abort) => {
                 let mgr = self.snap_mgr.clone();
                 match SnapKey::from_snap(meta.get_message().get_snapshot())
                     .and_then(|key| mgr.rl().get_snap_file(&key, false).map(|r| (r, key))) {
                     Ok((mut f, k)) => {
                         if f.exists() {
+                            abort.store(true, Ordering::Relaxed);
                             error!("file {} already exists, skip.", f.path().display());
                             return;
                         }
@@ -143,6 +148,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             res = meta.write_to_writer(&mut f).map_err(From::from);
                         }
                         if let Err(e) = res {
+                            abort.store(true, Ordering::Relaxed);
                             error!("failed to write meta: {:?}", e);
                             mgr.wl().deregister(&k, false);
                             return;
