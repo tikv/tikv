@@ -17,8 +17,7 @@ use super::server::*;
 fn test_region_detail() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    cluster.bootstrap_region().expect("");
-    cluster.start();
+    cluster.run();
 
     let leader = cluster.leader_of_region(1).unwrap();
     let region_detail = cluster.region_detail(1, 1);

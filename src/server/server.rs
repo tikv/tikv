@@ -155,6 +155,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 debug!("remove connection token {:?}", token);
                 // if connected to remote store, remove this too.
                 if let Some(store_id) = conn.store_id {
+                    warn!("remove store connection for store {} with token {:?}",
+                          store_id,
+                          token);
                     self.store_tokens.remove(&store_id);
                 }
 
@@ -165,7 +168,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 conn.close();
             }
             None => {
-                warn!("missing connection for token {}", token.as_usize());
+                debug!("missing connection for token {}", token.as_usize());
             }
         }
     }
@@ -197,7 +200,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn on_conn_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) -> Result<()> {
         let msgs = try!(match self.conns.get_mut(&token) {
             None => {
-                warn!("missing conn for token {:?}", token);
+                debug!("missing conn for token {:?}", token);
                 return Ok(());
             }
             Some(conn) => conn.on_readable(event_loop),
@@ -222,13 +225,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let msg_type = msg.get_msg_type();
         match msg_type {
             MessageType::Raft => {
-                if let Err(e) = self.raft_router.rl().send_raft_msg(msg.take_raft()) {
-                    // Should we return error to let outer close this connection later?
-                    error!("send raft message for token {:?} with msg id {} err {:?}",
-                           token,
-                           msg_id,
-                           e);
-                }
+                try!(self.raft_router.rl().send_raft_msg(msg.take_raft()));
                 Ok(())
             }
             MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
@@ -300,7 +297,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
             token => {
                 if let Err(e) = self.on_conn_readable(event_loop, token) {
-                    warn!("handle read conn for token {:?} err {:?}, remove", token, e);
+                    debug!("handle read conn for token {:?} err {:?}, remove", token, e);
                     self.remove_conn(event_loop, token);
                 }
             }
@@ -311,14 +308,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn on_writable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         let res = match self.conns.get_mut(&token) {
             None => {
-                warn!("missing conn for token {:?}", token);
+                debug!("missing conn for token {:?}", token);
                 return;
             }
             Some(conn) => conn.on_writable(event_loop),
         };
 
         if let Err(e) = res {
-            warn!("handle write conn err {:?}, remove", e);
+            debug!("handle write conn err {:?}, remove", e);
             self.remove_conn(event_loop, token);
         }
     }
@@ -326,14 +323,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn write_data(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
         let res = match self.conns.get_mut(&token) {
             None => {
-                warn!("missing conn for token {:?}", token);
+                debug!("missing conn for token {:?}", token);
                 return;
             }
             Some(conn) => conn.append_write_buf(event_loop, data),
         };
 
         if let Err(e) = res {
-            warn!("handle write data err {:?}, remove", e);
+            debug!("handle write data err {:?}, remove", e);
             self.remove_conn(event_loop, token);
         }
     }

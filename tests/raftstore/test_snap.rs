@@ -24,8 +24,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable default max peer count check.
     pd_client.disable_default_rule();
 
-    let r1 = cluster.bootstrap_conf_change();
-    cluster.start();
+    let r1 = cluster.run_conf_change();
 
     // at least 4m data
     for i in 0..2 * 1024 {

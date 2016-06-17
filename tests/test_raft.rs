@@ -27,7 +27,6 @@
 
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
-use std::sync::Arc;
 use std::collections::HashMap;
 use protobuf::{self, RepeatedField};
 use std::ops::Deref;
@@ -46,8 +45,8 @@ pub fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
     s
 }
 
-pub fn new_storage() -> Arc<MemStorage> {
-    Arc::new(MemStorage::new())
+pub fn new_storage() -> MemStorage {
+    MemStorage::new()
 }
 
 fn new_progress(state: ProgressState,
@@ -82,7 +81,7 @@ pub fn new_test_raft(id: u64,
                      peers: Vec<u64>,
                      election: usize,
                      heartbeat: usize,
-                     storage: Arc<MemStorage>)
+                     storage: MemStorage)
                      -> Interface {
     Interface::new(Raft::new(&new_test_config(id, peers, election, heartbeat), storage))
 }
@@ -99,7 +98,7 @@ fn ents(terms: Vec<u64>) -> Interface {
         e.set_term(*term);
         store.wl().append(&[e]).expect("");
     }
-    let mut raft = new_test_raft(1, vec![], 5, 1, Arc::new(store));
+    let mut raft = new_test_raft(1, vec![], 5, 1, store);
     raft.reset(0);
     raft
 }
@@ -217,7 +216,7 @@ fn new_raft_log(ents: Vec<Entry>, offset: u64, committed: u64) -> RaftLog<MemSto
     let store = MemStorage::new();
     store.wl().append(&ents).expect("");
     RaftLog {
-        store: Arc::new(store),
+        store: store,
         unstable: Unstable { offset: offset, ..Default::default() },
         committed: committed,
         ..Default::default()
@@ -235,7 +234,7 @@ pub fn new_snapshot(index: u64, term: u64, nodes: Vec<u64>) -> Snapshot {
 #[derive(Default)]
 pub struct Network {
     pub peers: HashMap<u64, Interface>,
-    storage: HashMap<u64, Arc<MemStorage>>,
+    storage: HashMap<u64, MemStorage>,
     dropm: HashMap<Connem, f64>,
     ignorem: HashMap<MessageType, bool>,
 }
@@ -248,8 +247,8 @@ impl Network {
     pub fn new(mut peers: Vec<Option<Interface>>) -> Network {
         let size = peers.len();
         let peer_addrs: Vec<u64> = (1..size as u64 + 1).collect();
-        let mut nstorage: HashMap<u64, Arc<MemStorage>> = HashMap::new();
-        let mut npeers: HashMap<u64, Interface> = HashMap::new();
+        let mut nstorage = HashMap::new();
+        let mut npeers = HashMap::new();
         for (p, id) in peers.drain(..).zip(peer_addrs.clone()) {
             match p {
                 None => {
@@ -901,7 +900,7 @@ fn test_commit() {
         hs.set_term(sm_term);
         store.wl().set_hardstate(hs);
 
-        let mut sm = new_test_raft(1, vec![1], 5, 1, Arc::new(store));
+        let mut sm = new_test_raft(1, vec![1], 5, 1, store);
         for (j, &v) in matches.iter().enumerate() {
             sm.set_progress(j as u64 + 1, v, v + 1);
         }
