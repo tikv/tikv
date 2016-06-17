@@ -17,7 +17,6 @@ use std::vec::Vec;
 use std::default::Default;
 
 use rocksdb::{DB, WriteBatch, Writable};
-use rocksdb::rocksdb::Snapshot;
 use protobuf::{self, Message};
 use uuid::Uuid;
 
@@ -40,7 +39,7 @@ use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
-use super::engine::{Peekable, Iterable, Mutable};
+use super::engine::{Snapshot, Peekable, Iterable, Mutable};
 
 pub struct PendingCmd {
     pub uuid: Uuid,
@@ -731,7 +730,7 @@ impl Peer {
         let (mut resp, exec_result) = {
             let engine = self.engine.clone();
             let ctx = ExecContext {
-                snap: engine.snapshot(),
+                snap: Snapshot::new(engine),
                 wb: &wb,
                 req: req,
             };
@@ -804,7 +803,7 @@ fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 }
 
 struct ExecContext<'a> {
-    pub snap: Snapshot<'a>,
+    pub snap: Snapshot,
     pub wb: &'a WriteBatch,
     pub req: &'a RaftCmdRequest,
 }

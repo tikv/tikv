@@ -60,14 +60,13 @@ impl Runner {
 
     fn generate_snap(&self, task: &Task) -> Result<(), Error> {
         // do we need to check leader here?
-        let db = task.storage.rl().get_engine();
         let raw_snap;
         let ranges;
         let key;
 
         {
             let storage = task.storage.rl();
-            raw_snap = db.snapshot();
+            raw_snap = storage.raw_snapshot();
             ranges = storage.region_key_ranges();
             let applied_idx = box_try!(storage.load_applied_index(&raw_snap));
             let term = box_try!(storage.term(applied_idx));

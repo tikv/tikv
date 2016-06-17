@@ -63,7 +63,7 @@ pub struct Cluster<T: Simulator> {
     // node id -> db engine.
     pub engines: HashMap<u64, Arc<DB>>,
 
-    sim: Arc<RwLock<T>>,
+    pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
 }
 

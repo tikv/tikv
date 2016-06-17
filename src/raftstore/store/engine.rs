@@ -12,13 +12,43 @@
 // limitations under the License.
 
 use std::option::Option;
+use std::sync::Arc;
 
-use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch};
-use rocksdb::rocksdb::Snapshot;
+use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions};
+use rocksdb::rocksdb::UnsafeSnap;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
 
 use raftstore::Result;
+
+
+pub struct Snapshot {
+    db: Arc<DB>,
+    snap: UnsafeSnap,
+}
+
+/// Because snap will be valid whenever db is valid, so it's safe to send
+/// it around.
+unsafe impl Send for Snapshot {}
+
+impl Snapshot {
+    pub fn new(db: Arc<DB>) -> Snapshot {
+        unsafe {
+            Snapshot {
+                snap: db.unsafe_snap(),
+                db: db,
+            }
+        }
+    }
+}
+
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        unsafe {
+            self.db.release_snap(&self.snap);
+        }
+    }
+}
 
 pub fn new_engine(path: &str) -> Result<DB> {
     // TODO: set proper options here,
@@ -119,16 +149,24 @@ impl Iterable for DB {
     }
 }
 
-impl<'a> Peekable for Snapshot<'a> {
+impl Peekable for Snapshot {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        let v = try!(self.get(key));
+        let mut opt = ReadOptions::new();
+        unsafe {
+            opt.set_snapshot(&self.snap);
+        }
+        let v = try!(self.db.get_opt(key, &opt));
         Ok(v)
     }
 }
 
-impl<'a> Iterable for Snapshot<'a> {
+impl Iterable for Snapshot {
     fn new_iterator(&self) -> DBIterator {
-        self.iter()
+        let mut opt = ReadOptions::new();
+        unsafe {
+            opt.set_snapshot(&self.snap);
+        }
+        DBIterator::new(&self.db, &opt)
     }
 }
 
@@ -161,6 +199,7 @@ impl Mutable for WriteBatch {}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use tempdir::TempDir;
     use rocksdb::Writable;
 
@@ -170,7 +209,7 @@ mod tests {
     #[test]
     fn test_base() {
         let path = TempDir::new("var").unwrap();
-        let engine = new_engine(path.path().to_str().unwrap()).unwrap();
+        let engine = Arc::new(new_engine(path.path().to_str().unwrap()).unwrap());
 
         let mut r = Region::new();
         r.set_id(10);
@@ -178,7 +217,7 @@ mod tests {
         let key = b"key";
         engine.put_msg(key, &r).unwrap();
 
-        let snap = engine.snapshot();
+        let snap = Snapshot::new(engine.clone());
 
         let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r1);
@@ -199,7 +238,7 @@ mod tests {
         assert_eq!(engine.get_i64(key).unwrap(), Some(-1));
         assert!(engine.get_i64(b"missing_key").unwrap().is_none());
 
-        let snap = engine.snapshot();
+        let snap = Snapshot::new(engine.clone());
         assert_eq!(snap.get_i64(key).unwrap(), Some(-1));
         assert!(snap.get_i64(b"missing_key").unwrap().is_none());
 
@@ -211,7 +250,7 @@ mod tests {
     #[test]
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
-        let engine = new_engine(path.path().to_str().unwrap()).unwrap();
+        let engine = Arc::new(new_engine(path.path().to_str().unwrap()).unwrap());
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();
@@ -243,7 +282,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let snap = engine.snapshot();
+        let snap = Snapshot::new(engine.clone());
 
         engine.put(b"a3", b"v3").unwrap();
         assert!(engine.seek(b"a3").unwrap().is_some());
