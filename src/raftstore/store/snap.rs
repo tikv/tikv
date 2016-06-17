@@ -263,7 +263,11 @@ impl SnapManagerCore {
         debug!("deregister [key: {}, is_sending: {}]", key, is_sending);
         let mut need_cleanup = false;
         match self.registry.get_mut(key) {
-            Some(&mut (b, ref mut cnt)) if b == is_sending => {
+            Some(&mut (b, ref mut cnt)) => {
+                if b != is_sending {
+                    warn!("stale deregister key: {} {}", key, is_sending);
+                    return;
+                }
                 *cnt -= 1;
                 need_cleanup = *cnt == 0;
             }
