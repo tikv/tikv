@@ -112,7 +112,7 @@ impl Simulator for ServerCluster {
 
         let mut cfg = cfg;
         let tmp = TempDir::new("test_cluster").unwrap();
-        cfg.store_cfg.snap_dir = tmp.path().to_str().unwrap().to_owned();
+        let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap());
         self.snap_paths.insert(node_id, tmp);
 
         // Now we cache the store address, so here we should re-use last
@@ -143,7 +143,10 @@ impl Simulator for ServerCluster {
         let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
 
-        node.start(store_event_loop, engine.clone(), simulate_trans.clone())
+        node.start(store_event_loop,
+                   engine.clone(),
+                   simulate_trans.clone(),
+                   snap_mgr.clone())
             .unwrap();
         let router = node.raft_store_router();
 
@@ -154,12 +157,7 @@ impl Simulator for ServerCluster {
         self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
 
-        let mut server = Server::new(&mut event_loop,
-                                     listener,
-                                     store,
-                                     router,
-                                     resolver,
-                                     cfg.store_cfg.snap_dir)
+        let mut server = Server::new(&mut event_loop, listener, store, router, resolver, snap_mgr)
             .unwrap();
 
         let ch = server.get_sendch();

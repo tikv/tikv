@@ -17,9 +17,9 @@ use std::fs::File;
 use std::net::{SocketAddr, TcpStream};
 use std::io::{Read, Write};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use threadpool::ThreadPool;
 use mio::Token;
@@ -28,7 +28,7 @@ use protobuf::Message;
 
 use super::{Result, ConnData};
 use super::transport::RaftStoreRouter;
-use raftstore::store::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, SnapFile};
+use raftstore::store::{SnapFile, SnapManager, SnapKey};
 use util::worker::Runnable;
 use util::codec::rpc;
 use util::codec::number::NumberEncoder;
@@ -48,7 +48,8 @@ const DEFAULT_SENDER_POOL_SIZE: usize = 3;
 /// `Discard` discard all the unsaved changes made to snapshot file;
 /// `SendTo` send the snapshot file to specified address.
 pub enum Task {
-    Register(Token, RaftMessage),
+    // bool indicate whether the initialization succeed.
+    Register(Token, RaftMessage, Arc<AtomicBool>),
     Write(Token, ByteBuf),
     Close(Token),
     Discard(Token),
@@ -62,7 +63,9 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Register(token, ref meta) => write!(f, "Register {:?} token: {:?}", meta, token),
+            Task::Register(token, ref meta, _) => {
+                write!(f, "Register {:?} token: {:?}", meta, token)
+            }
             Task::Write(token, _) => write!(f, "Write snap for {:?}", token),
             Task::Close(token) => write!(f, "Close file {:?}", token),
             Task::Discard(token) => write!(f, "Discard file {:?}", token),
@@ -76,18 +79,19 @@ impl Display for Task {
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the snapshot file.
-fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> {
+fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     assert!(data.is_snapshot());
     let timer = Instant::now();
     let snap = data.msg.get_raft().get_message().get_snapshot();
-    let mut snap_file = box_try!(SnapFile::from_snap(snap_dir.as_path(), &snap, SNAP_GEN_PREFIX));
+    let key = try!(SnapKey::from_snap(&snap));
+    defer!(mgr.wl().deregister(&key, true));
+    let snap_file = box_try!(mgr.rl().get_snap_file(&key, true));
     if !snap_file.exists() {
         return Err(box_err!("missing snap file: {:?}", snap_file.path()));
     }
     // snapshot file has been validated when created, so no need to validate again.
 
     let mut f = try!(File::open(snap_file.path()));
-    snap_file.delete_when_drop();
     let mut conn = try!(TcpStream::connect(&addr));
     try!(conn.set_nodelay(true));
 
@@ -107,16 +111,16 @@ fn send_snap(snap_dir: PathBuf, addr: SocketAddr, data: ConnData) -> Result<()> 
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
-    snap_dir: PathBuf,
+    snap_mgr: SnapManager,
     files: HashMap<Token, (SnapFile, RaftMessage)>,
     pool: ThreadPool,
     raft_router: Arc<RwLock<R>>,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new<T: Into<PathBuf>>(snap_dir: T, r: Arc<RwLock<R>>) -> Runner<R> {
+    pub fn new(snap_mgr: SnapManager, r: Arc<RwLock<R>>) -> Runner<R> {
         Runner {
-            snap_dir: snap_dir.into(),
+            snap_mgr: snap_mgr,
             files: map![],
             pool: ThreadPool::new_with_name("snap sender".to_owned(), DEFAULT_SENDER_POOL_SIZE),
             raft_router: r,
@@ -127,25 +131,26 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
 impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Register(token, meta) => {
-                match SnapFile::from_snap(self.snap_dir.as_path(),
-                                          meta.get_message().get_snapshot(),
-                                          SNAP_REV_PREFIX) {
-                    Ok(mut f) => {
+            Task::Register(token, meta, abort) => {
+                let mgr = self.snap_mgr.clone();
+                match SnapKey::from_snap(meta.get_message().get_snapshot())
+                    .and_then(|key| mgr.rl().get_snap_file(&key, false).map(|r| (r, key))) {
+                    Ok((mut f, k)) => {
                         if f.exists() {
-                            info!("file {} already exists, just apply.", f.path().display());
-                            if let Err(e) = self.raft_router.rl().send_raft_msg(meta) {
-                                error!("send snapshot for token {:?} err {:?}", token, e);
-                            }
+                            abort.store(true, Ordering::SeqCst);
+                            error!("file {} already exists, skip.", f.path().display());
                             return;
                         }
                         debug!("begin to receive snap {:?}", meta);
+                        mgr.wl().register(k.clone(), false);
                         let mut res = f.encode_u64(meta.compute_size() as u64);
                         if res.is_ok() {
                             res = meta.write_to_writer(&mut f).map_err(From::from);
                         }
                         if let Err(e) = res {
+                            abort.store(true, Ordering::SeqCst);
                             error!("failed to write meta: {:?}", e);
+                            mgr.wl().deregister(&k, false);
                             return;
                         }
                         self.files.insert(token, (f, meta));
@@ -166,13 +171,16 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             Task::Close(token) => {
                 match self.files.remove(&token) {
                     Some((mut writer, msg)) => {
+                        let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
+                        info!("saving snapshot to {}", writer.path().display());
                         if let Err(e) = writer.save() {
                             error!("failed to save file {:?}: {:?}", token, e);
+                            self.snap_mgr.wl().deregister(&key, false);
                             return;
                         }
-                        info!("snapshot saved to {}", writer.path().display());
                         if let Err(e) = self.raft_router.rl().send_raft_msg(msg) {
                             error!("send snapshot for token {:?} err {:?}", token, e);
+                            self.snap_mgr.wl().deregister(&key, false);
                         }
                     }
                     None => error!("invalid snap token {:?}", token),
@@ -181,12 +189,15 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             Task::Discard(token) => {
                 if let Some((_, msg)) = self.files.remove(&token) {
                     debug!("discard snapshot: {:?}", msg);
+                    // because token is inserted, following can't panic.
+                    let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
+                    self.snap_mgr.wl().deregister(&key, false);
                 }
             }
             Task::SendTo { addr, data, cb } => {
-                let path = self.snap_dir.clone();
+                let mgr = self.snap_mgr.clone();
                 self.pool.execute(move || {
-                    let res = send_snap(path, addr, data);
+                    let res = send_snap(mgr, addr, data);
                     if res.is_err() {
                         error!("failed to send snap to {}: {:?}", addr, res);
                     }

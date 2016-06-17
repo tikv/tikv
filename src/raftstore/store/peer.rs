@@ -35,7 +35,7 @@ use util::{escape, HandyRwLock, SlowTimer};
 use pd::PdClient;
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
-use super::util;
+use super::{util, SnapManager, SnapKey};
 use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
@@ -193,7 +193,7 @@ impl Peer {
         let cfg = store.config();
 
         let store_id = store.store_id();
-        let ps = try!(PeerStorage::new(store.engine(), &region, cfg.snap_dir.clone()));
+        let ps = try!(PeerStorage::new(store.engine(), &region, store.get_snap_mgr()));
         let applied_index = ps.applied_index();
         let storage = RaftStorage::new(ps);
 
@@ -294,7 +294,8 @@ impl Peer {
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self,
-                                           trans: &Arc<RwLock<T>>)
+                                           trans: &Arc<RwLock<T>>,
+                                           snap_mgr: &SnapManager)
                                            -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
             return Ok(None);
@@ -311,7 +312,7 @@ impl Peer {
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
         for msg in &ready.messages {
-            try!(self.send_raft_message(&msg, trans));
+            try!(self.send_raft_message(&msg, trans, snap_mgr));
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
@@ -512,7 +513,8 @@ impl Peer {
 
     fn send_raft_message<T: Transport>(&mut self,
                                        msg: &raftpb::Message,
-                                       trans: &Arc<RwLock<T>>)
+                                       trans: &Arc<RwLock<T>>,
+                                       snap_mgr: &SnapManager)
                                        -> Result<()> {
         metric_incr!("raftstore.send_raft_message");
         let mut send_msg = RaftMessage::new();
@@ -570,6 +572,8 @@ impl Peer {
             let is_snapshot = msg_type == raftpb::MessageType::MsgSnapshot;
             if is_snapshot {
                 self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
+                let key = SnapKey::from_region_snap(self.region_id, msg.get_snapshot());
+                snap_mgr.wl().deregister(&key, true);
             }
         }
 
