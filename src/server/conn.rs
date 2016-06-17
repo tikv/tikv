@@ -14,6 +14,8 @@
 use std::collections::VecDeque;
 use std::net::Shutdown;
 use std::cmp;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
@@ -60,6 +62,7 @@ pub struct Conn {
     file_size: usize,
     read_size: usize,
     snap_scheduler: Scheduler<SnapTask>,
+    abort: Arc<AtomicBool>,
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
@@ -110,6 +113,7 @@ impl Conn {
             res: VecDeque::new(),
             last_msg_id: 0,
             snap_scheduler: snap_scheduler,
+            abort: Arc::new(AtomicBool::new(false)),
             store_id: store_id,
         }
     }
@@ -166,7 +170,8 @@ impl Conn {
             self.file_size = snap_data.get_file_size() as usize;
             self.payload = Some(create_mem_buf(cmp::min(SNAPSHOT_PAYLOAD_BUF, self.file_size)));
 
-            let register_task = SnapTask::Register(self.token, data.msg.take_raft());
+            let register_task =
+                SnapTask::Register(self.token, data.msg.take_raft(), self.abort.clone());
             box_try!(self.snap_scheduler.schedule(register_task));
 
             return self.read_snapshot(event_loop);
@@ -182,6 +187,13 @@ impl Conn {
     {
         // all content should be read, ignore any read operation.
         if self.payload.is_none() {
+            return Ok(());
+        }
+        if self.abort.load(Ordering::SeqCst) {
+            if let Err(e) = self.sock.shutdown(Shutdown::Both) {
+                error!("shutdown connection error: {}", e);
+            }
+            self.payload.take();
             return Ok(());
         }
         // TODO: limit rate

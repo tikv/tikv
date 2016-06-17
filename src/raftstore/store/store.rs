@@ -39,8 +39,7 @@ use util::worker::Worker;
 use util::get_disk_stat;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
-use super::util;
-use super::{SendCh, Msg, Tick};
+use super::{util, SendCh, Msg, Tick, SnapManager, SnapKey};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
@@ -79,6 +78,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     pd_client: Arc<C>,
 
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
+
+    snap_mgr: SnapManager,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -98,7 +99,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                cfg: Config,
                engine: Arc<DB>,
                trans: Arc<RwLock<T>>,
-               pd_client: Arc<C>)
+               pd_client: Arc<C>,
+               mgr: SnapManager)
                -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
@@ -123,6 +125,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             trans: trans,
             pd_client: pd_client,
             peer_cache: Arc::new(RwLock::new(peer_cache)),
+            snap_mgr: mgr,
         })
     }
 
@@ -156,6 +159,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(self.prepare());
 
+        try!(self.snap_mgr.wl().try_recover());
+
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
@@ -167,7 +172,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        box_try!(self.snap_worker.start(SnapRunner::new(&self.cfg.snap_dir)));
+        box_try!(self.snap_worker.start(SnapRunner::new(self.snap_mgr.clone())));
 
         box_try!(self.compact_worker.start(CompactRunner));
 
@@ -182,10 +187,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.sendch.clone()
     }
 
+    #[inline]
+    pub fn get_snap_mgr(&self) -> SnapManager {
+        self.snap_mgr.clone()
+    }
+
     pub fn engine(&self) -> Arc<DB> {
         self.engine.clone()
     }
-
 
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
@@ -232,11 +241,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     // may fail, so we allow map_entry.
     #[allow(map_entry)]
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
+        let region_id = msg.get_region_id();
+
+        let k = if msg.get_message().has_snapshot() {
+            Some(SnapKey::from_region_snap(region_id, msg.get_message().get_snapshot()))
+        } else {
+            None
+        };
+        let mgr = self.snap_mgr.clone();
+        defer!({
+            if let Some(ref k) = k {
+                mgr.wl().deregister(k, false);
+            }
+        });
         if !self.is_raft_msg_valid(&msg) {
             return Ok(());
         }
 
-        let region_id = msg.get_region_id();
         // TODO: we may encounter a message with larger peer id, which
         // means current peer is stale, then we should remove current peer
 
@@ -250,7 +271,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
         }
 
-        if try!(self.is_snapshot_overlapped(&msg)) {
+        if k.is_some() && try!(self.is_snapshot_overlapped(&msg)) {
             return Ok(());
         }
 
@@ -259,7 +280,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
+        let prev_key = peer.raft_group.get_snap().map(|s| SnapKey::from_region_snap(region_id, s));
         try!(peer.raft_group.step(msg.take_message()));
+        let cur_key = peer.raft_group.get_snap().map(|s| SnapKey::from_region_snap(region_id, s));
+        if k.is_some() && k == cur_key {
+            mgr.wl().register(cur_key.unwrap(), false);
+            assert!(prev_key != k);
+            if let Some(k) = prev_key {
+                mgr.wl().deregister(&k, false);
+            }
+        }
         slow_log!(timer, "step takes {:?}", timer.elapsed());
 
         // Add into pending raft groups for later handling ready.
@@ -349,7 +379,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for region_id in ids {
             let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans) {
+                match peer.handle_raft_ready(&self.trans, &self.snap_mgr) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
                         error!("handle raft ready at region {} err: {:?}", region_id, e);
