@@ -403,8 +403,7 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     // leader isolation
-    let leader = cluster.leader_of_region(r1);
-    assert_eq!(leader, Some(new_peer(1, 1)));
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
     cluster.hook_transport(Isolate::new(1));
 
     // refresh region info, maybe no need
