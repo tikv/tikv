@@ -200,14 +200,14 @@ impl Drop for SnapFile {
 
 struct SnapEntry {
     is_sending: bool,
-    reg_cnt: usize,
+    ref_cnt: usize,
 }
 
 impl SnapEntry {
-    fn new(is_sending: bool, reg_cnt: usize) -> SnapEntry {
+    fn new(is_sending: bool, ref_cnt: usize) -> SnapEntry {
         SnapEntry {
             is_sending: is_sending,
-            reg_cnt: reg_cnt,
+            ref_cnt: ref_cnt,
         }
     }
 }
@@ -258,7 +258,7 @@ impl SnapManagerCore {
         match self.registry.entry(key) {
             Entry::Occupied(mut e) => {
                 if e.get().is_sending == is_sending {
-                    e.get_mut().reg_cnt += 1;
+                    e.get_mut().ref_cnt += 1;
                 } else {
                     info!("seems leadership of {} changed, cleanup old snapfiles",
                           e.key());
@@ -282,8 +282,8 @@ impl SnapManagerCore {
                 warn!("stale deregister key: {} {}", key, is_sending);
                 return;
             }
-            e.reg_cnt -= 1;
-            need_cleanup = e.reg_cnt == 0;
+            e.ref_cnt -= 1;
+            need_cleanup = e.ref_cnt == 0;
         };
         if need_cleanup {
             self.registry.remove(key);
