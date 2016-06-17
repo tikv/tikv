@@ -586,9 +586,6 @@ pub fn do_snapshot(mgr: SnapManager,
                    -> raft::Result<Snapshot> {
     debug!("begin to generate a snapshot for region {}", key.region_id);
 
-    let k = key.clone();
-    defer!(mgr.wl().register(k, true));
-
     let region: metapb::Region = try!(snap.get_msg(&keys::region_info_key(key.region_id))
         .and_then(|res| {
             match res {

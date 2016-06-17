@@ -74,6 +74,7 @@ impl Runner {
             key = SnapKey::new(storage.get_region_id(), term, applied_idx);
         }
 
+        self.mgr.wl().register(key.clone(), true);
         match store::do_snapshot(self.mgr.clone(), &raw_snap, key.clone(), ranges) {
             Ok(snap) => task.storage.wl().snap_state = SnapState::Snap(snap),
             Err(e) => {
