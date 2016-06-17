@@ -842,8 +842,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
-            info!("report to snapshot {} for {} {:?}",
-                  to_peer_id,
+            // The peer must be in peer_cache.
+            let to_peer = self.peer_cache.rl().get(&to_peer_id).cloned().unwrap();
+            info!("report to snapshot {:?} for {} {:?}",
+                  to_peer,
                   region_id,
                   status);
             peer.raft_group.report_snapshot(to_peer_id, status)
