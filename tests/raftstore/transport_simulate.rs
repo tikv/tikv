@@ -279,9 +279,6 @@ impl Filter for SnapshotFilter {
     }
 
     fn after(&self, x: Result<()>) -> Result<()> {
-        if self.drop.load(Ordering::Relaxed) {
-            return Err(Error::Timeout("drop by SnapshotFilter in SimulateTransport".to_string()));
-        }
         x
     }
 }

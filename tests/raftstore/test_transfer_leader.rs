@@ -126,12 +126,10 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20;
     cluster.cfg.store_cfg.raft_log_gc_limit = 2;
 
-    let r1 = cluster.bootstrap_conf_change();
-    cluster.start();
+    let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
-    // at least 4m data
-    for i in 0..2 * 1024 {
+    for i in 0..1024 {
         let key = format!("{:01024}", i);
         let value = format!("{:01024}", i);
         cluster.must_put(key.as_bytes(), value.as_bytes());
@@ -141,18 +139,18 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     // will stay at snapshot.
     cluster.hook_transport(DropSnapshot);
     pd_client.must_add_peer(r1, new_peer(3, 3));
-    // a just added peer need wait a couple of ticks, it'll commucation with leader
+    // a just added peer needs wait a couple of ticks, it'll communicate with leader
     // before getting snapshot
     sleep_ms(1000);
 
-    cluster.transfer_leader(r1, new_peer(3, 3));
+    cluster.transfer_leader(r1, new_peer(2, 2));
     cluster.reset_transport_hooks();
 
     sleep_ms(1000);
     cluster.must_put(b"k4", b"v4");
     let leader = cluster.leader_of_region(r1).unwrap();
-    must_get_equal(&cluster.engines[&3], b"k4", b"v4");
-    assert!(leader.get_store_id() != 3);
+    must_get_equal(&cluster.engines[&2], b"k4", b"v4");
+    assert_eq!(leader, new_peer(1, 1));
 }
 
 #[test]
