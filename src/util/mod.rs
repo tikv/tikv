@@ -375,7 +375,7 @@ mod tests {
     fn test_defer() {
         let should_panic = Rc::new(AtomicBool::new(true));
         let sp = should_panic.clone();
-        defer!(assert!(!sp.load(Ordering::Relaxed)));
-        should_panic.store(false, Ordering::Relaxed);
+        defer!(assert!(!sp.load(Ordering::SeqCst)));
+        should_panic.store(false, Ordering::SeqCst);
     }
 }

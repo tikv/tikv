@@ -189,7 +189,7 @@ impl Conn {
         if self.payload.is_none() {
             return Ok(());
         }
-        if self.abort.load(Ordering::Relaxed) {
+        if self.abort.load(Ordering::SeqCst) {
             if let Err(e) = self.sock.shutdown(Shutdown::Both) {
                 error!("shutdown connection error: {}", e);
             }

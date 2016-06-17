@@ -137,7 +137,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     .and_then(|key| mgr.rl().get_snap_file(&key, false).map(|r| (r, key))) {
                     Ok((mut f, k)) => {
                         if f.exists() {
-                            abort.store(true, Ordering::Relaxed);
+                            abort.store(true, Ordering::SeqCst);
                             error!("file {} already exists, skip.", f.path().display());
                             return;
                         }
@@ -148,7 +148,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             res = meta.write_to_writer(&mut f).map_err(From::from);
                         }
                         if let Err(e) = res {
-                            abort.store(true, Ordering::Relaxed);
+                            abort.store(true, Ordering::SeqCst);
                             error!("failed to write meta: {:?}", e);
                             mgr.wl().deregister(&k, false);
                             return;
