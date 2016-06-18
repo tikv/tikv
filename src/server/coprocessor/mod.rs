@@ -2,7 +2,7 @@ mod endpoint;
 mod aggregate;
 
 
-use kvproto::kvrpcpb::LockInfo;
+use kvproto::kvpb::LockInfo;
 use kvproto::errorpb;
 
 use std::result;
@@ -46,9 +46,9 @@ impl From<txn::Error> for Error {
         match e {
             txn::Error::Mvcc(mvcc::Error::KeyIsLocked { primary, ts, key }) => {
                 let mut info = LockInfo::new();
-                info.set_primary_lock(primary);
-                info.set_lock_version(ts);
-                info.set_key(key);
+                info.set_primary(primary);
+                info.set_ts(ts);
+                info.set_row(key);
                 Error::Locked(info)
             }
             _ => Error::Other(box e),

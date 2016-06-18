@@ -17,11 +17,10 @@ use std::u64;
 
 use util::{escape, codec};
 use util::codec::number::{self, NumberEncoder};
-use util::codec::bytes::BytesDecoder;
+use util::codec::bytes::{BytesDecoder, BytesEncoder};
 use super::mvcc;
 
 pub type Value = Vec<u8>;
-pub type KvPair = (Vec<u8>, Value);
 
 #[derive(Debug, Clone)]
 pub struct Key(Vec<u8>);
@@ -41,6 +40,17 @@ impl Key {
 
     pub fn encoded(&self) -> &Vec<u8> {
         &self.0
+    }
+
+    pub fn append_ts_column(&self, ts: u64, col: &[u8]) -> Key {
+        let mut encoded = self.0.clone();
+        if ts == mvcc::FIRST_META_INDEX || ts == u64::MAX {
+            encoded.encode_u64(ts).unwrap();
+        } else {
+            encoded.encode_u64_desc(ts).unwrap();
+        }
+        encoded.encode_bytes(col, false).unwrap();
+        Key(encoded)
     }
 
     pub fn append_ts(&self, ts: u64) -> Key {
