@@ -147,9 +147,9 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     cluster.reset_transport_hooks();
 
     sleep_ms(1000);
-    cluster.must_put(b"k4", b"v4");
+    cluster.must_put(b"k1", b"v1");
     let leader = cluster.leader_of_region(r1).unwrap();
-    must_get_equal(&cluster.engines[&2], b"k4", b"v4");
+    must_get_equal(&cluster.engines[&2], b"k1", b"v1");
     assert_eq!(leader, new_peer(1, 1));
 }
 

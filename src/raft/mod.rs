@@ -28,7 +28,7 @@
 mod raft_log;
 pub mod storage;
 mod raft;
-pub mod progress;
+mod progress;
 mod errors;
 mod log_unstable;
 mod status;

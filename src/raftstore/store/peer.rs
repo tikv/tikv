@@ -27,7 +27,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
-use raft::{self, RawNode, StateRole, SnapshotStatus, Storage};
+use raft::{self, RawNode, StateRole, SnapshotStatus};
 use raft::progress::ProgressState;
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
@@ -359,7 +359,7 @@ impl Peer {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
 
-            if is_tranfer_leader_allowed(&self.raft_group, peer.get_id()) {
+            if self.is_tranfer_leader_allowed(peer) {
                 self.transfer_leader(peer);
             } else {
                 info!("transfer leader message {:?} ignored directly.", req);
@@ -428,6 +428,24 @@ impl Peer {
         );
 
         self.raft_group.transfer_leader(peer.get_id());
+    }
+
+    fn is_tranfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
+        let peer_id = peer.get_id();
+        let status = self.raft_group.status();
+
+        if status.progress.get(&peer_id).is_none() {
+            return false;
+        }
+
+        for progress in status.progress.values() {
+            if progress.state == ProgressState::Snapshot {
+                return false;
+            }
+        }
+
+        let last_index = self.storage.rl().last_index();
+        last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
     fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
@@ -773,18 +791,6 @@ impl Peer {
 
         Ok((resp, exec_result))
     }
-}
-
-fn is_tranfer_leader_allowed<T: Storage>(raw_node: &RawNode<T>, peer_id: u64) -> bool {
-    let status = raw_node.status();
-    for progress in status.progress.values() {
-        if progress.state == ProgressState::Snapshot {
-            return false;
-        }
-    }
-
-    let last_index = raw_node.raft.raft_log.last_index();
-    last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
 }
 
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
