@@ -784,10 +784,7 @@ fn is_tranfer_leader_allowed<T: Storage>(raw_node: &RawNode<T>, peer_id: u64) ->
     }
 
     let last_index = raw_node.raft.raft_log.last_index();
-    if last_index - status.progress[&peer_id].matched > TRANSFER_LEADER_ALLOW_LOG_LAG {
-        return false;
-    }
-    true
+    last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
 }
 
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
