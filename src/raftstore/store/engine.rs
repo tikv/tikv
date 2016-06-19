@@ -50,10 +50,10 @@ impl Drop for Snapshot {
     }
 }
 
-pub fn new_engine(path: &str) -> Result<DB> {
+pub fn new_engine(path: &str) -> Result<Arc<DB>> {
     // TODO: set proper options here,
     let db = try!(DB::open_default(path));
-    Ok(db)
+    Ok(Arc::new(db))
 }
 
 // TODO: refactor this trait into rocksdb trait.
@@ -199,7 +199,6 @@ impl Mutable for WriteBatch {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use tempdir::TempDir;
     use rocksdb::Writable;
 
@@ -209,7 +208,7 @@ mod tests {
     #[test]
     fn test_base() {
         let path = TempDir::new("var").unwrap();
-        let engine = Arc::new(new_engine(path.path().to_str().unwrap()).unwrap());
+        let engine = new_engine(path.path().to_str().unwrap()).unwrap();
 
         let mut r = Region::new();
         r.set_id(10);
@@ -250,7 +249,7 @@ mod tests {
     #[test]
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
-        let engine = Arc::new(new_engine(path.path().to_str().unwrap()).unwrap());
+        let engine = new_engine(path.path().to_str().unwrap()).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();

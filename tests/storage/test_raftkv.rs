@@ -13,7 +13,7 @@ fn test_raftkv() {
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
 
-    // make sure leader have elected.
+    // make sure leader has been elected.
     assert_eq!(cluster.get(b"k1"), None);
 
     let region = cluster.get_region(b"");

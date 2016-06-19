@@ -104,14 +104,18 @@ enum CmdRes {
     Snap(RegionSnapshot),
 }
 
-fn on_result(mut resp: RaftCmdResponse, l: usize, uuid: &[u8], db: Arc<DB>) -> Result<CmdRes> {
+fn on_result(mut resp: RaftCmdResponse,
+             resp_cnt: usize,
+             uuid: &[u8],
+             db: Arc<DB>)
+             -> Result<CmdRes> {
     if resp.get_header().get_uuid() != uuid {
         return Err(Error::InvalidResponse("response is not correct!!!".to_owned()));
     }
     if resp.get_header().has_error() {
         return Err(Error::RequestFailed(resp.take_header().take_error()));
     }
-    if l != resp.get_responses().len() {
+    if resp_cnt != resp.get_responses().len() {
         return Err(Error::InvalidResponse("response count is not equal to requests, \
                                             something must go wrong."
             .to_owned()));

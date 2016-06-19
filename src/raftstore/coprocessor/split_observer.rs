@@ -106,7 +106,6 @@ impl RegionObserver for SplitObserver {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::sync::Arc;
     use tempdir::TempDir;
     use raftstore::store::engine::*;
     use raftstore::store::{self, PeerStorage};
@@ -121,7 +120,7 @@ mod test {
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        PeerStorage::new(Arc::new(engine), &Region::new(), store::new_snap_mgr("")).unwrap()
+        PeerStorage::new(engine, &Region::new(), store::new_snap_mgr("")).unwrap()
     }
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
@@ -163,7 +162,7 @@ mod test {
         r.set_id(10);
         r.set_start_key(region_start_key);
 
-        let ps = PeerStorage::new(Arc::new(engine), &r, store::new_snap_mgr("")).unwrap();
+        let ps = PeerStorage::new(engine, &r, store::new_snap_mgr("")).unwrap();
         let mut ctx = ObserverContext::new(&ps);
         let mut observer = SplitObserver;
 

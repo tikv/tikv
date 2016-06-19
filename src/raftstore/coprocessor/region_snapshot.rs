@@ -218,8 +218,7 @@ mod tests {
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
     fn new_temp_engine(path: &TempDir) -> Arc<DB> {
-        let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        Arc::new(engine)
+        new_engine(path.path().to_str().unwrap()).unwrap()
     }
 
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
