@@ -11,35 +11,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::{self, RaftStorage, SnapState, SnapManager, SnapKey};
+use raftstore::store::{self, Range, SnapState, SnapFile};
+use raftstore::store::engine::Snapshot;
 
 use std::fmt::{self, Formatter, Display};
-use std::error;
+use std::{error, result};
 use std::time::Instant;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use util::worker::Runnable;
-use util::HandyRwLock;
 
 /// Snapshot generating task.
 pub struct Task {
-    storage: RaftStorage,
+    snap: Snapshot,
+    state: Arc<SnapState>,
+    ranges: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 impl Task {
-    pub fn new(storage: RaftStorage) -> Task {
-        Task { storage: storage }
+    pub fn new(snap: Snapshot, state: Arc<SnapState>, ranges: Vec<Range>) -> Task {
+        Task {
+            snap: snap,
+            state: state,
+            ranges: ranges,
+        }
     }
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Snapshot Task for {}", self.storage.rl().get_region_id())
+        write!(f, "Snapshot Task for {}", self.state.key)
     }
 }
 
 quick_error! {
     #[derive(Debug)]
-    enum Error {
+    pub enum Error {
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -49,38 +57,32 @@ quick_error! {
     }
 }
 
+pub type Result<T> = result::Result<T, Error>;
+
 pub struct Runner {
-    mgr: SnapManager,
+    base_dir: String,
 }
 
 impl Runner {
-    pub fn new(mgr: SnapManager) -> Runner {
-        Runner { mgr: mgr }
+    pub fn new(base_dir: &str) -> Runner {
+        Runner { base_dir: base_dir.to_owned() }
     }
 
-    fn generate_snap(&self, task: &Task) -> Result<(), Error> {
-        // do we need to check leader here?
-        let raw_snap;
-        let ranges;
-        let key;
-
-        {
-            let storage = task.storage.rl();
-            raw_snap = storage.raw_snapshot();
-            ranges = storage.region_key_ranges();
-            let applied_idx = box_try!(storage.load_applied_index(&raw_snap));
-            let term = box_try!(storage.term(applied_idx));
-            key = SnapKey::new(storage.get_region_id(), term, applied_idx);
+    fn generate_snap(&self, task: &Task) -> Result<()> {
+        if task.state.failed.load(Ordering::SeqCst) {
+            // task has been canceled.
+            return Ok(());
         }
-
-        self.mgr.wl().register(key.clone(), true);
-        match store::do_snapshot(self.mgr.clone(), &raw_snap, key.clone(), ranges) {
-            Ok(snap) => task.storage.wl().snap_state = SnapState::Snap(snap),
-            Err(e) => {
-                self.mgr.wl().deregister(&key, true);
-                return Err(Error::Other(box e));
-            }
+        let key = task.state.key.clone();
+        let mut snap_file = box_try!(SnapFile::new(self.base_dir.clone(), true, &key));
+        // maybe check if cancel during scan.
+        let snap = box_try!(store::do_snapshot(&mut snap_file, &task.snap, &key, &task.ranges));
+        if task.state.failed.load(Ordering::SeqCst) {
+            // task has been canceled.
+            snap_file.delete();
+            return Ok(());
         }
+        *task.state.snap.lock().unwrap() = Some(snap);
         Ok(())
     }
 }
@@ -91,7 +93,7 @@ impl Runnable<Task> for Runner {
         let ts = Instant::now();
         if let Err(e) = self.generate_snap(&task) {
             error!("failed to generate snap: {:?}!!!", e);
-            task.storage.wl().snap_state = SnapState::Failed;
+            task.state.failed.store(true, Ordering::SeqCst);
             return;
         }
         metric_incr!("raftstore.generate_snap.success");

@@ -3,8 +3,10 @@ use std::fmt::{self, Formatter, Display};
 use std::fs::{self, File, OpenOptions, Metadata};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex, RwLockWriteGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::{Path, PathBuf};
+use std::thread;
 
 use crc::crc32::{self, Digest, Hasher32};
 use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
@@ -12,9 +14,13 @@ use protobuf::Message;
 
 use kvproto::raftpb::Snapshot;
 use kvproto::raft_serverpb::RaftSnapshotData;
+use util::worker::Worker;
+use raftstore::Result;
+use super::worker::{SnapTask, SnapRunner};
+use super::PeerStorage;
 
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub struct SnapKey {
     pub region_id: u64,
     pub term: u64,
@@ -73,7 +79,10 @@ pub struct SnapFile {
 }
 
 impl SnapFile {
-    fn new<T: Into<PathBuf>>(snap_dir: T, is_sending: bool, key: &SnapKey) -> io::Result<SnapFile> {
+    pub fn new<T: Into<PathBuf>>(snap_dir: T,
+                                 is_sending: bool,
+                                 key: &SnapKey)
+                                 -> io::Result<SnapFile> {
         let mut file_path = snap_dir.into();
         if !file_path.exists() {
             try!(fs::create_dir_all(file_path.as_path()));
@@ -214,11 +223,68 @@ impl SnapEntry {
     }
 }
 
+type SnapReg = HashMap<SnapKey, SnapEntry>;
+
+fn register(base_dir: &str, registry: &mut SnapReg, key: SnapKey, is_sending: bool) {
+    debug!("register [key: {}, is_sending: {}]", key, is_sending);
+    match registry.entry(key) {
+        Entry::Occupied(mut e) => {
+            if e.get().is_sending == is_sending {
+                e.get_mut().ref_cnt += 1;
+            } else {
+                info!("seems leadership of {} changed, cleanup old snapfiles",
+                      e.key());
+                if let Ok(f) = SnapFile::new(base_dir, !is_sending, e.key()) {
+                    f.delete();
+                }
+                e.insert(SnapEntry::new(is_sending, 1));
+            }
+        }
+        Entry::Vacant(e) => {
+            e.insert(SnapEntry::new(is_sending, 1));
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SnapState {
+    pub key: SnapKey,
+    is_sending: bool,
+    try_cnt: u8,
+    pub snap: Mutex<Option<Snapshot>>,
+    pub failed: AtomicBool,
+}
+
+impl SnapState {
+    pub fn new(key: SnapKey, is_sending: bool, try_cnt: u8) -> SnapState {
+        SnapState {
+            key: key,
+            is_sending: is_sending,
+            try_cnt: try_cnt,
+            snap: Mutex::new(None),
+            failed: AtomicBool::new(false),
+        }
+    }
+
+    fn take_snap(&self) -> Option<Snapshot> {
+        let mut snap = self.snap.lock().unwrap();
+        if snap.is_some() {
+            Some(snap.take().unwrap())
+        } else {
+            None
+        }
+    }
+}
+
+const MAX_SNAP_TRY_CNT: u8 = 5;
+
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManagerCore {
     // directory to store snapfile.
     base: String,
-    registry: HashMap<SnapKey, SnapEntry>,
+    registry: SnapReg,
+    snaps: HashMap<u64, Arc<SnapState>>,
+    snap_worker: Mutex<Worker<SnapTask>>,
 }
 
 impl SnapManagerCore {
@@ -226,10 +292,22 @@ impl SnapManagerCore {
         SnapManagerCore {
             base: path.into(),
             registry: map![],
+            snaps: map![],
+            snap_worker: Mutex::new(Worker::new("snapshot worker")),
         }
     }
 
-    pub fn try_recover(&self) -> io::Result<()> {
+    pub fn start(&mut self) -> Result<()> {
+        box_try!(self.snap_worker.lock().unwrap().start(SnapRunner::new(&self.base)));
+        try!(self.try_recover());
+        Ok(())
+    }
+
+    pub fn stop(&mut self) -> thread::Result<()> {
+        self.snap_worker.lock().unwrap().stop()
+    }
+
+    fn try_recover(&self) -> io::Result<()> {
         let path = Path::new(&self.base);
         if !path.exists() {
             try!(fs::create_dir_all(path));
@@ -251,30 +329,55 @@ impl SnapManagerCore {
         Ok(())
     }
 
+    pub fn gen_snap(&mut self,
+                    store: &RwLockWriteGuard<PeerStorage>,
+                    reschedule: bool)
+                    -> Result<(SnapKey, Option<Snapshot>)> {
+        let region_id = store.get_region_id();
+        let mut next_try_cnt = 1;
+        let mut previous_key = None;
+        if let Entry::Occupied(e) = self.snaps.entry(region_id) {
+            if reschedule {
+                let state = e.remove();
+                state.failed.store(true, Ordering::SeqCst);
+                previous_key = Some(state.key.clone());
+            } else if e.get().failed.load(Ordering::SeqCst) {
+                next_try_cnt = e.get().try_cnt + 1;
+                previous_key = Some(e.remove().key.clone());
+            } else {
+                let key = e.get().key.clone();
+                let s = e.get().take_snap();
+                if s.is_some() {
+                    e.remove();
+                }
+                return Ok((key, s));
+            }
+        }
+
+        if let Some(key) = previous_key {
+            self.deregister(&key, true);
+        }
+
+        let ranges = store.region_key_ranges();
+        let snap = store.raw_snapshot();
+        let applied_idx = box_try!(store.load_applied_index(&snap));
+        let term = box_try!(store.term(applied_idx));
+        let key = SnapKey::new(region_id, term, applied_idx);
+        let state = Arc::new(SnapState::new(key.clone(), true, next_try_cnt));
+        let task = SnapTask::new(snap, state.clone(), ranges);
+        box_try!(self.snap_worker.lock().unwrap().schedule(task));
+        self.snaps.insert(region_id, state);
+        self.register(key.clone(), true);
+        Ok((key, None))
+    }
+
     #[inline]
     pub fn get_snap_file(&self, key: &SnapKey, is_sending: bool) -> io::Result<SnapFile> {
         SnapFile::new(&self.base, is_sending, key)
     }
 
     pub fn register(&mut self, key: SnapKey, is_sending: bool) {
-        debug!("register [key: {}, is_sending: {}]", key, is_sending);
-        match self.registry.entry(key) {
-            Entry::Occupied(mut e) => {
-                if e.get().is_sending == is_sending {
-                    e.get_mut().ref_cnt += 1;
-                } else {
-                    info!("seems leadership of {} changed, cleanup old snapfiles",
-                          e.key());
-                    if let Ok(f) = SnapFile::new(&self.base, !is_sending, e.key()) {
-                        f.delete();
-                    }
-                    e.insert(SnapEntry::new(is_sending, 1));
-                }
-            }
-            Entry::Vacant(e) => {
-                e.insert(SnapEntry::new(is_sending, 1));
-            }
-        }
+        register(&self.base, &mut self.registry, key, is_sending)
     }
 
     pub fn deregister(&mut self, key: &SnapKey, is_sending: bool) {
