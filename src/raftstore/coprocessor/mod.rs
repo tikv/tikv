@@ -34,15 +34,15 @@ pub trait Coprocessor {
 }
 
 /// Context of request.
-pub struct ObserverContext<'a> {
+pub struct ObserverContext {
     /// A snapshot of requested region.
-    pub snap: RegionSnapshot<'a>,
+    pub snap: RegionSnapshot,
     /// Whether to bypass following observer hook.
     pub bypass: bool,
 }
 
-impl<'a> ObserverContext<'a> {
-    pub fn new(peer: &'a PeerStorage) -> ObserverContext<'a> {
+impl ObserverContext {
+    pub fn new(peer: &PeerStorage) -> ObserverContext {
         ObserverContext {
             snap: RegionSnapshot::new(peer),
             bypass: false,

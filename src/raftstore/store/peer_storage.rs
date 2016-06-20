@@ -18,7 +18,6 @@ use std::{error, mem};
 use std::time::Instant;
 
 use rocksdb::{DB, WriteBatch, Writable};
-use rocksdb::rocksdb::Snapshot as RocksDbSnapshot;
 use protobuf::Message;
 
 use kvproto::metapb;
@@ -31,7 +30,7 @@ use util::codec::number::NumberDecoder;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::{Peekable, Iterable, Mutable};
+use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::{SnapFile, SnapKey, SnapManager};
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -241,8 +240,8 @@ impl PeerStorage {
         &self.region
     }
 
-    pub fn raw_snapshot(&self) -> RocksDbSnapshot {
-        self.engine.snapshot()
+    pub fn raw_snapshot(&self) -> DbSnapshot {
+        DbSnapshot::new(self.engine.clone())
     }
 
     pub fn snapshot(&mut self) -> raft::Result<Snapshot> {
@@ -542,7 +541,7 @@ impl PeerStorage {
 }
 
 fn build_snap_file(f: &mut SnapFile,
-                   snap: &RocksDbSnapshot,
+                   snap: &DbSnapshot,
                    region_id: u64,
                    ranges: Ranges)
                    -> raft::Result<()> {
@@ -580,7 +579,7 @@ fn build_snap_file(f: &mut SnapFile,
 }
 
 pub fn do_snapshot(mgr: SnapManager,
-                   snap: &RocksDbSnapshot,
+                   snap: &DbSnapshot,
                    key: SnapKey,
                    ranges: Ranges)
                    -> raft::Result<Snapshot> {
@@ -836,8 +835,7 @@ mod test {
     }
 
     fn get_snap(s: &RaftStorage, mgr: SnapManager) -> Snapshot {
-        let engine = s.rl().get_engine();
-        let raw_snap = engine.snapshot();
+        let raw_snap = s.rl().raw_snapshot();
         let key_ranges = s.rl().region_key_ranges();
         let applied_id = s.rl().load_applied_index(&raw_snap).unwrap();
         let term = s.rl().term(applied_id).unwrap();

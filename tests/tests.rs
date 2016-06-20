@@ -41,6 +41,7 @@ mod test_raft_flow_control;
 mod test_raw_node;
 mod raftstore;
 mod coprocessor;
+mod storage;
 mod util;
 
 #[test]

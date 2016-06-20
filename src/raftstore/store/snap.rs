@@ -150,6 +150,7 @@ impl SnapFile {
     }
 
     pub fn try_delete(&self) -> io::Result<()> {
+        debug!("deleting {}", self.path().display());
         fs::remove_file(self.path())
     }
 
@@ -191,6 +192,7 @@ impl Write for SnapFile {
 impl Drop for SnapFile {
     fn drop(&mut self) {
         if let Some((_, path)) = self.tmp_file.take() {
+            debug!("deleteing {}", path);
             if let Err(e) = fs::remove_file(&path) {
                 warn!("failed to delete temporary file {}: {:?}", path, e);
             }
@@ -242,6 +244,7 @@ impl SnapManagerCore {
             if !try!(p.file_type()).is_file() {
                 continue;
             }
+            debug!("deleting {}", p.path().display());
             try!(fs::remove_file(p.path()));
             // TODO: resume applying when suitable
         }
