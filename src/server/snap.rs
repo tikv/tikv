@@ -19,14 +19,13 @@ use std::io::{Read, Write};
 use std::collections::HashMap;
 use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use threadpool::ThreadPool;
 use mio::Token;
 use bytes::{Buf, ByteBuf};
 use protobuf::Message;
 
-use super::{Result, ConnData};
+use super::{Result, ConnData, SendCh, Msg};
 use super::transport::RaftStoreRouter;
 use raftstore::store::{SnapFile, SnapManager, SnapKey};
 use util::worker::Runnable;
@@ -49,7 +48,7 @@ const DEFAULT_SENDER_POOL_SIZE: usize = 3;
 /// `SendTo` send the snapshot file to specified address.
 pub enum Task {
     // bool indicate whether the initialization succeed.
-    Register(Token, RaftMessage, Arc<AtomicBool>),
+    Register(Token, RaftMessage),
     Write(Token, ByteBuf),
     Close(Token),
     Discard(Token),
@@ -63,9 +62,7 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Register(token, ref meta, _) => {
-                write!(f, "Register {:?} token: {:?}", meta, token)
-            }
+            Task::Register(token, ref meta) => write!(f, "Register {:?} token: {:?}", meta, token),
             Task::Write(token, _) => write!(f, "Write snap for {:?}", token),
             Task::Close(token) => write!(f, "Close file {:?}", token),
             Task::Discard(token) => write!(f, "Discard file {:?}", token),
@@ -114,16 +111,24 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
     files: HashMap<Token, (SnapFile, RaftMessage)>,
     pool: ThreadPool,
+    ch: SendCh,
     raft_router: Arc<RwLock<R>>,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(snap_mgr: SnapManager, r: Arc<RwLock<R>>) -> Runner<R> {
+    pub fn new(snap_mgr: SnapManager, r: Arc<RwLock<R>>, ch: SendCh) -> Runner<R> {
         Runner {
             snap_mgr: snap_mgr,
             files: map![],
-            pool: ThreadPool::new_with_name("snap sender".to_owned(), DEFAULT_SENDER_POOL_SIZE),
+            pool: ThreadPool::new_with_name(thd_name!("snap sender"), DEFAULT_SENDER_POOL_SIZE),
             raft_router: r,
+            ch: ch,
+        }
+    }
+
+    pub fn close(&self, token: Token) {
+        if let Err(e) = self.ch.send(Msg::CloseConn { token: token }) {
+            error!("failed to close connection {:?}: {:?}", token, e);
         }
     }
 }
@@ -131,14 +136,14 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
 impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Register(token, meta, abort) => {
+            Task::Register(token, meta) => {
                 let mgr = self.snap_mgr.clone();
                 match SnapKey::from_snap(meta.get_message().get_snapshot())
                     .and_then(|key| mgr.rl().get_snap_file(&key, false).map(|r| (r, key))) {
                     Ok((mut f, k)) => {
                         if f.exists() {
-                            abort.store(true, Ordering::SeqCst);
                             error!("file {} already exists, skip.", f.path().display());
+                            self.close(token);
                             return;
                         }
                         debug!("begin to receive snap {:?}", meta);
@@ -148,8 +153,8 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             res = meta.write_to_writer(&mut f).map_err(From::from);
                         }
                         if let Err(e) = res {
-                            abort.store(true, Ordering::SeqCst);
                             error!("failed to write meta: {:?}", e);
+                            self.close(token);
                             mgr.wl().deregister(&k, false);
                             return;
                         }
@@ -182,6 +187,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             error!("send snapshot for token {:?} err {:?}", token, e);
                             self.snap_mgr.wl().deregister(&key, false);
                         }
+                        self.close(token);
                     }
                     None => error!("invalid snap token {:?}", token),
                 }
