@@ -77,6 +77,7 @@ pub fn new_store_cfg() -> Config {
         raft_log_gc_threshold: 1,
         pd_heartbeat_tick_interval: 20,
         region_check_size_diff: 10000,
+        notify_capacity: 4096,
         ..Config::default()
     }
 }
