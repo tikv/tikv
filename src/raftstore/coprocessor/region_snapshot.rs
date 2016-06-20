@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use rocksdb::{DB, SeekKey, DBVector, DBIterator};
-use rocksdb::rocksdb::Snapshot;
 use kvproto::metapb::Region;
 
-use raftstore::store::engine::Peekable;
+use raftstore::store::engine::{Snapshot, Peekable, Iterable};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::{Error, Result};
 
@@ -25,22 +25,22 @@ type Kv<'a> = (&'a [u8], &'a [u8]);
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
-pub struct RegionSnapshot<'a> {
-    snap: Snapshot<'a>,
+pub struct RegionSnapshot {
+    snap: Snapshot,
     region: Region,
 }
 
-impl<'a> RegionSnapshot<'a> {
-    pub fn new(ps: &'a PeerStorage) -> RegionSnapshot<'a> {
+impl RegionSnapshot {
+    pub fn new(ps: &PeerStorage) -> RegionSnapshot {
         RegionSnapshot {
             snap: ps.raw_snapshot(),
             region: ps.get_region().clone(),
         }
     }
 
-    pub fn from_raw(db: &'a DB, region: Region) -> RegionSnapshot<'a> {
+    pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
         RegionSnapshot {
-            snap: db.snapshot(),
+            snap: Snapshot::new(db),
             region: region,
         }
     }
@@ -50,7 +50,7 @@ impl<'a> RegionSnapshot<'a> {
     }
 
     pub fn iter(&self) -> RegionIterator {
-        RegionIterator::new(self.snap.iter(), self.region.clone())
+        RegionIterator::new(self.snap.new_iterator(), self.region.clone())
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -86,7 +86,7 @@ impl<'a> RegionSnapshot<'a> {
     }
 }
 
-impl<'a> Peekable for RegionSnapshot<'a> {
+impl Peekable for RegionSnapshot {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
         try!(util::check_key_in_region(key, &self.region));
         let data_key = keys::data_key(key);
@@ -218,8 +218,7 @@ mod tests {
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
     fn new_temp_engine(path: &TempDir) -> Arc<DB> {
-        let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        Arc::new(engine)
+        new_engine(path.path().to_str().unwrap()).unwrap()
     }
 
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {

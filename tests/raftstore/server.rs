@@ -28,6 +28,7 @@ use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::{self, SendCh as StoreSendCh};
 use tikv::util::codec::{Error as CodecError, rpc};
+use tikv::storage::Engine;
 use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
@@ -46,6 +47,7 @@ pub struct ServerCluster {
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
     store_chs: HashMap<u64, StoreSendCh>,
+    pub storages: HashMap<u64, Arc<Box<Engine>>>,
     snap_paths: HashMap<u64, TempDir>,
 
     msg_id: AtomicUsize,
@@ -63,6 +65,7 @@ impl ServerCluster {
             msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
             store_chs: HashMap::new(),
+            storages: HashMap::new(),
             snap_paths: HashMap::new(),
         }
     }
@@ -156,6 +159,7 @@ impl Simulator for ServerCluster {
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
+        self.storages.insert(node_id, store.get_engine());
 
         let mut server = Server::new(&mut event_loop, listener, store, router, resolver, snap_mgr)
             .unwrap();
