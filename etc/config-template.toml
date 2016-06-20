@@ -9,6 +9,8 @@ dsn = "rocksdb"
 store = "/tmp/tikv/store"
 # log level: trace, debug, info, warn, error, off.
 log-level = "info"
+# notify capacity, 40960 is suitable for about 7000 regions.
+notify-capacity = 40960
 
 # set store capacity, if no set, use unlimited or disk size later.
 # capacity = 0 # 0 is unlimited.
@@ -19,6 +21,10 @@ log-level = "info"
 addr = ""
 # metric prefix.
 prefix = "tikv"
+
+[raftstore]
+# notify capacity, 40960 is suitable for about 7000 regions.
+notify-capacity = 40960
 
 [raft]
 # set cluster id, must greater than 0.
