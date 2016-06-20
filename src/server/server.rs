@@ -18,14 +18,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
 use std::net::SocketAddr;
 
-use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
+use mio::{Token, Handler, EventLoop, EventLoopBuilder, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
-use super::{Result, OnResponse};
+use super::{Result, OnResponse, Config};
 use util::HandyRwLock;
 use util::worker::Worker;
 use storage::Storage;
@@ -41,12 +41,14 @@ const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 
-pub fn create_event_loop<T, S>() -> Result<EventLoop<Server<T, S>>>
+pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
           S: StoreAddrResolver
 {
-    let event_loop = try!(EventLoop::new());
-    Ok(event_loop)
+    let mut builder = EventLoopBuilder::new();
+    builder.notify_capacity(config.notify_capacity);
+    let el = try!(builder.build());
+    Ok(el)
 }
 
 pub fn bind(addr: &str) -> Result<TcpListener> {
@@ -610,7 +612,7 @@ mod tests {
     use mio::tcp::TcpListener;
 
     use super::*;
-    use super::super::{Msg, ConnData, Result};
+    use super::super::{Msg, ConnData, Result, Config};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::{Storage, Dsn};
@@ -664,7 +666,8 @@ mod tests {
 
         let resolver = MockResolver { addr: listener.local_addr().unwrap() };
 
-        let mut event_loop = create_event_loop().unwrap();
+        let cfg = Config::new();
+        let mut event_loop = create_event_loop(&cfg).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut server =
             Server::new(&mut event_loop,
