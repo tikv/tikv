@@ -248,22 +248,16 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
     opts
 }
 
-fn build_raftkv(matches: &Matches,
-                config: &toml::Value,
-                ch: SendCh,
-                cluster_id: u64,
-                addr: String,
-                pd_client: Arc<RpcClient>)
-                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, SnapManager) {
-    let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
-    let path = Path::new(&get_store_path(matches, config)).to_path_buf();
-    let opts = get_rocksdb_option(matches, config);
-    let mut db_path = path.clone();
-    db_path.push("db");
-    let engine = Arc::new(DB::open(&opts, db_path.to_str().unwrap()).unwrap());
+fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &str) -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
-    cfg.addr = addr.clone();
+    cfg.addr = addr.to_owned();
+    cfg.notify_capacity = get_integer_value("",
+                                            "server.notify-capacity",
+                                            matches,
+                                            config,
+                                            Some(40960),
+                                            |v| v.as_integer()) as usize;
     let capacity = get_integer_value("capacity",
                                      "server.capacity",
                                      matches,
@@ -281,8 +275,30 @@ fn build_raftkv(matches: &Matches,
                                           "server.advertise-addr",
                                           matches,
                                           config,
-                                          Some(addr),
+                                          Some(addr.to_owned()),
                                           |v| v.as_str().map(|s| s.to_owned()));
+    cfg.store_cfg.notify_capacity =
+        get_integer_value("",
+                          "raftstore.notify-capacity",
+                          matches,
+                          config,
+                          Some(40960),
+                          |v| v.as_integer()) as usize;
+    cfg
+}
+
+fn build_raftkv(matches: &Matches,
+                config: &toml::Value,
+                ch: SendCh,
+                pd_client: Arc<RpcClient>,
+                cfg: &Config)
+                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, SnapManager) {
+    let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
+    let path = Path::new(&get_store_path(matches, config)).to_path_buf();
+    let opts = get_rocksdb_option(matches, config);
+    let mut db_path = path.clone();
+    db_path.push("db");
+    let engine = Arc::new(DB::open(&opts, db_path.to_str().unwrap()).unwrap());
 
     let mut snap_path = path.clone();
     snap_path.push("snap");
@@ -290,7 +306,7 @@ fn build_raftkv(matches: &Matches,
     let snap_mgr = store::new_snap_mgr(snap_path);
 
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
-    let mut node = Node::new(&mut event_loop, &cfg, pd_client);
+    let mut node = Node::new(&mut event_loop, cfg, pd_client);
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
     let raft_router = node.raft_store_router();
     let node_id = node.id();
@@ -320,8 +336,8 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
-fn run_local_server(listener: TcpListener, store: Storage) {
-    let mut event_loop = create_event_loop().unwrap();
+fn run_local_server(listener: TcpListener, store: Storage, config: &Config) {
+    let mut event_loop = create_event_loop(config).unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
     let snap_mgr = store::new_snap_mgr(TEMP_DIR);
     let mut svr = Server::new(&mut event_loop,
@@ -334,23 +350,16 @@ fn run_local_server(listener: TcpListener, store: Storage) {
     svr.run(&mut event_loop).unwrap();
 }
 
-fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value) {
-    let mut event_loop = create_event_loop().unwrap();
+fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
+    let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel());
-    let id = get_string_value("I",
-                              "raft.cluster-id",
-                              matches,
-                              config,
-                              None,
-                              |v| v.as_integer().map(|i| i.to_string()));
-    let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
     let pd_addr = get_string_value("pd",
                                    "raft.pd",
                                    matches,
                                    config,
                                    None,
                                    |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(new_rpc_client(&pd_addr, cluster_id).unwrap());
+    let pd_client = Arc::new(new_rpc_client(&pd_addr, cfg.cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let store_path = get_store_path(matches, config);
@@ -363,12 +372,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     }
 
     let (store, raft_router, node_id, snap_mgr) =
-        build_raftkv(matches,
-                     config,
-                     ch.clone(),
-                     cluster_id,
-                     format!("{}", listener.local_addr().unwrap()),
-                     pd_client);
+        build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     initial_metric(matches, config, Some(node_id));
     let mut svr = Server::new(&mut event_loop,
                               listener,
@@ -450,15 +454,26 @@ fn main() {
                                     Some(ROCKSDB_DSN.to_owned()),
                                     |v| v.as_str().map(|s| s.to_owned()));
     panic_hook::set_exit_hook();
+    let id = get_string_value("I",
+                              "raft.cluster-id",
+                              &matches,
+                              &config,
+                              None,
+                              |v| v.as_integer().map(|i| i.to_string()));
+    let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
+    let cfg = build_cfg(&matches,
+                        &config,
+                        cluster_id,
+                        &format!("{}", listener.local_addr().unwrap()));
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
             initial_metric(&matches, &config, None);
             let path = get_store_path(&matches, &config);
             let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();
-            run_local_server(listener, store);
+            run_local_server(listener, store, &cfg);
         }
         RAFTKV_DSN => {
-            run_raft_server(listener, &matches, &config);
+            run_raft_server(listener, &matches, &config, &cfg);
         }
         n => panic!("unrecognized dns name: {}", n),
     };

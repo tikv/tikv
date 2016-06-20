@@ -30,7 +30,7 @@ const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
 const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 10000;
 const STORE_CAPACITY: u64 = u64::MAX;
-const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
+const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
 
 #[derive(Debug, Clone)]
 pub struct Config {

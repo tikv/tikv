@@ -104,12 +104,6 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || !self.handles.contains_key(&node_id));
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
-        // TODO: simplify creating raft server later.
-        let mut event_loop = create_event_loop().unwrap();
-        let sendch = SendCh::new(event_loop.channel());
-        let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
-        let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
-
         let mut cfg = cfg;
         let tmp = TempDir::new("test_cluster").unwrap();
         let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap());
@@ -138,6 +132,12 @@ impl Simulator for ServerCluster {
         }
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
+
+        // TODO: simplify creating raft server later.
+        let mut event_loop = create_event_loop(&cfg).unwrap();
+        let sendch = SendCh::new(event_loop.channel());
+        let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
+        let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
 
         let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
         let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
