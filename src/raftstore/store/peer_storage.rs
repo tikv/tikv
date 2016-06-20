@@ -679,9 +679,9 @@ impl Storage for RaftStorage {
 #[cfg(test)]
 mod test {
     use std::sync::*;
-    use std::{io, thread};
+    use std::sync::mpsc::*;
+    use std::io;
     use std::fs::File;
-    use std::time::Duration;
     use rocksdb::*;
     use kvproto::raftpb::{Entry, ConfState, Snapshot};
     use kvproto::raft_serverpb::RaftSnapshotData;
@@ -690,8 +690,16 @@ mod test {
     use protobuf;
     use raft::Storage;
     use raftstore::store::*;
+    use raftstore::Result;
     use util::codec::number::NumberEncoder;
     use util::HandyRwLock;
+
+    impl GenericSendCh<Msg> for Sender<Msg> {
+        fn send(&self, m: Msg) -> Result<()> {
+            Sender::send(self, m).unwrap();
+            Ok(())
+        }
+    }
 
     fn new_storage(mgr: SnapManager, path: &TempDir) -> RaftStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
@@ -831,27 +839,15 @@ mod test {
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
-        mgr.wl().start().unwrap();
+        let (sr, rv) = mpsc::channel();
+        mgr.wl().start(sr).unwrap();
         let s = new_storage_from_ents(mgr, &td, &ents);
         let mut snap_res = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap_res.unwrap_err(), unavailable);
 
-        let mut try_cnt = 0;
-        loop {
-            snap_res = s.snapshot();
-            if snap_res.is_ok() {
-                break;
-            }
-
-            if try_cnt >= 100 {
-                panic!("failed to genenrate snapshot");
-            } else {
-                thread::sleep(Duration::from_millis(20));
-            }
-
-            try_cnt += 1;
-        }
+        rv.recv().unwrap();
+        snap_res = s.snapshot();
 
         let snap_dir = TempDir::new("snap").unwrap();
         let snap = get_snap(&s, new_snap_mgr(snap_dir.path().to_str().unwrap()));

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::{self, Range, SnapState, SnapFile};
+use raftstore::store::{self, Range, SnapState, SnapFile, Msg, GenericSendCh};
 use raftstore::store::engine::Snapshot;
 
 use std::fmt::{self, Formatter, Display};
@@ -59,13 +59,17 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub struct Runner {
+pub struct Runner<H: GenericSendCh<Msg>> {
     base_dir: String,
+    ch: H,
 }
 
-impl Runner {
-    pub fn new(base_dir: &str) -> Runner {
-        Runner { base_dir: base_dir.to_owned() }
+impl<H: GenericSendCh<Msg>> Runner<H> {
+    pub fn new(base_dir: &str, ch: H) -> Runner<H> {
+        Runner {
+            base_dir: base_dir.to_owned(),
+            ch: ch,
+        }
     }
 
     fn generate_snap(&self, task: &Task) -> Result<()> {
@@ -82,12 +86,13 @@ impl Runner {
             snap_file.delete();
             return Ok(());
         }
+        box_try!(self.ch.send(Msg::SnapshotGenerated { key: key }));
         *task.state.snap.lock().unwrap() = Some(snap);
         Ok(())
     }
 }
 
-impl Runnable<Task> for Runner {
+impl<H: GenericSendCh<Msg>> Runnable<Task> for Runner<H> {
     fn run(&mut self, task: Task) {
         metric_incr!("raftstore.generate_snap");
         let ts = Instant::now();

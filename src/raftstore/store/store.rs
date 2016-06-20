@@ -157,7 +157,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(self.prepare());
 
-        box_try!(self.snap_mgr.wl().start());
+        let ch = self.get_sendch();
+        box_try!(self.snap_mgr.wl().start(ch));
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
@@ -872,6 +873,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.raft_group.report_unreachable(to_peer_id);
         }
     }
+
+    fn on_snap_generated(&mut self, key: SnapKey) {
+        if let Some(peer) = self.region_peers.get_mut(&key.region_id) {
+            if peer.is_leader() {
+                return;
+            }
+        }
+        self.snap_mgr.wl().deregister(&key, true);
+    }
 }
 
 fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
@@ -937,6 +947,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             }
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
+            }
+            Msg::SnapshotGenerated { key } => {
+                self.on_snap_generated(key);
             }
         }
         slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());

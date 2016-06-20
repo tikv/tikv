@@ -17,7 +17,7 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 use util::worker::Worker;
 use raftstore::Result;
 use super::worker::{SnapTask, SnapRunner};
-use super::PeerStorage;
+use super::{PeerStorage, SendCh, Msg};
 
 
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
@@ -276,6 +276,16 @@ impl SnapState {
     }
 }
 
+pub trait GenericSendCh<T: Send>: Send {
+    fn send(&self, t: T) -> Result<()>;
+}
+
+impl GenericSendCh<Msg> for SendCh {
+    fn send(&self, m: Msg) -> Result<()> {
+        SendCh::send(self, m)
+    }
+}
+
 const MAX_SNAP_TRY_CNT: u8 = 5;
 
 /// `SnapManagerCore` trace all current processing snapshots.
@@ -297,8 +307,8 @@ impl SnapManagerCore {
         }
     }
 
-    pub fn start(&mut self) -> Result<()> {
-        box_try!(self.snap_worker.lock().unwrap().start(SnapRunner::new(&self.base)));
+    pub fn start<H: GenericSendCh<Msg> + 'static>(&mut self, ch: H) -> Result<()> {
+        box_try!(self.snap_worker.lock().unwrap().start(SnapRunner::new(&self.base, ch)));
         try!(self.try_recover());
         Ok(())
     }
