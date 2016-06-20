@@ -47,7 +47,6 @@ const DEFAULT_SENDER_POOL_SIZE: usize = 3;
 /// `Discard` discard all the unsaved changes made to snapshot file;
 /// `SendTo` send the snapshot file to specified address.
 pub enum Task {
-    // bool indicate whether the initialization succeed.
     Register(Token, RaftMessage),
     Write(Token, ByteBuf),
     Close(Token),
