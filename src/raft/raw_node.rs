@@ -33,7 +33,6 @@ use kvproto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageTyp
                       ConfChangeType, ConfState};
 use raft::raft::{Config, Raft, SoftState, INVALID_ID};
 use raft::Status;
-use std::sync::Arc;
 
 #[derive(Debug, Default)]
 pub struct Peer {
@@ -140,7 +139,7 @@ pub struct RawNode<T: Storage> {
 
 impl<T: Storage> RawNode<T> {
     // NewRawNode returns a new RawNode given configuration and a list of raft peers.
-    pub fn new(config: &Config, store: Arc<T>, peers: &[Peer]) -> Result<RawNode<T>> {
+    pub fn new(config: &Config, store: T, peers: &[Peer]) -> Result<RawNode<T>> {
         assert!(config.id != 0, "config.id must not be zero");
         let r = Raft::new(config, store);
         let mut rn = RawNode {
@@ -290,7 +289,7 @@ impl<T: Storage> RawNode<T> {
         if hs != HardState::new() && hs != self.prev_hs {
             return true;
         }
-        if Some(true) == raft.raft_log.get_unstable().snapshot.as_ref().map(|s| !is_empty_snap(s)) {
+        if self.get_snap().map_or(false, |s| !is_empty_snap(s)) {
             return true;
         }
         if !raft.msgs.is_empty() || raft.raft_log.unstable_entries().is_some() ||
@@ -298,6 +297,11 @@ impl<T: Storage> RawNode<T> {
             return true;
         }
         false
+    }
+
+    #[inline]
+    pub fn get_snap(&self) -> Option<&Snapshot> {
+        self.raft.get_snap()
     }
 
     // Advance notifies the RawNode that the application has applied and saved progress in the

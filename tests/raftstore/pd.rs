@@ -171,8 +171,9 @@ impl Cluster {
             // overlap, remove old, insert new.
             // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
             // is overlapped with origin [a, c).
-            assert!(version > search_version);
-            assert!(conf_ver >= search_conf_ver);
+            if version <= search_version || conf_ver < search_conf_ver {
+                return Err(box_err!("epoch {:?} is stale.", region.get_region_epoch()));
+            }
 
             self.remove_region(&search_region);
             self.add_region(&region);

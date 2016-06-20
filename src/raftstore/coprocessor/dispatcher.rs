@@ -133,7 +133,7 @@ mod test {
     use raftstore::coprocessor::*;
     use tempdir::TempDir;
     use raftstore::store::engine::*;
-    use raftstore::store::PeerStorage;
+    use raftstore::store::{self, PeerStorage};
     use util::HandyRwLock;
     use std::sync::*;
     use std::fmt::Debug;
@@ -212,12 +212,9 @@ mod test {
         }
     }
 
-    fn new_peer_storage(path: &TempDir, snap_dir: &TempDir) -> PeerStorage {
+    fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        PeerStorage::new(Arc::new(engine),
-                         &Region::new(),
-                         snap_dir.path().to_str().unwrap().to_owned())
-            .unwrap()
+        PeerStorage::new(engine, &Region::new(), store::new_snap_mgr("")).unwrap()
     }
 
     fn share<T>(t: T) -> Arc<RwLock<T>> {
@@ -248,8 +245,7 @@ mod test {
         let mut host = CoprocessorHost::default();
         host.registry.register_observer(3, Box::new(observer1));
         let path = TempDir::new("test-raftstore").unwrap();
-        let snap_dir = TempDir::new("snap_dir").unwrap();
-        let ps = new_peer_storage(&path, &snap_dir);
+        let ps = new_peer_storage(&path);
         let mut admin_req = RaftCmdRequest::new();
         admin_req.set_admin_request(AdminRequest::new());
         let mut query_req = RaftCmdRequest::new();

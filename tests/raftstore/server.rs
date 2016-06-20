@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::thread;
+use std::thread::{self, Builder};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};
@@ -28,6 +28,7 @@ use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::raftstore::{Error, Result};
 use tikv::raftstore::store::{self, SendCh as StoreSendCh};
 use tikv::util::codec::{Error as CodecError, rpc};
+use tikv::storage::Engine;
 use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
@@ -46,6 +47,7 @@ pub struct ServerCluster {
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
     store_chs: HashMap<u64, StoreSendCh>,
+    pub storages: HashMap<u64, Arc<Box<Engine>>>,
     snap_paths: HashMap<u64, TempDir>,
 
     msg_id: AtomicUsize,
@@ -63,6 +65,7 @@ impl ServerCluster {
             msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
             store_chs: HashMap::new(),
+            storages: HashMap::new(),
             snap_paths: HashMap::new(),
         }
     }
@@ -104,15 +107,9 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || !self.handles.contains_key(&node_id));
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
-        // TODO: simplify creating raft server later.
-        let mut event_loop = create_event_loop().unwrap();
-        let sendch = SendCh::new(event_loop.channel());
-        let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
-        let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
-
         let mut cfg = cfg;
         let tmp = TempDir::new("test_cluster").unwrap();
-        cfg.store_cfg.snap_dir = tmp.path().to_str().unwrap().to_owned();
+        let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap());
         self.snap_paths.insert(node_id, tmp);
 
         // Now we cache the store address, so here we should re-use last
@@ -139,11 +136,20 @@ impl Simulator for ServerCluster {
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
 
+        // TODO: simplify creating raft server later.
+        let mut event_loop = create_event_loop(&cfg).unwrap();
+        let sendch = SendCh::new(event_loop.channel());
+        let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
+        let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
+
         let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
         let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
 
-        node.start(store_event_loop, engine.clone(), simulate_trans.clone())
+        node.start(store_event_loop,
+                   engine.clone(),
+                   simulate_trans.clone(),
+                   snap_mgr.clone())
             .unwrap();
         let router = node.raft_store_router();
 
@@ -153,20 +159,19 @@ impl Simulator for ServerCluster {
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
         let store = create_raft_storage(node, engine).unwrap();
+        self.storages.insert(node_id, store.get_engine());
 
-        let mut server = Server::new(&mut event_loop,
-                                     listener,
-                                     store,
-                                     router,
-                                     resolver,
-                                     cfg.store_cfg.snap_dir)
+        let mut server = Server::new(&mut event_loop, listener, store, router, resolver, snap_mgr)
             .unwrap();
 
         let ch = server.get_sendch();
 
-        let t = thread::spawn(move || {
-            server.run(&mut event_loop).unwrap();
-        });
+        let t = Builder::new()
+            .name(thd_name!(format!("server-{}", node_id)))
+            .spawn(move || {
+                server.run(&mut event_loop).unwrap();
+            })
+            .unwrap();
 
         self.handles.insert(node_id, t);
         self.senders.insert(node_id, ch);

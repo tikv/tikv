@@ -14,7 +14,7 @@
 pub mod util;
 pub mod cluster;
 mod node;
-mod server;
+pub mod server;
 pub mod pd;
 pub mod transport_simulate;
 

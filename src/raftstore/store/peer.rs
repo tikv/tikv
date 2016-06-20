@@ -17,7 +17,6 @@ use std::vec::Vec;
 use std::default::Default;
 
 use rocksdb::{DB, WriteBatch, Writable};
-use rocksdb::rocksdb::Snapshot;
 use protobuf::{self, Message};
 use uuid::Uuid;
 
@@ -35,12 +34,12 @@ use util::{escape, HandyRwLock, SlowTimer};
 use pd::PdClient;
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, RaftStorage, ApplySnapResult};
-use super::util;
+use super::{util, SnapManager, SnapKey};
 use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
-use super::engine::{Peekable, Iterable, Mutable};
+use super::engine::{Snapshot, Peekable, Iterable, Mutable};
 
 pub struct PendingCmd {
     pub uuid: Uuid,
@@ -121,7 +120,7 @@ pub struct Peer {
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<RaftStorage>,
-    pub storage: Arc<RaftStorage>,
+    pub storage: RaftStorage,
     pending_cmds: PendingCmdQueue,
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
     coprocessor_host: CoprocessorHost,
@@ -193,9 +192,9 @@ impl Peer {
         let cfg = store.config();
 
         let store_id = store.store_id();
-        let ps = try!(PeerStorage::new(store.engine(), &region, cfg.snap_dir.clone()));
+        let ps = try!(PeerStorage::new(store.engine(), &region, store.get_snap_mgr()));
         let applied_index = ps.applied_index();
-        let storage = Arc::new(RaftStorage::new(ps));
+        let storage = RaftStorage::new(ps);
 
         let raft_cfg = raft::Config {
             id: peer_id,
@@ -294,7 +293,8 @@ impl Peer {
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self,
-                                           trans: &Arc<RwLock<T>>)
+                                           trans: &Arc<RwLock<T>>,
+                                           snap_mgr: &SnapManager)
                                            -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
             return Ok(None);
@@ -311,7 +311,7 @@ impl Peer {
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
         for msg in &ready.messages {
-            try!(self.send_raft_message(&msg, trans));
+            try!(self.send_raft_message(&msg, trans, snap_mgr));
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
@@ -512,7 +512,8 @@ impl Peer {
 
     fn send_raft_message<T: Transport>(&mut self,
                                        msg: &raftpb::Message,
-                                       trans: &Arc<RwLock<T>>)
+                                       trans: &Arc<RwLock<T>>,
+                                       snap_mgr: &SnapManager)
                                        -> Result<()> {
         metric_incr!("raftstore.send_raft_message");
         let mut send_msg = RaftMessage::new();
@@ -570,6 +571,8 @@ impl Peer {
             let is_snapshot = msg_type == raftpb::MessageType::MsgSnapshot;
             if is_snapshot {
                 self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
+                let key = SnapKey::from_region_snap(self.region_id, msg.get_snapshot());
+                snap_mgr.wl().deregister(&key, true);
             }
         }
 
@@ -727,7 +730,7 @@ impl Peer {
         let (mut resp, exec_result) = {
             let engine = self.engine.clone();
             let ctx = ExecContext {
-                snap: engine.snapshot(),
+                snap: Snapshot::new(engine),
                 wb: &wb,
                 req: req,
             };
@@ -800,7 +803,7 @@ fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 }
 
 struct ExecContext<'a> {
-    pub snap: Snapshot<'a>,
+    pub snap: Snapshot,
     pub wb: &'a WriteBatch,
     pub req: &'a RaftCmdRequest,
 }

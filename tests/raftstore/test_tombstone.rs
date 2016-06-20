@@ -37,10 +37,6 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_2 = cluster.get_engine(2);
     must_get_equal(&engine_2, b"k1", b"v1");
 
-    let region_status = new_status_request(1, new_peer(2, 2), new_region_leader_cmd());
-    let resp = cluster.call_command(region_status, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_status_response().has_region_leader());
-
     // add peer (3, 3) to region 1.
     pd_client.must_add_peer(r1, new_peer(3, 3));
 

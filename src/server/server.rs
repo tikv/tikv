@@ -18,17 +18,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
 use std::net::SocketAddr;
 
-use mio::{Token, Handler, EventLoop, EventSet, PollOpt};
+use mio::{Token, Handler, EventLoop, EventLoopBuilder, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, SendCh, ConnData};
 use super::conn::Conn;
-use super::{Result, OnResponse};
+use super::{Result, OnResponse, Config};
 use util::HandyRwLock;
 use util::worker::Worker;
 use storage::Storage;
+use raftstore::store::SnapManager;
 use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost};
 use super::transport::RaftStoreRouter;
@@ -40,12 +41,14 @@ const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 
-pub fn create_event_loop<T, S>() -> Result<EventLoop<Server<T, S>>>
+pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
           S: StoreAddrResolver
 {
-    let event_loop = try!(EventLoop::new());
-    Ok(event_loop)
+    let mut builder = EventLoopBuilder::new();
+    builder.notify_capacity(config.notify_capacity);
+    let el = try!(builder.build());
+    Ok(el)
 }
 
 pub fn bind(addr: &str) -> Result<TcpListener> {
@@ -78,7 +81,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     store: StoreHandler,
     end_point_worker: Worker<RequestTask>,
 
-    snap_path: String,
+    snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
     resolver: S,
@@ -95,7 +98,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
                resolver: S,
-               snap_path: String)
+               snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
@@ -117,7 +120,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             raft_router: raft_router,
             store: store_handler,
             end_point_worker: end_point_worker,
-            snap_path: snap_path,
+            snap_mgr: snap_mgr,
             snap_worker: snap_worker,
             resolver: resolver,
         };
@@ -129,7 +132,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let end_point = EndPointHost::new(self.store.engine());
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
-        let snap_runner = SnapHandler::new(self.snap_path.clone(), self.raft_router.clone());
+        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone());
         box_try!(self.snap_worker.start(snap_runner));
 
         try!(event_loop.run(self));
@@ -168,7 +171,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 conn.close();
             }
             None => {
-                warn!("missing connection for token {}", token.as_usize());
+                debug!("missing connection for token {}", token.as_usize());
             }
         }
     }
@@ -200,7 +203,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn on_conn_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) -> Result<()> {
         let msgs = try!(match self.conns.get_mut(&token) {
             None => {
-                warn!("missing conn for token {:?}", token);
+                debug!("missing conn for token {:?}", token);
                 return Ok(());
             }
             Some(conn) => conn.on_readable(event_loop),
@@ -297,7 +300,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
             token => {
                 if let Err(e) = self.on_conn_readable(event_loop, token) {
-                    warn!("handle read conn for token {:?} err {:?}, remove", token, e);
+                    debug!("handle read conn for token {:?} err {:?}, remove", token, e);
                     self.remove_conn(event_loop, token);
                 }
             }
@@ -308,14 +311,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn on_writable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
         let res = match self.conns.get_mut(&token) {
             None => {
-                warn!("missing conn for token {:?}", token);
+                debug!("missing conn for token {:?}", token);
                 return;
             }
             Some(conn) => conn.on_writable(event_loop),
         };
 
         if let Err(e) = res {
-            warn!("handle write conn err {:?}, remove", e);
+            debug!("handle write conn err {:?}, remove", e);
             self.remove_conn(event_loop, token);
         }
     }
@@ -323,14 +326,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn write_data(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
         let res = match self.conns.get_mut(&token) {
             None => {
-                warn!("missing conn for token {:?}", token);
+                debug!("missing conn for token {:?}", token);
                 return;
             }
             Some(conn) => conn.append_write_buf(event_loop, data),
         };
 
         if let Err(e) = res {
-            warn!("handle write data err {:?}, remove", e);
+            debug!("handle write data err {:?}, remove", e);
             self.remove_conn(event_loop, token);
         }
     }
@@ -607,17 +610,16 @@ mod tests {
     use std::net::SocketAddr;
 
     use mio::tcp::TcpListener;
-    use tempdir::TempDir;
 
     use super::*;
-    use super::super::{Msg, ConnData, Result};
+    use super::super::{Msg, ConnData, Result, Config};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::{Storage, Dsn};
     use kvproto::msgpb::{Message, MessageType};
     use raftstore::Result as RaftStoreResult;
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::store::Callback;
+    use raftstore::store::{self, Callback};
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use raft::SnapshotStatus;
     use storage::engine::TEMP_DIR;
@@ -664,16 +666,16 @@ mod tests {
 
         let resolver = MockResolver { addr: listener.local_addr().unwrap() };
 
-        let mut event_loop = create_event_loop().unwrap();
+        let cfg = Config::new();
+        let mut event_loop = create_event_loop(&cfg).unwrap();
         let (tx, rx) = mpsc::channel();
-        let tmp_dir = TempDir::new("test").unwrap();
         let mut server =
             Server::new(&mut event_loop,
                         listener,
                         Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
                         resolver,
-                        tmp_dir.path().to_str().unwrap().to_owned())
+                        store::new_snap_mgr(""))
                 .unwrap();
 
         let ch = server.get_sendch();

@@ -63,7 +63,7 @@ pub struct Cluster<T: Simulator> {
     // node id -> db engine.
     pub engines: HashMap<u64, Arc<DB>>,
 
-    sim: Arc<RwLock<T>>,
+    pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
 }
 
@@ -158,33 +158,26 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().call_command(request, timeout)
     }
 
-    fn call_command_on_leader_once(&mut self,
-                                   mut request: RaftCmdRequest,
-                                   timeout: Duration)
-                                   -> Result<RaftCmdResponse> {
-        let region_id = request.get_header().get_region_id();
-        if let Some(leader) = self.leader_of_region(region_id) {
-            request.mut_header().set_peer(leader);
-            return self.call_command(request, timeout);
-        }
-        Err(box_err!("can't get leader of region"))
-    }
-
     pub fn call_command_on_leader(&mut self,
-                                  request: RaftCmdRequest,
+                                  mut request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
         let mut retry_cnt = 0;
         let region_id = request.get_header().get_region_id();
         loop {
-            let result = self.call_command_on_leader_once(request.clone(), timeout);
-            if result.is_err() {
-                return result;
-            }
-            let resp = result.unwrap();
+            let leader = match self.leader_of_region(region_id) {
+                None => return Err(box_err!("can't get leader of region")),
+                Some(l) => l,
+            };
+            request.mut_header().set_peer(leader);
+            let resp = match self.call_command(request.clone(), timeout) {
+                e @ Err(_) => return e,
+                Ok(resp) => resp,
+            };
             if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
                 retry_cnt += 1;
-                warn!("seems leader changed, let's retry");
+                warn!("{:?} is no longer leader, let's retry",
+                      request.get_header().get_peer());
                 continue;
             }
             return Ok(resp);
@@ -338,6 +331,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn shutdown(&mut self) {
+        debug!("about to shutdown cluster");
         let keys = self.sim.rl().get_node_ids();
         for id in keys {
             self.stop_node(id);
@@ -544,6 +538,7 @@ impl<T: Simulator> Cluster<T> {
         loop {
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
+                self.reset_leader_of_region(region.get_id());
                 self.ask_split(region, split_key);
             }
 

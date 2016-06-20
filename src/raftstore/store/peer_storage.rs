@@ -12,17 +12,12 @@
 // limitations under the License.
 
 use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::vec::Vec;
-use std::io::{self, Write, ErrorKind, Seek, SeekFrom, Read};
-use std::fs::{self, File, Metadata, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::io::{Seek, SeekFrom};
+use std::fs::File;
 use std::{error, mem};
 use std::time::Instant;
 
-use crc::crc32::{self, Digest, Hasher32};
-use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use rocksdb::{DB, WriteBatch, Writable};
-use rocksdb::rocksdb::Snapshot as RocksDbSnapshot;
 use protobuf::Message;
 
 use kvproto::metapb;
@@ -35,7 +30,8 @@ use util::codec::number::NumberDecoder;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::{Peekable, Iterable, Mutable};
+use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
+use super::{SnapFile, SnapKey, SnapManager};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -65,7 +61,7 @@ pub struct PeerStorage {
     // 2, a dummy entry for the start point of the empty log.
     pub truncated_state: RaftTruncatedState,
     pub snap_state: SnapState,
-    snap_dir: String,
+    snap_mgr: SnapManager,
     snap_tried_cnt: u8,
 }
 
@@ -97,7 +93,10 @@ pub struct ApplySnapResult {
 }
 
 impl PeerStorage {
-    pub fn new(engine: Arc<DB>, region: &metapb::Region, snap_dir: String) -> Result<PeerStorage> {
+    pub fn new(engine: Arc<DB>,
+               region: &metapb::Region,
+               snap_mgr: SnapManager)
+               -> Result<PeerStorage> {
         let mut store = PeerStorage {
             engine: engine,
             region: region.clone(),
@@ -106,7 +105,7 @@ impl PeerStorage {
             truncated_state: RaftTruncatedState::new(),
             snap_state: SnapState::Relax,
             snap_tried_cnt: 0,
-            snap_dir: snap_dir,
+            snap_mgr: snap_mgr,
         };
 
         store.applied_index = try!(store.load_applied_index(store.engine.as_ref()));
@@ -241,8 +240,8 @@ impl PeerStorage {
         &self.region
     }
 
-    pub fn raw_snapshot(&self) -> RocksDbSnapshot {
-        self.engine.snapshot()
+    pub fn raw_snapshot(&self) -> DbSnapshot {
+        DbSnapshot::new(self.engine.clone())
     }
 
     pub fn snapshot(&mut self) -> raft::Result<Snapshot> {
@@ -305,8 +304,9 @@ impl PeerStorage {
         info!("begin to apply snapshot for region {}",
               self.get_region_id());
 
-        let mut snap_file = try!(SnapFile::from_snap(self.snap_dir.clone(), snap, SNAP_REV_PREFIX));
-        snap_file.delete_when_drop();
+        let key = try!(SnapKey::from_snap(snap));
+        let snap_file = try!(self.snap_mgr.rl().get_snap_file(&key, false));
+        defer!(self.snap_mgr.wl().deregister(&key, false));
         if !snap_file.exists() {
             return Err(box_err!("missing snap file {}", snap_file.path().display()));
         }
@@ -540,173 +540,8 @@ impl PeerStorage {
     }
 }
 
-/// Name prefix for the self-generated snapshot file.
-pub const SNAP_GEN_PREFIX: &'static str = "gen";
-/// Name prefix for the received snapshot file.
-pub const SNAP_REV_PREFIX: &'static str = "rev";
-
-/// A structure represents the snapshot file.
-///
-/// All changes to the file will be written to `tmp_file` first, and use
-/// `save` method to make them persistent. When saving a crc32 checksum
-/// will be appended to the file end automatically.
-pub struct SnapFile {
-    file: PathBuf,
-    delete_when_drop: bool,
-    digest: Digest,
-    tmp_file: Option<(File, PathBuf)>,
-}
-
-impl SnapFile {
-    pub fn from_snap<T: Into<PathBuf>>(snap_dir: T,
-                                       snap: &Snapshot,
-                                       prefix: &str)
-                                       -> io::Result<SnapFile> {
-        let index = snap.get_metadata().get_index();
-        let term = snap.get_metadata().get_term();
-
-        let mut snap_data = RaftSnapshotData::new();
-        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
-            return Err(io::Error::new(ErrorKind::Other, e));
-        }
-        SnapFile::new(snap_dir,
-                      prefix,
-                      snap_data.get_region().get_id(),
-                      term,
-                      index)
-    }
-
-    pub fn new<T: Into<PathBuf>>(snap_dir: T,
-                                 prefix: &str,
-                                 region_id: u64,
-                                 term: u64,
-                                 idx: u64)
-                                 -> io::Result<SnapFile> {
-        let mut file_path = snap_dir.into();
-        if !file_path.exists() {
-            try!(fs::create_dir_all(file_path.as_path()));
-        }
-        let file_name = format!("{}_{}_{}_{}.snap", prefix, region_id, term, idx);
-        file_path.push(&file_name);
-
-        let mut f = SnapFile {
-            file: file_path,
-            delete_when_drop: false,
-            digest: Digest::new(crc32::IEEE),
-            tmp_file: None,
-        };
-
-        if f.exists() {
-            return Ok(f);
-        }
-
-        let mut tmp_p = f.file.clone();
-        tmp_p.set_file_name(format!("{}.tmp", file_name));
-        let tmp_f = try!(OpenOptions::new().write(true).create_new(true).open(tmp_p.as_path()));
-        f.tmp_file = Some((tmp_f, tmp_p));
-
-        Ok(f)
-    }
-
-    pub fn delete_when_drop(&mut self) {
-        self.delete_when_drop = true;
-    }
-
-    pub fn meta(&self) -> io::Result<Metadata> {
-        self.file.metadata()
-    }
-
-    /// Validate whether current file is broken.
-    pub fn validate(&self) -> io::Result<()> {
-        let mut reader = try!(File::open(self.path()));
-        let mut digest = Digest::new(crc32::IEEE);
-        let len = try!(reader.metadata()).len();
-        if len < 4 {
-            return Err(io::Error::new(ErrorKind::InvalidInput, format!("file length {} < 4", len)));
-        }
-        let to_read = len as usize - 4;
-        let mut total_read = 0;
-        let mut buffer = vec![0; 4098];
-        loop {
-            let read = try!(reader.read(&mut buffer));
-            if total_read + read >= to_read {
-                digest.write(&buffer[..to_read - total_read]);
-                try!(reader.seek(SeekFrom::End(-4)));
-                break;
-            }
-            digest.write(&buffer);
-            total_read += read;
-        }
-        let sum = try!(reader.read_u32::<BigEndian>());
-        if sum != digest.sum32() {
-            return Err(io::Error::new(ErrorKind::InvalidData,
-                                      format!("crc not correct: {} != {}", sum, digest.sum32())));
-        }
-        Ok(())
-    }
-
-    pub fn exists(&self) -> bool {
-        self.file.exists() && self.file.is_file()
-    }
-
-    pub fn delete(&self) -> io::Result<()> {
-        fs::remove_file(self.path())
-    }
-
-    /// Use the content in temporary files replace the target file.
-    ///
-    /// Please note that this method can only be called once.
-    pub fn save(&mut self) -> io::Result<()> {
-        if let Some((mut f, path)) = self.tmp_file.take() {
-            try!(f.write_u32::<BigEndian>(self.digest.sum32()));
-            try!(f.flush());
-            try!(fs::rename(path, self.file.as_path()));
-        }
-        Ok(())
-    }
-
-    pub fn path(&self) -> &Path {
-        self.file.as_path()
-    }
-}
-
-impl Write for SnapFile {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.tmp_file.is_none() {
-            return Ok(0);
-        }
-        let written = try!(self.tmp_file.as_mut().unwrap().0.write(buf));
-        self.digest.write(&buf[..written]);
-        Ok(written)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        if self.tmp_file.is_none() {
-            return Ok(());
-        }
-        self.tmp_file.as_mut().unwrap().0.flush()
-    }
-}
-
-impl Drop for SnapFile {
-    fn drop(&mut self) {
-        if let Some((_, path)) = self.tmp_file.take() {
-            if let Err(e) = fs::remove_file(path.as_path()) {
-                warn!("failed to delete temporary file {}: {:?}",
-                      path.display(),
-                      e);
-            }
-        }
-        if self.delete_when_drop {
-            if let Err(e) = self.delete() {
-                warn!("failed to delete file {}: {:?}", self.path().display(), e);
-            }
-        }
-    }
-}
-
 fn build_snap_file(f: &mut SnapFile,
-                   snap: &RocksDbSnapshot,
+                   snap: &DbSnapshot,
                    region_id: u64,
                    ranges: Ranges)
                    -> raft::Result<()> {
@@ -743,16 +578,14 @@ fn build_snap_file(f: &mut SnapFile,
     Ok(())
 }
 
-pub fn do_snapshot(snap_dir: &Path,
-                   snap: &RocksDbSnapshot,
-                   region_id: u64,
-                   ranges: Ranges,
-                   applied_idx: u64,
-                   term: u64)
+pub fn do_snapshot(mgr: SnapManager,
+                   snap: &DbSnapshot,
+                   key: SnapKey,
+                   ranges: Ranges)
                    -> raft::Result<Snapshot> {
-    debug!("begin to generate a snapshot for region {}", region_id);
+    debug!("begin to generate a snapshot for region {}", key.region_id);
 
-    let region: metapb::Region = try!(snap.get_msg(&keys::region_info_key(region_id))
+    let region: metapb::Region = try!(snap.get_msg(&keys::region_info_key(key.region_id))
         .and_then(|res| {
             match res {
                 None => Err(box_err!("could not find region info")),
@@ -763,8 +596,8 @@ pub fn do_snapshot(snap_dir: &Path,
     let mut snapshot = Snapshot::new();
 
     // Set snapshot metadata.
-    snapshot.mut_metadata().set_index(applied_idx);
-    snapshot.mut_metadata().set_term(term);
+    snapshot.mut_metadata().set_index(key.idx);
+    snapshot.mut_metadata().set_term(key.term);
 
     let mut conf_state = ConfState::new();
     for p in region.get_peers() {
@@ -777,21 +610,20 @@ pub fn do_snapshot(snap_dir: &Path,
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(region);
 
-    let mut snap_file =
-        try!(SnapFile::new(snap_dir, SNAP_GEN_PREFIX, region_id, term, applied_idx));
+    let mut snap_file = try!(mgr.rl().get_snap_file(&key, true));
     if snap_file.exists() {
         if let Err(e) = snap_file.validate() {
             error!("file {} is invalid, will regenerate: {:?}",
                    snap_file.path().display(),
                    e);
-            try!(snap_file.delete());
-            snap_file =
-                try!(SnapFile::new(snap_dir, SNAP_GEN_PREFIX, region_id, term, applied_idx));
-            try!(build_snap_file(&mut snap_file, snap, region_id, ranges));
+            try!(snap_file.try_delete());
+            try!(snap_file.init());
+            try!(build_snap_file(&mut snap_file, snap, key.region_id, ranges));
         }
     } else {
-        try!(build_snap_file(&mut snap_file, snap, region_id, ranges));
+        try!(build_snap_file(&mut snap_file, snap, key.region_id, ranges));
     }
+
     let len = try!(snap_file.meta()).len();
     snap_data.set_file_size(len);
 
@@ -821,19 +653,22 @@ pub fn save_last_index<T: Mutable>(w: &T, region_id: u64, last_index: u64) -> Re
     w.put_u64(&keys::raft_last_index_key(region_id), last_index)
 }
 
+#[derive(Clone)]
 pub struct RaftStorage {
-    store: RwLock<PeerStorage>,
+    store: Arc<RwLock<PeerStorage>>,
 }
 
 impl RaftStorage {
     pub fn new(store: PeerStorage) -> RaftStorage {
-        RaftStorage { store: RwLock::new(store) }
+        RaftStorage { store: Arc::new(RwLock::new(store)) }
     }
 
+    #[inline]
     pub fn rl(&self) -> RwLockReadGuard<PeerStorage> {
         self.store.rl()
     }
 
+    #[inline]
     pub fn wl(&self) -> RwLockWriteGuard<PeerStorage> {
         self.store.wl()
     }
@@ -867,33 +702,29 @@ impl Storage for RaftStorage {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::sync::*;
     use std::io;
     use std::fs::File;
-    use std::path::Path;
     use rocksdb::*;
     use kvproto::raftpb::{Entry, ConfState, Snapshot};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::bootstrap;
+    use raftstore::store::*;
     use util::codec::number::NumberEncoder;
+    use util::HandyRwLock;
 
-    fn new_storage(snap_dir: &TempDir, path: &TempDir) -> RaftStorage {
+    fn new_storage(mgr: SnapManager, path: &TempDir) -> RaftStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
         let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
-        RaftStorage::new(PeerStorage::new(db,
-                                          &region,
-                                          snap_dir.path().to_str().unwrap().to_owned())
-            .unwrap())
+        RaftStorage::new(PeerStorage::new(db, &region, mgr).unwrap())
     }
 
-    fn new_storage_from_ents(snap_dir: &TempDir, path: &TempDir, ents: &[Entry]) -> RaftStorage {
-        let store = new_storage(snap_dir, path);
+    fn new_storage_from_ents(mgr: SnapManager, path: &TempDir, ents: &[Entry]) -> RaftStorage {
+        let store = new_storage(mgr, path);
         let wb = WriteBatch::new();
         let li = store.rl().append(&wb, 0, &ents[1..]).expect("");
         store.rl().engine.write(wb).expect("");
@@ -931,8 +762,8 @@ mod test {
         ];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let snap_dir = TempDir::new("snap_dir").unwrap();
-            let store = new_storage_from_ents(&snap_dir, &td, &ents);
+            let mgr = new_snap_mgr("");
+            let store = new_storage_from_ents(mgr, &td, &ents);
             let t = store.rl().term(idx);
             if wterm != t {
                 panic!("#{}: expect res {:?}, got {:?}", i, wterm, t);
@@ -966,8 +797,8 @@ mod test {
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let snap_dir = TempDir::new("snap_dir").unwrap();
-            let store = new_storage_from_ents(&snap_dir, &td, &ents);
+            let mgr = new_snap_mgr("");
+            let store = new_storage_from_ents(mgr, &td, &ents);
             let e = store.rl().entries(lo, hi, maxsize);
             if e != wentries {
                 panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
@@ -989,8 +820,8 @@ mod test {
         ];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let snap_dir = TempDir::new("snap_dir").unwrap();
-            let store = new_storage_from_ents(&snap_dir, &td, &ents);
+            let mgr = new_snap_mgr("");
+            let store = new_storage_from_ents(mgr, &td, &ents);
             let wb = WriteBatch::new();
             let res = store.rl().compact(&wb, idx);
             // TODO check exact error type after refactoring error.
@@ -1003,14 +834,13 @@ mod test {
         }
     }
 
-    fn get_snap(s: &RaftStorage, snap_dir: &Path) -> Snapshot {
-        let engine = s.rl().get_engine();
-        let raw_snap = engine.snapshot();
-        let region_id = s.rl().get_region_id();
+    fn get_snap(s: &RaftStorage, mgr: SnapManager) -> Snapshot {
+        let raw_snap = s.rl().raw_snapshot();
         let key_ranges = s.rl().region_key_ranges();
         let applied_id = s.rl().load_applied_index(&raw_snap).unwrap();
         let term = s.rl().term(applied_id).unwrap();
-        do_snapshot(snap_dir, &raw_snap, region_id, key_ranges, applied_id, term).unwrap()
+        let key = SnapKey::new(s.rl().get_region_id(), term, applied_id);
+        do_snapshot(mgr, &raw_snap, key, key_ranges).unwrap()
     }
 
     #[test]
@@ -1021,7 +851,8 @@ mod test {
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let s = new_storage_from_ents(&snap_dir, &td, &ents);
+        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
+        let s = new_storage_from_ents(mgr, &td, &ents);
         let snap = s.wl().snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
@@ -1032,7 +863,7 @@ mod test {
         assert_eq!(s.rl().snap_state, SnapState::Generating);
 
         let snap_dir = TempDir::new("snap").unwrap();
-        let snap = get_snap(&s, snap_dir.path());
+        let snap = get_snap(&s, new_snap_mgr(snap_dir.path().to_str().unwrap()));
         assert_eq!(snap.get_metadata().get_index(), 5);
         assert_eq!(snap.get_metadata().get_term(), 5);
         assert!(!snap.get_data().is_empty());
@@ -1081,7 +912,8 @@ mod test {
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
             let snap_dir = TempDir::new("snap_dir").unwrap();
-            let store = new_storage_from_ents(&snap_dir, &td, &ents);
+            let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
+            let store = new_storage_from_ents(mgr, &td, &ents);
             let mut li = store.rl().last_index();
             let wb = WriteBatch::new();
             li = store.wl().append(&wb, li, &entries).expect("");
@@ -1102,20 +934,22 @@ mod test {
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let s1 = new_storage_from_ents(&snap_dir, &td1, &ents);
-        let snap1 = get_snap(&s1, snap_dir.path());
+        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
+        let s1 = new_storage_from_ents(mgr.clone(), &td1, &ents);
+        let snap1 = get_snap(&s1, mgr.clone());
         assert_eq!(s1.rl().truncated_state.get_index(), 3);
         assert_eq!(s1.rl().truncated_state.get_term(), 3);
 
-        let source_snap = SnapFile::from_snap(snap_dir.path(), &snap1, SNAP_GEN_PREFIX).unwrap();
-        let mut dst_snap = SnapFile::from_snap(snap_dir.path(), &snap1, SNAP_REV_PREFIX).unwrap();
+        let key = SnapKey::from_snap(&snap1).unwrap();
+        let source_snap = mgr.rl().get_snap_file(&key, true).unwrap();
+        let mut dst_snap = mgr.rl().get_snap_file(&key, false).unwrap();
         let mut f = File::open(source_snap.path()).unwrap();
         dst_snap.encode_u64(0).unwrap();
         io::copy(&mut f, &mut dst_snap).unwrap();
         dst_snap.save().unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
-        let s2 = new_storage(&snap_dir, &td2);
+        let s2 = new_storage(mgr.clone(), &td2);
         assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
         let wb = WriteBatch::new();
         let res = s2.wl().apply_snapshot(&wb, &snap1).unwrap();
