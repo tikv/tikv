@@ -1022,7 +1022,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut response = try!(match cmd_type {
             StatusCmdType::RegionLeader => self.execute_region_leader(request),
             StatusCmdType::RegionDetail => self.execute_region_detail(request),
-            StatusCmdType::StoreStats => Err(box_err!("unsupported store statistic now")),
             StatusCmdType::InvalidStatus => Err(box_err!("invalid status command!")),
         });
         response.set_cmd_type(cmd_type);
