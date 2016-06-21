@@ -43,6 +43,7 @@ use super::engine::{Snapshot, Peekable, Iterable, Mutable};
 
 pub struct PendingCmd {
     pub uuid: Uuid,
+    pub term: u64,
     pub cb: Callback,
 }
 
@@ -92,10 +93,16 @@ impl PendingCmdQueue {
         }
     }
 
-    fn pop_normal(&mut self) -> Option<PendingCmd> {
-        let cmd = self.normals.pop_front();
-        self.remove(&cmd);
-        cmd
+    fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
+        self.normals.pop_front().and_then(|cmd| {
+            if cmd.term > term {
+                self.normals.push_front(cmd);
+                return None;
+            }
+            let res = Some(cmd);
+            self.remove(&res);
+            res
+        })
     }
 
     fn append_normal(&mut self, cmd: PendingCmd) {
@@ -104,6 +111,8 @@ impl PendingCmdQueue {
     }
 
     fn take_conf_change(&mut self) -> Option<PendingCmd> {
+        // conf change will not be effected when changing between follower and leader,
+        // so there is no need to check term.
         let cmd = self.conf_change.take();
         self.remove(&cmd);
         cmd
@@ -617,6 +626,7 @@ impl Peer {
 
     fn handle_raft_entry_normal(&mut self, entry: &raftpb::Entry) -> Result<Option<ExecResult>> {
         let index = entry.get_index();
+        let term = entry.get_term();
         let data = entry.get_data();
 
         if data.is_empty() {
@@ -626,7 +636,7 @@ impl Peer {
 
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data));
         // no need to return error here.
-        self.process_raft_cmd(index, cmd).or_else(|e| {
+        self.process_raft_cmd(index, term, cmd).or_else(|e| {
             error!("process raft command at index {} err: {:?}", index, e);
             Ok(None)
         })
@@ -635,12 +645,12 @@ impl Peer {
     fn handle_raft_entry_conf_change(&mut self,
                                      entry: &raftpb::Entry)
                                      -> Result<Option<ExecResult>> {
-
         let index = entry.get_index();
+        let term = entry.get_term();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
-        let res = match self.process_raft_cmd(index, cmd) {
+        let res = match self.process_raft_cmd(index, term, cmd) {
             a @ Ok(Some(_)) => a,
             e => {
                 error!("process raft command at index {} err: {:?}", index, e);
@@ -656,7 +666,7 @@ impl Peer {
         res
     }
 
-    fn find_cb(&mut self, uuid: Uuid, cmd: &RaftCmdRequest) -> Option<Callback> {
+    fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
         if get_change_peer_cmd(cmd).is_some() {
             if let Some(cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
@@ -667,7 +677,7 @@ impl Peer {
             }
             return None;
         }
-        while let Some(head) = self.pending_cmds.pop_normal() {
+        while let Some(head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
                 return Some(head.cb);
             }
@@ -679,14 +689,18 @@ impl Peer {
         None
     }
 
-    fn process_raft_cmd(&mut self, index: u64, cmd: RaftCmdRequest) -> Result<Option<ExecResult>> {
+    fn process_raft_cmd(&mut self,
+                        index: u64,
+                        term: u64,
+                        cmd: RaftCmdRequest)
+                        -> Result<Option<ExecResult>> {
         if index == 0 {
             return Err(box_err!("processing raft command needs a none zero index"));
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
 
-        let cb = self.find_cb(uuid, &cmd);
+        let cb = self.find_cb(uuid, term, &cmd);
 
         let (mut resp, exec_result) = self.apply_raft_cmd(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);

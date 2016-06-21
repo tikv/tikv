@@ -297,7 +297,8 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     // hack: first append will append log, second append will set commit,
     // so only allow first append.
     cluster.add_filter(IsolateRegionStore::new(Some(MessageType::MsgAppend), 1, 2, 2, 1));
-    cluster.add_filter(IsolateRegionStore::new(Some(MessageType::MsgHeartbeatResponse), 1, 1, 1, 0));
+    cluster.add_filter(IsolateRegionStore::new(
+        Some(MessageType::MsgHeartbeatResponse), 1, 1, 1, 0));
     cluster.add_filter(IsolateRegionStore::new(Some(MessageType::MsgHeartbeat), 1, 2, 2, 0));
     cluster.must_put(b"k2", b"v2");
 
