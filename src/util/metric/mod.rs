@@ -99,7 +99,7 @@ impl MetricSink for NonblockUdpMetricSink {
     fn emit(&self, metric: &str) -> io::Result<usize> {
         let t = SlowTimer::from_millis(500);
         let r = self.socket.send_to(metric.as_bytes(), &self.sink_addr);
-        slow_log!(t, "send metric too slow takes {:?}", t.elapsed());
+        slow_log!(t, "send metric too slow, takes {:?}", t.elapsed());
         r
     }
 }
