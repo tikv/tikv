@@ -132,7 +132,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let end_point = EndPointHost::new(self.store.engine());
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
-        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone());
+        let ch = self.get_sendch();
+        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
 
         try!(event_loop.run(self));
@@ -542,6 +543,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             Msg::ResolveResult { store_id, sock_addr, data } => {
                 self.on_resolve_result(event_loop, store_id, sock_addr, data)
             }
+            Msg::CloseConn { token } => self.remove_conn(event_loop, token),
         }
     }
 
