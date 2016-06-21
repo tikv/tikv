@@ -161,6 +161,9 @@ pub enum Msg {
         sock_addr: Result<SocketAddr>,
         data: ConnData,
     },
+    CloseConn {
+        token: Token,
+    },
 }
 
 #[derive(Debug)]
