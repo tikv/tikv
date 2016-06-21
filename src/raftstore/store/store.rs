@@ -858,7 +858,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         metric_gauge!("raftstore.snapshot.sending",
                       snap_stats.sending_count as u64);
         metric_gauge!("raftstore.snapshot.receiving",
-                      snap_stats.sending_count as u64);
+                      snap_stats.receiving_count as u64);
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("failed to notify pd: {}", e);
