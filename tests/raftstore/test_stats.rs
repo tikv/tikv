@@ -120,8 +120,7 @@ fn test_server_store_snap_stats() {
     cluster.hook_transport(DelaySnapshot::new(Duration::from_millis(50)));
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
-    let snap_detected = snapshot_detected(&pd_client);
-    assert!(snap_detected, "must detect snapshot sending/receiving");
+    must_detect_snap(&pd_client);
 
     cluster.reset_transport_hooks();
     // wait snapshot finish.
@@ -131,19 +130,31 @@ fn test_server_store_snap_stats() {
     pd_client.must_remove_peer(r1, new_peer(2, 2));
     cluster.must_put(b"k2", b"v2");
 
-    let snap_detected = snapshot_detected(&pd_client);
-    assert!(!snap_detected, "must not detect snapshot sending/receiving");
+    must_not_detect_snap(&pd_client);
 }
 
-fn snapshot_detected(pd_client: &Arc<TestPdClient>) -> bool {
+fn must_detect_snap(pd_client: &Arc<TestPdClient>) {
     for _ in 0..200 {
         sleep_ms(10);
 
         let stats = pd_client.get_store_stats(1).unwrap();
         if stats.get_snap_sending_count() > 0 || stats.get_snap_receiving_count() > 0 {
-            return true;
+            return;
         }
     }
 
-    false
+    panic!("must detect snapshot sending/receiving");
+}
+
+fn must_not_detect_snap(pd_client: &Arc<TestPdClient>) {
+    for _ in 0..200 {
+        sleep_ms(10);
+
+        let stats = pd_client.get_store_stats(1).unwrap();
+        if stats.get_snap_sending_count() == 0 && stats.get_snap_receiving_count() == 0 {
+            return;
+        }
+    }
+
+    panic!("must not detect snapshot sending/receiving");
 }
