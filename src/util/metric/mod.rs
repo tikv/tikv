@@ -22,6 +22,7 @@ use cadence::{MetricSink, MetricResult, ErrorKind};
 
 #[macro_use]
 pub mod macros;
+use util::SlowTimer;
 
 static mut CLIENT: Option<*const Metric> = None;
 // IS_INITIALIZED indicates the state of CLIENT,
@@ -96,6 +97,9 @@ impl NonblockUdpMetricSink {
 
 impl MetricSink for NonblockUdpMetricSink {
     fn emit(&self, metric: &str) -> io::Result<usize> {
-        self.socket.send_to(metric.as_bytes(), &self.sink_addr)
+        let t = SlowTimer::from_millis(500);
+        let r = self.socket.send_to(metric.as_bytes(), &self.sink_addr);
+        slow_log!(t, "send metric too slow takes {:?}", t.elapsed());
+        r
     }
 }
