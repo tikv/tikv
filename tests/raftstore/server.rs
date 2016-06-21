@@ -250,9 +250,14 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>) {
+    fn add_filter(&self, node_id: u64, filters: Box<Filter>) {
         let trans = self.sim_trans.get(&node_id).unwrap();
-        trans.wl().set_filters(filters);
+        trans.wl().add_filters(filters);
+    }
+
+    fn clear_filter(&self, node_id: u64) {
+        let trans = self.sim_trans.get(&node_id).unwrap();
+        trans.wl().clear_filter();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<StoreSendCh> {

@@ -344,7 +344,10 @@ impl Peer {
             return cmd.cb.call_box((err_resp,));
         }
 
-        debug!("propose command with uuid {:?}", cmd.uuid);
+        debug!("[{}] {} propose command with uuid {:?}",
+               self.region_id,
+               self.peer_id(),
+               cmd.uuid);
         metric_incr!("raftstore.propose");
 
         if let Err(e) = self.check_epoch(&req) {
@@ -395,6 +398,10 @@ impl Peer {
         let leader = self.get_peer_from_cache(self.leader_id());
         let not_leader = Error::NotLeader(self.region_id, leader);
         let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
+        warn!("[{}] {:?} {} is stale, skip",
+              self.region_id,
+              self.peer,
+              cmd.uuid);
         if let Err(e) = cmd.cb.call_box((resp,)) {
             error!("failed to clean stale callback of {}: {:?}", cmd.uuid, e);
         }
@@ -686,7 +693,10 @@ impl Peer {
             (cmd_resp::new_error(e), None)
         });
 
-        debug!("command with uuid {:?} is applied", uuid);
+        debug!("[{}] {} command with uuid {:?} is applied",
+               self.region_id,
+               self.peer_id(),
+               uuid);
 
         if cb.is_none() {
             return Ok(exec_result);
