@@ -544,7 +544,7 @@ impl<'a> SelectContext<'a> {
         }
         if is_point(&range) {
             let row_value = try!(self.snap.get(range.get_start().to_vec(), mvcc::default_cols()));
-            if mvcc::row_value_empty(&row_value) {
+            if mvcc::is_row_value_empty(&row_value) {
                 return Ok(rows);
             }
             try!(self.core.load_row_with_key(&self.snap, range.get_start(), &mut rows));

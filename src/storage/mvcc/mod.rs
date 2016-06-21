@@ -61,12 +61,12 @@ pub fn default_cols() -> Vec<Vec<u8>> {
     vec![vec![]]
 }
 
-pub fn row_value_empty(row: &Row) -> bool {
+pub fn is_row_value_empty(row: &Row) -> bool {
     row.get_columns().len() == 0
 }
 
 pub fn default_row_value(row: &Row) -> Option<Vec<u8>> {
-    if row_value_empty(row) {
+    if is_row_value_empty(row) {
         return None;
     }
     Some(row.get_columns()[0].get_value().to_owned())
