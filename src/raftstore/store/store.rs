@@ -37,14 +37,13 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::Worker;
 use util::get_disk_stat;
-use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
-                    CompactRunner, PdRunner, PdTask};
+use super::worker::{SplitCheckRunner, SplitCheckTask, CompactTask, CompactRunner, PdRunner, PdTask};
 use super::{util, SendCh, Msg, Tick, SnapManager, SnapKey};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::{SnapState, ApplySnapResult};
+use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -67,7 +66,6 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     region_ranges: BTreeMap<Key, u64>,
 
     split_check_worker: Worker<SplitCheckTask>,
-    snap_worker: Worker<SnapTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
 
@@ -118,7 +116,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker"),
-            snap_worker: Worker::new("snapshot worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
@@ -160,7 +157,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(self.prepare());
 
-        try!(self.snap_mgr.wl().try_recover());
+        let ch = self.get_sendch();
+        box_try!(self.snap_mgr.wl().start(ch));
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
@@ -172,8 +170,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_max_size,
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
-
-        box_try!(self.snap_worker.start(SnapRunner::new(self.snap_mgr.clone())));
 
         box_try!(self.compact_worker.start(CompactRunner));
 
@@ -221,17 +217,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for (region_id, peer) in &mut self.region_peers {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(*region_id);
-            // ALERT!!! patern matching won't release lock here.
-            if peer.is_leader() && SnapState::Pending == peer.storage.rl().snap_state {
-                debug!("handling snapshot for {}", region_id);
-                let task = SnapTask::new(peer.storage.clone());
-                debug!("task generated");
-                peer.storage.wl().snap_state = SnapState::Generating;
-                if let Err(e) = self.snap_worker.schedule(task) {
-                    error!("failed to schedule snap task {}", e);
-                    peer.storage.wl().snap_state = SnapState::Failed;
-                }
-            }
         }
 
         self.register_raft_base_tick(event_loop);
@@ -888,6 +873,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.raft_group.report_unreachable(to_peer_id);
         }
     }
+
+    fn on_snap_generated(&mut self, key: SnapKey) {
+        if let Some(peer) = self.region_peers.get_mut(&key.region_id) {
+            if peer.is_leader() {
+                return;
+            }
+        }
+        self.snap_mgr.wl().deregister(&key, true);
+    }
 }
 
 fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
@@ -954,6 +948,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
             }
+            Msg::SnapshotGenerated { key } => {
+                self.on_snap_generated(key);
+            }
         }
         slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());
     }
@@ -979,8 +976,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 error!("failed to stop split scan thread: {:?}!!!", e);
             }
 
-            if let Err(e) = self.snap_worker.stop() {
-                error!("failed to stop snap thread: {:?}!!!", e);
+            if let Err(e) = self.snap_mgr.wl().stop() {
+                error!("failed to stop snap manager: {:?}", e);
             }
 
             if let Err(e) = self.compact_worker.stop() {

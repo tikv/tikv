@@ -33,5 +33,5 @@ pub use self::transport::Transport;
 pub use self::peer::Peer;
 pub use self::bootstrap::{bootstrap_store, bootstrap_region, write_region, clear_region};
 pub use self::engine::{Peekable, Iterable, Mutable};
-pub use self::peer_storage::{PeerStorage, do_snapshot, SnapState, RaftStorage};
-pub use self::snap::{SnapFile, SnapKey, SnapManager, new_snap_mgr};
+pub use self::peer_storage::{PeerStorage, do_snapshot, Range, RaftStorage};
+pub use self::snap::{SnapFile, SnapKey, SnapState, SnapManager, new_snap_mgr, GenericSendCh};

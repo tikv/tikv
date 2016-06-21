@@ -18,6 +18,7 @@ use std::time::Duration;
 use mio;
 
 use raftstore::{Result, send_msg, Error};
+use raftstore::store::SnapKey;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
@@ -62,6 +63,10 @@ pub enum Msg {
         region_id: u64,
         to_peer_id: u64,
     },
+
+    SnapshotGenerated {
+        key: SnapKey,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -84,6 +89,7 @@ impl fmt::Debug for Msg {
                        to_peer_id,
                        region_id)
             }
+            Msg::SnapshotGenerated { ref key } => write!(fmt, "snapshot {} generated", key),
         }
     }
 }
