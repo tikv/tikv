@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -19,6 +20,7 @@ use super::server::new_server_cluster;
 use super::util::*;
 use tikv::pd::PdClient;
 use super::pd::TestPdClient;
+use super::transport_simulate::DelaySnapshot;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
@@ -112,32 +114,30 @@ fn test_server_store_snap_stats() {
 
     let r1 = cluster.run_conf_change();
 
-    // at least 4m data
-    for i in 0..2 * 1024 {
-        let key = format!("{:01024}", i);
-        let value = format!("{:01024}", i);
-        cluster.must_put(key.as_bytes(), value.as_bytes());
-    }
+    cluster.must_put(b"k1", b"v1");
 
+    // delay snapshot sending, so that we can detect this.
+    cluster.hook_transport(DelaySnapshot::new(Duration::from_millis(50)));
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
     let snap_detected = snapshot_detected(&pd_client);
     assert!(snap_detected, "must detect snapshot sending/receiving");
 
+    cluster.reset_transport_hooks();
+    // wait snapshot finish.
+    sleep_ms(100);
+
     // remove the peer so we can't do any snapshot now.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
-    cluster.must_put(b"k1", b"v1");
-
-    // wait time to guarantee store reporting new stats.
-    sleep_ms(500);
+    cluster.must_put(b"k2", b"v2");
 
     let snap_detected = snapshot_detected(&pd_client);
     assert!(!snap_detected, "must not detect snapshot sending/receiving");
 }
 
 fn snapshot_detected(pd_client: &Arc<TestPdClient>) -> bool {
-    for _ in 0..100 {
-        sleep_ms(20);
+    for _ in 0..200 {
+        sleep_ms(10);
 
         let stats = pd_client.get_store_stats(1).unwrap();
         if stats.get_snap_sending_count() > 0 || stats.get_snap_receiving_count() > 0 {
