@@ -18,8 +18,7 @@ use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use super::transport_simulate::{Delay, DropPacket};
-use super::transport_simulate::IsolateRegionStore;
+use super::transport_simulate::*;
 
 use rand;
 use rand::Rng;
@@ -271,16 +270,19 @@ fn test_multi_server_random_restart() {
 }
 
 fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.store_cfg.raft_election_timeout_ticks = 50;
     // We use three nodes([1, 2, 3]) for this test.
     cluster.run();
+
+    sleep_ms(500);
 
     // guarantee node 1 is leader
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k0", b"v0");
     assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
 
-    // isolate node 3 for region 1.
-    cluster.add_filter(IsolateRegionStore::new(Some(MessageType::MsgAppend), 1, 3, 3, 0));
+    // So node 3 won't replicate any message of the region but still can vote.
+    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
     cluster.must_put(b"k1", b"v1");
 
     // node 1 and node 2 must have k2, but node 3 must not.
@@ -293,13 +295,26 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     must_get_none(&engine3, b"k1");
 
     // now only 1 and 2 can step to leader.
-    cluster.add_filter(IsolateRegionStore::new(Some(MessageType::MsgAppend), 1, 1, 2, 0));
+
     // hack: first append will append log, second append will set commit,
-    // so only allow first append.
-    cluster.add_filter(IsolateRegionStore::new(Some(MessageType::MsgAppend), 1, 2, 2, 1));
-    cluster.add_filter(IsolateRegionStore::new(
-        Some(MessageType::MsgHeartbeatResponse), 1, 1, 1, 0));
-    cluster.add_filter(IsolateRegionStore::new(Some(MessageType::MsgHeartbeat), 1, 2, 2, 0));
+    // So only allowing first append to make 2 have uncommitted entries.
+    cluster.add_filter(IsolateRegionStore::new(1, 2)
+        .msg_type(MessageType::MsgAppend)
+        .direction(Direction::Recv)
+        .allow(1));
+    // Make 2 have no way to know the uncommitted entries can be applied when it becomes leader.
+    cluster.add_filter(IsolateRegionStore::new(1, 1)
+        .msg_type(MessageType::MsgHeartbeatResponse)
+        .direction(Direction::Send));
+    // Make 2's msg won't be replicated when it becomes leader,
+    // so the uncommitted entries won't be applied immediatly.
+    cluster.add_filter(IsolateRegionStore::new(1, 1)
+        .msg_type(MessageType::MsgAppend)
+        .direction(Direction::Recv));
+    // Make 2 have no way to know the uncommitted entries can be applied when it's still follower.
+    cluster.add_filter(IsolateRegionStore::new(1, 2)
+        .msg_type(MessageType::MsgHeartbeat)
+        .direction(Direction::Recv));
     cluster.must_put(b"k2", b"v2");
 
     // 1 must commit, but 2 is not.
@@ -314,13 +329,6 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     let mut put = new_request(region.get_id(), region.get_region_epoch().clone(), reqs);
     debug!("requesting: {:?}", put);
     put.mut_header().set_peer(new_peer(2, 2));
-    let resp = cluster.call_command(put, Duration::from_secs(3));
-    assert!(resp.is_err());
-
-    let reqs = vec![new_put_cmd(b"k4", b"v4")];
-    let mut put = new_request(region.get_id(), region.get_region_epoch().clone(), reqs);
-    debug!("requesting: {:?}", put);
-    put.mut_header().set_peer(new_peer(2, 2));
     cluster.clear_filter();
     let resp = cluster.call_command(put, Duration::from_secs(5)).unwrap();
     assert!(!resp.get_header().has_error(), format!("{:?}", resp));
@@ -328,7 +336,6 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     for i in 1..4 {
         must_get_equal(&cluster.get_engine(i), b"k2", b"v2");
         must_get_equal(&cluster.get_engine(i), b"k3", b"v3");
-        must_get_equal(&cluster.get_engine(i), b"k4", b"v4");
     }
 }
 

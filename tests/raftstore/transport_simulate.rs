@@ -220,17 +220,37 @@ impl FilterFactory for Isolate {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum Direction {
+    Recv,
+    Send,
+    Both,
+}
+
+impl Direction {
+    pub fn is_recv(&self) -> bool {
+        match *self {
+            Direction::Recv | Direction::Both => true,
+            Direction::Send => false,
+        }
+    }
+
+    pub fn is_send(&self) -> bool {
+        match *self {
+            Direction::Send | Direction::Both => true,
+            Direction::Recv => false,
+        }
+    }
+}
+
 /// Drop specified messages for the store with special region.
 ///
 /// If `msg_type` is None, all message will be filtered.
-/// If direction is 1, only output messages will be fitered;
-/// if direction is 2, only input messages will be filtered;
-/// if direction is 3, both input and output messages will be filtered.
 pub struct FilterRegionPacket {
     region_id: u64,
     store_id: u64,
     drop: AtomicBool,
-    direction: u8,
+    direction: Direction,
     allow: AtomicUsize,
     msg_type: Option<MessageType>,
 }
@@ -243,8 +263,8 @@ impl Filter for FilterRegionPacket {
 
         let mut drop =
             self.region_id == region_id &&
-            ((self.direction & 1) > 0 && self.store_id == from_store_id ||
-             (self.direction & 2) > 0 && self.store_id == to_store_id) &&
+            (self.direction.is_send() && self.store_id == from_store_id ||
+             self.direction.is_recv() && self.store_id == to_store_id) &&
             self.msg_type.as_ref().map_or(true, |t| t == &m.get_message().get_msg_type());
         if drop && self.allow.load(Ordering::SeqCst) > 0 {
             drop = false;
@@ -266,25 +286,35 @@ impl Filter for FilterRegionPacket {
 pub struct IsolateRegionStore {
     region_id: u64,
     store_id: u64,
-    direction: u8,
+    direction: Direction,
     allow: usize,
     msg_type: Option<MessageType>,
 }
 
 impl IsolateRegionStore {
-    pub fn new(msg_type: Option<MessageType>,
-               region_id: u64,
-               store_id: u64,
-               direction: u8,
-               allow: usize)
-               -> IsolateRegionStore {
+    pub fn new(region_id: u64, store_id: u64) -> IsolateRegionStore {
         IsolateRegionStore {
             region_id: region_id,
             store_id: store_id,
-            direction: direction,
-            msg_type: msg_type,
-            allow: allow,
+            direction: Direction::Both,
+            msg_type: None,
+            allow: 0,
         }
+    }
+
+    pub fn direction(mut self, direction: Direction) -> IsolateRegionStore {
+        self.direction = direction;
+        self
+    }
+
+    pub fn msg_type(mut self, m_type: MessageType) -> IsolateRegionStore {
+        self.msg_type = Some(m_type);
+        self
+    }
+
+    pub fn allow(mut self, number: usize) -> IsolateRegionStore {
+        self.allow = number;
+        self
     }
 }
 

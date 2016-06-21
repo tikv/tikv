@@ -259,7 +259,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
     // isolate node 3 for region 1.
-    cluster.add_filter(IsolateRegionStore::new(None, 1, 3, 3, 0));
+    cluster.add_filter(IsolateRegionStore::new(1, 3));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
@@ -314,7 +314,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
     // isolate node 3 for region 1.
-    cluster.add_filter(IsolateRegionStore::new(None, 1, 3, 3, 0));
+    cluster.add_filter(IsolateRegionStore::new(1, 3));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
