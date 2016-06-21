@@ -303,16 +303,8 @@ impl SnapManagerCore {
     }
 
     pub fn stats(&self) -> SnapStats {
-        let mut sending_count: usize = 0;
-        let mut receiving_count: usize = 0;
-
-        for entry in self.registry.values() {
-            if entry.is_sending {
-                sending_count += 1;
-            } else {
-                receiving_count += 1;
-            }
-        }
+        let sending_count = self.registry.values().filter(|v| v.is_sending).count();
+        let receiving_count = self.registry.len() - sending_count;
 
         SnapStats {
             sending_count: sending_count,
