@@ -849,6 +849,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_available(available);
         stats.set_region_count(self.region_peers.len() as u32);
 
+        let snap_stats = self.snap_mgr.rl().stats();
+        stats.set_snap_sending_count(snap_stats.sending_count as u32);
+        stats.set_snap_receiving_count(snap_stats.receiving_count as u32);
+
         metric_gauge!("raftstore.capacity", capacity);
         metric_gauge!("raftstore.available", available);
 

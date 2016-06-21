@@ -214,6 +214,12 @@ impl SnapEntry {
     }
 }
 
+/// `SnapStats` is for snapshot statistics.
+pub struct SnapStats {
+    pub sending_count: usize,
+    pub receiving_count: usize,
+}
+
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManagerCore {
     // directory to store snapfile.
@@ -293,6 +299,16 @@ impl SnapManagerCore {
             if let Ok(f) = self.get_snap_file(key, is_sending) {
                 f.delete();
             }
+        }
+    }
+
+    pub fn stats(&self) -> SnapStats {
+        let sending_count = self.registry.values().filter(|v| v.is_sending).count();
+        let receiving_count = self.registry.len() - sending_count;
+
+        SnapStats {
+            sending_count: sending_count,
+            receiving_count: receiving_count,
         }
     }
 }
