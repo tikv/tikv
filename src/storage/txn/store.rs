@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use kvproto::kvpb::{Row, RowValue, Mutation};
+use kvproto::kvpb::{Row, Mutation};
 use kvproto::kvrpcpb::Context;
 use storage::Key;
 use storage::{Engine, Snapshot, Cursor};
@@ -35,44 +35,47 @@ impl TxnStore {
         }
     }
 
-    pub fn get(&self, ctx: Context, row: Row, ts: u64) -> Result<RowValue> {
+    pub fn get(&self, ctx: Context, row: Vec<u8>, cols: Vec<Vec<u8>>, ts: u64) -> Result<Row> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
         let snap_store = SnapshotStore::new(snapshot.as_ref(), ts);
-        snap_store.get(row)
+        snap_store.get(row, cols)
     }
 
     pub fn batch_get(&self,
                      ctx: Context,
-                     rows: Vec<Row>,
+                     rows: Vec<Vec<u8>>,
+                     cols: Vec<Vec<Vec<u8>>>,
                      ts: u64)
-                     -> Result<Vec<Result<RowValue>>> {
+                     -> Result<Vec<Result<Row>>> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
         let snap_store = SnapshotStore::new(snapshot.as_ref(), ts);
-        Ok(snap_store.batch_get(rows))
+        Ok(snap_store.batch_get(rows, cols))
     }
 
     pub fn scan(&self,
                 ctx: Context,
-                start_row: Row,
+                start_row: Vec<u8>,
+                cols: Vec<Vec<u8>>,
                 limit: usize,
                 ts: u64)
-                -> Result<Vec<Result<RowValue>>> {
+                -> Result<Vec<Result<Row>>> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
         let snap_store = SnapshotStore::new(snapshot.as_ref(), ts);
         let mut scanner = try!(snap_store.scanner());
-        scanner.scan(start_row, limit)
+        scanner.scan(start_row, cols, limit)
     }
 
     pub fn reverse_scan(&self,
                         ctx: Context,
-                        start_row: Row,
+                        start_row: Vec<u8>,
+                        cols: Vec<Vec<u8>>,
                         limit: usize,
                         ts: u64)
-                        -> Result<Vec<Result<RowValue>>> {
+                        -> Result<Vec<Result<Row>>> {
         let snapshot = try!(self.engine.as_ref().as_ref().snapshot(&ctx));
         let snap_store = SnapshotStore::new(snapshot.as_ref(), ts);
         let mut scanner = try!(snap_store.scanner());
-        scanner.reverse_scan(start_row, limit)
+        scanner.reverse_scan(start_row, cols, limit)
     }
 
     pub fn prewrite(&self,
@@ -123,19 +126,20 @@ impl TxnStore {
 
     pub fn commit_then_get(&self,
                            ctx: Context,
-                           row: Row,
+                           row: Vec<u8>,
+                           cols: Vec<Vec<u8>>,
                            start_ts: u64,
                            commit_ts: u64,
                            get_ts: u64)
-                           -> Result<RowValue> {
-        let _guard = self.shard_mutex.lock(&[row.get_row_key()]);
+                           -> Result<Row> {
+        let _guard = self.shard_mutex.lock(&[&row]);
 
         let engine = self.engine.as_ref().as_ref();
         let snapshot = try!(engine.snapshot(&ctx));
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
 
 
-        let row_value = try!(txn.commit_then_get(row, commit_ts, get_ts));
+        let row_value = try!(txn.commit_then_get(row, cols, commit_ts, get_ts));
         try!(txn.submit());
         Ok(row_value)
     }
@@ -166,14 +170,19 @@ impl TxnStore {
         Ok(())
     }
 
-    pub fn rollback_then_get(&self, ctx: Context, row: Row, ts: u64) -> Result<RowValue> {
-        let _guard = self.shard_mutex.lock(&[row.get_row_key()]);
+    pub fn rollback_then_get(&self,
+                             ctx: Context,
+                             row: Vec<u8>,
+                             cols: Vec<Vec<u8>>,
+                             ts: u64)
+                             -> Result<Row> {
+        let _guard = self.shard_mutex.lock(&[&row]);
 
         let engine = self.engine.as_ref().as_ref();
         let snapshot = try!(engine.snapshot(&ctx));
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, ts);
 
-        let val = try!(txn.rollback_then_get(row));
+        let val = try!(txn.rollback_then_get(row, cols));
         try!(txn.submit());
         Ok(val)
     }
@@ -192,16 +201,16 @@ impl<'a> SnapshotStore<'a> {
         }
     }
 
-    pub fn get(&self, row: Row) -> Result<RowValue> {
+    pub fn get(&self, row: Vec<u8>, cols: Vec<Vec<u8>>) -> Result<Row> {
         let mut txn = MvccSnapshot::new(self.snapshot, self.start_ts);
-        Ok(try!(txn.get(row)))
+        Ok(try!(txn.get(row, cols)))
     }
 
-    pub fn batch_get(&self, rows: Vec<Row>) -> Vec<Result<RowValue>> {
+    pub fn batch_get(&self, rows: Vec<Vec<u8>>, cols: Vec<Vec<Vec<u8>>>) -> Vec<Result<Row>> {
         let mut txn = MvccSnapshot::new(self.snapshot, self.start_ts);
         let mut results = Vec::with_capacity(rows.len());
-        for row in rows {
-            results.push(txn.get(row).map_err(Error::from));
+        for (row, cols) in rows.into_iter().zip(cols.into_iter()) {
+            results.push(txn.get(row, cols).map_err(Error::from));
         }
         results
     }
@@ -221,21 +230,19 @@ pub struct StoreScanner<'a> {
 }
 
 impl<'a> StoreScanner<'a> {
-    pub fn seek(&mut self, row: &mut Row) -> Result<Option<RowValue>> {
+    pub fn seek(&mut self, row: &mut Vec<u8>, cols: Vec<Vec<u8>>) -> Result<Option<Row>> {
         loop {
-            let row_key = Key::from_raw(row.get_row_key());
+            let row_key = Key::from_raw(row);
             if !try!(self.cursor.seek(&row_key)) {
                 return Ok(None);
             }
             let next_row_key = try!(Key::from_encoded(self.cursor.key().to_vec()).raw());
-            row.set_row_key(next_row_key);
+            *row = next_row_key;
             let cursor = self.cursor.as_mut();
             let mut txn = MvccCursor::new(cursor, self.start_ts);
 
-            let row_value = try!(txn.get(row.to_owned()));
-            let mut row_key = row.take_row_key();
-            row_key.push(0);
-            row.set_row_key(row_key);
+            let row_value = try!(txn.get(row.to_owned(), cols.to_owned()));
+            row.push(0);
 
             if row_value.get_columns().len() > 0 {
                 return Ok(Some(row_value));
@@ -245,18 +252,18 @@ impl<'a> StoreScanner<'a> {
         }
     }
 
-    pub fn reverse_seek(&mut self, row: &mut Row) -> Result<Option<RowValue>> {
+    pub fn reverse_seek(&mut self, row: &mut Vec<u8>, cols: Vec<Vec<u8>>) -> Result<Option<Row>> {
         loop {
-            let row_key = Key::from_raw(row.get_row_key());
+            let row_key = Key::from_raw(row);
             if !try!(self.cursor.reverse_seek(&row_key)) {
                 return Ok(None);
             }
             let next_row_key = try!(Key::from_encoded(self.cursor.key().to_vec()).raw());
-            row.set_row_key(next_row_key);
+            *row = next_row_key;
             let cursor = self.cursor.as_mut();
             let mut txn = MvccCursor::new(cursor, self.start_ts);
 
-            let row_value = try!(txn.get(row.to_owned()));
+            let row_value = try!(txn.get(row.to_owned(), cols.to_owned()));
             if row_value.get_columns().len() > 0 {
                 return Ok(Some(row_value));
             }
@@ -265,10 +272,14 @@ impl<'a> StoreScanner<'a> {
         }
     }
 
-    pub fn scan(&mut self, mut row: Row, limit: usize) -> Result<Vec<Result<RowValue>>> {
+    pub fn scan(&mut self,
+                mut row: Vec<u8>,
+                cols: Vec<Vec<u8>>,
+                limit: usize)
+                -> Result<Vec<Result<Row>>> {
         let mut results = vec![];
         while results.len() < limit {
-            match self.seek(&mut row) {
+            match self.seek(&mut row, cols.clone()) {
                 Ok(Some(x)) => results.push(Ok(x)),
                 Ok(None) => break,
                 Err(Error::Mvcc(e @ MvccError::KeyIsLocked { .. })) => results.push(Err(e.into())),
@@ -278,10 +289,14 @@ impl<'a> StoreScanner<'a> {
         Ok(results)
     }
 
-    pub fn reverse_scan(&mut self, mut row: Row, limit: usize) -> Result<Vec<Result<RowValue>>> {
+    pub fn reverse_scan(&mut self,
+                        mut row: Vec<u8>,
+                        cols: Vec<Vec<u8>>,
+                        limit: usize)
+                        -> Result<Vec<Result<Row>>> {
         let mut results = vec![];
         while results.len() < limit {
-            match self.reverse_seek(&mut row) {
+            match self.reverse_seek(&mut row, cols.clone()) {
                 Ok(Some(x)) => results.push(Ok(x)),
                 Ok(None) => break,
                 Err(Error::Mvcc(e @ MvccError::KeyIsLocked { .. })) => results.push(Err(e.into())),
@@ -333,16 +348,18 @@ mod tests {
 
     impl TxnStoreAssert for TxnStore {
         fn get_none(&self, key: &[u8], ts: u64) {
-            let row_value = self.get(Context::new(), mvcc::default_row(key), ts).unwrap();
+            let row_value = self.get(Context::new(), key.to_vec(), mvcc::default_cols(), ts)
+                .unwrap();
             assert!(mvcc::default_row_value(&row_value).is_none());
         }
 
         fn get_err(&self, key: &[u8], ts: u64) {
-            assert!(self.get(Context::new(), mvcc::default_row(key), ts).is_err());
+            assert!(self.get(Context::new(), key.to_vec(), mvcc::default_cols(), ts).is_err());
         }
 
         fn get_ok(&self, key: &[u8], ts: u64, expect: &[u8]) {
-            let row_value = self.get(Context::new(), mvcc::default_row(key), ts).unwrap();
+            let row_value = self.get(Context::new(), key.to_vec(), mvcc::default_cols(), ts)
+                .unwrap();
             assert_eq!(mvcc::default_row_value(&row_value).unwrap(), expect);
         }
 
@@ -359,7 +376,11 @@ mod tests {
         }
 
         fn scan_ok(&self, start_row: &[u8], limit: usize, ts: u64, expect: Vec<(&[u8], &[u8])>) {
-            let result = self.scan(Context::new(), mvcc::default_row(start_row), limit, ts)
+            let result = self.scan(Context::new(),
+                      start_row.to_vec(),
+                      mvcc::default_cols(),
+                      limit,
+                      ts)
                 .unwrap();
             let result: Vec<(Vec<u8>, Vec<u8>)> = result.into_iter()
                 .map(Result::ok)
@@ -376,7 +397,11 @@ mod tests {
                            limit: usize,
                            ts: u64,
                            expect: Vec<(&[u8], &[u8])>) {
-            let result = self.reverse_scan(Context::new(), mvcc::default_row(start_row), limit, ts)
+            let result = self.reverse_scan(Context::new(),
+                              start_row.to_vec(),
+                              mvcc::default_cols(),
+                              limit,
+                              ts)
                 .unwrap();
             let result: Vec<(Vec<u8>, Vec<u8>)> = result.into_iter()
                 .map(Result::ok)
@@ -424,7 +449,8 @@ mod tests {
                               get_ts: u64,
                               expect: &[u8]) {
             let row_value = self.commit_then_get(Context::new(),
-                                 mvcc::default_row(key),
+                                 key.to_vec(),
+                                 mvcc::default_cols(),
                                  lock_ts,
                                  commit_ts,
                                  get_ts)
@@ -434,8 +460,9 @@ mod tests {
         }
 
         fn rollback_then_get_ok(&self, key: &[u8], lock_ts: u64, expect: &[u8]) {
-            let row_value = self.rollback_then_get(Context::new(), mvcc::default_row(key), lock_ts)
-                .unwrap();
+            let row_value =
+                self.rollback_then_get(Context::new(), key.to_vec(), mvcc::default_cols(), lock_ts)
+                    .unwrap();
             assert_eq!(mvcc::default_row_value(&row_value).unwrap(),
                        expect.to_vec());
         }
@@ -476,7 +503,8 @@ mod tests {
         let store = TxnStore::new(Arc::new(engine));
 
         store.put_ok(b"secondary", b"s-0", 1, 2);
-        store.prewrite_ok(vec![mvcc::default_put(b"primary", b"p-5"), mvcc::default_put(b"secondary", b"s-5")],
+        store.prewrite_ok(vec![mvcc::default_put(b"primary", b"p-5"),
+                               mvcc::default_put(b"secondary", b"s-5")],
                           b"primary",
                           5);
         store.get_err(b"secondary", 10);
@@ -491,7 +519,8 @@ mod tests {
         let store = TxnStore::new(Arc::new(engine));
 
         store.put_ok(b"secondary", b"s-0", 1, 2);
-        store.prewrite_ok(vec![mvcc::default_put(b"primary", b"p-5"), mvcc::default_put(b"secondary", b"s-5")],
+        store.prewrite_ok(vec![mvcc::default_put(b"primary", b"p-5"),
+                               mvcc::default_put(b"secondary", b"s-5")],
                           b"primary",
                           5);
         store.get_err(b"secondary", 8);
@@ -668,24 +697,25 @@ mod tests {
     fn inc(store: &TxnStore, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
         for i in 0..INC_MAX_RETRY {
             let start_ts = oracle.get_ts();
-            let number: i32 = match store.get(Context::new(), mvcc::default_row(key), start_ts) {
-                Ok(x) => {
-                    match mvcc::default_row_value(&x) {
-                        Some(x) => String::from_utf8(x).unwrap().parse().unwrap(),
-                        None => 0,
+            let number: i32 =
+                match store.get(Context::new(), key.to_vec(), mvcc::default_cols(), start_ts) {
+                    Ok(x) => {
+                        match mvcc::default_row_value(&x) {
+                            Some(x) => String::from_utf8(x).unwrap().parse().unwrap(),
+                            None => 0,
+                        }
                     }
-                }
-                Err(_) => {
-                    backoff(i);
-                    continue;
-                }
-            };
+                    Err(_) => {
+                        backoff(i);
+                        continue;
+                    }
+                };
             let next = number + 1;
             if let Err(_) = store.prewrite(Context::new(),
                                            vec![mvcc::default_put(key,
-                                                            next.to_string()
-                                                                .into_bytes()
-                                                                .as_ref())],
+                                                                  next.to_string()
+                                                                      .into_bytes()
+                                                                      .as_ref())],
                                            key.to_vec(),
                                            start_ts) {
                 backoff(i);
@@ -740,18 +770,19 @@ mod tests {
             let keys: Vec<Vec<u8>> = (0..n).map(format_key).collect();
             let mut mutations = vec![];
             for key in keys.iter().take(n) {
-                let number = match store.get(Context::new(), mvcc::default_row(&key), start_ts) {
-                    Ok(x) => {
-                        match mvcc::default_row_value(&x) {
-                            Some(x) => String::from_utf8(x).unwrap().parse().unwrap(),
-                            None => 0,
+                let number =
+                    match store.get(Context::new(), key.to_vec(), mvcc::default_cols(), start_ts) {
+                        Ok(x) => {
+                            match mvcc::default_row_value(&x) {
+                                Some(x) => String::from_utf8(x).unwrap().parse().unwrap(),
+                                None => 0,
+                            }
                         }
-                    }
-                    Err(_) => {
-                        backoff(i);
-                        continue 'retry;
-                    }
-                };
+                        Err(_) => {
+                            backoff(i);
+                            continue 'retry;
+                        }
+                    };
                 let next = number + 1;
                 mutations.push(mvcc::default_put(key, next.to_string().into_bytes().as_ref()));
             }

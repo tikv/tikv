@@ -27,24 +27,24 @@ impl Scheduler {
     pub fn handle_cmd(&mut self, cmd: Command) {
         debug!("scheduler::handle_cmd: {:?}", cmd);
         match cmd {
-            Command::Get { ctx, row, ts, callback } => {
-                let res = self.store.get(ctx, row, ts);
+            Command::Get { ctx, row, cols, ts, callback } => {
+                let res = self.store.get(ctx, row, cols, ts);
                 if let Some(e) = extract_region_error(&res) {
                     callback(CallbackResult::Err(e));
                 } else {
                     callback(CallbackResult::Ok(extract_row_value(res)));
                 }
             }
-            Command::BatchGet { ctx, rows, ts, callback } => {
-                let res = self.store.batch_get(ctx, rows, ts);
+            Command::BatchGet { ctx, rows, cols, ts, callback } => {
+                let res = self.store.batch_get(ctx, rows, cols, ts);
                 if let Some(e) = extract_region_error(&res) {
                     callback(CallbackResult::Err(e));
                 } else {
                     callback(CallbackResult::Ok(extract_row_values(res)));
                 }
             }
-            Command::Scan { ctx, start_row, limit, ts, callback } => {
-                let res = self.store.scan(ctx, start_row, limit, ts);
+            Command::Scan { ctx, start_row, cols, limit, ts, callback } => {
+                let res = self.store.scan(ctx, start_row, cols, limit, ts);
                 if let Some(e) = extract_region_error(&res) {
                     callback(CallbackResult::Err(e));
                 } else {
@@ -67,8 +67,8 @@ impl Scheduler {
                     callback(CallbackResult::Ok(res.err().map(|e| extract_key_error(&e))));
                 }
             }
-            Command::CommitThenGet { ctx, row, start_ts, commit_ts, get_ts, callback } => {
-                let res = self.store.commit_then_get(ctx, row, start_ts, commit_ts, get_ts);
+            Command::CommitThenGet { ctx, row, cols, start_ts, commit_ts, get_ts, callback } => {
+                let res = self.store.commit_then_get(ctx, row, cols, start_ts, commit_ts, get_ts);
                 if let Some(e) = extract_region_error(&res) {
                     callback(CallbackResult::Err(e));
                 } else {
@@ -93,8 +93,8 @@ impl Scheduler {
                     callback(CallbackResult::Ok(res.err().map(|e| extract_key_error(&e))));
                 }
             }
-            Command::RollbackThenGet { ctx, row, ts, callback } => {
-                let res = self.store.rollback_then_get(ctx, row, ts);
+            Command::RollbackThenGet { ctx, row, cols, ts, callback } => {
+                let res = self.store.rollback_then_get(ctx, row, cols, ts);
                 if let Some(e) = extract_region_error(&res) {
                     callback(CallbackResult::Err(e));
                 } else {
@@ -109,7 +109,7 @@ use super::{Result, Error};
 use storage::engine::Error as EngineError;
 use storage::mvcc::Error as MvccError;
 use kvproto::errorpb::Error as RegionError;
-use kvproto::kvpb::{RowValue, KeyError, LockInfo};
+use kvproto::kvpb::{Row, KeyError, LockInfo};
 
 fn extract_region_error<T>(res: &Result<T>) -> Option<RegionError> {
     match *res {
@@ -153,18 +153,18 @@ fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<KeyError> {
     }
 }
 
-fn extract_row_value(res: Result<RowValue>) -> RowValue {
+fn extract_row_value(res: Result<Row>) -> Row {
     match res {
         Ok(r) => r,
         Err(e) => {
-            let mut r = RowValue::new();
+            let mut r = Row::new();
             r.set_error(extract_key_error(&e));
             r
         }
     }
 }
 
-fn extract_row_values(res: Result<Vec<Result<RowValue>>>) -> Vec<RowValue> {
+fn extract_row_values(res: Result<Vec<Result<Row>>>) -> Vec<Row> {
     match res {
         Ok(res) => res.into_iter().map(|x| extract_row_value(x)).collect(),
         Err(e) => vec![extract_row_value(Err(e))],

@@ -298,7 +298,7 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                 e.insert(v);
             } else {
                 let key = table::encode_column_key(t_id, h, col_id);
-                let data = try!(snap.get(mvcc::default_row(&key)));
+                let data = try!(snap.get(key.clone(), mvcc::default_cols()));
                 let value = match mvcc::default_row_value(&data) {
                     None if mysql::has_not_null_flag(col.get_flag() as u64) => {
                         return Err(box_err!("key {} not exists", escape(&key)));
@@ -391,7 +391,7 @@ impl SelectContextCore {
                     box_try!(datum::encode_to(row.mut_data(), &[d], false));
                 } else {
                     let raw_key = table::encode_column_key(tid, h, col.get_column_id());
-                    let data = try!(snap.get(mvcc::default_row(&raw_key)));
+                    let data = try!(snap.get(raw_key.clone(), mvcc::default_cols()));
                     match mvcc::default_row_value(&data) {
                         None if mysql::has_not_null_flag(col.get_flag() as u64) => {
                             return Err(box_err!("key {} not exists", escape(&raw_key)));
@@ -543,7 +543,7 @@ impl<'a> SelectContext<'a> {
             return Ok(rows);
         }
         if is_point(&range) {
-            let row_value = try!(self.snap.get(mvcc::default_row(range.get_start())));
+            let row_value = try!(self.snap.get(range.get_start().to_vec(), mvcc::default_cols()));
             if mvcc::row_value_empty(&row_value) {
                 return Ok(rows);
             }
@@ -556,11 +556,10 @@ impl<'a> SelectContext<'a> {
             };
             let mut scanner = try!(self.snap.scanner());
             while limit > rows.len() {
-                let mut kv_row = mvcc::default_row(&seek_key);
                 let row_value = if desc {
-                    try!(scanner.reverse_seek(&mut kv_row))
+                    try!(scanner.reverse_seek(&mut seek_key, mvcc::default_cols()))
                 } else {
-                    try!(scanner.seek(&mut kv_row))
+                    try!(scanner.seek(&mut seek_key, mvcc::default_cols()))
                 };
                 let key = match row_value {
                     Some(x) => x.get_row_key().to_vec(),
@@ -614,11 +613,10 @@ impl<'a> SelectContext<'a> {
         };
         let mut scanner = try!(self.snap.scanner());
         while rows.len() < limit {
-            let mut kv_row = mvcc::default_row(&seek_key);
             let row_value = if desc {
-                try!(scanner.reverse_seek(&mut kv_row))
+                try!(scanner.reverse_seek(&mut seek_key, mvcc::default_cols()))
             } else {
-                try!(scanner.seek(&mut kv_row))
+                try!(scanner.seek(&mut seek_key, mvcc::default_cols()))
             };
             let (key, val) = match row_value {
                 Some(x) => (x.get_row_key().to_vec(), mvcc::default_row_value(&x).unwrap()),

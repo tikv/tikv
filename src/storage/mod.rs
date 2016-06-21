@@ -18,7 +18,7 @@ use std::thread::{self, JoinHandle};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use self::txn::Scheduler;
-use kvproto::kvpb::{Row, RowValue, Mutation, KeyError};
+use kvproto::kvpb::{Row, Mutation, KeyError};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as RegionError;
 
@@ -46,22 +46,25 @@ pub use self::types::make_key;
 pub enum Command {
     Get {
         ctx: Context,
-        row: Row,
+        row: Vec<u8>,
+        cols: Vec<Vec<u8>>,
         ts: u64,
-        callback: Callback<RowValue>,
+        callback: Callback<Row>,
     },
     BatchGet {
         ctx: Context,
-        rows: Vec<Row>,
+        rows: Vec<Vec<u8>>,
+        cols: Vec<Vec<Vec<u8>>>,
         ts: u64,
-        callback: Callback<Vec<RowValue>>,
+        callback: Callback<Vec<Row>>,
     },
     Scan {
         ctx: Context,
-        start_row: Row,
+        start_row: Vec<u8>,
+        cols: Vec<Vec<u8>>,
         limit: usize,
         ts: u64,
-        callback: Callback<Vec<RowValue>>,
+        callback: Callback<Vec<Row>>,
     },
     Prewrite {
         ctx: Context,
@@ -79,11 +82,12 @@ pub enum Command {
     },
     CommitThenGet {
         ctx: Context,
-        row: Row,
+        row: Vec<u8>,
+        cols: Vec<Vec<u8>>,
         start_ts: u64,
         commit_ts: u64,
         get_ts: u64,
-        callback: Callback<RowValue>,
+        callback: Callback<Row>,
     },
     Cleanup {
         ctx: Context,
@@ -99,9 +103,10 @@ pub enum Command {
     },
     RollbackThenGet {
         ctx: Context,
-        row: Row,
+        row: Vec<u8>,
+        cols: Vec<Vec<u8>>,
         ts: u64,
-        callback: Callback<RowValue>,
+        callback: Callback<Row>,
     },
 }
 
@@ -206,13 +211,15 @@ impl Storage {
 
     pub fn async_get(&self,
                      ctx: Context,
-                     row: Row,
+                     row: Vec<u8>,
+                     cols: Vec<Vec<u8>>,
                      ts: u64,
-                     callback: Callback<RowValue>)
+                     callback: Callback<Row>)
                      -> Result<()> {
         let cmd = Command::Get {
             ctx: ctx,
             row: row,
+            cols: cols,
             ts: ts,
             callback: callback,
         };
@@ -222,13 +229,15 @@ impl Storage {
 
     pub fn async_batch_get(&self,
                            ctx: Context,
-                           rows: Vec<Row>,
+                           rows: Vec<Vec<u8>>,
+                           cols: Vec<Vec<Vec<u8>>>,
                            ts: u64,
-                           callback: Callback<Vec<RowValue>>)
+                           callback: Callback<Vec<Row>>)
                            -> Result<()> {
         let cmd = Command::BatchGet {
             ctx: ctx,
             rows: rows,
+            cols: cols,
             ts: ts,
             callback: callback,
         };
@@ -238,14 +247,16 @@ impl Storage {
 
     pub fn async_scan(&self,
                       ctx: Context,
-                      start_row: Row,
+                      start_row: Vec<u8>,
+                      cols: Vec<Vec<u8>>,
                       limit: usize,
                       ts: u64,
-                      callback: Callback<Vec<RowValue>>)
+                      callback: Callback<Vec<Row>>)
                       -> Result<()> {
         let cmd = Command::Scan {
             ctx: ctx,
             start_row: start_row,
+            cols: cols,
             limit: limit,
             ts: ts,
             callback: callback,
@@ -292,15 +303,17 @@ impl Storage {
 
     pub fn async_commit_then_get(&self,
                                  ctx: Context,
-                                 row: Row,
+                                 row: Vec<u8>,
+                                 cols: Vec<Vec<u8>>,
                                  start_ts: u64,
                                  commit_ts: u64,
                                  get_ts: u64,
-                                 callback: Callback<RowValue>)
+                                 callback: Callback<Row>)
                                  -> Result<()> {
         let cmd = Command::CommitThenGet {
             ctx: ctx,
             row: row,
+            cols: cols,
             start_ts: start_ts,
             commit_ts: commit_ts,
             get_ts: get_ts,
@@ -344,13 +357,15 @@ impl Storage {
 
     pub fn async_rollback_then_get(&self,
                                    ctx: Context,
-                                   row: Row,
+                                   row: Vec<u8>,
+                                   cols: Vec<Vec<u8>>,
                                    ts: u64,
-                                   callback: Callback<RowValue>)
+                                   callback: Callback<Row>)
                                    -> Result<()> {
         let cmd = Command::RollbackThenGet {
             ctx: ctx,
             row: row,
+            cols: cols,
             ts: ts,
             callback: callback,
         };
@@ -402,16 +417,16 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 mod tests {
     use super::*;
     use kvproto::kvrpcpb::Context;
-    use kvproto::kvpb::{RowValue, KeyError};
+    use kvproto::kvpb::{Row, KeyError};
 
-    fn expect_get_none() -> Callback<RowValue> {
+    fn expect_get_none() -> Callback<Row> {
         Box::new(|res| match res {
             CallbackResult::Ok(x) => assert_eq!(mvcc::default_row_value(&x), None),
             CallbackResult::Err(_) => panic!("expect_get_none got region error."),
         })
     }
 
-    fn expect_get_val(v: Vec<u8>) -> Callback<RowValue> {
+    fn expect_get_val(v: Vec<u8>) -> Callback<Row> {
         Box::new(move |res| match res {
             CallbackResult::Ok(x) => assert_eq!(mvcc::default_row_value(&x), Some(v)),
             CallbackResult::Err(_) => panic!("expect_get_val got region error."),
@@ -439,10 +454,10 @@ mod tests {
         })
     }
 
-    fn expect_scan(pairs: Vec<(&[u8], &[u8])>) -> Callback<Vec<RowValue>> {
+    fn expect_scan(pairs: Vec<(&[u8], &[u8])>) -> Callback<Vec<Row>> {
         let expect: Vec<(Vec<u8>, Vec<u8>)> =
             pairs.into_iter().map(|(k, v)| (k.to_vec(), v.to_vec())).collect();
-        Box::new(move |res: CallbackResult<Vec<RowValue>>| match res {
+        Box::new(move |res: CallbackResult<Vec<Row>>| match res {
             CallbackResult::Ok(x) => {
                 let result: Vec<(Vec<u8>, Vec<u8>)> = x.into_iter()
                     .map(|x| (x.get_row_key().to_vec(), mvcc::default_row_value(&x).unwrap()))
@@ -457,7 +472,8 @@ mod tests {
     fn test_get_put() {
         let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
         storage.async_get(Context::new(),
-                       mvcc::default_row(b"x"),
+                       b"x".to_vec(),
+                       mvcc::default_cols(),
                        100,
                        expect_get_none())
             .unwrap();
@@ -470,12 +486,14 @@ mod tests {
         storage.async_commit(Context::new(), vec![b"x".to_vec()], 100, 101, expect_ok())
             .unwrap();
         storage.async_get(Context::new(),
-                       mvcc::default_row(b"x"),
+                       b"x".to_vec(),
+                       mvcc::default_cols(),
                        100,
                        expect_get_none())
             .unwrap();
         storage.async_get(Context::new(),
-                       mvcc::default_row(b"x"),
+                       b"x".to_vec(),
+                       mvcc::default_cols(),
                        101,
                        expect_get_val(b"100".to_vec()))
             .unwrap();
@@ -500,7 +518,8 @@ mod tests {
                           expect_ok())
             .unwrap();
         storage.async_scan(Context::new(),
-                        mvcc::default_row(b"a"),
+                        b"a".to_vec(),
+                        mvcc::default_cols(),
                         1000,
                         5,
                         expect_scan(vec![(b"a", b"aa"), (b"b", b"bb"), (b"c", b"cc")]))
@@ -528,12 +547,14 @@ mod tests {
         storage.async_commit(Context::new(), vec![b"y".to_vec()], 101, 111, expect_ok())
             .unwrap();
         storage.async_get(Context::new(),
-                       mvcc::default_row(b"x"),
+                       b"x".to_vec(),
+                       mvcc::default_cols(),
                        120,
                        expect_get_val(b"100".to_vec()))
             .unwrap();
         storage.async_get(Context::new(),
-                       mvcc::default_row(b"y"),
+                       b"y".to_vec(),
+                       mvcc::default_cols(),
                        120,
                        expect_get_val(b"101".to_vec()))
             .unwrap();

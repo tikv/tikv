@@ -15,7 +15,7 @@ use std::fmt;
 use std::collections::BTreeMap;
 use storage::Key;
 use storage::engine::{Engine, Snapshot, Modify, Cursor};
-use kvproto::kvpb::{Row, RowValue, Op, Mutation};
+use kvproto::kvpb::{Row, Column, Op, Mutation};
 use kvproto::mvccpb::{MetaLock, MetaItem, MetaColumn};
 use kvproto::kvrpcpb::Context;
 use super::meta::{Meta, FIRST_META_INDEX};
@@ -32,79 +32,72 @@ trait MvccReader {
         Ok(meta)
     }
 
-    fn get_row(&mut self, row: Row, ts: u64) -> Result<RowValue> {
-        let row_key = Key::from_raw(row.get_row_key());
-        let meta = try!(self.load_meta(&row_key, FIRST_META_INDEX));
-        self.get_row_with_first_meta(&row_key, row, &meta, ts)
+    fn get_row(&mut self, row: Vec<u8>, cols: Vec<Vec<u8>>, ts: u64) -> Result<Row> {
+        let row_key = Key::from_raw(&row);
+        self.get_row_impl(&row_key, row, cols, None, ts)
     }
 
-    fn get_row_with_first_meta(&mut self,
-                               row_key: &Key,
-                               mut row: Row,
-                               first_meta: &Meta,
-                               ts: u64)
-                               -> Result<RowValue> {
+    fn get_row_impl(&mut self,
+                    row_key: &Key,
+                    row_key_raw: Vec<u8>,
+                    cols: Vec<Vec<u8>>,
+                    first_meta: Option<Meta>,
+                    ts: u64)
+                    -> Result<Row> {
+        // Load the first meta if not passed in.
+        let mut meta = match first_meta {
+            Some(x) => x,
+            None => try!(self.load_meta(row_key, FIRST_META_INDEX)),
+        };
         // Check for locks that signal concurrent writes.
-        if let Some(lock) = first_meta.get_lock() {
+        if let Some(lock) = meta.get_lock() {
             if lock.get_start_ts() <= ts {
                 // There is a pending lock. Client should wait or clean it.
                 return Err(Error::KeyIsLocked {
-                    key: row.get_row_key().to_vec(),
+                    key: row_key_raw,
                     primary: lock.get_primary_key().to_vec(),
                     ts: lock.get_start_ts(),
                 });
             }
         }
-        let mut row_value = RowValue::new();
-        row_value.set_row_key(row.take_row_key());
+        let mut row = Row::new();
+        row.set_row_key(row_key_raw.clone());
         let mut pending_cols = BTreeMap::new();
-        for col in row.get_columns() {
+        for col in cols {
             pending_cols.insert(col.to_vec(), true);
         }
-        // Find the latest write below our start timestamp.
-        if let Some(x) = first_meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
-            for col in x.get_columns() {
-                if let Some(_) = pending_cols.remove(col.get_name()) {
-                    if col.get_op() == Op::Put {
-                        let value_key = row_key.append_ts_column(x.get_start_ts(), col.get_name());
-                        if let Some(x) = try!(self.read(&value_key)) {
-                            // TODO: Should we keep the order of columns in RowValue same as Row?
-                            row_value.mut_columns().push(col.get_name().to_vec());
-                            row_value.mut_values().push(x);
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut next = first_meta.next_index();
         loop {
-            if pending_cols.len() == 0 {
-                break;
-            }
-            let meta = match next {
-                Some(x) => try!(self.load_meta(&row_key, x)),
-                None => break,
-            };
-            if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
-                for col in x.get_columns() {
+            // Find the latest write below our start timestamp for each column.
+            for item in meta.iter_items().filter(|x| x.get_commit_ts() <= ts) {
+                if pending_cols.len() == 0 {
+                    break;
+                }
+                for col in item.get_columns() {
                     if let Some(_) = pending_cols.remove(col.get_name()) {
                         if col.get_op() == Op::Put {
                             let value_key =
-                                row_key.append_ts_column(x.get_start_ts(), col.get_name());
+                                row_key.append_ts_column(item.get_start_ts(), col.get_name());
                             if let Some(x) = try!(self.read(&value_key)) {
-                                // TODO: Should we keep the order of columns in RowValue same as
-                                // Row?
-                                row_value.mut_columns().push(col.get_name().to_vec());
-                                row_value.mut_values().push(x);
+                                let mut column = Column::new();
+                                column.set_name(col.get_name().to_vec());
+                                column.set_value(x);
+                                row.mut_columns().push(column);
                             }
                         }
                     }
                 }
             }
-            next = meta.next_index();
+            if pending_cols.len() == 0 {
+                break;
+            }
+            match meta.next_index() {
+                Some(index) => {
+                    meta = try!(self.load_meta(row_key, index));
+                }
+                None => break,
+            }
         }
-        Ok(row_value)
+        Ok(row)
     }
 }
 
@@ -152,9 +145,9 @@ impl<'a> MvccTxn<'a> {
         self.writes.push(modify);
     }
 
-    pub fn get(&mut self, row: Row) -> Result<RowValue> {
+    pub fn get(&mut self, row: Vec<u8>, cols: Vec<Vec<u8>>) -> Result<Row> {
         let ts = self.start_ts;
-        self.get_row(row, ts)
+        self.get_row(row, cols, ts)
     }
 
     pub fn prewrite(&mut self, mut mutation: Mutation, primary: &[u8]) -> Result<()> {
@@ -182,17 +175,16 @@ impl<'a> MvccTxn<'a> {
         }
 
         let mut lock = MetaLock::new();
-        for ((op, col), val) in mutation.take_ops()
+        for (op, mut col) in mutation.take_ops()
             .into_iter()
-            .zip(mutation.take_columns().into_iter())
-            .zip(mutation.take_values().into_iter()) {
+            .zip(mutation.take_columns().into_iter()) {
             if op == Op::Put {
-                let value_key = row_key.append_ts_column(self.start_ts, &col);
-                self.writes.push(Modify::Put((value_key, val)));
+                let value_key = row_key.append_ts_column(self.start_ts, col.get_name());
+                self.writes.push(Modify::Put((value_key, col.take_value())));
             }
             let mut column = MetaColumn::new();
             column.set_op(op);
-            column.set_name(col);
+            column.set_name(col.take_name());
             lock.mut_columns().push(column);
         }
         lock.set_primary_key(primary.to_vec());
@@ -237,11 +229,16 @@ impl<'a> MvccTxn<'a> {
         Ok(())
     }
 
-    pub fn commit_then_get(&mut self, row: Row, commit_ts: u64, get_ts: u64) -> Result<RowValue> {
-        let row_key = Key::from_raw(row.get_row_key());
+    pub fn commit_then_get(&mut self,
+                           row: Vec<u8>,
+                           cols: Vec<Vec<u8>>,
+                           commit_ts: u64,
+                           get_ts: u64)
+                           -> Result<Row> {
+        let row_key = Key::from_raw(&row);
         let mut meta = try!(self.load_meta(&row_key, FIRST_META_INDEX));
         try!(self.commit_impl(commit_ts, &mut meta));
-        let res = try!(self.get_row_with_first_meta(&row_key, row, &meta, get_ts));
+        let res = try!(self.get_row_impl(&row_key, row, cols, Some(meta.clone()), get_ts));
         self.write_meta(&row_key, &mut meta);
         Ok(res)
     }
@@ -277,12 +274,12 @@ impl<'a> MvccTxn<'a> {
         Ok(())
     }
 
-    pub fn rollback_then_get(&mut self, row: Row) -> Result<RowValue> {
-        let row_key = Key::from_raw(row.get_row_key());
+    pub fn rollback_then_get(&mut self, row: Vec<u8>, cols: Vec<Vec<u8>>) -> Result<Row> {
+        let row_key = Key::from_raw(&row);
         let mut meta = try!(self.load_meta(&row_key, FIRST_META_INDEX));
         try!(self.rollback_impl(&row_key, &mut meta));
         let ts = self.start_ts;
-        let res = try!(self.get_row_with_first_meta(&row_key, row, &meta, ts));
+        let res = try!(self.get_row_impl(&row_key, row, cols, Some(meta.clone()), ts));
         self.write_meta(&row_key, &mut meta);
         Ok(res)
     }
@@ -319,9 +316,9 @@ impl<'a> MvccSnapshot<'a> {
         }
     }
 
-    pub fn get(&mut self, row: Row) -> Result<RowValue> {
+    pub fn get(&mut self, row: Vec<u8>, cols: Vec<Vec<u8>>) -> Result<Row> {
         let ts = self.start_ts;
-        self.get_row(row, ts)
+        self.get_row(row, cols, ts)
     }
 }
 
@@ -344,19 +341,17 @@ impl<'a> MvccCursor<'a> {
         }
     }
 
-    pub fn get(&mut self, row: Row) -> Result<RowValue> {
+    pub fn get(&mut self, row: Vec<u8>, cols: Vec<Vec<u8>>) -> Result<Row> {
         let ts = self.start_ts;
-        self.get_row(row, ts)
+        self.get_row(row, cols, ts)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use kvproto::kvpb::{Mutation, Op};
     use kvproto::kvrpcpb::Context;
-    use super::MvccTxn;
     use storage::engine::{self, Engine, Dsn, TEMP_DIR};
-    use storage::mvcc::{default_row, default_row_value, TEST_TS_BASE};
+    use storage::mvcc::*;
     use storage::Key;
 
     #[test]
@@ -497,7 +492,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
-        let row_value = txn.get(default_row(key)).unwrap();
+        let row_value = txn.get(key.to_vec(), default_cols()).unwrap();
         assert_eq!(default_row_value(&row_value).unwrap(), expect);
     }
 
@@ -505,7 +500,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
-        let row_value = txn.get(default_row(key)).unwrap();
+        let row_value = txn.get(key.to_vec(), default_cols()).unwrap();
         assert!(default_row_value(&row_value).is_none());
     }
 
@@ -513,19 +508,14 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
-        assert!(txn.get(default_row(key)).is_err());
+        assert!(txn.get(key.to_vec(), default_cols()).is_err());
     }
 
     fn must_prewrite_put(engine: &Engine, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
-        let mut mutation = Mutation::new();
-        mutation.set_row_key(key.to_vec());
-        mutation.mut_columns().push(vec![]);
-        mutation.mut_ops().push(Op::Put);
-        mutation.mut_values().push(value.to_vec());
-        txn.prewrite(mutation, pk).unwrap();
+        txn.prewrite(default_put(key, value), pk).unwrap();
         txn.submit().unwrap();
     }
 
@@ -533,12 +523,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
-        let mut mutation = Mutation::new();
-        mutation.set_row_key(key.to_vec());
-        mutation.mut_columns().push(vec![]);
-        mutation.mut_ops().push(Op::Del);
-        mutation.mut_values().push(vec![]);
-        txn.prewrite(mutation, pk).unwrap();
+        txn.prewrite(default_del(key), pk).unwrap();
         txn.submit().unwrap();
     }
 
@@ -546,12 +531,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
-        let mut mutation = Mutation::new();
-        mutation.set_row_key(key.to_vec());
-        mutation.mut_columns().push(vec![]);
-        mutation.mut_ops().push(Op::Lock);
-        mutation.mut_values().push(vec![]);
-        txn.prewrite(mutation, pk).unwrap();
+        txn.prewrite(default_lock(key), pk).unwrap();
         txn.submit().unwrap();
     }
 
@@ -559,12 +539,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(ts));
-        let mut mutation = Mutation::new();
-        mutation.set_row_key(key.to_vec());
-        mutation.mut_columns().push(vec![]);
-        mutation.mut_ops().push(Op::Lock);
-        mutation.mut_values().push(vec![]);
-        assert!(txn.prewrite(mutation, pk).is_err());
+        assert!(txn.prewrite(default_lock(key), pk).is_err());
     }
 
     fn must_commit(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -591,9 +566,11 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
-        let row_value =
-            txn.commit_then_get(default_row(key), to_fake_ts(commit_ts), to_fake_ts(get_ts))
-                .unwrap();
+        let row_value = txn.commit_then_get(key.to_vec(),
+                             default_cols(),
+                             to_fake_ts(commit_ts),
+                             to_fake_ts(get_ts))
+            .unwrap();
         txn.submit().unwrap();
         assert_eq!(default_row_value(&row_value).unwrap(), expect);
     }
@@ -606,7 +583,10 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
-        assert!(txn.commit_then_get(default_row(key), to_fake_ts(commit_ts), to_fake_ts(get_ts))
+        assert!(txn.commit_then_get(key.to_vec(),
+                             default_cols(),
+                             to_fake_ts(commit_ts),
+                             to_fake_ts(get_ts))
             .is_err());
     }
 
@@ -629,7 +609,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
-        let row_value = txn.rollback_then_get(default_row(key)).unwrap();
+        let row_value = txn.rollback_then_get(key.to_vec(), default_cols()).unwrap();
         txn.submit().unwrap();
         assert_eq!(default_row_value(&row_value).unwrap(), expect);
     }
@@ -638,6 +618,6 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, to_fake_ts(lock_ts));
-        assert!(txn.rollback_then_get(default_row(key)).is_err());
+        assert!(txn.rollback_then_get(key.to_vec(), default_cols()).is_err());
     }
 }

@@ -15,7 +15,7 @@ use std::boxed::Box;
 use std::sync::Arc;
 
 use protobuf::RepeatedField;
-use kvproto::kvpb::{RowValue, KeyError};
+use kvproto::kvpb::{Row, KeyError};
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
                        CmdBatchRollbackResponse, CmdCleanupResponse, CmdRollbackThenGetResponse,
                        CmdCommitThenGetResponse, CmdBatchGetResponse, Request, Response,
@@ -43,7 +43,11 @@ impl StoreHandler {
         let ctx = msg.take_context();
         let cb = self.make_cb(StoreHandler::cmd_get_done, on_resp);
         self.store
-            .async_get(ctx, req.take_row(), req.get_ts(), cb)
+            .async_get(ctx,
+                       req.take_row_key(),
+                       req.take_columns().into_vec(),
+                       req.get_ts(),
+                       cb)
             .map_err(Error::Storage)
     }
 
@@ -52,12 +56,12 @@ impl StoreHandler {
             return Err(box_err!("msg doesn't contain a CmdScanRequest"));
         }
         let mut req = msg.take_cmd_scan_req();
-        let start_row = req.take_start_row();
-        debug!("start_row [{}]", escape(start_row.get_row_key()));
+        debug!("start_row [{}]", escape(req.get_start_row_key()));
         let cb = self.make_cb(StoreHandler::cmd_scan_done, on_resp);
         self.store
             .async_scan(msg.take_context(),
-                        start_row,
+                        req.take_start_row_key(),
+                        req.take_columns().into_vec(),
                         req.get_limit() as usize,
                         req.get_ts(),
                         cb)
@@ -86,7 +90,7 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_commit_req();
         let cb = self.make_cb(StoreHandler::cmd_commit_done, on_resp);
-        let rows = req.take_rows().into_vec();
+        let rows = req.take_row_keys().into_vec();
         self.store
             .async_commit(msg.take_context(),
                           rows,
@@ -102,7 +106,7 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_batch_rollback_req();
         let cb = self.make_cb(StoreHandler::cmd_batch_rollback_done, on_resp);
-        let rows = req.take_rows().into_vec();
+        let rows = req.take_row_keys().into_vec();
         self.store
             .async_rollback(msg.take_context(), rows, req.get_ts(), cb)
             .map_err(Error::Storage)
@@ -115,7 +119,7 @@ impl StoreHandler {
         let mut req = msg.take_cmd_cleanup_req();
         let cb = self.make_cb(StoreHandler::cmd_cleanup_done, on_resp);
         self.store
-            .async_cleanup(msg.take_context(), req.take_row(), req.get_ts(), cb)
+            .async_cleanup(msg.take_context(), req.take_row_key(), req.get_ts(), cb)
             .map_err(Error::Storage)
     }
 
@@ -127,7 +131,8 @@ impl StoreHandler {
         let mut req = msg.take_cmd_commit_get_req();
         self.store
             .async_commit_then_get(msg.take_context(),
-                                   req.take_row(),
+                                   req.take_row_key(),
+                                   req.take_columns().into_vec(),
                                    req.get_start_ts(),
                                    req.get_commit_ts(),
                                    req.get_get_ts(),
@@ -142,7 +147,11 @@ impl StoreHandler {
         let mut req = msg.take_cmd_rb_get_req();
         let cb = self.make_cb(StoreHandler::cmd_rollback_get_done, on_resp);
         self.store
-            .async_rollback_then_get(msg.take_context(), req.take_row(), req.get_ts(), cb)
+            .async_rollback_then_get(msg.take_context(),
+                                     req.take_row_key(),
+                                     req.take_columns().into_vec(),
+                                     req.get_ts(),
+                                     cb)
             .map_err(Error::Storage)
     }
 
@@ -154,7 +163,8 @@ impl StoreHandler {
         let cb = self.make_cb(StoreHandler::cmd_batch_get_done, on_resp);
         self.store
             .async_batch_get(msg.take_context(),
-                             req.take_rows().into_vec(),
+                             req.take_row_keys().into_vec(),
+                             req.take_columns().iter().map(|x| x.get_columns().to_vec()).collect(),
                              req.get_ts(),
                              cb)
             .map_err(Error::Storage)
@@ -174,24 +184,24 @@ impl StoreHandler {
         })
     }
 
-    fn cmd_get_done(row_value: RowValue, resp: &mut Response) {
+    fn cmd_get_done(row: Row, resp: &mut Response) {
         resp.set_field_type(MessageType::CmdGet);
         let mut get_resp = CmdGetResponse::new();
-        get_resp.set_row(row_value);
+        get_resp.set_row(row);
         resp.set_cmd_get_resp(get_resp);
     }
 
-    fn cmd_scan_done(rows: Vec<RowValue>, resp: &mut Response) {
+    fn cmd_scan_done(rows: Vec<Row>, resp: &mut Response) {
         resp.set_field_type(MessageType::CmdScan);
         let mut scan_resp = CmdScanResponse::new();
         scan_resp.set_rows(RepeatedField::from_vec(rows));
         resp.set_cmd_scan_resp(scan_resp);
     }
 
-    fn cmd_batch_get_done(rows: Vec<RowValue>, resp: &mut Response) {
+    fn cmd_batch_get_done(rows: Vec<Row>, resp: &mut Response) {
         resp.set_field_type(MessageType::CmdBatchGet);
         let mut batch_get_resp = CmdBatchGetResponse::new();
-        batch_get_resp.set_row_values(RepeatedField::from_vec(rows));
+        batch_get_resp.set_rows(RepeatedField::from_vec(rows));
         resp.set_cmd_batch_get_resp(batch_get_resp);
     }
 
@@ -231,17 +241,17 @@ impl StoreHandler {
         resp.set_cmd_cleanup_resp(cleanup);
     }
 
-    fn cmd_commit_get_done(r: RowValue, resp: &mut Response) {
+    fn cmd_commit_get_done(r: Row, resp: &mut Response) {
         resp.set_field_type(MessageType::CmdCommitThenGet);
         let mut commit_get = CmdCommitThenGetResponse::new();
-        commit_get.set_row_value(r);
+        commit_get.set_row(r);
         resp.set_cmd_commit_get_resp(commit_get);
     }
 
-    fn cmd_rollback_get_done(r: RowValue, resp: &mut Response) {
+    fn cmd_rollback_get_done(r: Row, resp: &mut Response) {
         resp.set_field_type(MessageType::CmdRollbackThenGet);
         let mut rollback_get = CmdRollbackThenGetResponse::new();
-        rollback_get.set_row_value(r);
+        rollback_get.set_row(r);
         resp.set_cmd_rb_get_resp(rollback_get);
     }
 
@@ -277,7 +287,7 @@ impl StoreHandler {
 mod tests {
     use kvproto::kvrpcpb::*;
     use kvproto::errorpb::{NotLeader, Error as RegionError};
-    use kvproto::kvpb::RowValue;
+    use kvproto::kvpb::Row;
     use storage::CallbackResult;
     use super::*;
 
@@ -292,10 +302,9 @@ mod tests {
 
     #[test]
     fn test_get_done() {
-        let resp = build_resp(CallbackResult::Ok(RowValue::new()),
-                              StoreHandler::cmd_get_done);
+        let resp = build_resp(CallbackResult::Ok(Row::new()), StoreHandler::cmd_get_done);
         let mut cmd = CmdGetResponse::new();
-        cmd.set_row(RowValue::new());
+        cmd.set_row(Row::new());
         let mut expect = Response::new();
         expect.set_field_type(MessageType::CmdGet);
         expect.set_cmd_get_resp(cmd);

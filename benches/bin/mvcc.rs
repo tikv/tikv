@@ -60,7 +60,8 @@ fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
     bench!{
         let (k, _) = kvs.next().unwrap();
         assert!(store.scan(Context::new(),
-                           mvcc::default_row(&k),
+                           k,
+                           mvcc::default_cols(),
                            1,
                            ts_generator.next().unwrap())
                      .unwrap()
