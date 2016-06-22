@@ -325,7 +325,7 @@ impl Peer {
 
         let ready = self.raft_group.ready();
 
-        let t = SlowTimer::from_millis(500);
+        let t = SlowTimer::new();
 
         self.send_ready_metric(&ready);
 
@@ -339,13 +339,14 @@ impl Peer {
 
         slow_log!(t,
                   "handle peer {:?}, region {} ready, entries {}, committed entries {}, messages \
-                   {}, snapshot {}, takes {:?}",
+                   {}, snapshot {}, hard state changed {}, takes {:?}",
                   self.peer,
                   self.region_id,
                   ready.entries.len(),
                   ready.committed_entries.len(),
                   ready.messages.len(),
                   apply_result.is_some(),
+                  ready.hs.is_some(),
                   t.elapsed());
 
         self.raft_group.advance(ready);
