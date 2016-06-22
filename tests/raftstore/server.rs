@@ -255,9 +255,9 @@ impl Simulator for ServerCluster {
         trans.wl().add_filter(filter);
     }
 
-    fn clear_filter(&self, node_id: u64) {
+    fn clear_filters(&self, node_id: u64) {
         let trans = self.sim_trans.get(&node_id).unwrap();
-        trans.wl().clear_filter();
+        trans.wl().clear_filters();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<StoreSendCh> {

@@ -278,7 +278,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine3 = cluster.get_engine(3);
     util::must_get_none(&engine3, b"k2");
 
-    cluster.clear_filter();
+    cluster.clear_filters();
     cluster.must_put(b"k3", b"v3");
 
     util::sleep_ms(3000);
@@ -338,7 +338,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.get(b"k2").unwrap();
     }
 
-    cluster.clear_filter();
+    cluster.clear_filters();
 
     util::sleep_ms(3000);
     // node 3 must have k1, k2.

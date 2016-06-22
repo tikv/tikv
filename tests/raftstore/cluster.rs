@@ -52,7 +52,7 @@ pub trait Simulator {
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
     fn add_filter(&self, node_id: u64, filter: Box<Filter>);
-    fn clear_filter(&self, node_id: u64);
+    fn clear_filters(&self, node_id: u64);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -136,16 +136,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn run_node(&mut self, node_id: u64) {
-        debug!("starting node {}", node_id);
         let engine = self.engines.get(&node_id).unwrap();
         self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
-        debug!("node {} started", node_id);
     }
 
     pub fn stop_node(&mut self, node_id: u64) {
-        debug!("stopping node {}", node_id);
         self.sim.wl().stop_node(node_id);
-        debug!("node {} stopped", node_id);
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
@@ -519,10 +515,10 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn clear_filter(&mut self) {
+    pub fn clear_filters(&mut self) {
         let sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
-            sim.clear_filter(node_id);
+            sim.clear_filters(node_id);
         }
     }
 

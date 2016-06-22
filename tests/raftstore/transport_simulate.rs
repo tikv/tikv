@@ -79,7 +79,7 @@ impl<T: Transport> SimulateTransport<T> {
         }
     }
 
-    pub fn clear_filter(&mut self) {
+    pub fn clear_filters(&mut self) {
         self.filters.clear();
     }
 

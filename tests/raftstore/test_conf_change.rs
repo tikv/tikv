@@ -420,7 +420,7 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k2", b"v2");
 
     // when network recovers, 1 will send request vote to [2,3]
-    cluster.clear_filter();
+    cluster.clear_filters();
     cluster.partition(vec![1, 2, 3], vec![4, 5, 6]);
 
     // refresh region info, maybe no need

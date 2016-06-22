@@ -122,7 +122,7 @@ fn test_server_store_snap_stats() {
 
     must_detect_snap(&pd_client);
 
-    cluster.clear_filter();
+    cluster.clear_filters();
     // wait snapshot finish.
     sleep_ms(100);
 

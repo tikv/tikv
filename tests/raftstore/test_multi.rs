@@ -271,6 +271,8 @@ fn test_multi_server_random_restart() {
 
 fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.store_cfg.raft_election_timeout_ticks = 50;
+    // disable compact log to make test more stable.
+    cluster.cfg.store_cfg.raft_log_gc_threshold = 1000;
     // We use three peers([1, 2, 3]) for this test.
     cluster.run();
 
@@ -278,8 +280,6 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
     // guarantee peer 1 is leader
     cluster.must_transfer_leader(1, new_peer(1, 1));
-    cluster.must_put(b"k0", b"v0");
-    assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
 
     // So peer 3 won't replicate any message of the region but still can vote.
     cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
@@ -297,7 +297,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     // now only peer 1 and peer 2 can step to leader.
 
     // hack: first MsgAppend will append log, second MsgAppend will set commit index,
-    // So only allowing first MsgAppend to make 2 have uncommitted entries.
+    // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
     cluster.add_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv)
@@ -332,7 +332,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     let mut put = new_request(region.get_id(), region.get_region_epoch().clone(), reqs);
     debug!("requesting: {:?}", put);
     put.mut_header().set_peer(new_peer(2, 2));
-    cluster.clear_filter();
+    cluster.clear_filters();
     let resp = cluster.call_command(put, Duration::from_secs(5)).unwrap();
     assert!(!resp.get_header().has_error(), format!("{:?}", resp));
 
