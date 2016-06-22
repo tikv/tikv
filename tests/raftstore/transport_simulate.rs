@@ -83,7 +83,7 @@ impl<T: Transport> SimulateTransport<T> {
         self.filters.clear();
     }
 
-    pub fn add_filters(&mut self, filter: Box<Filter>) {
+    pub fn add_filter(&mut self, filter: Box<Filter>) {
         self.filters.push(filter);
     }
 }
