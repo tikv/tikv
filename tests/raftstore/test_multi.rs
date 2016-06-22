@@ -271,21 +271,21 @@ fn test_multi_server_random_restart() {
 
 fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.store_cfg.raft_election_timeout_ticks = 50;
-    // We use three nodes([1, 2, 3]) for this test.
+    // We use three peers([1, 2, 3]) for this test.
     cluster.run();
 
     sleep_ms(500);
 
-    // guarantee node 1 is leader
+    // guarantee peer 1 is leader
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k0", b"v0");
     assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
 
-    // So node 3 won't replicate any message of the region but still can vote.
+    // So peer 3 won't replicate any message of the region but still can vote.
     cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
     cluster.must_put(b"k1", b"v1");
 
-    // node 1 and node 2 must have k2, but node 3 must not.
+    // peer 1 and peer 2 must have k2, but peer 3 must not.
     for i in 1..3 {
         let engine = cluster.get_engine(i);
         must_get_equal(&engine, b"k1", b"v1");
@@ -294,30 +294,33 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     let engine3 = cluster.get_engine(3);
     must_get_none(&engine3, b"k1");
 
-    // now only 1 and 2 can step to leader.
+    // now only peer 1 and peer 2 can step to leader.
 
-    // hack: first append will append log, second append will set commit,
-    // So only allowing first append to make 2 have uncommitted entries.
+    // hack: first MsgAppend will append log, second MsgAppend will set commit index,
+    // So only allowing first MsgAppend to make 2 have uncommitted entries.
     cluster.add_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv)
         .allow(1));
-    // Make 2 have no way to know the uncommitted entries can be applied when it becomes leader.
+    // Make peer 2 have no way to know the uncommitted entries can be applied
+    // when it becomes leader.
     cluster.add_filter(IsolateRegionStore::new(1, 1)
         .msg_type(MessageType::MsgHeartbeatResponse)
         .direction(Direction::Send));
-    // Make 2's msg won't be replicated when it becomes leader,
+    // Make peer 2's msg won't be replicated when it becomes leader,
     // so the uncommitted entries won't be applied immediatly.
     cluster.add_filter(IsolateRegionStore::new(1, 1)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv));
-    // Make 2 have no way to know the uncommitted entries can be applied when it's still follower.
+    // Make peer 2 have no way to know the uncommitted entries can be applied
+    // when it's still follower.
     cluster.add_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgHeartbeat)
         .direction(Direction::Recv));
+    debug!("putting k2");
     cluster.must_put(b"k2", b"v2");
 
-    // 1 must commit, but 2 is not.
+    // peer 1 must have committed, but peer 2 has not.
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 
     cluster.must_transfer_leader(1, util::new_peer(2, 2));

@@ -177,9 +177,9 @@ impl Simulator for NodeCluster {
         self.trans.rl().send(msg)
     }
 
-    fn add_filter(&self, node_id: u64, filters: Box<Filter>) {
+    fn add_filter(&self, node_id: u64, filter: Box<Filter>) {
         let trans = self.simulate_trans.get(&node_id).unwrap();
-        trans.wl().add_filters(filters);
+        trans.wl().add_filters(filter);
     }
 
     fn clear_filter(&self, node_id: u64) {

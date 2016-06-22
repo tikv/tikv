@@ -51,7 +51,7 @@ pub trait Simulator {
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
-    fn add_filter(&self, node_id: u64, filters: Box<Filter>);
+    fn add_filter(&self, node_id: u64, filter: Box<Filter>);
     fn clear_filter(&self, node_id: u64);
 }
 
