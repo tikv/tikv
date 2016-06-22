@@ -14,7 +14,7 @@ use kvproto::raftpb::Snapshot;
 use kvproto::raft_serverpb::RaftSnapshotData;
 
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SnapKey {
     pub region_id: u64,
     pub term: u64,
@@ -200,18 +200,12 @@ impl Drop for SnapFile {
     }
 }
 
-struct SnapEntry {
-    is_sending: bool,
-    ref_cnt: usize,
-}
-
-impl SnapEntry {
-    fn new(is_sending: bool, ref_cnt: usize) -> SnapEntry {
-        SnapEntry {
-            is_sending: is_sending,
-            ref_cnt: ref_cnt,
-        }
-    }
+#[derive(PartialEq, Debug)]
+pub enum SnapEntry {
+    Generating = 1,
+    Sending = 2,
+    Receiving = 3,
+    Applying = 4,
 }
 
 /// `SnapStats` is for snapshot statistics.
@@ -224,7 +218,7 @@ pub struct SnapStats {
 pub struct SnapManagerCore {
     // directory to store snapfile.
     base: String,
-    registry: HashMap<SnapKey, SnapEntry>,
+    registry: HashMap<SnapKey, Vec<SnapEntry>>,
 }
 
 impl SnapManagerCore {
@@ -257,53 +251,89 @@ impl SnapManagerCore {
         Ok(())
     }
 
+    pub fn list_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
+        let path = Path::new(&self.base);
+        let read_dir = try!(fs::read_dir(path));
+        Ok(read_dir.filter_map(|p| {
+                let p = match p {
+                    Err(e) => {
+                        error!("failed to list content of {}: {:?}", self.base, e);
+                        return None;
+                    }
+                    Ok(p) => p,
+                };
+                match p.file_type() {
+                    Ok(t) if t.is_file() => {}
+                    _ => return None,
+                }
+                let file_name = p.file_name();
+                let name = match file_name.to_str() {
+                    None => return None,
+                    Some(n) => n,
+                };
+                let is_sending = name.starts_with(SNAP_GEN_PREFIX);
+                let numbers: Vec<u64> = name.split('.')
+                    .next()
+                    .map_or_else(|| vec![], |s| {
+                        s.split('_')
+                            .skip(1)
+                            .filter_map(|s| s.parse().ok())
+                            .collect()
+                    });
+                if numbers.len() != 3 {
+                    error!("failed to parse snapkey from {}", name);
+                    return None;
+                }
+                Some((SnapKey::new(numbers[0], numbers[1], numbers[2]), is_sending))
+            })
+            .collect())
+    }
+
     #[inline]
     pub fn get_snap_file(&self, key: &SnapKey, is_sending: bool) -> io::Result<SnapFile> {
         SnapFile::new(&self.base, is_sending, key)
     }
 
-    pub fn register(&mut self, key: SnapKey, is_sending: bool) {
-        debug!("register [key: {}, is_sending: {}]", key, is_sending);
+    pub fn register(&mut self, key: SnapKey, entry: SnapEntry) {
+        debug!("register [key: {}, entry: {:?}]", key, entry);
         match self.registry.entry(key) {
             Entry::Occupied(mut e) => {
-                if e.get().is_sending == is_sending {
-                    e.get_mut().ref_cnt += 1;
-                } else {
-                    info!("seems leadership of {} changed, cleanup old snapfiles",
-                          e.key());
-                    if let Ok(f) = SnapFile::new(&self.base, !is_sending, e.key()) {
-                        f.delete();
-                    }
-                    e.insert(SnapEntry::new(is_sending, 1));
+                if e.get().contains(&entry) {
+                    warn!("{} is registered more than 1 time!!!", e.key());
+                    return;
                 }
+                e.get_mut().push(entry);
             }
             Entry::Vacant(e) => {
-                e.insert(SnapEntry::new(is_sending, 1));
+                e.insert(vec![entry]);
             }
         }
     }
 
-    pub fn deregister(&mut self, key: &SnapKey, is_sending: bool) {
-        debug!("deregister [key: {}, is_sending: {}]", key, is_sending);
-        let mut need_cleanup = false;
+    pub fn deregister(&mut self, key: &SnapKey, entry: &SnapEntry) {
+        debug!("deregister [key: {}, entry: {:?}]", key, entry);
+        let mut need_clean = false;
+        let mut handled = false;
         if let Some(e) = self.registry.get_mut(key) {
-            if e.is_sending != is_sending {
-                warn!("stale deregister key: {} {}", key, is_sending);
-                return;
-            }
-            e.ref_cnt -= 1;
-            need_cleanup = e.ref_cnt == 0;
-        };
-        if need_cleanup {
-            self.registry.remove(key);
-            if let Ok(f) = self.get_snap_file(key, is_sending) {
-                f.delete();
-            }
+            let last_len = e.len();
+            e.retain(|e| e != entry);
+            need_clean = e.is_empty();
+            handled = last_len > e.len();
         }
+        if need_clean {
+            self.registry.remove(key);
+        }
+        if handled {
+            return;
+        }
+        warn!("stale deregister key: {} {:?}", key, entry);
     }
 
     pub fn stats(&self) -> SnapStats {
-        let sending_count = self.registry.values().filter(|v| v.is_sending).count();
+        let sending_count = self.registry
+            .values()
+            .filter(|v| v.iter().any(|s| *s == SnapEntry::Sending || *s == SnapEntry::Generating))
+            .count();
         let receiving_count = self.registry.len() - sending_count;
 
         SnapStats {

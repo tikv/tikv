@@ -18,7 +18,6 @@ use std::error;
 use std::time::Instant;
 
 use util::worker::Runnable;
-use util::HandyRwLock;
 
 /// Snapshot generating task.
 pub struct Task {
@@ -73,11 +72,9 @@ impl Runner {
             key = SnapKey::new(storage.get_region_id(), term, applied_idx);
         }
 
-        self.mgr.wl().register(key.clone(), true);
         match store::do_snapshot(self.mgr.clone(), &raw_snap, key.clone(), ranges) {
             Ok(snap) => task.storage.wl().snap_state = SnapState::Snap(snap),
             Err(e) => {
-                self.mgr.wl().deregister(&key, true);
                 return Err(Error::Other(box e));
             }
         }

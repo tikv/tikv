@@ -31,7 +31,7 @@ use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
-use super::{SnapFile, SnapKey, SnapManager};
+use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -306,7 +306,11 @@ impl PeerStorage {
 
         let key = try!(SnapKey::from_snap(snap));
         let snap_file = try!(self.snap_mgr.rl().get_snap_file(&key, false));
-        defer!(self.snap_mgr.wl().deregister(&key, false));
+        self.snap_mgr.wl().register(key.clone(), SnapEntry::Applying);
+        defer!({
+            self.snap_mgr.wl().deregister(&key, &SnapEntry::Applying);
+            snap_file.delete();
+        });
         if !snap_file.exists() {
             return Err(box_err!("missing snap file {}", snap_file.path().display()));
         }
@@ -586,6 +590,8 @@ pub fn do_snapshot(mgr: SnapManager,
                    ranges: Ranges)
                    -> raft::Result<Snapshot> {
     debug!("begin to generate a snapshot for region {}", key.region_id);
+    mgr.wl().register(key.clone(), SnapEntry::Generating);
+    defer!(mgr.wl().deregister(&key, &SnapEntry::Generating));
 
     let region: metapb::Region = try!(snap.get_msg(&keys::region_info_key(key.region_id))
         .and_then(|res| {

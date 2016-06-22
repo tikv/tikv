@@ -31,6 +31,8 @@ const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
 const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 10000;
 const STORE_CAPACITY: u64 = u64::MAX;
 const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
+const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
+const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -66,6 +68,8 @@ pub struct Config {
     pub pd_heartbeat_tick_interval: u64,
     pub pd_store_heartbeat_tick_interval: u64,
     pub notify_capacity: usize,
+    pub snap_mgr_gc_tick_interval: u64,
+    pub snap_gc_timeout: u64,
 }
 
 impl Default for Config {
@@ -87,6 +91,8 @@ impl Default for Config {
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
             pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL_MS,
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
+            snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL_MS,
+            snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
         }
     }
 }

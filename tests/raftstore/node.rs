@@ -69,7 +69,7 @@ impl Transport for ChannelTransport {
             };
             let mut dst_file = match self.snap_paths.get(&to_store) {
                 Some(p) => {
-                    p.0.wl().register(key.clone(), false);
+                    p.0.wl().register(key.clone(), SnapEntry::Sending);
                     p.0.rl().get_snap_file(&key, false).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
@@ -83,6 +83,8 @@ impl Transport for ChannelTransport {
                 io::copy(&mut reader, &mut dst_file).unwrap();
                 dst_file.save().unwrap();
             }
+
+            self.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Sending);
         }
 
         match self.routers.get(&to_store) {
@@ -148,6 +150,10 @@ impl Simulator for NodeCluster {
         self.trans.wl().snap_paths.insert(node_id, (snap_mgr, tmp));
 
         node_id
+    }
+
+    fn get_snap_dir(&self, node_id: u64) -> String {
+        self.trans.wl().snap_paths.get(&node_id).unwrap().1.path().to_str().unwrap().to_owned()
     }
 
     fn stop_node(&mut self, node_id: u64) {

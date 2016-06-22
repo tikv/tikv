@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::Duration;
-use std::cmp;
+use std::{cmp, u64};
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder};
@@ -39,7 +39,7 @@ use util::worker::Worker;
 use util::get_disk_stat;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
-use super::{util, SendCh, Msg, Tick, SnapManager, SnapKey};
+use super::{util, SendCh, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
@@ -167,6 +167,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_split_region_check_tick(event_loop);
         self.register_pd_heartbeat_tick(event_loop);
         self.register_pd_store_heartbeat_tick(event_loop);
+        self.register_snap_mgr_gc_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -243,18 +244,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     #[allow(map_entry)]
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-
-        let k = if msg.get_message().has_snapshot() {
-            Some(SnapKey::from_region_snap(region_id, msg.get_message().get_snapshot()))
-        } else {
-            None
-        };
-        let mgr = self.snap_mgr.clone();
-        defer!({
-            if let Some(ref k) = k {
-                mgr.wl().deregister(k, false);
-            }
-        });
         if !self.is_raft_msg_valid(&msg) {
             return Ok(());
         }
@@ -272,7 +261,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
         }
 
-        if k.is_some() && try!(self.is_snapshot_overlapped(&msg)) {
+        if try!(self.is_snapshot_overlapped(&msg)) {
             return Ok(());
         }
 
@@ -281,16 +270,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
-        let prev_key = peer.raft_group.get_snap().map(|s| SnapKey::from_region_snap(region_id, s));
         try!(peer.raft_group.step(msg.take_message()));
-        let cur_key = peer.raft_group.get_snap().map(|s| SnapKey::from_region_snap(region_id, s));
-        if k.is_some() && k == cur_key {
-            mgr.wl().register(cur_key.unwrap(), false);
-            assert!(prev_key != k);
-            if let Some(k) = prev_key {
-                mgr.wl().deregister(&k, false);
-            }
-        }
         slow_log!(timer, "step takes {:?}", timer.elapsed());
 
         // Add into pending raft groups for later handling ready.
@@ -380,7 +360,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for region_id in ids {
             let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans, &self.snap_mgr) {
+                match peer.handle_raft_ready(&self.trans) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
                         error!("handle raft ready at region {} err: {:?}", region_id, e);
@@ -868,6 +848,57 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_store_heartbeat_tick(event_loop);
     }
 
+    fn handle_snap_mgr_gc(&mut self) -> Result<()> {
+        let mut snap_keys = try!(self.snap_mgr.wl().list_snap());
+        if snap_keys.is_empty() {
+            return Ok(());
+        }
+        snap_keys.sort();
+        let (mut last_region_id, mut first_idx, mut first_term) = (0, u64::MAX, u64::MAX);
+        for (key, is_sending) in snap_keys {
+            if last_region_id != key.region_id {
+                last_region_id = key.region_id;
+                match self.region_peers.get(&key.region_id) {
+                    None => {
+                        // region is deleted
+                        first_idx = u64::MAX;
+                        first_term = u64::MAX;
+                    }
+                    Some(peer) => {
+                        let s = peer.storage.rl();
+                        first_idx = cmp::min(s.first_index(), s.last_index());
+                        first_term = try!(s.term(first_idx));
+                    }
+                };
+            }
+
+            let f = try!(self.snap_mgr.rl().get_snap_file(&key, is_sending));
+            if is_sending {
+                if key.term < first_term || key.idx < first_idx {
+                    // log has been compacted.
+                    f.delete();
+                } else if let Ok(meta) = f.meta() {
+                    let modified = box_try!(meta.modified());
+                    if let Ok(elapsed) = modified.elapsed() {
+                        if elapsed > Duration::from_secs(self.cfg.snap_gc_timeout) {
+                            f.delete();
+                        }
+                    }
+                }
+            } else if key.term <= first_term && key.idx <= first_idx {
+                // snapshot is applied.
+                f.delete();
+            }
+        }
+        Ok(())
+    }
+
+    fn on_snap_mgr_gc(&mut self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = self.handle_snap_mgr_gc() {
+            error!("failed to gc snap manager on {}: {:?}", self.store_id(), e);
+        }
+        self.register_snap_mgr_gc_tick(event_loop);
+    }
 
     fn register_pd_store_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
@@ -875,6 +906,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.pd_store_heartbeat_tick_interval) {
             error!("register pd store heartbeat tick err: {:?}", e);
         };
+    }
+
+    fn register_snap_mgr_gc_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::SnapMgrGc,
+                                       self.cfg.snap_mgr_gc_tick_interval) {
+            error!("register snap mgr gc tick err: {:?}", e);
+        }
     }
 
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
@@ -972,6 +1011,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
+            Tick::SnapMgrGc => self.on_snap_mgr_gc(event_loop),
         }
         slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }
