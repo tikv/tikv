@@ -525,7 +525,9 @@ impl PeerStorage {
             try!(save_hard_state(&wb, region_id, hs));
         }
 
-        try!(self.engine.write(wb));
+        if !wb.is_empty() {
+            try!(self.engine.write(wb));
+        }
 
         self.set_last_index(last_index);
         // If we apply snapshot ok, we should update some infos like applied index too.
