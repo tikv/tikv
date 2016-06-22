@@ -12,10 +12,7 @@
 // limitations under the License.
 
 use std::collections::VecDeque;
-use std::net::Shutdown;
 use std::cmp;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
 use mio::tcp::TcpStream;
@@ -62,7 +59,6 @@ pub struct Conn {
     file_size: usize,
     read_size: usize,
     snap_scheduler: Scheduler<SnapTask>,
-    abort: Arc<AtomicBool>,
 
     // write buffer, including msg header already.
     res: VecDeque<ByteBuf>,
@@ -113,7 +109,6 @@ impl Conn {
             res: VecDeque::new(),
             last_msg_id: 0,
             snap_scheduler: snap_scheduler,
-            abort: Arc::new(AtomicBool::new(false)),
             store_id: store_id,
         }
     }
@@ -170,8 +165,7 @@ impl Conn {
             self.file_size = snap_data.get_file_size() as usize;
             self.payload = Some(create_mem_buf(cmp::min(SNAPSHOT_PAYLOAD_BUF, self.file_size)));
 
-            let register_task =
-                SnapTask::Register(self.token, data.msg.take_raft(), self.abort.clone());
+            let register_task = SnapTask::Register(self.token, data.msg.take_raft());
             box_try!(self.snap_scheduler.schedule(register_task));
 
             return self.read_snapshot(event_loop);
@@ -189,13 +183,6 @@ impl Conn {
         if self.payload.is_none() {
             return Ok(());
         }
-        if self.abort.load(Ordering::SeqCst) {
-            if let Err(e) = self.sock.shutdown(Shutdown::Both) {
-                error!("shutdown connection error: {}", e);
-            }
-            self.payload.take();
-            return Ok(());
-        }
         // TODO: limit rate
         while try!(self.read_payload()) {
             let payload = self.payload.take().unwrap();
@@ -208,9 +195,7 @@ impl Conn {
             if self.read_size == self.file_size {
                 // last chunk
                 box_try!(self.snap_scheduler.schedule(SnapTask::Close(self.token)));
-                if let Err(e) = self.sock.shutdown(Shutdown::Both) {
-                    error!("shutdown connection error: {}", e);
-                }
+                // let snap_scheduler to close the connection.
                 break;
             } else if self.read_size + cap >= self.file_size {
                 self.payload = Some(create_mem_buf(self.file_size - self.read_size))
