@@ -92,4 +92,7 @@ pub trait PdClient: Send + Sync {
 
     // Send store statistics regularly.
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()>;
+
+    // Report pd the split region.
+    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> Result<()>;
 }
