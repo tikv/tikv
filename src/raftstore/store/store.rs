@@ -854,39 +854,40 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
         snap_keys.sort();
-        let (mut last_region_id, mut first_idx, mut first_term) = (0, u64::MAX, u64::MAX);
+        let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
         for (key, is_sending) in snap_keys {
             if last_region_id != key.region_id {
                 last_region_id = key.region_id;
                 match self.region_peers.get(&key.region_id) {
                     None => {
                         // region is deleted
-                        first_idx = u64::MAX;
-                        first_term = u64::MAX;
+                        compacted_idx = u64::MAX;
+                        compacted_term = u64::MAX;
                     }
                     Some(peer) => {
                         let s = peer.storage.rl();
-                        first_idx = cmp::min(s.first_index(), s.last_index());
-                        first_term = try!(s.term(first_idx));
+                        compacted_idx = s.truncated_state.get_index();
+                        compacted_term = s.truncated_state.get_term();
                     }
                 };
             }
 
             let f = try!(self.snap_mgr.rl().get_snap_file(&key, is_sending));
             if is_sending {
-                if key.term < first_term || key.idx < first_idx {
-                    // log has been compacted.
+                if key.term < compacted_term || key.idx < compacted_idx {
+                    debug!("snap file {} has been compacted, delete.", key);
                     f.delete();
                 } else if let Ok(meta) = f.meta() {
                     let modified = box_try!(meta.modified());
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed > Duration::from_secs(self.cfg.snap_gc_timeout) {
+                            debug!("snap file {} has been expired, delete.", key);
                             f.delete();
                         }
                     }
                 }
-            } else if key.term <= first_term && key.idx <= first_idx {
-                // snapshot is applied.
+            } else if key.term <= compacted_term && key.idx <= compacted_idx {
+                debug!("snap file {} has been applied, delete.", key);
                 f.delete();
             }
         }
@@ -910,7 +911,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn register_snap_mgr_gc_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
-                                       Tick::SnapMgrGc,
+                                       Tick::SnapGc,
                                        self.cfg.snap_mgr_gc_tick_interval) {
             error!("register snap mgr gc tick err: {:?}", e);
         }
@@ -1011,7 +1012,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
-            Tick::SnapMgrGc => self.on_snap_mgr_gc(event_loop),
+            Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
         }
         slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }

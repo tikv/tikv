@@ -64,12 +64,15 @@ impl Transport for ChannelTransport {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
             let source_file = match self.snap_paths.get(&from_store) {
-                Some(p) => p.0.rl().get_snap_file(&key, true).unwrap(),
+                Some(p) => {
+                    p.0.wl().register(key.clone(), SnapEntry::Sending);
+                    p.0.rl().get_snap_file(&key, true).unwrap()
+                }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
             let mut dst_file = match self.snap_paths.get(&to_store) {
                 Some(p) => {
-                    p.0.wl().register(key.clone(), SnapEntry::Sending);
+                    p.0.wl().register(key.clone(), SnapEntry::Receiving);
                     p.0.rl().get_snap_file(&key, false).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
@@ -84,7 +87,8 @@ impl Transport for ChannelTransport {
                 dst_file.save().unwrap();
             }
 
-            self.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Sending);
+            self.snap_paths[&from_store].0.wl().deregister(&key, &SnapEntry::Sending);
+            self.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
         }
 
         match self.routers.get(&to_store) {

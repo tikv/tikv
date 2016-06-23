@@ -158,6 +158,7 @@ impl SnapFile {
     ///
     /// Please note that this method can only be called once.
     pub fn save(&mut self) -> io::Result<()> {
+        debug!("saving to {}", self.file.as_path().display());
         if let Some((mut f, path)) = self.tmp_file.take() {
             try!(f.write_u32::<BigEndian>(self.digest.sum32()));
             try!(f.flush());
@@ -192,7 +193,7 @@ impl Write for SnapFile {
 impl Drop for SnapFile {
     fn drop(&mut self) {
         if let Some((_, path)) = self.tmp_file.take() {
-            debug!("deleteing {}", path);
+            debug!("deleting {}", path);
             if let Err(e) = fs::remove_file(&path) {
                 warn!("failed to delete temporary file {}: {:?}", path, e);
             }

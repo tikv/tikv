@@ -33,7 +33,7 @@ pub enum Tick {
     SplitRegionCheck,
     PdHeartbeat,
     PdStoreHeartbeat,
-    SnapMgrGc,
+    SnapGc,
 }
 
 pub enum Msg {
