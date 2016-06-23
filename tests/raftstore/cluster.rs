@@ -50,6 +50,7 @@ pub trait Simulator {
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
+    fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
     fn add_filter(&self, node_id: u64, filter: Box<Filter>);
     fn clear_filters(&self, node_id: u64);
@@ -517,6 +518,10 @@ impl<T: Simulator> Cluster<T> {
             }
             try_cnt += 1;
         }
+    }
+
+    pub fn get_snap_dir(&self, node_id: u64) -> String {
+        self.sim.rl().get_snap_dir(node_id)
     }
 
     pub fn clear_filters(&mut self) {
