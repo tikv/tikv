@@ -4,7 +4,6 @@ use std::fs::{self, File, OpenOptions, Metadata};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, RwLock};
-use std::cmp;
 use std::path::{Path, PathBuf};
 
 use crc::crc32::{self, Digest, Hasher32};
@@ -338,21 +337,26 @@ impl SnapManagerCore {
 
     pub fn stats(&self) -> SnapStats {
         // send_count, generating_count, receiving_count, applying_count
-        let (mut sc, mut gc, mut rc, mut ac) = (0, 0, 0, 0);
+        let (mut sending_cnt, mut receiving_cnt) = (0, 0);
         for v in self.registry.values() {
+            let (mut is_sending, mut is_receiving) = (false, false);
             for s in v {
                 match *s {
-                    SnapEntry::Sending => sc += 1,
-                    SnapEntry::Generating => gc += 1,
-                    SnapEntry::Receiving => rc += 1,
-                    SnapEntry::Applying => ac += 1,
+                    SnapEntry::Sending | SnapEntry::Generating => is_sending = true,
+                    SnapEntry::Receiving | SnapEntry::Applying => is_receiving = true,
                 }
+            }
+            if is_sending {
+                sending_cnt += 1;
+            }
+            if is_receiving {
+                receiving_cnt += 1;
             }
         }
 
         SnapStats {
-            sending_count: cmp::max(sc, gc),
-            receiving_count: cmp::max(rc, ac),
+            sending_count: sending_cnt,
+            receiving_count: receiving_cnt,
         }
     }
 }

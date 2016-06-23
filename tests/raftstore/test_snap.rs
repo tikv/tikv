@@ -15,6 +15,7 @@
 use std::fs;
 
 use tikv::pd::PdClient;
+use kvproto::raftpb::MessageType;
 
 use super::transport_simulate::IsolateRegionStore;
 use super::cluster::{Cluster, Simulator};
@@ -87,8 +88,10 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    // isolate node 3 for region 1.
-    cluster.add_filter(IsolateRegionStore::new(1, 3));
+    // isolate node 3 for region 1, but keep the heartbeat to make
+    // 3 not vote after filters are cleared.
+    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgSnapshot));
+    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
@@ -120,10 +123,6 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.clear_filters();
     debug!("filters cleared.");
-
-    // node 3 will start a new election, so wait a little time to avoid
-    // timeout when machine is slow.
-    sleep_ms(1000);
 
     // node 3 must have k1, k2.
     must_get_equal(&engine3, b"k1", b"v1");
