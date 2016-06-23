@@ -856,6 +856,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         snap_keys.sort();
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
         for (key, is_sending) in snap_keys {
+            if self.snap_mgr.rl().has_registered(&key) {
+                continue;
+            }
             if last_region_id != key.region_id {
                 last_region_id = key.region_id;
                 match self.region_peers.get(&key.region_id) {

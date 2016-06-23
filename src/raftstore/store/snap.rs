@@ -291,6 +291,11 @@ impl SnapManagerCore {
     }
 
     #[inline]
+    pub fn has_registered(&self, key: &SnapKey) -> bool {
+        self.registry.contains_key(key)
+    }
+
+    #[inline]
     pub fn get_snap_file(&self, key: &SnapKey, is_sending: bool) -> io::Result<SnapFile> {
         SnapFile::new(&self.base, is_sending, key)
     }

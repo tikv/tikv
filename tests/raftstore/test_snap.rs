@@ -75,7 +75,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20;
     cluster.cfg.store_cfg.raft_log_gc_limit = 2;
     cluster.cfg.store_cfg.snap_mgr_gc_tick_interval = 50;
-    cluster.cfg.store_cfg.snap_gc_timeout = 5;
+    cluster.cfg.store_cfg.snap_gc_timeout = 2;
 
     // We use three nodes([1, 2, 3]) for this test.
     cluster.run();
@@ -106,7 +106,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine3 = cluster.get_engine(3);
     must_get_none(&engine3, b"k2");
 
-    for _ in 0..200 {
+    for _ in 0..30 {
         // write many logs to force log GC for region 1 and region 2.
         // and trigger snapshot more than one time.
         cluster.get(b"k1").unwrap();
@@ -119,12 +119,17 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(snapfiles.len() > 2);
 
     cluster.clear_filters();
+    debug!("filters cleared.");
 
-    sleep_ms(5000);
+    // node 3 will start a new election, so wait a little time to avoid
+    // timeout when machine is slow.
+    sleep_ms(1000);
 
     // node 3 must have k1, k2.
     must_get_equal(&engine3, b"k1", b"v1");
     must_get_equal(&engine3, b"k2", b"v2");
+
+    sleep_ms(2000);
 
     for i in 1..4 {
         let snap_dir = cluster.get_snap_dir(i);
