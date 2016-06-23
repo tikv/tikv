@@ -360,6 +360,8 @@ impl PeerStorage {
             Some(state) => try!(w.put_msg(&hard_state_key, &state)),
         }
 
+        try!(w.put_msg(&keys::region_info_key(region_id), region));
+
         let last_index = snap.get_metadata().get_index();
         try!(save_last_index(w, region_id, last_index));
 
@@ -542,47 +544,34 @@ impl PeerStorage {
 
 fn build_snap_file(f: &mut SnapFile,
                    snap: &DbSnapshot,
-                   region_id: u64,
-                   ranges: Ranges)
+                   region: &metapb::Region)
                    -> raft::Result<()> {
-    // Scan everything except raft logs for this region.
-    let log_prefix = keys::raft_log_prefix(region_id);
     let mut snap_size = 0;
     let mut snap_key_cnt = 0;
-    for (begin, end) in ranges {
-        try!(snap.scan(&begin,
-                       &end,
-                       &mut |key, value| {
-            if key.starts_with(&log_prefix) {
-                // Ignore raft logs.
-                // TODO: do more tests for snapshot.
-                return Ok(true);
-            }
-            snap_size += key.len();
-            snap_size += value.len();
-            snap_key_cnt += 1;
+    let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
+    try!(snap.scan(&begin_key,
+                   &end_key,
+                   &mut |key, value| {
+        snap_size += key.len();
+        snap_size += value.len();
+        snap_key_cnt += 1;
 
-            try!(f.encode_compact_bytes(key));
-            try!(f.encode_compact_bytes(value));
-            Ok(true)
-        }));
-    }
+        try!(f.encode_compact_bytes(key));
+        try!(f.encode_compact_bytes(value));
+        Ok(true)
+    }));
     // use an empty byte array to indicate that kvpair reaches an end.
     box_try!(f.encode_compact_bytes(b""));
     try!(f.save());
 
     info!("scan snapshot for region {}, size {}, key count {}",
-          region_id,
+          region.get_id(),
           snap_size,
           snap_key_cnt);
     Ok(())
 }
 
-pub fn do_snapshot(mgr: SnapManager,
-                   snap: &DbSnapshot,
-                   key: SnapKey,
-                   ranges: Ranges)
-                   -> raft::Result<Snapshot> {
+pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, key: SnapKey) -> raft::Result<Snapshot> {
     debug!("begin to generate a snapshot for region {}", key.region_id);
     mgr.wl().register(key.clone(), SnapEntry::Generating);
     defer!(mgr.wl().deregister(&key, &SnapEntry::Generating));
@@ -608,10 +597,6 @@ pub fn do_snapshot(mgr: SnapManager,
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    // Set snapshot data.
-    let mut snap_data = RaftSnapshotData::new();
-    snap_data.set_region(region);
-
     let mut snap_file = try!(mgr.rl().get_snap_file(&key, true));
     if snap_file.exists() {
         if let Err(e) = snap_file.validate() {
@@ -620,11 +605,15 @@ pub fn do_snapshot(mgr: SnapManager,
                    e);
             try!(snap_file.try_delete());
             try!(snap_file.init());
-            try!(build_snap_file(&mut snap_file, snap, key.region_id, ranges));
+            try!(build_snap_file(&mut snap_file, snap, &region));
         }
     } else {
-        try!(build_snap_file(&mut snap_file, snap, key.region_id, ranges));
+        try!(build_snap_file(&mut snap_file, snap, &region));
     }
+
+    // Set snapshot data.
+    let mut snap_data = RaftSnapshotData::new();
+    snap_data.set_region(region);
 
     let len = try!(snap_file.meta()).len();
     snap_data.set_file_size(len);
@@ -838,11 +827,10 @@ mod test {
 
     fn get_snap(s: &RaftStorage, mgr: SnapManager) -> Snapshot {
         let raw_snap = s.rl().raw_snapshot();
-        let key_ranges = s.rl().region_key_ranges();
         let applied_id = s.rl().load_applied_index(&raw_snap).unwrap();
         let term = s.rl().term(applied_id).unwrap();
         let key = SnapKey::new(s.rl().get_region_id(), term, applied_id);
-        do_snapshot(mgr, &raw_snap, key, key_ranges).unwrap()
+        do_snapshot(mgr, &raw_snap, key).unwrap()
     }
 
     #[test]
