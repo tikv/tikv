@@ -284,6 +284,29 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           config,
                           Some(40960),
                           |v| v.as_integer()) as usize;
+    cfg.store_cfg.region_split_size =
+        get_integer_value("region-split-size",
+                          "raftstore.region-split-size",
+                          matches,
+                          config,
+                          Some(64 * 1024 * 1024),
+                          |v| v.as_integer()) as u64;
+    cfg.store_cfg.region_max_size =
+        get_integer_value("region-max-size",
+                          "raftstore.region-max-size",
+                          matches,
+                          config,
+                          Some(80 * 1024 * 1024),
+                          |v| v.as_integer()) as u64;
+    cfg.store_cfg.region_check_size_diff =
+        get_integer_value("region-split-check-diff",
+                          "raftstore.region-split-check-diff",
+                          matches,
+                          config,
+                          Some(8 * 1024 * 1024),
+                          |v| v.as_integer()) as u64;
+
+
     cfg
 }
 
@@ -421,6 +444,18 @@ fn main() {
                 "metric-prefix",
                 "set metric prefix",
                 "metric prefix: tikv");
+    opts.optopt("",
+                "region-split-size",
+                "set region split size",
+                "default: 64 MB");
+    opts.optopt("",
+                "region-max-size",
+                "set region max size",
+                "default: 80 MB");
+    opts.optopt("",
+                "region-split-check-diff",
+                "set region split check diff",
+                "default: 8 MB");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);
