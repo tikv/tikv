@@ -136,12 +136,16 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn run_node(&mut self, node_id: u64) {
+        debug!("starting node {}", node_id);
         let engine = self.engines.get(&node_id).unwrap();
         self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
+        debug!("node {} started", node_id);
     }
 
     pub fn stop_node(&mut self, node_id: u64) {
+        debug!("stopping node {}", node_id);
         self.sim.wl().stop_node(node_id);
+        debug!("node {} stopped", node_id);
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
