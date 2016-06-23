@@ -592,7 +592,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(peer) => peer,
         };
 
-        bind_term(&mut resp, peer.term());
+        let term = peer.term();
+        bind_term(&mut resp, term);
 
         if !peer.is_leader() {
             bind_error(&mut resp,
@@ -619,6 +620,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let pending_cmd = PendingCmd {
             uuid: uuid,
+            term: term,
             cb: cb,
         };
         try!(peer.propose(pending_cmd, msg, resp));

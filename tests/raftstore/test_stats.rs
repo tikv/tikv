@@ -117,12 +117,12 @@ fn test_server_store_snap_stats() {
     cluster.must_put(b"k1", b"v1");
 
     // delay snapshot sending, so that we can detect this.
-    cluster.hook_transport(DelaySnapshot::new(Duration::from_millis(50)));
+    cluster.add_filter(DelaySnapshot::new(Duration::from_millis(50)));
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
     must_detect_snap(&pd_client);
 
-    cluster.reset_transport_hooks();
+    cluster.clear_filters();
     // wait snapshot finish.
     sleep_ms(100);
 

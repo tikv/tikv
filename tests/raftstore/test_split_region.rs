@@ -259,7 +259,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
     // isolate node 3 for region 1.
-    cluster.hook_transport(IsolateRegionStore::new(1, 3));
+    cluster.add_filter(IsolateRegionStore::new(1, 3));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
@@ -278,7 +278,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine3 = cluster.get_engine(3);
     util::must_get_none(&engine3, b"k2");
 
-    cluster.reset_transport_hooks();
+    cluster.clear_filters();
     cluster.must_put(b"k3", b"v3");
 
     util::sleep_ms(3000);
@@ -314,7 +314,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
     // isolate node 3 for region 1.
-    cluster.hook_transport(IsolateRegionStore::new(1, 3));
+    cluster.add_filter(IsolateRegionStore::new(1, 3));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
@@ -338,7 +338,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.get(b"k2").unwrap();
     }
 
-    cluster.reset_transport_hooks();
+    cluster.clear_filters();
 
     util::sleep_ms(3000);
     // node 3 must have k1, k2.
