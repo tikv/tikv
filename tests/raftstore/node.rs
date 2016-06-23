@@ -16,12 +16,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use std::fs::File;
-use std::io;
+use std::fs;
 
 use rocksdb::DB;
 use tempdir::TempDir;
-use protobuf::Message;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
@@ -33,7 +31,6 @@ use tikv::raftstore::{store, Result};
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
-use tikv::util::codec::number::NumberEncoder;
 use tikv::raft::SnapshotStatus;
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
@@ -70,7 +67,7 @@ impl Transport for ChannelTransport {
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
-            let mut dst_file = match self.snap_paths.get(&to_store) {
+            let dst_file = match self.snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
                     p.0.rl().get_snap_file(&key, false).unwrap()
@@ -79,12 +76,7 @@ impl Transport for ChannelTransport {
             };
 
             if !dst_file.exists() {
-                let mut reader = File::open(source_file.path()).unwrap();
-
-                dst_file.encode_u64(msg.compute_size() as u64).unwrap();
-                msg.write_to_writer(&mut dst_file).unwrap();
-                io::copy(&mut reader, &mut dst_file).unwrap();
-                dst_file.save().unwrap();
+                fs::copy(source_file.path(), dst_file.path()).unwrap();
             }
 
             self.snap_paths[&from_store].0.wl().deregister(&key, &SnapEntry::Sending);

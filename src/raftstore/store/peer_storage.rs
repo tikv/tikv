@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::io::{Seek, SeekFrom};
 use std::fs::File;
 use std::{error, mem};
 use std::time::Instant;
@@ -24,9 +23,7 @@ use kvproto::metapb;
 use kvproto::raftpb::{Entry, Snapshot, HardState, ConfState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftTruncatedState};
 use util::HandyRwLock;
-use util::codec::bytes::BytesEncoder;
-use util::codec::bytes::CompactBytesDecoder;
-use util::codec::number::NumberDecoder;
+use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::keys::{self, enc_start_key, enc_end_key};
@@ -316,9 +313,6 @@ impl PeerStorage {
         }
         try!(snap_file.validate());
         let mut reader = try!(File::open(snap_file.path()));
-        let len = try!(reader.decode_u64());
-        // do we need to check RaftMsg here?
-        try!(reader.seek(SeekFrom::Current(len as i64)));
 
         let mut snap_data = RaftSnapshotData::new();
         try!(snap_data.merge_from_bytes(snap.get_data()));
