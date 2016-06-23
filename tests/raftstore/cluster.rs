@@ -51,7 +51,8 @@ pub trait Simulator {
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
-    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>);
+    fn add_filter(&self, node_id: u64, filter: Box<Filter>);
+    fn clear_filters(&self, node_id: u64);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -479,11 +480,12 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
-    pub fn hook_transport<F: FilterFactory>(&self, factory: F) {
+    pub fn add_filter<F: FilterFactory>(&self, factory: F) {
         let sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
-            let filter = factory.generate(node_id);
-            sim.hook_transport(node_id, filter);
+            for filter in factory.generate(node_id) {
+                sim.add_filter(node_id, filter);
+            }
         }
     }
 
@@ -513,10 +515,10 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn reset_transport_hooks(&mut self) {
+    pub fn clear_filters(&mut self) {
         let sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
-            sim.hook_transport(node_id, vec![]);
+            sim.clear_filters(node_id);
         }
     }
 
@@ -558,7 +560,7 @@ impl<T: Simulator> Cluster<T> {
 
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
-        self.hook_transport(Partition::new(s1, s2));
+        self.add_filter(Partition::new(s1, s2));
     }
 }
 
