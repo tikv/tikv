@@ -26,7 +26,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState};
-use raft::{self, RawNode, StateRole, SnapshotStatus};
+use raft::{self, RawNode, StateRole, SnapshotStatus, Ready};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -301,6 +301,25 @@ impl Peer {
         self.raft_group.raft.state == StateRole::Leader
     }
 
+    fn send_ready_metric(&self, ready: &Ready) {
+        if !ready.messages.is_empty() {
+            metric_count!("raftstore.send_raft_message", ready.messages.len() as i64);
+        }
+
+        if !ready.committed_entries.is_empty() {
+            metric_count!("raftstore.handle_raft_commit_entries",
+                          ready.committed_entries.len() as i64);
+        }
+
+        if !ready.entries.is_empty() {
+            metric_count!("raftstore.append_entries", ready.entries.len() as i64);
+        }
+
+        if !raft::is_empty_snap(&ready.snapshot) {
+            metric_incr!("raftstore.apply_snapshot");
+        }
+    }
+
     pub fn handle_raft_ready<T: Transport>(&mut self,
                                            trans: &Arc<RwLock<T>>)
                                            -> Result<Option<ReadyResult>> {
@@ -314,7 +333,9 @@ impl Peer {
 
         let ready = self.raft_group.ready();
 
-        let t = SlowTimer::from_millis(500);
+        let t = SlowTimer::new();
+
+        self.send_ready_metric(&ready);
 
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
@@ -326,13 +347,14 @@ impl Peer {
 
         slow_log!(t,
                   "handle peer {:?}, region {} ready, entries {}, committed entries {}, messages \
-                   {}, snapshot {}, takes {:?}",
+                   {}, snapshot {}, hard state changed {}, takes {:?}",
                   self.peer,
                   self.region_id,
                   ready.entries.len(),
                   ready.committed_entries.len(),
                   ready.messages.len(),
                   apply_result.is_some(),
+                  ready.hs.is_some(),
                   t.elapsed());
 
         self.raft_group.advance(ready);
@@ -529,7 +551,6 @@ impl Peer {
                                        msg: &raftpb::Message,
                                        trans: &Arc<RwLock<T>>)
                                        -> Result<()> {
-        metric_incr!("raftstore.send_raft_message");
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // TODO: can we use move instead?
@@ -593,7 +614,6 @@ impl Peer {
     fn handle_raft_commit_entries(&mut self,
                                   committed_entries: &[raftpb::Entry])
                                   -> Result<Vec<ExecResult>> {
-        metric_incr!("raftstore.handle_raft_commit_entries");
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
