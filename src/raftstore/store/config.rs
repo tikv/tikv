@@ -102,15 +102,9 @@ impl Config {
                                 self.raft_log_gc_threshold));
         }
 
-        if self.region_max_size <= self.region_split_size {
-            return Err(box_err!("region max size {} must > split size {}",
+        if self.region_max_size < self.region_split_size {
+            return Err(box_err!("region max size {} must >= split size {}",
                                 self.region_max_size,
-                                self.region_split_size));
-        }
-
-        if self.region_check_size_diff >= self.region_split_size {
-            return Err(box_err!("region split check size {} must < split size {}",
-                                self.region_check_size_diff,
                                 self.region_split_size));
         }
 
