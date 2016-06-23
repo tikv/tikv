@@ -51,6 +51,7 @@ struct Cluster {
     rule: Option<Rule>,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
+    split_count: usize,
 }
 
 impl Cluster {
@@ -67,6 +68,7 @@ impl Cluster {
             base_id: AtomicUsize::new(1000),
             rule: None,
             store_stats: HashMap::new(),
+            split_count: 0,
         }
     }
 
@@ -445,6 +447,10 @@ impl TestPdClient {
     pub fn get_store_stats(&self, store_id: u64) -> Option<pdpb::StoreStats> {
         self.cluster.rl().store_stats.get(&store_id).cloned()
     }
+
+    pub fn get_split_count(&self) -> usize {
+        self.cluster.rl().split_count
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -527,6 +533,13 @@ impl PdClient for TestPdClient {
         let store_id = stats.get_store_id();
         self.cluster.wl().store_stats.insert(store_id, stats);
 
+        Ok(())
+    }
+
+    fn report_split(&self, _: metapb::Region, _: metapb::Region) -> Result<()> {
+        // pd just uses this for history show, so here we just count it.
+        try!(self.check_bootstrap());
+        self.cluster.wl().split_count += 1;
         Ok(())
     }
 }

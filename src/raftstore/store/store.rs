@@ -470,11 +470,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if is_leader {
                     // Notify pd immediately to let it update the region meta.
                     let left = self.region_peers.get(&region_id).unwrap();
-                    info!("notify pd with split left {:?}, right {:?}",
-                          left.region(),
-                          new_peer.region());
-                    self.heartbeat_pd(left);
-                    self.heartbeat_pd(&new_peer);
+                    self.report_split_pd(left, &new_peer);
                 }
 
                 // Insert new regions and validation
@@ -491,6 +487,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 self.region_peers.insert(new_region_id, new_peer);
             }
+        }
+    }
+
+    fn report_split_pd(&self, left: &Peer, right: &Peer) {
+        let left_region = left.region();
+        let right_region = right.region();
+
+        info!("notify pd with split left {:?}, right {:?}",
+              left_region,
+              right_region);
+        self.heartbeat_pd(left);
+        self.heartbeat_pd(right);
+
+        // Now pd only uses ReportSplit for history operation show,
+        // so we send it independently here.
+        let task = PdTask::ReportSplit {
+            left: left_region,
+            right: right_region,
+        };
+
+        if let Err(e) = self.pd_worker.schedule(task) {
+            error!("failed to notify pd: {}", e);
         }
     }
 
