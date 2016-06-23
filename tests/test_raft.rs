@@ -1870,7 +1870,7 @@ fn test_raft_nodes() {
 }
 
 #[test]
-fn test_compaign_while_leader() {
+fn test_campaign_while_leader() {
     let mut r = new_test_raft(1, vec![1], 5, 1, new_storage());
     assert_eq!(r.state, StateRole::Follower);
     // We don't call campaign() directly because it comes after the check

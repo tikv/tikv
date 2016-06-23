@@ -330,36 +330,3 @@ impl FilterFactory for IsolateRegionStore {
              }]
     }
 }
-
-pub struct DelaySnapshotFiler {
-    duration: time::Duration,
-}
-
-impl Filter for DelaySnapshotFiler {
-    fn before(&self, msg: &RaftMessage) -> bool {
-        if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
-            thread::sleep(self.duration);
-        }
-
-        false
-    }
-    fn after(&self, x: Result<()>) -> Result<()> {
-        x
-    }
-}
-
-pub struct DelaySnapshot {
-    duration: time::Duration,
-}
-
-impl DelaySnapshot {
-    pub fn new(duration: time::Duration) -> DelaySnapshot {
-        DelaySnapshot { duration: duration }
-    }
-}
-
-impl FilterFactory for DelaySnapshot {
-    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
-        vec![box DelaySnapshotFiler { duration: self.duration }]
-    }
-}

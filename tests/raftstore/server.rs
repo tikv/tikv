@@ -180,6 +180,10 @@ impl Simulator for ServerCluster {
         node_id
     }
 
+    fn get_snap_dir(&self, node_id: u64) -> String {
+        self.snap_paths.get(&node_id).unwrap().path().to_str().unwrap().to_owned()
+    }
+
     fn stop_node(&mut self, node_id: u64) {
         let h = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
