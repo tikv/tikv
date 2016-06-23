@@ -128,6 +128,18 @@ impl super::PdClient for RpcClient {
         let resp = try!(self.send(&req));
         check_resp(&resp)
     }
+
+    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> Result<()> {
+        let mut report_split = pdpb::ReportSplitRequest::new();
+        report_split.set_left(left);
+        report_split.set_right(right);
+
+        let mut req = self.new_request(pdpb::CommandType::ReportSplit);
+        req.set_report_split(report_split);
+
+        let resp = try!(self.send(&req));
+        check_resp(&resp)
+    }
 }
 
 impl RpcClient {
