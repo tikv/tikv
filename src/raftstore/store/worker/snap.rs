@@ -65,7 +65,7 @@ impl Runner {
         {
             let storage = task.storage.rl();
             raw_snap = storage.raw_snapshot();
-            let applied_idx = box_try!(storage.load_applied_index(&raw_snap));
+            let applied_idx = storage.applied_index();
             let term = box_try!(storage.term(applied_idx));
             key = SnapKey::new(storage.get_region_id(), term, applied_idx);
         }

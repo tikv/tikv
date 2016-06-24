@@ -24,7 +24,8 @@ use mio::{self, EventLoop, EventLoopBuilder};
 use protobuf;
 use uuid::Uuid;
 
-use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData, RaftTruncatedState};
+use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData, RaftTruncatedState,
+                             RegionLocalState, PeerState};
 use kvproto::raftpb::ConfChangeType;
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer};
@@ -140,14 +141,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                          end_key,
                          &mut |key, value| {
             let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
-            if suffix != keys::REGION_INFO_SUFFIX {
+            if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
             }
 
-            let region = try!(protobuf::parse_from_bytes::<metapb::Region>(value));
-            let peer = try!(Peer::create(self, &region));
+            let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
+            // TODO: handle apply
+            if local_state.get_state() != PeerState::Normal {
+                return Ok(true);
+            }
+            let region = local_state.get_region();
+            let peer = try!(Peer::create(self, region));
 
-            self.region_ranges.insert(enc_end_key(&region), region_id);
+            self.region_ranges.insert(enc_end_key(region), region_id);
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             self.region_peers.insert(region_id, peer);
@@ -891,8 +897,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     }
                     Some(peer) => {
                         let s = peer.storage.rl();
-                        compacted_idx = s.truncated_state.get_index();
-                        compacted_term = s.truncated_state.get_term();
+                        compacted_idx = s.truncated_index();
+                        compacted_term = s.truncated_term();
                     }
                 };
             }

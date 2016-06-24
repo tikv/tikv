@@ -376,7 +376,7 @@ impl<T: Simulator> Cluster<T> {
         for _ in 0..10 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
-            let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
+            let req = new_request(region_id, region.take_region_epoch(), reqs.clone());
             let result = self.call_command_on_leader(req, timeout);
 
             if let Err(Error::Timeout(_)) = result {
@@ -546,6 +546,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
         let mut try_cnt = 0;
+        let split_cnt = self.pd_client.get_split_count();
         loop {
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
@@ -553,7 +554,8 @@ impl<T: Simulator> Cluster<T> {
                 self.ask_split(region, split_key);
             }
 
-            if self.pd_client.check_split(region, split_key) {
+            if self.pd_client.check_split(region, split_key) &&
+               self.pd_client.get_split_count() > split_cnt {
                 return;
             }
 

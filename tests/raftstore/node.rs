@@ -75,12 +75,14 @@ impl Transport for ChannelTransport {
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
 
-            if !dst_file.exists() {
-                fs::copy(source_file.path(), dst_file.path()).unwrap();
-            }
+            defer!({
+                self.snap_paths[&from_store].0.wl().deregister(&key, &SnapEntry::Sending);
+                self.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
+            });
 
-            self.snap_paths[&from_store].0.wl().deregister(&key, &SnapEntry::Sending);
-            self.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
+            if !dst_file.exists() {
+                try!(fs::copy(source_file.path(), dst_file.path()));
+            }
         }
 
         match self.routers.get(&to_store) {

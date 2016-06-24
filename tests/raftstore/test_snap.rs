@@ -128,14 +128,22 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine3, b"k1", b"v1");
     must_get_equal(&engine3, b"k2", b"v2");
 
-    sleep_ms(2000);
-
-    for i in 1..4 {
-        let snap_dir = cluster.get_snap_dir(i);
-        // snapfiles should be gc.
-        let snapfiles: Vec<_> =
-            fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
-        assert!(snapfiles.is_empty(), format!("{:?}", snapfiles));
+    let mut tried_cnt = 0;
+    loop {
+        let mut snap_files = vec![];
+        for i in 1..4 {
+            let snap_dir = cluster.get_snap_dir(i);
+            // snapfiles should be gc.
+            snap_files.extend(fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()));
+        }
+        if snap_files.is_empty() {
+            return;
+        }
+        if tried_cnt > 200 {
+            panic!("snap files is still not empty: {:?}", snap_files);
+        }
+        tried_cnt += 1;
+        sleep_ms(20);
     }
 }
 
