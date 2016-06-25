@@ -32,7 +32,7 @@ use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use storage::{Snapshot, Key};
 use util::codec::number::NumberDecoder;
-use util::codec::datum::DatumDecoder;
+use util::codec::table::TableDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
 use util::{escape, duration_to_ms};
