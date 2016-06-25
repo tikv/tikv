@@ -199,7 +199,7 @@ impl<C> Node<C>
     fn start_store<T>(&mut self,
                       mut event_loop: EventLoop<Store<T, C>>,
                       store_id: u64,
-                      engine: Arc<DB>,
+                      db: Arc<DB>,
                       trans: Arc<RwLock<T>>,
                       snap_mgr: SnapManager)
                       -> Result<()>
@@ -213,16 +213,12 @@ impl<C> Node<C>
 
         let cfg = self.store_cfg.clone();
         let pd_client = self.pd_client.clone();
-        let mut store = try!(Store::new(&mut event_loop,
-                                        self.store.clone(),
-                                        cfg,
-                                        engine,
-                                        trans.clone(),
-                                        pd_client,
-                                        snap_mgr));
+        let store = self.store.clone();
+        let ch = event_loop.channel();
 
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
+            let mut store = Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);
             };

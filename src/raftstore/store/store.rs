@@ -20,7 +20,7 @@ use std::time::Duration;
 use std::{cmp, u64};
 
 use rocksdb::DB;
-use mio::{self, EventLoop, EventLoopBuilder};
+use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use uuid::Uuid;
 
@@ -96,7 +96,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
-    pub fn new(event_loop: &mut EventLoop<Self>,
+    pub fn new(sender: Sender<Msg>,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
@@ -107,7 +107,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
-        let sendch = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(sender);
 
         let peer_cache = HashMap::new();
 
@@ -180,7 +180,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        box_try!(self.snap_worker.start(SnapRunner::new(self.snap_mgr.clone())));
+        let runner = SnapRunner::new(self.engine.clone(), self.snap_mgr.clone());
+        box_try!(self.snap_worker.start(runner));
 
         box_try!(self.compact_worker.start(CompactRunner));
 
@@ -225,18 +226,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (region_id, peer) in &mut self.region_peers {
+        for (&region_id, peer) in &mut self.region_peers {
             peer.raft_group.tick();
-            self.pending_raft_groups.insert(*region_id);
+            self.pending_raft_groups.insert(region_id);
             // ALERT!!! patern matching won't release lock here.
-            if peer.is_leader() && SnapState::Pending == peer.storage.rl().snap_state {
-                debug!("handling snapshot for {}", region_id);
-                let task = SnapTask::new(peer.storage.clone());
-                debug!("task generated");
-                peer.storage.wl().snap_state = SnapState::Generating;
-                if let Err(e) = self.snap_worker.schedule(task) {
-                    error!("failed to schedule snap task {}", e);
-                    peer.storage.wl().snap_state = SnapState::Failed;
+            if peer.is_leader() {
+                let mut store = peer.storage.wl();
+                if SnapState::Pending == *store.snap_state.rl() {
+                    debug!("handling snapshot for {}", region_id);
+                    let task = SnapTask::new(region_id, store.snap_state.clone());
+                    debug!("task generated");
+                    *store.snap_state.wl() = SnapState::Generating;
+                    if let Err(e) = self.snap_worker.schedule(task) {
+                        error!("failed to schedule snap task {}", e);
+                        *store.snap_state.wl() = SnapState::Failed;
+                    }
                 }
             }
         }

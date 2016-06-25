@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{self, Arc, RwLock};
+use std::cell::{RefCell, Ref, RefMut};
+use std::rc::Rc;
 use std::fs::File;
 use std::{error, mem};
 use std::time::Instant;
@@ -53,7 +55,7 @@ pub struct PeerStorage {
     pub region: metapb::Region,
     pub local_state: RaftLocalState,
 
-    pub snap_state: SnapState,
+    pub snap_state: Arc<RwLock<SnapState>>,
     snap_mgr: SnapManager,
     snap_tried_cnt: u8,
 }
@@ -125,7 +127,7 @@ impl PeerStorage {
             engine: engine,
             region: region.clone(),
             local_state: state,
-            snap_state: SnapState::Relax,
+            snap_state: Arc::new(RwLock::new(SnapState::Relax)),
             snap_tried_cnt: 0,
             snap_mgr: snap_mgr,
         })
@@ -271,16 +273,17 @@ impl PeerStorage {
     }
 
     pub fn snapshot(&mut self) -> raft::Result<Snapshot> {
-        if let SnapState::Relax = self.snap_state {
+        let mut state = self.snap_state.wl();
+        if SnapState::Relax == *state {
             info!("requesting snapshot on {}...", self.get_region_id());
             self.snap_tried_cnt = 0;
-            self.snap_state = SnapState::Pending;
-        } else if let SnapState::Snap(_) = self.snap_state {
-            match mem::replace(&mut self.snap_state, SnapState::Relax) {
+            *state = SnapState::Pending;
+        } else if let SnapState::Snap(_) = *state {
+            match mem::replace(&mut *state, SnapState::Relax) {
                 SnapState::Snap(s) => return Ok(s),
                 _ => unreachable!(),
             }
-        } else if let SnapState::Failed = self.snap_state {
+        } else if SnapState::Failed == *state {
             if self.snap_tried_cnt >= MAX_SNAP_TRY_CNT {
                 return Err(raft::Error::Store(box_err!("failed to get snapshot after {} times",
                                                        self.snap_tried_cnt)));
@@ -288,7 +291,7 @@ impl PeerStorage {
             self.snap_tried_cnt += 1;
             warn!("snapshot generating failed, retry {} time",
                   self.snap_tried_cnt);
-            self.snap_state = SnapState::Pending;
+            *state = SnapState::Pending;
         }
         Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable))
     }
@@ -531,8 +534,26 @@ fn build_snap_file(f: &mut SnapFile,
     Ok(())
 }
 
-pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, key: SnapKey) -> raft::Result<Snapshot> {
-    debug!("begin to generate a snapshot for region {}", key.region_id);
+pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft::Result<Snapshot> {
+    debug!("begin to generate a snapshot for region {}", region_id);
+
+    let raft_state: RaftLocalState = match try!(snap.get_msg(&keys::raft_state_key(region_id))) {
+        None => return Err(box_err!("could not load raft state of region {}", region_id)),
+        Some(state) => state,
+    };
+
+    let idx = raft_state.get_applied_index();
+    let term = if idx == raft_state.get_truncated_state().get_index() {
+        raft_state.get_truncated_state().get_term()
+    } else {
+        match try!(snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))) {
+            None => return Err(box_err!("entry {} of {} not found.", idx, region_id)),
+            Some(entry) => entry.get_term(),
+        }
+    };
+
+    let key = SnapKey::new(region_id, term, idx);
+
     mgr.wl().register(key.clone(), SnapEntry::Generating);
     defer!(mgr.wl().deregister(&key, &SnapEntry::Generating));
 
@@ -587,22 +608,22 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, key: SnapKey) -> raft::R
 
 #[derive(Clone)]
 pub struct RaftStorage {
-    store: Arc<RwLock<PeerStorage>>,
+    store: Rc<RefCell<PeerStorage>>,
 }
 
 impl RaftStorage {
     pub fn new(store: PeerStorage) -> RaftStorage {
-        RaftStorage { store: Arc::new(RwLock::new(store)) }
+        RaftStorage { store: Rc::new(RefCell::new(store)) }
     }
 
     #[inline]
-    pub fn rl(&self) -> RwLockReadGuard<PeerStorage> {
-        self.store.rl()
+    pub fn rl(&self) -> Ref<PeerStorage> {
+        self.store.borrow()
     }
 
     #[inline]
-    pub fn wl(&self) -> RwLockWriteGuard<PeerStorage> {
-        self.store.wl()
+    pub fn wl(&self) -> RefMut<PeerStorage> {
+        self.store.borrow_mut()
     }
 }
 
@@ -661,10 +682,12 @@ mod test {
         let store = new_storage(mgr, path);
         let mut ctx = InvokeContext::new(&store.rl());
         store.rl().append(&mut ctx, &ents[1..]).expect("");
-        store.rl().engine.write(ctx.wb).expect("");
         ctx.local_state.mut_truncated_state().set_index(ents[0].get_index());
         ctx.local_state.mut_truncated_state().set_term(ents[0].get_term());
         ctx.local_state.set_applied_index(ents.last().unwrap().get_index());
+        ctx.save(store.rl().get_region_id()).unwrap();
+        store.rl().engine.write(ctx.wb).expect("");
+
         store.wl().local_state = ctx.local_state;
         store
     }
@@ -771,10 +794,7 @@ mod test {
     fn get_snap(s: &RaftStorage, mgr: SnapManager) -> Snapshot {
         let store = s.rl();
         let raw_snap = store.raw_snapshot();
-        let applied_id = store.applied_index();
-        let term = store.term(applied_id).unwrap();
-        let key = SnapKey::new(store.get_region_id(), term, applied_id);
-        do_snapshot(mgr, &raw_snap, key).unwrap()
+        do_snapshot(mgr, &raw_snap, store.get_region_id()).unwrap()
     }
 
     #[test]
@@ -790,11 +810,14 @@ mod test {
         let snap = s.wl().snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
-        assert_eq!(s.wl().snap_state, SnapState::Pending);
+        {
+            let mut s = s.wl();
+            assert_eq!(*s.snap_state.rl(), SnapState::Pending);
 
-        s.wl().snap_state = SnapState::Generating;
-        assert_eq!(s.wl().snapshot().unwrap_err(), unavailable);
-        assert_eq!(s.rl().snap_state, SnapState::Generating);
+            *s.snap_state.wl() = SnapState::Generating;
+            assert_eq!(s.snapshot().unwrap_err(), unavailable);
+            assert_eq!(*s.snap_state.rl(), SnapState::Generating);
+        }
 
         let snap_dir = TempDir::new("snap").unwrap();
         let snap = get_snap(&s, new_snap_mgr(snap_dir.path().to_str().unwrap()));
@@ -807,8 +830,9 @@ mod test {
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
 
-        s.wl().snap_state = SnapState::Snap(snap.clone());
-        assert_eq!(s.wl().snapshot(), Ok(snap));
+        let mut s = s.wl();
+        *s.snap_state.wl() = SnapState::Snap(snap.clone());
+        assert_eq!(s.snapshot(), Ok(snap));
     }
 
     #[test]
