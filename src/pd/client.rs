@@ -23,6 +23,7 @@ use kvproto::pdpb::{Request, Response};
 use kvproto::msgpb::{Message, MessageType};
 
 use super::Result;
+use super::etcd::EtcdClient;
 
 const MAX_PD_SEND_RETRY_COUNT: usize = 100;
 const SOCKET_READ_TIMEOUT: u64 = 3;
@@ -30,9 +31,7 @@ const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
 #[derive(Debug)]
 struct RpcClientCore {
-    addrs: Vec<String>,
-    // Try to connect pd with round-robin.
-    next_index: usize,
+    client: EtcdClient,
     stream: Option<TcpStream>,
 }
 
@@ -57,21 +56,16 @@ fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u
 }
 
 impl RpcClientCore {
-    fn new(dsn: &str) -> RpcClientCore {
-        let addrs: Vec<String> = dsn.split(',').map(From::from).collect();
+    fn new(client: EtcdClient) -> RpcClientCore {
         RpcClientCore {
-            addrs: addrs,
-            next_index: 0,
+            client: client,
             stream: None,
         }
     }
 
     fn try_connect(&mut self) -> Result<()> {
-        let index = self.next_index;
-        self.next_index = (self.next_index + 1) % self.addrs.len();
-
-        let addr = self.addrs.get(index).unwrap();
-        let stream = try!(make_std_tcp_conn(&**addr));
+        let addr = box_try!(self.client.get_leader_addr());
+        let stream = try!(make_std_tcp_conn(&*addr));
         self.stream = Some(stream);
         Ok(())
     }
@@ -123,10 +117,10 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new(dsn: &str, cluster_id: u64) -> Result<RpcClient> {
+    pub fn new(client: EtcdClient, cluster_id: u64) -> Result<RpcClient> {
         Ok(RpcClient {
             msg_id: AtomicUsize::new(0),
-            core: Mutex::new(RpcClientCore::new(dsn)),
+            core: Mutex::new(RpcClientCore::new(client)),
             cluster_id: cluster_id,
         })
     }
@@ -139,93 +133,5 @@ impl RpcClient {
 
     fn alloc_msg_id(&self) -> u64 {
         self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::net::TcpListener;
-    use std::thread;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
-
-    use super::*;
-    use util::codec::rpc;
-    use kvproto::pdpb;
-    use kvproto::msgpb::{Message, MessageType};
-    use rand;
-    use util::make_std_tcp_conn;
-
-    fn start_pd_server(index: usize,
-                       leader_index: Arc<AtomicUsize>,
-                       quit: Arc<AtomicBool>)
-                       -> (thread::JoinHandle<()>, String) {
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-
-        let addr = format!("{}", l.local_addr().unwrap());
-
-        let h = thread::spawn(move || {
-            loop {
-                let (mut stream, _) = l.accept().unwrap();
-
-                if quit.load(Ordering::SeqCst) {
-                    return;
-                }
-
-                stream.set_nodelay(true).unwrap();
-
-                let leader = leader_index.load(Ordering::SeqCst);
-                if leader != index {
-                    continue;
-                }
-
-
-                let (id, _) = rpc::decode_data(&mut stream).unwrap();
-                let mut msg = Message::new();
-                msg.set_msg_type(MessageType::PdResp);
-                msg.set_pd_resp(pdpb::Response::new());
-                rpc::encode_msg(&mut stream, id, &msg).unwrap();
-            }
-        });
-
-        (h, addr)
-    }
-
-    #[test]
-    fn test_rpc_client() {
-        let leader = Arc::new(AtomicUsize::new(0));
-        let quit = Arc::new(AtomicBool::new(false));
-        let mut handlers = vec![];
-        let mut addrs = vec![];
-
-        let count = 3;
-        for i in 0..count {
-            let (h, addr) = start_pd_server(i, leader.clone(), quit.clone());
-            handlers.push(h);
-            addrs.push(addr);
-        }
-
-        let dsn = addrs.join(",");
-
-        let msg = pdpb::Request::new();
-        let client = RpcClient::new(&dsn, 0).unwrap();
-
-        for _ in 0..10 {
-            client.send(&msg).unwrap();
-
-            // select a leader randomly
-            leader.store(rand::random::<usize>() % 3, Ordering::SeqCst);
-        }
-
-        quit.store(true, Ordering::SeqCst);
-
-        // connect the server so that we can close the thread.
-        for addr in addrs {
-            make_std_tcp_conn(&*addr).unwrap();
-        }
-
-        for h in handlers {
-            h.join().unwrap();
-        }
     }
 }

@@ -16,12 +16,14 @@ use std::vec::Vec;
 pub mod errors;
 mod client;
 mod protocol;
-mod etcd;
+pub mod etcd;
 pub use self::errors::{Result, Error};
 pub use self::client::RpcClient;
+use self::etcd::EtcdClient;
 
-pub fn new_rpc_client(addr: &str, cluster_id: u64) -> Result<RpcClient> {
-    let client = try!(RpcClient::new(addr, cluster_id));
+pub fn new_rpc_client(endpoints: &str, pd_root: &str, cluster_id: u64) -> Result<RpcClient> {
+    let c = box_try!(EtcdClient::new(endpoints, pd_root, cluster_id));
+    let client = try!(RpcClient::new(c, cluster_id));
     Ok(client)
 }
 

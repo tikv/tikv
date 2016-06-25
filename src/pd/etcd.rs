@@ -226,18 +226,19 @@ impl<H: Transport> Handler<H> for EtcdHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct EtcdClient {
     root_path: String,
     endpoints: Vec<String>,
     next_index: usize,
 
-    client: Client<EtcdHandler>,
+    client: Option<Client<EtcdHandler>>,
 }
 
 impl EtcdClient {
-    // pd_root is pd root in etcd, like /pd.
     // endpoints is etcd endpoints, format is 127.0.0.1:2379,127.0.0.1:3379.
-    pub fn new(cluster_id: u64, pd_root: &str, endpoints: &str) -> Result<EtcdClient> {
+    // pd_root is pd root in etcd, like /pd.
+    pub fn new(endpoints: &str, pd_root: &str, cluster_id: u64) -> Result<EtcdClient> {
         // only 1 thread is enough for pd now.
         // TODO: detect HTTP or HTTPs with SSL config.
         let endpoints: Vec<_> = endpoints.split(',').map(|v| format!("http://{}", v)).collect();
@@ -252,7 +253,7 @@ impl EtcdClient {
             root_path: format!("{}/{}", pd_root, cluster_id),
             endpoints: endpoints,
             next_index: 0,
-            client: client,
+            client: Some(client),
         })
     }
 
@@ -261,14 +262,23 @@ impl EtcdClient {
     }
 
     pub fn request(&mut self, path: &str, obj: Json) -> Result<Json> {
+        if self.client.is_none() {
+            return Err(box_err!("miss etcd client, may be closed already"));
+        }
+
         let endpoint = self.endpoints.get(self.next_index).unwrap();
 
         let finish = Event::new();
         let url = box_try!(Url::parse(&format!("{}{}", endpoint, path)));
 
         let handler = EtcdHandler::new(obj, finish.clone());
-        if let Err(e) = self.client.request(url, handler) {
-            return Err(box_err!("request {} failed {}", path, e));
+
+        let client = self.client.take().unwrap();
+        let res = client.request(url, handler);
+        self.client = Some(client);
+
+        if let Err(e) = res {
+            return Err(box_err!("request {} at {} failed {}", path, endpoint, e));
         }
 
         let timeout = Duration::from_secs(HTTP_REQUEST_TIMEOUT);
@@ -296,15 +306,18 @@ impl EtcdClient {
     }
 }
 
+impl Drop for EtcdClient {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            client.close();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::collections::BTreeMap;
-
     use rustc_serialize::json::Json;
-    use protobuf::Message;
 
-    use kvproto::pdpb::Leader;
     use super::*;
 
     #[test]
@@ -335,32 +348,5 @@ mod tests {
             let obj = Json::from_str(resp).unwrap();
             assert!(parse_leader_addr(&obj, leader_key).is_err(), resp);
         }
-    }
-
-    #[test]
-    fn test_get_leader() {
-        // If no ETCD_ENDPOINTS, skip this test.
-        let endpoints = match env::var("ETCD_ENDPOINTS") {
-            Err(_) => return,
-            Ok(v) => v,
-        };
-
-        let mut client = EtcdClient::new(0, "/pd_test", &endpoints).unwrap();
-
-        let key = format!("{}/leader", client.root_path());
-
-        let mut leader = Leader::new();
-        leader.set_addr("127.0.0.1:1234".to_owned());
-
-        let value = leader.write_to_bytes().unwrap();
-        let mut obj = BTreeMap::new();
-        obj.insert("key".to_owned(), b64encode_to_json(key.as_bytes()));
-        obj.insert("value".to_owned(), b64encode_to_json(&value));
-
-        client.request("/v3alpha/kv/put", Json::Object(obj)).unwrap();
-
-        let addr = client.get_leader_addr().unwrap();
-        assert_eq!(&addr, leader.get_addr());
-
     }
 }

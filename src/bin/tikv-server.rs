@@ -376,13 +376,20 @@ fn run_local_server(listener: TcpListener, store: Storage, config: &Config) {
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel());
-    let pd_addr = get_string_value("pd",
-                                   "raft.pd",
-                                   matches,
-                                   config,
-                                   None,
-                                   |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(new_rpc_client(&pd_addr, cfg.cluster_id).unwrap());
+    let etcd_endpoints = get_string_value("etcd",
+                                          "etcd.endpoints",
+                                          matches,
+                                          config,
+                                          None,
+                                          |v| v.as_str().map(|s| s.to_owned()));
+    let etcd_pd_root = get_string_value("etcd-pd",
+                                        "etcd.pd-root",
+                                        matches,
+                                        config,
+                                        Some("/pd".to_owned()),
+                                        |v| v.as_str().map(|s| s.to_owned()));
+    let pd_client = Arc::new(new_rpc_client(&etcd_endpoints, &etcd_pd_root, cfg.cluster_id)
+        .unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let store_path = get_store_path(matches, config);
@@ -438,7 +445,6 @@ fn main() {
                 "set which dsn to use, warning: default is rocksdb without persistent",
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
-    opts.optopt("", "pd", "set pd address", "host:port");
     opts.optopt("", "metric-addr", "set statsd server address", "host:port");
     opts.optopt("",
                 "metric-prefix",
@@ -456,6 +462,11 @@ fn main() {
                 "region-split-check-diff",
                 "set region split check diff",
                 "default: 8 MB");
+    opts.optopt("",
+                "etcd",
+                "etcd endpoints",
+                "127.0.0.1:2379,127.0.0.1:3379");
+    opts.optopt("", "etcd-pd", "pd root path in etcd", "/pd");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);

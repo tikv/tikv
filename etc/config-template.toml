@@ -38,8 +38,12 @@ region-split-check-diff = 8388608
 [raft]
 # set cluster id, must greater than 0.
 #cluster-id = 1
-# set pd address, host:port
-#pd = 
+
+[etcd]
+# etcd endpoints 
+endpoints = ""
+# pd root path in etcd 
+pd-root = "/pd"
 
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/options.h
 [rocksdb]
