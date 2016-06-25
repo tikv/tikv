@@ -65,6 +65,8 @@ impl RpcClientCore {
 
     fn try_connect(&mut self) -> Result<()> {
         let addr = box_try!(self.client.get_leader_addr());
+        info!("get pd leader {}", addr);
+
         let stream = try!(make_std_tcp_conn(&*addr));
         self.stream = Some(stream);
         Ok(())

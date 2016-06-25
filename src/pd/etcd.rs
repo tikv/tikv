@@ -143,6 +143,7 @@ impl EtcdHandler {
         let next = if res.is_ok() {
             Next::end()
         } else {
+            debug!("finish request with err {:?}", res);
             Next::remove()
         };
 
@@ -267,6 +268,8 @@ impl EtcdClient {
         }
 
         let endpoint = self.endpoints.get(self.next_index).unwrap();
+
+        debug!("request {} at {}", path, endpoint);
 
         let finish = Event::new();
         let url = box_try!(Url::parse(&format!("{}{}", endpoint, path)));
