@@ -36,7 +36,7 @@ use protobuf::Message;
 use raft::SnapshotStatus;
 use raftstore::{Result, Error};
 use kvproto::metapb;
-use util::worker::Worker;
+use util::worker::{Worker, Scheduler};
 use util::get_disk_stat;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
@@ -45,7 +45,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::{SnapState, ApplySnapResult};
+use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -201,6 +201,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.snap_mgr.clone()
     }
 
+    pub fn snap_scheduler(&self) -> Scheduler<SnapTask> {
+        self.snap_worker.scheduler()
+    }
+
     pub fn engine(&self) -> Arc<DB> {
         self.engine.clone()
     }
@@ -229,20 +233,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for (&region_id, peer) in &mut self.region_peers {
             peer.raft_group.tick();
             self.pending_raft_groups.insert(region_id);
-            // ALERT!!! patern matching won't release lock here.
-            if peer.is_leader() {
-                let mut store = peer.storage.wl();
-                if SnapState::Pending == *store.snap_state.rl() {
-                    debug!("handling snapshot for {}", region_id);
-                    let task = SnapTask::new(region_id, store.snap_state.clone());
-                    debug!("task generated");
-                    *store.snap_state.wl() = SnapState::Generating;
-                    if let Err(e) = self.snap_worker.schedule(task) {
-                        error!("failed to schedule snap task {}", e);
-                        *store.snap_state.wl() = SnapState::Failed;
-                    }
-                }
-            }
         }
 
         self.register_raft_base_tick(event_loop);
