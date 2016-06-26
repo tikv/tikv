@@ -109,9 +109,9 @@ fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
 
 fn dump_region_info(db: DB, region_id_str: String) {
     let region_id = u64::from_str_radix(&region_id_str, 10).unwrap();
-    let region_info_key = keys::region_info_key(region_id);
-    println!("info_key: {}", escape(&region_info_key));
-    let region: Option<Region> = db.get_msg(&region_info_key).unwrap();
+    let region_state_key = keys::region_state_key(region_id);
+    println!("info_key: {}", escape(&region_state_key));
+    let region: Option<Region> = db.get_msg(&region_state_key).unwrap();
     println!("info: {:?}", region);
 }
 

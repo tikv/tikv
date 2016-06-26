@@ -60,19 +60,17 @@ impl Runner {
     fn generate_snap(&self, task: &Task) -> Result<(), Error> {
         // do we need to check leader here?
         let raw_snap;
-        let ranges;
         let key;
 
         {
             let storage = task.storage.rl();
             raw_snap = storage.raw_snapshot();
-            ranges = storage.region_key_ranges();
-            let applied_idx = box_try!(storage.load_applied_index(&raw_snap));
+            let applied_idx = storage.applied_index();
             let term = box_try!(storage.term(applied_idx));
             key = SnapKey::new(storage.get_region_id(), term, applied_idx);
         }
 
-        match store::do_snapshot(self.mgr.clone(), &raw_snap, key.clone(), ranges) {
+        match store::do_snapshot(self.mgr.clone(), &raw_snap, key.clone()) {
             Ok(snap) => task.storage.wl().snap_state = SnapState::Snap(snap),
             Err(e) => {
                 return Err(Error::Other(box e));
