@@ -546,6 +546,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
         let mut try_cnt = 0;
+        let split_count = self.pd_client.get_split_count();
         loop {
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
@@ -553,7 +554,8 @@ impl<T: Simulator> Cluster<T> {
                 self.ask_split(region, split_key);
             }
 
-            if self.pd_client.check_split(region, split_key) {
+            if self.pd_client.check_split(region, split_key) &&
+               self.pd_client.get_split_count() > split_count {
                 return;
             }
 
