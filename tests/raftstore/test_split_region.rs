@@ -44,11 +44,8 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         let region2 = pd_client.get_region(right_key).unwrap();
         assert_eq!(region.get_id(), region2.get_id());
 
-        let split_count = pd_client.get_split_count();
         // Split with split_key, so left_key must in left, and right_key in right.
         cluster.must_split(&region, split_key);
-
-        assert_eq!(pd_client.get_split_count(), split_count + 1);
 
         let left = pd_client.get_region(left_key).unwrap();
         let right = pd_client.get_region(right_key).unwrap();
