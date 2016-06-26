@@ -207,7 +207,7 @@ impl Peer {
 
         let store_id = store.store_id();
         let sched = store.snap_scheduler();
-        let ps = try!(PeerStorage::new(store.engine(), &region, sched, store.get_snap_mgr()));
+        let ps = try!(PeerStorage::new(store.engine(), &region, sched));
         let applied_index = ps.applied_index();
         let storage = RaftStorage::new(ps);
 

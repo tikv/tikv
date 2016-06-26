@@ -108,7 +108,7 @@ mod test {
     use super::*;
     use tempdir::TempDir;
     use raftstore::store::engine::*;
-    use raftstore::store::{self, PeerStorage};
+    use raftstore::store::PeerStorage;
     use raftstore::coprocessor::ObserverContext;
     use raftstore::coprocessor::RegionObserver;
     use kvproto::metapb::Region;
@@ -123,7 +123,7 @@ mod test {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
         let worker = Worker::new("");
         let sched = worker.scheduler();
-        PeerStorage::new(engine, &Region::new(), sched, store::new_snap_mgr("")).unwrap()
+        PeerStorage::new(engine, &Region::new(), sched).unwrap()
     }
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
@@ -167,7 +167,7 @@ mod test {
 
         let worker = Worker::new("");
         let sched = worker.scheduler();
-        let ps = PeerStorage::new(engine, &r, sched, store::new_snap_mgr("")).unwrap();
+        let ps = PeerStorage::new(engine, &r, sched).unwrap();
         let mut ctx = ObserverContext::new(&ps);
         let mut observer = SplitObserver;
 

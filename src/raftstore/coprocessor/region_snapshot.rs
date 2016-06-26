@@ -208,7 +208,7 @@ mod tests {
     use rocksdb::{Writable, DB};
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
-    use raftstore::store::{self, PeerStorage};
+    use raftstore::store::PeerStorage;
     use storage::{Cursor, Key};
     use util::worker::Worker;
 
@@ -225,7 +225,7 @@ mod tests {
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
         let worker = Worker::new("");
         let sched = worker.scheduler();
-        PeerStorage::new(engine, r, sched, store::new_snap_mgr("")).unwrap()
+        PeerStorage::new(engine, r, sched).unwrap()
     }
 
     fn new_snapshot(peer_storage: &PeerStorage) -> RegionSnapshot {

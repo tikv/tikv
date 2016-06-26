@@ -58,7 +58,6 @@ pub struct PeerStorage {
 
     snap_state: Arc<RwLock<SnapState>>,
     snap_sched: Scheduler<SnapTask>,
-    snap_mgr: SnapManager,
     snap_tried_cnt: u8,
 }
 
@@ -108,8 +107,7 @@ impl InvokeContext {
 impl PeerStorage {
     pub fn new(engine: Arc<DB>,
                region: &metapb::Region,
-               snap_sched: Scheduler<SnapTask>,
-               snap_mgr: SnapManager)
+               snap_sched: Scheduler<SnapTask>)
                -> Result<PeerStorage> {
         let state = match try!(engine.get_msg(&keys::raft_state_key(region.get_id()))) {
             Some(s) => s,
@@ -133,7 +131,6 @@ impl PeerStorage {
             snap_sched: snap_sched,
             snap_state: Arc::new(RwLock::new(SnapState::Relax)),
             snap_tried_cnt: 0,
-            snap_mgr: snap_mgr,
         })
     }
 
@@ -681,20 +678,19 @@ mod test {
 
     use super::InvokeContext;
 
-    fn new_storage(mgr: SnapManager, sched: Scheduler<SnapTask>, path: &TempDir) -> RaftStorage {
+    fn new_storage(sched: Scheduler<SnapTask>, path: &TempDir) -> RaftStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
         let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
-        RaftStorage::new(PeerStorage::new(db, &region, sched, mgr).unwrap())
+        RaftStorage::new(PeerStorage::new(db, &region, sched).unwrap())
     }
 
-    fn new_storage_from_ents(mgr: SnapManager,
-                             sched: Scheduler<SnapTask>,
+    fn new_storage_from_ents(sched: Scheduler<SnapTask>,
                              path: &TempDir,
                              ents: &[Entry])
                              -> RaftStorage {
-        let store = new_storage(mgr, sched, path);
+        let store = new_storage(sched, path);
         let mut ctx = InvokeContext::new(&store.rl());
         store.rl().append(&mut ctx, &ents[1..]).expect("");
         ctx.local_state.mut_truncated_state().set_index(ents[0].get_index());
@@ -734,10 +730,9 @@ mod test {
         ];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let mgr = new_snap_mgr("");
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
-            let store = new_storage_from_ents(mgr, sched, &td, &ents);
+            let store = new_storage_from_ents(sched, &td, &ents);
             let t = store.rl().term(idx);
             if wterm != t {
                 panic!("#{}: expect res {:?}, got {:?}", i, wterm, t);
@@ -771,10 +766,9 @@ mod test {
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let mgr = new_snap_mgr("");
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
-            let store = new_storage_from_ents(mgr, sched, &td, &ents);
+            let store = new_storage_from_ents(sched, &td, &ents);
             let e = store.rl().entries(lo, hi, maxsize);
             if e != wentries {
                 panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
@@ -796,10 +790,9 @@ mod test {
         ];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let mgr = new_snap_mgr("");
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
-            let store = new_storage_from_ents(mgr, sched, &td, &ents);
+            let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store.rl());
             let res = store.rl().compact(&mut ctx, idx);
             // TODO check exact error type after refactoring error.
@@ -839,8 +832,8 @@ mod test {
         let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
-        let s = new_storage_from_ents(mgr.clone(), sched, &td, &ents);
-        let runner = SnapRunner::new(s.rl().engine.clone(), mgr.clone());
+        let s = new_storage_from_ents(sched, &td, &ents);
+        let runner = SnapRunner::new(s.rl().engine.clone(), mgr);
         worker.start(runner).unwrap();
         let snap = s.wl().snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -897,11 +890,9 @@ mod test {
         ];
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let snap_dir = TempDir::new("snap_dir").unwrap();
-            let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
-            let store = new_storage_from_ents(mgr, sched, &td, &ents);
+            let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store.rl());
             store.wl().append(&mut ctx, &entries).expect("");
             store.wl().engine.write(ctx.wb).expect("");
@@ -925,7 +916,7 @@ mod test {
         let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
-        let s1 = new_storage_from_ents(mgr.clone(), sched.clone(), &td1, &ents);
+        let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let runner = SnapRunner::new(s1.rl().engine.clone(), mgr.clone());
         worker.start(runner).unwrap();
         let snap1 = get_snap(&s1);
@@ -941,7 +932,7 @@ mod test {
         dst_snap.save().unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
-        let s2 = new_storage(mgr.clone(), sched, &td2);
+        let s2 = new_storage(sched, &td2);
         assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2.rl());
         s2.wl().apply_snapshot(&mut ctx, &snap1).unwrap();

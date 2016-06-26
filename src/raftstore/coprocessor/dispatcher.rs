@@ -133,7 +133,7 @@ mod test {
     use raftstore::coprocessor::*;
     use tempdir::TempDir;
     use raftstore::store::engine::*;
-    use raftstore::store::{self, PeerStorage};
+    use raftstore::store::PeerStorage;
     use util::HandyRwLock;
     use util::worker::Worker;
     use std::sync::*;
@@ -217,7 +217,7 @@ mod test {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
         let worker = Worker::new("");
         let sched = worker.scheduler();
-        PeerStorage::new(engine, &Region::new(), sched, store::new_snap_mgr("")).unwrap()
+        PeerStorage::new(engine, &Region::new(), sched).unwrap()
     }
 
     fn share<T>(t: T) -> Arc<RwLock<T>> {
