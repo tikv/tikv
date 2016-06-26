@@ -14,7 +14,6 @@
 use std::sync::{self, Arc, RwLock};
 use std::cell::{RefCell, Ref, RefMut};
 use std::rc::Rc;
-use std::fs::File;
 use std::{error, mem};
 use std::time::Instant;
 
@@ -23,9 +22,9 @@ use protobuf::Message;
 
 use kvproto::metapb;
 use kvproto::raftpb::{Entry, Snapshot, ConfState};
-use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState};
+use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, PeerState};
 use util::HandyRwLock;
-use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
+use util::codec::bytes::BytesEncoder;
 use util::worker::Scheduler;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
@@ -47,6 +46,7 @@ pub enum SnapState {
     Relax,
     Generating,
     Snap(Snapshot),
+    Applying,
     Failed,
 }
 
@@ -300,7 +300,10 @@ impl PeerStorage {
             return Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable));
         }
         if *state == SnapState::Generating {
-            let task = SnapTask::new(self.get_region_id(), self.snap_state.clone());
+            let task = SnapTask::Gen {
+                region_id: self.get_region_id(),
+                state: self.snap_state.clone(),
+            };
             if let Err(e) = self.snap_sched.schedule(task) {
                 error!("failed to schedule task snap generation: {:?}", e);
                 *state = SnapState::Failed;
@@ -346,19 +349,6 @@ impl PeerStorage {
         info!("begin to apply snapshot for region {}",
               self.get_region_id());
 
-        let key = try!(SnapKey::from_snap(snap));
-        let snap_file = try!(self.snap_mgr.rl().get_snap_file(&key, false));
-        self.snap_mgr.wl().register(key.clone(), SnapEntry::Applying);
-        defer!({
-            self.snap_mgr.wl().deregister(&key, &SnapEntry::Applying);
-            snap_file.delete();
-        });
-        if !snap_file.exists() {
-            return Err(box_err!("missing snap file {}", snap_file.path().display()));
-        }
-        try!(snap_file.validate());
-        let mut reader = try!(File::open(snap_file.path()));
-
         let mut snap_data = RaftSnapshotData::new();
         try!(snap_data.merge_from_bytes(snap.get_data()));
 
@@ -381,21 +371,8 @@ impl PeerStorage {
             info!("clean old region takes {:?}", timer.elapsed());
         }
 
-        let timer = Instant::now();
-        // Write the snapshot into the region.
-        loop {
-            // TODO: avoid too many allocation
-            let key = try!(reader.decode_compact_bytes());
-            if key.is_empty() {
-                break;
-            }
-            let value = try!(reader.decode_compact_bytes());
-            try!(ctx.wb.put(&key, &value));
-        }
-        info!("apply new data takes {:?}", timer.elapsed());
-
         let mut region_state = RegionLocalState::new();
-        // TODO: state.set_state(PeerState::Apply);
+        region_state.set_state(PeerState::Applying);
         region_state.set_region(region.clone());
         try!(ctx.wb.put_msg(&keys::region_state_key(region_id), &region_state));
 
@@ -409,7 +386,7 @@ impl PeerStorage {
         ctx.local_state.mut_truncated_state().set_index(last_index);
         ctx.local_state.mut_truncated_state().set_term(snap.get_metadata().get_term());
 
-        info!("apply snapshot ok for region {}", self.get_region_id());
+        info!("apply snapshot meta ok for region {}", self.get_region_id());
 
         Ok(ApplySnapResult {
             prev_region: self.region.clone(),
@@ -443,6 +420,10 @@ impl PeerStorage {
 
     pub fn get_engine(&self) -> Arc<DB> {
         self.engine.clone()
+    }
+
+    pub fn is_applying_snap(&self) -> bool {
+        *self.snap_state.rl() == SnapState::Applying
     }
 
     // For region snapshot, we return three key ranges in database for this region.
@@ -503,6 +484,8 @@ impl PeerStorage {
             try!(ctx.save(region_id));
         }
 
+        let mut state = self.snap_state.wl();
+
         if !ctx.wb.is_empty() {
             try!(self.engine.write(ctx.wb));
         }
@@ -510,6 +493,13 @@ impl PeerStorage {
         self.local_state = ctx.local_state;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
+            *state = SnapState::Applying;
+            let task = SnapTask::Apply {
+                snap_key: SnapKey::from_region_snap(self.get_region_id(), &ready.snapshot),
+                state: self.snap_state.clone(),
+            };
+            // TODO: gracefully remove region instead.
+            self.snap_sched.schedule(task).expect("snap apply job should not failed");
             self.region = res.region.clone();
             return Ok(Some(res));
         }
@@ -577,6 +567,10 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
                 Some(state) => Ok(state),
             }
         }));
+
+    if state.get_state() != PeerState::Normal {
+        return Err(box_err!("snap job for {} seems stale, skip.", region_id));
+    }
 
     let mut snapshot = Snapshot::new();
 

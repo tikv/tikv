@@ -72,9 +72,6 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
 
-    /// A flag indicates whether store has been shutdown.
-    stopped: Arc<RwLock<bool>>,
-
     trans: Arc<RwLock<T>>,
     pd_client: Arc<C>,
 
@@ -123,7 +120,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
-            stopped: Arc::new(RwLock::new(false)),
             trans: trans,
             pd_client: pd_client,
             peer_cache: Arc::new(RwLock::new(peer_cache)),
@@ -146,12 +142,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
-            // TODO: handle apply
-            if local_state.get_state() != PeerState::Normal {
+            if local_state.get_state() == PeerState::Tombstone {
                 return Ok(true);
             }
             let region = local_state.get_region();
-            let peer = try!(Peer::create(self, region));
+            let mut peer = try!(Peer::create(self, region));
+
+            if local_state.get_state() == PeerState::Applying {
+                try!(peer.destroy());
+                return Ok(true);
+            }
 
             self.region_ranges.insert(enc_end_key(region), region_id);
             // No need to check duplicated here, because we use region id as the key
@@ -166,7 +166,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(self.prepare());
 
-        try!(self.snap_mgr.wl().try_recover());
+        try!(self.snap_mgr.wl().init());
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
@@ -1044,9 +1044,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            *self.stopped.wl() = true;
-            // TODO: do some close here.
-
             if let Err(e) = self.split_check_worker.stop() {
                 error!("failed to stop split scan thread: {:?}!!!", e);
             }

@@ -22,7 +22,7 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::raftpb::{self, ConfChangeType};
+use kvproto::raftpb::{self, ConfChangeType, MessageType, Snapshot as RaftSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -329,7 +329,15 @@ impl Peer {
                self.peer,
                self.region_id);
 
-        let ready = self.raft_group.ready();
+        let mut ready = self.raft_group.ready();
+
+        let is_applying = self.storage.rl().is_applying_snap();
+
+        if is_applying {
+            // skip apply and snapshot
+            ready.committed_entries = vec![];
+            ready.snapshot = RaftSnapshot::new();
+        }
 
         let t = SlowTimer::new();
 
@@ -338,6 +346,10 @@ impl Peer {
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
         for msg in &ready.messages {
+            if msg.get_msg_type() == MessageType::MsgRequestVote && is_applying {
+                warn!("peer {} is still applying, drop {:?}", self.peer_id(), msg);
+                continue;
+            }
             try!(self.send_raft_message(&msg, trans));
         }
 
@@ -354,6 +366,11 @@ impl Peer {
                   apply_result.is_some(),
                   ready.hs.is_some(),
                   t.elapsed());
+
+        if is_applying {
+            // remove hard state to let raft not change apply index.
+            ready.hs.take();
+        }
 
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
