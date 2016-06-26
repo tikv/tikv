@@ -376,7 +376,7 @@ impl<T: Simulator> Cluster<T> {
         for _ in 0..10 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
-            let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
+            let req = new_request(region_id, region.take_region_epoch(), reqs.clone());
             let result = self.call_command_on_leader(req, timeout);
 
             if let Err(Error::Timeout(_)) = result {
