@@ -95,6 +95,15 @@ impl<T: Display> Clone for Scheduler<T> {
     }
 }
 
+/// Create a scheduler that can't be scheduled any task.
+///
+/// Useful for test purpose.
+#[cfg(test)]
+pub fn dead_scheduler<T: Display>() -> Scheduler<T> {
+    let (tx, _) = mpsc::channel();
+    Scheduler::new(AtomicUsize::new(0), tx)
+}
+
 /// A worker that can schedule time consuming tasks.
 pub struct Worker<T: Display> {
     name: String,

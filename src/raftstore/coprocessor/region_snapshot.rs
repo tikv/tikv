@@ -210,7 +210,7 @@ mod tests {
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
     use storage::{Cursor, Key};
-    use util::worker::Worker;
+    use util::worker;
 
     use super::*;
     use std::sync::Arc;
@@ -223,9 +223,7 @@ mod tests {
     }
 
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
-        let worker = Worker::new("");
-        let sched = worker.scheduler();
-        PeerStorage::new(engine, r, sched).unwrap()
+        PeerStorage::new(engine, r, worker::dead_scheduler()).unwrap()
     }
 
     fn new_snapshot(peer_storage: &PeerStorage) -> RegionSnapshot {

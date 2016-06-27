@@ -116,14 +116,12 @@ mod test {
     use util::codec::{datum, table, Datum};
     use util::codec::number::NumberEncoder;
     use util::codec::bytes::encode_bytes;
-    use util::worker::Worker;
+    use util::worker;
     use byteorder::{BigEndian, WriteBytesExt};
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        let worker = Worker::new("");
-        let sched = worker.scheduler();
-        PeerStorage::new(engine, &Region::new(), sched).unwrap()
+        PeerStorage::new(engine, &Region::new(), worker::dead_scheduler()).unwrap()
     }
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
@@ -165,9 +163,7 @@ mod test {
         r.set_id(10);
         r.set_start_key(region_start_key);
 
-        let worker = Worker::new("");
-        let sched = worker.scheduler();
-        let ps = PeerStorage::new(engine, &r, sched).unwrap();
+        let ps = PeerStorage::new(engine, &r, worker::dead_scheduler()).unwrap();
         let mut ctx = ObserverContext::new(&ps);
         let mut observer = SplitObserver;
 

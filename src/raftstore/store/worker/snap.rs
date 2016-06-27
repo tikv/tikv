@@ -18,7 +18,7 @@ use std::fs::File;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use rocksdb::{DB, Writable};
+use rocksdb::{DB, Writable, WriteBatch};
 
 use util::worker::Runnable;
 use util::codec::bytes::CompactBytesDecoder;
@@ -26,7 +26,9 @@ use util::HandyRwLock;
 use raftstore::store::{self, SnapState, SnapManager, SnapKey, SnapEntry};
 use raftstore::store::engine::Snapshot;
 
-/// Snapshot generating task.
+const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
+
+/// Snapshot related task.
 pub enum Task {
     Gen {
         region_id: u64,
@@ -123,14 +125,24 @@ impl Runner {
 
         let timer = Instant::now();
         // Write the snapshot into the region.
+        let mut wb = WriteBatch::new();
+        let mut batch_size = 0;
         loop {
             // TODO: avoid too many allocation
             let key = box_try!(reader.decode_compact_bytes());
             if key.is_empty() {
+                box_try!(self.db.write(wb));
                 break;
             }
+            batch_size += key.len();
             let value = box_try!(reader.decode_compact_bytes());
-            box_try!(self.db.put(&key, &value));
+            batch_size += value.len();
+            box_try!(wb.put(&key, &value));
+            if batch_size > BATCH_SIZE {
+                box_try!(self.db.write(wb));
+                wb = WriteBatch::new();
+                batch_size = 0;
+            }
         }
         info!("apply new data takes {:?}", timer.elapsed());
         Ok(())
@@ -144,7 +156,11 @@ impl Runner {
             // TODO: gracefully remove region instead.
             panic!("failed to apply snap: {:?}!!!", e);
         }
-        *state.wl() = SnapState::Relax;
+        let mut snap_state = state.wl();
+        assert_eq!(*snap_state, SnapState::Applying);
+        // It's safe to just overwrite here. Any other pending snapshot is kept in
+        // ready and will never be applied before following is executed.
+        *snap_state = SnapState::Relax;
         metric_incr!("raftstore.apply_snap.success");
         metric_time!("raftstore.apply_snap.cost", ts.elapsed());
     }
