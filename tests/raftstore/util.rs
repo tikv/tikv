@@ -36,31 +36,35 @@ use tikv::util::escape;
 
 pub use tikv::raftstore::store::util::find_peer;
 
-pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
-    for _ in 1..200 {
+pub fn must_get(engine: &Arc<DB>, key: &[u8], value: Option<&[u8]>) {
+    for _ in 1..250 {
         if let Ok(res) = engine.get_value(&keys::data_key(key)) {
-            if let Some(val) = res {
-                assert_eq!(&*val, value);
+            if value.is_some() && res.is_some() {
+                assert_eq!(value.unwrap(), &*res.unwrap());
+                return;
+            }
+            if value.is_none() && res.is_none() {
                 return;
             }
             thread::sleep(Duration::from_millis(10));
         }
     }
+    let res = engine.get_value(&keys::data_key(key)).unwrap();
+    if value.is_none() && res.is_none() ||
+       value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap() {
+        return;
+    }
     panic!("can't get value {:?} for key {:?}",
-           escape(value),
+           value.map(escape),
            escape(key))
 }
 
+pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
+    must_get(engine, key, Some(value));
+}
+
 pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
-    for _ in 1..200 {
-        if let Ok(res) = engine.get_value(&keys::data_key(key)) {
-            if res.is_none() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-    panic!("get value for key {:?}, not none", escape(key));
+    must_get(engine, key, None);
 }
 
 pub fn new_engine(path: &TempDir) -> Arc<DB> {

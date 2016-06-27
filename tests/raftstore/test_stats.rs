@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
@@ -20,7 +19,6 @@ use super::server::new_server_cluster;
 use super::util::*;
 use tikv::pd::PdClient;
 use super::pd::TestPdClient;
-use super::transport_simulate::DelaySnapshot;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
@@ -114,15 +112,18 @@ fn test_server_store_snap_stats() {
 
     let r1 = cluster.run_conf_change();
 
-    cluster.must_put(b"k1", b"v1");
+    // make a big snapshot
+    for i in 0..2 * 1024 {
+        let key = format!("{:01024}", i);
+        let value = format!("{:01024}", i);
+        cluster.must_put(key.as_bytes(), value.as_bytes());
+    }
 
-    // delay snapshot sending, so that we can detect this.
-    cluster.hook_transport(DelaySnapshot::new(Duration::from_millis(50)));
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
     must_detect_snap(&pd_client);
 
-    cluster.reset_transport_hooks();
+    cluster.clear_filters();
     // wait snapshot finish.
     sleep_ms(100);
 

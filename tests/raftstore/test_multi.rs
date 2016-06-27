@@ -12,12 +12,13 @@
 // limitations under the License.
 
 use tikv::raftstore::store::*;
+use kvproto::raftpb::MessageType;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use super::transport_simulate::{Delay, DropPacket};
+use super::transport_simulate::*;
 
 use rand;
 use rand::Rng;
@@ -162,7 +163,7 @@ fn test_multi_node_base() {
 
 fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.hook_transport(DropPacket::new(30));
+    cluster.add_filter(DropPacket::new(30));
     test_multi_base_after_bootstrap(cluster);
 }
 
@@ -190,7 +191,7 @@ fn test_multi_server_base() {
 
 fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.hook_transport(Delay::new(Duration::from_millis(30)));
+    cluster.add_filter(Delay::new(Duration::from_millis(30)));
     test_multi_base_after_bootstrap(cluster);
 }
 
@@ -266,4 +267,89 @@ fn test_multi_server_random_restart() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_multi_random_restart(&mut cluster, count, 10);
+}
+
+fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.store_cfg.raft_election_timeout_ticks = 50;
+    // disable compact log to make test more stable.
+    cluster.cfg.store_cfg.raft_log_gc_threshold = 1000;
+    // We use three peers([1, 2, 3]) for this test.
+    cluster.run();
+
+    sleep_ms(500);
+
+    // guarantee peer 1 is leader
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // So peer 3 won't replicate any message of the region but still can vote.
+    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
+    cluster.must_put(b"k1", b"v1");
+
+    // peer 1 and peer 2 must have k2, but peer 3 must not.
+    for i in 1..3 {
+        let engine = cluster.get_engine(i);
+        must_get_equal(&engine, b"k1", b"v1");
+    }
+
+    let engine3 = cluster.get_engine(3);
+    must_get_none(&engine3, b"k1");
+
+    // now only peer 1 and peer 2 can step to leader.
+
+    // hack: first MsgAppend will append log, second MsgAppend will set commit index,
+    // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
+    cluster.add_filter(IsolateRegionStore::new(1, 2)
+        .msg_type(MessageType::MsgAppend)
+        .direction(Direction::Recv)
+        .allow(1));
+    // Make peer 2 have no way to know the uncommitted entries can be applied
+    // when it becomes leader.
+    cluster.add_filter(IsolateRegionStore::new(1, 1)
+        .msg_type(MessageType::MsgHeartbeatResponse)
+        .direction(Direction::Send));
+    // Make peer 2's msg won't be replicated when it becomes leader,
+    // so the uncommitted entries won't be applied immediatly.
+    cluster.add_filter(IsolateRegionStore::new(1, 1)
+        .msg_type(MessageType::MsgAppend)
+        .direction(Direction::Recv));
+    // Make peer 2 have no way to know the uncommitted entries can be applied
+    // when it's still follower.
+    cluster.add_filter(IsolateRegionStore::new(1, 2)
+        .msg_type(MessageType::MsgHeartbeat)
+        .direction(Direction::Recv));
+    debug!("putting k2");
+    cluster.must_put(b"k2", b"v2");
+
+    // peer 1 must have committed, but peer 2 has not.
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+
+    cluster.must_transfer_leader(1, util::new_peer(2, 2));
+
+    must_get_none(&cluster.get_engine(2), b"k2");
+
+    let region = cluster.get_region(b"");
+    let reqs = vec![new_put_cmd(b"k3", b"v3")];
+    let mut put = new_request(region.get_id(), region.get_region_epoch().clone(), reqs);
+    debug!("requesting: {:?}", put);
+    put.mut_header().set_peer(new_peer(2, 2));
+    cluster.clear_filters();
+    let resp = cluster.call_command(put, Duration::from_secs(5)).unwrap();
+    assert!(!resp.get_header().has_error(), format!("{:?}", resp));
+
+    for i in 1..4 {
+        must_get_equal(&cluster.get_engine(i), b"k2", b"v2");
+        must_get_equal(&cluster.get_engine(i), b"k3", b"v3");
+    }
+}
+
+#[test]
+fn test_node_leader_change_with_uncommitted_log() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_leader_change_with_uncommitted_log(&mut cluster);
+}
+
+#[test]
+fn test_server_leader_change_with_uncommitted_log() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_leader_change_with_uncommitted_log(&mut cluster);
 }

@@ -180,6 +180,10 @@ impl Simulator for ServerCluster {
         node_id
     }
 
+    fn get_snap_dir(&self, node_id: u64) -> String {
+        self.snap_paths.get(&node_id).unwrap().path().to_str().unwrap().to_owned()
+    }
+
     fn stop_node(&mut self, node_id: u64) {
         let h = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
@@ -250,9 +254,14 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>) {
+    fn add_filter(&self, node_id: u64, filter: Box<Filter>) {
         let trans = self.sim_trans.get(&node_id).unwrap();
-        trans.wl().set_filters(filters);
+        trans.wl().add_filter(filter);
+    }
+
+    fn clear_filters(&self, node_id: u64) {
+        let trans = self.sim_trans.get(&node_id).unwrap();
+        trans.wl().clear_filters();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<StoreSendCh> {

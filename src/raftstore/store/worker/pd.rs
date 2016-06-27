@@ -41,6 +41,10 @@ pub enum Task {
     StoreHeartbeat {
         stats: pdpb::StoreStats,
     },
+    ReportSplit {
+        left: metapb::Region,
+        right: metapb::Region,
+    },
 }
 
 
@@ -60,6 +64,9 @@ impl Display for Task {
                        peer.get_id())
             }
             Task::StoreHeartbeat { ref stats } => write!(f, "store heartbeat stats: {:?}", stats),
+            Task::ReportSplit { ref left, ref right } => {
+                write!(f, "report split left {:?}, right {:?}", left, right)
+            }
         }
     }
 }
@@ -157,6 +164,13 @@ impl<T: PdClient> Runner<T> {
             error!("store heartbeat failed {:?}", e);
         }
     }
+
+    fn handle_report_split(&self, left: metapb::Region, right: metapb::Region) {
+        metric_incr!("pd.report_split");
+        if let Err(e) = self.pd_client.report_split(left, right) {
+            error!("report split failed {:?}", e);
+        }
+    }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
@@ -169,6 +183,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             }
             Task::Heartbeat { region, peer } => self.handle_heartbeat(region, peer),
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
+            Task::ReportSplit { left, right } => self.handle_report_split(left, right),
         };
     }
 }
