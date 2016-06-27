@@ -13,7 +13,7 @@
 
 
 use std::io::Write;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::cmp;
 use tipb::schema::ColumnInfo;
 
@@ -206,6 +206,24 @@ pub trait TableDecoder: DatumDecoder {
 
 impl<T: BytesDecoder> TableDecoder for T {}
 
+// `cut_row` cut encoded row into byte slices and return interested columns' byte slice.
+// Row layout: colID1, value1, colID2, value2, .....
+pub fn cut_row<'a>(mut data: &'a [u8], cols: &HashSet<i64>) -> Result<HashMap<i64, &'a [u8]>> {
+    let mut res = HashMap::with_capacity(cols.len());
+    if data.is_empty() || data.len() == 1 && data[0] == datum::NIL_FLAG {
+        return Ok(res);
+    }
+    while !data.is_empty() {
+        let id = try!(data.decode_datum()).i64();
+        let (val, rem) = try!(datum::split_datum(data, false));
+        if cols.contains(&id) {
+            res.insert(id, val);
+        }
+        data = rem;
+    }
+    Ok(res)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -214,6 +232,7 @@ mod test {
     use util::codec::number::NumberEncoder;
     use tipb::schema::ColumnInfo;
     use std::i64;
+    use std::collections::{HashSet, HashMap};
 
     #[test]
     fn test_row_key_codec() {
@@ -240,6 +259,11 @@ mod test {
         col_info
     }
 
+    fn cut_row_as_owned(bs: &[u8], col_id_set: &HashSet<i64>) -> HashMap<i64, Vec<u8>> {
+        let res = cut_row(bs, col_id_set).unwrap();
+        res.iter().map(|(k, v)| (*k, v.to_vec())).collect()
+    }
+
     #[test]
     fn test_row_codec() {
         let mut cols = map![
@@ -254,12 +278,15 @@ mod test {
             3 => Datum::Dec(Decimal::new(1.into(), 1, MAX_FSP))
         ];
 
-        let mut col_ids = vec![];
-        let mut col_values = vec![];
-        for (&id, v) in &row {
-            col_ids.push(id);
-            col_values.push(v.clone());
-        }
+        let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
+        let col_values: Vec<_> = row.iter().map(|(_, v)| v.clone()).collect();
+        let mut col_encoded: HashMap<_, _> = row.iter()
+            .map(|(k, v)| {
+                let f = super::flatten(v.clone()).unwrap();
+                (*k, datum::encode_value(&[f]).unwrap())
+            })
+            .collect();
+        let mut col_id_set: HashSet<_> = col_ids.iter().cloned().collect();
 
         let bs = encode_row(col_values, &col_ids).unwrap();
         assert!(!bs.is_empty());
@@ -267,18 +294,32 @@ mod test {
         let r = bs.as_slice().decode_row(&cols).unwrap();
         assert_eq!(row, r);
 
+        let mut datums: HashMap<_, _>;
+        datums = cut_row_as_owned(&bs, &col_id_set);
+        assert_eq!(col_encoded, datums);
+
         cols.insert(4, new_col_info(types::FLOAT));
         let r = bs.as_slice().decode_row(&cols).unwrap();
         assert_eq!(row, r);
+        col_id_set.insert(4);
+        datums = cut_row_as_owned(&bs, &col_id_set);
+        assert_eq!(col_encoded, datums);
 
         cols.remove(&4);
         cols.remove(&3);
         let r = bs.as_slice().decode_row(&cols).unwrap();
         row.remove(&3);
         assert_eq!(row, r);
+        col_id_set.remove(&3);
+        col_id_set.remove(&4);
+        datums = cut_row_as_owned(&bs, &col_id_set);
+        col_encoded.remove(&3);
+        assert_eq!(col_encoded, datums);
 
         let bs = encode_row(vec![], &[]).unwrap();
         assert!(!bs.is_empty());
         assert!(bs.as_slice().decode_row(&cols).unwrap().is_empty());
+        datums = cut_row_as_owned(&bs, &col_id_set);
+        assert!(datums.is_empty());
     }
 }

@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 use std::usize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::time::Instant;
 use std::boxed::FnBox;
@@ -22,6 +22,7 @@ use std::fmt::{self, Display, Formatter};
 
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
 use tipb::schema::ColumnInfo;
+use tipb::expression::{Expr, ExprType};
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use threadpool::ThreadPool;
@@ -31,6 +32,7 @@ use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use storage::{Snapshot, Key};
 use util::codec::table::TableDecoder;
+use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
 use util::{escape, duration_to_ms};
@@ -191,7 +193,7 @@ impl TiDbEndPoint {
                          sel: SelectRequest)
                          -> Result<Response> {
         let snap = SnapshotStore::new(snap, sel.get_start_ts());
-        let mut ctx = SelectContext::new(sel, snap);
+        let mut ctx = try!(SelectContext::new(sel, snap));
         let mut range = req.take_ranges().into_vec();
         let desc = ctx.core.sel.get_order_by().first().map_or(false, |o| o.get_desc());
         debug!("scanning range: {:?}", range);
@@ -279,96 +281,120 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
+#[inline]
+fn inflate_with_col<'a, T>(eval: &mut Evaluator,
+                           values: &HashMap<i64, &[u8]>,
+                           cols: T,
+                           h: i64)
+                           -> Result<()>
+    where T: IntoIterator<Item = &'a ColumnInfo>
+{
+    for col in cols {
+        let col_id = col.get_column_id();
+        if let Entry::Vacant(e) = eval.row.entry(col_id) {
+            if col.get_pk_handle() {
+                let v = get_pk(col, h);
+                e.insert(v);
+            } else {
+                let value = match values.get(&col_id) {
+                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                        return Err(box_err!("column {} is missing", col_id));
+                    }
+                    None => Datum::Null,
+                    Some(bs) => box_try!(bs.clone().decode_col_value(col)),
+                };
+                e.insert(value);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub struct SelectContextCore {
     sel: SelectRequest,
     eval: Evaluator,
-    pk: Option<ColumnInfo>,
-    cols: HashMap<i64, ColumnInfo>,
+    cols: HashSet<i64>,
+    cond_cols: HashMap<i64, ColumnInfo>,
     aggr: bool,
     gks: Vec<Rc<Vec<u8>>>,
     gk_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
 }
 
 impl SelectContextCore {
-    fn new(sel: SelectRequest) -> SelectContextCore {
-        let select_cols = if sel.has_table_info() {
-            sel.get_table_info().get_columns().to_vec()
-        } else {
-            sel.get_index_info().get_columns().to_vec()
-        };
-        let pk = if let Some(col) = select_cols.iter().find(|c| c.get_pk_handle()) {
-            Some(col.clone())
-        } else {
-            None
-        };
-        let mut cols = HashMap::with_capacity(select_cols.len());
-        for col in select_cols {
-            cols.insert(col.get_column_id(), col);
+    fn new(sel: SelectRequest) -> Result<SelectContextCore> {
+        let cols;
+        let mut cond_cols;
+
+        {
+            let select_cols = if sel.has_table_info() {
+                sel.get_table_info().get_columns()
+            } else {
+                sel.get_index_info().get_columns()
+            };
+            cols = select_cols.iter().map(|c| c.get_column_id()).collect();
+            cond_cols = HashMap::new();
+            try!(collect_col_in_expr(&mut cond_cols, select_cols, sel.get_field_where()));
         }
 
-        SelectContextCore {
+
+        Ok(SelectContextCore {
             aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
             sel: sel,
             eval: Default::default(),
-            pk: pk,
             cols: cols,
+            cond_cols: cond_cols,
             gks: vec![],
             gk_aggrs: map![],
-        }
+        })
     }
 
-    fn handle_row(&mut self, key: &[u8], mut value: &[u8], dest: &mut Vec<Row>) -> Result<()> {
+    fn handle_row(&mut self, key: &[u8], value: &[u8], dest: &mut Vec<Row>) -> Result<()> {
         let h = box_try!(table::decode_handle(key));
-        self.eval.row = box_try!(value.decode_row(&self.cols));
 
-        if let Some(pk) = self.pk.as_ref() {
-            let h_d = get_pk(pk, h);
-            self.eval.row.insert(pk.get_column_id(), h_d);
-        }
+        let row_data = box_try!(table::cut_row(value, &self.cols));
+        // clear all dirty values.
+        self.eval.row.clear();
 
-        for (&col_id, col) in &self.cols {
-            if let Entry::Vacant(e) = self.eval.row.entry(col_id) {
-                if mysql::has_not_null_flag(col.get_flag() as u64) {
-                    return Err(box_err!("column {} missing", col_id));
-                } else {
-                    e.insert(Datum::Null);
-                }
-            }
-        }
-
-        if try!(self.should_skip()) {
+        if try!(self.should_skip(h, &row_data)) {
             return Ok(());
         }
 
         if self.aggr {
-            try!(self.aggregate());
+            try!(self.aggregate(h, &row_data));
         } else {
-            dest.push(try!(self.get_row(h)))
+            dest.push(try!(self.get_row(h, row_data)))
         }
         Ok(())
     }
 
-    fn should_skip(&mut self) -> Result<bool> {
+    fn should_skip(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<bool> {
         if !self.sel.has_field_where() {
             return Ok(false);
         }
+        try!(inflate_with_col(&mut self.eval, values, self.cond_cols.values(), h));
         let res = box_try!(self.eval.eval(self.sel.get_field_where()));
         let b = box_try!(res.into_bool());
         Ok(b.map_or(true, |v| !v))
     }
 
-    fn get_row(&mut self, h: i64) -> Result<Row> {
+    fn get_row(&mut self, h: i64, values: HashMap<i64, &[u8]>) -> Result<Row> {
         let mut row = Row::new();
         let handle = box_try!(datum::encode_value(&[Datum::I64(h)]));
         row.set_handle(handle);
-        let cols = self.sel.get_table_info().get_columns();
-        let mut datums = Vec::with_capacity(cols.len());
-        for col in cols {
+        for col in self.sel.get_table_info().get_columns() {
             let col_id = col.get_column_id();
-            let d = self.eval.row.remove(&col_id).unwrap();
-            datums.push(d);
+            if let Some(v) = values.get(&col_id) {
+                row.mut_data().extend_from_slice(v);
+                continue;
+            }
+            if col.get_pk_handle() {
+                box_try!(datum::encode_to(row.mut_data(), &[get_pk(col, h)], false));
+            } else if mysql::has_not_null_flag(col.get_flag() as u64) {
+                return Err(box_err!("column {} is missing", col_id));
+            } else {
+                box_try!(datum::encode_to(row.mut_data(), &[Datum::Null], false));
+            }
         }
-        row.set_data(box_try!(datum::encode_value(&datums)));
         Ok(row)
     }
 
@@ -386,7 +412,11 @@ impl SelectContextCore {
         Ok(res)
     }
 
-    fn aggregate(&mut self) -> Result<()> {
+    fn aggregate(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<()> {
+        try!(inflate_with_col(&mut self.eval,
+                              values,
+                              self.sel.get_table_info().get_columns(),
+                              h));
         let gk = Rc::new(try!(self.get_group_key()));
         let aggr_exprs = self.sel.get_aggregates();
         match self.gk_aggrs.entry(gk.clone()) {
@@ -440,17 +470,40 @@ impl SelectContextCore {
     }
 }
 
+fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
+                       col_meta: &[ColumnInfo],
+                       expr: &Expr)
+                       -> Result<()> {
+    if expr.get_tp() == ExprType::ColumnRef {
+        let i = box_try!(expr.get_val().decode_i64());
+        if let Entry::Vacant(e) = cols.entry(i) {
+            for c in col_meta {
+                if c.get_column_id() == i {
+                    e.insert(c.clone());
+                    return Ok(());
+                }
+            }
+            return Err(box_err!("column meta of {} is missing", i));
+        }
+    }
+    for c in expr.get_children() {
+        try!(collect_col_in_expr(cols, col_meta, c));
+    }
+    Ok(())
+}
+
+
 pub struct SelectContext<'a> {
     snap: SnapshotStore<'a>,
     core: SelectContextCore,
 }
 
 impl<'a> SelectContext<'a> {
-    fn new(sel: SelectRequest, snap: SnapshotStore<'a>) -> SelectContext<'a> {
-        SelectContext {
-            core: SelectContextCore::new(sel),
+    fn new(sel: SelectRequest, snap: SnapshotStore<'a>) -> Result<SelectContext<'a>> {
+        Ok(SelectContext {
+            core: try!(SelectContextCore::new(sel)),
             snap: snap,
-        }
+        })
     }
 
     fn get_rows_from_sel(&mut self,
