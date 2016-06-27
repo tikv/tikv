@@ -321,8 +321,7 @@ impl SelectContextCore {
         let h = box_try!(table::decode_handle(key));
         self.eval.row = box_try!(value.decode_row(&self.cols));
 
-        {
-            let pk = self.pk.as_ref().unwrap();
+        if let Some(pk) = self.pk.as_ref() {
             let h_d = get_pk(pk, h);
             self.eval.row.insert(pk.get_column_id(), h_d);
         }
