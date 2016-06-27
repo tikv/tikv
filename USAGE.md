@@ -26,15 +26,14 @@
     make shared_lib 
     make install-shared
     ```
-    
+    * To install RocksDB on other Linux platform, see [INSTALL.md](https://github.com/facebook/rocksdb/blob/master/INSTALL.md).
+
     * **Mac OS X**
     
     ```sh
     brew update
     brew install rocksdb
     ``` 
-    
-    * To install RocksDB on other Linux platform, see [INSTALL.md](https://github.com/facebook/rocksdb/blob/master/INSTALL.md).
 
 + **Etcd**
 
@@ -78,30 +77,30 @@
 
     The binary of `tidb-server` will be installed in `${GOPATH}/src/github.com/pingcap/tidb/tidb-server`
 
-### Running single node
+### Running in standalone mode
 
-1. Start Etcd with default listening port 2379.
+1. Start etcd on the default listening port 2379.
 
     ```sh
     etcd 
     ```
 
-2. Start PD with listening port 1234 and cluster ID 1.
+2. Start PD on listening port 1234 and cluster ID 1.
 
     ```sh
-    pd-server -addr 127.0.0.1:1234 --etcd 127.0.0.1:2379 --cluster-id 1 --root pd
+    pd-server -addr 127.0.0.1:1234 --etcd 127.0.0.1:2379 --cluster-id 1 --root /pd
     ```
 
     Cluster ID is used to distinguish different TiKV clusters.
-    The root `pd` is the root prefix path in etcd. 
+    The root `/pd` is the root prefix path in etcd. 
 
-3. Start TiKV with listening port 5551, the data is stored in local directory `data1` and cluster ID is 1.
+3. Start TiKV on listening port 5551, the data is stored in local directory `data1` and cluster ID is 1.
 
     ```sh
     tikv-server -S raftkv --addr 127.0.0.1:5551 --pd 127.0.0.1:1234 -s data1 --cluster-id 1
     ```
 
-4. Start TiDB with listening port 5001. 
+4. Start TiDB on listening port 5001. 
 
     ```sh
     tidb-server --store=tikv --path="127.0.0.1:2379/pd?cluster=1" -lease 1 -P 5001
@@ -113,20 +112,20 @@
     mysql -h 127.0.0.1 -P 5001 -u root -D test
     ```
 
-### Running cluster
+### Running in cluster mode
 
-In production, the cluster deployment is recommended. 
+In production environment, it is strongly recommended to run TiKV in cluster mode. 
 
 1. Start etcd cluster, see [multi-machine cluster](https://github.com/coreos/etcd/blob/master/Documentation/op-guide/clustering.md).
 
-    Let's assume the etcd cluster endpoints are 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379.
+    Let's assume that the etcd cluster endpoints are 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379.
 
 2. Start PD cluster.
 
     ```sh
-    pd-server -addr 127.0.0.1:1234 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 --cluster-id 1 --root pd
-    pd-server -addr 127.0.0.1:2234 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 --cluster-id 1 --root pd
-    pd-server -addr 127.0.0.1:3234 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 --cluster-id 1 --root pd
+    pd-server -addr 127.0.0.1:1234 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 --cluster-id 1 --root /pd
+    pd-server -addr 127.0.0.1:2234 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 --cluster-id 1 --root /pd
+    pd-server -addr 127.0.0.1:3234 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 --cluster-id 1 --root /pd
 ```
 
 3. Start TiKV cluster.
