@@ -6,7 +6,7 @@
 
 TiKV depends on Etcd and PD, which both need [*Go*](https://golang.org/) installed on your machine (version 1.5+ is required). 
 
-The latest Etcd version supports gRPC is required. 
+It is required to use the latest etcd version which supports gRPC from the master branch.
 
 Etcd:
 
