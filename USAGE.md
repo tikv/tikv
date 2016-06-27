@@ -38,7 +38,7 @@
 
 + **Etcd**
 
-    It is required to use the latest etcd version which supports gRPC from the master branch.
+    The latest etcd version is required.
     
     ```sh
     git clone https://github.com/coreos/etcd.git ${GOPATH}/src/github.com/coreos/etcd
