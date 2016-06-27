@@ -37,7 +37,7 @@
 
 + **Etcd**
 
-    The latest etcd version is required.
+    The latest version of etcd is required.
     
     ```sh
     git clone https://github.com/coreos/etcd.git ${GOPATH}/src/github.com/coreos/etcd
@@ -45,7 +45,7 @@
     ./build
     ```
 
-    The binary of `etcd` will be installed in `${GOPATH}/src/github.com/coreos/etcd/bin`
+    The binary of `etcd` is installed in `${GOPATH}/src/github.com/coreos/etcd/bin`.
 
 + **PD**
 
@@ -55,7 +55,7 @@
     make build
     ```
     
-    The binary of `pd-server` will be installed in `${GOPATH}/src/github.com/pingcap/pd/bin`
+    The binary of `pd-server` is installed in `${GOPATH}/src/github.com/pingcap/pd/bin`.
 
 + **TiKV**
 
@@ -65,7 +65,7 @@
     make release
     ```
     
-    The binary of `tikv-server` will be installed in `tikv/target/release/`
+    The binary of `tikv-server` is installed in `tikv/target/release/`.
 
 + **TiDB**
 
@@ -75,7 +75,7 @@
     make server
     ```
 
-    The binary of `tidb-server` will be installed in `${GOPATH}/src/github.com/pingcap/tidb/tidb-server`
+    The binary of `tidb-server` is installed in `${GOPATH}/src/github.com/pingcap/tidb/tidb-server`
 
 ### Running in standalone mode
 
@@ -92,7 +92,7 @@
     ```
 
     Cluster ID is used to distinguish different TiKV clusters.
-    The root `/pd` is the root prefix path in etcd. 
+    The `/pd` is the root prefix path in etcd. 
 
 3. Start TiKV on listening port 5551, the data is stored in local directory `data1` and cluster ID is 1.
 
@@ -106,7 +106,7 @@
     tidb-server --store=tikv --path="127.0.0.1:2379/pd?cluster=1" -lease 1 -P 5001
     ```
 
-5. Use official `mysql` client to connect TiDB and enjoy it. 
+5. Use the official `mysql` client to connect TiDB and enjoy it. 
 
     ```sh
     mysql -h 127.0.0.1 -P 5001 -u root -D test
