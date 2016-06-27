@@ -46,7 +46,7 @@
     ./build
     ```
 
-    The `etcd` binary execution will be installed in `${GOPATH}/src/github.com/coreos/etcd/bin`
+    The binary of `etcd` will be installed in `${GOPATH}/src/github.com/coreos/etcd/bin`
 
 + **PD**
 
@@ -56,7 +56,7 @@
     make build
     ```
     
-    The `pd-server` binary execution will be installed in `${GOPATH}/src/github.com/pingcap/pd/bin`
+    The binary of `pd-server` will be installed in `${GOPATH}/src/github.com/pingcap/pd/bin`
 
 + **TiKV**
 
@@ -66,7 +66,7 @@
     make release
     ```
     
-    The `tikv-server` binary execution will be installed in `tikv/target/release/`
+    The binary of `tikv-server` will be installed in `tikv/target/release/`
 
 + **TiDB**
 
@@ -76,7 +76,7 @@
     make server
     ```
 
-    The `tidb-server` binary execution will be installed in `${GOPATH}/src/github.com/pingcap/tidb/tidb-server`
+    The binary of `tidb-server` will be installed in `${GOPATH}/src/github.com/pingcap/tidb/tidb-server`
 
 ### Running single node
 
