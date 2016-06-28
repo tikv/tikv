@@ -74,7 +74,7 @@ fn get_string_value<F>(short: &str,
 
     s.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("malformed or missing {}, use default", long);
+                info!("malformed or missing {}, use default {:?}", long, default);
                 default
             })
         })
@@ -98,7 +98,7 @@ fn get_integer_value<F>(short: &str,
 
     i.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("malformed or missing {}, use default", long);
+                info!("malformed or missing {}, use default {:?}", long, default);
                 default
             })
         })
