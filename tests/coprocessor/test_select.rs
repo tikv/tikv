@@ -7,7 +7,6 @@ use tikv::util::codec::number::*;
 use tikv::storage::{Dsn, Mutation, Key};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::storage::txn::TxnStore;
-use tikv::util;
 use tikv::util::event::Event;
 use tikv::util::worker::Worker;
 use kvproto::coprocessor::{Request, KeyRange};
@@ -121,19 +120,12 @@ fn gen_values(h: i64, ti: &TableInfo) -> Vec<Datum> {
     values
 }
 
-fn encode_col_kv(t_id: i64, h: i64, c_id: i64, v: &Datum) -> (Vec<u8>, Vec<u8>) {
-    let key = table::encode_column_key(t_id, h, c_id);
-    let val = datum::encode_value(util::as_slice(v)).unwrap();
-    (key, val)
-}
-
 fn get_row(h: i64, ti: &TableInfo) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let key = build_row_key(ti.t_id, h);
     let col_values = gen_values(h, ti);
+    let value = table::encode_row(col_values.clone(), &ti.c_ids).unwrap();
     let mut kvs = vec![];
-    for (v, &id) in col_values.iter().zip(&ti.c_ids) {
-        let (k, v) = encode_col_kv(ti.t_id, h, id, v);
-        kvs.push((k, v));
-    }
+    kvs.push((key, value));
     for (&off, &i_id) in ti.idx_off.iter().zip(&ti.i_ids) {
         let v = col_values[off as usize].clone();
 
@@ -154,10 +146,6 @@ fn prepare_table_data(store: &mut Store, ti: &TableInfo, count: i64) {
     store.begin();
     for i in 1..count + 1 {
         let mut mutations = vec![];
-
-        let row_key = build_row_key(ti.t_id, i as i64);
-
-        mutations.push((row_key, vec![]));
         mutations.extend(get_row(i, ti));
         store.put(mutations);
     }
