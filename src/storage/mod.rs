@@ -14,9 +14,7 @@
 use std::boxed::FnBox;
 use std::fmt;
 use std::error;
-use std::thread::{self, JoinHandle};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Sender};
 use self::txn::Scheduler;
 
 pub mod engine;
@@ -117,7 +115,7 @@ pub enum Command {
     },
 }
 
-impl fmt::Debug for Command {
+impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Command::Get { ref key, start_ts, .. } => {
@@ -172,36 +170,17 @@ impl fmt::Debug for Command {
 
 pub struct Storage {
     engine: Arc<Box<Engine>>,
-    tx: Sender<Message>,
-    thread: Option<JoinHandle<Result<()>>>,
+    sched: Option<Scheduler>,
 }
 
 impl Storage {
     pub fn from_engine(engine: Box<Engine>) -> Result<Storage> {
-        let desc = format!("{:?}", engine);
         let engine = Arc::new(engine);
-        let mut scheduler = Scheduler::new(engine.clone());
-
-        let (tx, rx) = mpsc::channel::<Message>();
-        let builder = thread::Builder::new().name(thd_name!(format!("storage-{:?}", desc)));
-        let handle = box_try!(builder.spawn(move || {
-            info!("storage: [{}] started.", desc);
-            loop {
-                let msg = try!(rx.recv());
-                debug!("recv message: {:?}", msg);
-                match msg {
-                    Message::Command(cmd) => scheduler.handle_cmd(cmd),
-                    Message::Close => break,
-                }
-            }
-            info!("storage: [{}] closing.", desc);
-            Ok(())
-        }));
-
+        let sched = Scheduler::new(engine.clone());
+        info!("storage {} started.", format!("{:?}", engine));
         Ok(Storage {
             engine: engine,
-            tx: tx,
-            thread: Some(handle),
+            sched: Some(sched),
         })
     }
 
@@ -211,18 +190,21 @@ impl Storage {
     }
 
     pub fn stop(&mut self) -> Result<()> {
-        if self.thread.is_none() {
-            return Ok(());
-        }
-        try!(self.tx.send(Message::Close));
-        if self.thread.take().unwrap().join().is_err() {
-            return Err(box_err!("failed to wait storage thread quit"));
-        }
+        self.sched.take();
+        info!("storage {} closed.", format!("{:?}", self.engine));
         Ok(())
     }
 
     pub fn get_engine(&self) -> Arc<Box<Engine>> {
         self.engine.clone()
+    }
+
+    fn send(&self, cmd: Command) -> Result<()> {
+        match self.sched {
+            Some(ref sched) => sched.exec(cmd),
+            None => return Err(Error::Closed),
+        };
+        Ok(())
     }
 
     pub fn async_get(&self,
@@ -237,7 +219,7 @@ impl Storage {
             start_ts: start_ts,
             callback: callback,
         };
-        try!(self.tx.send(Message::Command(cmd)));
+        try!(self.send(cmd));
         Ok(())
     }
 
@@ -253,7 +235,7 @@ impl Storage {
             start_ts: start_ts,
             callback: callback,
         };
-        try!(self.tx.send(Message::Command(cmd)));
+        try!(self.send(cmd));
         Ok(())
     }
 
@@ -271,7 +253,7 @@ impl Storage {
             start_ts: start_ts,
             callback: callback,
         };
-        try!(self.tx.send(Message::Command(cmd)));
+        try!(self.send(cmd));
         Ok(())
     }
 
@@ -289,7 +271,7 @@ impl Storage {
             start_ts: start_ts,
             callback: callback,
         };
-        try!(self.tx.send(Message::Command(cmd)));
+        try!(self.send(cmd));
         Ok(())
     }
 
@@ -307,7 +289,7 @@ impl Storage {
             commit_ts: commit_ts,
             callback: callback,
         };
-        try!(self.tx.send(Message::Command(cmd)));
+        try!(self.send(cmd));
         Ok(())
     }
 
@@ -327,7 +309,7 @@ impl Storage {
             get_ts: get_ts,
             callback: callback,
         };
-        try!(self.tx.send(Message::Command(cmd)));
+        try!(self.send(cmd));
         Ok(())
     }
 
@@ -343,7 +325,7 @@ impl Storage {
             start_ts: start_ts,
             callback: callback,
         };
-        try!(self.tx.send(Message::Command(cmd)));
+        try!(self.send(cmd));
         Ok(())
     }
 
@@ -359,7 +341,7 @@ impl Storage {
             start_ts: start_ts,
             callback: callback,
         };
-        try!(self.tx.send(Message::Command(cmd)));
+        try!(self.send(cmd));
         Ok(())
     }
 
@@ -375,30 +357,14 @@ impl Storage {
             lock_ts: lock_ts,
             callback: callback,
         };
-        try!(self.tx.send(Message::Command(cmd)));
+        try!(self.send(cmd));
         Ok(())
     }
-}
-
-#[derive(Debug)]
-pub enum Message {
-    Command(Command),
-    Close,
 }
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Recv(err: mpsc::RecvError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        Send(err: mpsc::SendError<Message>) {
-            from()
-            cause(err)
-            description(err.description())
-        }
         Engine(err: EngineError) {
             from()
             cause(err)
@@ -408,6 +374,9 @@ quick_error! {
             from()
             cause(err)
             description(err.description())
+        }
+        Closed {
+            description("storage is closed.")
         }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
