@@ -411,6 +411,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
 
     let (store, raft_router, node_id, snap_mgr) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
+    info!("tikv server config: {:?}", cfg);
     initial_metric(matches, config, Some(node_id));
     let mut svr = Server::new(&mut event_loop,
                               listener,
