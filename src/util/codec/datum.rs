@@ -18,12 +18,12 @@ use std::io::Write;
 use std::str::FromStr;
 use std::mem;
 use byteorder::{ReadBytesExt, WriteBytesExt};
-use tipb::schema::ColumnInfo;
 
+use util::escape;
 use super::{number, Result, bytes, convert};
-use super::mysql::{self, Duration, types, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder};
+use super::mysql::{self, Duration, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder};
 
-const NIL_FLAG: u8 = 0;
+pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
 const COMPACT_BYTES_FLAG: u8 = 2;
 const INT_FLAG: u8 = 3;
@@ -290,48 +290,6 @@ pub trait DatumDecoder: DecimalDecoder {
 
         Ok(res)
     }
-
-    // `decode_col_value` decodes data to a Datum according to the column info.
-    fn decode_col_value(&mut self, col: &ColumnInfo) -> Result<Datum> {
-        let d = try!(self.decode_datum());
-        unflatten(d, col)
-    }
-}
-
-/// `unflatten` converts a raw datum to a column datum.
-fn unflatten(datum: Datum, col: &ColumnInfo) -> Result<Datum> {
-    if let Datum::Null = datum {
-        return Ok(datum);
-    }
-    match col.get_tp() {
-        types::FLOAT => Ok(Datum::F64(datum.f64() as f32 as f64)),
-        types::TINY |
-        types::SHORT |
-        types::YEAR |
-        types::INT24 |
-        types::LONG |
-        types::LONG_LONG |
-        types::DOUBLE |
-        types::TINY_BLOB |
-        types::MEDIUM_BLOB |
-        types::BLOB |
-        types::LONG_BLOB |
-        types::VARCHAR |
-        types::STRING => Ok(datum),
-        types::DATE | types::DATETIME | types::TIMESTAMP | types::ENUM | types::SET |
-        types::BIT => unimplemented!(),
-        types::DURATION => Duration::from_nanos(datum.i64(), mysql::MAX_FSP).map(Datum::Dur),
-        types::NEW_DECIMAL => {
-            if let Datum::Dec(_) = datum {
-                return Ok(datum);
-            }
-            datum.into_string().and_then(|s| s.parse()).map(Datum::Dec)
-        }
-        t => {
-            error!("unknown type {} {:?}", t, datum);
-            Ok(datum)
-        }
-    }
 }
 
 impl<T: DecimalDecoder> DatumDecoder for T {}
@@ -434,6 +392,30 @@ pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Resul
     buf.reserve(approximate_size(values, comparable));
     try!(buf.encode(values, comparable));
     Ok(())
+}
+
+/// Split bytes array into two part: first one is a whole datum's encoded data,
+/// and the second part is the remaining data.
+#[allow(match_same_arms)]
+pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
+    if buf.is_empty() {
+        return Err(box_err!("{} is too short", escape(buf)));
+    }
+    let pos = match buf[0] {
+        INT_FLAG => number::I64_SIZE,
+        UINT_FLAG => number::U64_SIZE,
+        BYTES_FLAG => bytes::encoded_bytes_len(&buf[1..], desc),
+        COMPACT_BYTES_FLAG => bytes::encoded_compact_len(&buf[1..]),
+        NIL_FLAG => 0,
+        FLOAT_FLAG => number::F64_SIZE,
+        DURATION_FLAG => number::I64_SIZE,
+        DECIMAL_FLAG => mysql::encoded_len(&buf[1..]),
+        f => return Err(invalid_type!("unsupported data type `{}`", f)),
+    };
+    if buf.len() < pos + 1 {
+        return Err(box_err!("{} is too short", escape(buf)));
+    }
+    Ok(buf.split_at(1 + pos))
 }
 
 #[cfg(test)]
@@ -725,6 +707,43 @@ mod test {
             if d.clone().into_bool().unwrap() != b {
                 panic!("expect {:?} to be {:?}", d, b);
             }
+        }
+    }
+
+    #[test]
+    fn test_split_datum() {
+        let table = vec![
+            vec![Datum::I64(1)],
+            vec![Datum::F64(1f64), Datum::F64(3.15), Datum::Bytes(b"123".to_vec())],
+            vec![Datum::U64(1), Datum::F64(3.15), Datum::Bytes(b"123".to_vec()), Datum::I64(-1)],
+            vec![Datum::I64(1), Datum::I64(0)],
+            vec![Datum::Null],
+            vec![Datum::I64(100), Datum::U64(100)],
+            vec![Datum::U64(1), Datum::U64(1)],
+            vec![Datum::Dec(Decimal::new(1.into(), 1, MAX_FSP))],
+            vec![Datum::F64(1f64), Datum::F64(3.15), Datum::Bytes(b"123456789012345".to_vec())],
+        ];
+
+        for case in table {
+            let key_bs = encode_key(&case).unwrap();
+            let mut buf = key_bs.as_slice();
+            for exp in &case {
+                let (act, rem) = split_datum(buf, false).unwrap();
+                let exp_bs = encode_key(as_slice(exp)).unwrap();
+                assert_eq!(exp_bs, act);
+                buf = rem;
+            }
+            assert!(buf.is_empty());
+
+            let value_bs = encode_value(&case).unwrap();
+            let mut buf = value_bs.as_slice();
+            for exp in &case {
+                let (act, rem) = split_datum(buf, false).unwrap();
+                let exp_bs = encode_value(as_slice(exp)).unwrap();
+                assert_eq!(exp_bs, act);
+                buf = rem;
+            }
+            assert!(buf.is_empty());
         }
     }
 }
