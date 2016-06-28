@@ -29,7 +29,7 @@ impl Scheduler {
     pub fn new(engine: Arc<Box<Engine>>) -> Scheduler {
         Scheduler {
             store: Arc::new(TxnStore::new(engine)),
-            pool: ThreadPool::new_with_name(thd_name!("txn-scheduler-pool"), DEFAULT_POOL_SIZE)
+            pool: ThreadPool::new_with_name(thd_name!("txn-scheduler-pool"), DEFAULT_POOL_SIZE),
         }
     }
 

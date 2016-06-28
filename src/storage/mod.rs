@@ -177,7 +177,7 @@ impl Storage {
     pub fn from_engine(engine: Box<Engine>) -> Result<Storage> {
         let engine = Arc::new(engine);
         let sched = Scheduler::new(engine.clone());
-        info!("storage {} started.", format!("{:?}", engine));
+        info!("storage {:?} started.", engine);
         Ok(Storage {
             engine: engine,
             sched: Some(sched),
@@ -191,7 +191,7 @@ impl Storage {
 
     pub fn stop(&mut self) -> Result<()> {
         self.sched.take();
-        info!("storage {} closed.", format!("{:?}", self.engine));
+        info!("storage {:?} closed.", self.engine);
         Ok(())
     }
 
