@@ -22,7 +22,7 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::raftpb::{self, ConfChangeType, MessageType, Snapshot as RaftSnapshot};
+use kvproto::raftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -346,10 +346,6 @@ impl Peer {
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
         for msg in &ready.messages {
-            if msg.get_msg_type() == MessageType::MsgRequestVote && is_applying {
-                warn!("peer {} is still applying, drop {:?}", self.peer_id(), msg);
-                continue;
-            }
             try!(self.send_raft_message(&msg, trans));
         }
 

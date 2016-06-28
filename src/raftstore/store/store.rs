@@ -231,7 +231,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
-            peer.raft_group.tick();
+            if !peer.storage.rl().is_applying_snap() {
+                peer.raft_group.tick();
+            }
             self.pending_raft_groups.insert(region_id);
         }
 
