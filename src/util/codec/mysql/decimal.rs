@@ -419,6 +419,28 @@ pub trait DecimalEncoder: BytesEncoder {
 
 impl<T: Write> DecimalEncoder for T {}
 
+/// Return the first encoded decimal's length.
+///
+/// Please note that this function won't check if the decimal is
+/// encoded correctly.
+pub fn encoded_len(encoded: &[u8]) -> usize {
+    if encoded.is_empty() {
+        return 0;
+    }
+    let (is_neg, prefix_len) = match encoded[0] {
+        ZERO_SIGN => return 1,
+        NEGATIVE_SIGN => (true, 1 + number::I64_SIZE),
+        POSITIVE_SIGN => (false, 1 + number::I64_SIZE),
+        _ => return 0,
+    };
+
+    if encoded.len() < prefix_len {
+        return encoded.len();
+    }
+
+    bytes::encoded_bytes_len(&encoded[prefix_len..], is_neg) + prefix_len
+}
+
 pub trait DecimalDecoder: BytesDecoder {
     fn decode_decimal(&mut self) -> Result<Decimal> {
         let (sign, mut exp) = match try!(self.read_u8()) {
