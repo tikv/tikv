@@ -12,7 +12,7 @@ use protobuf::Message;
 
 use kvproto::raftpb::Snapshot;
 use kvproto::raft_serverpb::RaftSnapshotData;
-
+use raftstore::store::{SendCh, Msg};
 
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SnapKey {
@@ -220,13 +220,15 @@ pub struct SnapManagerCore {
     // directory to store snapfile.
     base: String,
     registry: HashMap<SnapKey, Vec<SnapEntry>>,
+    ch: Option<SendCh>,
 }
 
 impl SnapManagerCore {
-    pub fn new<T: Into<String>>(path: T) -> SnapManagerCore {
+    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh>) -> SnapManagerCore {
         SnapManagerCore {
             base: path.into(),
             registry: map![],
+            ch: ch,
         }
     }
 
@@ -314,6 +316,8 @@ impl SnapManagerCore {
                 e.insert(vec![entry]);
             }
         }
+
+        self.notify_stats();
     }
 
     pub fn deregister(&mut self, key: &SnapKey, entry: &SnapEntry) {
@@ -330,9 +334,18 @@ impl SnapManagerCore {
             self.registry.remove(key);
         }
         if handled {
+            self.notify_stats();
             return;
         }
         warn!("stale deregister key: {} {:?}", key, entry);
+    }
+
+    fn notify_stats(&self) {
+        if let Some(ref ch) = self.ch {
+            if let Err(e) = ch.send(Msg::SnapshotStats) {
+                error!("notify snapshot stats failed {:?}", e)
+            }
+        }
     }
 
     pub fn stats(&self) -> SnapStats {
@@ -363,6 +376,6 @@ impl SnapManagerCore {
 
 pub type SnapManager = Arc<RwLock<SnapManagerCore>>;
 
-pub fn new_snap_mgr<T: Into<String>>(path: T) -> SnapManager {
-    Arc::new(RwLock::new(SnapManagerCore::new(path)))
+pub fn new_snap_mgr<T: Into<String>>(path: T, ch: Option<SendCh>) -> SnapManager {
+    Arc::new(RwLock::new(SnapManagerCore::new(path, ch)))
 }

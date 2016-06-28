@@ -1031,6 +1031,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
             }
+            Msg::SnapshotStats => self.store_heartbeat_pd(),
         }
         slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());
     }

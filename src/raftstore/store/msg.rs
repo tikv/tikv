@@ -63,6 +63,9 @@ pub enum Msg {
         region_id: u64,
         to_peer_id: u64,
     },
+
+    // For snapshot stats.
+    SnapshotStats,
 }
 
 impl fmt::Debug for Msg {
@@ -85,6 +88,7 @@ impl fmt::Debug for Msg {
                        to_peer_id,
                        region_id)
             }
+            Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
         }
     }
 }

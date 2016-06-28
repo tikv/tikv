@@ -131,9 +131,11 @@ impl Simulator for NodeCluster {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
         let tmp = TempDir::new("test_cluster").unwrap();
-        let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap());
-
         let mut event_loop = create_event_loop(&cfg.store_cfg).unwrap();
+
+        let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap(),
+                                           Some(SendCh::new(event_loop.channel())));
+
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let trans = Arc::new(RwLock::new(simulate_trans));
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());

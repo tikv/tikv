@@ -696,7 +696,7 @@ mod test {
         ];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let mgr = new_snap_mgr("");
+            let mgr = new_snap_mgr("", None);
             let store = new_storage_from_ents(mgr, &td, &ents);
             let t = store.rl().term(idx);
             if wterm != t {
@@ -731,7 +731,7 @@ mod test {
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let mgr = new_snap_mgr("");
+            let mgr = new_snap_mgr("", None);
             let store = new_storage_from_ents(mgr, &td, &ents);
             let e = store.rl().entries(lo, hi, maxsize);
             if e != wentries {
@@ -754,7 +754,7 @@ mod test {
         ];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let mgr = new_snap_mgr("");
+            let mgr = new_snap_mgr("", None);
             let store = new_storage_from_ents(mgr, &td, &ents);
             let mut ctx = InvokeContext::new(&store.rl());
             let res = store.rl().compact(&mut ctx, idx);
@@ -785,7 +785,7 @@ mod test {
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
+        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(), None);
         let s = new_storage_from_ents(mgr, &td, &ents);
         let snap = s.wl().snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -797,7 +797,7 @@ mod test {
         assert_eq!(s.rl().snap_state, SnapState::Generating);
 
         let snap_dir = TempDir::new("snap").unwrap();
-        let snap = get_snap(&s, new_snap_mgr(snap_dir.path().to_str().unwrap()));
+        let snap = get_snap(&s, new_snap_mgr(snap_dir.path().to_str().unwrap(), None));
         assert_eq!(snap.get_metadata().get_index(), 5);
         assert_eq!(snap.get_metadata().get_term(), 5);
         assert!(!snap.get_data().is_empty());
@@ -846,7 +846,7 @@ mod test {
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
             let snap_dir = TempDir::new("snap_dir").unwrap();
-            let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
+            let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(), None);
             let store = new_storage_from_ents(mgr, &td, &ents);
             let mut ctx = InvokeContext::new(&store.rl());
             store.wl().append(&mut ctx, &entries).expect("");
@@ -868,7 +868,7 @@ mod test {
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
+        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(), None);
         let s1 = new_storage_from_ents(mgr.clone(), &td1, &ents);
         let snap1 = get_snap(&s1, mgr.clone());
         assert_eq!(s1.rl().truncated_index(), 3);

@@ -677,7 +677,7 @@ mod tests {
                         Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
                         resolver,
-                        store::new_snap_mgr(""))
+                        store::new_snap_mgr("", None))
                 .unwrap();
 
         let ch = server.get_sendch();

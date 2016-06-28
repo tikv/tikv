@@ -222,7 +222,7 @@ mod tests {
     }
 
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
-        PeerStorage::new(engine, r, store::new_snap_mgr("")).unwrap()
+        PeerStorage::new(engine, r, store::new_snap_mgr("", None)).unwrap()
     }
 
     fn new_snapshot(peer_storage: &PeerStorage) -> RegionSnapshot {

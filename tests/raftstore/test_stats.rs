@@ -104,7 +104,7 @@ fn test_server_simple_store_stats() {
 #[test]
 fn test_server_store_snap_stats() {
     let mut cluster = new_server_cluster(0, 2);
-    cluster.cfg.store_cfg.pd_store_heartbeat_tick_interval = 20;
+    cluster.cfg.store_cfg.pd_store_heartbeat_tick_interval = 600000;
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
@@ -123,7 +123,6 @@ fn test_server_store_snap_stats() {
 
     must_detect_snap(&pd_client);
 
-    cluster.clear_filters();
     // wait snapshot finish.
     sleep_ms(100);
 
@@ -138,9 +137,10 @@ fn must_detect_snap(pd_client: &Arc<TestPdClient>) {
     for _ in 0..200 {
         sleep_ms(10);
 
-        let stats = pd_client.get_store_stats(1).unwrap();
-        if stats.get_snap_sending_count() > 0 || stats.get_snap_receiving_count() > 0 {
-            return;
+        if let Some(stats) = pd_client.get_store_stats(1) {
+            if stats.get_snap_sending_count() > 0 || stats.get_snap_receiving_count() > 0 {
+                return;
+            }
         }
     }
 
@@ -151,9 +151,10 @@ fn must_not_detect_snap(pd_client: &Arc<TestPdClient>) {
     for _ in 0..200 {
         sleep_ms(10);
 
-        let stats = pd_client.get_store_stats(1).unwrap();
-        if stats.get_snap_sending_count() == 0 && stats.get_snap_receiving_count() == 0 {
-            return;
+        if let Some(stats) = pd_client.get_store_stats(1) {
+            if stats.get_snap_sending_count() == 0 && stats.get_snap_receiving_count() == 0 {
+                return;
+            }
         }
     }
 
