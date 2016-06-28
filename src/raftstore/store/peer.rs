@@ -465,7 +465,7 @@ impl Peer {
         let peer_id = peer.get_id();
         let status = self.raft_group.status();
 
-        if status.progress.get(&peer_id).is_none() {
+        if !status.progress.contains_key(&peer_id) {
             return false;
         }
 
