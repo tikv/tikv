@@ -143,6 +143,8 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
             panic!("snap files is still not empty: {:?}", snap_files);
         }
         tried_cnt += 1;
+        // trigger compact log.
+        cluster.must_put(b"k2", b"v2");
         sleep_ms(20);
     }
 }

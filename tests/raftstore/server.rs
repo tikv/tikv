@@ -108,9 +108,14 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
         let mut cfg = cfg;
-        let tmp = TempDir::new("test_cluster").unwrap();
-        let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap());
-        self.snap_paths.insert(node_id, tmp);
+        let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
+            let p = TempDir::new("test_cluster").unwrap();
+            (p.path().to_str().unwrap().to_owned(), Some(p))
+        } else {
+            let p = self.snap_paths.get(&node_id).unwrap().path().to_str().unwrap();
+            (p.to_owned(), None)
+        };
+        let snap_mgr = store::new_snap_mgr(tmp_str);
 
         // Now we cache the store address, so here we should re-use last
         // listening address for the same store. Maybe we should enable
@@ -155,6 +160,9 @@ impl Simulator for ServerCluster {
 
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
+        if let Some(tmp) = tmp {
+            self.snap_paths.insert(node_id, tmp);
+        }
 
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);

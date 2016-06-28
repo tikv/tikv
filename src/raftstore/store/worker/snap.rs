@@ -15,15 +15,18 @@
 use std::fmt::{self, Formatter, Display};
 use std::error;
 use std::fs::File;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Instant;
 
 use rocksdb::{DB, Writable, WriteBatch};
+use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, PeerState};
 
 use util::worker::Runnable;
 use util::codec::bytes::CompactBytesDecoder;
-use util::HandyRwLock;
-use raftstore::store::{self, SnapState, SnapManager, SnapKey, SnapEntry};
+use util::{escape, HandyRwLock};
+use raftstore;
+use raftstore::store::engine::Mutable;
+use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, SendCh, Msg, keys, Peekable};
 use raftstore::store::engine::Snapshot;
 
 const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
@@ -32,11 +35,9 @@ const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 pub enum Task {
     Gen {
         region_id: u64,
-        state: Arc<RwLock<SnapState>>,
     },
     Apply {
-        snap_key: SnapKey,
-        state: Arc<RwLock<SnapState>>,
+        region_id: u64,
     },
 }
 
@@ -44,7 +45,7 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
-            Task::Apply { ref snap_key, .. } => write!(f, "Snap apply for {}", snap_key),
+            Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
         }
     }
 }
@@ -61,47 +62,56 @@ quick_error! {
     }
 }
 
-pub struct Runner {
+pub trait MsgSender {
+    fn send(&self, msg: Msg) -> raftstore::Result<()>;
+}
+
+impl MsgSender for SendCh {
+    fn send(&self, msg: Msg) -> raftstore::Result<()> {
+        SendCh::send(self, msg)
+    }
+}
+
+pub struct Runner<T: MsgSender> {
     db: Arc<DB>,
+    ch: T,
     mgr: SnapManager,
 }
 
-impl Runner {
-    pub fn new(db: Arc<DB>, mgr: SnapManager) -> Runner {
-        Runner { db: db, mgr: mgr }
+impl<T: MsgSender> Runner<T> {
+    pub fn new(db: Arc<DB>, ch: T, mgr: SnapManager) -> Runner<T> {
+        Runner {
+            db: db,
+            ch: ch,
+            mgr: mgr,
+        }
     }
 
-    fn generate_snap(&self, region_id: u64, state: Arc<RwLock<SnapState>>) -> Result<(), Error> {
+    fn generate_snap(&self, region_id: u64) -> Result<(), Error> {
         // do we need to check leader here?
         let raw_snap = Snapshot::new(self.db.clone());
 
-        if *state.rl() != SnapState::Generating {
-            // task has been canceled.
-            return Ok(());
+        let snap = box_try!(store::do_snapshot(self.mgr.clone(), &raw_snap, region_id));
+        let msg = Msg::SnapGenRes {
+            region_id: region_id,
+            snap: Some(snap),
+        };
+        if let Err(e) = self.ch.send(msg) {
+            error!("failed to notify snap result of {}: {:?}", region_id, e);
         }
-
-        let res = store::do_snapshot(self.mgr.clone(), &raw_snap, region_id);
-        let mut state = state.wl();
-        if *state != SnapState::Generating {
-            // task has been canceled.
-            return Ok(());
-        }
-        match res {
-            Ok(snap) => {
-                *state = SnapState::Snap(snap);
-                Ok(())
-            }
-            Err(e) => {
-                *state = SnapState::Failed;
-                Err(Error::Other(box e))
-            }
-        }
+        Ok(())
     }
 
-    fn handle_gen(&self, region_id: u64, state: Arc<RwLock<SnapState>>) {
+    fn handle_gen(&self, region_id: u64) {
         metric_incr!("raftstore.generate_snap");
         let ts = Instant::now();
-        if let Err(e) = self.generate_snap(region_id, state) {
+        if let Err(e) = self.generate_snap(region_id) {
+            if let Err(e) = self.ch.send(Msg::SnapGenRes {
+                region_id: region_id,
+                snap: None,
+            }) {
+                panic!("failed to notify snap result of {}: {:?}", region_id, e);
+            }
             error!("failed to generate snap: {:?}!!!", e);
             return;
         }
@@ -109,13 +119,20 @@ impl Runner {
         metric_time!("raftstore.generate_snap.cost", ts.elapsed());
     }
 
-    fn apply_snap(&self, snap_key: SnapKey) -> Result<(), Error> {
-        info!("begin apply snap data for {}", snap_key);
+    fn apply_snap(&self, region_id: u64) -> Result<(), Error> {
+        info!("begin apply snap data for {}", region_id);
+        let state_key = keys::raft_state_key(region_id);
+        let raft_state: RaftLocalState = match box_try!(self.db.get_msg(&state_key)) {
+            Some(state) => state,
+            None => return Err(box_err!("failed to get raftstate from {}", escape(&state_key))),
+        };
+        let term = raft_state.get_truncated_state().get_term();
+        let idx = raft_state.get_truncated_state().get_index();
+        let snap_key = SnapKey::new(region_id, term, idx);
         let snap_file = box_try!(self.mgr.rl().get_snap_file(&snap_key, false));
         self.mgr.wl().register(snap_key.clone(), SnapEntry::Applying);
         defer!({
             self.mgr.wl().deregister(&snap_key, &SnapEntry::Applying);
-            snap_file.delete();
         });
         if !snap_file.exists() {
             return Err(box_err!("missing snap file {}", snap_file.path().display()));
@@ -144,33 +161,45 @@ impl Runner {
                 batch_size = 0;
             }
         }
+        let state_key = keys::region_state_key(region_id);
+        let mut region_state: RegionLocalState = match box_try!(self.db.get_msg(&state_key)) {
+            Some(state) => state,
+            None => return Err(box_err!("failed to get region_state from {}", escape(&state_key))),
+        };
+        region_state.set_state(PeerState::Normal);
+        box_try!(self.db.put_msg(&state_key, &region_state));
+        snap_file.delete();
         info!("apply new data takes {:?}", timer.elapsed());
         Ok(())
     }
 
-    fn handle_apply(&self, snap_key: SnapKey, state: Arc<RwLock<SnapState>>) {
+    fn handle_apply(&self, region_id: u64) {
         metric_incr!("raftstore.apply_snap");
         let ts = Instant::now();
-        assert_eq!(*state.rl(), SnapState::Applying);
-        if let Err(e) = self.apply_snap(snap_key) {
-            // TODO: gracefully remove region instead.
-            panic!("failed to apply snap: {:?}!!!", e);
+        let mut is_success = true;
+        if let Err(e) = self.apply_snap(region_id) {
+            is_success = false;
+            error!("failed to apply snap: {:?}!!!", e);
         }
-        let mut snap_state = state.wl();
-        assert_eq!(*snap_state, SnapState::Applying);
-        // It's safe to just overwrite here. Any other pending snapshot is kept in
-        // ready and will never be applied before following is executed.
-        *snap_state = SnapState::Relax;
+        let msg = Msg::SnapApplyRes {
+            region_id: region_id,
+            is_success: is_success,
+        };
+        if let Err(e) = self.ch.send(msg) {
+            panic!("failed to notify snap apply result of {}: {:?}",
+                   region_id,
+                   e);
+        }
         metric_incr!("raftstore.apply_snap.success");
         metric_time!("raftstore.apply_snap.cost", ts.elapsed());
     }
 }
 
-impl Runnable<Task> for Runner {
+impl<T: MsgSender> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Gen { region_id, state } => self.handle_gen(region_id, state),
-            Task::Apply { snap_key, state } => self.handle_apply(snap_key, state),
+            Task::Gen { region_id } => self.handle_gen(region_id),
+            Task::Apply { region_id } => self.handle_apply(region_id),
         }
     }
 }

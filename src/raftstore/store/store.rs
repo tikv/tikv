@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData, RaftTruncatedState,
                              RegionLocalState, PeerState};
-use kvproto::raftpb::ConfChangeType;
+use kvproto::raftpb::{ConfChangeType, Snapshot};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer};
 use pd::PdClient;
@@ -45,7 +45,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::ApplySnapResult;
+use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -146,11 +146,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(true);
             }
             let region = local_state.get_region();
-            let mut peer = try!(Peer::create(self, region));
+            let peer = try!(Peer::create(self, region));
 
             if local_state.get_state() == PeerState::Applying {
-                try!(peer.destroy());
-                return Ok(true);
+                peer.storage.wl().snap_state = SnapState::Applying;
+                box_try!(self.snap_worker.schedule(SnapTask::Apply { region_id: region_id }));
             }
 
             self.region_ranges.insert(enc_end_key(region), region_id);
@@ -180,7 +180,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        let runner = SnapRunner::new(self.engine.clone(), self.snap_mgr.clone());
+        let runner = SnapRunner::new(self.engine.clone(),
+                                     self.get_sendch(),
+                                     self.snap_mgr.clone());
         box_try!(self.snap_worker.start(runner));
 
         box_try!(self.compact_worker.start(CompactRunner));
@@ -879,6 +881,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         snap_keys.sort();
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
+        let mut is_applying_snap = false;
         for (key, is_sending) in snap_keys {
             if self.snap_mgr.rl().has_registered(&key) {
                 continue;
@@ -890,11 +893,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         // region is deleted
                         compacted_idx = u64::MAX;
                         compacted_term = u64::MAX;
+                        is_applying_snap = false;
                     }
                     Some(peer) => {
                         let s = peer.storage.rl();
                         compacted_idx = s.truncated_index();
                         compacted_term = s.truncated_term();
+                        is_applying_snap = s.is_applying_snap();
                     }
                 };
             }
@@ -913,7 +918,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         }
                     }
                 }
-            } else if key.term <= compacted_term && key.idx <= compacted_idx {
+            } else if key.term <= compacted_term &&
+               (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap) {
                 debug!("snap file {} has been applied, delete.", key);
                 f.delete();
             }
@@ -960,6 +966,39 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             peer.raft_group.report_unreachable(to_peer_id);
         }
+    }
+
+    fn on_snap_gen_res(&mut self, region_id: u64, snap: Option<Snapshot>) {
+        let peer = match self.region_peers.get_mut(&region_id) {
+            None => return,
+            Some(peer) => peer,
+        };
+        let mut storage = peer.storage.wl();
+        if storage.snap_state != SnapState::Generating {
+            // snapshot no need anymore.
+            return;
+        }
+        match snap {
+            Some(snap) => {
+                storage.snap_state = SnapState::Relax;
+                storage.snap = Some(snap);
+            }
+            None => {
+                storage.snap_state = SnapState::Failed;
+            }
+        }
+    }
+
+    fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool) {
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
+        let mut storage = peer.storage.wl();
+        assert!(storage.snap_state == SnapState::Applying,
+                "snap state should not change during applying");
+        if !is_success {
+            // TODO: cleanup region and treat it as tombstone.
+            panic!("applying snapshot to {} failed", region_id);
+        }
+        storage.snap_state = SnapState::Relax;
     }
 }
 
@@ -1026,6 +1065,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             }
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
+            }
+            Msg::SnapApplyRes { region_id, is_success } => {
+                self.on_snap_apply_res(region_id, is_success);
+            }
+            Msg::SnapGenRes { region_id, snap } => {
+                self.on_snap_gen_res(region_id, snap);
             }
         }
         slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());

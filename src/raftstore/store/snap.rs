@@ -230,22 +230,6 @@ impl SnapManagerCore {
         }
     }
 
-    fn clean_up(&self, path: &Path) -> io::Result<()> {
-        // delete children instead of itself in case we don't have permission to recreate
-        // the directory in parent's directory.
-        for child in try!(fs::read_dir(path)) {
-            let p = try!(child);
-            debug!("deleting {}", p.path().display());
-            let ft = try!(p.file_type());
-            if ft.is_dir() {
-                try!(fs::remove_dir_all(p.path()));
-            } else {
-                try!(fs::remove_file(p.path()));
-            }
-        }
-        Ok(())
-    }
-
     pub fn init(&self) -> io::Result<()> {
         let path = Path::new(&self.base);
         if !path.exists() {
@@ -255,11 +239,6 @@ impl SnapManagerCore {
         if !path.is_dir() {
             return Err(io::Error::new(ErrorKind::Other,
                                       format!("{} should be a directory", path.display())));
-        }
-        debug!("cleaning up snap dir: {}", path.display());
-        if let Err(e) = self.clean_up(path) {
-            warn!("failed to clean up {}, you may have to do it by yourself.",
-                  e);
         }
         Ok(())
     }
