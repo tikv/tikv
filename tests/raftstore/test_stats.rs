@@ -11,11 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::*;
 use tikv::pd::PdClient;
+use super::pd::TestPdClient;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
@@ -96,4 +99,63 @@ fn test_node_simple_store_stats() {
 fn test_server_simple_store_stats() {
     let mut cluster = new_server_cluster(0, 1);
     test_simple_store_stats(&mut cluster);
+}
+
+#[test]
+fn test_server_store_snap_stats() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.store_cfg.pd_store_heartbeat_tick_interval = 20;
+
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.disable_default_rule();
+
+    let r1 = cluster.run_conf_change();
+
+    // make a big snapshot
+    for i in 0..2 * 1024 {
+        let key = format!("{:01024}", i);
+        let value = format!("{:01024}", i);
+        cluster.must_put(key.as_bytes(), value.as_bytes());
+    }
+
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    must_detect_snap(&pd_client);
+
+    cluster.clear_filters();
+    // wait snapshot finish.
+    sleep_ms(100);
+
+    // remove the peer so we can't do any snapshot now.
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
+    cluster.must_put(b"k2", b"v2");
+
+    must_not_detect_snap(&pd_client);
+}
+
+fn must_detect_snap(pd_client: &Arc<TestPdClient>) {
+    for _ in 0..200 {
+        sleep_ms(10);
+
+        let stats = pd_client.get_store_stats(1).unwrap();
+        if stats.get_snap_sending_count() > 0 || stats.get_snap_receiving_count() > 0 {
+            return;
+        }
+    }
+
+    panic!("must detect snapshot sending/receiving");
+}
+
+fn must_not_detect_snap(pd_client: &Arc<TestPdClient>) {
+    for _ in 0..200 {
+        sleep_ms(10);
+
+        let stats = pd_client.get_store_stats(1).unwrap();
+        if stats.get_snap_sending_count() == 0 && stats.get_snap_receiving_count() == 0 {
+            return;
+        }
+    }
+
+    panic!("must not detect snapshot sending/receiving");
 }

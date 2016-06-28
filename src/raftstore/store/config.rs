@@ -30,6 +30,9 @@ const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
 const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 10000;
 const STORE_CAPACITY: u64 = u64::MAX;
+const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
+const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
+const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -64,9 +67,9 @@ pub struct Config {
     pub region_check_size_diff: u64,
     pub pd_heartbeat_tick_interval: u64,
     pub pd_store_heartbeat_tick_interval: u64,
-
-    /// Directory for snapshot files
-    pub snap_dir: String,
+    pub notify_capacity: usize,
+    pub snap_mgr_gc_tick_interval: u64,
+    pub snap_gc_timeout: u64,
 }
 
 impl Default for Config {
@@ -87,7 +90,9 @@ impl Default for Config {
             region_check_size_diff: REGION_CHECK_DIFF,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
             pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL_MS,
-            snap_dir: "".to_owned(),
+            notify_capacity: DEFAULT_NOTIFY_CAPACITY,
+            snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL_MS,
+            snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
         }
     }
 }
@@ -102,8 +107,11 @@ impl Config {
             return Err(box_err!("raft log gc threshold must >= 1, not {}",
                                 self.raft_log_gc_threshold));
         }
-        if self.snap_dir.is_empty() {
-            return Err(box_err!("invalid snap path"));
+
+        if self.region_max_size < self.region_split_size {
+            return Err(box_err!("region max size {} must >= split size {}",
+                                self.region_max_size,
+                                self.region_split_size));
         }
 
         Ok(())

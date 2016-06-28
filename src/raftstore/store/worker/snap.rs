@@ -11,12 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::{self, RaftStorage, SnapState};
+use raftstore::store::{self, RaftStorage, SnapState, SnapManager, SnapKey};
 
 use std::fmt::{self, Formatter, Display};
 use std::error;
 use std::time::Instant;
-use std::path::PathBuf;
 
 use util::worker::Runnable;
 
@@ -50,39 +49,33 @@ quick_error! {
 }
 
 pub struct Runner {
-    snap_dir: PathBuf,
+    mgr: SnapManager,
 }
 
 impl Runner {
-    pub fn new<T: Into<PathBuf>>(snap_dir: T) -> Runner {
-        Runner { snap_dir: snap_dir.into() }
+    pub fn new(mgr: SnapManager) -> Runner {
+        Runner { mgr: mgr }
     }
 
     fn generate_snap(&self, task: &Task) -> Result<(), Error> {
         // do we need to check leader here?
-        let db = task.storage.rl().get_engine();
         let raw_snap;
-        let region_id;
-        let ranges;
-        let applied_idx;
-        let term;
+        let key;
 
         {
             let storage = task.storage.rl();
-            raw_snap = db.snapshot();
-            region_id = storage.get_region_id();
-            ranges = storage.region_key_ranges();
-            applied_idx = box_try!(storage.load_applied_index(&raw_snap));
-            term = box_try!(storage.term(applied_idx));
+            raw_snap = storage.raw_snapshot();
+            let applied_idx = storage.applied_index();
+            let term = box_try!(storage.term(applied_idx));
+            key = SnapKey::new(storage.get_region_id(), term, applied_idx);
         }
 
-        let snap = box_try!(store::do_snapshot(self.snap_dir.as_path(),
-                                               &raw_snap,
-                                               region_id,
-                                               ranges,
-                                               applied_idx,
-                                               term));
-        task.storage.wl().snap_state = SnapState::Snap(snap);
+        match store::do_snapshot(self.mgr.clone(), &raw_snap, key.clone()) {
+            Ok(snap) => task.storage.wl().snap_state = SnapState::Snap(snap),
+            Err(e) => {
+                return Err(Error::Other(box e));
+            }
+        }
         Ok(())
     }
 }

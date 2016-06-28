@@ -18,9 +18,10 @@ use tikv::raftstore::store::Transport;
 use rand;
 use std::sync::{Arc, RwLock};
 use std::time;
+use std::usize;
 use std::thread;
 use std::vec::Vec;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use tikv::util::HandyRwLock;
 
@@ -78,8 +79,12 @@ impl<T: Transport> SimulateTransport<T> {
         }
     }
 
-    pub fn set_filters(&mut self, filters: Vec<Box<Filter>>) {
-        self.filters = filters;
+    pub fn clear_filters(&mut self) {
+        self.filters.clear();
+    }
+
+    pub fn add_filter(&mut self, filter: Box<Filter>) {
+        self.filters.push(filter);
     }
 }
 
@@ -215,11 +220,39 @@ impl FilterFactory for Isolate {
     }
 }
 
-// Drop all packages for the store with special region.
+#[derive(Clone, Copy)]
+pub enum Direction {
+    Recv,
+    Send,
+    Both,
+}
+
+impl Direction {
+    pub fn is_recv(&self) -> bool {
+        match *self {
+            Direction::Recv | Direction::Both => true,
+            Direction::Send => false,
+        }
+    }
+
+    pub fn is_send(&self) -> bool {
+        match *self {
+            Direction::Send | Direction::Both => true,
+            Direction::Recv => false,
+        }
+    }
+}
+
+/// Drop specified messages for the store with special region.
+///
+/// If `msg_type` is None, all message will be filtered.
 pub struct FilterRegionPacket {
     region_id: u64,
     store_id: u64,
     drop: AtomicBool,
+    direction: Direction,
+    allow: AtomicUsize,
+    msg_type: Option<MessageType>,
 }
 
 impl Filter for FilterRegionPacket {
@@ -228,8 +261,15 @@ impl Filter for FilterRegionPacket {
         let from_store_id = m.get_from_peer().get_store_id();
         let to_store_id = m.get_to_peer().get_store_id();
 
-        let drop = self.region_id == region_id &&
-                   (self.store_id == from_store_id || self.store_id == to_store_id);
+        let mut drop =
+            self.region_id == region_id &&
+            (self.direction.is_send() && self.store_id == from_store_id ||
+             self.direction.is_recv() && self.store_id == to_store_id) &&
+            self.msg_type.as_ref().map_or(true, |t| t == &m.get_message().get_msg_type());
+        if drop && self.allow.load(Ordering::SeqCst) > 0 {
+            drop = false;
+            self.allow.fetch_sub(1, Ordering::SeqCst);
+        }
         self.drop.store(drop, Ordering::Relaxed);
         drop
     }
@@ -246,6 +286,9 @@ impl Filter for FilterRegionPacket {
 pub struct IsolateRegionStore {
     region_id: u64,
     store_id: u64,
+    direction: Direction,
+    allow: usize,
+    msg_type: Option<MessageType>,
 }
 
 impl IsolateRegionStore {
@@ -253,7 +296,25 @@ impl IsolateRegionStore {
         IsolateRegionStore {
             region_id: region_id,
             store_id: store_id,
+            direction: Direction::Both,
+            msg_type: None,
+            allow: 0,
         }
+    }
+
+    pub fn direction(mut self, direction: Direction) -> IsolateRegionStore {
+        self.direction = direction;
+        self
+    }
+
+    pub fn msg_type(mut self, m_type: MessageType) -> IsolateRegionStore {
+        self.msg_type = Some(m_type);
+        self
+    }
+
+    pub fn allow(mut self, number: usize) -> IsolateRegionStore {
+        self.allow = number;
+        self
     }
 }
 
@@ -262,6 +323,9 @@ impl FilterFactory for IsolateRegionStore {
         vec![box FilterRegionPacket {
                  region_id: self.region_id,
                  store_id: self.store_id,
+                 direction: self.direction,
+                 msg_type: self.msg_type.clone(),
+                 allow: AtomicUsize::new(self.allow),
                  drop: AtomicBool::new(false),
              }]
     }

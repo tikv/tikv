@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::collections::VecDeque;
-use std::net::Shutdown;
 use std::cmp;
 
 use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
@@ -196,9 +195,7 @@ impl Conn {
             if self.read_size == self.file_size {
                 // last chunk
                 box_try!(self.snap_scheduler.schedule(SnapTask::Close(self.token)));
-                if let Err(e) = self.sock.shutdown(Shutdown::Both) {
-                    error!("shutdown connection error: {}", e);
-                }
+                // let snap_scheduler to close the connection.
                 break;
             } else if self.read_size + cap >= self.file_size {
                 self.payload = Some(create_mem_buf(self.file_size - self.read_size))

@@ -289,7 +289,7 @@ impl<T: Storage> RawNode<T> {
         if hs != HardState::new() && hs != self.prev_hs {
             return true;
         }
-        if Some(true) == raft.raft_log.get_unstable().snapshot.as_ref().map(|s| !is_empty_snap(s)) {
+        if self.get_snap().map_or(false, |s| !is_empty_snap(s)) {
             return true;
         }
         if !raft.msgs.is_empty() || raft.raft_log.unstable_entries().is_some() ||
@@ -297,6 +297,11 @@ impl<T: Storage> RawNode<T> {
             return true;
         }
         false
+    }
+
+    #[inline]
+    pub fn get_snap(&self) -> Option<&Snapshot> {
+        self.raft.get_snap()
     }
 
     // Advance notifies the RawNode that the application has applied and saved progress in the

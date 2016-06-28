@@ -90,6 +90,23 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
     encoded
 }
 
+/// Get the first compactly encoded bytes's length in encoded.
+///
+/// Please note that, this function won't check the whether the bytes
+/// is encoded correctly.
+pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
+    let last_encoded = encoded.as_ptr() as usize;
+    let total_len = encoded.len();
+    let vn = match encoded.decode_var_i64() {
+        Ok(vn) => vn as usize,
+        Err(e) => {
+            debug!("failed to decode bytes' length: {:?}", e);
+            return total_len;
+        }
+    };
+    vn + (encoded.as_ptr() as usize - last_encoded)
+}
+
 pub trait CompactBytesDecoder: NumberDecoder {
     /// `decode_compact_bytes` decodes bytes which is encoded by `encode_compact_bytes` before.
     fn decode_compact_bytes(&mut self) -> Result<Vec<u8>> {
@@ -101,6 +118,24 @@ pub trait CompactBytesDecoder: NumberDecoder {
 }
 
 impl<T: Read> CompactBytesDecoder for T {}
+
+/// Get the first encoded bytes's length in encoded.
+///
+/// Please note that, this function won't check the whether the bytes
+/// is encoded correctly.
+pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
+    let mut idx = ENC_GROUP_SIZE;
+    loop {
+        if encoded.len() < idx + 1 {
+            return encoded.len();
+        }
+        let marker = encoded[idx];
+        if desc && marker != 0 || !desc && marker != ENC_MARKER {
+            return idx + 1;
+        }
+        idx += ENC_GROUP_SIZE + 1;
+    }
+}
 
 pub trait BytesDecoder: NumberDecoder + CompactBytesDecoder {
     /// Get the remaining length in bytes of current reader.

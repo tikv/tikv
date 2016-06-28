@@ -137,14 +137,14 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
 
     // hook transport and drop all snapshot packet, so follower's status
     // will stay at snapshot.
-    cluster.hook_transport(DropSnapshot);
+    cluster.add_filter(DropSnapshot);
     pd_client.must_add_peer(r1, new_peer(3, 3));
     // a just added peer needs wait a couple of ticks, it'll communicate with leader
     // before getting snapshot
     sleep_ms(1000);
 
     cluster.transfer_leader(r1, new_peer(2, 2));
-    cluster.reset_transport_hooks();
+    cluster.clear_filters();
 
     sleep_ms(1000);
     cluster.must_put(b"k1", b"v1");

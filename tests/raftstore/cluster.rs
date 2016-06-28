@@ -50,8 +50,10 @@ pub trait Simulator {
     fn get_node_ids(&self) -> HashSet<u64>;
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
+    fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
-    fn hook_transport(&self, node_id: u64, filters: Vec<Box<Filter>>);
+    fn add_filter(&self, node_id: u64, filter: Box<Filter>);
+    fn clear_filters(&self, node_id: u64);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -63,7 +65,7 @@ pub struct Cluster<T: Simulator> {
     // node id -> db engine.
     pub engines: HashMap<u64, Arc<DB>>,
 
-    sim: Arc<RwLock<T>>,
+    pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
 }
 
@@ -135,12 +137,16 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn run_node(&mut self, node_id: u64) {
+        debug!("starting node {}", node_id);
         let engine = self.engines.get(&node_id).unwrap();
         self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
+        debug!("node {} started", node_id);
     }
 
     pub fn stop_node(&mut self, node_id: u64) {
+        debug!("stopping node {}", node_id);
         self.sim.wl().stop_node(node_id);
+        debug!("node {} stopped", node_id);
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
@@ -158,33 +164,26 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().call_command(request, timeout)
     }
 
-    fn call_command_on_leader_once(&mut self,
-                                   mut request: RaftCmdRequest,
-                                   timeout: Duration)
-                                   -> Result<RaftCmdResponse> {
-        let region_id = request.get_header().get_region_id();
-        if let Some(leader) = self.leader_of_region(region_id) {
-            request.mut_header().set_peer(leader);
-            return self.call_command(request, timeout);
-        }
-        Err(box_err!("can't get leader of region"))
-    }
-
     pub fn call_command_on_leader(&mut self,
-                                  request: RaftCmdRequest,
+                                  mut request: RaftCmdRequest,
                                   timeout: Duration)
                                   -> Result<RaftCmdResponse> {
         let mut retry_cnt = 0;
         let region_id = request.get_header().get_region_id();
         loop {
-            let result = self.call_command_on_leader_once(request.clone(), timeout);
-            if result.is_err() {
-                return result;
-            }
-            let resp = result.unwrap();
+            let leader = match self.leader_of_region(region_id) {
+                None => return Err(box_err!("can't get leader of region")),
+                Some(l) => l,
+            };
+            request.mut_header().set_peer(leader);
+            let resp = match self.call_command(request.clone(), timeout) {
+                e @ Err(_) => return e,
+                Ok(resp) => resp,
+            };
             if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
                 retry_cnt += 1;
-                warn!("seems leader changed, let's retry");
+                warn!("{:?} is no longer leader, let's retry",
+                      request.get_header().get_peer());
                 continue;
             }
             return Ok(resp);
@@ -338,6 +337,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn shutdown(&mut self) {
+        debug!("about to shutdown cluster");
         let keys = self.sim.rl().get_node_ids();
         for id in keys {
             self.stop_node(id);
@@ -376,7 +376,7 @@ impl<T: Simulator> Cluster<T> {
         for _ in 0..10 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
-            let req = new_request(region_id, region.take_region_epoch().clone(), reqs.clone());
+            let req = new_request(region_id, region.take_region_epoch(), reqs.clone());
             let result = self.call_command_on_leader(req, timeout);
 
             if let Err(Error::Timeout(_)) = result {
@@ -485,11 +485,12 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
-    pub fn hook_transport<F: FilterFactory>(&self, factory: F) {
+    pub fn add_filter<F: FilterFactory>(&self, factory: F) {
         let sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
-            let filter = factory.generate(node_id);
-            sim.hook_transport(node_id, filter);
+            for filter in factory.generate(node_id) {
+                sim.add_filter(node_id, filter);
+            }
         }
     }
 
@@ -519,10 +520,14 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn reset_transport_hooks(&mut self) {
+    pub fn get_snap_dir(&self, node_id: u64) -> String {
+        self.sim.rl().get_snap_dir(node_id)
+    }
+
+    pub fn clear_filters(&mut self) {
         let sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
-            sim.hook_transport(node_id, vec![]);
+            sim.clear_filters(node_id);
         }
     }
 
@@ -541,6 +546,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
         let mut try_cnt = 0;
+        let split_count = self.pd_client.get_split_count();
         loop {
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
@@ -548,7 +554,8 @@ impl<T: Simulator> Cluster<T> {
                 self.ask_split(region, split_key);
             }
 
-            if self.pd_client.check_split(region, split_key) {
+            if self.pd_client.check_split(region, split_key) &&
+               self.pd_client.get_split_count() > split_count {
                 return;
             }
 
@@ -564,7 +571,7 @@ impl<T: Simulator> Cluster<T> {
 
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
-        self.hook_transport(Partition::new(s1, s2));
+        self.add_filter(Partition::new(s1, s2));
     }
 }
 

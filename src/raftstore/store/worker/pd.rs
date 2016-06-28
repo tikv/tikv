@@ -41,6 +41,10 @@ pub enum Task {
     StoreHeartbeat {
         stats: pdpb::StoreStats,
     },
+    ReportSplit {
+        left: metapb::Region,
+        right: metapb::Region,
+    },
 }
 
 
@@ -60,6 +64,9 @@ impl Display for Task {
                        peer.get_id())
             }
             Task::StoreHeartbeat { ref stats } => write!(f, "store heartbeat stats: {:?}", stats),
+            Task::ReportSplit { ref left, ref right } => {
+                write!(f, "report split left {:?}, right {:?}", left, right)
+            }
         }
     }
 }
@@ -107,49 +114,61 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_ask_split(&self, region: metapb::Region, split_key: Vec<u8>, peer: metapb::Peer) {
         metric_incr!("pd.ask_split");
-        if let Ok(mut resp) = self.pd_client.ask_split(region.clone()) {
-            metric_incr!("pd.ask_split.success");
-            info!("try to split with new region id {} for region {:?}",
-                  resp.get_new_region_id(),
-                  region);
-            let req = new_split_region_request(split_key,
-                                               resp.get_new_region_id(),
-                                               resp.take_new_peer_ids());
-            self.send_admin_request(region, peer, req);
+        match self.pd_client.ask_split(region.clone()) {
+            Ok(mut resp) => {
+                metric_incr!("pd.ask_split.success");
+                info!("try to split with new region id {} for region {:?}",
+                      resp.get_new_region_id(),
+                      region);
+                let req = new_split_region_request(split_key,
+                                                   resp.get_new_region_id(),
+                                                   resp.take_new_peer_ids());
+                self.send_admin_request(region, peer, req);
+            }
+            Err(e) => debug!("failed to ask split: {:?}", e),
         }
     }
 
     fn handle_heartbeat(&self, region: metapb::Region, peer: metapb::Peer) {
         metric_incr!("pd.heartbeat");
         // Now we use put region protocol for heartbeat.
-        if let Ok(mut resp) = self.pd_client
-            .region_heartbeat(region.clone(), peer.clone()) {
-            metric_incr!("pd.heartbeat.success");
-            if resp.has_change_peer() {
-                metric_incr!("pd.heartbeat.change_peer");
-                let mut change_peer = resp.take_change_peer();
-                info!("try to change peer {:?} {:?} for region {:?}",
-                      change_peer.get_change_type(),
-                      change_peer.get_peer(),
-                      region);
-                let req = new_change_peer_request(change_peer.get_change_type(),
-                                                  change_peer.take_peer());
-                self.send_admin_request(region, peer, req);
-            } else if resp.has_transfer_leader() {
-                metric_incr!("pd.heartbeat.transfer_leader");
-                let mut transfer_leader = resp.take_transfer_leader();
-                info!("try to transfer leader from {:?} to {:?}",
-                      peer,
-                      transfer_leader.get_peer());
-                let req = new_transfer_leader_request(transfer_leader.take_peer());
-                self.send_admin_request(region, peer, req)
+        match self.pd_client.region_heartbeat(region.clone(), peer.clone()) {
+            Ok(mut resp) => {
+                metric_incr!("pd.heartbeat.success");
+                if resp.has_change_peer() {
+                    metric_incr!("pd.heartbeat.change_peer");
+                    let mut change_peer = resp.take_change_peer();
+                    info!("try to change peer {:?} {:?} for region {:?}",
+                          change_peer.get_change_type(),
+                          change_peer.get_peer(),
+                          region);
+                    let req = new_change_peer_request(change_peer.get_change_type(),
+                                                      change_peer.take_peer());
+                    self.send_admin_request(region, peer, req);
+                } else if resp.has_transfer_leader() {
+                    metric_incr!("pd.heartbeat.transfer_leader");
+                    let mut transfer_leader = resp.take_transfer_leader();
+                    info!("try to transfer leader from {:?} to {:?}",
+                          peer,
+                          transfer_leader.get_peer());
+                    let req = new_transfer_leader_request(transfer_leader.take_peer());
+                    self.send_admin_request(region, peer, req)
+                }
             }
+            Err(e) => debug!("failed to send heartbeat: {:?}", e),
         }
     }
 
     fn handle_store_heartbeat(&self, stats: pdpb::StoreStats) {
         if let Err(e) = self.pd_client.store_heartbeat(stats) {
             error!("store heartbeat failed {:?}", e);
+        }
+    }
+
+    fn handle_report_split(&self, left: metapb::Region, right: metapb::Region) {
+        metric_incr!("pd.report_split");
+        if let Err(e) = self.pd_client.report_split(left, right) {
+            error!("report split failed {:?}", e);
         }
     }
 }
@@ -164,6 +183,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             }
             Task::Heartbeat { region, peer } => self.handle_heartbeat(region, peer),
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
+            Task::ReportSplit { left, right } => self.handle_report_split(left, right),
         };
     }
 }

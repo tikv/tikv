@@ -143,3 +143,13 @@ macro_rules! thd_name {
         }).unwrap_or_else(|| $name.to_owned())
     });
 }
+
+/// Simulating go's defer.
+///
+/// Please note that, different from go, this defer is bound to scope.
+#[macro_export]
+macro_rules! defer {
+    ($t:expr) => (
+        let __ctx = $crate::util::DeferContext::new(|| $t);
+    );
+}

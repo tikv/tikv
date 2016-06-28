@@ -15,9 +15,9 @@
 
 use server::Node;
 use server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
-use raftstore::store::Peekable;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
+use raftstore::store::engine::Peekable;
 use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           CmdType, DeleteRequest, PutRequest};
@@ -99,6 +99,35 @@ pub struct RaftKv<C: PdClient + 'static> {
     router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
 
+enum CmdRes {
+    Resp(Vec<Response>),
+    Snap(RegionSnapshot),
+}
+
+fn on_result(mut resp: RaftCmdResponse,
+             resp_cnt: usize,
+             uuid: &[u8],
+             db: Arc<DB>)
+             -> Result<CmdRes> {
+    if resp.get_header().get_uuid() != uuid {
+        return Err(Error::InvalidResponse("response is not correct!!!".to_owned()));
+    }
+    if resp.get_header().has_error() {
+        return Err(Error::RequestFailed(resp.take_header().take_error()));
+    }
+    if resp_cnt != resp.get_responses().len() {
+        return Err(Error::InvalidResponse("response count is not equal to requests, \
+                                            something must go wrong."
+            .to_owned()));
+    }
+    let mut resps = resp.take_responses();
+    if resps.len() != 1 || resps[0].get_cmd_type() != CmdType::Snap {
+        return Ok(CmdRes::Resp(resps.into_vec()));
+    }
+    let snap = RegionSnapshot::from_raw(db, resps[0].take_snap().take_region());
+    Ok(CmdRes::Snap(snap))
+}
+
 impl<C: PdClient> RaftKv<C> {
     /// Create a RaftKv using specified configuration.
     pub fn new(node: Node<C>, db: Arc<DB>) -> RaftKv<C> {
@@ -110,48 +139,26 @@ impl<C: PdClient> RaftKv<C> {
         }
     }
 
-    pub fn call_command(&self, request: RaftCmdRequest) -> Result<Event<RaftCmdResponse>> {
+    fn call_command(&self, req: RaftCmdRequest) -> Result<CmdRes> {
+        let uuid = req.get_header().get_uuid().to_vec();
+        let l = req.get_requests().len();
+        let db = self.db.clone();
         let finished = Event::new();
         let finished2 = finished.clone();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
 
-        try!(self.router.rl().send_command(request,
+        try!(self.router.rl().send_command(req,
                                            box move |resp| {
-            finished2.set(resp);
-            // Wait for response to be consumed or `finished` is
-            // dropped.
-            finished2.wait_clear(None);
-            Ok(())
-        }));
+                                               let res = on_result(resp, l, &uuid, db);
+                                               finished2.set(res);
+                                               Ok(())
+                                           }));
 
         if finished.wait_timeout(Some(timeout)) {
-            return Ok(finished);
+            return finished.take().unwrap();
         }
 
         Err(Error::Timeout(timeout))
-    }
-
-    fn exec_cmd_request(&self, req: RaftCmdRequest) -> Result<Event<RaftCmdResponse>> {
-        let uuid = req.get_header().get_uuid().to_vec();
-        let l = req.get_requests().len();
-
-        let resp = try!(self.call_command(req));
-        try!(resp.apply(|resp| {
-                if resp.get_header().get_uuid() != &*uuid {
-                    return Err(Error::InvalidResponse("response is not correct!!!".to_owned()));
-                }
-                if resp.get_header().has_error() {
-                    return Err(Error::RequestFailed(resp.take_header().take_error()));
-                }
-                if l != resp.get_responses().len() {
-                    return Err(Error::InvalidResponse("response count is not equal to requests, \
-                                                       something must go wrong."
-                        .to_owned()));
-                }
-                Ok(())
-            })
-            .unwrap());
-        Ok(resp)
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -163,41 +170,21 @@ impl<C: PdClient> RaftKv<C> {
         header
     }
 
-    fn exec_requests(&self, ctx: &Context, reqs: Vec<Request>) -> Result<Vec<Response>> {
+    fn exec_requests(&self, ctx: &Context, reqs: Vec<Request>) -> Result<CmdRes> {
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::new();
         cmd.set_header(header);
         cmd.set_requests(RepeatedField::from_vec(reqs));
-        let resp = try!(self.exec_cmd_request(cmd));
-        // notice: raft thread will be woken up after the take method is called.
-        Ok(resp.take().unwrap().take_responses().to_vec())
-    }
-
-    fn exec_request(&self, ctx: &Context, req: Request) -> Result<Response> {
-        let resps = self.exec_requests(ctx, vec![req]);
-        resps.map(|mut v| v.remove(0))
+        self.call_command(cmd)
     }
 
     fn raw_snapshot(&self, ctx: &Context) -> Result<RegionSnapshot> {
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Snap);
-
-        let header = self.new_request_header(ctx);
-        let mut cmd = RaftCmdRequest::new();
-        cmd.set_header(header);
-        cmd.mut_requests().push(req);
-
-        // notice: the raft thread will be woken up after resp is dropped
-        let resp = try!(self.exec_cmd_request(cmd));
-        let region = try!(resp.apply(|resp| {
-                let mut resp = resp.take_responses().remove(0);
-                if resp.get_cmd_type() != CmdType::Snap {
-                    return Err(invalid_resp_type(CmdType::Snap, resp.get_cmd_type()));
-                }
-                Ok(resp.take_snap().take_region())
-            })
-            .unwrap());
-        Ok(RegionSnapshot::from_raw(self.db.as_ref(), region))
+        match try!(self.exec_requests(ctx, vec![req])) {
+            CmdRes::Resp(rs) => Err(invalid_resp_type(CmdType::Snap, rs[0].get_cmd_type()).into()),
+            CmdRes::Snap(s) => Ok(s),
+        }
     }
 }
 
@@ -247,8 +234,10 @@ impl<C: PdClient> Engine for RaftKv<C> {
             }
             reqs.push(req);
         }
-        try!(self.exec_requests(ctx, reqs));
-        Ok(())
+        match try!(self.exec_requests(ctx, reqs)) {
+            CmdRes::Resp(_) => Ok(()),
+            CmdRes::Snap(_) => Err(box_err!("unexpect snapshot, should mutate instead.")),
+        }
     }
 
     fn snapshot<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Snapshot + 'a>> {
@@ -257,7 +246,7 @@ impl<C: PdClient> Engine for RaftKv<C> {
     }
 }
 
-impl<'a> Snapshot for RegionSnapshot<'a> {
+impl Snapshot for RegionSnapshot {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
         let v = box_try!(self.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
