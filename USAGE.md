@@ -9,6 +9,8 @@
 + Go, 1.5+ is required.
 
 ### Installing TiKV
+    
+    Install the following components on each node.
 
 + **RocksDB**
 
@@ -92,9 +94,9 @@
     ```
 
     Cluster ID is used to distinguish different TiKV clusters.
-    The `/pd` is the root prefix path in etcd. 
+    `/pd` is the root prefix path in etcd. 
 
-3. Start TiKV on listening port 5551, the data is stored in local directory `data1` and cluster ID is 1.
+3. Start TiKV on listening port 5551. The data is stored in directory `data1` and cluster ID is 1.
 
     ```sh
     tikv-server -S raftkv --addr 127.0.0.1:5551 --pd 127.0.0.1:1234 -s data1 --cluster-id 1
