@@ -778,7 +778,7 @@ impl Peer {
         let mut storage = self.storage.wl();
         // Commit write and change storage fields atomically.
         // Lock here to guarantee generating snapshot sees a consistent view data.
-        match self.engine.write(ctx.invoke_ctx.wb) {
+        match self.engine.write_without_wal(ctx.invoke_ctx.wb) {
             Ok(_) => {
                 storage.local_state = ctx.invoke_ctx.local_state;
 
