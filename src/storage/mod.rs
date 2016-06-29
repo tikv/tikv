@@ -29,6 +29,9 @@ pub use self::txn::SnapshotStore;
 pub use self::types::{Key, Value, KvPair};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
+pub type CfName = &'static str;
+pub const DEFAULT_ENGINE_CFS: &'static [CfName] = &[];
+
 #[cfg(test)]
 pub use self::types::make_key;
 
@@ -185,7 +188,7 @@ impl Storage {
     }
 
     pub fn new(dsn: Dsn) -> Result<Storage> {
-        let engine = try!(engine::new_engine(dsn));
+        let engine = try!(engine::new_engine(dsn, DEFAULT_ENGINE_CFS));
         Storage::from_engine(engine)
     }
 
