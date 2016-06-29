@@ -72,6 +72,7 @@ impl MsgSender for SendCh {
     }
 }
 
+// TODO: seperate snap generate and apply to different thread.
 pub struct Runner<T: MsgSender> {
     db: Arc<DB>,
     ch: T,
@@ -148,7 +149,7 @@ impl<T: MsgSender> Runner<T> {
             // TODO: avoid too many allocation
             let key = box_try!(reader.decode_compact_bytes());
             if key.is_empty() {
-                box_try!(self.db.write(wb));
+                box_try!(self.db.write_without_wal(wb));
                 break;
             }
             batch_size += key.len();
@@ -156,7 +157,7 @@ impl<T: MsgSender> Runner<T> {
             batch_size += value.len();
             box_try!(wb.put(&key, &value));
             if batch_size > BATCH_SIZE {
-                box_try!(self.db.write(wb));
+                box_try!(self.db.write_without_wal(wb));
                 wb = WriteBatch::new();
                 batch_size = 0;
             }

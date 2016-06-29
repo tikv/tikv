@@ -340,9 +340,7 @@ impl Peer {
                self.region_id);
 
         let mut ready = self.raft_group.ready();
-
         let is_applying = self.storage.rl().is_applying_snap();
-
         if is_applying {
             // skip apply and snapshot
             ready.committed_entries = vec![];
@@ -353,7 +351,7 @@ impl Peer {
 
         self.send_ready_metric(&ready);
 
-        // The leader can write to its disk in parallel with replicating to the followers.
+        // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1
         if self.is_leader() {
             try!(self.send(trans, &ready.messages));
@@ -380,7 +378,7 @@ impl Peer {
                   t.elapsed());
 
         if is_applying {
-            // remove hard state to let raft not change apply index.
+            // remove hard state so raft won't change the apply index.
             ready.hs.take();
         }
 

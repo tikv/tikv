@@ -137,7 +137,7 @@ impl Simulator for NodeCluster {
 
         let (snap_mgr, tmp) = if node_id == 0 ||
                                  !self.trans.rl().snap_paths.contains_key(&node_id) {
-            let tmp = TempDir::new("test_luster").unwrap();
+            let tmp = TempDir::new("test_cluster").unwrap();
             let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
