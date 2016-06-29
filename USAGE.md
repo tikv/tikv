@@ -9,8 +9,8 @@
 + Go, 1.5+ is required.
 
 ### Installing TiKV
-    
-    Install the following components on each node.
+
+Install the following components on each node.
 
 + **RocksDB**
 
@@ -18,24 +18,26 @@
     
     * **Linux - Ubuntu**
     
-    GCC 4.7+ with C++11 support is required.
+        GCC 4.7+ with C++11 support is required.
 
-    ```sh
-    apt-get install zlib1g-dev libbz2-dev libsnappy-dev libgflags-dev liblz4-dev
-    curl -L https://github.com/facebook/rocksdb/archive/rocksdb-4.3.1.tar.gz -o rocksdb.tar.gz
-    tar xf rocksdb.tar.gz 
-    cd rocksdb-rocksdb-4.3.1 
-    make shared_lib 
-    make install-shared
-    ```
+        ```sh
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends zlib1g-dev libbz2-dev libsnappy-dev libgflags-dev liblz4-dev
+        curl -L https://github.com/facebook/rocksdb/archive/rocksdb-4.6.1.tar.gz -o rocksdb.tar.gz
+        tar xf rocksdb.tar.gz 
+        cd rocksdb-rocksdb-4.6.1 
+        make shared_lib 
+        sudo make install-shared
+        ```
+        
     * To install RocksDB on other Linux platforms, see [INSTALL.md](https://github.com/facebook/rocksdb/blob/master/INSTALL.md).
 
     * **Mac OS X**
-    
-    ```sh
-    brew update
-    brew install rocksdb
-    ``` 
+        
+        ```sh
+        brew update
+        brew install rocksdb
+        ``` 
 
 + **Etcd**
 
@@ -78,6 +80,9 @@
     ```
 
     The binary of `tidb-server` is installed in `${GOPATH}/src/github.com/pingcap/tidb/tidb-server`
+    
+You can also use [install.sh](./install.sh) to install above components. The binary 
+    executions are installed in `bin` directory. 
 
 ### Running in the standalone mode
 
@@ -125,6 +130,7 @@ In production environment, it is strongly recommended to run TiKV in the cluster
 2. Start PD cluster.
 
     Start three pd-server instances listening on different ports with the same etcd address and cluster id. They will form a PD cluster.
+    
     ```sh
     pd-server -addr 127.0.0.1:1234 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 --cluster-id 1 --root /pd
     pd-server -addr 127.0.0.1:2234 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 --cluster-id 1 --root /pd
@@ -134,6 +140,7 @@ In production environment, it is strongly recommended to run TiKV in the cluster
 3. Start TiKV cluster.
 
     Start three tikv-server instances listening on different ports with the same pd address and cluster id. They will form a TiKV cluster.
+    
     ```sh
     tikv-server -S raftkv --addr 127.0.0.1:5551 --pd 127.0.0.1:1234,127.0.0.1:2234,127.0.0.1:3234 -s data1 --cluster-id 1
     tikv-server -S raftkv --addr 127.0.0.1:5552 --pd 127.0.0.1:1234,127.0.0.1:2234,127.0.0.1:3234 -s data2 --cluster-id 1
