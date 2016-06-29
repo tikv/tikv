@@ -11,7 +11,7 @@
 ### Installing TiKV
 
 You can use [install.sh](./install.sh) to install all binary executions in `bin` directory, or you can
-also follow [BUILD.md](./BUILD.md) to build all components separately.
+also follow [BUILD.md](./BUILD.md) to build all components manually.
 
 ### Running in the standalone mode
 

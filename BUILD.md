@@ -1,6 +1,6 @@
 # Build
 
-You can build all components separately. 
+You can build all components manually. 
 
 ## System requirement
 
