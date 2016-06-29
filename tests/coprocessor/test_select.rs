@@ -4,7 +4,7 @@ use kvproto::kvrpcpb::Context;
 use tikv::util::codec::{table, Datum, datum};
 use tikv::util::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
-use tikv::storage::{Dsn, Mutation, Key, DEFAULT_ENGINE_CFS};
+use tikv::storage::{Dsn, Mutation, Key, DEFAULT_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::storage::txn::TxnStore;
 use tikv::util::event::Event;
@@ -220,8 +220,7 @@ fn prepare_sel(store: &mut Store,
 // `varchar$((handle / 2))`. Third column's type is long, id is 4,
 // value is the same as handle.
 fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
-    let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_ENGINE_CFS)
-        .unwrap());
+    let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap());
     let mut store = Store::new(engine.clone());
     let ti = TableInfo {
         t_id: 1,
