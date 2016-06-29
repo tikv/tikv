@@ -15,6 +15,8 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raftpb::MessageType;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::Transport;
+use tikv::util::HandyRwLock;
+
 use rand;
 use std::sync::{Arc, RwLock};
 use std::time;
@@ -22,8 +24,6 @@ use std::usize;
 use std::thread;
 use std::vec::Vec;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-use tikv::util::HandyRwLock;
 
 pub trait Filter: Send + Sync {
     // in a SimulateTransport, if any filter's before return true, msg will be discard
@@ -157,7 +157,7 @@ struct PartitionFilter {
 
 impl Filter for PartitionFilter {
     fn before(&self, msg: &RaftMessage) -> bool {
-        let drop = self.node_ids.contains(&msg.get_message().get_to());
+        let drop = self.node_ids.contains(&msg.get_to_peer().get_store_id());
         self.drop.store(drop, Ordering::Relaxed);
         drop
     }
@@ -214,7 +214,7 @@ impl FilterFactory for Isolate {
                         }];
         }
         vec![box PartitionFilter {
-                 node_ids: vec![node_id],
+                 node_ids: vec![self.node_id],
                  drop: AtomicBool::new(false),
              }]
     }
@@ -328,5 +328,29 @@ impl FilterFactory for IsolateRegionStore {
                  allow: AtomicUsize::new(self.allow),
                  drop: AtomicBool::new(false),
              }]
+    }
+}
+
+struct SnapshotFilter {
+    drop: AtomicBool,
+}
+
+impl Filter for SnapshotFilter {
+    fn before(&self, msg: &RaftMessage) -> bool {
+        let drop = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
+        self.drop.store(drop, Ordering::Relaxed);
+        drop
+    }
+
+    fn after(&self, x: Result<()>) -> Result<()> {
+        x
+    }
+}
+
+pub struct DropSnapshot;
+
+impl FilterFactory for DropSnapshot {
+    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+        vec![box SnapshotFilter { drop: AtomicBool::new(false) }]
     }
 }

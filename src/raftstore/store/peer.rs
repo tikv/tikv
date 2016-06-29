@@ -22,12 +22,12 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::raftpb::{self, ConfChangeType};
+use kvproto::raftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState, PeerState, RegionLocalState};
-use raft::{self, RawNode, StateRole, SnapshotStatus, Ready};
+use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -41,6 +41,8 @@ use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Iterable, Mutable};
+
+const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
 pub struct PendingCmd {
     pub uuid: Uuid,
@@ -204,7 +206,8 @@ impl Peer {
         let cfg = store.config();
 
         let store_id = store.store_id();
-        let ps = try!(PeerStorage::new(store.engine(), &region, store.get_snap_mgr()));
+        let sched = store.snap_scheduler();
+        let ps = try!(PeerStorage::new(store.engine(), &region, sched));
         let applied_index = ps.applied_index();
         let storage = RaftStorage::new(ps);
 
@@ -315,6 +318,16 @@ impl Peer {
         }
     }
 
+    #[inline]
+    fn send<T>(&mut self, trans: &Arc<RwLock<T>>, msgs: &[raftpb::Message]) -> Result<()>
+        where T: Transport
+    {
+        for msg in msgs {
+            try!(self.send_raft_message(msg, trans));
+        }
+        Ok(())
+    }
+
     pub fn handle_raft_ready<T: Transport>(&mut self,
                                            trans: &Arc<RwLock<T>>)
                                            -> Result<Option<ReadyResult>> {
@@ -326,16 +339,28 @@ impl Peer {
                self.peer,
                self.region_id);
 
-        let ready = self.raft_group.ready();
+        let mut ready = self.raft_group.ready();
+        let is_applying = self.storage.rl().is_applying_snap();
+        if is_applying {
+            // skip apply and snapshot
+            ready.committed_entries = vec![];
+            ready.snapshot = RaftSnapshot::new();
+        }
 
         let t = SlowTimer::new();
 
         self.send_ready_metric(&ready);
 
+        // The leader can write to disk and replicate to the followers concurrently
+        // For more details, check raft thesis 10.2.1
+        if self.is_leader() {
+            try!(self.send(trans, &ready.messages));
+        }
+
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
-        for msg in &ready.messages {
-            try!(self.send_raft_message(&msg, trans));
+        if !self.is_leader() {
+            try!(self.send(trans, &ready.messages));
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
@@ -351,6 +376,11 @@ impl Peer {
                   apply_result.is_some(),
                   ready.hs.is_some(),
                   t.elapsed());
+
+        if is_applying {
+            // remove hard state so raft won't change the apply index.
+            ready.hs.take();
+        }
 
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
@@ -381,11 +411,18 @@ impl Peer {
         }
 
         if get_transfer_leader_cmd(&req).is_some() {
-            let resp = self.transfer_leader(req);
+            let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
+            let peer = transfer_leader.get_peer();
+
+            if self.is_tranfer_leader_allowed(peer) {
+                self.transfer_leader(peer);
+            } else {
+                info!("transfer leader message {:?} ignored directly.", req);
+            }
 
             // transfer leader command doesn't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
-            return cmd.cb.call_box((resp,));
+            return cmd.cb.call_box((make_transfer_leader_response(),));
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
                 return Err(box_err!("there is a pending conf change, try later."));
@@ -440,10 +477,7 @@ impl Peer {
         Ok(())
     }
 
-    fn transfer_leader(&mut self, cmd: RaftCmdRequest) -> RaftCmdResponse {
-        let transfer_leader = get_transfer_leader_cmd(&cmd).unwrap();
-        let peer = transfer_leader.get_peer();
-
+    fn transfer_leader(&mut self, peer: &metapb::Peer) {
         metric_incr!("raftstore.transfer_leader");
 
         info!("transfer leader from {:?} to {:?} at region {}",
@@ -453,13 +487,24 @@ impl Peer {
         );
 
         self.raft_group.transfer_leader(peer.get_id());
+    }
 
-        let mut response = AdminResponse::new();
-        response.set_cmd_type(AdminCmdType::TransferLeader);
-        response.set_transfer_leader(TransferLeaderResponse::new());
-        let mut resp = RaftCmdResponse::new();
-        resp.set_admin_response(response);
-        resp
+    fn is_tranfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
+        let peer_id = peer.get_id();
+        let status = self.raft_group.status();
+
+        if !status.progress.contains_key(&peer_id) {
+            return false;
+        }
+
+        for progress in status.progress.values() {
+            if progress.state == ProgressState::Snapshot {
+                return false;
+            }
+        }
+
+        let last_index = self.storage.rl().last_index();
+        last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
     fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
@@ -778,7 +823,7 @@ impl Peer {
         let mut storage = self.storage.wl();
         // Commit write and change storage fields atomically.
         // Lock here to guarantee generating snapshot sees a consistent view data.
-        match self.engine.write(ctx.invoke_ctx.wb) {
+        match self.engine.write_without_wal(ctx.invoke_ctx.wb) {
             Ok(_) => {
                 storage.local_state = ctx.invoke_ctx.local_state;
 
@@ -1162,4 +1207,13 @@ impl Peer {
         resp.mut_snap().set_region(self.storage.rl().get_region().clone());
         Ok(resp)
     }
+}
+
+fn make_transfer_leader_response() -> RaftCmdResponse {
+    let mut response = AdminResponse::new();
+    response.set_cmd_type(AdminCmdType::TransferLeader);
+    response.set_transfer_leader(TransferLeaderResponse::new());
+    let mut resp = RaftCmdResponse::new();
+    resp.set_admin_response(response);
+    resp
 }

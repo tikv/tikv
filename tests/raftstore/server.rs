@@ -108,6 +108,15 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
         let mut cfg = cfg;
+
+        let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
+            let p = TempDir::new("test_cluster").unwrap();
+            (p.path().to_str().unwrap().to_owned(), Some(p))
+        } else {
+            let p = self.snap_paths.get(&node_id).unwrap().path().to_str().unwrap();
+            (p.to_owned(), None)
+        };
+
         // Now we cache the store address, so here we should re-use last
         // listening address for the same store. Maybe we should enable
         // reuse_socket?
@@ -139,14 +148,9 @@ impl Simulator for ServerCluster {
         let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
 
         let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
-
-        let tmp = TempDir::new("test_cluster").unwrap();
-        let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap(),
-                                           Some(StoreSendCh::new(store_event_loop.channel())));
-
         let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
-
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
+        let snap_mgr = store::new_snap_mgr(tmp_str, Some(node.get_sendch()));
 
         node.start(store_event_loop,
                    engine.clone(),
@@ -157,8 +161,9 @@ impl Simulator for ServerCluster {
 
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
-
-        self.snap_paths.insert(node_id, tmp);
+        if let Some(tmp) = tmp {
+            self.snap_paths.insert(node_id, tmp);
+        }
 
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);

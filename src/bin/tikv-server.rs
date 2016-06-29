@@ -324,7 +324,6 @@ fn build_raftkv(matches: &Matches,
     let engine = Arc::new(DB::open(&opts, db_path.to_str().unwrap()).unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
-
     let mut node = Node::new(&mut event_loop, cfg, pd_client);
 
     let mut snap_path = path.clone();

@@ -131,21 +131,21 @@ impl Unstable {
 
     // append entries to unstable, truncate local block first if overlapped.
     pub fn truncate_and_append(&mut self, ents: &[Entry]) {
-        let after = ents[0].get_index() - 1;
-        if after == self.offset + self.entries.len() as u64 - 1 {
-            // after is the last index in the self.entries, append directly
+        let after = ents[0].get_index();
+        if after == self.offset + self.entries.len() as u64 {
+            // after is the next index in the self.entries, append directly
             self.entries.extend_from_slice(ents);
-        } else if after < self.offset {
+        } else if after <= self.offset {
             // The log is being truncated to before our current offset
             // portion, so set the offset and replace the entries
-            self.offset = after + 1;
+            self.offset = after;
             self.entries.clear();
             self.entries.extend_from_slice(ents);
         } else {
             // truncate to after and copy to self.entries then append
             let off = self.offset;
             self.entries = {
-                let cut_ents = self.slice(off, after + 1);
+                let cut_ents = self.slice(off, after);
                 let mut entries = Vec::with_capacity(cut_ents.len() + ents.len());
                 entries.extend_from_slice(cut_ents);
                 entries.extend_from_slice(ents);

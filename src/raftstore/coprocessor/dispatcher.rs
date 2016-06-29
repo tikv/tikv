@@ -133,8 +133,9 @@ mod test {
     use raftstore::coprocessor::*;
     use tempdir::TempDir;
     use raftstore::store::engine::*;
-    use raftstore::store::{self, PeerStorage};
+    use raftstore::store::PeerStorage;
     use util::HandyRwLock;
+    use util::worker;
     use std::sync::*;
     use std::fmt::Debug;
     use protobuf::RepeatedField;
@@ -214,7 +215,7 @@ mod test {
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        PeerStorage::new(engine, &Region::new(), store::new_snap_mgr("", None)).unwrap()
+        PeerStorage::new(engine, &Region::new(), worker::dummy_scheduler()).unwrap()
     }
 
     fn share<T>(t: T) -> Arc<RwLock<T>> {
