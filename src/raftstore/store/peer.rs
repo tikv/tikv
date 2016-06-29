@@ -818,9 +818,8 @@ impl Peer {
         ctx.local_state.set_applied_index(index);
         ctx.save(self.region_id).expect("save state must not fail");
 
-        let mut storage = self.storage.wl();
         // Commit write and change storage fields atomically.
-        // Lock here to guarantee generating snapshot sees a consistent view data.
+        let mut storage = self.storage.wl();
         match self.engine.write_without_wal(ctx.invoke_ctx.wb) {
             Ok(_) => {
                 storage.local_state = ctx.invoke_ctx.local_state;
