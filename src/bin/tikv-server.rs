@@ -45,7 +45,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, c
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
-use tikv::raftstore::store::{self, SnapManager, SendCh as StoreSendCh};
+use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{new_rpc_client, RpcClient};
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -323,14 +323,15 @@ fn build_raftkv(matches: &Matches,
     db_path.push("db");
     let engine = Arc::new(DB::open(&opts, db_path.to_str().unwrap()).unwrap());
 
-    let mut snap_path = path.clone();
-    snap_path.push("snap");
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
 
-    let snap_path = snap_path.to_str().unwrap().to_owned();
-    let snap_mgr = store::new_snap_mgr(snap_path, Some(StoreSendCh::new(event_loop.channel())));
-
     let mut node = Node::new(&mut event_loop, cfg, pd_client);
+
+    let mut snap_path = path.clone();
+    snap_path.push("snap");
+    let snap_path = snap_path.to_str().unwrap().to_owned();
+    let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
+
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
     let raft_router = node.raft_store_router();
     let node_id = node.id();
