@@ -391,58 +391,90 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::{channel, Sender};
     use kvproto::kvrpcpb::Context;
 
-    fn expect_get_none() -> Callback<Option<Value>> {
-        Box::new(|x: Result<Option<Value>>| assert_eq!(x.unwrap(), None))
+    fn expect_get_none(done: Sender<i32>) -> Callback<Option<Value>> {
+        Box::new(move |x: Result<Option<Value>>| {
+            assert_eq!(x.unwrap(), None);
+            done.send(1).unwrap();
+        })
     }
 
-    fn expect_get_val(v: Vec<u8>) -> Callback<Option<Value>> {
-        Box::new(move |x: Result<Option<Value>>| assert_eq!(x.unwrap().unwrap(), v))
+    fn expect_get_val(done: Sender<i32>, v: Vec<u8>) -> Callback<Option<Value>> {
+        Box::new(move |x: Result<Option<Value>>| {
+            assert_eq!(x.unwrap().unwrap(), v);
+            done.send(1).unwrap();
+        })
     }
 
-    fn expect_ok<T>() -> Callback<T> {
-        Box::new(|x: Result<T>| assert!(x.is_ok()))
+    fn expect_ok<T>(done: Sender<i32>) -> Callback<T> {
+        Box::new(move |x: Result<T>| {
+            assert!(x.is_ok());
+            done.send(1).unwrap();
+        })
     }
 
-    fn expect_fail<T>() -> Callback<T> {
-        Box::new(|x: Result<T>| assert!(x.is_err()))
+    fn expect_fail<T>(done: Sender<i32>) -> Callback<T> {
+        Box::new(move |x: Result<T>| {
+            assert!(x.is_err());
+            done.send(1).unwrap();
+        })
     }
 
-    fn expect_scan(pairs: Vec<Option<KvPair>>) -> Callback<Vec<Result<KvPair>>> {
+    fn expect_scan(done: Sender<i32>, pairs: Vec<Option<KvPair>>) -> Callback<Vec<Result<KvPair>>> {
         Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
             let rlt: Vec<Option<KvPair>> = rlt.unwrap()
                 .into_iter()
                 .map(Result::ok)
                 .collect();
             assert_eq!(rlt, pairs);
+            done.send(1).unwrap()
         })
     }
 
     #[test]
     fn test_get_put() {
         let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
-        storage.async_get(Context::new(), make_key(b"x"), 100, expect_get_none()).unwrap();
+        let (tx, rx) = channel();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       100,
+                       expect_get_none(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            expect_ok())
+                            expect_ok(tx.clone()))
             .unwrap();
-        storage.async_commit(Context::new(), vec![make_key(b"x")], 100, 101, expect_ok())
+        rx.recv().unwrap();
+        storage.async_commit(Context::new(),
+                          vec![make_key(b"x")],
+                          100,
+                          101,
+                          expect_ok(tx.clone()))
             .unwrap();
-        storage.async_get(Context::new(), make_key(b"x"), 100, expect_get_none()).unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       100,
+                       expect_get_none(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        101,
-                       expect_get_val(b"100".to_vec()))
+                       expect_get_val(tx.clone(), b"100".to_vec()))
             .unwrap();
+        rx.recv().unwrap();
         storage.stop().unwrap();
     }
-
     #[test]
     fn test_scan() {
         let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
+        let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![
             Mutation::Put((make_key(b"a"), b"aa".to_vec())),
@@ -451,62 +483,82 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            expect_ok())
+                            expect_ok(tx.clone()))
             .unwrap();
+        rx.recv().unwrap();
         storage.async_commit(Context::new(),
                           vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
                           1,
                           2,
-                          expect_ok())
+                          expect_ok(tx.clone()))
             .unwrap();
+        rx.recv().unwrap();
         storage.async_scan(Context::new(),
                         make_key(b"\x00"),
                         1000,
                         5,
-                        expect_scan(vec![
+                        expect_scan(tx.clone(),
+                                    vec![
             Some((b"a".to_vec(), b"aa".to_vec())),
             Some((b"b".to_vec(), b"bb".to_vec())),
             Some((b"c".to_vec(), b"cc".to_vec())),
             ]))
             .unwrap();
+        rx.recv().unwrap();
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_txn() {
         let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap();
+        let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            expect_ok())
+                            expect_ok(tx.clone()))
             .unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                             b"y".to_vec(),
                             101,
-                            expect_ok())
+                            expect_ok(tx.clone()))
             .unwrap();
-        storage.async_commit(Context::new(), vec![make_key(b"x")], 100, 110, expect_ok())
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+        storage.async_commit(Context::new(),
+                          vec![make_key(b"x")],
+                          100,
+                          110,
+                          expect_ok(tx.clone()))
             .unwrap();
-        storage.async_commit(Context::new(), vec![make_key(b"y")], 101, 111, expect_ok())
+        storage.async_commit(Context::new(),
+                          vec![make_key(b"y")],
+                          101,
+                          111,
+                          expect_ok(tx.clone()))
             .unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        120,
-                       expect_get_val(b"100".to_vec()))
+                       expect_get_val(tx.clone(), b"100".to_vec()))
             .unwrap();
         storage.async_get(Context::new(),
                        make_key(b"y"),
                        120,
-                       expect_get_val(b"101".to_vec()))
+                       expect_get_val(tx.clone(), b"101".to_vec()))
             .unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
                             b"x".to_vec(),
                             105,
-                            expect_fail())
+                            expect_fail(tx.clone()))
             .unwrap();
+        rx.recv().unwrap();
         storage.stop().unwrap();
     }
 }
