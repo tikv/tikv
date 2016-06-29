@@ -10,7 +10,7 @@
 
 ### Installing TiKV
 
-Install the following components on each node.
+Install the following components on each node. You can simpily use [install.sh](./install.sh) to install following components. The binary executions are installed in `bin` directory. 
 
 + **RocksDB**
 
@@ -81,8 +81,6 @@ Install the following components on each node.
 
     The binary of `tidb-server` is installed in `${GOPATH}/src/github.com/pingcap/tidb/tidb-server`
     
-You can also use [install.sh](./install.sh) to install above components. The binary 
-    executions are installed in `bin` directory. 
 
 ### Running in the standalone mode
 
