@@ -486,7 +486,7 @@ impl PeerStorage {
             self.snap.take();
             let task = SnapTask::Apply { region_id: region_id };
             // TODO: gracefully remove region instead.
-            self.snap_sched.schedule(task).expect("snap apply job should not failed");
+            self.snap_sched.schedule(task).expect("snap apply job should not fail");
             self.region = res.region.clone();
             return Ok(Some(res));
         }
