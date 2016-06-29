@@ -230,7 +230,7 @@ impl SnapManagerCore {
         }
     }
 
-    pub fn try_recover(&self) -> io::Result<()> {
+    pub fn init(&self) -> io::Result<()> {
         let path = Path::new(&self.base);
         if !path.exists() {
             try!(fs::create_dir_all(path));
@@ -239,15 +239,6 @@ impl SnapManagerCore {
         if !path.is_dir() {
             return Err(io::Error::new(ErrorKind::Other,
                                       format!("{} should be a directory", path.display())));
-        }
-        for path in try!(fs::read_dir(path)) {
-            let p = try!(path);
-            if !try!(p.file_type()).is_file() {
-                continue;
-            }
-            debug!("deleting {}", p.path().display());
-            try!(fs::remove_file(p.path()));
-            // TODO: resume applying when suitable
         }
         Ok(())
     }
