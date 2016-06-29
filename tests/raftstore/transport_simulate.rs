@@ -330,3 +330,27 @@ impl FilterFactory for IsolateRegionStore {
              }]
     }
 }
+
+struct SnapshotFilter {
+    drop: AtomicBool,
+}
+
+impl Filter for SnapshotFilter {
+    fn before(&self, msg: &RaftMessage) -> bool {
+        let drop = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
+        self.drop.store(drop, Ordering::Relaxed);
+        drop
+    }
+
+    fn after(&self, x: Result<()>) -> Result<()> {
+        x
+    }
+}
+
+pub struct DropSnapshot;
+
+impl FilterFactory for DropSnapshot {
+    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+        vec![box SnapshotFilter { drop: AtomicBool::new(false) }]
+    }
+}
