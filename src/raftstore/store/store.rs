@@ -958,9 +958,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 None => {
                     // If to_peer is removed immediately after sending snapshot, the command
                     // may be applied before SnapshotStatus is reported. So here just ignore.
-                    warn!("peer {} not found, skip reporting snap {:?}", to_peer_id, status);
+                    warn!("peer {} not found, skip reporting snap {:?}",
+                          to_peer_id,
+                          status);
                     return;
-                },
+                }
             };
             info!("report snapshot status {:?} for {} {:?}",
                   to_peer,

@@ -318,6 +318,16 @@ impl Peer {
         }
     }
 
+    #[inline]
+    fn send<T>(&mut self, trans: &Arc<RwLock<T>>, msgs: &[raftpb::Message]) -> Result<()>
+        where T: Transport
+    {
+        for msg in msgs {
+            try!(self.send_raft_message(msg, trans));
+        }
+        Ok(())
+    }
+
     pub fn handle_raft_ready<T: Transport>(&mut self,
                                            trans: &Arc<RwLock<T>>)
                                            -> Result<Option<ReadyResult>> {
@@ -343,10 +353,16 @@ impl Peer {
 
         self.send_ready_metric(&ready);
 
+        // The leader can write to its disk in parallel with replicating to the followers.
+        // For more details, check raft thesis 10.2.1
+        if self.is_leader() {
+            try!(self.send(trans, &ready.messages));
+        }
+
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
 
-        for msg in &ready.messages {
-            try!(self.send_raft_message(&msg, trans));
+        if !self.is_leader() {
+            try!(self.send(trans, &ready.messages));
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
