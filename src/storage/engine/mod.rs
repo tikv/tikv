@@ -48,6 +48,9 @@ pub trait Engine: Send + Sync + Debug {
     }
 
     fn iter<'a>(&'a self, ctx: &Context) -> Result<Box<Cursor + 'a>>;
+
+    // maybe mut is better.
+    fn close(&self) {}
 }
 
 pub trait Snapshot {
