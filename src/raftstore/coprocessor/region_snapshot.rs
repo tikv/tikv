@@ -223,7 +223,7 @@ mod tests {
     }
 
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
-        PeerStorage::new(engine, r, worker::dead_scheduler()).unwrap()
+        PeerStorage::new(engine, r, worker::dummy_scheduler()).unwrap()
     }
 
     fn new_snapshot(peer_storage: &PeerStorage) -> RegionSnapshot {

@@ -215,7 +215,7 @@ mod test {
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        PeerStorage::new(engine, &Region::new(), worker::dead_scheduler()).unwrap()
+        PeerStorage::new(engine, &Region::new(), worker::dummy_scheduler()).unwrap()
     }
 
     fn share<T>(t: T) -> Arc<RwLock<T>> {

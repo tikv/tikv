@@ -99,7 +99,7 @@ impl<T: Display> Clone for Scheduler<T> {
 ///
 /// Useful for test purpose.
 #[cfg(test)]
-pub fn dead_scheduler<T: Display>() -> Scheduler<T> {
+pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
     let (tx, _) = mpsc::channel();
     Scheduler::new(AtomicUsize::new(0), tx)
 }

@@ -121,7 +121,7 @@ mod test {
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = new_engine(path.path().to_str().unwrap()).unwrap();
-        PeerStorage::new(engine, &Region::new(), worker::dead_scheduler()).unwrap()
+        PeerStorage::new(engine, &Region::new(), worker::dummy_scheduler()).unwrap()
     }
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
@@ -163,7 +163,7 @@ mod test {
         r.set_id(10);
         r.set_start_key(region_start_key);
 
-        let ps = PeerStorage::new(engine, &r, worker::dead_scheduler()).unwrap();
+        let ps = PeerStorage::new(engine, &r, worker::dummy_scheduler()).unwrap();
         let mut ctx = ObserverContext::new(&ps);
         let mut observer = SplitObserver;
 
