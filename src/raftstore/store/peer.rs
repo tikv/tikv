@@ -754,9 +754,7 @@ impl Peer {
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
-
         let cb = self.find_cb(uuid, term, &cmd);
-
         let (mut resp, exec_result) = self.apply_raft_cmd(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);
             (cmd_resp::new_error(e), None)
