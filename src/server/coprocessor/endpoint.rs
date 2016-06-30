@@ -331,7 +331,10 @@ impl SelectContextCore {
             } else {
                 sel.get_index_info().get_columns()
             };
-            cols = select_cols.iter().map(|c| c.get_column_id()).collect();
+            cols = select_cols.iter()
+                .filter(|c| !c.get_pk_handle())
+                .map(|c| c.get_column_id())
+                .collect();
             cond_cols = HashMap::new();
             try!(collect_col_in_expr(&mut cond_cols, select_cols, sel.get_field_where()));
         }
