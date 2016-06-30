@@ -155,15 +155,6 @@ impl EtcdHandler {
     }
 }
 
-impl Drop for EtcdHandler {
-    fn drop(&mut self) {
-        // Oh, something must go wrong, we forget finishing the request.
-        if let Some(finish) = self.finish.take() {
-            finish.set(Err(box_err!("forget to finish the request")));
-        }
-    }
-}
-
 impl<H: Transport> Handler<H> for EtcdHandler {
     fn on_request(&mut self, req: &mut Request) -> Next {
         req.set_method(Post);
