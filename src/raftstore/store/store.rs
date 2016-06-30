@@ -1092,6 +1092,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
             }
+            Msg::SnapshotStats => self.store_heartbeat_pd(),
             Msg::SnapApplyRes { region_id, is_success } => {
                 self.on_snap_apply_res(region_id, is_success);
             }
