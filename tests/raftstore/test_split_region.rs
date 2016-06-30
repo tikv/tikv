@@ -360,6 +360,9 @@ fn test_server_apply_new_version_snapshot() {
 }
 
 fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+    // disable raft log gc.
+    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 60000;
+
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
@@ -376,6 +379,9 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     // check node 3 has k0.
     let engine3 = cluster.get_engine(3);
     util::must_get_equal(&engine3, b"k0", b"v0");
+
+    // guarantee node 1 is leader.
+    cluster.must_transfer_leader(r1, util::new_peer(1, 1));
 
     // isolate node 3 for region 1.
     cluster.add_filter(IsolateRegionStore::new(1, 3));
