@@ -4,6 +4,7 @@ cache:
   directories:
   - $HOME/.cache/rocksdb
   - $HOME/.cache/kcov
+  - $HOME/.cache/etcd
 
 matrix:
   include:
@@ -21,9 +22,15 @@ matrix:
 install:
   - export KCOV_DIR=$HOME/.cache/kcov
   - export ROCKSDB_DIR=$HOME/.cache/rocksdb
+  - export ETCD_DIR=$HOME/.cache/etcd
+  - export GOROOT=${ETCD_DIR}/go
+  - export GOPATH=${ETCD_DIR}/gopath
+  - export PATH=${GOROOT}/bin:${PATH}
   - make -f travis-build/Makefile prepare_${TRAVIS_OS_NAME}
 
 script:
+  - export ETCD_DIR=$HOME/.cache/etcd
+  - export PATH=${ETCD_DIR}:${PATH}
   - make -f travis-build/Makefile test_${TRAVIS_OS_NAME}
 
 after_success:

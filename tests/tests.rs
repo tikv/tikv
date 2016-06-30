@@ -31,6 +31,7 @@ extern crate mio;
 extern crate kvproto;
 extern crate tipb;
 extern crate time;
+extern crate rustc_serialize;
 
 use std::env;
 
@@ -43,6 +44,7 @@ mod raftstore;
 mod coprocessor;
 mod storage;
 mod util;
+mod pd;
 
 #[test]
 fn _travis_setup() {
