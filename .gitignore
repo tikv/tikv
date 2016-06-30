@@ -22,3 +22,5 @@ out/
 .vscode/**
 
 target
+tmp
+bin

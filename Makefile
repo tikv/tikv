@@ -1,5 +1,8 @@
 ENABLE_FEATURES ?= dev
 
+DEPS_PATH = $(CURDIR)/tmp
+BIN_PATH = $(CURDIR)/bin
+
 .PHONY: all
 
 all: format build test
@@ -26,5 +29,38 @@ format:
 	@cargo fmt -- --write-mode diff | grep "Diff at line" > /dev/null && cargo fmt -- --write-mode overwrite | grep -v "found TODO" || exit 0
 	@rustfmt --write-mode diff tests/tests.rs benches/benches.rs | grep "Diff at line" > /dev/null && rustfmt --write-mode overwrite tests/tests.rs benches/benches.rs | grep -v "found TODO" || exit 0
 
+rocksdb: 
+	DEPS_PATH=$(DEPS_PATH) ./scripts/build_rocksdb.sh
+
+$(BIN_PATH)/etcd: 
+	@DEPS_PATH=$(DEPS_PATH) BIN_PATH=$(BIN_PATH) ./scripts/build_etcd.sh
+
+etcd: $(BIN_PATH)/etcd
+
+$(BIN_PATH)/pd-server: 
+	@DEPS_PATH=$(DEPS_PATH) BIN_PATH=$(BIN_PATH) ./scripts/build_pd.sh
+
+pd: $(BIN_PATH)/pd-server
+
+$(BIN_PATH)/tidb-server: 
+	@DEPS_PATH=$(DEPS_PATH) BIN_PATH=$(BIN_PATH) ./scripts/build_tidb.sh
+
+tidb: $(BIN_PATH)/tidb-server
+
+deps: rocksdb etcd pd tidb
+
+install: deps release
+	@cp -f ./target/release/tikv-server $(BIN_PATH)
+
+clean_etcd:
+	@rm -f $(BIN_PATH)/etcd
+
+clean_pd:
+	@rm -f $(BIN_PATH)/pd-server
+
+clean_tidb:
+	@rm -f $(BIN_PATH)/tidb-server
+
 clean:
 	cargo clean
+	@rm -rf $(DEPS_PATH) $(BIN_PATH)
