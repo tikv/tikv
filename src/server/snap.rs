@@ -23,14 +23,12 @@ use std::time::Instant;
 use threadpool::ThreadPool;
 use mio::Token;
 use bytes::{Buf, ByteBuf};
-use protobuf::Message;
 
 use super::{Result, ConnData, SendCh, Msg};
 use super::transport::RaftStoreRouter;
 use raftstore::store::{SnapFile, SnapManager, SnapKey, SnapEntry};
 use util::worker::Runnable;
 use util::codec::rpc;
-use util::codec::number::NumberEncoder;
 use util::HandyRwLock;
 
 use kvproto::raft_serverpb::RaftMessage;
@@ -143,7 +141,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 let mgr = self.snap_mgr.clone();
                 match SnapKey::from_snap(meta.get_message().get_snapshot())
                     .and_then(|key| mgr.rl().get_snap_file(&key, false).map(|r| (r, key))) {
-                    Ok((mut f, k)) => {
+                    Ok((f, k)) => {
                         if f.exists() {
                             info!("file {} already exists, skip receiving.",
                                   f.path().display());
@@ -155,16 +153,6 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         }
                         debug!("begin to receive snap {:?}", meta);
                         mgr.wl().register(k.clone(), SnapEntry::Receiving);
-                        let mut res = f.encode_u64(meta.compute_size() as u64);
-                        if res.is_ok() {
-                            res = meta.write_to_writer(&mut f).map_err(From::from);
-                        }
-                        if let Err(e) = res {
-                            error!("failed to write meta: {:?}", e);
-                            self.close(token);
-                            mgr.wl().deregister(&k, &SnapEntry::Receiving);
-                            return;
-                        }
                         self.files.insert(token, (f, meta));
                     }
                     Err(e) => error!("failed to create snap file for {:?}: {:?}", token, e),

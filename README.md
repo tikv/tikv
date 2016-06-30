@@ -37,6 +37,10 @@ This figure represents tikv-server software stack.
 
 When a node starts, the metadata of node, store and region are registered into PD. The status of each Region and Store is reported to PD regularly.
 
+### Usage
+
+See [Usage](./USAGE.md) for how to install and run TiKV.
+
 ### Contributing
 
 See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.

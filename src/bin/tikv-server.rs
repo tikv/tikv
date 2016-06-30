@@ -74,7 +74,7 @@ fn get_string_value<F>(short: &str,
 
     s.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("malformed or missing {}, use default", long);
+                info!("malformed or missing {}, use default {:?}", long, default);
                 default
             })
         })
@@ -98,7 +98,7 @@ fn get_integer_value<F>(short: &str,
 
     i.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("malformed or missing {}, use default", long);
+                info!("malformed or missing {}, use default {:?}", long, default);
                 default
             })
         })
@@ -306,6 +306,21 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           Some(8 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
 
+    cfg.store_cfg.pd_heartbeat_tick_interval =
+        get_integer_value("pd-heartbeat-tick-interval",
+                          "raftstore.pd-heartbeat-tick-interval",
+                          matches,
+                          config,
+                          Some(5000),
+                          |v| v.as_integer()) as u64;
+
+    cfg.store_cfg.pd_store_heartbeat_tick_interval =
+        get_integer_value("pd-store-heartbeat-tick-interval",
+                          "raftstore.pd-store-heartbeat-tick-interval",
+                          matches,
+                          config,
+                          Some(10000),
+                          |v| v.as_integer()) as u64;
 
     cfg
 }
@@ -403,6 +418,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
 
     let (store, raft_router, node_id, snap_mgr) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
+    info!("tikv server config: {:?}", cfg);
     initial_metric(matches, config, Some(node_id));
     let mut svr = Server::new(&mut event_loop,
                               listener,
@@ -467,6 +483,15 @@ fn main() {
                 "etcd endpoints",
                 "127.0.0.1:2379,127.0.0.1:3379");
     opts.optopt("", "etcd-pd", "pd root path in etcd", "/pd");
+    opts.optopt("",
+                "pd-heartbeat-tick-interval",
+                "set region heartbeat tick interval",
+                "default 5000 (ms)");
+    opts.optopt("",
+                "pd-store-heartbeat-tick-interval",
+                "set region store heartbeat tick interval",
+                "default 5000 (ms)");
+
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);

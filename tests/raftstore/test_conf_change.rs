@@ -17,6 +17,7 @@ use std::thread;
 
 use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::RaftResponseHeader;
+use kvproto::raft_serverpb::RaftLocalState;
 use kvproto::metapb;
 use tikv::pd::PdClient;
 
@@ -359,7 +360,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         .clone();
 
     let engine1 = cluster.get_engine(1);
-    let index = engine1.get_u64(&keys::raft_applied_index_key(r1)).unwrap().unwrap();
+    let state = engine1.get_msg::<RaftLocalState>(&keys::raft_state_key(r1)).unwrap().unwrap();
+    let index = state.get_applied_index();
     let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
     compact_log.mut_header().set_peer(new_peer(1, 1));
     // ignore error, we just want to send this command to peer (1, 1),
@@ -416,8 +418,13 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_remove_peer(r1, new_peer(2, 2));
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
-    // refresh region info, maybe no need
     cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(6), b"k2", b"v2");
+    let region_detail = cluster.region_detail(r1, 1);
+    for peer in region_detail.get_region().get_peers() {
+        assert!(peer.get_id() < 4);
+    }
+    assert!(region_detail.get_leader().get_id() < 4);
 
     // when network recovers, 1 will send request vote to [2,3]
     cluster.clear_filters();

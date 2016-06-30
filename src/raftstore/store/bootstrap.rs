@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use rocksdb::{DB, Writable};
-use kvproto::raft_serverpb::StoreIdent;
+use kvproto::raft_serverpb::{StoreIdent, RegionLocalState};
 use kvproto::metapb;
 use raftstore::Result;
 use super::keys;
@@ -47,13 +47,15 @@ pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()
 
 // Write first region meta.
 pub fn write_region(engine: &DB, region: &metapb::Region) -> Result<()> {
-    try!(engine.put_msg(&keys::region_info_key(region.get_id()), region));
+    let mut state = RegionLocalState::new();
+    state.set_region(region.clone());
+    try!(engine.put_msg(&keys::region_state_key(region.get_id()), &state));
     Ok(())
 }
 
 // Clear first region meta.
 pub fn clear_region(engine: &DB, region_id: u64) -> Result<()> {
-    try!(engine.delete(&keys::region_info_key(region_id)));
+    try!(engine.delete(&keys::region_state_key(region_id)));
     Ok(())
 }
 
