@@ -1,8 +1,8 @@
 #!/bin/bash
 
 echo "building rocksdb..."
-cd $DEPS_PATH
 mkdir -p ${DEPS_PATH}
+cd $DEPS_PATH
 
 case "$OSTYPE" in 
     linux*) 
