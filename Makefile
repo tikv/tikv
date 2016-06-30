@@ -7,6 +7,32 @@ all: format build test
 build:
 	cargo build --features ${ENABLE_FEATURES}
 
+local-build: deps-lib build
+	@echo "dependencies build done"
+
+deps-lib: deps-dir
+	export LD_LIBRARY_PATH="./deps/libs:$LD_LIBRARY_PATH"
+	export LIBRARY_PATH="$LD_LIBRARY_PATH"
+
+deps-build: deps-dir dep-gflags dep-rocksdb
+
+deps-dir:
+	mkdir -p deps/libs
+
+dep-gflags: deps-dir
+	wget https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -O deps/gflags.tar.gz
+	tar -zxf deps/gflags.tar.gz -C deps
+	cd deps/gflags-2.1.2 && cmake . && make && cp lib/* ../libs
+
+dep-rocksdb: deps-dir
+	wget https://github.com/facebook/rocksdb/archive/rocksdb-4.3.1.tar.gz -O deps/rocksdb-4.3.1.tar.gz
+	tar -xzf deps/rocksdb-4.3.1.tar.gz -C deps
+	cd deps/rocksdb-rocksdb-4.3.1 && make shared_lib
+	cp deps/rocksdb-rocksdb-4.3.1/librocksdb.so* deps/libs
+
+clean-deps:
+	rm -rf deps
+
 run:
 	cargo run --features ${ENABLE_FEATURES}
 
