@@ -143,9 +143,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
             if local_state.get_state() == PeerState::Tombstone {
-                info!("region {:?} is tombstone in store {}",
-                      local_state.get_region(),
-                      self.store_id());
+                debug!("region {:?} is tombstone in store {}",
+                       local_state.get_region(),
+                       self.store_id());
                 return Ok(true);
             }
             let region = local_state.get_region();
@@ -268,7 +268,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                              msg.get_to_peer().get_id()) {
                 Ok(peer) => peer,
                 Err(e) => {
-                    error!("from {:?} replicates to {:?} for {} failed {:?}",
+                    error!("peer replication from {:?} to {:?} for region id {} failed {:?}",
                            msg.get_from_peer(),
                            msg.get_to_peer(),
                            region_id,
