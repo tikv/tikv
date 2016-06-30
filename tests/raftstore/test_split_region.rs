@@ -358,3 +358,75 @@ fn test_server_apply_new_version_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
     test_apply_new_version_snapshot(&mut cluster);
 }
+
+fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_rule();
+
+    let r1 = cluster.run_conf_change();
+
+    // add peer (2,2) to region 1.
+    pd_client.must_add_peer(r1, util::new_peer(2, 2));
+
+    // add peer (3,3) to region 1.
+    pd_client.must_add_peer(r1, util::new_peer(3, 3));
+
+    cluster.must_put(b"k0", b"v0");
+    // check node 3 has k0.
+    let engine3 = cluster.get_engine(3);
+    util::must_get_equal(&engine3, b"k0", b"v0");
+
+    // isolate node 3 for region 1.
+    cluster.add_filter(IsolateRegionStore::new(1, 3));
+
+    let region = pd_client.get_region(b"").unwrap();
+
+    // split (-inf, +inf) -> (-inf, k2), [k2, +inf]
+    cluster.must_split(&region, b"k2");
+
+    cluster.must_put(b"k2", b"v2");
+
+    let region2 = pd_client.get_region(b"k2").unwrap();
+
+    // remove node 3 peer in region 2.
+    let peer3 = util::find_peer(&region2, 3).unwrap();
+    pd_client.must_remove_peer(region2.get_id(), peer3.clone());
+
+    // clear isolation so node 3 can split region 1.
+    // now node 3 has a stale peer for region 2.
+    cluster.clear_filters();
+    cluster.must_put(b"k1", b"v1");
+
+    // check node 3 has k1
+    util::must_get_equal(&engine3, b"k1", b"v1");
+
+    // split [k2, +inf) -> [k2, k3), [k3, +inf]
+    cluster.must_split(&region2, b"k3");
+    let region3 = pd_client.get_region(b"k3").unwrap();
+    // region 3 can't have node 3.
+    assert_eq!(region3.get_peers().len(), 2);
+    assert!(util::find_peer(&region3, 3).is_none());
+
+    let new_peer_id = pd_client.alloc_id().unwrap();
+    // add peer (3, new_peer_id) to region 3
+    pd_client.must_add_peer(region3.get_id(), util::new_peer(3, new_peer_id));
+
+    cluster.must_put(b"k3", b"v3");
+    // of course, node 3 can't get k3.
+    // this is a bug now, after stale peer gc is introduced,
+    // node 3 must get k3, then we must update the test.
+    util::must_get_none(&engine3, b"k3");
+}
+
+#[test]
+fn test_node_split_with_stale_peer() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_split_with_stale_peer(&mut cluster);
+}
+
+#[test]
+fn test_server_split_with_stale_peer() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_split_with_stale_peer(&mut cluster);
+}
