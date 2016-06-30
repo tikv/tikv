@@ -213,7 +213,7 @@ pub fn cut_row<'a>(mut data: &'a [u8], cols: &HashSet<i64>) -> Result<HashMap<i6
     if data.is_empty() || data.len() == 1 && data[0] == datum::NIL_FLAG {
         return Ok(res);
     }
-    while !data.is_empty() {
+    while !data.is_empty() && res.len() < cols.len() {
         let id = try!(data.decode_datum()).i64();
         let (val, rem) = try!(datum::split_datum(data, false));
         if cols.contains(&id) {
