@@ -754,9 +754,7 @@ impl Peer {
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
-
         let cb = self.find_cb(uuid, term, &cmd);
-
         let (mut resp, exec_result) = self.apply_raft_cmd(index, &cmd).unwrap_or_else(|e| {
             error!("apply raft command err {:?}", e);
             (cmd_resp::new_error(e), None)
@@ -820,9 +818,8 @@ impl Peer {
         ctx.local_state.set_applied_index(index);
         ctx.save(self.region_id).expect("save state must not fail");
 
-        let mut storage = self.storage.wl();
         // Commit write and change storage fields atomically.
-        // Lock here to guarantee generating snapshot sees a consistent view data.
+        let mut storage = self.storage.wl();
         match self.engine.write_without_wal(ctx.invoke_ctx.wb) {
             Ok(_) => {
                 storage.local_state = ctx.invoke_ctx.local_state;
