@@ -38,4 +38,5 @@ for l in sys.stdin:
     grep $case $LOG_FILE | cut -d ' ' -f 2-
     echo
 done
+pkill -9 etcd
 exit $status
