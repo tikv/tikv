@@ -397,7 +397,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                           config,
                                           None,
                                           |v| v.as_str().map(|s| s.to_owned()));
-    let etcd_pd_root = get_string_value("etcd-pd",
+    let etcd_pd_root = get_string_value("pd-root",
                                         "etcd.pd-root",
                                         matches,
                                         config,
@@ -482,7 +482,7 @@ fn main() {
                 "etcd",
                 "etcd endpoints",
                 "127.0.0.1:2379,127.0.0.1:3379");
-    opts.optopt("", "etcd-pd", "pd root path in etcd", "/pd");
+    opts.optopt("", "pd-root", "pd root path in etcd", "/pd");
     opts.optopt("",
                 "pd-heartbeat-tick-interval",
                 "set region heartbeat tick interval",
