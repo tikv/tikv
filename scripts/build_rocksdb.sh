@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 echo "building rocksdb..."
 mkdir -p ${DEPS_PATH}
 cd $DEPS_PATH

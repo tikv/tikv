@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 echo "building pd..."
 mkdir -p ${DEPS_PATH}
 mkdir -p ${BIN_PATH}
