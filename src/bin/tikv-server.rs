@@ -338,13 +338,14 @@ fn build_raftkv(matches: &Matches,
     db_path.push("db");
     let engine = Arc::new(DB::open(&opts, db_path.to_str().unwrap()).unwrap());
 
+    let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+    let mut node = Node::new(&mut event_loop, cfg, pd_client);
+
     let mut snap_path = path.clone();
     snap_path.push("snap");
     let snap_path = snap_path.to_str().unwrap().to_owned();
-    let snap_mgr = store::new_snap_mgr(snap_path);
+    let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
 
-    let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
-    let mut node = Node::new(&mut event_loop, cfg, pd_client);
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
     let raft_router = node.raft_store_router();
     let node_id = node.id();
@@ -377,7 +378,7 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
 fn run_local_server(listener: TcpListener, store: Storage, config: &Config) {
     let mut event_loop = create_event_loop(config).unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
-    let snap_mgr = store::new_snap_mgr(TEMP_DIR);
+    let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
     let mut svr = Server::new(&mut event_loop,
                               listener,
                               store,

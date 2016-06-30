@@ -65,6 +65,8 @@ pub enum Msg {
         to_peer_id: u64,
     },
 
+    // For snapshot stats.
+    SnapshotStats,
     SnapApplyRes {
         region_id: u64,
         is_success: bool,
@@ -95,6 +97,7 @@ impl fmt::Debug for Msg {
                        to_peer_id,
                        region_id)
             }
+            Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
             Msg::SnapApplyRes { region_id, is_success } => {
                 write!(fmt,
                        "SnapApplyRes [region_id: {}, is_success: {}]",

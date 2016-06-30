@@ -108,6 +108,7 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
         let mut cfg = cfg;
+
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = TempDir::new("test_cluster").unwrap();
             (p.path().to_str().unwrap().to_owned(), Some(p))
@@ -115,7 +116,6 @@ impl Simulator for ServerCluster {
             let p = self.snap_paths.get(&node_id).unwrap().path().to_str().unwrap();
             (p.to_owned(), None)
         };
-        let snap_mgr = store::new_snap_mgr(tmp_str);
 
         // Now we cache the store address, so here we should re-use last
         // listening address for the same store. Maybe we should enable
@@ -147,9 +147,10 @@ impl Simulator for ServerCluster {
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
         let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
 
-        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
         let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
+        let snap_mgr = store::new_snap_mgr(tmp_str, Some(node.get_sendch()));
 
         node.start(store_event_loop,
                    engine.clone(),
