@@ -15,10 +15,13 @@
 set -o pipefail
 
 # start etcd
-etcd &
-sleep 3s
+which etcd
+if [ $? -eq 0 ]; then
+    etcd &
+    sleep 3s
+    export ETCD_ENDPOINTS=127.0.0.1:2379
+fi
 
-export ETCD_ENDPOINTS=127.0.0.1:2379
 export ENABLE_FEATURES=default
 export LOG_FILE=tests.log
 make test 2>&1 | tee tests.out
