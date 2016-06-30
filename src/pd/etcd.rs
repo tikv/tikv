@@ -228,7 +228,7 @@ impl<H: Transport> Handler<H> for EtcdHandler {
 }
 
 #[derive(Debug)]
-pub struct EtcdClient {
+pub struct EtcdPdClient {
     root_path: String,
     endpoints: Vec<String>,
     next_index: usize,
@@ -236,10 +236,10 @@ pub struct EtcdClient {
     client: Option<Client<EtcdHandler>>,
 }
 
-impl EtcdClient {
+impl EtcdPdClient {
     // endpoints is etcd endpoints, format is 127.0.0.1:2379,127.0.0.1:3379.
     // pd_root is pd root in etcd, like /pd.
-    pub fn new(endpoints: &str, pd_root: &str, cluster_id: u64) -> Result<EtcdClient> {
+    pub fn new(endpoints: &str, pd_root: &str, cluster_id: u64) -> Result<EtcdPdClient> {
         // only 1 thread is enough for pd now.
         // TODO: detect HTTP or HTTPs with SSL config.
         let endpoints: Vec<_> = endpoints.split(',').map(|v| format!("http://{}", v)).collect();
@@ -250,7 +250,7 @@ impl EtcdClient {
             .keep_alive(true)
             .build());
 
-        Ok(EtcdClient {
+        Ok(EtcdPdClient {
             root_path: format!("{}/{}", pd_root, cluster_id),
             endpoints: endpoints,
             next_index: 0,
@@ -309,7 +309,7 @@ impl EtcdClient {
     }
 }
 
-impl Drop for EtcdClient {
+impl Drop for EtcdPdClient {
     fn drop(&mut self) {
         if let Some(client) = self.client.take() {
             client.close();

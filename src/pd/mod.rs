@@ -19,10 +19,10 @@ mod protocol;
 pub mod etcd;
 pub use self::errors::{Result, Error};
 pub use self::client::RpcClient;
-use self::etcd::EtcdClient;
+use self::etcd::EtcdPdClient;
 
 pub fn new_rpc_client(endpoints: &str, pd_root: &str, cluster_id: u64) -> Result<RpcClient> {
-    let c = box_try!(EtcdClient::new(endpoints, pd_root, cluster_id));
+    let c = box_try!(EtcdPdClient::new(endpoints, pd_root, cluster_id));
     let client = try!(RpcClient::new(c, cluster_id));
     Ok(client)
 }

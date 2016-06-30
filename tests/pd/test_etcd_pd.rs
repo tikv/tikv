@@ -31,7 +31,7 @@ use tikv::util::codec::rpc;
 use tikv::pd::RpcClient;
 use tikv::pd::etcd::*;
 
-fn put_leader_addr(client: &mut EtcdClient, addr: &str) {
+fn put_leader_addr(client: &mut EtcdPdClient, addr: &str) {
     let mut leader = Leader::new();
     leader.set_addr(addr.to_owned());
 
@@ -53,14 +53,14 @@ fn test_get_leader() {
         Ok(v) => v,
     };
 
-    let mut client = EtcdClient::new(&endpoints, "/pd_test_get_leader", 0).unwrap();
+    let mut client = EtcdPdClient::new(&endpoints, "/pd_test_get_leader", 0).unwrap();
 
     put_leader_addr(&mut client, "127.0.0.1:1234");
     let addr = client.get_leader_addr().unwrap();
     assert_eq!(&addr, "127.0.0.1:1234");
 }
 
-fn start_pd_server(client: &mut EtcdClient,
+fn start_pd_server(client: &mut EtcdPdClient,
                    quit: Arc<AtomicBool>)
                    -> (thread::JoinHandle<()>, String) {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -99,7 +99,7 @@ fn test_rpc_client() {
 
     let quit = Arc::new(AtomicBool::new(false));
 
-    let mut etcd_client = EtcdClient::new(&endpoints, "/pd_test_rpc_client", 0).unwrap();
+    let mut etcd_client = EtcdPdClient::new(&endpoints, "/pd_test_rpc_client", 0).unwrap();
     let (h, addr) = start_pd_server(&mut etcd_client, quit.clone());
 
     let client = RpcClient::new(etcd_client, 0).unwrap();

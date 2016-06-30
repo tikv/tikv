@@ -23,7 +23,7 @@ use kvproto::pdpb::{Request, Response};
 use kvproto::msgpb::{Message, MessageType};
 
 use super::Result;
-use super::etcd::EtcdClient;
+use super::etcd::EtcdPdClient;
 
 const MAX_PD_SEND_RETRY_COUNT: usize = 100;
 const SOCKET_READ_TIMEOUT: u64 = 3;
@@ -31,7 +31,7 @@ const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
 #[derive(Debug)]
 struct RpcClientCore {
-    client: EtcdClient,
+    client: EtcdPdClient,
     stream: Option<TcpStream>,
 }
 
@@ -56,7 +56,7 @@ fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u
 }
 
 impl RpcClientCore {
-    fn new(client: EtcdClient) -> RpcClientCore {
+    fn new(client: EtcdPdClient) -> RpcClientCore {
         RpcClientCore {
             client: client,
             stream: None,
@@ -119,7 +119,7 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new(client: EtcdClient, cluster_id: u64) -> Result<RpcClient> {
+    pub fn new(client: EtcdPdClient, cluster_id: u64) -> Result<RpcClient> {
         Ok(RpcClient {
             msg_id: AtomicUsize::new(0),
             core: Mutex::new(RpcClientCore::new(client)),
