@@ -143,12 +143,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
             if local_state.get_state() == PeerState::Tombstone {
+                info!("region {:?} is tombstone in store {}",
+                      local_state.get_region(),
+                      self.store_id());
                 return Ok(true);
             }
             let region = local_state.get_region();
             let peer = try!(Peer::create(self, region));
 
             if local_state.get_state() == PeerState::Applying {
+                info!("region {:?} is applying in store {}",
+                      local_state.get_region(),
+                      self.store_id());
                 peer.storage.wl().snap_state = SnapState::Applying;
                 box_try!(self.snap_worker.schedule(SnapTask::Apply { region_id: region_id }));
             }
@@ -256,10 +262,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // means current peer is stale, then we should remove current peer
 
         if !self.region_peers.contains_key(&region_id) {
-            let peer = try!(Peer::replicate(self,
-                                            region_id,
-                                            msg.get_region_epoch(),
-                                            msg.get_to_peer().get_id()));
+            let peer = match Peer::replicate(self,
+                                             region_id,
+                                             msg.get_region_epoch(),
+                                             msg.get_to_peer().get_id()) {
+                Ok(peer) => peer,
+                Err(e) => {
+                    error!("from {:?} replicates to {:?} for {} failed {:?}",
+                           msg.get_from_peer(),
+                           msg.get_to_peer(),
+                           region_id,
+                           e);
+                    return Err(e);
+                }
+            };
             // We don't have start_key of the region, so there is no need to insert into
             // region_ranges
             self.region_peers.insert(region_id, peer);
