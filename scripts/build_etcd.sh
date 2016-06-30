@@ -1,6 +1,9 @@
 #!/bin/bash
 
 echo "building etcd..."
+mkdir -p ${DEPS_PATH}
+mkdir -p ${BIN_PATH}
+
 rm -rf ${DEPS_PATH}/src/github.com/coreos/etcd
 git clone --depth=1 https://github.com/coreos/etcd.git ${DEPS_PATH}/src/github.com/coreos/etcd
 

@@ -1,6 +1,9 @@
 #!/bin/bash
 
 echo "building pd..."
+mkdir -p ${DEPS_PATH}
+mkdir -p ${BIN_PATH}
+
 rm -rf ${DEPS_PATH}/src/github.com/pingcap/pd
 git clone --depth=1 https://github.com/pingcap/pd.git ${DEPS_PATH}/src/github.com/pingcap/pd
 
