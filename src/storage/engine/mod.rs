@@ -162,7 +162,7 @@ pub enum Dsn<'a> {
 }
 
 // Now we only support RocksDB.
-pub fn new_engine(dsn: Dsn, cfs: &'static [CfName]) -> Result<Box<Engine>> {
+pub fn new_engine(dsn: Dsn, cfs: &[CfName]) -> Result<Box<Engine>> {
     match dsn {
         Dsn::RocksDBPath(path) => {
             EngineRocksdb::new(path, cfs).map(|engine| -> Box<Engine> { Box::new(engine) })
