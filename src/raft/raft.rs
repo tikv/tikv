@@ -493,9 +493,9 @@ impl<T: Storage> Raft<T> {
             self.vote = INVALID_ID;
         }
         self.leader_id = INVALID_ID;
+        self.reset_randomized_election_timeout();
         self.election_elapsed = 0;
         self.heartbeat_elapsed = 0;
-        self.reset_randomized_election_timeout();
 
         self.abort_leader_transfer();
 
@@ -1356,8 +1356,16 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn reset_randomized_election_timeout(&mut self) {
-        self.randomized_election_timeout = self.election_timeout +
-                                           rand::thread_rng().gen_range(0, self.election_timeout)
+        let prev_timeout = self.randomized_election_timeout;
+        let timeout = self.election_timeout +
+                      rand::thread_rng().gen_range(0, self.election_timeout);
+        debug!("{} {} reset election timeout {} -> {} at {}",
+               self.tag,
+               self.id,
+               prev_timeout,
+               timeout,
+               self.election_elapsed);
+        self.randomized_election_timeout = timeout;
     }
 
     // check_quorum_active returns true if the quorum is active from

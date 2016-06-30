@@ -130,22 +130,35 @@ impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
-        let tmp = TempDir::new("test_cluster").unwrap();
-        let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap());
-
         let mut event_loop = create_event_loop(&cfg.store_cfg).unwrap();
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let trans = Arc::new(RwLock::new(simulate_trans));
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
 
+        let (snap_mgr, tmp) = if node_id == 0 ||
+                                 !self.trans.rl().snap_paths.contains_key(&node_id) {
+            let tmp = TempDir::new("test_cluster").unwrap();
+            let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap());
+            (snap_mgr, Some(tmp))
+        } else {
+            let trans = self.trans.rl();
+            let &(ref snap_mgr, _) = trans.snap_paths.get(&node_id).unwrap();
+            (snap_mgr.clone(), None)
+        };
+
         node.start(event_loop, engine, trans.clone(), snap_mgr.clone()).unwrap();
         assert!(node_id == 0 || node_id == node.id());
+        debug!("node_id: {} tmp: {:?}",
+               node_id,
+               tmp.as_ref().map(|p| p.path().to_str().unwrap().to_owned()));
+        if let Some(tmp) = tmp {
+            self.trans.wl().snap_paths.insert(node.id(), (snap_mgr, tmp));
+        }
 
         let node_id = node.id();
         self.trans.wl().routers.insert(node_id, node.raft_store_router());
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, trans);
-        self.trans.wl().snap_paths.insert(node_id, (snap_mgr, tmp));
 
         node_id
     }
@@ -157,7 +170,6 @@ impl Simulator for NodeCluster {
     fn stop_node(&mut self, node_id: u64) {
         let node = self.nodes.remove(&node_id).unwrap();
         self.trans.wl().routers.remove(&node_id).unwrap();
-        self.trans.wl().snap_paths.remove(&node_id).unwrap();
 
         drop(node);
     }

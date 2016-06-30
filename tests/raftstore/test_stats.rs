@@ -139,7 +139,7 @@ fn must_detect_snap(pd_client: &Arc<TestPdClient>) {
         sleep_ms(10);
 
         let stats = pd_client.get_store_stats(1).unwrap();
-        if stats.get_snap_sending_count() > 0 || stats.get_snap_receiving_count() > 0 {
+        if stats.get_sending_snap_count() > 0 || stats.get_receiving_snap_count() > 0 {
             return;
         }
     }
@@ -152,7 +152,7 @@ fn must_not_detect_snap(pd_client: &Arc<TestPdClient>) {
         sleep_ms(10);
 
         let stats = pd_client.get_store_stats(1).unwrap();
-        if stats.get_snap_sending_count() == 0 && stats.get_snap_receiving_count() == 0 {
+        if stats.get_sending_snap_count() == 0 && stats.get_receiving_snap_count() == 0 {
             return;
         }
     }

@@ -190,8 +190,12 @@ impl Storage {
     }
 
     pub fn stop(&mut self) -> Result<()> {
+        if self.sched.is_none() {
+            return Ok(());
+        }
         self.sched.take();
         info!("storage {:?} closed.", self.engine);
+        self.engine.close();
         Ok(())
     }
 

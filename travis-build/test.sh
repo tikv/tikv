@@ -14,6 +14,18 @@
 
 set -o pipefail
 
+trap 'kill $(jobs -p) &> /dev/null || true' EXIT
+    
+# start etcd
+which etcd
+if [ $? -eq 0 ]; then
+    etcd &
+    sleep 3s
+    export ETCD_ENDPOINTS=127.0.0.1:2379
+fi
+
+exit 0
+
 export ENABLE_FEATURES=default
 export LOG_FILE=tests.log
 make test 2>&1 | tee tests.out
@@ -33,4 +45,5 @@ for l in sys.stdin:
     grep $case $LOG_FILE | cut -d ' ' -f 2-
     echo
 done
+
 exit $status

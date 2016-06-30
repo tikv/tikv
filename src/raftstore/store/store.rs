@@ -20,13 +20,13 @@ use std::time::Duration;
 use std::{cmp, u64};
 
 use rocksdb::DB;
-use mio::{self, EventLoop, EventLoopBuilder};
+use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use uuid::Uuid;
 
 use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData, RaftTruncatedState,
                              RegionLocalState, PeerState};
-use kvproto::raftpb::ConfChangeType;
+use kvproto::raftpb::{ConfChangeType, Snapshot};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer};
 use pd::PdClient;
@@ -36,7 +36,7 @@ use protobuf::Message;
 use raft::SnapshotStatus;
 use raftstore::{Result, Error};
 use kvproto::metapb;
-use util::worker::Worker;
+use util::worker::{Worker, Scheduler};
 use util::get_disk_stat;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
@@ -45,7 +45,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Peekable, Iterable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::{SnapState, ApplySnapResult};
+use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -72,9 +72,6 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
 
-    /// A flag indicates whether store has been shutdown.
-    stopped: Arc<RwLock<bool>>,
-
     trans: Arc<RwLock<T>>,
     pd_client: Arc<C>,
 
@@ -96,7 +93,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
-    pub fn new(event_loop: &mut EventLoop<Self>,
+    pub fn new(sender: Sender<Msg>,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
@@ -107,7 +104,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
-        let sendch = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(sender);
 
         let peer_cache = HashMap::new();
 
@@ -123,7 +120,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
-            stopped: Arc::new(RwLock::new(false)),
             trans: trans,
             pd_client: pd_client,
             peer_cache: Arc::new(RwLock::new(peer_cache)),
@@ -146,12 +142,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
-            // TODO: handle apply
-            if local_state.get_state() != PeerState::Normal {
+            if local_state.get_state() == PeerState::Tombstone {
                 return Ok(true);
             }
             let region = local_state.get_region();
             let peer = try!(Peer::create(self, region));
+
+            if local_state.get_state() == PeerState::Applying {
+                peer.storage.wl().snap_state = SnapState::Applying;
+                box_try!(self.snap_worker.schedule(SnapTask::Apply { region_id: region_id }));
+            }
 
             self.region_ranges.insert(enc_end_key(region), region_id);
             // No need to check duplicated here, because we use region id as the key
@@ -166,7 +166,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(self.prepare());
 
-        try!(self.snap_mgr.wl().try_recover());
+        try!(self.snap_mgr.wl().init());
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
@@ -180,7 +180,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        box_try!(self.snap_worker.start(SnapRunner::new(self.snap_mgr.clone())));
+        let runner = SnapRunner::new(self.engine.clone(),
+                                     self.get_sendch(),
+                                     self.snap_mgr.clone());
+        box_try!(self.snap_worker.start(runner));
 
         box_try!(self.compact_worker.start(CompactRunner));
 
@@ -198,6 +201,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     #[inline]
     pub fn get_snap_mgr(&self) -> SnapManager {
         self.snap_mgr.clone()
+    }
+
+    pub fn snap_scheduler(&self) -> Scheduler<SnapTask> {
+        self.snap_worker.scheduler()
     }
 
     pub fn engine(&self) -> Arc<DB> {
@@ -225,20 +232,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (region_id, peer) in &mut self.region_peers {
-            peer.raft_group.tick();
-            self.pending_raft_groups.insert(*region_id);
-            // ALERT!!! patern matching won't release lock here.
-            if peer.is_leader() && SnapState::Pending == peer.storage.rl().snap_state {
-                debug!("handling snapshot for {}", region_id);
-                let task = SnapTask::new(peer.storage.clone());
-                debug!("task generated");
-                peer.storage.wl().snap_state = SnapState::Generating;
-                if let Err(e) = self.snap_worker.schedule(task) {
-                    error!("failed to schedule snap task {}", e);
-                    peer.storage.wl().snap_state = SnapState::Failed;
-                }
+        for (&region_id, peer) in &mut self.region_peers {
+            if !peer.storage.rl().is_applying_snap() {
+                peer.raft_group.tick();
             }
+            self.pending_raft_groups.insert(region_id);
         }
 
         self.register_raft_base_tick(event_loop);
@@ -856,8 +854,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_region_count(self.region_peers.len() as u32);
 
         let snap_stats = self.snap_mgr.rl().stats();
-        stats.set_snap_sending_count(snap_stats.sending_count as u32);
-        stats.set_snap_receiving_count(snap_stats.receiving_count as u32);
+        stats.set_sending_snap_count(snap_stats.sending_count as u32);
+        stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
 
         metric_gauge!("raftstore.capacity", capacity);
         metric_gauge!("raftstore.available", available);
@@ -883,6 +881,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         snap_keys.sort();
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
+        let mut is_applying_snap = false;
         for (key, is_sending) in snap_keys {
             if self.snap_mgr.rl().has_registered(&key) {
                 continue;
@@ -894,11 +893,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         // region is deleted
                         compacted_idx = u64::MAX;
                         compacted_term = u64::MAX;
+                        is_applying_snap = false;
                     }
                     Some(peer) => {
                         let s = peer.storage.rl();
                         compacted_idx = s.truncated_index();
                         compacted_term = s.truncated_term();
+                        is_applying_snap = s.is_applying_snap();
                     }
                 };
             }
@@ -917,7 +918,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         }
                     }
                 }
-            } else if key.term <= compacted_term && key.idx <= compacted_idx {
+            } else if key.term <= compacted_term &&
+               (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap) {
                 debug!("snap file {} has been applied, delete.", key);
                 f.delete();
             }
@@ -951,7 +953,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             // The peer must exist in peer_cache.
-            let to_peer = self.peer_cache.rl().get(&to_peer_id).cloned().unwrap();
+            let to_peer = match self.peer_cache.rl().get(&to_peer_id).cloned() {
+                Some(peer) => peer,
+                None => {
+                    // If to_peer is removed immediately after sending snapshot, the command
+                    // may be applied before SnapshotStatus is reported. So here just ignore.
+                    warn!("peer {} not found, skip reporting snap {:?}",
+                          to_peer_id,
+                          status);
+                    return;
+                }
+            };
             info!("report snapshot status {:?} for {} {:?}",
                   to_peer,
                   region_id,
@@ -964,6 +976,39 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             peer.raft_group.report_unreachable(to_peer_id);
         }
+    }
+
+    fn on_snap_gen_res(&mut self, region_id: u64, snap: Option<Snapshot>) {
+        let peer = match self.region_peers.get_mut(&region_id) {
+            None => return,
+            Some(peer) => peer,
+        };
+        let mut storage = peer.storage.wl();
+        if storage.snap_state != SnapState::Generating {
+            // snapshot no need anymore.
+            return;
+        }
+        match snap {
+            Some(snap) => {
+                storage.snap_state = SnapState::Relax;
+                storage.snap = Some(snap);
+            }
+            None => {
+                storage.snap_state = SnapState::Failed;
+            }
+        }
+    }
+
+    fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool) {
+        let peer = self.region_peers.get_mut(&region_id).unwrap();
+        let mut storage = peer.storage.wl();
+        assert!(storage.snap_state == SnapState::Applying,
+                "snap state should not change during applying");
+        if !is_success {
+            // TODO: cleanup region and treat it as tombstone.
+            panic!("applying snapshot to {} failed", region_id);
+        }
+        storage.snap_state = SnapState::Relax;
     }
 }
 
@@ -1031,6 +1076,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
             }
+            Msg::SnapApplyRes { region_id, is_success } => {
+                self.on_snap_apply_res(region_id, is_success);
+            }
+            Msg::SnapGenRes { region_id, snap } => {
+                self.on_snap_gen_res(region_id, snap);
+            }
         }
         slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());
     }
@@ -1050,9 +1101,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            *self.stopped.wl() = true;
-            // TODO: do some close here.
-
             if let Err(e) = self.split_check_worker.stop() {
                 error!("failed to stop split scan thread: {:?}!!!", e);
             }

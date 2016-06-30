@@ -11,9 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{self, Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::fs::File;
-use std::{error, mem};
+use std::sync::{self, Arc};
+use std::cell::{RefCell, Ref, RefMut};
+use std::rc::Rc;
+use std::error;
 use std::time::Instant;
 
 use rocksdb::{DB, WriteBatch, Writable};
@@ -21,11 +22,13 @@ use protobuf::Message;
 
 use kvproto::metapb;
 use kvproto::raftpb::{Entry, Snapshot, ConfState};
-use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState};
+use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, PeerState};
 use util::HandyRwLock;
-use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
+use util::codec::bytes::BytesEncoder;
+use util::worker::Scheduler;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
+use super::worker::SnapTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
@@ -41,9 +44,8 @@ pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 #[derive(PartialEq, Debug)]
 pub enum SnapState {
     Relax,
-    Pending,
     Generating,
-    Snap(Snapshot),
+    Applying,
     Failed,
 }
 
@@ -54,7 +56,8 @@ pub struct PeerStorage {
     pub local_state: RaftLocalState,
 
     pub snap_state: SnapState,
-    snap_mgr: SnapManager,
+    pub snap: Option<Snapshot>,
+    snap_sched: Scheduler<SnapTask>,
     snap_tried_cnt: u8,
 }
 
@@ -104,7 +107,7 @@ impl InvokeContext {
 impl PeerStorage {
     pub fn new(engine: Arc<DB>,
                region: &metapb::Region,
-               snap_mgr: SnapManager)
+               snap_sched: Scheduler<SnapTask>)
                -> Result<PeerStorage> {
         let state = match try!(engine.get_msg(&keys::raft_state_key(region.get_id()))) {
             Some(s) => s,
@@ -126,8 +129,9 @@ impl PeerStorage {
             region: region.clone(),
             local_state: state,
             snap_state: SnapState::Relax,
+            snap: None,
+            snap_sched: snap_sched,
             snap_tried_cnt: 0,
-            snap_mgr: snap_mgr,
         })
     }
 
@@ -271,16 +275,14 @@ impl PeerStorage {
     }
 
     pub fn snapshot(&mut self) -> raft::Result<Snapshot> {
-        if let SnapState::Relax = self.snap_state {
+        if self.snap.is_some() {
+            return Ok(self.snap.take().unwrap());
+        }
+        if SnapState::Relax == self.snap_state {
             info!("requesting snapshot on {}...", self.get_region_id());
             self.snap_tried_cnt = 0;
-            self.snap_state = SnapState::Pending;
-        } else if let SnapState::Snap(_) = self.snap_state {
-            match mem::replace(&mut self.snap_state, SnapState::Relax) {
-                SnapState::Snap(s) => return Ok(s),
-                _ => unreachable!(),
-            }
-        } else if let SnapState::Failed = self.snap_state {
+            self.snap_state = SnapState::Generating;
+        } else if SnapState::Failed == self.snap_state {
             if self.snap_tried_cnt >= MAX_SNAP_TRY_CNT {
                 return Err(raft::Error::Store(box_err!("failed to get snapshot after {} times",
                                                        self.snap_tried_cnt)));
@@ -288,7 +290,14 @@ impl PeerStorage {
             self.snap_tried_cnt += 1;
             warn!("snapshot generating failed, retry {} time",
                   self.snap_tried_cnt);
-            self.snap_state = SnapState::Pending;
+            self.snap_state = SnapState::Generating;
+        } else {
+            return Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable));
+        }
+        let task = SnapTask::Gen { region_id: self.get_region_id() };
+        if let Err(e) = self.snap_sched.schedule(task) {
+            error!("failed to schedule task snap generation: {:?}", e);
+            self.snap_state = SnapState::Failed;
         }
         Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable))
     }
@@ -330,19 +339,6 @@ impl PeerStorage {
         info!("begin to apply snapshot for region {}",
               self.get_region_id());
 
-        let key = try!(SnapKey::from_snap(snap));
-        let snap_file = try!(self.snap_mgr.rl().get_snap_file(&key, false));
-        self.snap_mgr.wl().register(key.clone(), SnapEntry::Applying);
-        defer!({
-            self.snap_mgr.wl().deregister(&key, &SnapEntry::Applying);
-            snap_file.delete();
-        });
-        if !snap_file.exists() {
-            return Err(box_err!("missing snap file {}", snap_file.path().display()));
-        }
-        try!(snap_file.validate());
-        let mut reader = try!(File::open(snap_file.path()));
-
         let mut snap_data = RaftSnapshotData::new();
         try!(snap_data.merge_from_bytes(snap.get_data()));
 
@@ -365,21 +361,8 @@ impl PeerStorage {
             info!("clean old region takes {:?}", timer.elapsed());
         }
 
-        let timer = Instant::now();
-        // Write the snapshot into the region.
-        loop {
-            // TODO: avoid too many allocation
-            let key = try!(reader.decode_compact_bytes());
-            if key.is_empty() {
-                break;
-            }
-            let value = try!(reader.decode_compact_bytes());
-            try!(ctx.wb.put(&key, &value));
-        }
-        info!("apply new data takes {:?}", timer.elapsed());
-
         let mut region_state = RegionLocalState::new();
-        // TODO: state.set_state(PeerState::Apply);
+        region_state.set_state(PeerState::Applying);
         region_state.set_region(region.clone());
         try!(ctx.wb.put_msg(&keys::region_state_key(region_id), &region_state));
 
@@ -393,7 +376,7 @@ impl PeerStorage {
         ctx.local_state.mut_truncated_state().set_index(last_index);
         ctx.local_state.mut_truncated_state().set_term(snap.get_metadata().get_term());
 
-        info!("apply snapshot ok for region {}", self.get_region_id());
+        info!("apply snapshot meta ok for region {}", self.get_region_id());
 
         Ok(ApplySnapResult {
             prev_region: self.region.clone(),
@@ -427,6 +410,11 @@ impl PeerStorage {
 
     pub fn get_engine(&self) -> Arc<DB> {
         self.engine.clone()
+    }
+
+    #[inline]
+    pub fn is_applying_snap(&self) -> bool {
+        self.snap_state == SnapState::Applying
     }
 
     // For region snapshot, we return three key ranges in database for this region.
@@ -494,6 +482,11 @@ impl PeerStorage {
         self.local_state = ctx.local_state;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
+            self.snap_state = SnapState::Applying;
+            self.snap.take();
+            let task = SnapTask::Apply { region_id: region_id };
+            // TODO: gracefully remove region instead.
+            self.snap_sched.schedule(task).expect("snap apply job should not fail");
             self.region = res.region.clone();
             return Ok(Some(res));
         }
@@ -531,8 +524,26 @@ fn build_snap_file(f: &mut SnapFile,
     Ok(())
 }
 
-pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, key: SnapKey) -> raft::Result<Snapshot> {
-    debug!("begin to generate a snapshot for region {}", key.region_id);
+pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft::Result<Snapshot> {
+    debug!("begin to generate a snapshot for region {}", region_id);
+
+    let raft_state: RaftLocalState = match try!(snap.get_msg(&keys::raft_state_key(region_id))) {
+        None => return Err(box_err!("could not load raft state of region {}", region_id)),
+        Some(state) => state,
+    };
+
+    let idx = raft_state.get_applied_index();
+    let term = if idx == raft_state.get_truncated_state().get_index() {
+        raft_state.get_truncated_state().get_term()
+    } else {
+        match try!(snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))) {
+            None => return Err(box_err!("entry {} of {} not found.", idx, region_id)),
+            Some(entry) => entry.get_term(),
+        }
+    };
+
+    let key = SnapKey::new(region_id, term, idx);
+
     mgr.wl().register(key.clone(), SnapEntry::Generating);
     defer!(mgr.wl().deregister(&key, &SnapEntry::Generating));
 
@@ -543,6 +554,10 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, key: SnapKey) -> raft::R
                 Some(state) => Ok(state),
             }
         }));
+
+    if state.get_state() != PeerState::Normal {
+        return Err(box_err!("snap job for {} seems stale, skip.", region_id));
+    }
 
     let mut snapshot = Snapshot::new();
 
@@ -587,22 +602,22 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, key: SnapKey) -> raft::R
 
 #[derive(Clone)]
 pub struct RaftStorage {
-    store: Arc<RwLock<PeerStorage>>,
+    store: Rc<RefCell<PeerStorage>>,
 }
 
 impl RaftStorage {
     pub fn new(store: PeerStorage) -> RaftStorage {
-        RaftStorage { store: Arc::new(RwLock::new(store)) }
+        RaftStorage { store: Rc::new(RefCell::new(store)) }
     }
 
     #[inline]
-    pub fn rl(&self) -> RwLockReadGuard<PeerStorage> {
-        self.store.rl()
+    pub fn rl(&self) -> Ref<PeerStorage> {
+        self.store.borrow()
     }
 
     #[inline]
-    pub fn wl(&self) -> RwLockWriteGuard<PeerStorage> {
-        self.store.wl()
+    pub fn wl(&self) -> RefMut<PeerStorage> {
+        self.store.borrow_mut()
     }
 }
 
@@ -635,36 +650,53 @@ impl Storage for RaftStorage {
 #[cfg(test)]
 mod test {
     use std::sync::*;
+    use std::sync::mpsc::*;
     use std::io;
     use std::fs::File;
     use rocksdb::*;
-    use kvproto::raftpb::{Entry, ConfState, Snapshot};
+    use kvproto::raftpb::{Entry, ConfState};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
+    use raftstore;
     use raftstore::store::*;
+    use raftstore::store::worker::{SnapRunner, MsgSender};
     use util::codec::number::NumberEncoder;
+    use raftstore::store::worker::SnapTask;
+    use util::worker::{Worker, Scheduler};
     use util::HandyRwLock;
 
     use super::InvokeContext;
 
-    fn new_storage(mgr: SnapManager, path: &TempDir) -> RaftStorage {
+    impl MsgSender for Sender<Msg> {
+        fn send(&self, msg: Msg) -> raftstore::Result<()> {
+            Sender::send(self, msg).unwrap();
+            Ok(())
+        }
+    }
+
+    fn new_storage(sched: Scheduler<SnapTask>, path: &TempDir) -> RaftStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
         let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
-        RaftStorage::new(PeerStorage::new(db, &region, mgr).unwrap())
+        RaftStorage::new(PeerStorage::new(db, &region, sched).unwrap())
     }
 
-    fn new_storage_from_ents(mgr: SnapManager, path: &TempDir, ents: &[Entry]) -> RaftStorage {
-        let store = new_storage(mgr, path);
+    fn new_storage_from_ents(sched: Scheduler<SnapTask>,
+                             path: &TempDir,
+                             ents: &[Entry])
+                             -> RaftStorage {
+        let store = new_storage(sched, path);
         let mut ctx = InvokeContext::new(&store.rl());
         store.rl().append(&mut ctx, &ents[1..]).expect("");
-        store.rl().engine.write(ctx.wb).expect("");
         ctx.local_state.mut_truncated_state().set_index(ents[0].get_index());
         ctx.local_state.mut_truncated_state().set_term(ents[0].get_term());
         ctx.local_state.set_applied_index(ents.last().unwrap().get_index());
+        ctx.save(store.rl().get_region_id()).unwrap();
+        store.rl().engine.write(ctx.wb).expect("");
+
         store.wl().local_state = ctx.local_state;
         store
     }
@@ -696,8 +728,9 @@ mod test {
         ];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let mgr = new_snap_mgr("");
-            let store = new_storage_from_ents(mgr, &td, &ents);
+            let worker = Worker::new("snap_manager");
+            let sched = worker.scheduler();
+            let store = new_storage_from_ents(sched, &td, &ents);
             let t = store.rl().term(idx);
             if wterm != t {
                 panic!("#{}: expect res {:?}, got {:?}", i, wterm, t);
@@ -731,8 +764,9 @@ mod test {
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let mgr = new_snap_mgr("");
-            let store = new_storage_from_ents(mgr, &td, &ents);
+            let worker = Worker::new("snap_manager");
+            let sched = worker.scheduler();
+            let store = new_storage_from_ents(sched, &td, &ents);
             let e = store.rl().entries(lo, hi, maxsize);
             if e != wentries {
                 panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
@@ -754,8 +788,9 @@ mod test {
         ];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let mgr = new_snap_mgr("");
-            let store = new_storage_from_ents(mgr, &td, &ents);
+            let worker = Worker::new("snap_manager");
+            let sched = worker.scheduler();
+            let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store.rl());
             let res = store.rl().compact(&mut ctx, idx);
             // TODO check exact error type after refactoring error.
@@ -768,15 +803,6 @@ mod test {
         }
     }
 
-    fn get_snap(s: &RaftStorage, mgr: SnapManager) -> Snapshot {
-        let store = s.rl();
-        let raw_snap = store.raw_snapshot();
-        let applied_id = store.applied_index();
-        let term = store.term(applied_id).unwrap();
-        let key = SnapKey::new(store.get_region_id(), term, applied_id);
-        do_snapshot(mgr, &raw_snap, key).unwrap()
-    }
-
     #[test]
     fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
@@ -786,18 +812,21 @@ mod test {
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
-        let s = new_storage_from_ents(mgr, &td, &ents);
+        let mut worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let s = new_storage_from_ents(sched, &td, &ents);
+        let (tx, rx) = channel();
+        let runner = SnapRunner::new(s.rl().engine.clone(), tx, mgr);
+        worker.start(runner).unwrap();
         let snap = s.wl().snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
-        assert_eq!(s.wl().snap_state, SnapState::Pending);
-
-        s.wl().snap_state = SnapState::Generating;
-        assert_eq!(s.wl().snapshot().unwrap_err(), unavailable);
         assert_eq!(s.rl().snap_state, SnapState::Generating);
 
-        let snap_dir = TempDir::new("snap").unwrap();
-        let snap = get_snap(&s, new_snap_mgr(snap_dir.path().to_str().unwrap()));
+        let snap = match rx.recv().unwrap() {
+            Msg::SnapGenRes { snap, .. } => snap.unwrap(),
+            m => panic!("unexpected snap: {:?}", m),
+        };
         assert_eq!(snap.get_metadata().get_index(), 5);
         assert_eq!(snap.get_metadata().get_term(), 5);
         assert!(!snap.get_data().is_empty());
@@ -807,7 +836,7 @@ mod test {
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
 
-        s.wl().snap_state = SnapState::Snap(snap.clone());
+        s.wl().snap = Some(snap.clone());
         assert_eq!(s.wl().snapshot(), Ok(snap));
     }
 
@@ -845,9 +874,9 @@ mod test {
         ];
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
-            let snap_dir = TempDir::new("snap_dir").unwrap();
-            let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
-            let store = new_storage_from_ents(mgr, &td, &ents);
+            let worker = Worker::new("snap_manager");
+            let sched = worker.scheduler();
+            let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store.rl());
             store.wl().append(&mut ctx, &entries).expect("");
             store.wl().engine.write(ctx.wb).expect("");
@@ -869,8 +898,17 @@ mod test {
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
         let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap());
-        let s1 = new_storage_from_ents(mgr.clone(), &td1, &ents);
-        let snap1 = get_snap(&s1, mgr.clone());
+        let mut worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
+        let (tx, rx) = channel();
+        let runner = SnapRunner::new(s1.rl().engine.clone(), tx, mgr.clone());
+        worker.start(runner).unwrap();
+        assert!(s1.wl().snapshot().is_err());
+        let snap1 = match rx.recv().unwrap() {
+            Msg::SnapGenRes { snap, .. } => snap.unwrap(),
+            m => panic!("unexpected message: {:?}", m),
+        };
         assert_eq!(s1.rl().truncated_index(), 3);
         assert_eq!(s1.rl().truncated_term(), 3);
 
@@ -883,7 +921,7 @@ mod test {
         dst_snap.save().unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
-        let s2 = new_storage(mgr.clone(), &td2);
+        let s2 = new_storage(sched, &td2);
         assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2.rl());
         s2.wl().apply_snapshot(&mut ctx, &snap1).unwrap();
