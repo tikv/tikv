@@ -99,7 +99,7 @@
 3. Start TiKV on listening port 5551. The data is stored in directory `data1` and cluster ID is 1.
 
     ```sh
-    tikv-server -S raftkv --addr 127.0.0.1:5551 --pd 127.0.0.1:1234 -s data1 --cluster-id 1
+    tikv-server -S raftkv --addr 127.0.0.1:5551 --etcd 127.0.0.1:2379 -s data1 --cluster-id 1
     ```
 
 4. Start TiDB on listening port 5001. 
@@ -135,9 +135,9 @@ In production environment, it is strongly recommended to run TiKV in the cluster
 
     Start three tikv-server instances listening on different ports with the same pd address and cluster id. They will form a TiKV cluster.
     ```sh
-    tikv-server -S raftkv --addr 127.0.0.1:5551 --pd 127.0.0.1:1234,127.0.0.1:2234,127.0.0.1:3234 -s data1 --cluster-id 1
-    tikv-server -S raftkv --addr 127.0.0.1:5552 --pd 127.0.0.1:1234,127.0.0.1:2234,127.0.0.1:3234 -s data2 --cluster-id 1
-    tikv-server -S raftkv --addr 127.0.0.1:5553 --pd 127.0.0.1:1234,127.0.0.1:2234,127.0.0.1:3234 -s data3 --cluster-id 1
+    tikv-server -S raftkv --addr 127.0.0.1:5551 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 -s data1 --cluster-id 1
+    tikv-server -S raftkv --addr 127.0.0.1:5552 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 -s data2 --cluster-id 1
+    tikv-server -S raftkv --addr 127.0.0.1:5553 --etcd 127.0.0.1:2379,127.0.0.1:3379,127.0.0.1:4379 -s data3 --cluster-id 1
     ```
 
 4. Start TiDB.
