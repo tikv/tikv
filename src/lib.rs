@@ -49,6 +49,8 @@ extern crate num;
 extern crate cadence;
 extern crate libc;
 extern crate crc;
+extern crate rustc_serialize;
+extern crate hyper;
 
 #[macro_use]
 pub mod util;
