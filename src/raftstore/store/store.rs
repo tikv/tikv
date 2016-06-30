@@ -268,7 +268,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                              msg.get_to_peer().get_id()) {
                 Ok(peer) => peer,
                 Err(e) => {
-                    error!("peer replication from {:?} to {:?} for region id {} failed {:?}",
+                    error!("peer replication from {:?} to {:?} in region {} failed {:?}",
                            msg.get_from_peer(),
                            msg.get_to_peer(),
                            region_id,
