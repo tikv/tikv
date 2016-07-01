@@ -49,7 +49,7 @@ impl EngineRocksdb {
     fn open_or_create_db(path: &str, cfs: &[CfName]) -> Result<DB> {
         // Currently we support 1) Create new db. 2) Open a db with CFs we want. 3) Open db with no
         // CFs.
-        // TODO: Support open db with imcomplete CFs.
+        // TODO: Support open db with incomplete CFs.
 
         let mut opts = Options::new();
         opts.create_if_missing(false);
