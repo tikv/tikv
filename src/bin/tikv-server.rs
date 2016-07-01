@@ -74,7 +74,7 @@ fn get_string_value<F>(short: &str,
 
     s.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("malformed or missing {}, use default {:?}", long, default);
+                info!("{}, use default {:?}", long, default);
                 default
             })
         })
@@ -98,7 +98,7 @@ fn get_integer_value<F>(short: &str,
 
     i.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("malformed or missing {}, use default {:?}", long, default);
+                info!("{}, use default {:?}", long, default);
                 default
             })
         })
@@ -501,9 +501,9 @@ fn main() {
 
     let config = match matches.opt_str("C") {
         Some(path) => {
-            let mut config_file = fs::File::open(&path).expect("config open filed");
+            let mut config_file = fs::File::open(&path).expect("config open failed");
             let mut s = String::new();
-            config_file.read_to_string(&mut s).expect("config read filed");
+            config_file.read_to_string(&mut s).expect("config read failed");
             toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
         }
         // Empty value, lookup() always return `None`.
