@@ -23,7 +23,6 @@ use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result, DEFAULT_CFNAME};
 use tempdir::TempDir;
 
 
-#[allow(dead_code)]
 pub struct EngineRocksdb {
     db: DB,
     // only use for memory mode
@@ -80,7 +79,7 @@ impl EngineRocksdb {
 
 impl Debug for EngineRocksdb {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Rocksdb") // TODO(disksing): print DSN
+        write!(f, "Rocksdb [is_temp: {}]", self.temp_dir.is_some()) // TODO(disksing): print DSN
     }
 }
 

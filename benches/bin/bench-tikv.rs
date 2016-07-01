@@ -33,21 +33,12 @@ extern crate kvproto;
 extern crate time;
 
 #[allow(dead_code)]
+#[allow(unused_imports)]
+#[path="../../tests/raftstore/mod.rs"]
+mod mock_raftstore;
+#[allow(dead_code)]
 #[path="../../tests/util.rs"]
 mod test_util;
-#[path="../../tests/raftstore/util.rs"]
-mod util;
-#[path="../../tests/raftstore/cluster.rs"]
-mod cluster;
-#[path="../../tests/raftstore/node.rs"]
-mod node;
-#[path="../../tests/raftstore/server.rs"]
-mod server;
-#[path="../../tests/raftstore/pd.rs"]
-mod pd;
-#[allow(unused)]
-#[path="../../tests/raftstore/transport_simulate.rs"]
-mod transport_simulate;
 
 use test::BenchSamples;
 
