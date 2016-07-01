@@ -23,19 +23,9 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // transfer leader to (2, 2)
     cluster.must_transfer_leader(1, new_peer(2, 2));
-    // wait for leader transfer finish
-    let (k1, v1) = (b"k1", b"v1");
-    cluster.must_put(k1, v1);
-    must_get_equal(&cluster.engines[&2], k1, v1);
-    // check it
-    assert_eq!(cluster.leader_of_region(1), Some(new_peer(2, 2)));
 
     // transfer leader to (3, 3)
     cluster.must_transfer_leader(1, new_peer(3, 3));
-    let (k2, v2) = (b"k2", b"v2");
-    cluster.must_put(k2, v2);
-    must_get_equal(&cluster.engines[&3], k2, v2);
-    assert_eq!(cluster.leader_of_region(1), Some(new_peer(3, 3)));
 
     let mut region = cluster.get_region(b"k3");
     let mut req = new_request(region.get_id(),
@@ -134,7 +124,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
         let value = format!("{:01024}", i);
         cluster.must_put(key.as_bytes(), value.as_bytes());
     }
-    
+
     cluster.must_transfer_leader(r1, new_peer(1, 1));
 
     // hook transport and drop all snapshot packet, so follower's status
