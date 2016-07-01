@@ -13,9 +13,9 @@
 
 use test::BenchSamples;
 use test_util::*;
-use mock_raftstore::cluster::*;
-use mock_raftstore::node::new_node_cluster;
-use mock_raftstore::server::new_server_cluster;
+use cluster::*;
+use node::new_node_cluster;
+use server::new_server_cluster;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use tikv::raftstore::store::*;
