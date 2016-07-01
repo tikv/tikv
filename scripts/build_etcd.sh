@@ -6,10 +6,23 @@ echo "building etcd..."
 mkdir -p ${DEPS_PATH}
 mkdir -p ${BIN_PATH}
 
-rm -rf ${DEPS_PATH}/src/github.com/coreos/etcd
-git clone --depth=1 https://github.com/coreos/etcd.git ${DEPS_PATH}/src/github.com/coreos/etcd
+cd ${DEPS_PATH}
 
-cd ${DEPS_PATH}/src/github.com/coreos/etcd
-export GOPATH=$DEPS_PATH
-./build
-cp -f ./bin/etcd $BIN_PATH
+case "$OSTYPE" in 
+    linux*) 
+        curl -L https://github.com/coreos/etcd/releases/download/v3.0.0/etcd-v3.0.0-linux-amd64.tar.gz -o etcd-v3.0.0-linux-amd64.tar.gz
+        tar xzvf etcd-v3.0.0-linux-amd64.tar.gz
+        cd etcd-v3.0.0-linux-amd64
+        cp -f etcd ${BIN_PATH}
+    ;;
+    darwin*) 
+        curl -L https://github.com/coreos/etcd/releases/download/v3.0.0/etcd-v3.0.0-darwin-amd64.zip -o etcd-v3.0.0-darwin-amd64.zip
+        unzip etcd-v3.0.0-darwin-amd64.zip
+        cd etcd-v3.0.0-darwin-amd64
+        cp -f etcd ${BIN_PATH}
+    ;;
+    *) 
+        echo "unsupported $OSTYPE"
+        exit 1
+    ;;
+esac
