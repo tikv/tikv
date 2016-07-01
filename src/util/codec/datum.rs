@@ -17,6 +17,7 @@ use std::{str, i64};
 use std::io::Write;
 use std::str::FromStr;
 use std::mem;
+use std::fmt::{self, Display, Formatter, Debug};
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
 use util::escape;
@@ -34,7 +35,7 @@ const DURATION_FLAG: u8 = 7;
 const MAX_FLAG: u8 = 250;
 // TODO: support more flags
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Clone)]
 pub enum Datum {
     Null,
     I64(i64),
@@ -47,9 +48,60 @@ pub enum Datum {
     Max,
 }
 
+impl Display for Datum {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match *self {
+            Datum::Null => write!(f, "NULL"),
+            Datum::I64(i) => write!(f, "I64({})", i),
+            Datum::U64(u) => write!(f, "U64({})", u),
+            Datum::F64(v) => write!(f, "F64({})", v),
+            Datum::Dur(ref d) => write!(f, "Dur({})", d),
+            Datum::Bytes(ref bs) => write!(f, "Bytes(\"{}\")", escape(bs)),
+            Datum::Dec(ref d) => write!(f, "Dec({})", d),
+            Datum::Min => write!(f, "MIN"),
+            Datum::Max => write!(f, "MAX"),
+        }
+    }
+}
+
+impl Debug for Datum {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
 fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
     l.partial_cmp(&r)
         .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
+}
+
+#[cfg(debug_assertions)]
+macro_rules! abs {
+    ($r:ident) => {
+        // in debug mode, if r is `i64::min_value()`, `-r` will panic.
+        // but in release mode, `-r as u64` will get `|r|`.
+        if $r == i64::min_value() {
+            i64::max_value() as u64 + 1
+        } else {
+            -$r as u64
+        }
+    };
+}
+
+#[cfg(not(debug_assertions))]
+macro_rules! abs {
+    ($r:ident) => {
+        -$r as u64
+    };
+}
+
+#[inline]
+fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
+    if r >= 0 {
+        Some(l + r as u64)
+    } else {
+        l.checked_sub(abs!(r))
+    }
 }
 
 #[allow(should_implement_trait)]
@@ -225,6 +277,83 @@ impl Datum {
             Datum::Bytes(_) | Datum::Dec(_) | Datum::Max | Datum::Min | Datum::Null => 0,
         }
     }
+
+    // into_arith converts datum to appropriate datum for arithmetic computing.
+    pub fn into_arith(self) -> Result<Datum> {
+        match self {
+            // MySQL will convert string to float for arithmetic operation
+            Datum::Bytes(bs) => convert::bytes_to_f64(&bs).map(From::from),
+            Datum::Dur(d) => {
+                let dec = try!(d.to_decimal());
+                if d.get_fsp() == 0 {
+                    return dec.i64()
+                        .map(Datum::I64)
+                        .ok_or_else(|| box_err!("{} to int will overflow", d));
+                }
+                Ok(Datum::Dec(dec))
+            }
+            a => Ok(a),
+        }
+    }
+
+    /// Try its best effort to convert into a decimal datum.
+    fn coerce_to_dec(self) -> Datum {
+        let dec_opt = match self {
+            Datum::I64(i) => Some(i.into()),
+            Datum::U64(u) => Some(u.into()),
+            Datum::F64(f) => Decimal::from_f64(f).ok(),
+            Datum::Bytes(ref bs) => str::from_utf8(bs).ok().and_then(|s| s.parse().ok()),
+            _ => None,
+        };
+        dec_opt.map_or(self, Datum::Dec)
+    }
+
+    /// Try its best effort to convert into a f64 datum.
+    fn coerce_to_f64(self) -> Datum {
+        match self {
+            Datum::I64(i) => Datum::F64(i as f64),
+            Datum::U64(u) => Datum::F64(u as f64),
+            a => a,
+        }
+    }
+
+    // `coerce` changes type.
+    // If left or right is Decimal, changes the both to Decimal.
+    // Else if left or right is Float, changes the both to Float.
+    pub fn coerce(left: Datum, right: Datum) -> (Datum, Datum) {
+        match (left, right) {
+            a @ (Datum::Dec(_), Datum::Dec(_)) |
+            a @ (Datum::F64(_), Datum::F64(_)) => a,
+            (l @ Datum::Dec(_), r) => (l, r.coerce_to_dec()),
+            (l, r @ Datum::Dec(_)) => (l.coerce_to_dec(), r),
+            (l @ Datum::F64(_), r) => (l, r.coerce_to_f64()),
+            (l, r @ Datum::F64(_)) => (l.coerce_to_f64(), r),
+            p => p,
+        }
+    }
+
+    pub fn checked_add(self, d: Datum) -> Result<Datum> {
+        let res: Datum = match (self, d) {
+            (Datum::I64(l), Datum::I64(r)) => l.checked_add(r).into(),
+            (Datum::I64(l), Datum::U64(r)) => checked_add_i64(r, l).into(),
+            (Datum::U64(l), Datum::I64(r)) => checked_add_i64(l, r).into(),
+            (Datum::U64(l), Datum::U64(r)) => l.checked_add(r).into(),
+            (Datum::F64(l), Datum::F64(r)) => {
+                let res = l + r;
+                if !res.is_finite() {
+                    Datum::Null
+                } else {
+                    Datum::F64(res)
+                }
+            }
+            (Datum::Dec(l), Datum::Dec(r)) => Datum::Dec(l + r),
+            (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
+        };
+        if let Datum::Null = res {
+            return Err(box_err!("overflow"));
+        }
+        Ok(res)
+    }
 }
 
 impl From<bool> for Datum {
@@ -255,6 +384,30 @@ impl<'a> From<&'a [u8]> for Datum {
 impl From<Duration> for Datum {
     fn from(dur: Duration) -> Datum {
         Datum::Dur(dur)
+    }
+}
+
+impl From<i64> for Datum {
+    fn from(data: i64) -> Datum {
+        Datum::I64(data)
+    }
+}
+
+impl From<u64> for Datum {
+    fn from(data: u64) -> Datum {
+        Datum::U64(data)
+    }
+}
+
+impl From<Decimal> for Datum {
+    fn from(data: Decimal) -> Datum {
+        Datum::Dec(data)
+    }
+}
+
+impl From<f64> for Datum {
+    fn from(data: f64) -> Datum {
+        Datum::F64(data)
     }
 }
 

@@ -23,6 +23,7 @@
 #![feature(const_fn)]
 #![feature(panic_handler)]
 #![feature(static_rwlock)]
+#![feature(stmt_expr_attributes)]
 #![feature(iter_arith)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]

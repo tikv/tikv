@@ -16,9 +16,11 @@ use time::{self, Tm};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::{str, i64, u64};
+use std::io::Write;
 
 use util::codec::Result;
 use util::escape;
+use super::Decimal;
 
 const NANOS_PER_SEC: i64 = 1_000_000_000;
 const NANO_WIDTH: u32 = 9;
@@ -88,6 +90,10 @@ impl Duration {
             neg: false,
             fsp: 0,
         }
+    }
+
+    pub fn get_fsp(&self) -> usize {
+        self.fsp
     }
 
     pub fn hours(&self) -> u64 {
@@ -224,6 +230,25 @@ impl Duration {
             fsp: fsp,
         })
     }
+
+    pub fn to_decimal(&self) -> Result<Decimal> {
+        let mut buf = Vec::with_capacity(13);
+        if self.neg {
+            try!(write!(buf, "-"));
+        }
+        try!(write!(buf,
+                    "{:02}{:02}{:02}",
+                    self.hours(),
+                    self.minutes(),
+                    self.secs()));
+        if self.fsp > 0 {
+            try!(write!(buf, "."));
+            let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - self.fsp as u32));
+            try!(write!(buf, "{:01$}", nanos, self.fsp));
+        }
+        let d = unsafe { try!(str::from_utf8_unchecked(&buf).parse()) };
+        Ok(d)
+    }
 }
 
 impl Display for Duration {
@@ -330,6 +355,32 @@ mod test {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_to_decimal() {
+        let cases = vec![
+            ("31 11:30:45", 0, "7553045"),
+            ("31 11:30:45", 6, "7553045.000000"),
+            ("31 11:30:45", 0, "7553045"),
+            ("31 11:30:45.123", 6, "7553045.123000"),
+            ("11:30:45", 0, "113045"),
+            ("11:30:45", 6, "113045.000000"),
+            ("11:30:45.123", 6, "113045.123000"),
+            ("11:30:45.123345", 0, "113045"),
+            ("11:30:45.123345", 3, "113045.123"),
+            ("11:30:45.123345", 5, "113045.12335"),
+            ("11:30:45.123345", 6, "113045.123345"),
+            ("11:30:45.1233456", 6, "113045.123346"),
+            ("11:30:45.9233456", 0, "113046"),
+            ("-11:30:45.9233456", 0, "-113046"),
+        ];
+
+        for (input, fsp, exp) in cases {
+            let t = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let res = format!("{}", t.to_decimal().unwrap());
+            assert_eq!(exp, res);
         }
     }
 }
