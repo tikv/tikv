@@ -843,7 +843,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         };
 
-        let capacity = cmp::min(disk_stat.capacity, self.cfg.capacity);
+        // if the configuration capacity > current disk available size,
+        // use disk available size.
+        let capacity = cmp::min(disk_stat.available, self.cfg.capacity);
 
         stats.set_capacity(capacity);
 
