@@ -5,7 +5,7 @@
 ### System requirement
 
 + Linux or Mac OS X.
-+ Rust, nightly version is required.
++ Rust, [nightly version](https://www.rust-lang.org/downloads.html) is required.
 + Go, 1.5+ is required.
 
 ### Installing TiKV
