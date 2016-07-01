@@ -34,12 +34,29 @@ ${KCOV_DIR}/kcov:
 	mkdir -p ${KCOV_DIR} && \
 	cp src/kcov ${KCOV_DIR}/kcov
 
-prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov
+${ETCD_DIR}/etcd:
+ifeq ($(TRAVIS_OS_NAME),linux)
+	cd /tmp && \
+	curl -L https://github.com/coreos/etcd/releases/download/v3.0.0/etcd-v3.0.0-linux-amd64.tar.gz -o etcd-v3.0.0-linux-amd64.tar.gz && \
+	tar xzvf etcd-v3.0.0-linux-amd64.tar.gz && \
+	cd etcd-v3.0.0-linux-amd64 && \
+	cp -f etcd ${ETCD_DIR}
+else
+	cd /tmp && \
+	curl -L https://github.com/coreos/etcd/releases/download/v3.0.0/etcd-v3.0.0-darwin-amd64.zip -o etcd-v3.0.0-darwin-amd64.zip && \
+	unzip etcd-v3.0.0-darwin-amd64.zip && \
+	cd etcd-v3.0.0-darwin-amd64 && \
+	cp -f etcd ${ETCD_DIR}
+endif
 
-prepare_osx:
+prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov ${ETCD_DIR}/etcd
+
+prepare_brew: 
 	brew update && \
 	brew install gflags snappy rocksdb
 
+prepare_osx: prepare_brew ${ETCD_DIR}/etcd
+	
 test_linux:
 	export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	export LIBRARY_PATH="${LIBRARY_PATH}:${ROCKSDB_DIR}" && \

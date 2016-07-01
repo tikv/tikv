@@ -18,6 +18,7 @@ use std::time::Duration;
 use mio;
 
 use raftstore::{Result, send_msg, Error};
+use kvproto::raftpb::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
@@ -63,6 +64,17 @@ pub enum Msg {
         region_id: u64,
         to_peer_id: u64,
     },
+
+    // For snapshot stats.
+    SnapshotStats,
+    SnapApplyRes {
+        region_id: u64,
+        is_success: bool,
+    },
+    SnapGenRes {
+        region_id: u64,
+        snap: Option<Snapshot>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -84,6 +96,19 @@ impl fmt::Debug for Msg {
                        "peer {} for region {} is unreachable",
                        to_peer_id,
                        region_id)
+            }
+            Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
+            Msg::SnapApplyRes { region_id, is_success } => {
+                write!(fmt,
+                       "SnapApplyRes [region_id: {}, is_success: {}]",
+                       region_id,
+                       is_success)
+            }
+            Msg::SnapGenRes { region_id, ref snap } => {
+                write!(fmt,
+                       "SnapGenRes [region_id: {}, is_success: {}]",
+                       region_id,
+                       snap.is_some())
             }
         }
     }

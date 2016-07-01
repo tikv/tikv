@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod snap;
-mod split_check;
-mod compact;
-mod pd;
+use bytes::{ByteBuf, MutByteBuf, alloc};
+pub use mio::{TryRead, TryWrite};
 
-pub use self::snap::{Task as SnapTask, Runner as SnapRunner, MsgSender};
-pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
-pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
-pub use self::pd::{Task as PdTask, Runner as PdRunner};
+// `create_mem_buf` creates the buffer with fixed capacity s.
+pub fn create_mem_buf(s: usize) -> MutByteBuf {
+    unsafe {
+        ByteBuf::from_mem_ref(alloc::heap(s.next_power_of_two()), s as u32, 0, s as u32).flip()
+    }
+}

@@ -38,6 +38,7 @@ pub mod xeval;
 pub mod event;
 pub mod rocksdb_option;
 pub mod fs;
+pub mod buf;
 
 pub use self::fs::{DiskStat, get_disk_stat};
 

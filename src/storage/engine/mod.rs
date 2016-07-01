@@ -16,7 +16,7 @@ use std::fmt::Debug;
 use std::cmp::Ordering;
 
 use self::rocksdb::EngineRocksdb;
-use storage::{Key, Value};
+use storage::{Key, Value, CfName};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -26,28 +26,43 @@ pub mod raftkv;
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &'static str = "";
 
+// The default column family is created by Rocksdb automatically.
+pub const DEFAULT_CFNAME: CfName = "default";
+
 const SEEK_BOUND: usize = 30;
 
 #[derive(Debug)]
 pub enum Modify {
-    Delete(Key),
-    Put((Key, Value)),
+    Delete(CfName, Key),
+    Put(CfName, Key, Value),
 }
 
 pub trait Engine: Send + Sync + Debug {
     fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
+    fn get_cf(&self, ctx: &Context, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
     fn snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
-        self.write(ctx, vec![Modify::Put((key, value))])
+        self.put_cf(ctx, DEFAULT_CFNAME, key, value)
+    }
+
+    fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
+        self.write(ctx, vec![Modify::Put(cf, key, value)])
     }
 
     fn delete(&self, ctx: &Context, key: Key) -> Result<()> {
-        self.write(ctx, vec![Modify::Delete(key)])
+        self.delete_cf(ctx, DEFAULT_CFNAME, key)
+    }
+
+    fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
+        self.write(ctx, vec![Modify::Delete(cf, key)])
     }
 
     fn iter<'a>(&'a self, ctx: &Context) -> Result<Box<Cursor + 'a>>;
+
+    // maybe mut is better.
+    fn close(&self) {}
 }
 
 pub trait Snapshot {
@@ -148,10 +163,10 @@ pub enum Dsn<'a> {
 }
 
 // Now we only support RocksDB.
-pub fn new_engine(dsn: Dsn) -> Result<Box<Engine>> {
+pub fn new_engine(dsn: Dsn, cfs: &[CfName]) -> Result<Box<Engine>> {
     match dsn {
         Dsn::RocksDBPath(path) => {
-            EngineRocksdb::new(path).map(|engine| -> Box<Engine> { Box::new(engine) })
+            EngineRocksdb::new(path, cfs).map(|engine| -> Box<Engine> { Box::new(engine) })
         }
         Dsn::RaftKv => unimplemented!(),
     }
@@ -180,28 +195,58 @@ pub type Result<T> = result::Result<T, Error>;
 mod tests {
     use super::*;
     use tempdir::TempDir;
-    use storage::make_key;
+    use storage::{CfName, make_key};
     use util::codec::bytes;
     use util::escape;
     use kvproto::kvrpcpb::Context;
 
+    const TEST_ENGINE_CFS: &'static [CfName] = &["cf"];
+
     #[test]
     fn rocksdb() {
         let dir = TempDir::new("rocksdb_test").unwrap();
-        let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap())).unwrap();
+        let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
+                           TEST_ENGINE_CFS)
+            .unwrap();
 
-        get_put(e.as_ref());
-        batch(e.as_ref());
-        seek(e.as_ref());
-        near_seek(e.as_ref());
+        test_get_put(e.as_ref());
+        test_batch(e.as_ref());
+        test_seek(e.as_ref());
+        test_near_seek(e.as_ref());
+        test_cf(e.as_ref());
+    }
+
+    #[test]
+    fn rocksdb_reopen() {
+        let dir = TempDir::new("rocksdb_test").unwrap();
+        {
+            let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
+                               TEST_ENGINE_CFS)
+                .unwrap();
+            must_put_cf(e.as_ref(), "cf", b"k", b"v1");
+        }
+        {
+            let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
+                               TEST_ENGINE_CFS)
+                .unwrap();
+            assert_has_cf(e.as_ref(), "cf", b"k", b"v1");
+        }
     }
 
     fn must_put(engine: &Engine, key: &[u8], value: &[u8]) {
         engine.put(&Context::new(), make_key(key), value.to_vec()).unwrap();
     }
 
+    fn must_put_cf(engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
+        engine.put_cf(&Context::new(), cf, make_key(key), value.to_vec()).unwrap();
+    }
+
     fn must_delete(engine: &Engine, key: &[u8]) {
         engine.delete(&Context::new(), make_key(key)).unwrap();
+    }
+
+    fn muest_delete_cf(engine: &Engine, cf: CfName, key: &[u8]) {
+        engine.delete_cf(&Context::new(), cf, make_key(key)).unwrap();
     }
 
     fn assert_has(engine: &Engine, key: &[u8], value: &[u8]) {
@@ -209,8 +254,18 @@ mod tests {
                    value);
     }
 
+    fn assert_has_cf(engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
+        assert_eq!(engine.get_cf(&Context::new(), cf, &make_key(key)).unwrap().unwrap(),
+                   value);
+    }
+
     fn assert_none(engine: &Engine, key: &[u8]) {
         assert_eq!(engine.get(&Context::new(), &make_key(key)).unwrap(), None);
+    }
+
+    fn assert_none_cf(engine: &Engine, cf: CfName, key: &[u8]) {
+        assert_eq!(engine.get_cf(&Context::new(), cf, &make_key(key)).unwrap(),
+                   None);
     }
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
@@ -233,7 +288,7 @@ mod tests {
                    (&*bytes::encode_bytes(pair.0), pair.1));
     }
 
-    fn get_put(engine: &Engine) {
+    fn test_get_put(engine: &Engine) {
         assert_none(engine, b"x");
         must_put(engine, b"x", b"1");
         assert_has(engine, b"x", b"1");
@@ -241,22 +296,23 @@ mod tests {
         assert_has(engine, b"x", b"2");
     }
 
-    fn batch(engine: &Engine) {
+    fn test_batch(engine: &Engine) {
         engine.write(&Context::new(),
-                   vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
-                        Modify::Put((make_key(b"y"), b"2".to_vec()))])
+                   vec![Modify::Put(DEFAULT_CFNAME, make_key(b"x"), b"1".to_vec()),
+                        Modify::Put(DEFAULT_CFNAME, make_key(b"y"), b"2".to_vec())])
             .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
         engine.write(&Context::new(),
-                   vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
+                   vec![Modify::Delete(DEFAULT_CFNAME, make_key(b"x")),
+                        Modify::Delete(DEFAULT_CFNAME, make_key(b"y"))])
             .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
     }
 
-    fn seek(engine: &Engine) {
+    fn test_seek(engine: &Engine) {
         must_put(engine, b"x", b"1");
         assert_seek(engine, b"x", (b"x", b"1"));
         assert_seek(engine, b"a", (b"x", b"1"));
@@ -269,7 +325,7 @@ mod tests {
         must_delete(engine, b"z");
     }
 
-    fn near_seek(engine: &Engine) {
+    fn test_near_seek(engine: &Engine) {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let mut cursor = engine.iter(&Context::new()).unwrap();
@@ -283,5 +339,13 @@ mod tests {
         assert!(!cursor_mut.near_seek(&make_key(b"z\x00")).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
+    }
+
+    fn test_cf(engine: &Engine) {
+        assert_none_cf(engine, "cf", b"key");
+        must_put_cf(engine, "cf", b"key", b"value");
+        assert_has_cf(engine, "cf", b"key", b"value");
+        muest_delete_cf(engine, "cf", b"key");
+        assert_none_cf(engine, "cf", b"key");
     }
 }

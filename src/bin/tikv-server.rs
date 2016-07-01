@@ -74,7 +74,7 @@ fn get_string_value<F>(short: &str,
 
     s.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("malformed or missing {}, use default {:?}", long, default);
+                info!("{}, use default {:?}", long, default);
                 default
             })
         })
@@ -98,7 +98,7 @@ fn get_integer_value<F>(short: &str,
 
     i.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("malformed or missing {}, use default {:?}", long, default);
+                info!("{}, use default {:?}", long, default);
                 default
             })
         })
@@ -306,6 +306,21 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           Some(8 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
 
+    cfg.store_cfg.pd_heartbeat_tick_interval =
+        get_integer_value("pd-heartbeat-tick-interval",
+                          "raftstore.pd-heartbeat-tick-interval",
+                          matches,
+                          config,
+                          Some(5000),
+                          |v| v.as_integer()) as u64;
+
+    cfg.store_cfg.pd_store_heartbeat_tick_interval =
+        get_integer_value("pd-store-heartbeat-tick-interval",
+                          "raftstore.pd-store-heartbeat-tick-interval",
+                          matches,
+                          config,
+                          Some(10000),
+                          |v| v.as_integer()) as u64;
 
     cfg
 }
@@ -323,13 +338,14 @@ fn build_raftkv(matches: &Matches,
     db_path.push("db");
     let engine = Arc::new(DB::open(&opts, db_path.to_str().unwrap()).unwrap());
 
+    let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+    let mut node = Node::new(&mut event_loop, cfg, pd_client);
+
     let mut snap_path = path.clone();
     snap_path.push("snap");
     let snap_path = snap_path.to_str().unwrap().to_owned();
-    let snap_mgr = store::new_snap_mgr(snap_path);
+    let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
 
-    let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
-    let mut node = Node::new(&mut event_loop, cfg, pd_client);
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
     let raft_router = node.raft_store_router();
     let node_id = node.id();
@@ -362,7 +378,7 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
 fn run_local_server(listener: TcpListener, store: Storage, config: &Config) {
     let mut event_loop = create_event_loop(config).unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
-    let snap_mgr = store::new_snap_mgr(TEMP_DIR);
+    let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
     let mut svr = Server::new(&mut event_loop,
                               listener,
                               store,
@@ -376,13 +392,20 @@ fn run_local_server(listener: TcpListener, store: Storage, config: &Config) {
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel());
-    let pd_addr = get_string_value("pd",
-                                   "raft.pd",
-                                   matches,
-                                   config,
-                                   None,
-                                   |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(new_rpc_client(&pd_addr, cfg.cluster_id).unwrap());
+    let etcd_endpoints = get_string_value("etcd",
+                                          "etcd.endpoints",
+                                          matches,
+                                          config,
+                                          None,
+                                          |v| v.as_str().map(|s| s.to_owned()));
+    let etcd_pd_root = get_string_value("pd-root",
+                                        "etcd.pd-root",
+                                        matches,
+                                        config,
+                                        Some("/pd".to_owned()),
+                                        |v| v.as_str().map(|s| s.to_owned()));
+    let pd_client = Arc::new(new_rpc_client(&etcd_endpoints, &etcd_pd_root, cfg.cluster_id)
+        .unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let store_path = get_store_path(matches, config);
@@ -396,6 +419,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
 
     let (store, raft_router, node_id, snap_mgr) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
+    info!("tikv server config: {:?}", cfg);
     initial_metric(matches, config, Some(node_id));
     let mut svr = Server::new(&mut event_loop,
                               listener,
@@ -438,7 +462,6 @@ fn main() {
                 "set which dsn to use, warning: default is rocksdb without persistent",
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
-    opts.optopt("", "pd", "set pd address", "host:port");
     opts.optopt("", "metric-addr", "set statsd server address", "host:port");
     opts.optopt("",
                 "metric-prefix",
@@ -456,6 +479,20 @@ fn main() {
                 "region-split-check-diff",
                 "set region split check diff",
                 "default: 8 MB");
+    opts.optopt("",
+                "etcd",
+                "etcd endpoints",
+                "127.0.0.1:2379,127.0.0.1:3379");
+    opts.optopt("", "pd-root", "pd root path in etcd", "/pd");
+    opts.optopt("",
+                "pd-heartbeat-tick-interval",
+                "set region heartbeat tick interval",
+                "default 5000 (ms)");
+    opts.optopt("",
+                "pd-store-heartbeat-tick-interval",
+                "set region store heartbeat tick interval",
+                "default 5000 (ms)");
+
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);
@@ -464,9 +501,9 @@ fn main() {
 
     let config = match matches.opt_str("C") {
         Some(path) => {
-            let mut config_file = fs::File::open(&path).expect("config open filed");
+            let mut config_file = fs::File::open(&path).expect("config open failed");
             let mut s = String::new();
-            config_file.read_to_string(&mut s).expect("config read filed");
+            config_file.read_to_string(&mut s).expect("config read failed");
             toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
         }
         // Empty value, lookup() always return `None`.

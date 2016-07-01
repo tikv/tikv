@@ -16,7 +16,7 @@ use test::BenchSamples;
 use tempdir::TempDir;
 
 use test_util::*;
-use tikv::storage::{self, Dsn, Mutation, Key};
+use tikv::storage::{self, Dsn, Mutation, Key, DEFAULT_CFS};
 use tikv::storage::txn::TxnStore;
 use tikv::storage::mvcc::TEST_TS_BASE;
 use kvproto::kvrpcpb::Context;
@@ -26,7 +26,7 @@ use super::print_result;
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.
 fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
-    let engine = storage::new_engine(dsn).unwrap();
+    let engine = storage::new_engine(dsn, DEFAULT_CFS).unwrap();
 
     let store = TxnStore::new(Arc::new(engine));
     let mut ts_generator = TEST_TS_BASE..;

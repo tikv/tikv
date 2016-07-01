@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 
 use server::Node;
 use server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
@@ -26,7 +25,7 @@ use kvproto::kvrpcpb::Context;
 
 use pd::PdClient;
 use uuid::Uuid;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
 use std::time::Duration;
@@ -37,7 +36,7 @@ use protobuf::RepeatedField;
 use storage::engine;
 use super::{Engine, Modify, Cursor, Snapshot};
 use util::event::Event;
-use storage::{Key, Value};
+use storage::{Key, Value, CfName};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
@@ -94,7 +93,7 @@ impl From<RaftServerError> for engine::Error {
 
 /// RaftKv is a storage engine base on RaftKvServer.
 pub struct RaftKv<C: PdClient + 'static> {
-    node: Node<C>,
+    node: Mutex<Node<C>>,
     db: Arc<DB>,
     router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
@@ -133,7 +132,7 @@ impl<C: PdClient> RaftKv<C> {
     pub fn new(node: Node<C>, db: Arc<DB>) -> RaftKv<C> {
         let router = node.raft_store_router();
         RaftKv {
-            node: node,
+            node: Mutex::new(node),
             db: db,
             router: router,
         }
@@ -204,6 +203,10 @@ impl<C: PdClient> Engine for RaftKv<C> {
         snap.get(key)
     }
 
+    fn get_cf(&self, _: &Context, _: CfName, _: &Key) -> engine::Result<Option<Value>> {
+        unimplemented!();
+    }
+
     fn iter<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Cursor + 'a>> {
         let snap = try!(self.raw_snapshot(ctx));
         Ok(box RegionIterator::new(self.db.iter(), snap.get_region().clone()))
@@ -218,13 +221,13 @@ impl<C: PdClient> Engine for RaftKv<C> {
             let m = modifies.pop().unwrap();
             let mut req = Request::new();
             match m {
-                Modify::Delete(k) => {
+                Modify::Delete(_, k) => {
                     let mut delete = DeleteRequest::new();
                     delete.set_key(k.encoded().to_owned());
                     req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
-                Modify::Put((k, v)) => {
+                Modify::Put(_, k, v) => {
                     let mut put = PutRequest::new();
                     put.set_key(k.encoded().to_owned());
                     put.set_value(v);
@@ -243,6 +246,10 @@ impl<C: PdClient> Engine for RaftKv<C> {
     fn snapshot<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Snapshot + 'a>> {
         let snap = try!(self.raw_snapshot(ctx));
         Ok(box snap)
+    }
+
+    fn close(&self) {
+        self.node.lock().unwrap().stop();
     }
 }
 
