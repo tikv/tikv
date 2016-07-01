@@ -134,6 +134,8 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
         let value = format!("{:01024}", i);
         cluster.must_put(key.as_bytes(), value.as_bytes());
     }
+    
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
 
     // hook transport and drop all snapshot packet, so follower's status
     // will stay at snapshot.
