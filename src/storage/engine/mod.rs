@@ -26,14 +26,15 @@ pub mod raftkv;
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &'static str = "";
 
+// The default column family is created by Rocksdb automatically.
+pub const DEFAULT_CFNAME: CfName = "default";
+
 const SEEK_BOUND: usize = 30;
 
 #[derive(Debug)]
 pub enum Modify {
-    Delete(Key),
-    DeleteCf(CfName, Key),
-    Put((Key, Value)),
-    PutCf((CfName, Key, Value)),
+    Delete(CfName, Key),
+    Put(CfName, Key, Value),
 }
 
 pub trait Engine: Send + Sync + Debug {
@@ -43,19 +44,19 @@ pub trait Engine: Send + Sync + Debug {
     fn snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
-        self.write(ctx, vec![Modify::Put((key, value))])
+        self.put_cf(ctx, DEFAULT_CFNAME, key, value)
     }
 
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
-        self.write(ctx, vec![Modify::PutCf((cf, key, value))])
+        self.write(ctx, vec![Modify::Put(cf, key, value)])
     }
 
     fn delete(&self, ctx: &Context, key: Key) -> Result<()> {
-        self.write(ctx, vec![Modify::Delete(key)])
+        self.delete_cf(ctx, DEFAULT_CFNAME, key)
     }
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
-        self.write(ctx, vec![Modify::DeleteCf(cf, key)])
+        self.write(ctx, vec![Modify::Delete(cf, key)])
     }
 
     fn iter<'a>(&'a self, ctx: &Context) -> Result<Box<Cursor + 'a>>;
@@ -297,14 +298,15 @@ mod tests {
 
     fn test_batch(engine: &Engine) {
         engine.write(&Context::new(),
-                   vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
-                        Modify::Put((make_key(b"y"), b"2".to_vec()))])
+                   vec![Modify::Put(DEFAULT_CFNAME, make_key(b"x"), b"1".to_vec()),
+                        Modify::Put(DEFAULT_CFNAME, make_key(b"y"), b"2".to_vec())])
             .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
         engine.write(&Context::new(),
-                   vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
+                   vec![Modify::Delete(DEFAULT_CFNAME, make_key(b"x")),
+                        Modify::Delete(DEFAULT_CFNAME, make_key(b"y"))])
             .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");

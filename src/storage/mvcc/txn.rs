@@ -13,7 +13,7 @@
 
 use std::fmt;
 use storage::{Key, Value, Mutation};
-use storage::engine::{Engine, Snapshot, Modify, Cursor};
+use storage::engine::{Engine, Snapshot, Modify, Cursor, DEFAULT_CFNAME};
 use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 use kvproto::kvrpcpb::Context;
 use super::meta::{Meta, FIRST_META_INDEX};
@@ -64,10 +64,12 @@ impl<'a> MvccTxn<'a> {
 
     fn write_meta(&mut self, key: &Key, meta: &mut Meta) {
         if let Some((split_meta, index)) = meta.split() {
-            let modify = Modify::Put((key.append_ts(index), split_meta.to_bytes()));
+            let modify = Modify::Put(DEFAULT_CFNAME, key.append_ts(index), split_meta.to_bytes());
             self.writes.push(modify);
         }
-        let modify = Modify::Put((key.append_ts(FIRST_META_INDEX), meta.to_bytes()));
+        let modify = Modify::Put(DEFAULT_CFNAME,
+                                 key.append_ts(FIRST_META_INDEX),
+                                 meta.to_bytes());
         self.writes.push(modify);
     }
 
@@ -104,7 +106,7 @@ impl<'a> MvccTxn<'a> {
 
         if let Mutation::Put((_, ref value)) = mutation {
             let value_key = key.append_ts(self.start_ts);
-            self.writes.push(Modify::Put((value_key, value.clone())));
+            self.writes.push(Modify::Put(DEFAULT_CFNAME, value_key, value.clone()));
         }
         Ok(())
     }
@@ -161,7 +163,7 @@ impl<'a> MvccTxn<'a> {
         match meta.get_lock() {
             Some(lock) if lock.get_start_ts() == self.start_ts => {
                 let value_key = key.append_ts(lock.get_start_ts());
-                self.writes.push(Modify::Delete(value_key));
+                self.writes.push(Modify::Delete(DEFAULT_CFNAME, value_key));
             }
             _ => {
                 return match meta.get_item_by_start_ts(self.start_ts) {

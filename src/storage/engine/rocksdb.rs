@@ -19,7 +19,7 @@ use rocksdb::rocksdb_ffi::DBCFHandle;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, CfName};
 use util::escape;
-use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result};
+use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result, DEFAULT_CFNAME};
 use tempdir::TempDir;
 
 
@@ -105,33 +105,30 @@ impl Engine for EngineRocksdb {
     fn write(&self, _: &Context, batch: Vec<Modify>) -> Result<()> {
         let wb = WriteBatch::new();
         for rev in batch {
-            match rev {
-                Modify::Delete(k) => {
-                    trace!("EngineRocksdb: delete {}", k);
-                    if let Err(msg) = wb.delete(k.encoded()) {
-                        return Err(RocksDBError::new(msg).into_engine_error());
+            let res = match rev {
+                Modify::Delete(cf, k) => {
+                    if cf == DEFAULT_CFNAME {
+                        trace!("EngineRocksdb: delete {}", k);
+                        wb.delete(k.encoded())
+                    } else {
+                        trace!("EngineRocksdb: delete_cf {} {}", cf, k);
+                        let handle = try!(self.cf_handle(cf));
+                        wb.delete_cf(*handle, k.encoded())
                     }
                 }
-                Modify::DeleteCf(cf, k) => {
-                    trace!("EngineRocksdb: delete_cf {} {}", cf, k);
-                    let handle = try!(self.cf_handle(cf));
-                    if let Err(msg) = wb.delete_cf(handle.to_owned(), k.encoded()) {
-                        return Err(RocksDBError::new(msg).into_engine_error());
+                Modify::Put(cf, k, v) => {
+                    if cf == DEFAULT_CFNAME {
+                        trace!("EngineRocksdb: put {},{}", k, escape(&v));
+                        wb.put(k.encoded(), &v)
+                    } else {
+                        trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
+                        let handle = try!(self.cf_handle(cf));
+                        wb.put_cf(*handle, k.encoded(), &v)
                     }
                 }
-                Modify::Put((k, v)) => {
-                    trace!("EngineRocksdb: put {},{}", k, escape(&v));
-                    if let Err(msg) = wb.put(k.encoded(), &v) {
-                        return Err(RocksDBError::new(msg).into_engine_error());
-                    }
-                }
-                Modify::PutCf((cf, k, v)) => {
-                    trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
-                    let handle = try!(self.cf_handle(cf));
-                    if let Err(msg) = wb.put_cf(handle.to_owned(), k.encoded(), &v) {
-                        return Err(RocksDBError::new(msg).into_engine_error());
-                    }
-                }
+            };
+            if let Err(msg) = res {
+                return Err(RocksDBError::new(msg).into_engine_error());
             }
         }
         if let Err(msg) = self.db.write(wb) {
