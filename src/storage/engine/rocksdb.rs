@@ -14,7 +14,7 @@
 use std::fmt::{self, Display, Formatter, Debug};
 use std::error::Error;
 use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator, Options};
-use rocksdb::rocksdb::Snapshot as RocksSnapshot;
+use rocksdb::rocksdb::Snapshot as DBSnapshot;
 use rocksdb::rocksdb_ffi::DBCFHandle;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, CfName};
@@ -70,12 +70,6 @@ impl EngineRocksdb {
         }
         Ok(db)
     }
-
-    fn cf_handle(&self, cf: CfName) -> Result<&DBCFHandle> {
-        self.db
-            .cf_handle(cf)
-            .ok_or(RocksDBError::new("cf not found.".to_string()).into_engine_error())
-    }
 }
 
 impl Debug for EngineRocksdb {
@@ -95,9 +89,9 @@ impl Engine for EngineRocksdb {
 
     fn get_cf(&self, _: &Context, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("EngineRocksdb: get_cf {} {}", key, cf);
-        let handle = try!(self.cf_handle(cf));
+        let handle = try!(get_cf_handle(&self.db, cf));
         self.db
-            .get_cf(handle.to_owned(), key.encoded())
+            .get_cf(*handle, key.encoded())
             .map(|r| r.map(|v| v.to_vec()))
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
@@ -112,7 +106,7 @@ impl Engine for EngineRocksdb {
                         wb.delete(k.encoded())
                     } else {
                         trace!("EngineRocksdb: delete_cf {} {}", cf, k);
-                        let handle = try!(self.cf_handle(cf));
+                        let handle = try!(get_cf_handle(&self.db, cf));
                         wb.delete_cf(*handle, k.encoded())
                     }
                 }
@@ -122,7 +116,7 @@ impl Engine for EngineRocksdb {
                         wb.put(k.encoded(), &v)
                     } else {
                         trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
-                        let handle = try!(self.cf_handle(cf));
+                        let handle = try!(get_cf_handle(&self.db, cf));
                         wb.put_cf(*handle, k.encoded(), &v)
                     }
                 }
@@ -138,7 +132,7 @@ impl Engine for EngineRocksdb {
     }
 
     fn snapshot<'a>(&'a self, _: &Context) -> Result<Box<Snapshot + 'a>> {
-        let snapshot = RocksSnapshot::new(&self.db);
+        let snapshot = RocksSnapshot::new(self);
         Ok(box snapshot)
     }
 
@@ -181,18 +175,46 @@ impl<'a> Cursor for DBIterator<'a> {
     }
 }
 
+struct RocksSnapshot<'a> {
+    db: &'a DB,
+    snap: DBSnapshot<'a>,
+}
+
+impl<'a> RocksSnapshot<'a> {
+    fn new(db: &EngineRocksdb) -> RocksSnapshot {
+        RocksSnapshot {
+            db: &db.db,
+            snap: DBSnapshot::new(&db.db),
+        }
+    }
+}
+
 impl<'a> Snapshot for RocksSnapshot<'a> {
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get {}", key);
-        self.get(key.encoded())
+        self.snap
+            .get(key.encoded())
+            .map(|r| r.map(|v| v.to_vec()))
+            .map_err(|e| RocksDBError::new(e).into_engine_error())
+    }
+
+    fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get_cf {} {}", cf, key);
+        let handle = try!(get_cf_handle(self.db, cf));
+        self.snap
+            .get_cf(*handle, key.encoded())
             .map(|r| r.map(|v| v.to_vec()))
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 
     fn iter<'b>(&'b self) -> Result<Box<Cursor + 'b>> {
         trace!("RocksSnapshot: create iterator");
-        Ok(box RocksSnapshot::iter(self))
+        Ok(box DBSnapshot::iter(&self.snap))
     }
+}
+
+fn get_cf_handle<'a>(db: &'a DB, cf: CfName) -> Result<&'a DBCFHandle> {
+    db.cf_handle(cf).ok_or(RocksDBError::new("cf not found.".to_string()).into_engine_error())
 }
 
 #[derive(Debug, Clone)]

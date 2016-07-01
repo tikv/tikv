@@ -67,6 +67,7 @@ pub trait Engine: Send + Sync + Debug {
 
 pub trait Snapshot {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
+    fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
 }
 
