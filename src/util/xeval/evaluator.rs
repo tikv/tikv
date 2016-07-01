@@ -492,6 +492,10 @@ mod test {
 
     test_eval!(test_eval_arith,
                vec![
+		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
+        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Plus), Datum::U64(2)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Plus), Datum::F64(2.0)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Plus), Datum::F64(0.0)),
         (bin_expr(Datum::Null, Datum::Null, ExprType::Plus), Datum::Null),
         (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Plus), Datum::Null),
         (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Plus), Datum::Null),
