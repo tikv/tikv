@@ -24,8 +24,6 @@ if [ $? -eq 0 ]; then
     export ETCD_ENDPOINTS=127.0.0.1:2379
 fi
 
-exit 0
-
 export ENABLE_FEATURES=default
 export LOG_FILE=tests.log
 make test 2>&1 | tee tests.out
