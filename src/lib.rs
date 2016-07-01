@@ -12,17 +12,13 @@
 // limitations under the License.
 
 #![crate_type = "lib"]
-#![allow(unused_features)]
 #![feature(test)]
 #![feature(optin_builtin_traits)]
 #![feature(btree_range, collections_bound)]
-#![feature(recover)]
 #![feature(fnbox)]
 #![feature(plugin)]
 #![feature(box_syntax)]
 #![feature(const_fn)]
-#![feature(panic_handler)]
-#![feature(static_rwlock)]
 #![feature(iter_arith)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
