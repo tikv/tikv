@@ -13,12 +13,13 @@
 
 use std::fmt::{self, Display, Formatter, Debug};
 use std::error::Error;
-use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
+use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator, Options};
 use rocksdb::rocksdb::Snapshot as RocksSnapshot;
+use rocksdb::rocksdb_ffi::DBCFHandle;
 use kvproto::kvrpcpb::Context;
-use storage::{Key, Value};
+use storage::{Key, Value, CfName};
 use util::escape;
-use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result};
+use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result, DEFAULT_CFNAME};
 use tempdir::TempDir;
 
 
@@ -30,7 +31,7 @@ pub struct EngineRocksdb {
 }
 
 impl EngineRocksdb {
-    pub fn new(path: &str) -> Result<EngineRocksdb> {
+    pub fn new(path: &str, cfs: &[CfName]) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
@@ -39,15 +40,41 @@ impl EngineRocksdb {
             }
             _ => (path.to_owned(), None),
         };
+        Ok(EngineRocksdb {
+            db: try!(Self::open_or_create_db(&path, cfs)),
+            temp_dir: temp_dir,
+        })
+    }
 
-        DB::open_default(&path)
-            .map(|db| {
-                EngineRocksdb {
-                    db: db,
-                    temp_dir: temp_dir,
-                }
-            })
-            .map_err(|e| RocksDBError::new(e).into_engine_error())
+    fn open_or_create_db(path: &str, cfs: &[CfName]) -> Result<DB> {
+        // Currently we support 1) Create new db. 2) Open a db with CFs we want. 3) Open db with no
+        // CFs.
+        // TODO: Support open db with incomplete CFs.
+
+        let mut opts = Options::new();
+        opts.create_if_missing(false);
+        match DB::open_cf(&opts, path, cfs) {
+            Ok(db) => return Ok(db),
+            Err(e) => warn!("open rocksdb fail: {}", e),
+        }
+
+        opts.create_if_missing(true);
+        let mut db = match DB::open(&opts, path) {
+            Ok(db) => db,
+            Err(e) => return Err(RocksDBError::new(e).into_engine_error()),
+        };
+        for cf in cfs {
+            if let Err(e) = db.create_cf(cf, &opts) {
+                return Err(RocksDBError::new(e).into_engine_error());
+            }
+        }
+        Ok(db)
+    }
+
+    fn cf_handle(&self, cf: CfName) -> Result<&DBCFHandle> {
+        self.db
+            .cf_handle(cf)
+            .ok_or(RocksDBError::new("cf not found.".to_string()).into_engine_error())
     }
 }
 
@@ -66,22 +93,42 @@ impl Engine for EngineRocksdb {
             .map_err(|e| RocksDBError::new(e).into_engine_error())
     }
 
+    fn get_cf(&self, _: &Context, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        trace!("EngineRocksdb: get_cf {} {}", key, cf);
+        let handle = try!(self.cf_handle(cf));
+        self.db
+            .get_cf(handle.to_owned(), key.encoded())
+            .map(|r| r.map(|v| v.to_vec()))
+            .map_err(|e| RocksDBError::new(e).into_engine_error())
+    }
+
     fn write(&self, _: &Context, batch: Vec<Modify>) -> Result<()> {
         let wb = WriteBatch::new();
         for rev in batch {
-            match rev {
-                Modify::Delete(k) => {
-                    trace!("EngineRocksdb: delete {}", k);
-                    if let Err(msg) = wb.delete(k.encoded()) {
-                        return Err(RocksDBError::new(msg).into_engine_error());
+            let res = match rev {
+                Modify::Delete(cf, k) => {
+                    if cf == DEFAULT_CFNAME {
+                        trace!("EngineRocksdb: delete {}", k);
+                        wb.delete(k.encoded())
+                    } else {
+                        trace!("EngineRocksdb: delete_cf {} {}", cf, k);
+                        let handle = try!(self.cf_handle(cf));
+                        wb.delete_cf(*handle, k.encoded())
                     }
                 }
-                Modify::Put((k, v)) => {
-                    trace!("EngineRocksdb: put {},{}", k, escape(&v));
-                    if let Err(msg) = wb.put(k.encoded(), &v) {
-                        return Err(RocksDBError::new(msg).into_engine_error());
+                Modify::Put(cf, k, v) => {
+                    if cf == DEFAULT_CFNAME {
+                        trace!("EngineRocksdb: put {},{}", k, escape(&v));
+                        wb.put(k.encoded(), &v)
+                    } else {
+                        trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
+                        let handle = try!(self.cf_handle(cf));
+                        wb.put_cf(*handle, k.encoded(), &v)
                     }
                 }
+            };
+            if let Err(msg) = res {
+                return Err(RocksDBError::new(msg).into_engine_error());
             }
         }
         if let Err(msg) = self.db.write(wb) {
