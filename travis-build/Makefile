@@ -34,28 +34,28 @@ ${KCOV_DIR}/kcov:
 	mkdir -p ${KCOV_DIR} && \
 	cp src/kcov ${KCOV_DIR}/kcov
 
-# TODO: After Etcd releases binary package, we don't need to install go and then build the source.
 ${ETCD_DIR}/etcd:
-	git clone --depth=1 https://github.com/coreos/etcd.git "${GOPATH}/src/github.com/coreos/etcd" && \
-  	cd "${GOPATH}/src/github.com/coreos/etcd" && \
-  	./build && \
-  	cp -f ./bin/etcd "${ETCD_DIR}/etcd"
+ifeq ($(TRAVIS_OS_NAME),linux)
+	cd /tmp && \
+	curl -L https://github.com/coreos/etcd/releases/download/v3.0.0/etcd-v3.0.0-linux-amd64.tar.gz -o etcd-v3.0.0-linux-amd64.tar.gz && \
+	tar xzvf etcd-v3.0.0-linux-amd64.tar.gz && \
+	cd etcd-v3.0.0-linux-amd64 && \
+	cp -f etcd ${ETCD_DIR}
+else
+	cd /tmp && \
+	curl -L https://github.com/coreos/etcd/releases/download/v3.0.0/etcd-v3.0.0-darwin-amd64.zip -o etcd-v3.0.0-darwin-amd64.zip && \
+	unzip etcd-v3.0.0-darwin-amd64.zip && \
+	cd etcd-v3.0.0-darwin-amd64 && \
+	cp -f etcd ${ETCD_DIR}
+endif
 
-linux_go:
-	curl -L https://storage.googleapis.com/golang/go1.6.2.linux-amd64.tar.gz -o go.tar.gz && \
-	tar -C ${ETCD_DIR} -xzf go.tar.gz 
-
-mac_go:
-	curl -L https://storage.googleapis.com/golang/go1.6.2.darwin-amd64.tar.gz -o go.tar.gz && \
-	tar -C ${ETCD_DIR} -xzf go.tar.gz 
-
-prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov linux_go ${ETCD_DIR}/etcd
+prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov ${ETCD_DIR}/etcd
 
 prepare_brew: 
 	brew update && \
 	brew install gflags snappy rocksdb
 
-prepare_osx: prepare_brew mac_go ${ETCD_DIR}/etcd
+prepare_osx: prepare_brew ${ETCD_DIR}/etcd
 	
 test_linux:
 	export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${ROCKSDB_DIR}" && \
