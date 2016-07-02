@@ -42,7 +42,7 @@ use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, Comp
                     CompactRunner, PdRunner, PdTask};
 use super::{util, SendCh, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::Iterable;
+use super::engine::{Iterable, Peekable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::peer_storage::{ApplySnapResult, SnapState};
@@ -257,14 +257,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
+        if msg.has_is_tombstone() && msg.get_is_tombstone() {
+            // we receive a message tells us to remove ourself.
+            self.handle_gc_peer_msg(&msg);
+            return Ok(());
+        }
+
+        if try!(self.is_msg_stale(&msg)) {
+            return Ok(());
+        }
+
         // TODO: we may encounter a message with larger peer id, which
         // means current peer is stale, then we should remove current peer
 
         if !self.region_peers.contains_key(&region_id) {
-            let peer = match Peer::replicate(self,
-                                             region_id,
-                                             msg.get_region_epoch(),
-                                             msg.get_to_peer().get_id()) {
+            let peer = match Peer::replicate(self, region_id, msg.get_to_peer().get_id()) {
                 Ok(peer) => peer,
                 Err(e) => {
                     error!("peer replication from {:?} to {:?} in region {} failed {:?}",
@@ -322,24 +329,94 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return false;
         }
 
+        true
+    }
+
+    fn is_msg_stale(&self, msg: &RaftMessage) -> Result<bool> {
+        let region_id = msg.get_region_id();
+        let from_peer = msg.get_from_peer();
+        let to_peer = msg.get_to_peer();
+        let from_epoch = msg.get_region_epoch();
+        let msg_type = msg.get_message().get_msg_type();
+
         // If we receive a message whose sender peer is not in current region and
         // epoch is stale, we can ignore it.
         if let Some(peer) = self.region_peers.get(&region_id) {
-            let from_epoch = msg.get_region_epoch();
-            let conf_ver = peer.storage.rl().region.get_region_epoch().get_conf_ver();
-            let version = peer.storage.rl().region.get_region_epoch().get_version();
+            let region = &peer.storage.rl().region;
+            let epoch = region.get_region_epoch();
 
-            if (from_epoch.get_conf_ver() < conf_ver || from_epoch.get_version() < version) &&
-               util::find_peer(&peer.storage.rl().region, from.get_store_id()).is_none() {
+            if util::is_epoch_stale(from_epoch, epoch) &&
+               util::find_peer(region, from_peer.get_store_id()).is_none() {
+                warn!("raft message {:?} is stale {:?}, current {:?}, tell to gc",
+                      msg_type,
+                      from_epoch,
+                      epoch);
+                self.send_gc_peer_msg(region_id, to_peer.clone(), from_peer.clone(), epoch.clone());
+                return Ok(true);
+            }
+        } else {
+            // no exist, check with tombstone key.
+            let state_key = keys::region_state_key(region_id);
+            if let Some(local_state) = try!(self.engine.get_msg::<RegionLocalState>(&state_key)) {
+                if local_state.get_state() == PeerState::Tombstone {
+                    let region_epoch = local_state.get_region().get_region_epoch();
+                    // The region in this peer is already destroyed
+                    if util::is_epoch_stale(from_epoch, region_epoch) {
+                        warn!("raft message {:?} is stale {:?}, tombstone {:?}, tell to gc",
+                              msg_type,
+                              from_epoch,
+                              region_epoch);
+                        self.send_gc_peer_msg(region_id,
+                                              to_peer.clone(),
+                                              from_peer.clone(),
+                                              region_epoch.clone());
+                        return Ok(true);
+                    }
 
-                warn!("raft message {:?} is stale {:?}, ignore it",
-                      msg.get_message().get_msg_type(),
-                      from_epoch);
-                return false;
+                    if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
+                        return Err(box_err!("msg {:?} has invalid epoch, ignore it", msg_type));
+                    }
+                }
             }
         }
 
-        true
+        Ok(false)
+    }
+
+    fn send_gc_peer_msg(&self,
+                        region_id: u64,
+                        from: metapb::Peer,
+                        to: metapb::Peer,
+                        epoch: metapb::RegionEpoch) {
+        let mut msg = RaftMessage::new();
+        msg.set_region_id(region_id);
+        msg.set_from_peer(from);
+        msg.set_to_peer(to);
+        msg.set_region_epoch(epoch);
+        msg.set_is_tombstone(true);
+        if let Err(e) = self.trans.rl().send(msg) {
+            error!("send gc message failed {:?}", e);
+        }
+    }
+
+    fn handle_gc_peer_msg(&mut self, msg: &RaftMessage) {
+        let region_id = msg.get_region_id();
+
+        let mut need_remove = false;
+        if let Some(peer) = self.region_peers.get(&region_id) {
+            let from_epoch = msg.get_region_epoch();
+            if util::is_epoch_stale(peer.storage.rl().region.get_region_epoch(), from_epoch) {
+                // TODO: ask pd to guarantee we are stale now.
+                warn!("peer {:?} for region {} receives gc message, remove",
+                      msg.get_to_peer(),
+                      region_id);
+                need_remove = true;
+            }
+        }
+
+        if need_remove {
+            self.destory_peer(region_id, msg.get_to_peer().clone());
+        }
     }
 
     fn is_snapshot_overlapped(&self, msg: &RaftMessage) -> Result<bool> {
@@ -407,6 +484,30 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
+    fn destory_peer(&mut self, region_id: u64, peer: metapb::Peer) {
+        warn!("destroy peer {:?} for region {}", peer, region_id);
+        // The remove peer is in the same store.
+        // TODO: should we check None here?
+        // Can we destroy it in another thread later?
+        let mut p = self.region_peers.remove(&region_id).unwrap();
+        let end_key = enc_end_key(&p.region());
+        if let Err(e) = p.destroy() {
+            error!("destroy peer {:?} for region {} in store {} err {:?}",
+                   peer,
+                   region_id,
+                   self.store_id(),
+                   e);
+        } else {
+            if self.region_ranges.remove(&end_key).is_none() {
+                panic!("Remove region, peer {:?}, region {} in store {}",
+                       peer,
+                       region_id,
+                       self.store_id());
+
+            }
+        }
+    }
+
     fn on_ready_change_peer(&mut self,
                             region_id: u64,
                             change_type: ConfChangeType,
@@ -418,31 +519,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.heartbeat_pd(p);
             }
         }
-
-
+        
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
-            warn!("destroy peer {:?} for region {}", peer, region_id);
-            // The remove peer is in the same store.
-            // TODO: should we check None here?
-            // Can we destroy it in another thread later?
-            let mut p = self.region_peers.remove(&region_id).unwrap();
-            let end_key = enc_end_key(&p.region());
-            if let Err(e) = p.destroy() {
-                error!("destroy peer {:?} for region {} in store {} err {:?}",
-                       peer,
-                       region_id,
-                       self.store_id(),
-                       e);
-            } else {
-                if self.region_ranges.remove(&end_key).is_none() {
-                    panic!("Remove region, peer {:?}, region {} in store {}",
-                           peer,
-                           region_id,
-                           self.store_id());
-
-                }
-            }
+            self.destory_peer(region_id, peer)
         }
     }
 
@@ -1015,15 +1095,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool) {
-        let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let mut storage = peer.storage.wl();
-        assert!(storage.snap_state == SnapState::Applying,
-                "snap state should not change during applying");
-        if !is_success {
-            // TODO: cleanup region and treat it as tombstone.
-            panic!("applying snapshot to {} failed", region_id);
+        if let Some(peer) = self.region_peers.get_mut(&region_id) {
+            let mut storage = peer.storage.wl();
+            assert!(storage.snap_state == SnapState::Applying,
+                    "snap state should not change during applying");
+            if !is_success {
+                // TODO: cleanup region and treat it as tombstone.
+                panic!("applying snapshot to {} failed", region_id);
+            }
+            storage.snap_state = SnapState::Relax;
         }
-        storage.snap_state = SnapState::Relax;
     }
 }
 

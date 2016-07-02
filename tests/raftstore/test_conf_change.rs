@@ -433,23 +433,16 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // refresh region info, maybe no need
     cluster.must_put(b"k3", b"v3");
 
+    // wait sometime to let peer (1, 1) get gc message.
+    sleep_ms(500);
     // check whether a new cluster [1,2,3] is formed
     // if so, both [1,2,3] and [4,5,6] think they serve for region r1
     // result in split brain
-    let header0 = find_leader_response_header(cluster, r1, new_peer(2, 2));
-    assert!(header0.get_error().has_region_not_found());
-
-    // at least wait for a round of election timeout and check again
-    let term = find_leader_response_header(cluster, r1, new_peer(1, 1)).get_current_term();
-    let mut current_term = term;
-    while current_term < term + 2 {
-        sleep_ms(10);
-        let header2 = find_leader_response_header(cluster, r1, new_peer(1, 1));
-        current_term = header2.get_current_term();
+    // all [1,2,3] must have no region r1.
+    for i in 1..4 {
+        let header = find_leader_response_header(cluster, r1, new_peer(i, i));
+        assert!(header.get_error().has_region_not_found());
     }
-
-    let header1 = find_leader_response_header(cluster, r1, new_peer(2, 2));
-    assert!(header1.get_error().has_region_not_found());
 }
 
 fn find_leader_response_header<T: Simulator>(cluster: &mut Cluster<T>,
