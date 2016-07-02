@@ -25,7 +25,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
+
 use raft::storage::Storage;
 use raft::log_unstable::Unstable;
 use kvproto::raftpb::{Entry, Snapshot};

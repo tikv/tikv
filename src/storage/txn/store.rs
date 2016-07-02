@@ -165,7 +165,6 @@ impl TxnStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn rollback_then_get(&self, ctx: Context, key: Key, lock_ts: u64) -> Result<Option<Value>> {
         let _guard = self.shard_mutex.lock(&[&key]);
 
