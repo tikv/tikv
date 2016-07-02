@@ -353,3 +353,54 @@ fn test_server_leader_change_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 3);
     test_leader_change_with_uncommitted_log(&mut cluster);
 }
+
+fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.store_cfg.raft_election_timeout_ticks = 50;
+    // disable compact log to make test more stable.
+    cluster.cfg.store_cfg.raft_log_gc_threshold = 1000;
+    // We use three peers([1, 2, 3]) for this test.
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+
+    // guarantee peer 1 is leader
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // stop peer 2 replicate messages.
+    cluster.add_filter(IsolateRegionStore::new(1, 2)
+        .msg_type(MessageType::MsgAppend)
+        .direction(Direction::Recv));
+    // peer 2 can't step to leader.
+    cluster.add_filter(IsolateRegionStore::new(1, 2)
+        .msg_type(MessageType::MsgRequestVote)
+        .direction(Direction::Send));
+
+    let pd_client = cluster.pd_client.clone();
+    pd_client.remove_peer(1, new_peer(1, 1));
+
+    // wait for the leader receive the remove order.
+    sleep_ms(1000);
+
+    let region = cluster.get_region(b"");
+    let reqs = vec![new_put_cmd(b"k3", b"v3")];
+    let mut put = new_request(region.get_id(), region.get_region_epoch().clone(), reqs);
+    debug!("requesting: {:?}", put);
+    put.mut_header().set_peer(new_peer(1, 1));
+    cluster.clear_filters();
+    let resp = cluster.call_command(put, Duration::from_secs(5)).unwrap();
+    assert!(resp.get_header().has_error());
+    assert!(resp.get_header().get_error().has_region_not_found(),
+            format!("{:?} should have region not found", resp));
+}
+
+#[test]
+fn test_node_remove_leader_with_uncommitted_log() {
+    let mut cluster = new_node_cluster(0, 2);
+    test_remove_leader_with_uncommitted_log(&mut cluster);
+}
+
+#[test]
+fn test_server_remove_leader_with_uncommitted_log() {
+    let mut cluster = new_server_cluster(0, 2);
+    test_remove_leader_with_uncommitted_log(&mut cluster);
+}
