@@ -25,7 +25,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
+
 use std::cmp;
 use raft::storage::Storage;
 use rand::{self, Rng};
@@ -281,10 +281,6 @@ impl<T: Storage> Raft<T> {
     #[inline]
     pub fn get_snap(&self) -> Option<&Snapshot> {
         self.raft_log.get_unstable().snapshot.as_ref()
-    }
-
-    fn has_leader(&self) -> bool {
-        self.leader_id != INVALID_ID
     }
 
     pub fn soft_state(&self) -> SoftState {

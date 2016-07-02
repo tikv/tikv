@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -107,7 +106,6 @@ impl Transport for ChannelTransport {
 type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 
 pub struct NodeCluster {
-    cluster_id: u64,
     trans: Arc<RwLock<ChannelTransport>>,
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
@@ -115,9 +113,8 @@ pub struct NodeCluster {
 }
 
 impl NodeCluster {
-    pub fn new(cluster_id: u64, pd_client: Arc<TestPdClient>) -> NodeCluster {
+    pub fn new(pd_client: Arc<TestPdClient>) -> NodeCluster {
         NodeCluster {
-            cluster_id: cluster_id,
             trans: ChannelTransport::new(),
             pd_client: pd_client,
             nodes: HashMap::new(),
@@ -212,6 +209,6 @@ impl Simulator for NodeCluster {
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(id, pd_client.clone())));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     Cluster::new(id, count, sim, pd_client)
 }

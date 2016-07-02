@@ -25,8 +25,6 @@ use std::result::Result as StdResult;
 /// to the key format of `TiDB`.
 pub struct SplitObserver;
 
-const VERSION_LENGTH: usize = 8;
-
 type Result<T> = StdResult<T, String>;
 
 impl SplitObserver {

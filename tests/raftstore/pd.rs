@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
