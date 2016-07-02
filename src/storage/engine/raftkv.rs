@@ -36,7 +36,7 @@ use protobuf::RepeatedField;
 use storage::engine;
 use super::{Engine, Modify, Cursor, Snapshot};
 use util::event::Event;
-use storage::{Key, Value};
+use storage::{Key, Value, CfName};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
@@ -203,6 +203,10 @@ impl<C: PdClient> Engine for RaftKv<C> {
         snap.get(key)
     }
 
+    fn get_cf(&self, _: &Context, _: CfName, _: &Key) -> engine::Result<Option<Value>> {
+        unimplemented!();
+    }
+
     fn iter<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Cursor + 'a>> {
         let snap = try!(self.raw_snapshot(ctx));
         Ok(box RegionIterator::new(self.db.iter(), snap.get_region().clone()))
@@ -217,13 +221,13 @@ impl<C: PdClient> Engine for RaftKv<C> {
             let m = modifies.pop().unwrap();
             let mut req = Request::new();
             match m {
-                Modify::Delete(k) => {
+                Modify::Delete(_, k) => {
                     let mut delete = DeleteRequest::new();
                     delete.set_key(k.encoded().to_owned());
                     req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
-                Modify::Put((k, v)) => {
+                Modify::Put(_, k, v) => {
                     let mut put = PutRequest::new();
                     put.set_key(k.encoded().to_owned());
                     put.set_value(v);

@@ -24,8 +24,8 @@ use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use uuid::Uuid;
 
-use kvproto::raft_serverpb::{RaftMessage, StoreIdent, RaftSnapshotData, RaftTruncatedState,
-                             RegionLocalState, PeerState};
+use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+                             PeerState};
 use kvproto::raftpb::{ConfChangeType, Snapshot};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer};
@@ -42,7 +42,7 @@ use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, Comp
                     CompactRunner, PdRunner, PdTask};
 use super::{util, SendCh, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::{Peekable, Iterable};
+use super::engine::Iterable;
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::peer_storage::{ApplySnapResult, SnapState};
@@ -52,7 +52,6 @@ use super::transport::Transport;
 
 type Key = Vec<u8>;
 
-const SPLIT_TASK_PEEK_INTERVAL_SECS: u64 = 1;
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
@@ -1028,11 +1027,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
-fn load_store_ident<T: Peekable>(r: &T) -> Result<Option<StoreIdent>> {
-    let ident = try!(r.get_msg::<StoreIdent>(&keys::store_ident_key()));
-
-    Ok(ident)
-}
 
 fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
                                              tick: Tick,

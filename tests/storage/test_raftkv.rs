@@ -82,14 +82,15 @@ fn get_put(ctx: &Context, engine: &Engine) {
 
 fn batch(ctx: &Context, engine: &Engine) {
     engine.write(ctx,
-               vec![Modify::Put((make_key(b"x"), b"1".to_vec())),
-                    Modify::Put((make_key(b"y"), b"2".to_vec()))])
+               vec![Modify::Put(DEFAULT_CFNAME, make_key(b"x"), b"1".to_vec()),
+                    Modify::Put(DEFAULT_CFNAME, make_key(b"y"), b"2".to_vec())])
         .unwrap();
     assert_has(ctx, engine, b"x", b"1");
     assert_has(ctx, engine, b"y", b"2");
 
     engine.write(ctx,
-               vec![Modify::Delete(make_key(b"x")), Modify::Delete(make_key(b"y"))])
+               vec![Modify::Delete(DEFAULT_CFNAME, make_key(b"x")),
+                    Modify::Delete(DEFAULT_CFNAME, make_key(b"y"))])
         .unwrap();
     assert_none(ctx, engine, b"y");
     assert_none(ctx, engine, b"y");

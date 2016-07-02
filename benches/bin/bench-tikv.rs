@@ -35,17 +35,20 @@ extern crate time;
 #[allow(dead_code)]
 #[path="../../tests/util.rs"]
 mod test_util;
+#[allow(dead_code)]
 #[path="../../tests/raftstore/util.rs"]
 mod util;
+#[allow(dead_code)]
 #[path="../../tests/raftstore/cluster.rs"]
 mod cluster;
 #[path="../../tests/raftstore/node.rs"]
 mod node;
 #[path="../../tests/raftstore/server.rs"]
 mod server;
+#[allow(dead_code)]
 #[path="../../tests/raftstore/pd.rs"]
 mod pd;
-#[allow(unused)]
+#[allow(dead_code)]
 #[path="../../tests/raftstore/transport_simulate.rs"]
 mod transport_simulate;
 
