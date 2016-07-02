@@ -71,6 +71,8 @@ pub fn client() -> Option<&'static Metric> {
     unsafe { CLIENT.map(|c| &*c) }
 }
 
+static BUFFER_SIZE: usize = 1024;
+
 pub struct BufferedUdpMetricSink {
     sink_addr: SocketAddr,
     socket: UdpSocket,
@@ -98,7 +100,7 @@ impl BufferedUdpMetricSink {
             sink_addr: addr,
             socket: socket,
 
-            buffer: Mutex::new(Vec::with_capacity(1024)),
+            buffer: Mutex::new(Vec::with_capacity(BUFFER_SIZE)),
             flush_period: flush_period,
             last_flush_time: Mutex::new(Instant::now()),
         })
@@ -121,7 +123,10 @@ impl BufferedUdpMetricSink {
     }
 
     fn flush(&self, buffer: &mut Vec<u8>) {
-        let _ = self.socket.send_to(buffer.as_slice(), &self.sink_addr);
+        if let Err(e) = self.socket.send_to(buffer.as_slice(), &self.sink_addr) {
+            warn!("send metric failed {:?}", e);
+        }
+
         buffer.clear();
     }
 }
