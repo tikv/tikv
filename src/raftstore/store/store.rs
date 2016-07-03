@@ -516,7 +516,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // TODO: should we check None here?
         // Can we destroy it in another thread later?
         let mut p = self.region_peers.remove(&region_id).unwrap();
-        // We can destroy a peer which is applying snapshot.
+        // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snap());
 
         let is_initialized = p.is_initialized();
