@@ -441,7 +441,8 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // all [1,2,3] must have no region r1.
     for i in 1..4 {
         let header = find_leader_response_header(cluster, r1, new_peer(i, i));
-        assert!(header.get_error().has_region_not_found());
+        assert!(header.get_error().has_region_not_found(),
+                format!{"store {} can't have region {}", i,r1});
     }
 }
 

@@ -340,7 +340,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let msg_type = msg.get_message().get_msg_type();
 
         // If we receive a message whose sender peer is not in current region and
-        // epoch is stale, we can ignore it.
+        // epoch is stale, we should send gc message for the sender peer to let it
+        // remove itself.
         if let Some(peer) = self.region_peers.get(&region_id) {
             let region = &peer.storage.rl().region;
             let epoch = region.get_region_epoch();
@@ -354,28 +355,30 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.send_gc_peer_msg(region_id, to_peer.clone(), from_peer.clone(), epoch.clone());
                 return Ok(true);
             }
-        } else {
-            // no exist, check with tombstone key.
-            let state_key = keys::region_state_key(region_id);
-            if let Some(local_state) = try!(self.engine.get_msg::<RegionLocalState>(&state_key)) {
-                if local_state.get_state() == PeerState::Tombstone {
-                    let region_epoch = local_state.get_region().get_region_epoch();
-                    // The region in this peer is already destroyed
-                    if util::is_epoch_stale(from_epoch, region_epoch) {
-                        warn!("raft message {:?} is stale {:?}, tombstone {:?}, tell to gc",
-                              msg_type,
-                              from_epoch,
-                              region_epoch);
-                        self.send_gc_peer_msg(region_id,
-                                              to_peer.clone(),
-                                              from_peer.clone(),
-                                              region_epoch.clone());
-                        return Ok(true);
-                    }
 
-                    if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
-                        return Err(box_err!("msg {:?} has invalid epoch, ignore it", msg_type));
-                    }
+            return Ok(false);
+        }
+
+        // no exist, check with tombstone key.
+        let state_key = keys::region_state_key(region_id);
+        if let Some(local_state) = try!(self.engine.get_msg::<RegionLocalState>(&state_key)) {
+            if local_state.get_state() == PeerState::Tombstone {
+                let region_epoch = local_state.get_region().get_region_epoch();
+                // The region in this peer is already destroyed
+                if util::is_epoch_stale(from_epoch, region_epoch) {
+                    warn!("raft message {:?} is stale {:?}, tombstone {:?}, tell to gc",
+                          msg_type,
+                          from_epoch,
+                          region_epoch);
+                    self.send_gc_peer_msg(region_id,
+                                          to_peer.clone(),
+                                          from_peer.clone(),
+                                          region_epoch.clone());
+                    return Ok(true);
+                }
+
+                if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
+                    return Err(box_err!("msg {:?} has invalid epoch, ignore it", msg_type));
                 }
             }
         }
@@ -490,21 +493,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // TODO: should we check None here?
         // Can we destroy it in another thread later?
         let mut p = self.region_peers.remove(&region_id).unwrap();
+        let is_initialized = p.is_initialized();
         let end_key = enc_end_key(&p.region());
         if let Err(e) = p.destroy() {
+            // should panic here?
             error!("destroy peer {:?} for region {} in store {} err {:?}",
                    peer,
                    region_id,
                    self.store_id(),
                    e);
-        } else {
-            if self.region_ranges.remove(&end_key).is_none() {
-                panic!("Remove region, peer {:?}, region {} in store {}",
-                       peer,
-                       region_id,
-                       self.store_id());
+            return;
+        }
 
-            }
+        if is_initialized && self.region_ranges.remove(&end_key).is_none() {
+            panic!("Remove region, peer {:?}, region {} in store {}",
+                   peer,
+                   region_id,
+                   self.store_id());
+
         }
     }
 
@@ -519,7 +525,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.heartbeat_pd(p);
             }
         }
-        
+
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             self.destory_peer(region_id, peer)

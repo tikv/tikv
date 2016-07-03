@@ -258,6 +258,10 @@ impl Peer {
         Ok(())
     }
 
+    pub fn is_initialized(&self) -> bool {
+        self.storage.rl().is_initialized()
+    }
+
     pub fn load_all_coprocessors(&mut self) {
         // TODO load coprocessors from configuation
         self.coprocessor_host.registry.register_observer(100, box SplitObserver);
