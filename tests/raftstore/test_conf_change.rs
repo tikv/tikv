@@ -28,7 +28,6 @@ use super::server::new_server_cluster;
 use super::util::*;
 use super::pd::TestPdClient;
 
-
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -421,7 +420,9 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(6), b"k2", b"v2");
     let region_detail = cluster.region_detail(r1, 1);
-    for peer in region_detail.get_region().get_peers() {
+    let region_peers = region_detail.get_region().get_peers();
+    assert_eq!(region_peers.len(), 3);
+    for peer in region_peers {
         assert!(peer.get_id() < 4);
     }
     assert!(region_detail.get_leader().get_id() < 4);
@@ -433,17 +434,23 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // refresh region info, maybe no need
     cluster.must_put(b"k3", b"v3");
 
-    // wait sometime to let peer (1, 1) get gc message.
-    sleep_ms(500);
     // check whether a new cluster [1,2,3] is formed
     // if so, both [1,2,3] and [4,5,6] think they serve for region r1
     // result in split brain
-    // all [1,2,3] must have no region r1.
-    for i in 1..4 {
-        let header = find_leader_response_header(cluster, r1, new_peer(i, i));
-        assert!(header.get_error().has_region_not_found(),
-                format!{"store {} can't have region {}", i,r1});
+    let header0 = find_leader_response_header(cluster, r1, new_peer(2, 2));
+    assert!(header0.get_error().has_region_not_found());
+
+    // at least wait for a round of election timeout and check again
+    let term = find_leader_response_header(cluster, r1, new_peer(1, 1)).get_current_term();
+    let mut current_term = term;
+    while current_term < term + 2 {
+        sleep_ms(10);
+        let header2 = find_leader_response_header(cluster, r1, new_peer(1, 1));
+        current_term = header2.get_current_term();
     }
+
+    let header1 = find_leader_response_header(cluster, r1, new_peer(2, 2));
+    assert!(header1.get_error().has_region_not_found());
 }
 
 fn find_leader_response_header<T: Simulator>(cluster: &mut Cluster<T>,

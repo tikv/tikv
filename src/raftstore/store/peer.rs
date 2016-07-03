@@ -287,6 +287,10 @@ impl Peer {
         self.raft_group.raft.state == StateRole::Leader
     }
 
+    pub fn is_applying_snap(&self) -> bool {
+        self.storage.rl().is_applying_snap()
+    }
+
     fn send_ready_metric(&self, ready: &Ready) {
         if !ready.messages.is_empty() {
             metric_count!("raftstore.send_raft_message", ready.messages.len() as i64);
