@@ -75,8 +75,9 @@ fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
         .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
 }
 
+/// Get the opposite numbers of negative numbers.
 #[cfg(debug_assertions)]
-macro_rules! abs {
+macro_rules! opp_neg {
     ($r:ident) => {
         // in debug mode, if r is `i64::min_value()`, `-r` will panic.
         // but in release mode, `-r as u64` will get `|r|`.
@@ -88,8 +89,9 @@ macro_rules! abs {
     };
 }
 
+/// Get the opposite numbers of negative numbers.
 #[cfg(not(debug_assertions))]
-macro_rules! abs {
+macro_rules! opp_neg {
     ($r:ident) => {
         -$r as u64
     };
@@ -100,7 +102,7 @@ fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
     if r >= 0 {
         Some(l + r as u64)
     } else {
-        l.checked_sub(abs!(r))
+        l.checked_sub(opp_neg!(r))
     }
 }
 
