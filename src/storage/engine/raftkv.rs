@@ -266,8 +266,9 @@ impl Snapshot for RegionSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn get_cf(&self, _: CfName, _: &Key) -> engine::Result<Option<Value>> {
-        unimplemented!();
+    fn get_cf(&self, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
+        let v = box_try!(self.get_value_cf(cf, key.encoded()));
+        Ok(v.map(|v| v.to_vec()))
     }
 
     fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
