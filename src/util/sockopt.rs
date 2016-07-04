@@ -36,6 +36,7 @@ mod unix {
         fn set_send_buffer_size(&self, size: usize) -> Result<()> {
             socket::setsockopt(self.as_raw_fd(), sockopt::SndBuf, &size).map_err(from_nix_error)
         }
+
         fn send_buffer_size(&self) -> Result<usize> {
             socket::getsockopt(self.as_raw_fd(), sockopt::SndBuf).map_err(from_nix_error)
         }
@@ -88,3 +89,31 @@ pub use self::unix::*;
 
 #[cfg(windows)]
 pub use self::windows::*;
+
+#[cfg(test)]
+mod tests {
+    use mio::*;
+    use mio::tcp::{TcpListener, TcpStream};
+
+    use super::SocketOpt;
+
+    const SERVER: Token = Token(0);
+    const CLIENT: Token = Token(1);
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sock_opt() {
+        let addr = "127.0.0.1:0".parse().unwrap();
+
+        let server = TcpListener::bind(&addr).unwrap();
+        let addr = &format!("{}", server.local_addr().unwrap());
+
+        let sock = TcpStream::connect(&addr.parse().unwrap()).unwrap();
+
+        sock.set_send_buffer_size(100).unwrap();
+        assert_eq!(sock.send_buffer_size().unwrap(), 100);
+
+        sock.set_recv_buffer_size(100).unwrap();
+        assert_eq!(sock.recv_buffer_size().unwrap(), 100);
+    }
+}
