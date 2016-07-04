@@ -257,7 +257,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if msg.has_is_tombstone() && msg.get_is_tombstone() {
+        if msg.get_is_tombstone() {
             // we receive a message tells us to remove ourself.
             self.handle_gc_peer_msg(&msg);
             return Ok(());
@@ -337,6 +337,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let from_epoch = msg.get_region_epoch();
         let is_vote_msg = msg.get_message().get_msg_type() == MessageType::MsgRequestVote;
         let from_store_id = msg.get_from_peer().get_store_id();
+        let to_peer = msg.get_to_peer();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
         // a. 1 removes 2, 2 may still send MsgAppendResponse to 1.
@@ -348,12 +349,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         //  2 will send stale MsgRequestVote to 3, 3 should ignore this message.
         // d. 2 is isolated but can communicate with 3. 1 removes 2, then adds 4, remove 3.
         //  2 will send stale MsgRequestVote to 3, 3 should tell 2 to gc itself.
-        // e. 2 is isolated. 1 removes 2, adds 4, 5, 6, and then removes 3 and itself.
-        //  After 2 rejoins the cluster, 2 will send stale MsgRequestVote to 1 and 3,
-        //  1 and 3 will ignore this message.
-        //
-        // TODO: introduce checking stale peer with pd, so for case c and e, we can
-        // send gc message directly and let the peer to check whether stale or not with pd.
+        // e. 2 is isolated. 1 adds 4, 5, 6, removes 3, 1. Now assume 4 is leader.
+        //  After 2 rejoins the cluster, 2 may send stale MsgRequestVote to 1 and 3,
+        //  1 and 3 will ignore this message. Later 4 will send messages to 2 and 2 will
+        //  rejoin the raft group again.
+        // f. 2 is isolated. 1 adds 4, 5, 6, removes 3, 1. Now assume 4 is leader, and 4 removes 2.
+        //  unlike case e, 2 will be stale forever.
+        // TODO: for case f, if 2 is stale for a long time, 2 will communicate with pd and pd will
+        // tell 2 is stale, so 2 can remove itself.
         if let Some(peer) = self.region_peers.get(&region_id) {
             let region = &peer.storage.rl().region;
             let epoch = region.get_region_epoch();
@@ -431,6 +434,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut need_remove = false;
         if let Some(peer) = self.region_peers.get(&region_id) {
+            // TODO: need checking peer id changed?
             let from_epoch = msg.get_region_epoch();
             if util::is_epoch_stale(peer.storage.rl().region.get_region_epoch(), from_epoch) {
                 // TODO: ask pd to guarantee we are stale now.
