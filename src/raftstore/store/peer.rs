@@ -166,7 +166,6 @@ impl Peer {
     // will be retrieved later after appling snapshot.
     pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                                 region_id: u64,
-
                                                 peer_id: u64)
                                                 -> Result<Peer> {
         // We will remove tombstone key when apply snapshot

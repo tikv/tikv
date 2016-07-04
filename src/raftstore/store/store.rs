@@ -337,7 +337,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let from_epoch = msg.get_region_epoch();
         let is_vote_msg = msg.get_message().get_msg_type() == MessageType::MsgRequestVote;
         let from_store_id = msg.get_from_peer().get_store_id();
-        let to_peer = msg.get_to_peer();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
         // a. 1 removes 2, 2 may still send MsgAppendResponse to 1.
