@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
@@ -405,14 +404,17 @@ impl TestPdClient {
         self.must_have_peer(region_id, peer);
     }
 
-    pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
-        let peer2 = peer.clone();
+    pub fn remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
             if region.get_id() != region_id {
                 return None;
             }
-            new_pd_remove_change_peer(region, peer2.clone())
+            new_pd_remove_change_peer(region, peer.clone())
         });
+    }
+
+    pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
+        self.remove_peer(region_id, peer.clone());
         self.must_none_peer(region_id, peer);
     }
 

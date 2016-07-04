@@ -127,6 +127,20 @@ impl PendingCmdQueue {
     }
 }
 
+/// Call the callback of `cmd` that the region is removed.
+fn notify_region_removed(region_id: u64, peer_id: u64, cmd: PendingCmd) {
+    let region_not_found = Error::RegionNotFound(region_id);
+    let mut resp = cmd_resp::new_error(region_not_found);
+    cmd_resp::bind_uuid(&mut resp, cmd.uuid);
+    debug!("[{}] {} is removed, notify {}.",
+           region_id,
+           peer_id,
+           cmd.uuid);
+    if let Err(e) = cmd.cb.call_box((resp,)) {
+        error!("failed to notify {}: {:?}", cmd.uuid, e);
+    }
+}
+
 pub struct Peer {
     engine: Arc<DB>,
     pub peer: metapb::Peer,
@@ -140,7 +154,7 @@ pub struct Peer {
     pub size_diff_hint: u64,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
-    penging_remove: bool,
+    pending_remove: bool,
 }
 
 impl Peer {
@@ -235,7 +249,7 @@ impl Peer {
             peer_cache: store.peer_cache(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
-            penging_remove: false,
+            pending_remove: false,
         };
 
         peer.load_all_coprocessors();
@@ -252,6 +266,16 @@ impl Peer {
         // TODO maybe very slow
         // Delete all data in this peer.
         let t = SlowTimer::new();
+
+        // TODO: figure out a way to unit test this.
+        let peer_id = self.peer_id();
+        for cmd in self.pending_cmds.normals.drain(..) {
+            notify_region_removed(self.region_id, peer_id, cmd);
+        }
+        if let Some(cmd) = self.pending_cmds.conf_change.take() {
+            notify_region_removed(self.region_id, peer_id, cmd);
+        }
+
         let wb = WriteBatch::new();
         let store = self.storage.wl();
         try!(store.scan_region(self.engine.as_ref(),
@@ -791,9 +815,13 @@ impl Peer {
                       index: u64,
                       req: &RaftCmdRequest)
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-        if self.penging_remove {
-            return Err(box_err!("handle removing peer {} before, ignore apply",
-                                self.peer.get_id()));
+        if self.pending_remove {
+            let region_not_found = Error::RegionNotFound(self.region_id);
+            let mut resp = cmd_resp::new_error(region_not_found);
+            if let Some(uuid) = util::get_uuid_from_req(req) {
+                cmd_resp::bind_uuid(&mut resp, uuid);
+            }
+            return Ok((resp, None));
         }
 
         let last_applied_index = self.storage.rl().applied_index();
@@ -986,7 +1014,7 @@ impl Peer {
                 if self.peer_id() == peer.get_id() {
                     // Remove ourself, we will destroy all region data later.
                     // So we need not to apply following logs.
-                    self.penging_remove = true;
+                    self.pending_remove = true;
                 }
 
                 // Remove this peer from cache.

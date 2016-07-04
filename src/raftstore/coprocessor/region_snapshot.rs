@@ -226,10 +226,6 @@ mod tests {
         PeerStorage::new(engine, r, worker::dummy_scheduler()).unwrap()
     }
 
-    fn new_snapshot(peer_storage: &PeerStorage) -> RegionSnapshot {
-        RegionSnapshot::new(peer_storage)
-    }
-
     fn load_default_dataset(engine: Arc<DB>) -> (PeerStorage, DataSet) {
         let mut r = Region::new();
         r.set_id(10);

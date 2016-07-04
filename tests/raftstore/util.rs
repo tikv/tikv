@@ -11,17 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 
-use rocksdb::{DB, WriteBatch, Writable};
+use rocksdb::DB;
 use tempdir::TempDir;
 use uuid::Uuid;
 use protobuf;
-use super::cluster::{Cluster, Simulator};
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
@@ -31,7 +29,6 @@ use kvproto::raftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
-use tikv::raft::INVALID_ID;
 use tikv::util::escape;
 
 pub use tikv::raftstore::store::util::find_peer;
@@ -207,35 +204,6 @@ pub fn sleep_ms(ms: u64) {
 
 pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
-}
-
-pub fn is_invalid_peer(peer: &metapb::Peer) -> bool {
-    peer.get_id() == INVALID_ID
-}
-
-pub fn write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
-    let wb = WriteBatch::new();
-    for &(ref k, ref v) in kvs {
-        wb.put(k, v).expect("");
-    }
-    db.write(wb).unwrap();
-}
-
-pub fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
-    let wb = WriteBatch::new();
-    for &(ref k, ref v) in kvs {
-        wb.put(&keys::data_key(k), v).expect("");
-    }
-    db.write(wb).expect("");
-}
-
-pub fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>,
-                                     initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
-    cluster.run();
-    for engine in cluster.engines.values() {
-        enc_write_kvs(engine, initial_kvs);
-    }
-    cluster.leader_of_region(1).unwrap();
 }
 
 pub fn new_pd_change_peer(change_type: ConfChangeType,

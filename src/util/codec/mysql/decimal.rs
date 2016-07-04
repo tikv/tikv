@@ -11,11 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use num::{self, One, Signed, Zero};
+use num::{self, One, Signed, Zero, ToPrimitive};
 use num::bigint::{Sign, BigUint, BigInt};
 use num::integer::Integer;
 use std::cmp::{self, Ordering};
 use std::io::Write;
+use std::ops::Add;
 use std::fmt::{self, Display, Formatter};
 use std::str::{self, FromStr};
 use std::{i32, u64};
@@ -104,7 +105,7 @@ impl Decimal {
         }
 
         if fsp as i32 + exp < 0 {
-            return d.rescale(-(fsp as i32));
+            return d.rescale(-(fsp as i32)).unwrap();
         }
         d
     }
@@ -114,6 +115,9 @@ impl Decimal {
     /// For example, 1000 * 10<sup>3</sup> will be compact to 1 * 10<sup>6</sup>,
     /// 1000 * 10<sup>-3</sup> will be compact to 1 * 10<sup>0</sup>.
     pub fn compact(mut self) -> Decimal {
+        if self.is_zero() {
+            return self;
+        }
         let ten = 10.into();
         loop {
             let res = self.coeff.div_rem(&ten);
@@ -132,12 +136,12 @@ impl Decimal {
     /// For example, 12345 * 10<sup>3</sup> rescale with 4 will be represented
     /// as 1235 * 10<sup>4</sup>; 12345 * 10<sup>-3</sup> rescale with -5 will
     /// be represented as 1234500 * 10<sup>-5</sup>
-    pub fn rescale(&self, mut exp: i32) -> Decimal {
+    pub fn rescale(&self, mut exp: i32) -> Option<Decimal> {
         if exp < 0 {
             exp = cmp::max(exp, -(MAX_FSP as i32));
         }
         if self.exp == exp {
-            return self.clone();
+            return None;
         }
 
         let to_add = exp - self.exp;
@@ -156,7 +160,7 @@ impl Decimal {
             exp = 0;
         }
 
-        Decimal {
+        Some(Decimal {
             coeff: coeff,
             exp: exp,
             fsp: if exp < 0 {
@@ -164,7 +168,7 @@ impl Decimal {
             } else {
                 0
             },
-        }
+        })
     }
 
     /// Convert the decimal to float value.
@@ -201,6 +205,16 @@ impl Decimal {
             basic_size + 1
         } else {
             basic_size
+        }
+    }
+
+    /// Get the int part of this decimal.
+    ///
+    /// Return None if overflow.
+    pub fn i64(&self) -> Option<i64> {
+        match self.rescale(0) {
+            Some(d) => d.i64(),
+            None => self.coeff.to_i64(),
         }
     }
 }
@@ -299,10 +313,9 @@ impl Display for Decimal {
             return write!(formatter, "{}", unsafe { str::from_utf8_unchecked(&v) });
         }
 
-        let s = if self.fsp as i32 + self.exp == 0 {
-            format!("{}", self.coeff).into_bytes()
-        } else {
-            format!("{}", self.rescale(-(self.fsp as i32)).coeff).into_bytes()
+        let s = match self.rescale(-(self.fsp as i32)) {
+            Some(s) => format!("{}", s.coeff).into_bytes(),
+            None => format!("{}", self.coeff).into_bytes(),
         };
 
         let vlen = if self.is_negative() {
@@ -350,25 +363,42 @@ impl Eq for Decimal {}
 
 impl Ord for Decimal {
     fn cmp(&self, right: &Decimal) -> Ordering {
-        let temp;
-        let mut left = self;
-        let mut right = right;
-
-        if left.coeff.sign() < right.coeff.sign() {
+        if self.coeff.sign() < right.coeff.sign() {
             return Ordering::Less;
-        } else if left.coeff.sign() > right.coeff.sign() {
+        } else if self.coeff.sign() > right.coeff.sign() {
             return Ordering::Greater;
         }
 
-        if left.exp < right.exp {
-            temp = right.rescale(left.exp);
-            right = &temp;
-        } else if left.exp > right.exp {
-            temp = left.rescale(right.exp);
-            left = &temp;
-        }
+        let exp = cmp::min(self.exp, right.exp);
 
-        left.coeff.cmp(&right.coeff)
+        if let Some(l) = self.rescale(exp) {
+            l.coeff.cmp(&right.coeff)
+        } else if let Some(r) = right.rescale(exp) {
+            self.coeff.cmp(&r.coeff)
+        } else {
+            self.coeff.cmp(&right.coeff)
+        }
+    }
+}
+
+impl Add<Decimal> for Decimal {
+    type Output = Decimal;
+
+    fn add(self, rhs: Decimal) -> Decimal {
+        let fsp = cmp::max(self.fsp, rhs.fsp);
+        let exp = cmp::min(self.exp, rhs.exp);
+
+        // TODO: check overflow
+        let res = if let Some(l) = self.rescale(exp) {
+            l.coeff.add(&rhs.coeff)
+        } else if let Some(r) = rhs.rescale(exp) {
+            self.coeff.add(&r.coeff)
+        } else {
+            self.coeff.add(&rhs.coeff)
+        };
+
+        let d = Decimal::new(res, exp, fsp);
+        d.compact()
     }
 }
 
@@ -708,7 +738,7 @@ mod test {
 
         for (input, scale, expected) in cases {
             let d = Decimal::from_str(input).expect(input);
-            let dd = d.rescale(scale);
+            let dd = d.rescale(scale).unwrap_or(d);
             let res = format!("{}", dd);
             if expected != &res {
                 panic!("{} with scale {} not format as {}, got {}",
@@ -717,6 +747,25 @@ mod test {
                        expected,
                        res);
             }
+        }
+    }
+
+    #[test]
+    fn test_decimal_add() {
+        let cases = vec![
+            ("2", "3", "5"),
+            ("2454495034", "3451204593", "5905699627"),
+            ("24544.95034", ".3451204593", "24545.2954604593"),
+            (".1", ".1", "0.2"),
+            (".1", "-.1", "0.0"),
+            ("0", "1.001", "1.001"),
+        ];
+        for (a, b, exp) in cases {
+            let lhs: Decimal = a.parse().unwrap();
+            let rhs: Decimal = b.parse().unwrap();
+            let res = lhs + rhs;
+            let res_str = format!("{}", res);
+            assert_eq!(res_str, exp.to_owned());
         }
     }
 }

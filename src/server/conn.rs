@@ -14,9 +14,9 @@
 use std::collections::VecDeque;
 use std::cmp;
 
-use mio::{Token, EventLoop, EventSet, PollOpt, TryRead, TryWrite};
+use mio::{Token, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpStream;
-use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf, alloc};
+use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf};
 use protobuf::Message as PbMessage;
 
 use kvproto::msgpb::Message;
@@ -28,6 +28,7 @@ use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use util::worker::Scheduler;
+use util::buf::{TryRead, TryWrite, create_mem_buf};
 
 
 #[derive(PartialEq)]
@@ -69,27 +70,15 @@ fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
         return Ok(());
     }
 
-    // TODO: use try_read_buf directly if we can solve the compile problem.
-    unsafe {
-        // header is not full read, we will try read more.
-        if let Some(n) = try!(r.try_read(buf.mut_bytes())) {
-            if n == 0 {
-                // 0 means remote has closed the socket.
-                return Err(box_err!("remote has closed the connection"));
-            }
-            buf.advance(n)
+    if let Some(n) = try!(r.try_read_buf(buf)) {
+        if n == 0 {
+            // 0 means remote has closed the socket.
+            return Err(box_err!("remote has closed the connection"));
         }
     }
 
     Ok(())
 }
-
-fn create_mem_buf(s: usize) -> MutByteBuf {
-    unsafe {
-        ByteBuf::from_mem_ref(alloc::heap(s.next_power_of_two()), s as u32, 0, s as u32).flip()
-    }
-}
-
 
 impl Conn {
     pub fn new(sock: TcpStream,
@@ -268,9 +257,7 @@ impl Conn {
         // we check empty before.
         let mut buf = self.res.front_mut().unwrap();
 
-        if let Some(n) = try!(self.sock.try_write(buf.bytes())) {
-            buf.advance(n)
-        }
+        try!(self.sock.try_write_buf(buf));
 
         Ok(buf.remaining())
     }

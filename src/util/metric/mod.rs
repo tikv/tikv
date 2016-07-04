@@ -14,6 +14,8 @@
 use std::error;
 use std::fmt;
 use std::io;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{ToSocketAddrs, SocketAddr, UdpSocket};
 
@@ -69,15 +71,22 @@ pub fn client() -> Option<&'static Metric> {
     unsafe { CLIENT.map(|c| &*c) }
 }
 
-/// Implementation of a `MetricSink` that emits metrics over UDP with nonblocking mode.
-// TODO: add buffer.
-pub struct NonblockUdpMetricSink {
+static BUFFER_SIZE: usize = 1024;
+
+pub struct BufferedUdpMetricSink {
     sink_addr: SocketAddr,
     socket: UdpSocket,
+
+    buffer: Mutex<Vec<u8>>,
+    last_flush_time: Mutex<Instant>,
+    flush_period: Duration,
 }
 
-impl NonblockUdpMetricSink {
-    pub fn from<A>(sink_addr: A, socket: UdpSocket) -> MetricResult<NonblockUdpMetricSink>
+impl BufferedUdpMetricSink {
+    pub fn from<A>(sink_addr: A,
+                   socket: UdpSocket,
+                   flush_period: Duration)
+                   -> MetricResult<BufferedUdpMetricSink>
         where A: ToSocketAddrs
     {
         let mut addr_iter = try!(sink_addr.to_socket_addrs());
@@ -87,15 +96,43 @@ impl NonblockUdpMetricSink {
         // Moves this UDP stream into nonblocking mode.
         try!(socket.set_nonblocking(true));
 
-        Ok(NonblockUdpMetricSink {
+        Ok(BufferedUdpMetricSink {
             sink_addr: addr,
             socket: socket,
+
+            buffer: Mutex::new(Vec::with_capacity(BUFFER_SIZE)),
+            flush_period: flush_period,
+            last_flush_time: Mutex::new(Instant::now()),
         })
+    }
+
+    fn append_to_buffer(&self, metric: &str) -> io::Result<usize> {
+        let mut buffer = self.buffer.lock().unwrap();
+        let mut last_flush_time = self.last_flush_time.lock().unwrap();
+
+        // +1 for '\n'
+        if (buffer.len() + metric.len() + 1) > buffer.capacity() ||
+           (last_flush_time.elapsed() >= self.flush_period) {
+            self.flush(&mut buffer);
+            *last_flush_time = Instant::now();
+        }
+
+        buffer.extend_from_slice(metric.as_bytes());
+        buffer.push(b'\n');
+        Ok(metric.len())
+    }
+
+    fn flush(&self, buffer: &mut Vec<u8>) {
+        if let Err(e) = self.socket.send_to(buffer.as_slice(), &self.sink_addr) {
+            warn!("send metric failed {:?}", e);
+        }
+
+        buffer.clear();
     }
 }
 
-impl MetricSink for NonblockUdpMetricSink {
+impl MetricSink for BufferedUdpMetricSink {
     fn emit(&self, metric: &str) -> io::Result<usize> {
-        self.socket.send_to(metric.as_bytes(), &self.sink_addr)
+        self.append_to_buffer(metric)
     }
 }
