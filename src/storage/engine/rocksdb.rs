@@ -214,7 +214,8 @@ impl<'a> Snapshot for RocksSnapshot<'a> {
 }
 
 fn get_cf_handle<'a>(db: &'a DB, cf: CfName) -> Result<&'a DBCFHandle> {
-    db.cf_handle(cf).ok_or(RocksDBError::new("cf not found.".to_string()).into_engine_error())
+    db.cf_handle(cf)
+        .ok_or_else(|| RocksDBError::new("cf not found.".to_string()).into_engine_error())
 }
 
 #[derive(Debug, Clone)]
