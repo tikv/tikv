@@ -203,8 +203,9 @@ impl<C: PdClient> Engine for RaftKv<C> {
         snap.get(key)
     }
 
-    fn get_cf(&self, _: &Context, _: CfName, _: &Key) -> engine::Result<Option<Value>> {
-        unimplemented!();
+    fn get_cf(&self, ctx: &Context, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
+        let snap = try!(self.snapshot(ctx));
+        snap.get_cf(cf, key)
     }
 
     fn iter<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Cursor + 'a>> {
@@ -257,6 +258,10 @@ impl Snapshot for RegionSnapshot {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
         let v = box_try!(self.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf(&self, _: CfName, _: &Key) -> engine::Result<Option<Value>> {
+        unimplemented!();
     }
 
     fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
