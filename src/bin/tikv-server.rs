@@ -278,6 +278,21 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                                           config,
                                           Some(addr.to_owned()),
                                           |v| v.as_str().map(|s| s.to_owned()));
+    cfg.send_buffer_size =
+        get_integer_value("send-buffer-size",
+                          "server.send-buffer-size",
+                          matches,
+                          config,
+                          Some(128 * 1024),
+                          |v| v.as_integer()) as usize;
+    cfg.recv_buffer_size =
+        get_integer_value("recv-buffer-size",
+                          "server.recv-buffer-size",
+                          matches,
+                          config,
+                          Some(128 * 1024),
+                          |v| v.as_integer()) as usize;
+
     cfg.store_cfg.notify_capacity =
         get_integer_value("",
                           "raftstore.notify-capacity",
@@ -381,6 +396,7 @@ fn run_local_server(listener: TcpListener, store: Storage, config: &Config) {
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
     let mut svr = Server::new(&mut event_loop,
+                              config,
                               listener,
                               store,
                               router,
@@ -423,6 +439,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     info!("tikv server config: {:?}", cfg);
     initial_metric(matches, config, Some(node_id));
     let mut svr = Server::new(&mut event_loop,
+                              cfg,
                               listener,
                               store,
                               raft_router,
@@ -493,6 +510,14 @@ fn main() {
                 "pd-store-heartbeat-tick-interval",
                 "set region store heartbeat tick interval",
                 "default 5000 (ms)");
+    opts.optopt("",
+                "send-buffer-size",
+                "server socket send buffer size",
+                "default 128 KB");
+    opts.optopt("",
+                "recv-buffer-size",
+                "server socket recv buffer size",
+                "default 128 KB");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {

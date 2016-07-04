@@ -36,6 +36,7 @@ use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
 use raft::SnapshotStatus;
+use util::sockopt::SocketOpt;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
@@ -85,6 +86,8 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     snap_worker: Worker<SnapTask>,
 
     resolver: S,
+
+    cfg: Config,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -94,6 +97,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // create the listener outer, get the real listening address for
     // Node and then pass it here.
     pub fn new(event_loop: &mut EventLoop<Self>,
+               cfg: &Config,
                listener: TcpListener,
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
@@ -123,6 +127,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
             resolver: resolver,
+            cfg: cfg.clone(),
         };
 
         Ok(svr)
@@ -188,6 +193,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         // TODO: check conn max capacity.
 
         try!(sock.set_nodelay(true));
+        try!(sock.set_send_buffer_size(self.cfg.send_buffer_size));
+        try!(sock.set_recv_buffer_size(self.cfg.recv_buffer_size));
 
         try!(event_loop.register(&sock,
                                  new_token,
@@ -673,6 +680,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut server =
             Server::new(&mut event_loop,
+                        &cfg,
                         listener,
                         Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
