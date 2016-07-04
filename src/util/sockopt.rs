@@ -92,13 +92,9 @@ pub use self::windows::*;
 
 #[cfg(test)]
 mod tests {
-    use mio::*;
     use mio::tcp::{TcpListener, TcpStream};
 
     use super::SocketOpt;
-
-    const SERVER: Token = Token(0);
-    const CLIENT: Token = Token(1);
 
     #[cfg(unix)]
     #[test]
