@@ -64,45 +64,45 @@ fn split_property(property: &str) -> Result<(f64, &str), (())> {
 }
 
 const UNIT: i64 = 1;
-const FILE_SIZE_MAGNITUDE: i64 = 1024;
-const FILE_SIZE_B: i64 = UNIT;
-const FILE_SIZE_KB: i64 = FILE_SIZE_B * FILE_SIZE_MAGNITUDE;
-const FILE_SIZE_MB: i64 = FILE_SIZE_KB * FILE_SIZE_MAGNITUDE;
-const FILE_SIZE_GB: i64 = FILE_SIZE_MB * FILE_SIZE_MAGNITUDE;
+const DATA_MAGNITUDE: i64 = 1024;
+const KB: i64 = UNIT * DATA_MAGNITUDE;
+const MB: i64 = KB * DATA_MAGNITUDE;
+const GB: i64 = MB * DATA_MAGNITUDE;
 // When we cast TB and PB to `f64`, compiler will report a overflow warning.
-// FILE_SIZE_TB = FILE_SIZE_GB * FILE_SIZE_MAGNITUDE
-// FILE_SIZE_PB = FILE_SIZE_PB * FILE_SIZE_MAGNITUDE
+// TB = GB * DATA_MAGNITUDE
+// PB = PB * DATA_MAGNITUDE
 
-const TIME_MAGNITUDE: i64 = 1000;
-const TIME_MS: i64 = UNIT;
-const TIME_S: i64 = TIME_MS * TIME_MAGNITUDE;
+const TIME_MAGNITUDE_1: i64 = 1000;
+const TIME_MAGNITUDE_2: i64 = 60;
+const MS: i64 = UNIT;
+const SECOND: i64 = MS * TIME_MAGNITUDE_1;
+const MINTUE: i64 = SECOND * TIME_MAGNITUDE_2;
+const HOUR: i64 = MINTUE * TIME_MAGNITUDE_2;
 
-#[allow(match_same_arms)]
 pub fn get_integer_by_string(size: &str) -> Result<i64, ()> {
     let (num, unit) = try!(split_property(size));
 
-    match unit {
+    match &*unit.to_owned().to_lowercase() {
         // file size
-        "B" => Ok((num * (FILE_SIZE_B as f64)) as i64),
-        "KB" => Ok((num * (FILE_SIZE_KB as f64)) as i64),
-        "MB" => Ok((num * (FILE_SIZE_MB as f64)) as i64),
-        "GB" => Ok((num * (FILE_SIZE_GB as f64)) as i64),
-        "TB" => {
+        "kb" => Ok((num * (KB as f64)) as i64),
+        "mb" => Ok((num * (MB as f64)) as i64),
+        "gb" => Ok((num * (GB as f64)) as i64),
+        "tb" => {
             let mut ret: i64 = 0;
             let mut decimal: f64 = 0.0;
-            for _ in 0..FILE_SIZE_MAGNITUDE {
-                let res = num * (FILE_SIZE_GB as f64);
+            for _ in 0..DATA_MAGNITUDE {
+                let res = num * (GB as f64);
                 ret += res as i64;
                 decimal += res - ((res as i64) as f64);
             }
             Ok(ret + (decimal as i64))
         }
 
-        "PB" => {
+        "pb" => {
             let mut ret: i64 = 0;
             let mut decimal: f64 = 0.0;
-            for _ in 0..(FILE_SIZE_MAGNITUDE * FILE_SIZE_MAGNITUDE) {
-                let res = num * (FILE_SIZE_GB as f64);
+            for _ in 0..(DATA_MAGNITUDE * DATA_MAGNITUDE) {
+                let res = num * (GB as f64);
                 ret += res as i64;
                 decimal += res - ((res as i64) as f64);
             }
@@ -110,8 +110,10 @@ pub fn get_integer_by_string(size: &str) -> Result<i64, ()> {
         }
 
         // time
-        "ms" => Ok((num * (TIME_MS as f64)) as i64),
-        "s" => Ok((num * (TIME_S as f64)) as i64),
+        "ms" => Ok((num * (MS as f64)) as i64),
+        "s" => Ok((num * (SECOND as f64)) as i64),
+        "m" => Ok((num * (MINTUE as f64)) as i64),
+        "h" => Ok((num * (HOUR as f64)) as i64),
 
         _ => Err(()),
     }
@@ -124,14 +126,12 @@ mod test {
     #[test]
     fn test_get_integer_by_string() {
         // file size
-        assert!(Ok(1) == get_integer_by_string("1B"));
         assert!(Ok(1_024) == get_integer_by_string("1KB"));
         assert!(Ok(1_048_576) == get_integer_by_string("1MB"));
         assert!(Ok(1_073_741_824) == get_integer_by_string("1GB"));
         assert!(Ok(1_099_511_627_776) == get_integer_by_string("1TB"));
         assert!(Ok(1_125_899_906_842_624) == get_integer_by_string("1PB"));
 
-        assert!(Ok(1) == get_integer_by_string("1.5B"));
         assert!(Ok(1_536) == get_integer_by_string("1.5KB"));
         assert!(Ok(1_572_864) == get_integer_by_string("1.5MB"));
         assert!(Ok(1_610_612_736) == get_integer_by_string("1.5GB"));
@@ -143,7 +143,6 @@ mod test {
         assert!(Ok(1_429_365_116_108) == get_integer_by_string("1.3TB"));
         assert!(Ok(1_463_669_878_895_411) == get_integer_by_string("1.3PB"));
 
-        assert!(Err(()) == get_integer_by_string("B"));
         assert!(Err(()) == get_integer_by_string("KB"));
         assert!(Err(()) == get_integer_by_string("MB"));
         assert!(Err(()) == get_integer_by_string("GB"));
@@ -152,15 +151,24 @@ mod test {
 
         // time
         assert!(Ok(1) == get_integer_by_string("1ms"));
+        assert!(Ok(1_000) == get_integer_by_string("1s"));
+        assert!(Ok(60_000) == get_integer_by_string("1m"));
+        assert!(Ok(3_600_000) == get_integer_by_string("1h"));
+
         assert!(Ok(1) == get_integer_by_string("1.3ms"));
-        assert!(Ok(1000) == get_integer_by_string("1000ms"));
-        assert!(Ok(1000) == get_integer_by_string("1s"));
-        assert!(Ok(1300) == get_integer_by_string("1.3s"));
-        assert!(Ok(1500) == get_integer_by_string("1.5s"));
-        assert!(Ok(10000) == get_integer_by_string("10s"));
+        assert!(Ok(1_000) == get_integer_by_string("1000ms"));
+        assert!(Ok(1_300) == get_integer_by_string("1.3s"));
+        assert!(Ok(1_500) == get_integer_by_string("1.5s"));
+        assert!(Ok(10_000) == get_integer_by_string("10s"));
+        assert!(Ok(78_000) == get_integer_by_string("1.3m"));
+        assert!(Ok(90_000) == get_integer_by_string("1.5m"));
+        assert!(Ok(4_680_000) == get_integer_by_string("1.3h"));
+        assert!(Ok(5_400_000) == get_integer_by_string("1.5h"));
 
         assert!(Err(()) == get_integer_by_string("ms"));
         assert!(Err(()) == get_integer_by_string("s"));
+        assert!(Err(()) == get_integer_by_string("m"));
+        assert!(Err(()) == get_integer_by_string("h"));
 
         assert!(Err(()) == get_integer_by_string("1"));
         assert!(Err(()) == get_integer_by_string("foo"));
