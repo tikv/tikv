@@ -180,25 +180,8 @@ impl Peer {
     // will be retrieved later after appling snapshot.
     pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                                 region_id: u64,
-                                                from_epoch: &metapb::RegionEpoch,
                                                 peer_id: u64)
                                                 -> Result<Peer> {
-        let state_key = keys::region_state_key(region_id);
-        if let Some(local_state) = try!(store.engine().get_msg::<RegionLocalState>(&state_key)) {
-            if local_state.get_state() == PeerState::Tombstone {
-                let region_epoch = local_state.get_region().get_region_epoch();
-                // The region in this peer already destroyed
-                if from_epoch.get_version() < region_epoch.get_version() ||
-                   from_epoch.get_conf_ver() <= region_epoch.get_conf_ver() {
-                    error!("from epoch {:?}, tombstone epoch {:?}",
-                           from_epoch,
-                           region_epoch);
-                    // We receive a stale message and we can't re-create the peer with the peer id.
-                    return Err(box_err!("peer {} already destroyed", peer_id));
-                }
-            }
-        }
-
         // We will remove tombstone key when apply snapshot
         info!("replicate peer, peer id {}, region_id {}",
               peer_id,
@@ -298,6 +281,10 @@ impl Peer {
         Ok(())
     }
 
+    pub fn is_initialized(&self) -> bool {
+        self.storage.rl().is_initialized()
+    }
+
     pub fn load_all_coprocessors(&mut self) {
         // TODO load coprocessors from configuation
         self.coprocessor_host.registry.register_observer(100, box SplitObserver);
@@ -321,6 +308,10 @@ impl Peer {
 
     pub fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
+    }
+
+    pub fn is_applying_snap(&self) -> bool {
+        self.storage.rl().is_applying_snap()
     }
 
     fn send_ready_metric(&self, ready: &Ready) {
