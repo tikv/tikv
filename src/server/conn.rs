@@ -292,15 +292,7 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        // Now we just push data to a write buffer and register writable for later writing.
-        // Later we can write data directly, if meet WOUNDBLOCK error(don't write all data OK),
-        // we can register writable at that time.
-        // We must also check `socket is not connected` error too, when we connect to a remote
-        // store, mio puts this socket in event loop immediately, but this socket may not be
-        // connected at that time, so we must register writable too for this case.
-        let mut send_buffer = self.send_buffer.take().unwrap();
-        msg.encode_to(&mut send_buffer).unwrap();
-        self.send_buffer = Some(send_buffer);
+        msg.encode_to(self.send_buffer.as_mut().unwrap()).unwrap();
 
         if !self.interest.is_writable() {
             // re-register writable if we have not,
