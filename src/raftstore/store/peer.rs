@@ -775,10 +775,11 @@ impl Peer {
             (cmd_resp::new_error(e), None)
         });
 
-        debug!("[{}] {} command with uuid {:?} is applied",
+        debug!("[{}] {} command with uuid {:?} is applied: {:?}",
                self.region_id,
                self.peer_id(),
-               uuid);
+               uuid,
+               resp.get_header());
 
         if cb.is_none() {
             return Ok(exec_result);
