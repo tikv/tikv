@@ -11,17 +11,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error;
+use std::fmt;
 use rocksdb::DBCompressionType;
 
-pub fn get_compression_by_string(tp: &str) -> DBCompressionType {
+#[derive(Debug)]
+pub struct ParseConfigError;
+
+impl fmt::Display for ParseConfigError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "malformed property")
+    }
+}
+
+impl error::Error for ParseConfigError {
+    fn description(&self) -> &str {
+        "malformed property"
+    }
+}
+
+pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ParseConfigError> {
     match &*tp.to_owned().to_lowercase() {
-        "no" => DBCompressionType::DBNo,
-        "snappy" => DBCompressionType::DBSnappy,
-        "zlib" => DBCompressionType::DBZlib,
-        "bzip2" => DBCompressionType::DBBz2,
-        "lz4" => DBCompressionType::DBLz4,
-        "lz4hc" => DBCompressionType::DBLz4hc,
-        _ => panic!("unsupported compression type {}", tp),
+        "no" => Ok(DBCompressionType::DBNo),
+        "snappy" => Ok(DBCompressionType::DBSnappy),
+        "zlib" => Ok(DBCompressionType::DBZlib),
+        "bzip2" => Ok(DBCompressionType::DBBz2),
+        "lz4" => Ok(DBCompressionType::DBLz4),
+        "lz4hc" => Ok(DBCompressionType::DBLz4hc),
+        _ => Err(ParseConfigError),
     }
 }
 
@@ -43,7 +60,7 @@ pub fn get_per_level_compression_by_string(tp: &str) -> Vec<DBCompressionType> {
     result
 }
 
-fn split_property(property: &str) -> Result<(f64, &str), (())> {
+fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
     let mut indx = 0;
     for s in property.chars() {
         match s {
@@ -57,10 +74,7 @@ fn split_property(property: &str) -> Result<(f64, &str), (())> {
     }
 
     let (num, unit) = property.split_at(indx);
-    match num.parse::<f64>() {
-        Ok(f) => Ok((f, unit)),
-        Err(_) => Err(()),
-    }
+    num.parse::<f64>().map(|f| (f, unit)).or(Err(ParseConfigError))
 }
 
 const UNIT: i64 = 1;
@@ -79,7 +93,7 @@ const SECOND: i64 = MS * TIME_MAGNITUDE_1;
 const MINTUE: i64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: i64 = MINTUE * TIME_MAGNITUDE_2;
 
-pub fn get_integer_by_string(size: &str) -> Result<i64, ()> {
+pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
     let (num, unit) = try!(split_property(size));
 
     match &*unit.to_owned().to_lowercase() {
@@ -115,7 +129,7 @@ pub fn get_integer_by_string(size: &str) -> Result<i64, ()> {
         "m" => Ok((num * (MINTUE as f64)) as i64),
         "h" => Ok((num * (HOUR as f64)) as i64),
 
-        _ => Err(()),
+        _ => Err(ParseConfigError),
     }
 }
 
@@ -124,59 +138,59 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_get_integer_by_string() {
+    fn test_parse_readable_int() {
         // file size
-        assert!(Ok(1_024) == get_integer_by_string("1KB"));
-        assert!(Ok(1_048_576) == get_integer_by_string("1MB"));
-        assert!(Ok(1_073_741_824) == get_integer_by_string("1GB"));
-        assert!(Ok(1_099_511_627_776) == get_integer_by_string("1TB"));
-        assert!(Ok(1_125_899_906_842_624) == get_integer_by_string("1PB"));
+        assert!(1_024 == parse_readable_int("1KB").unwrap());
+        assert!(1_048_576 == parse_readable_int("1MB").unwrap());
+        assert!(1_073_741_824 == parse_readable_int("1GB").unwrap());
+        assert!(1_099_511_627_776 == parse_readable_int("1TB").unwrap());
+        assert!(1_125_899_906_842_624 == parse_readable_int("1PB").unwrap());
 
-        assert!(Ok(1_024) == get_integer_by_string("1kb"));
-        assert!(Ok(1_048_576) == get_integer_by_string("1mb"));
-        assert!(Ok(1_073_741_824) == get_integer_by_string("1gb"));
-        assert!(Ok(1_099_511_627_776) == get_integer_by_string("1tb"));
-        assert!(Ok(1_125_899_906_842_624) == get_integer_by_string("1pb"));
+        assert!(1_024 == parse_readable_int("1kb").unwrap());
+        assert!(1_048_576 == parse_readable_int("1mb").unwrap());
+        assert!(1_073_741_824 == parse_readable_int("1gb").unwrap());
+        assert!(1_099_511_627_776 == parse_readable_int("1tb").unwrap());
+        assert!(1_125_899_906_842_624 == parse_readable_int("1pb").unwrap());
 
-        assert!(Ok(1_536) == get_integer_by_string("1.5KB"));
-        assert!(Ok(1_572_864) == get_integer_by_string("1.5MB"));
-        assert!(Ok(1_610_612_736) == get_integer_by_string("1.5GB"));
-        assert!(Ok(1_649_267_441_664) == get_integer_by_string("1.5TB"));
-        assert!(Ok(1_688_849_860_263_936) == get_integer_by_string("1.5PB"));
+        assert!(1_536 == parse_readable_int("1.5KB").unwrap());
+        assert!(1_572_864 == parse_readable_int("1.5MB").unwrap());
+        assert!(1_610_612_736 == parse_readable_int("1.5GB").unwrap());
+        assert!(1_649_267_441_664 == parse_readable_int("1.5TB").unwrap());
+        assert!(1_688_849_860_263_936 == parse_readable_int("1.5PB").unwrap());
 
-        assert!(Ok(100_663_296) == get_integer_by_string("96MB"));
+        assert!(100_663_296 == parse_readable_int("96MB").unwrap());
 
-        assert!(Ok(1_429_365_116_108) == get_integer_by_string("1.3TB"));
-        assert!(Ok(1_463_669_878_895_411) == get_integer_by_string("1.3PB"));
+        assert!(1_429_365_116_108 == parse_readable_int("1.3TB").unwrap());
+        assert!(1_463_669_878_895_411 == parse_readable_int("1.3PB").unwrap());
 
-        assert!(Err(()) == get_integer_by_string("KB"));
-        assert!(Err(()) == get_integer_by_string("MB"));
-        assert!(Err(()) == get_integer_by_string("GB"));
-        assert!(Err(()) == get_integer_by_string("TB"));
-        assert!(Err(()) == get_integer_by_string("PB"));
+        assert!(parse_readable_int("KB").is_err());
+        assert!(parse_readable_int("MB").is_err());
+        assert!(parse_readable_int("GB").is_err());
+        assert!(parse_readable_int("TB").is_err());
+        assert!(parse_readable_int("PB").is_err());
 
         // time
-        assert!(Ok(1) == get_integer_by_string("1ms"));
-        assert!(Ok(1_000) == get_integer_by_string("1s"));
-        assert!(Ok(60_000) == get_integer_by_string("1m"));
-        assert!(Ok(3_600_000) == get_integer_by_string("1h"));
+        assert!(1 == parse_readable_int("1ms").unwrap());
+        assert!(1_000 == parse_readable_int("1s").unwrap());
+        assert!(60_000 == parse_readable_int("1m").unwrap());
+        assert!(3_600_000 == parse_readable_int("1h").unwrap());
 
-        assert!(Ok(1) == get_integer_by_string("1.3ms"));
-        assert!(Ok(1_000) == get_integer_by_string("1000ms"));
-        assert!(Ok(1_300) == get_integer_by_string("1.3s"));
-        assert!(Ok(1_500) == get_integer_by_string("1.5s"));
-        assert!(Ok(10_000) == get_integer_by_string("10s"));
-        assert!(Ok(78_000) == get_integer_by_string("1.3m"));
-        assert!(Ok(90_000) == get_integer_by_string("1.5m"));
-        assert!(Ok(4_680_000) == get_integer_by_string("1.3h"));
-        assert!(Ok(5_400_000) == get_integer_by_string("1.5h"));
+        assert!(1 == parse_readable_int("1.3ms").unwrap());
+        assert!(1_000 == parse_readable_int("1000ms").unwrap());
+        assert!(1_300 == parse_readable_int("1.3s").unwrap());
+        assert!(1_500 == parse_readable_int("1.5s").unwrap());
+        assert!(10_000 == parse_readable_int("10s").unwrap());
+        assert!(78_000 == parse_readable_int("1.3m").unwrap());
+        assert!(90_000 == parse_readable_int("1.5m").unwrap());
+        assert!(4_680_000 == parse_readable_int("1.3h").unwrap());
+        assert!(5_400_000 == parse_readable_int("1.5h").unwrap());
 
-        assert!(Err(()) == get_integer_by_string("ms"));
-        assert!(Err(()) == get_integer_by_string("s"));
-        assert!(Err(()) == get_integer_by_string("m"));
-        assert!(Err(()) == get_integer_by_string("h"));
+        assert!(parse_readable_int("ms").is_err());
+        assert!(parse_readable_int("s").is_err());
+        assert!(parse_readable_int("m").is_err());
+        assert!(parse_readable_int("h").is_err());
 
-        assert!(Err(()) == get_integer_by_string("1"));
-        assert!(Err(()) == get_integer_by_string("foo"));
+        assert!(parse_readable_int("1").is_err());
+        assert!(parse_readable_int("foo").is_err());
     }
 }
