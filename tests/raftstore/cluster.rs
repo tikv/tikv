@@ -380,12 +380,14 @@ impl<T: Simulator> Cluster<T> {
 
             if let Err(Error::Timeout(_)) = result {
                 warn!("call command timeout, let's retry");
+                sleep_ms(100);
                 continue;
             }
 
             let resp = result.unwrap();
             if resp.get_header().get_error().has_stale_epoch() {
                 warn!("seems split, let's retry");
+                sleep_ms(100);
                 continue;
             }
             return resp;
