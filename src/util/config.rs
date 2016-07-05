@@ -89,24 +89,24 @@ pub fn get_integer_by_string(size: &str) -> Result<i64, ()> {
         "gb" => Ok((num * (GB as f64)) as i64),
         "tb" => {
             let mut ret: i64 = 0;
-            let mut decimal: f64 = 0.0;
+            let mut frac: f64 = 0.0;
             for _ in 0..DATA_MAGNITUDE {
                 let res = num * (GB as f64);
                 ret += res as i64;
-                decimal += res - ((res as i64) as f64);
+                frac += res - ((res as i64) as f64);
             }
-            Ok(ret + (decimal as i64))
+            Ok(ret + (frac as i64))
         }
 
         "pb" => {
             let mut ret: i64 = 0;
-            let mut decimal: f64 = 0.0;
+            let mut frac: f64 = 0.0;
             for _ in 0..(DATA_MAGNITUDE * DATA_MAGNITUDE) {
                 let res = num * (GB as f64);
                 ret += res as i64;
-                decimal += res - ((res as i64) as f64);
+                frac += res - ((res as i64) as f64);
             }
-            Ok(ret + (decimal as i64))
+            Ok(ret + (frac as i64))
         }
 
         // time
