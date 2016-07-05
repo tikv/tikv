@@ -441,6 +441,7 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
     let region_max_size = 2000;
     let region_split_size = 1000;
     cluster.cfg.store_cfg.split_region_check_tick_interval = 100;
+    cluster.cfg.store_cfg.region_check_size_diff = 10;
     cluster.cfg.store_cfg.region_max_size = region_max_size;
     cluster.cfg.store_cfg.region_split_size = region_split_size;
     cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20000;
