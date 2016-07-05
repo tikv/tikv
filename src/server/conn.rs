@@ -11,24 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::VecDeque;
 use std::cmp;
 
 use mio::{Token, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpStream;
-use bytes::{Buf, MutBuf, ByteBuf, MutByteBuf};
+use bytes::{MutBuf, MutByteBuf};
 use protobuf::Message as PbMessage;
 
 use kvproto::msgpb::Message;
 use kvproto::raft_serverpb::RaftSnapshotData;
-use super::{Result, ConnData};
+use super::{Result, ConnData, Error};
 use super::server::Server;
 use util::codec::rpc;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use util::worker::Scheduler;
-use util::buf::{TryRead, TryWrite, create_mem_buf};
+use util::buf::{TryRead, create_mem_buf, SendBuffer};
 
 
 #[derive(PartialEq)]
@@ -39,6 +38,7 @@ enum ConnType {
 }
 
 const SNAPSHOT_PAYLOAD_BUF: usize = 4 * 1024 * 1024;
+const DEFAULT_SEND_BUFFER_SIZE: usize = 8 * 1024;
 
 pub struct Conn {
     pub sock: TcpStream,
@@ -61,8 +61,7 @@ pub struct Conn {
     read_size: usize,
     snap_scheduler: Scheduler<SnapTask>,
 
-    // write buffer, including msg header already.
-    res: VecDeque<ByteBuf>,
+    send_buffer: Option<SendBuffer>,
 }
 
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
@@ -95,10 +94,13 @@ impl Conn {
             read_size: 0,
             file_size: 0,
             payload: None,
-            res: VecDeque::new(),
             last_msg_id: 0,
             snap_scheduler: snap_scheduler,
             store_id: store_id,
+            // send buffer can be grown automatically, first using
+            // DEFAULT_SEND_BUFFER_SIZE is ok. Maybe we should need
+            // max size to shrink later.
+            send_buffer: Some(SendBuffer::new(DEFAULT_SEND_BUFFER_SIZE)),
         }
     }
 
@@ -117,7 +119,6 @@ impl Conn {
         try!(event_loop.reregister(&self.sock, self.token, self.interest, PollOpt::edge()));
         Ok(())
     }
-
 
     pub fn on_readable<T, S>(&mut self,
                              event_loop: &mut EventLoop<Server<T, S>>)
@@ -254,27 +255,26 @@ impl Conn {
     }
 
     fn write_buf(&mut self) -> Result<usize> {
-        // we check empty before.
-        let mut buf = self.res.front_mut().unwrap();
+        let mut send_buffer = self.send_buffer.take().unwrap();
+        let res = send_buffer.send(&mut self.sock).map_err(Error::Io);
+        let remaining = send_buffer.len();
+        self.send_buffer = Some(send_buffer);
 
-        try!(self.sock.try_write_buf(buf));
+        if res.is_err() {
+            return res;
+        }
 
-        Ok(buf.remaining())
+        Ok(remaining)
     }
 
     pub fn on_writable<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        while !self.res.is_empty() {
-            let remaining = try!(self.write_buf());
-
-            if remaining > 0 {
-                // we don't write all data, so must try later.
-                // we have already registered writable, no need registering again.
-                return Ok(());
-            }
-            self.res.pop_front();
+        if try!(self.write_buf()) > 0 {
+            // we don't write all data, so must try later.
+            // we have already registered writable, no need registering again.
+            return Ok(());
         }
 
         // no data for writing, remove writable
@@ -298,7 +298,9 @@ impl Conn {
         // We must also check `socket is not connected` error too, when we connect to a remote
         // store, mio puts this socket in event loop immediately, but this socket may not be
         // connected at that time, so we must register writable too for this case.
-        self.res.push_back(msg.encode_to_buf());
+        let mut send_buffer = self.send_buffer.take().unwrap();
+        msg.encode_to(&mut send_buffer).unwrap();
+        self.send_buffer = Some(send_buffer);
 
         if !self.interest.is_writable() {
             // re-register writable if we have not,
