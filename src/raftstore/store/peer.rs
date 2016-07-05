@@ -1203,7 +1203,7 @@ impl Peer {
     }
 
     fn get_cf_handle(&self, cf: &str) -> Result<&DBCFHandle> {
-        self.engine.cf_handle(cf).ok_or_else(|| Error::RocksDb("cf not found".to_string()))
+        self.engine.cf_handle(cf).ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf)))
     }
 
     fn do_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {

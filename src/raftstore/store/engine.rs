@@ -164,7 +164,7 @@ impl Peekable for DB {
     }
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
         let handle = try!(self.cf_handle(cf)
-            .ok_or_else(|| Error::RocksDb("cf not found".to_string())));
+            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
         let v = try!(self.get_cf(*handle, key));
         Ok(v)
     }
@@ -188,7 +188,7 @@ impl Peekable for Snapshot {
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
         let handle = try!(self.db
             .cf_handle(cf)
-            .ok_or_else(|| Error::RocksDb("cf not found".to_string())));
+            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
         let mut opt = ReadOptions::new();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -282,6 +282,20 @@ mod tests {
         engine.put_u64(key, 1).unwrap();
         assert_eq!(engine.get_u64(key).unwrap(), Some(1));
         assert_eq!(snap.get_i64(key).unwrap(), Some(-1));
+    }
+
+    #[test]
+    fn test_peekable() {
+        let path = TempDir::new("var").unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap();
+
+        engine.put(b"k1", b"v1").unwrap();
+        let handle = engine.cf_handle("cf").unwrap();
+        engine.put_cf(*handle, b"k1", b"v2").unwrap();
+
+        assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
+        assert!(engine.get_value_cf("foo", b"k1").is_err());
+        assert_eq!(&*engine.get_value_cf("cf", b"k1").unwrap().unwrap(), b"v2");
     }
 
     #[test]
