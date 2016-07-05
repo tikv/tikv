@@ -36,16 +36,15 @@ impl SendBuffer {
     pub fn send<T: Write>(&mut self, w: &mut T) -> Result<usize> {
         let count = {
             let (left, right) = self.buf.as_slices();
-            let res = try!(w.try_write(left));
-            let mut count = 0;
-            match res {
+            let mut count = match try!(w.try_write(left)) {
                 None => return Ok(0),
-                Some(n) => count += n,
-            }
+                Some(n) => n,
+            };
 
-            let res = try!(w.try_write(right));
-            if let Some(n) = res {
-                count += n;
+            if count == left.len() {
+                if let Some(n) = try!(w.try_write(right)) {
+                    count += n;
+                }
             }
 
             count
