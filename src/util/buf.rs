@@ -33,7 +33,7 @@ impl SendBuffer {
         SendBuffer { buf: VecDeque::with_capacity(n) }
     }
 
-    pub fn send<T: Write>(&mut self, w: &mut T) -> Result<usize> {
+    pub fn send_to<T: Write>(&mut self, w: &mut T) -> Result<usize> {
         let count = {
             let (left, right) = self.buf.as_slices();
             let mut count = match try!(w.try_write(left)) {
@@ -86,7 +86,7 @@ mod tests {
         assert_eq!(s.len(), 10);
 
         let mut w = vec![];
-        s.send(&mut w).unwrap();
+        s.send_to(&mut w).unwrap();
         assert!(s.is_empty());
         assert_eq!(w.len(), 10);
         assert_eq!(w, b"0123456789");
@@ -96,7 +96,7 @@ mod tests {
         w.clear();
         assert_eq!(s.len(), 2);
 
-        s.send(&mut w).unwrap();
+        s.send_to(&mut w).unwrap();
         assert!(s.is_empty());
         assert_eq!(w, b"ab");
     }

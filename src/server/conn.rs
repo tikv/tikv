@@ -258,7 +258,7 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        try!(self.send_buffer.send(&mut self.sock));
+        try!(self.send_buffer.send_to(&mut self.sock));
         if !self.send_buffer.is_empty() {
             // we don't write all data, so must try later.
             // we have already registered writable, no need registering again.
