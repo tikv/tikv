@@ -231,7 +231,7 @@ impl Peer {
             pending_cmds: Default::default(),
             peer_cache: store.peer_cache(),
             coprocessor_host: CoprocessorHost::new(),
-            size_diff_hint: 0,
+            size_diff_hint: cfg.region_check_size_diff,
             pending_remove: false,
         };
 
@@ -1193,8 +1193,12 @@ impl Peer {
 
         let resp = Response::new();
         let key = keys::data_key(key);
-        self.size_diff_hint += key.len() as u64;
-        self.size_diff_hint += value.len() as u64;
+        if let Some(diff) = self.size_diff_hint.checked_add(key.len() as u64) {
+            self.size_diff_hint = diff;
+        }
+        if let Some(diff) = self.size_diff_hint.checked_add(value.len() as u64) {
+            self.size_diff_hint = diff;
+        }
         try!(ctx.wb.put(&key, value));
 
         Ok(resp)
