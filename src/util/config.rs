@@ -63,21 +63,35 @@ fn split_property(property: &str) -> Result<(f64, &str), (())> {
     }
 }
 
+const UNIT: i64 = 1;
+const FILE_SIZE_MAGNITUDE: i64 = 1024;
+const FILE_SIZE_B: i64 = UNIT;
+const FILE_SIZE_KB: i64 = FILE_SIZE_B * FILE_SIZE_MAGNITUDE;
+const FILE_SIZE_MB: i64 = FILE_SIZE_KB * FILE_SIZE_MAGNITUDE;
+const FILE_SIZE_GB: i64 = FILE_SIZE_MB * FILE_SIZE_MAGNITUDE;
+// When we cast TB and PB to `f64`, compiler will report a overflow warning.
+// FILE_SIZE_TB = FILE_SIZE_GB * FILE_SIZE_MAGNITUDE
+// FILE_SIZE_PB = FILE_SIZE_PB * FILE_SIZE_MAGNITUDE
+
+const TIME_MAGNITUDE: i64 = 1000;
+const TIME_MS: i64 = UNIT;
+const TIME_S: i64 = TIME_MS * TIME_MAGNITUDE;
+
 #[allow(match_same_arms)]
 pub fn get_integer_by_string(size: &str) -> Result<i64, ()> {
     let (num, unit) = try!(split_property(size));
 
     match unit {
         // file size
-        "B" => Ok(num as i64),
-        "KB" => Ok((num * (1024 as f64)) as i64),
-        "MB" => Ok((num * (1024 * 1024) as f64) as i64),
-        "GB" => Ok((num * ((1024 * 1024 * 1024) as f64)) as i64),
+        "B" => Ok((num * (FILE_SIZE_B as f64)) as i64),
+        "KB" => Ok((num * (FILE_SIZE_KB as f64)) as i64),
+        "MB" => Ok((num * (FILE_SIZE_MB as f64)) as i64),
+        "GB" => Ok((num * (FILE_SIZE_GB as f64)) as i64),
         "TB" => {
             let mut ret: i64 = 0;
             let mut decimal: f64 = 0.0;
-            for _ in 0..1024 {
-                let res = num * ((1024 * 1024 * 1024) as f64);
+            for _ in 0..FILE_SIZE_MAGNITUDE {
+                let res = num * (FILE_SIZE_GB as f64);
                 ret += res as i64;
                 decimal += res - ((res as i64) as f64);
             }
@@ -87,8 +101,8 @@ pub fn get_integer_by_string(size: &str) -> Result<i64, ()> {
         "PB" => {
             let mut ret: i64 = 0;
             let mut decimal: f64 = 0.0;
-            for _ in 0..(1024 * 1024) {
-                let res = num * ((1024 * 1024 * 1024) as f64);
+            for _ in 0..(FILE_SIZE_MAGNITUDE * FILE_SIZE_MAGNITUDE) {
+                let res = num * (FILE_SIZE_GB as f64);
                 ret += res as i64;
                 decimal += res - ((res as i64) as f64);
             }
@@ -96,8 +110,8 @@ pub fn get_integer_by_string(size: &str) -> Result<i64, ()> {
         }
 
         // time
-        "ms" => Ok(num as i64),
-        "s" => Ok((num * 1000 as f64) as i64),
+        "ms" => Ok((num * (TIME_MS as f64)) as i64),
+        "s" => Ok((num * (TIME_S as f64)) as i64),
 
         _ => Err(()),
     }
