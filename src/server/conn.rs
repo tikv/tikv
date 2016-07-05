@@ -20,7 +20,7 @@ use protobuf::Message as PbMessage;
 
 use kvproto::msgpb::Message;
 use kvproto::raft_serverpb::RaftSnapshotData;
-use super::{Result, ConnData, Error};
+use super::{Result, ConnData};
 use super::server::Server;
 use util::codec::rpc;
 use super::transport::RaftStoreRouter;
@@ -61,7 +61,7 @@ pub struct Conn {
     read_size: usize,
     snap_scheduler: Scheduler<SnapTask>,
 
-    send_buffer: Option<SendBuffer>,
+    send_buffer: SendBuffer,
 }
 
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
@@ -100,7 +100,7 @@ impl Conn {
             // send buffer can be grown automatically, first using
             // DEFAULT_SEND_BUFFER_SIZE is ok. Maybe we should need
             // max size to shrink later.
-            send_buffer: Some(SendBuffer::new(DEFAULT_SEND_BUFFER_SIZE)),
+            send_buffer: SendBuffer::new(DEFAULT_SEND_BUFFER_SIZE),
         }
     }
 
@@ -254,24 +254,12 @@ impl Conn {
         Ok(())
     }
 
-    fn write_buf(&mut self) -> Result<usize> {
-        let mut send_buffer = self.send_buffer.take().unwrap();
-        let res = send_buffer.send(&mut self.sock).map_err(Error::Io);
-        let remaining = send_buffer.len();
-        self.send_buffer = Some(send_buffer);
-
-        if res.is_err() {
-            return res;
-        }
-
-        Ok(remaining)
-    }
-
     pub fn on_writable<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        if try!(self.write_buf()) > 0 {
+        try!(self.send_buffer.send(&mut self.sock));
+        if !self.send_buffer.is_empty() {
             // we don't write all data, so must try later.
             // we have already registered writable, no need registering again.
             return Ok(());
@@ -292,7 +280,7 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        msg.encode_to(self.send_buffer.as_mut().unwrap()).unwrap();
+        msg.encode_to(&mut self.send_buffer).unwrap();
 
         if !self.interest.is_writable() {
             // re-register writable if we have not,
