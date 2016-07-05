@@ -132,6 +132,12 @@ mod test {
         assert!(Ok(1_099_511_627_776) == get_integer_by_string("1TB"));
         assert!(Ok(1_125_899_906_842_624) == get_integer_by_string("1PB"));
 
+        assert!(Ok(1_024) == get_integer_by_string("1kb"));
+        assert!(Ok(1_048_576) == get_integer_by_string("1mb"));
+        assert!(Ok(1_073_741_824) == get_integer_by_string("1gb"));
+        assert!(Ok(1_099_511_627_776) == get_integer_by_string("1tb"));
+        assert!(Ok(1_125_899_906_842_624) == get_integer_by_string("1pb"));
+
         assert!(Ok(1_536) == get_integer_by_string("1.5KB"));
         assert!(Ok(1_572_864) == get_integer_by_string("1.5MB"));
         assert!(Ok(1_610_612_736) == get_integer_by_string("1.5GB"));
