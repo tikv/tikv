@@ -57,6 +57,9 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<Arc<DB>> {
 
 pub fn new_engine_opt(mut opts: Options, path: &str, cfs: &[&str]) -> Result<Arc<DB>> {
     // TODO: configurable opts for each CF.
+    // Currently we support 1) Create new db. 2) Open a db with CFs we want. 3) Open db with no
+    // CF.
+    // TODO: Support open db with incomplete CFs.
     opts.create_if_missing(false);
     match DB::open_cf(&opts, path, cfs) {
         Ok(db) => return Ok(Arc::new(db)),
@@ -162,6 +165,7 @@ impl Peekable for DB {
         let v = try!(self.get(key));
         Ok(v)
     }
+
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
         let handle = try!(self.cf_handle(cf)
             .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
