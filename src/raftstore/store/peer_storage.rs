@@ -13,7 +13,6 @@
 
 use std::sync::{self, Arc};
 use std::cell::{RefCell, Ref, RefMut};
-use std::rc::Rc;
 use std::error;
 use std::time::Instant;
 
@@ -600,14 +599,13 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     Ok(snapshot)
 }
 
-#[derive(Clone)]
 pub struct RaftStorage {
-    store: Rc<RefCell<PeerStorage>>,
+    store: RefCell<PeerStorage>,
 }
 
 impl RaftStorage {
     pub fn new(store: PeerStorage) -> RaftStorage {
-        RaftStorage { store: Rc::new(RefCell::new(store)) }
+        RaftStorage { store: RefCell::new(store) }
     }
 
     #[inline]
