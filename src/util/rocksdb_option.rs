@@ -24,3 +24,21 @@ pub fn get_compression_by_string(tp: &str) -> DBCompressionType {
         _ => panic!("unsupported compression type {}", tp),
     }
 }
+
+pub fn get_per_level_compression_by_string(tp: &str) -> Vec<DBCompressionType> {
+    let mut result: Vec<DBCompressionType> = vec![];
+    let v: Vec<&str> = tp.split(':').collect();
+    for i in &v {
+        match &*i.to_owned().to_lowercase() {
+            "no" => result.push(DBCompressionType::DBNo),
+            "snappy" => result.push(DBCompressionType::DBSnappy),
+            "zlib" => result.push(DBCompressionType::DBZlib),
+            "bzip2" => result.push(DBCompressionType::DBBz2),
+            "lz4" => result.push(DBCompressionType::DBLz4),
+            "lz4hc" => result.push(DBCompressionType::DBLz4hc),
+            _ => panic!("unsupported compression type {}", tp),
+        }
+    }
+
+    result
+}
