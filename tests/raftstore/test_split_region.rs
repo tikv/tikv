@@ -16,6 +16,8 @@ use std::thread;
 use std::cmp;
 use rand::{self, Rng};
 
+use kvproto::raftpb::MessageType;
+
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
@@ -302,7 +304,8 @@ fn test_server_split_overlap_snapshot() {
 fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20;
-    cluster.cfg.store_cfg.raft_log_gc_limit = 2;
+    cluster.cfg.store_cfg.raft_log_gc_limit = 5;
+    cluster.cfg.store_cfg.raft_log_gc_threshold = 5;
 
     // We use three nodes([1, 2, 3]) for this test.
     cluster.run();
@@ -332,6 +335,9 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let engine3 = cluster.get_engine(3);
     util::must_get_none(&engine3, b"k2");
+
+    // transfer leader to ease the preasure of store 1.
+    cluster.must_transfer_leader(1, util::new_peer(2, 2));
 
     for _ in 0..100 {
         // write many logs to force log GC for region 1 and region 2.
@@ -384,7 +390,8 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_transfer_leader(r1, util::new_peer(1, 1));
 
     // isolate node 3 for region 1.
-    cluster.add_filter(IsolateRegionStore::new(1, 3));
+    // only filter MsgAppend to avoid election when recover.
+    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
 
     let region = pd_client.get_region(b"").unwrap();
 
