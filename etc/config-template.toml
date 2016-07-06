@@ -71,6 +71,10 @@ max-write-buffer-number = 5
 # before writing to storage.
 min-write-buffer-number-to-merge = 2
 
+# The maximum number of background threads for compactions and flushes,
+# submitted to the default LOW priority thread pool.
+max-background-threads = 1
+
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
 max-background-compactions = 3

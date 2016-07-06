@@ -202,7 +202,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                                    "rocksdb.max-background-threads",
                                                    matches,
                                                    config,
-                                                   Some(3),
+                                                   Some(1),
                                                    |v| v.as_integer());
     opts.increase_parallelism(max_background_threads as i32);
 
