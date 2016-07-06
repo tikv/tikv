@@ -705,7 +705,7 @@ impl Peer {
             let mut state = self.storage.rl().apply_state.clone();
             state.set_applied_index(index);
             try!(wb.put_msg(&keys::apply_state_key(self.region_id), &state));
-            try!(self.engine.write(wb));
+            try!(self.engine.write_without_wal(wb));
             self.storage.wl().apply_state = state;
             return Ok(None);
         }
