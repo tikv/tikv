@@ -47,7 +47,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_remove_peer(r1, new_peer(2, 2));
 
     // After new leader is elected, the change peer must be finished.
-    cluster.leader_of_region(1).unwrap();
+    cluster.leader_of_region(r1).unwrap();
     let (key, value) = (b"k3", b"v3");
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
@@ -56,24 +56,20 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"k1");
     must_get_none(&engine_2, b"k3");
 
-    let epoch = cluster.pd_client
-        .get_region_by_id(1)
-        .unwrap()
-        .get_region_epoch()
-        .clone();
-
-    // Send a stale raft message to peer (2, 2, 2)
+    // Send a stale raft message to peer (2, 2)
     let mut raft_msg = raft_serverpb::RaftMessage::new();
 
-    raft_msg.set_region_id(1);
-    raft_msg.set_from_peer(new_peer(1, 1));
+    raft_msg.set_region_id(r1);
+    // Use an invalid from peer to ignore gc peer message.
+    raft_msg.set_from_peer(new_peer(0, 0));
     raft_msg.set_to_peer(new_peer(2, 2));
-    raft_msg.set_region_epoch(epoch.clone());
+    raft_msg.mut_region_epoch().set_conf_ver(0);
+    raft_msg.mut_region_epoch().set_version(0);
 
     cluster.send_raft_msg(raft_msg).unwrap();
 
     // We must get RegionNotFound error.
-    let region_status = new_status_request(1, new_peer(2, 2), new_region_leader_cmd());
+    let region_status = new_status_request(r1, new_peer(2, 2), new_region_leader_cmd());
     let resp = cluster.call_command(region_status, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().get_error().has_region_not_found(),
             format!("region must not found, but got {:?}", resp));
