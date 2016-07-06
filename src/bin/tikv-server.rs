@@ -101,9 +101,8 @@ fn get_integer_value<F>(short: &str,
             config.lookup(long)
                 .and_then(|v| {
                     if let toml::Value::String(ref s) = *v {
-                        util::config::parse_readable_int(s)
-                            .map_err(|e| info!("{}, {}", long, e))
-                            .ok()
+                        Some(util::config::parse_readable_int(s)
+                            .expect(&format!("malformed {}", long)))
                     } else {
                         f(v)
                     }

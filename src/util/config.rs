@@ -31,7 +31,7 @@ impl error::Error for ParseConfigError {
 }
 
 pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ParseConfigError> {
-    match &*tp.to_owned().to_lowercase() {
+    match &*tp.to_lowercase() {
         "no" => Ok(DBCompressionType::DBNo),
         "snappy" => Ok(DBCompressionType::DBSnappy),
         "zlib" => Ok(DBCompressionType::DBZlib),
@@ -77,51 +77,31 @@ fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
     num.parse::<f64>().map(|f| (f, unit)).or(Err(ParseConfigError))
 }
 
-const UNIT: i64 = 1;
-const DATA_MAGNITUDE: i64 = 1024;
-const KB: i64 = UNIT * DATA_MAGNITUDE;
-const MB: i64 = KB * DATA_MAGNITUDE;
-const GB: i64 = MB * DATA_MAGNITUDE;
-// When we cast TB and PB to `f64`, compiler will report a overflow warning.
-// TB = GB * DATA_MAGNITUDE
-// PB = PB * DATA_MAGNITUDE
+const UNIT: usize = 1;
+const DATA_MAGNITUDE: usize = 1024;
+const KB: usize = UNIT * DATA_MAGNITUDE;
+const MB: usize = KB * DATA_MAGNITUDE;
+const GB: usize = MB * DATA_MAGNITUDE;
+const TB: usize = GB * DATA_MAGNITUDE;
+const PB: usize = TB * DATA_MAGNITUDE;
 
-const TIME_MAGNITUDE_1: i64 = 1000;
-const TIME_MAGNITUDE_2: i64 = 60;
-const MS: i64 = UNIT;
-const SECOND: i64 = MS * TIME_MAGNITUDE_1;
-const MINTUE: i64 = SECOND * TIME_MAGNITUDE_2;
-const HOUR: i64 = MINTUE * TIME_MAGNITUDE_2;
+const TIME_MAGNITUDE_1: usize = 1000;
+const TIME_MAGNITUDE_2: usize = 60;
+const MS: usize = UNIT;
+const SECOND: usize = MS * TIME_MAGNITUDE_1;
+const MINTUE: usize = SECOND * TIME_MAGNITUDE_2;
+const HOUR: usize = MINTUE * TIME_MAGNITUDE_2;
 
 pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
     let (num, unit) = try!(split_property(size));
 
-    match &*unit.to_owned().to_lowercase() {
+    match &*unit.to_lowercase() {
         // file size
         "kb" => Ok((num * (KB as f64)) as i64),
         "mb" => Ok((num * (MB as f64)) as i64),
         "gb" => Ok((num * (GB as f64)) as i64),
-        "tb" => {
-            let mut ret: i64 = 0;
-            let mut frac: f64 = 0.0;
-            for _ in 0..DATA_MAGNITUDE {
-                let res = num * (GB as f64);
-                ret += res as i64;
-                frac += res - ((res as i64) as f64);
-            }
-            Ok(ret + (frac as i64))
-        }
-
-        "pb" => {
-            let mut ret: i64 = 0;
-            let mut frac: f64 = 0.0;
-            for _ in 0..(DATA_MAGNITUDE * DATA_MAGNITUDE) {
-                let res = num * (GB as f64);
-                ret += res as i64;
-                frac += res - ((res as i64) as f64);
-            }
-            Ok(ret + (frac as i64))
-        }
+        "tb" => Ok((num * (TB as f64)) as i64),
+        "pb" => Ok((num * (PB as f64)) as i64),
 
         // time
         "ms" => Ok((num * (MS as f64)) as i64),
