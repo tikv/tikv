@@ -47,6 +47,7 @@ pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>
 {
     let mut builder = EventLoopBuilder::new();
     builder.notify_capacity(config.notify_capacity);
+    builder.messages_per_tick(config.messages_per_tick);
     let el = try!(builder.build());
     Ok(el)
 }

@@ -18,6 +18,7 @@ const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
+const DEFAULT_MESSAGES_PER_TICK: usize = 256;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -30,6 +31,7 @@ pub struct Config {
     // If not set, we will use listening address instead.
     pub advertise_addr: String,
     pub notify_capacity: usize,
+    pub messages_per_tick: usize,
     pub store_cfg: StoreConfig,
 }
 
@@ -40,6 +42,7 @@ impl Default for Config {
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
+            messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             store_cfg: StoreConfig::default(),
         }
     }

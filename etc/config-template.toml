@@ -11,6 +11,8 @@ store = "/tmp/tikv/store"
 log-level = "info"
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960
+# maximum number of messages can be processed in one tick.
+messages-per-tick = 4096
 
 # set store capacity, if no set, use unlimited or disk size later.
 # capacity = 0 # 0 is unlimited.
@@ -25,6 +27,10 @@ prefix = "tikv"
 [raftstore]
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960
+
+# maximum number of messages can be processed in one tick.
+messages-per-tick = 4096
+
 # Region heartbeat tick interval (ms) for reporting to pd. 
 pd-heartbeat-tick-interval = 5000
 # Store heartbeat tick interval (ms) for reporting to pd.
