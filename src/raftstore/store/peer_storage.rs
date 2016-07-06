@@ -189,7 +189,7 @@ impl PeerStorage {
 
     pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
         try!(self.check_range(low, high));
-        let mut ents = vec![];
+        let mut ents = Vec::with_capacity((high - low) as usize);
         let mut total_size: u64 = 0;
         let mut next_index = low;
         let mut exceeded_max_size = false;
