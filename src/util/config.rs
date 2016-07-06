@@ -82,8 +82,10 @@ const DATA_MAGNITUDE: usize = 1024;
 const KB: usize = UNIT * DATA_MAGNITUDE;
 const MB: usize = KB * DATA_MAGNITUDE;
 const GB: usize = MB * DATA_MAGNITUDE;
-const TB: usize = GB * DATA_MAGNITUDE;
-const PB: usize = TB * DATA_MAGNITUDE;
+
+// Make sure it will not overflow.
+const TB: u64 = (GB as u64) * (DATA_MAGNITUDE as u64);
+const PB: u64 = (TB as u64) * (DATA_MAGNITUDE as u64);
 
 const TIME_MAGNITUDE_1: usize = 1000;
 const TIME_MAGNITUDE_2: usize = 60;
