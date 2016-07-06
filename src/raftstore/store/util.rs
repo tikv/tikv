@@ -66,6 +66,12 @@ pub fn conf_change_type_str(conf_type: &raftpb::ConfChangeType) -> String {
     }
 }
 
+// check whether epoch is staler than check_epoch.
+pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionEpoch) -> bool {
+    epoch.get_version() < check_epoch.get_version() ||
+    epoch.get_conf_ver() < check_epoch.get_conf_ver()
+}
+
 #[cfg(test)]
 mod tests {
     use kvproto::metapb;

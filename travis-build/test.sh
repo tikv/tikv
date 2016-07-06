@@ -44,4 +44,6 @@ for l in sys.stdin:
     echo
 done
 
+rm $LOG_FILE || true
+
 exit $status
