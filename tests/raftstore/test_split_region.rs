@@ -460,7 +460,10 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
     put_till_size(cluster, region_max_size * 10, &mut range);
-
+    // Peer will split when size of region meet region_max_size,
+    // so assume the last region_max_size of data is not involved in split,
+    // there will be at least (region_max_size * 10 - region_max_size) / region_split_size regions.
+    // But region_max_size of data should be split too, so there will be at least 2 more regions.
     let min_region_cnt = (region_max_size * 10 - region_max_size) / region_split_size + 2;
 
     let mut try_cnt = 0;
