@@ -58,7 +58,6 @@ git = "https://github.com/stepancheg/rust-protobuf.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
-branch = "siddontang/gc-peer"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
