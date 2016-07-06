@@ -198,6 +198,14 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
     };
     opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
 
+    let max_background_threads = get_integer_value("",
+                                                   "rocksdb.max-background-threads",
+                                                   matches,
+                                                   config,
+                                                   Some(3),
+                                                   |v| v.as_integer());
+    opts.increase_parallelism(max_background_threads as i32);
+
     let max_background_compactions = get_integer_value("",
                                                        "rocksdb.max-background-compactions",
                                                        matches,
