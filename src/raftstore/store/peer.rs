@@ -34,7 +34,8 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer};
 use pd::PdClient;
 use super::store::Store;
-use super::peer_storage::{PeerStorage, RaftStorage, ApplySnapResult, InvokeContext};
+use super::peer_storage::{PeerStorage, RaftStorage, ApplySnapResult, InvokeContext,
+                          write_initial_state};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -1095,6 +1096,7 @@ impl Peer {
         let mut new_state = RegionLocalState::new();
         new_state.set_region(new_region.clone());
         try!(ctx.wb.put_msg(&keys::region_state_key(new_region.get_id()), &new_state));
+        try!(write_initial_state(&ctx.wb, new_region.get_id()));
 
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());

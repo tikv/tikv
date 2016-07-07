@@ -11,12 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{DB, Writable};
+use rocksdb::{DB, Writable, WriteBatch};
 use kvproto::raft_serverpb::{StoreIdent, RegionLocalState};
 use kvproto::metapb;
 use raftstore::Result;
 use super::keys;
 use super::engine::{Iterable, Mutable};
+use super::peer_storage::write_initial_state;
 
 const INIT_EPOCH_VER: u64 = 1;
 const INIT_EPOCH_CONF_VER: u64 = 1;
@@ -49,7 +50,11 @@ pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()
 pub fn write_region(engine: &DB, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::new();
     state.set_region(region.clone());
-    try!(engine.put_msg(&keys::region_state_key(region.get_id()), &state));
+
+    let wb = WriteBatch::new();
+    try!(wb.put_msg(&keys::region_state_key(region.get_id()), &state));
+    try!(write_initial_state(&wb, region.get_id()));
+    try!(engine.write(wb));
     Ok(())
 }
 
