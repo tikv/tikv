@@ -14,12 +14,12 @@
 use std::option::Option;
 use std::sync::Arc;
 
-use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions};
+use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions, Options};
 use rocksdb::rocksdb::UnsafeSnap;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
 
-use raftstore::Result;
+use raftstore::{Error, Result};
 
 
 pub struct Snapshot {
@@ -50,15 +50,39 @@ impl Drop for Snapshot {
     }
 }
 
-pub fn new_engine(path: &str) -> Result<Arc<DB>> {
-    // TODO: set proper options here,
-    let db = try!(DB::open_default(path));
+pub fn new_engine(path: &str, cfs: &[&str]) -> Result<Arc<DB>> {
+    let opts = Options::new();
+    new_engine_opt(opts, path, cfs)
+}
+
+pub fn new_engine_opt(mut opts: Options, path: &str, cfs: &[&str]) -> Result<Arc<DB>> {
+    // TODO: configurable opts for each CF.
+    // Currently we support 1) Create new db. 2) Open a db with CFs we want. 3) Open db with no
+    // CF.
+    // TODO: Support open db with incomplete CFs.
+    opts.create_if_missing(false);
+    match DB::open_cf(&opts, path, cfs) {
+        Ok(db) => return Ok(Arc::new(db)),
+        Err(e) => warn!("open rocksdb fail: {}", e),
+    }
+
+    opts.create_if_missing(true);
+    let mut db = match DB::open(&opts, path) {
+        Ok(db) => db,
+        Err(e) => return Err(Error::RocksDb(e)),
+    };
+    for cf in cfs {
+        if let Err(e) = db.create_cf(cf, &opts) {
+            return Err(Error::RocksDb(e));
+        }
+    }
     Ok(Arc::new(db))
 }
 
 // TODO: refactor this trait into rocksdb trait.
 pub trait Peekable {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>>;
+    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>>;
 
     fn get_msg<M>(&self, key: &[u8]) -> Result<Option<M>>
         where M: protobuf::Message + protobuf::MessageStatic
@@ -141,6 +165,13 @@ impl Peekable for DB {
         let v = try!(self.get(key));
         Ok(v)
     }
+
+    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
+        let handle = try!(self.cf_handle(cf)
+            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
+        let v = try!(self.get_cf(*handle, key));
+        Ok(v)
+    }
 }
 
 impl Iterable for DB {
@@ -156,6 +187,17 @@ impl Peekable for Snapshot {
             opt.set_snapshot(&self.snap);
         }
         let v = try!(self.db.get_opt(key, &opt));
+        Ok(v)
+    }
+    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
+        let handle = try!(self.db
+            .cf_handle(cf)
+            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
+        let mut opt = ReadOptions::new();
+        unsafe {
+            opt.set_snapshot(&self.snap);
+        }
+        let v = try!(self.db.get_cf_opt(*handle, key, &opt));
         Ok(v)
     }
 }
@@ -208,7 +250,7 @@ mod tests {
     #[test]
     fn test_base() {
         let path = TempDir::new("var").unwrap();
-        let engine = new_engine(path.path().to_str().unwrap()).unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), &[]).unwrap();
 
         let mut r = Region::new();
         r.set_id(10);
@@ -247,9 +289,23 @@ mod tests {
     }
 
     #[test]
+    fn test_peekable() {
+        let path = TempDir::new("var").unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap();
+
+        engine.put(b"k1", b"v1").unwrap();
+        let handle = engine.cf_handle("cf").unwrap();
+        engine.put_cf(*handle, b"k1", b"v2").unwrap();
+
+        assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
+        assert!(engine.get_value_cf("foo", b"k1").is_err());
+        assert_eq!(&*engine.get_value_cf("cf", b"k1").unwrap().unwrap(), b"v2");
+    }
+
+    #[test]
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
-        let engine = new_engine(path.path().to_str().unwrap()).unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), &[]).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();
