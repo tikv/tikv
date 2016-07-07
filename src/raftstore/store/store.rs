@@ -55,7 +55,6 @@ use super::transport::Transport;
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
-const APPLY_CONCURRENCY: usize = 10;
 
 pub struct Store<T: Transport + 'static, C: PdClient + 'static> {
     cfg: Config,
@@ -108,8 +107,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         try!(cfg.validate());
 
         let sendch = SendCh::new(sender);
-
         let peer_cache = HashMap::new();
+        let apply_concurrency = cfg.apply_concurrency;
 
         Ok(Store {
             cfg: cfg,
@@ -122,7 +121,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             snap_worker: Worker::new("snapshot worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
-            apply_pool: ThreadPool::new_with_name(thd_name!("apply-pool"), APPLY_CONCURRENCY),
+            apply_pool: ThreadPool::new_with_name(thd_name!("apply-pool"), apply_concurrency),
             region_ranges: BTreeMap::new(),
             trans: trans,
             pd_client: pd_client,

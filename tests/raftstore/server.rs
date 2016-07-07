@@ -170,7 +170,13 @@ impl Simulator for ServerCluster {
         let store = create_raft_storage(node, engine).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
-        let mut server = Server::new(&mut event_loop, listener, store, router, resolver, snap_mgr)
+        let mut server = Server::new(&mut event_loop,
+                                     cfg,
+                                     listener,
+                                     store,
+                                     router,
+                                     resolver,
+                                     snap_mgr)
             .unwrap();
 
         let ch = server.get_sendch();

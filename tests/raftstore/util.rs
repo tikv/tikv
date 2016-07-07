@@ -73,6 +73,7 @@ pub fn new_store_cfg() -> Config {
         raft_log_gc_threshold: 1,
         pd_heartbeat_tick_interval: 20,
         region_check_size_diff: 10000,
+        apply_concurrency: 2,
         ..Config::default()
     }
 }
@@ -84,6 +85,7 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         cluster_id: cluster_id,
         addr: "127.0.0.1:0".to_owned(),
         store_cfg: store_cfg,
+        end_point_concurrency: 1,
         ..ServerConfig::default()
     }
 }

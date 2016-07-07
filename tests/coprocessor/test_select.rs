@@ -231,7 +231,7 @@ fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
     };
     prepare_table_data(&mut store, &ti, count);
 
-    let end_point = EndPointHost::new(engine);
+    let end_point = EndPointHost::new(engine, 1);
     let mut worker = Worker::new("test select worker");
     worker.start_batch(end_point, 5).unwrap();
     (store, worker, ti)

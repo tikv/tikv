@@ -58,6 +58,7 @@ pub fn bind(addr: &str) -> Result<TcpListener> {
 }
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
+    server_cfg: Config,
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
     // In our raft server, a client with token 1 sends a raft command, we will
@@ -94,6 +95,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // create the listener outer, get the real listening address for
     // Node and then pass it here.
     pub fn new(event_loop: &mut EventLoop<Self>,
+               server_cfg: Config,
                listener: TcpListener,
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
@@ -111,6 +113,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let snap_worker = Worker::new("snap-handler");
 
         let svr = Server {
+            server_cfg: server_cfg,
             listener: listener,
             sendch: sendch,
             conns: HashMap::new(),
@@ -129,7 +132,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        let end_point = EndPointHost::new(self.store.engine());
+        let end_point = EndPointHost::new(self.store.engine(),
+                                          self.server_cfg.end_point_concurrency);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
         let ch = self.get_sendch();
@@ -673,6 +677,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut server =
             Server::new(&mut event_loop,
+                        cfg,
                         listener,
                         Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),

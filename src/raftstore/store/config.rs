@@ -33,6 +33,7 @@ const STORE_CAPACITY: u64 = u64::MAX;
 const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
 const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
 const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
+const APPLY_CONCURRENCY: usize = 10;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -70,6 +71,8 @@ pub struct Config {
     pub notify_capacity: usize,
     pub snap_mgr_gc_tick_interval: u64,
     pub snap_gc_timeout: u64,
+
+    pub apply_concurrency: usize,
 }
 
 impl Default for Config {
@@ -93,6 +96,7 @@ impl Default for Config {
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
             snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL_MS,
             snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
+            apply_concurrency: APPLY_CONCURRENCY,
         }
     }
 }
@@ -112,6 +116,10 @@ impl Config {
             return Err(box_err!("region max size {} must >= split size {}",
                                 self.region_max_size,
                                 self.region_split_size));
+        }
+
+        if self.apply_concurrency == 0 {
+            return Err(box_err!("apply concurrency should not be 0."));
         }
 
         Ok(())
