@@ -92,6 +92,12 @@ impl Peekable for RegionSnapshot {
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
+
+    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
+        try!(util::check_key_in_region(key, &self.region));
+        let data_key = keys::data_key(key);
+        self.snap.get_value_cf(cf, &data_key)
+    }
 }
 
 /// `RegionIterator` wrap a rocksdb iterator and only allow it to
@@ -209,7 +215,7 @@ mod tests {
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
-    use storage::{Cursor, Key};
+    use storage::{Cursor, Key, DEFAULT_CFS};
     use util::worker;
 
     use super::*;
@@ -219,7 +225,7 @@ mod tests {
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
     fn new_temp_engine(path: &TempDir) -> Arc<DB> {
-        new_engine(path.path().to_str().unwrap()).unwrap()
+        new_engine(path.path().to_str().unwrap(), DEFAULT_CFS).unwrap()
     }
 
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
