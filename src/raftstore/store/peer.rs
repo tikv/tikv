@@ -13,7 +13,6 @@
 
 use std::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ops::{Deref, DerefMut};
 use std::vec::Vec;
 use std::default::Default;
 
@@ -27,7 +26,8 @@ use kvproto::raftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState, PeerState, RegionLocalState};
+use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
+                             RegionLocalState};
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
@@ -35,7 +35,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer};
 use pd::PdClient;
 use super::store::Store;
-use super::peer_storage::{PeerStorage, RaftStorage, ApplySnapResult, InvokeContext};
+use super::peer_storage::{PeerStorage, RaftStorage, ApplySnapResult};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -704,6 +704,12 @@ impl Peer {
 
         if data.is_empty() {
             // when a peer become leader, it will send an empty entry.
+            let wb = WriteBatch::new();
+            let mut state = self.get_store().rl().apply_state.clone();
+            state.set_applied_index(index);
+            try!(wb.put_msg(&keys::apply_state_key(self.region_id), &state));
+            try!(self.engine.write_without_wal(wb));
+            self.get_store().wl().apply_state = state;
             return Ok(None);
         }
 
@@ -829,8 +835,8 @@ impl Peer {
         let engine = self.engine.clone();
         let mut ctx = ExecContext {
             snap: Snapshot::new(engine),
-            // TODO: lock the whole method.
-            invoke_ctx: InvokeContext::new(&self.get_store().rl()),
+            apply_state: self.get_store().rl().apply_state.clone(),
+            wb: WriteBatch::new(),
             req: req,
         };
         let (mut resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
@@ -838,14 +844,14 @@ impl Peer {
             (cmd_resp::new_error(e), None)
         });
 
-        ctx.local_state.set_applied_index(index);
+        ctx.apply_state.set_applied_index(index);
         ctx.save(self.region_id).expect("save state must not fail");
 
         // Commit write and change storage fields atomically.
         let mut storage = self.get_store().wl();
-        match self.engine.write_without_wal(ctx.invoke_ctx.wb) {
+        match self.engine.write_without_wal(ctx.wb) {
             Ok(_) => {
-                storage.local_state = ctx.invoke_ctx.local_state;
+                storage.apply_state = ctx.apply_state;
 
                 if let Some(ref exec_result) = exec_result {
                     match *exec_result {
@@ -895,21 +901,15 @@ fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 
 struct ExecContext<'a> {
     pub snap: Snapshot,
-    pub invoke_ctx: InvokeContext,
+    pub apply_state: RaftApplyState,
+    pub wb: WriteBatch,
     pub req: &'a RaftCmdRequest,
 }
 
-impl<'a> Deref for ExecContext<'a> {
-    type Target = InvokeContext;
-
-    fn deref(&self) -> &InvokeContext {
-        &self.invoke_ctx
-    }
-}
-
-impl<'a> DerefMut for ExecContext<'a> {
-    fn deref_mut(&mut self) -> &mut InvokeContext {
-        &mut self.invoke_ctx
+impl<'a> ExecContext<'a> {
+    fn save(&self, region_id: u64) -> Result<()> {
+        try!(self.wb.put_msg(&keys::apply_state_key(region_id), &self.apply_state));
+        Ok(())
     }
 }
 
@@ -1126,9 +1126,9 @@ impl Peer {
             return Ok((resp, None));
         }
 
-        try!(self.get_store().rl().compact(&mut ctx.invoke_ctx, compact_index));
+        try!(self.get_store().rl().compact(&mut ctx.apply_state, compact_index));
         Ok((resp,
-            Some(ExecResult::CompactLog { state: ctx.local_state.get_truncated_state().clone() })))
+            Some(ExecResult::CompactLog { state: ctx.apply_state.get_truncated_state().clone() })))
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
