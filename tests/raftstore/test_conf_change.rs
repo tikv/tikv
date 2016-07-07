@@ -17,7 +17,7 @@ use std::thread;
 
 use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::RaftResponseHeader;
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::raft_serverpb::RaftApplyState;
 use kvproto::metapb;
 use tikv::pd::PdClient;
 
@@ -359,11 +359,12 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         .clone();
 
     let engine1 = cluster.get_engine(1);
-    let state = engine1.get_msg::<RaftLocalState>(&keys::raft_state_key(r1)).unwrap().unwrap();
+    let state = engine1.get_msg::<RaftApplyState>(&keys::apply_state_key(r1)).unwrap().unwrap();
     let index = state.get_applied_index();
     let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
     compact_log.mut_header().set_peer(new_peer(1, 1));
     // ignore error, we just want to send this command to peer (1, 1),
+
     // and the command can't be executed because we have only one peer,
     // so here will return timeout error, we should ignore it.
     let _ = cluster.call_command(compact_log, Duration::from_millis(1));

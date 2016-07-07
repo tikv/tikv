@@ -17,7 +17,6 @@ use std::time::Duration;
 use std::thread;
 
 use rocksdb::DB;
-use tempdir::TempDir;
 use uuid::Uuid;
 use protobuf;
 
@@ -62,11 +61,6 @@ pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
 
 pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
     must_get(engine, key, None);
-}
-
-pub fn new_engine(path: &TempDir) -> Arc<DB> {
-    let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
-    Arc::new(db)
 }
 
 pub fn new_store_cfg() -> Config {

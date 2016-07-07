@@ -34,7 +34,7 @@ use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
-use super::{Engine, Modify, Cursor, Snapshot};
+use super::{Engine, Modify, Cursor, Snapshot, DEFAULT_CFNAME};
 use util::event::Event;
 use storage::{Key, Value, CfName};
 
@@ -222,16 +222,22 @@ impl<C: PdClient> Engine for RaftKv<C> {
             let m = modifies.pop().unwrap();
             let mut req = Request::new();
             match m {
-                Modify::Delete(_, k) => {
+                Modify::Delete(cf, k) => {
                     let mut delete = DeleteRequest::new();
                     delete.set_key(k.encoded().to_owned());
+                    if cf != DEFAULT_CFNAME {
+                        delete.set_cf(cf.to_string());
+                    }
                     req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
-                Modify::Put(_, k, v) => {
+                Modify::Put(cf, k, v) => {
                     let mut put = PutRequest::new();
                     put.set_key(k.encoded().to_owned());
                     put.set_value(v);
+                    if cf != DEFAULT_CFNAME {
+                        put.set_cf(cf.to_string());
+                    }
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
                 }
@@ -260,8 +266,9 @@ impl Snapshot for RegionSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn get_cf(&self, _: CfName, _: &Key) -> engine::Result<Option<Value>> {
-        unimplemented!();
+    fn get_cf(&self, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
+        let v = box_try!(self.get_value_cf(cf, key.encoded()));
+        Ok(v.map(|v| v.to_vec()))
     }
 
     fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
