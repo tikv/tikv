@@ -488,7 +488,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
-        let mut send_cnt = 0;
+        let mut sent_cnt = 0;
         let (tx, rx) = mpsc::channel();
         for &region_id in &ids {
             if let Some(mut peer) = self.region_peers.remove(&region_id) {
@@ -503,12 +503,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                peer.peer_id());
                     }
                 });
-                send_cnt += 1;
+                sent_cnt += 1;
             }
         }
 
         let mut has_err = false;
-        for _ in 0..send_cnt {
+        drop(tx);
+        for _ in 0..sent_cnt {
             // if err, means we lost some peer.
             let (peer, res) = rx.recv().expect("recv ready result shouldn't fail");
             let region_id = peer.region_id();
@@ -528,7 +529,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         has_err = true;
                     }
                 }
-                _ => {}
+                Ok(None) => {}
             }
         }
 
