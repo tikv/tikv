@@ -45,6 +45,7 @@ pub fn must_get(engine: &Arc<DB>, key: &[u8], value: Option<&[u8]>) {
             thread::sleep(Duration::from_millis(10));
         }
     }
+    debug!("last try to get {}", escape(key));
     let res = engine.get_value(&keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none() ||
        value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap() {
