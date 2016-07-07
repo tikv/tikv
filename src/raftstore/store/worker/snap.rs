@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rocksdb::{DB, Writable, WriteBatch};
-use kvproto::raft_serverpb::{ApplyState, RegionLocalState, PeerState};
+use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 
 use util::worker::Runnable;
 use util::codec::bytes::CompactBytesDecoder;
@@ -123,7 +123,7 @@ impl<T: MsgSender> Runner<T> {
     fn apply_snap(&self, region_id: u64) -> Result<(), Error> {
         info!("begin apply snap data for {}", region_id);
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: ApplyState = match box_try!(self.db.get_msg(&state_key)) {
+        let apply_state: RaftApplyState = match box_try!(self.db.get_msg(&state_key)) {
             Some(state) => state,
             None => return Err(box_err!("failed to get raftstate from {}", escape(&state_key))),
         };

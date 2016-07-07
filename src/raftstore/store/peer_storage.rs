@@ -13,7 +13,6 @@
 
 use std::sync::{self, Arc};
 use std::cell::{RefCell, Ref, RefMut};
-use std::rc::Rc;
 use std::error;
 use std::time::Instant;
 
@@ -22,7 +21,7 @@ use protobuf::Message;
 
 use kvproto::metapb;
 use kvproto::raftpb::{Entry, Snapshot, ConfState};
-use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, ApplyState,
+use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
 use util::HandyRwLock;
 use util::codec::bytes::BytesEncoder;
@@ -55,7 +54,7 @@ pub struct PeerStorage {
 
     pub region: metapb::Region,
     pub raft_state: RaftLocalState,
-    pub apply_state: ApplyState,
+    pub apply_state: RaftApplyState,
 
     pub snap_state: SnapState,
     pub snap: Option<Snapshot>,
@@ -89,7 +88,7 @@ pub struct ApplySnapResult {
 
 pub struct InvokeContext {
     pub raft_state: RaftLocalState,
-    pub apply_state: ApplyState,
+    pub apply_state: RaftApplyState,
     pub wb: WriteBatch,
 }
 
@@ -131,7 +130,7 @@ impl PeerStorage {
         let apply_state = match try!(engine.get_msg(&keys::apply_state_key(region.get_id()))) {
             Some(s) => s,
             None => {
-                let mut apply_state = ApplyState::new();
+                let mut apply_state = RaftApplyState::new();
                 if !region.get_peers().is_empty() {
                     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
                     let state = apply_state.mut_truncated_state();
@@ -208,7 +207,7 @@ impl PeerStorage {
 
     pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
         try!(self.check_range(low, high));
-        let mut ents = vec![];
+        let mut ents = Vec::with_capacity((high - low) as usize);
         let mut total_size: u64 = 0;
         let mut next_index = low;
         let mut exceeded_max_size = false;
@@ -405,7 +404,7 @@ impl PeerStorage {
 
     // Discard all log entries prior to compact_index. We must guarantee
     // that the compact_index is not greater than applied index.
-    pub fn compact(&self, state: &mut ApplyState, compact_index: u64) -> Result<()> {
+    pub fn compact(&self, state: &mut RaftApplyState, compact_index: u64) -> Result<()> {
         debug!("compact log entries to prior to {} for region {}",
                compact_index,
                self.get_region_id());
@@ -551,7 +550,7 @@ fn build_snap_file(f: &mut SnapFile,
 pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft::Result<Snapshot> {
     debug!("begin to generate a snapshot for region {}", region_id);
 
-    let apply_state: ApplyState = match try!(snap.get_msg(&keys::apply_state_key(region_id))) {
+    let apply_state: RaftApplyState = match try!(snap.get_msg(&keys::apply_state_key(region_id))) {
         None => return Err(box_err!("could not load raft state of region {}", region_id)),
         Some(state) => state,
     };
@@ -624,14 +623,13 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     Ok(snapshot)
 }
 
-#[derive(Clone)]
 pub struct RaftStorage {
-    store: Rc<RefCell<PeerStorage>>,
+    store: RefCell<PeerStorage>,
 }
 
 impl RaftStorage {
     pub fn new(store: PeerStorage) -> RaftStorage {
-        RaftStorage { store: Rc::new(RefCell::new(store)) }
+        RaftStorage { store: RefCell::new(store) }
     }
 
     #[inline]
