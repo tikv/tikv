@@ -18,6 +18,7 @@ use std::vec::Vec;
 use std::default::Default;
 
 use rocksdb::{DB, WriteBatch, Writable};
+use rocksdb::rocksdb_ffi::DBCFHandle;
 use protobuf::{self, Message};
 use uuid::Uuid;
 
@@ -1168,7 +1169,12 @@ impl Peer {
         try!(self.check_data_key(key));
 
         let mut resp = Response::new();
-        let res = try!(ctx.snap.get_value(&keys::data_key(key)));
+        let res = if req.get_get().has_cf() {
+            let cf = req.get_get().get_cf();
+            try!(ctx.snap.get_value_cf(cf, &keys::data_key(key)))
+        } else {
+            try!(ctx.snap.get_value(&keys::data_key(key)))
+        };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
         }
@@ -1190,6 +1196,10 @@ impl Peer {
         Ok(resp)
     }
 
+    fn get_cf_handle(&self, cf: &str) -> Result<&DBCFHandle> {
+        self.engine.cf_handle(cf).ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf)))
+    }
+
     fn do_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         try!(self.check_data_key(key));
@@ -1198,8 +1208,13 @@ impl Peer {
         let key = keys::data_key(key);
         self.size_diff_hint += key.len() as u64;
         self.size_diff_hint += value.len() as u64;
-        try!(ctx.wb.put(&key, value));
-
+        if req.get_put().has_cf() {
+            let cf = req.get_put().get_cf();
+            let handle = try!(self.get_cf_handle(cf));
+            try!(ctx.wb.put_cf(*handle, &key, value));
+        } else {
+            try!(ctx.wb.put(&key, value));
+        }
         Ok(resp)
     }
 
@@ -1216,7 +1231,13 @@ impl Peer {
             self.size_diff_hint = 0;
         }
         let resp = Response::new();
-        try!(ctx.wb.delete(&key));
+        if req.get_delete().has_cf() {
+            let cf = req.get_delete().get_cf();
+            let handle = try!(self.get_cf_handle(cf));
+            try!(ctx.wb.delete_cf(*handle, &key));
+        } else {
+            try!(ctx.wb.delete(&key));
+        }
 
         Ok(resp)
     }

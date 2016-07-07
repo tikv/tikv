@@ -31,6 +31,7 @@ use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use tikv::raft::SnapshotStatus;
+use tikv::storage::DEFAULT_CFS;
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
 
@@ -210,5 +211,5 @@ impl Simulator for NodeCluster {
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    Cluster::new(id, count, sim, pd_client)
+    Cluster::new(id, count, DEFAULT_CFS, sim, pd_client)
 }
