@@ -11,22 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error;
-use std::fmt;
 use rocksdb::DBCompressionType;
 
-#[derive(Debug)]
-pub struct ParseConfigError(&'static str);
-
-impl fmt::Display for ParseConfigError {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "malformed property")
-    }
-}
-
-impl error::Error for ParseConfigError {
-    fn description(&self) -> &str {
-        "malformed property"
+quick_error! {
+    #[derive(Debug)]
+    pub enum ParseConfigError {
+        MalformedRocksDB
+        MalformedReadableNumber
     }
 }
 
@@ -38,7 +29,7 @@ pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ParseCon
         "bzip2" => Ok(DBCompressionType::DBBz2),
         "lz4" => Ok(DBCompressionType::DBLz4),
         "lz4hc" => Ok(DBCompressionType::DBLz4hc),
-        _ => Err(ParseConfigError("invalid rocksdb compression")),
+        _ => Err(ParseConfigError::MalformedRocksDB),
     }
 }
 
@@ -74,7 +65,7 @@ fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
     }
 
     let (num, unit) = property.split_at(indx);
-    num.parse::<f64>().map(|f| (f, unit)).or(Err(ParseConfigError("malformed readable number")))
+    num.parse::<f64>().map(|f| (f, unit)).or(Err(ParseConfigError::MalformedReadableNumber))
 }
 
 const UNIT: usize = 1;
@@ -111,7 +102,7 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
         "m" => Ok((num * (MINTUE as f64)) as i64),
         "h" => Ok((num * (HOUR as f64)) as i64),
 
-        _ => Err(ParseConfigError("malformed readable number")),
+        _ => Err(ParseConfigError::MalformedReadableNumber),
     }
 }
 
