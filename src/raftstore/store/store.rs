@@ -510,7 +510,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut has_err = false;
         for _ in 0..send_cnt {
             // if err, means we lost some peer.
-            let (peer, res) = rx.recv().expect("recv ready result can't failed");
+            let (peer, res) = rx.recv().expect("recv ready result can't fail");
 
             let region_id = peer.region_id();
             self.region_peers.insert(region_id, peer);
@@ -539,7 +539,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   t.elapsed());
 
         if has_err {
-            Err(box_err!("some error happen during handle ready."))
+            Err(box_err!("some errors happen during handle ready."))
         } else {
             Ok(())
         }
