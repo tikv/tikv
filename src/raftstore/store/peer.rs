@@ -292,6 +292,10 @@ impl Peer {
         self.get_store().rl().get_region().clone()
     }
 
+    pub fn region_id(&self) -> u64 {
+        self.region_id
+    }
+
     pub fn peer_id(&self) -> u64 {
         self.peer.get_id()
     }
