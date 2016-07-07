@@ -620,6 +620,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     .is_none() {
                     panic!("region should exist, {:?}", right);
                 }
+                new_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 self.region_peers.insert(new_region_id, new_peer);
             }
         }

@@ -373,7 +373,7 @@ impl<T: Simulator> Cluster<T> {
                    reqs: Vec<Request>,
                    timeout: Duration)
                    -> RaftCmdResponse {
-        for _ in 0..10 {
+        for _ in 0..20 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch(), reqs.clone());
@@ -381,12 +381,14 @@ impl<T: Simulator> Cluster<T> {
 
             if let Err(Error::Timeout(_)) = result {
                 warn!("call command timeout, let's retry");
+                sleep_ms(100);
                 continue;
             }
 
             let resp = result.unwrap();
             if resp.get_header().get_error().has_stale_epoch() {
                 warn!("seems split, let's retry");
+                sleep_ms(100);
                 continue;
             }
             return resp;

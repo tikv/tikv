@@ -117,6 +117,7 @@ impl PeerStorage {
                region: &metapb::Region,
                snap_sched: Scheduler<SnapTask>)
                -> Result<PeerStorage> {
+        debug!("creating storage on {} for {:?}", engine.path(), region);
         let raft_state = match try!(engine.get_msg(&keys::raft_state_key(region.get_id()))) {
             Some(s) => s,
             None => {

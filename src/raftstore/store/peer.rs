@@ -1206,6 +1206,12 @@ impl Peer {
 
         let resp = Response::new();
         let key = keys::data_key(key);
+        if let Some(diff) = self.size_diff_hint.checked_add(key.len() as u64) {
+            self.size_diff_hint = diff;
+        }
+        if let Some(diff) = self.size_diff_hint.checked_add(value.len() as u64) {
+            self.size_diff_hint = diff;
+        }
         self.size_diff_hint += key.len() as u64;
         self.size_diff_hint += value.len() as u64;
         if req.get_put().has_cf() {
