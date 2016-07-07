@@ -165,7 +165,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                               "rocksdb.compression_per_level",
                               matches,
                               config,
-                              Some("no:no:no:lz4:lz4:lz4:lz4".to_owned()),
+                              Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
                               |v| v.as_str().map(|s| s.to_owned()));
     let per_level_compression = util::rocksdb_option::get_per_level_compression_by_string(&cpl);
     opts.compression_per_level(&per_level_compression);
@@ -202,7 +202,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                                        "rocksdb.max-background-compactions",
                                                        matches,
                                                        config,
-                                                       Some(3),
+                                                       Some(4),
                                                        |v| v.as_integer());
     opts.set_max_background_compactions(max_background_compactions as i32);
 
@@ -210,7 +210,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                                      "rocksdb.max-bytes-for-level-base",
                                                      matches,
                                                      config,
-                                                     Some(256 * 1024 * 1024),
+                                                     Some(64 * 1024 * 1024),
                                                      |v| v.as_integer());
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
 

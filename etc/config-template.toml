@@ -58,10 +58,9 @@ pd-root = "/pd"
 #   bzip2: kBZip2Compression
 #   lz4: kLZ4Compression
 #   lz4hc: kLZ4HCCompression
-compression = "lz4"
 
 # per level compression
-compression_per_level = "no:no:no:lz4:lz4:lz4:lz4"
+compression_per_level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
 
 # Amount of data to build up in memory (backed by an unsorted log
 # on disk) before converting to a sorted on-disk file.
@@ -76,10 +75,10 @@ min-write-buffer-number-to-merge = 1
 
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
-max-background-compactions = 3
+max-background-compactions = 4
 
 # Control maximum total data size for base level (level 1).
-max-bytes-for-level-base = 268435456 # 256 * 1024 * 1024
+max-bytes-for-level-base = 67108864 # 64 * 1024 * 1024
 
 # Target file size for compaction.
 target-file-size-base = 16777216 # 16 * 1024 * 1024
