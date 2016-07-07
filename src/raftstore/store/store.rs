@@ -19,6 +19,7 @@ use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::Duration;
 use std::{cmp, u64};
+use std::collections::hash_map::Entry;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
@@ -512,7 +513,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // if err, means we lost some peer.
             let (peer, res) = rx.recv().expect("recv ready result shouldn't fail");
             let region_id = peer.region_id();
-            self.region_peers.insert(region_id, peer);
+            // if the peer appears again, it means that existing peer is inserted
+            // by handle split, so returned peer should be skipped.
+            match self.region_peers.entry(region_id) {
+                Entry::Occupied(_) => {
+                    assert!(!peer.get_store().rl().is_initialized());
+                }
+                Entry::Vacant(e) => {
+                    e.insert(peer);
+                }
+            }
 
             match res {
                 Err(e) => {
