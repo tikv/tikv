@@ -373,7 +373,7 @@ impl<T: Simulator> Cluster<T> {
                    reqs: Vec<Request>,
                    timeout: Duration)
                    -> RaftCmdResponse {
-        for _ in 0..10 {
+        for _ in 0..20 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch(), reqs.clone());

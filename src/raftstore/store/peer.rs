@@ -230,7 +230,7 @@ impl Peer {
             pending_cmds: Default::default(),
             peer_cache: store.peer_cache(),
             coprocessor_host: CoprocessorHost::new(),
-            size_diff_hint: cfg.region_check_size_diff,
+            size_diff_hint: 0,
             pending_remove: false,
         };
 
