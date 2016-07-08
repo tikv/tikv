@@ -20,7 +20,7 @@ use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::Message;
 
 use kvproto::metapb;
-use kvproto::raftpb::{Entry, Snapshot, ConfState};
+use kvproto::raftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
 use util::HandyRwLock;
@@ -158,33 +158,24 @@ impl PeerStorage {
         !self.region.get_peers().is_empty()
     }
 
-    pub fn initial_state(&mut self) -> raft::Result<RaftState> {
-        let initialized = self.is_initialized();
+    pub fn initial_state(&self) -> raft::Result<RaftState> {
+        let hard_state = self.raft_state.get_hard_state().clone();
+        let mut conf_state = ConfState::new();
+        if hard_state == HardState::new() {
+            assert!(!self.is_initialized(),
+                    "peer for region {:?} is initialized but local state {:?} has empty hard \
+                     state",
+                    self.region,
+                    self.raft_state);
 
-        let found = self.raft_state.has_hard_state();
-        let mut hard_state = self.raft_state.get_hard_state().clone();
-
-        if !found {
-            if initialized {
-                hard_state.set_term(RAFT_INIT_LOG_TERM);
-                hard_state.set_commit(RAFT_INIT_LOG_INDEX);
-                self.raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
-            } else {
-                // This is a new region created from another node.
-                // Initialize to 0 so that we can receive a snapshot.
-                self.raft_state.set_last_index(0);
-            }
-        } else if initialized && hard_state.get_commit() == 0 {
-            // How can we enter this condition? Log first and try to find later.
-            warn!("peer initialized but hard state commit is 0");
-            hard_state.set_commit(RAFT_INIT_LOG_INDEX);
+            return Ok(RaftState {
+                hard_state: hard_state,
+                conf_state: conf_state,
+            });
         }
 
-        let mut conf_state = ConfState::new();
-        if found || initialized {
-            for p in self.region.get_peers() {
-                conf_state.mut_nodes().push(p.get_id());
-            }
+        for p in self.region.get_peers() {
+            conf_state.mut_nodes().push(p.get_id());
         }
 
         Ok(RaftState {
@@ -624,6 +615,25 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     Ok(snapshot)
 }
 
+// When we bootstrap the region or handling split new region, we must
+// call this to initialize region local state first.
+pub fn write_initial_state<T: Mutable>(w: &T, region_id: u64) -> Result<()> {
+    let mut raft_state = RaftLocalState::new();
+    raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
+    raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
+    raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
+
+    let mut apply_state = RaftApplyState::new();
+    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+    apply_state.mut_truncated_state().set_index(RAFT_INIT_LOG_INDEX);
+    apply_state.mut_truncated_state().set_term(RAFT_INIT_LOG_TERM);
+
+    try!(w.put_msg(&keys::raft_state_key(region_id), &raft_state));
+    try!(w.put_msg(&keys::apply_state_key(region_id), &apply_state));
+
+    Ok(())
+}
+
 pub struct RaftStorage {
     store: RefCell<PeerStorage>,
 }
@@ -646,7 +656,7 @@ impl RaftStorage {
 
 impl Storage for RaftStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
-        self.wl().initial_state()
+        self.rl().initial_state()
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
