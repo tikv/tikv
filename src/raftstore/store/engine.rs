@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions, Options};
 use rocksdb::rocksdb::UnsafeSnap;
+use rocksdb::rocksdb_ffi::DBCFHandle;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
 
@@ -40,6 +41,10 @@ impl Snapshot {
             }
         }
     }
+
+    pub fn cf_names(&self) -> Vec<&str> {
+        self.db.cf_names()
+    }
 }
 
 impl Drop for Snapshot {
@@ -61,7 +66,9 @@ pub fn new_engine_opt(mut opts: Options, path: &str, cfs: &[&str]) -> Result<Arc
     // CF.
     // TODO: Support open db with incomplete CFs.
     opts.create_if_missing(false);
-    match DB::open_cf(&opts, path, cfs) {
+    let cf_opts: Vec<Options> = cfs.iter().map(|_| Options::new()).collect();
+    let cf_ref_opts: Vec<&Options> = cf_opts.iter().collect();
+    match DB::open_cf(&opts, path, cfs, &cf_ref_opts) {
         Ok(db) => return Ok(Arc::new(db)),
         Err(e) => warn!("open rocksdb fail: {}", e),
     }
@@ -126,30 +133,21 @@ pub trait Peekable {
 // TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
     fn new_iterator(&self) -> DBIterator;
+    fn new_iterator_cf(&self, &str) -> Result<DBIterator>;
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let mut it = self.new_iterator();
-        it.seek(start_key.into());
-        while it.valid() {
-            let r = {
-                let key = it.key();
-                if key >= end_key {
-                    break;
-                }
+        scan_impl(self.new_iterator(), start_key, end_key, f)
+    }
 
-                try!(f(key, it.value()))
-            };
-
-            if !r || !it.next() {
-                break;
-            }
-        }
-
-        Ok(())
+    // like `scan`, only on a specific column family.
+    fn scan_cf<F>(&self, cf: &str, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
+        where F: FnMut(&[u8], &[u8]) -> Result<bool>
+    {
+        scan_impl(try!(self.new_iterator_cf(cf)), start_key, end_key, f)
     }
 
     // Seek the first key >= given key, if no found, return None.
@@ -160,6 +158,33 @@ pub trait Iterable {
     }
 }
 
+fn scan_impl<F>(mut it: DBIterator, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
+    where F: FnMut(&[u8], &[u8]) -> Result<bool>
+{
+    it.seek(start_key.into());
+    while it.valid() {
+        let r = {
+            let key = it.key();
+            if key >= end_key {
+                break;
+            }
+
+            try!(f(key, it.value()))
+        };
+
+        if !r || !it.next() {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a DBCFHandle> {
+    db.cf_handle(cf)
+        .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf)))
+}
+
 impl Peekable for DB {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
         let v = try!(self.get(key));
@@ -167,8 +192,7 @@ impl Peekable for DB {
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = try!(self.cf_handle(cf)
-            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
+        let handle = try!(get_cf_handle(self, cf));
         let v = try!(self.get_cf(*handle, key));
         Ok(v)
     }
@@ -177,6 +201,11 @@ impl Peekable for DB {
 impl Iterable for DB {
     fn new_iterator(&self) -> DBIterator {
         self.iter()
+    }
+
+    fn new_iterator_cf(&self, cf: &str) -> Result<DBIterator> {
+        let handle = try!(get_cf_handle(self, cf));
+        Ok(self.iter_cf(*handle))
     }
 }
 
@@ -189,10 +218,9 @@ impl Peekable for Snapshot {
         let v = try!(self.db.get_opt(key, &opt));
         Ok(v)
     }
+
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = try!(self.db
-            .cf_handle(cf)
-            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
+        let handle = try!(get_cf_handle(&self.db, cf));
         let mut opt = ReadOptions::new();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -209,6 +237,15 @@ impl Iterable for Snapshot {
             opt.set_snapshot(&self.snap);
         }
         DBIterator::new(&self.db, &opt)
+    }
+
+    fn new_iterator_cf(&self, cf: &str) -> Result<DBIterator> {
+        let handle = try!(get_cf_handle(&self.db, cf));
+        let mut opt = ReadOptions::new();
+        unsafe {
+            opt.set_snapshot(&self.snap);
+        }
+        Ok(DBIterator::new_cf(&self.db, *handle, &opt))
     }
 }
 
@@ -305,10 +342,13 @@ mod tests {
     #[test]
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
-        let engine = new_engine(path.path().to_str().unwrap(), &[]).unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap();
+        let handle = engine.cf_handle("cf").unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();
+        engine.put_cf(*handle, b"a1", b"v1").unwrap();
+        engine.put_cf(*handle, b"a2", b"v22").unwrap();
 
         let mut data = vec![];
         engine.scan(b"",
@@ -318,13 +358,26 @@ mod tests {
                       Ok(true)
                   })
             .unwrap();
+        assert_eq!(data,
+                   vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a2".to_vec(), b"v2".to_vec())]);
+        data.clear();
 
-        assert_eq!(data.len(), 2);
+        engine.scan_cf("cf",
+                     b"",
+                     &[0xFF, 0xFF],
+                     &mut |key, value| {
+                         data.push((key.to_vec(), value.to_vec()));
+                         Ok(true)
+                     })
+            .unwrap();
+        assert_eq!(data,
+                   vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a2".to_vec(), b"v22".to_vec())]);
+        data.clear();
+
         let pair = engine.seek(b"a1").unwrap().unwrap();
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         assert!(engine.seek(b"a3").unwrap().is_none());
 
-        data.clear();
         let mut index = 0;
         engine.scan(b"",
                   &[0xFF, 0xFF],

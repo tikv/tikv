@@ -17,8 +17,10 @@ use std::error;
 use std::fs::File;
 use std::sync::Arc;
 use std::time::Instant;
+use std::str;
 
 use rocksdb::{DB, Writable, WriteBatch};
+use rocksdb::rocksdb_ffi::DBCFHandle;
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 
 use util::worker::Runnable;
@@ -77,6 +79,10 @@ pub struct Runner<T: MsgSender> {
     db: Arc<DB>,
     ch: T,
     mgr: SnapManager,
+}
+
+fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> raftstore::Result<&'a DBCFHandle> {
+    Ok(db.cf_handle(cf).unwrap())
 }
 
 impl<T: MsgSender> Runner<T> {
@@ -143,23 +149,31 @@ impl<T: MsgSender> Runner<T> {
 
         let timer = Instant::now();
         // Write the snapshot into the region.
-        let mut wb = WriteBatch::new();
-        let mut batch_size = 0;
         loop {
             // TODO: avoid too many allocation
-            let key = box_try!(reader.decode_compact_bytes());
-            if key.is_empty() {
-                box_try!(self.db.write(wb));
+            let cf = box_try!(reader.decode_compact_bytes());
+            if cf.is_empty() {
                 break;
             }
-            batch_size += key.len();
-            let value = box_try!(reader.decode_compact_bytes());
-            batch_size += value.len();
-            box_try!(wb.put(&key, &value));
-            if batch_size > BATCH_SIZE {
-                box_try!(self.db.write(wb));
-                wb = WriteBatch::new();
-                batch_size = 0;
+            let handle = box_try!(get_cf_handle(&self.db,
+                                                unsafe { str::from_utf8_unchecked(&cf) }));
+            let mut wb = WriteBatch::new();
+            let mut batch_size = 0;
+            loop {
+                let key = box_try!(reader.decode_compact_bytes());
+                if key.is_empty() {
+                    box_try!(self.db.write(wb));
+                    break;
+                }
+                batch_size += key.len();
+                let value = box_try!(reader.decode_compact_bytes());
+                batch_size += value.len();
+                box_try!(wb.put_cf(*handle, &key, &value));
+                if batch_size > BATCH_SIZE {
+                    box_try!(self.db.write(wb));
+                    wb = WriteBatch::new();
+                    batch_size = 0;
+                }
             }
         }
         let state_key = keys::region_state_key(region_id);

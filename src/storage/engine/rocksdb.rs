@@ -52,7 +52,9 @@ impl EngineRocksdb {
 
         let mut opts = Options::new();
         opts.create_if_missing(false);
-        match DB::open_cf(&opts, path, cfs) {
+        let cf_opts: Vec<Options> = cfs.iter().map(|_| Options::new()).collect();
+        let cf_ref_opts: Vec<&Options> = cf_opts.iter().collect();
+        match DB::open_cf(&opts, path, cfs, &cf_ref_opts) {
             Ok(db) => return Ok(db),
             Err(e) => warn!("open rocksdb fail: {}", e),
         }

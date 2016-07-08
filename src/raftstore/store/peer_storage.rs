@@ -517,17 +517,22 @@ fn build_snap_file(f: &mut SnapFile,
     let mut snap_size = 0;
     let mut snap_key_cnt = 0;
     let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
-    try!(snap.scan(&begin_key,
-                   &end_key,
-                   &mut |key, value| {
-        snap_size += key.len();
-        snap_size += value.len();
-        snap_key_cnt += 1;
-
-        try!(f.encode_compact_bytes(key));
-        try!(f.encode_compact_bytes(value));
-        Ok(true)
-    }));
+    for cf in snap.cf_names() {
+        box_try!(f.encode_compact_bytes(cf.as_bytes()));
+        try!(snap.scan_cf(cf,
+                          &begin_key,
+                          &end_key,
+                          &mut |key, value| {
+            snap_size += key.len();
+            snap_size += value.len();
+            snap_key_cnt += 1;
+            try!(f.encode_compact_bytes(key));
+            try!(f.encode_compact_bytes(value));
+            Ok(true)
+        }));
+        // use an empty byte array to indicate that cf reaches an end.
+        box_try!(f.encode_compact_bytes(b""));
+    }
     // use an empty byte array to indicate that kvpair reaches an end.
     box_try!(f.encode_compact_bytes(b""));
     try!(f.save());

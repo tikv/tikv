@@ -51,7 +51,8 @@ bytes  = "0.3.0"
 git = "https://github.com/rust-lang-nursery/getopts"
 
 [dependencies.rocksdb]
-git = "https://github.com/ngaut/rust-rocksdb.git"
+git = "https://github.com/disksing/rust-rocksdb.git"
+branch = "update-cf2"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"

@@ -14,7 +14,7 @@
 use std::slice::Iter;
 use protobuf::core::Message;
 use protobuf::RepeatedField;
-use kvproto::mvccpb::{Meta as PbMeta, MetaItem, MetaLock};
+use kvproto::mvccpb::{Meta as PbMeta, MetaItem};
 use super::Result;
 
 pub const META_SPLIT_SIZE: usize = 5;
@@ -45,22 +45,6 @@ impl Meta {
         let mut os = vec![];
         self.write_to(&mut os);
         os
-    }
-
-    pub fn get_lock(&self) -> Option<&MetaLock> {
-        if self.pb.has_lock() {
-            Some(self.pb.get_lock())
-        } else {
-            None
-        }
-    }
-
-    pub fn set_lock(&mut self, lock: MetaLock) {
-        self.pb.set_lock(lock);
-    }
-
-    pub fn clear_lock(&mut self) {
-        self.pb.clear_lock();
     }
 
     pub fn iter_items(&self) -> Iter<MetaItem> {
@@ -106,7 +90,7 @@ impl Meta {
 mod tests {
     use super::*;
     use std::ops::RangeFrom;
-    use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
+    use kvproto::mvccpb::MetaItem;
     use storage::mvcc::TEST_TS_BASE;
 
     #[test]
@@ -140,27 +124,6 @@ mod tests {
         assert_eq!(item.get_start_ts(), 3);
         assert!(meta2.get_item_by_start_ts(4).is_none());
         assert!(meta2.get_item_by_start_ts(0).is_none());
-    }
-
-    #[test]
-    fn test_meta_lock() {
-        let mut meta = Meta::new();
-        assert!(meta.get_lock().is_none());
-        let mut lock = MetaLock::new();
-        lock.set_field_type(MetaLockType::ReadWrite);
-        lock.set_start_ts(1);
-        lock.set_primary_key(b"pk".to_vec());
-        meta.set_lock(lock);
-
-        {
-            let lock = meta.get_lock().unwrap();
-            assert_eq!(lock.get_start_ts(), 1);
-            assert_eq!(lock.get_primary_key(), b"pk");
-            assert_eq!(lock.get_field_type(), MetaLockType::ReadWrite);
-        }
-
-        meta.clear_lock();
-        assert!(meta.get_lock().is_none());
     }
 
     #[test]

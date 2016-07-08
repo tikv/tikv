@@ -18,7 +18,7 @@ dependencies = [
  "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
- "rocksdb 0.3.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
+ "rocksdb 0.3.0 (git+https://github.com/disksing/rust-rocksdb.git?branch=update-cf2)",
  "rustc-serialize 0.3.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "threadpool 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -191,7 +191,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#e340fddadc2824d615989fe5cc11de2c6661d754"
+source = "git+https://github.com/disksing/rust-rocksdb.git?branch=update-cf2#07d44ea81909832b2f93de13a333131fd99469d7"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -390,10 +390,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#e340fddadc2824d615989fe5cc11de2c6661d754"
+source = "git+https://github.com/disksing/rust-rocksdb.git?branch=update-cf2#07d44ea81909832b2f93de13a333131fd99469d7"
 dependencies = [
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
- "librocksdb_sys 0.1.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
+ "librocksdb_sys 0.1.0 (git+https://github.com/disksing/rust-rocksdb.git?branch=update-cf2)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
