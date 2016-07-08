@@ -13,11 +13,11 @@
 
 use std::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ops::{Deref, DerefMut};
 use std::vec::Vec;
 use std::default::Default;
 
 use rocksdb::{DB, WriteBatch, Writable};
+use rocksdb::rocksdb_ffi::DBCFHandle;
 use protobuf::{self, Message};
 use uuid::Uuid;
 
@@ -26,7 +26,8 @@ use kvproto::raftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{RaftMessage, RaftTruncatedState, PeerState, RegionLocalState};
+use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
+                             RegionLocalState};
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
@@ -34,8 +35,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer};
 use pd::PdClient;
 use super::store::Store;
-use super::peer_storage::{PeerStorage, RaftStorage, ApplySnapResult, InvokeContext,
-                          write_initial_state};
+use super::peer_storage::{PeerStorage, RaftStorage, ApplySnapResult, write_initial_state};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -704,6 +704,12 @@ impl Peer {
 
         if data.is_empty() {
             // when a peer become leader, it will send an empty entry.
+            let wb = WriteBatch::new();
+            let mut state = self.get_store().rl().apply_state.clone();
+            state.set_applied_index(index);
+            try!(wb.put_msg(&keys::apply_state_key(self.region_id), &state));
+            try!(self.engine.write_without_wal(wb));
+            self.get_store().wl().apply_state = state;
             return Ok(None);
         }
 
@@ -829,8 +835,8 @@ impl Peer {
         let engine = self.engine.clone();
         let mut ctx = ExecContext {
             snap: Snapshot::new(engine),
-            // TODO: lock the whole method.
-            invoke_ctx: InvokeContext::new(&self.get_store().rl()),
+            apply_state: self.get_store().rl().apply_state.clone(),
+            wb: WriteBatch::new(),
             req: req,
         };
         let (mut resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
@@ -838,14 +844,14 @@ impl Peer {
             (cmd_resp::new_error(e), None)
         });
 
-        ctx.local_state.set_applied_index(index);
+        ctx.apply_state.set_applied_index(index);
         ctx.save(self.region_id).expect("save state must not fail");
 
         // Commit write and change storage fields atomically.
         let mut storage = self.get_store().wl();
-        match self.engine.write_without_wal(ctx.invoke_ctx.wb) {
+        match self.engine.write_without_wal(ctx.wb) {
             Ok(_) => {
-                storage.local_state = ctx.invoke_ctx.local_state;
+                storage.apply_state = ctx.apply_state;
 
                 if let Some(ref exec_result) = exec_result {
                     match *exec_result {
@@ -895,21 +901,15 @@ fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 
 struct ExecContext<'a> {
     pub snap: Snapshot,
-    pub invoke_ctx: InvokeContext,
+    pub apply_state: RaftApplyState,
+    pub wb: WriteBatch,
     pub req: &'a RaftCmdRequest,
 }
 
-impl<'a> Deref for ExecContext<'a> {
-    type Target = InvokeContext;
-
-    fn deref(&self) -> &InvokeContext {
-        &self.invoke_ctx
-    }
-}
-
-impl<'a> DerefMut for ExecContext<'a> {
-    fn deref_mut(&mut self) -> &mut InvokeContext {
-        &mut self.invoke_ctx
+impl<'a> ExecContext<'a> {
+    fn save(&self, region_id: u64) -> Result<()> {
+        try!(self.wb.put_msg(&keys::apply_state_key(region_id), &self.apply_state));
+        Ok(())
     }
 }
 
@@ -1127,9 +1127,9 @@ impl Peer {
             return Ok((resp, None));
         }
 
-        try!(self.get_store().rl().compact(&mut ctx.invoke_ctx, compact_index));
+        try!(self.get_store().rl().compact(&mut ctx.apply_state, compact_index));
         Ok((resp,
-            Some(ExecResult::CompactLog { state: ctx.local_state.get_truncated_state().clone() })))
+            Some(ExecResult::CompactLog { state: ctx.apply_state.get_truncated_state().clone() })))
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
@@ -1170,7 +1170,12 @@ impl Peer {
         try!(self.check_data_key(key));
 
         let mut resp = Response::new();
-        let res = try!(ctx.snap.get_value(&keys::data_key(key)));
+        let res = if req.get_get().has_cf() {
+            let cf = req.get_get().get_cf();
+            try!(ctx.snap.get_value_cf(cf, &keys::data_key(key)))
+        } else {
+            try!(ctx.snap.get_value(&keys::data_key(key)))
+        };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
         }
@@ -1192,16 +1197,31 @@ impl Peer {
         Ok(resp)
     }
 
+    fn get_cf_handle(&self, cf: &str) -> Result<&DBCFHandle> {
+        self.engine.cf_handle(cf).ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf)))
+    }
+
     fn do_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         try!(self.check_data_key(key));
 
         let resp = Response::new();
         let key = keys::data_key(key);
+        if let Some(diff) = self.size_diff_hint.checked_add(key.len() as u64) {
+            self.size_diff_hint = diff;
+        }
+        if let Some(diff) = self.size_diff_hint.checked_add(value.len() as u64) {
+            self.size_diff_hint = diff;
+        }
         self.size_diff_hint += key.len() as u64;
         self.size_diff_hint += value.len() as u64;
-        try!(ctx.wb.put(&key, value));
-
+        if req.get_put().has_cf() {
+            let cf = req.get_put().get_cf();
+            let handle = try!(self.get_cf_handle(cf));
+            try!(ctx.wb.put_cf(*handle, &key, value));
+        } else {
+            try!(ctx.wb.put(&key, value));
+        }
         Ok(resp)
     }
 
@@ -1218,7 +1238,13 @@ impl Peer {
             self.size_diff_hint = 0;
         }
         let resp = Response::new();
-        try!(ctx.wb.delete(&key));
+        if req.get_delete().has_cf() {
+            let cf = req.get_delete().get_cf();
+            let handle = try!(self.get_cf_handle(cf));
+            try!(ctx.wb.delete_cf(*handle, &key));
+        } else {
+            try!(ctx.wb.delete(&key));
+        }
 
         Ok(resp)
     }
