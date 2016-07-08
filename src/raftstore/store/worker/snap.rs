@@ -20,12 +20,11 @@ use std::time::Instant;
 use std::str;
 
 use rocksdb::{DB, Writable, WriteBatch};
-use rocksdb::rocksdb_ffi::DBCFHandle;
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 
 use util::worker::Runnable;
 use util::codec::bytes::CompactBytesDecoder;
-use util::{escape, HandyRwLock};
+use util::{escape, HandyRwLock, rocksdb};
 use raftstore;
 use raftstore::store::engine::Mutable;
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, SendCh, Msg, keys, Peekable};
@@ -79,10 +78,6 @@ pub struct Runner<T: MsgSender> {
     db: Arc<DB>,
     ch: T,
     mgr: SnapManager,
-}
-
-fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> raftstore::Result<&'a DBCFHandle> {
-    Ok(db.cf_handle(cf).unwrap())
 }
 
 impl<T: MsgSender> Runner<T> {
@@ -155,8 +150,8 @@ impl<T: MsgSender> Runner<T> {
             if cf.is_empty() {
                 break;
             }
-            let handle = box_try!(get_cf_handle(&self.db,
-                                                unsafe { str::from_utf8_unchecked(&cf) }));
+            let handle = box_try!(rocksdb::get_cf_handle(&self.db,
+                                                         unsafe { str::from_utf8_unchecked(&cf) }));
             let mut wb = WriteBatch::new();
             let mut batch_size = 0;
             loop {

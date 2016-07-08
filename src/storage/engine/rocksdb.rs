@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{self, Display, Formatter, Debug};
-use std::error::Error;
-use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator, Options};
+use std::fmt::{self, Formatter, Debug};
+use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
 use rocksdb::rocksdb::Snapshot as DBSnapshot;
-use rocksdb::rocksdb_ffi::DBCFHandle;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, CfName};
 use util::escape;
-use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result, DEFAULT_CFNAME};
+use util::rocksdb;
+use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result, Error, DEFAULT_CFNAME};
 use tempdir::TempDir;
 
 
@@ -40,36 +39,9 @@ impl EngineRocksdb {
             _ => (path.to_owned(), None),
         };
         Ok(EngineRocksdb {
-            db: try!(Self::open_or_create_db(&path, cfs)),
+            db: try!(rocksdb::new_engine(&path, cfs)),
             temp_dir: temp_dir,
         })
-    }
-
-    fn open_or_create_db(path: &str, cfs: &[CfName]) -> Result<DB> {
-        // Currently we support 1) Create new db. 2) Open a db with CFs we want. 3) Open db with no
-        // CFs.
-        // TODO: Support open db with incomplete CFs.
-
-        let mut opts = Options::new();
-        opts.create_if_missing(false);
-        let cf_opts: Vec<Options> = cfs.iter().map(|_| Options::new()).collect();
-        let cf_ref_opts: Vec<&Options> = cf_opts.iter().collect();
-        match DB::open_cf(&opts, path, cfs, &cf_ref_opts) {
-            Ok(db) => return Ok(db),
-            Err(e) => warn!("open rocksdb fail: {}", e),
-        }
-
-        opts.create_if_missing(true);
-        let mut db = match DB::open(&opts, path) {
-            Ok(db) => db,
-            Err(e) => return Err(RocksDBError::new(e).into_engine_error()),
-        };
-        for cf in cfs {
-            if let Err(e) = db.create_cf(cf, &opts) {
-                return Err(RocksDBError::new(e).into_engine_error());
-            }
-        }
-        Ok(db)
     }
 }
 
@@ -82,19 +54,19 @@ impl Debug for EngineRocksdb {
 impl Engine for EngineRocksdb {
     fn get(&self, _: &Context, key: &Key) -> Result<Option<Value>> {
         trace!("EngineRocksdb: get {}", key);
-        self.db
+        let v = try!(self.db
             .get(key.encoded())
-            .map(|r| r.map(|v| v.to_vec()))
-            .map_err(|e| RocksDBError::new(e).into_engine_error())
+            .map(|r| r.map(|v| v.to_vec())));
+        Ok(v)
     }
 
     fn get_cf(&self, _: &Context, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("EngineRocksdb: get_cf {} {}", key, cf);
-        let handle = try!(get_cf_handle(&self.db, cf));
-        self.db
+        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
+        let v = try!(self.db
             .get_cf(*handle, key.encoded())
-            .map(|r| r.map(|v| v.to_vec()))
-            .map_err(|e| RocksDBError::new(e).into_engine_error())
+            .map(|r| r.map(|v| v.to_vec())));
+        Ok(v)
     }
 
     fn write(&self, _: &Context, batch: Vec<Modify>) -> Result<()> {
@@ -107,7 +79,7 @@ impl Engine for EngineRocksdb {
                         wb.delete(k.encoded())
                     } else {
                         trace!("EngineRocksdb: delete_cf {} {}", cf, k);
-                        let handle = try!(get_cf_handle(&self.db, cf));
+                        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
                         wb.delete_cf(*handle, k.encoded())
                     }
                 }
@@ -117,17 +89,17 @@ impl Engine for EngineRocksdb {
                         wb.put(k.encoded(), &v)
                     } else {
                         trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
-                        let handle = try!(get_cf_handle(&self.db, cf));
+                        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
                         wb.put_cf(*handle, k.encoded(), &v)
                     }
                 }
             };
             if let Err(msg) = res {
-                return Err(RocksDBError::new(msg).into_engine_error());
+                return Err(Error::RocksDb(msg));
             }
         }
         if let Err(msg) = self.db.write(wb) {
-            return Err(RocksDBError::new(msg).into_engine_error());
+            return Err(Error::RocksDb(msg));
         }
         Ok(())
     }
@@ -193,59 +165,23 @@ impl<'a> RocksSnapshot<'a> {
 impl<'a> Snapshot for RocksSnapshot<'a> {
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get {}", key);
-        self.snap
+        let v = try!(self.snap
             .get(key.encoded())
-            .map(|r| r.map(|v| v.to_vec()))
-            .map_err(|e| RocksDBError::new(e).into_engine_error())
+            .map(|r| r.map(|v| v.to_vec())));
+        Ok(v)
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf {} {}", cf, key);
-        let handle = try!(get_cf_handle(self.db, cf));
-        self.snap
+        let handle = try!(rocksdb::get_cf_handle(self.db, cf));
+        let v = try!(self.snap
             .get_cf(*handle, key.encoded())
-            .map(|r| r.map(|v| v.to_vec()))
-            .map_err(|e| RocksDBError::new(e).into_engine_error())
+            .map(|r| r.map(|v| v.to_vec())));
+        Ok(v)
     }
 
     fn iter<'b>(&'b self) -> Result<Box<Cursor + 'b>> {
         trace!("RocksSnapshot: create iterator");
         Ok(box DBSnapshot::iter(&self.snap))
-    }
-}
-
-fn get_cf_handle<'a>(db: &'a DB, cf: CfName) -> Result<&'a DBCFHandle> {
-    db.cf_handle(cf)
-        .ok_or_else(|| RocksDBError::new("cf not found.".to_string()).into_engine_error())
-}
-
-#[derive(Debug, Clone)]
-pub struct RocksDBError {
-    message: String,
-}
-
-impl RocksDBError {
-    fn new(msg: String) -> RocksDBError {
-        RocksDBError { message: msg }
-    }
-
-    fn into_engine_error(self) -> super::Error {
-        super::Error::Other(Box::new(self))
-    }
-}
-
-impl Display for RocksDBError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl Error for RocksDBError {
-    fn description(&self) -> &str {
-        &self.message
-    }
-
-    fn cause(&self) -> Option<&Error> {
-        None
     }
 }

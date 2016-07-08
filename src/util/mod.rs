@@ -36,7 +36,7 @@ pub mod worker;
 pub mod codec;
 pub mod xeval;
 pub mod event;
-pub mod rocksdb_option;
+pub mod rocksdb;
 pub mod fs;
 pub mod buf;
 

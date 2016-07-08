@@ -14,13 +14,13 @@
 use std::option::Option;
 use std::sync::Arc;
 
-use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions, Options};
+use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions};
 use rocksdb::rocksdb::UnsafeSnap;
-use rocksdb::rocksdb_ffi::DBCFHandle;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
+use util::rocksdb;
 
-use raftstore::{Error, Result};
+use raftstore::Result;
 
 
 pub struct Snapshot {
@@ -53,37 +53,6 @@ impl Drop for Snapshot {
             self.db.release_snap(&self.snap);
         }
     }
-}
-
-pub fn new_engine(path: &str, cfs: &[&str]) -> Result<Arc<DB>> {
-    let opts = Options::new();
-    new_engine_opt(opts, path, cfs)
-}
-
-pub fn new_engine_opt(mut opts: Options, path: &str, cfs: &[&str]) -> Result<Arc<DB>> {
-    // TODO: configurable opts for each CF.
-    // Currently we support 1) Create new db. 2) Open a db with CFs we want. 3) Open db with no
-    // CF.
-    // TODO: Support open db with incomplete CFs.
-    opts.create_if_missing(false);
-    let cf_opts: Vec<Options> = cfs.iter().map(|_| Options::new()).collect();
-    let cf_ref_opts: Vec<&Options> = cf_opts.iter().collect();
-    match DB::open_cf(&opts, path, cfs, &cf_ref_opts) {
-        Ok(db) => return Ok(Arc::new(db)),
-        Err(e) => warn!("open rocksdb fail: {}", e),
-    }
-
-    opts.create_if_missing(true);
-    let mut db = match DB::open(&opts, path) {
-        Ok(db) => db,
-        Err(e) => return Err(Error::RocksDb(e)),
-    };
-    for cf in cfs {
-        if let Err(e) = db.create_cf(cf, &opts) {
-            return Err(Error::RocksDb(e));
-        }
-    }
-    Ok(Arc::new(db))
 }
 
 // TODO: refactor this trait into rocksdb trait.
@@ -180,11 +149,6 @@ fn scan_impl<F>(mut it: DBIterator, start_key: &[u8], end_key: &[u8], f: &mut F)
     Ok(())
 }
 
-fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a DBCFHandle> {
-    db.cf_handle(cf)
-        .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf)))
-}
-
 impl Peekable for DB {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
         let v = try!(self.get(key));
@@ -192,7 +156,7 @@ impl Peekable for DB {
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = try!(get_cf_handle(self, cf));
+        let handle = try!(rocksdb::get_cf_handle(self, cf));
         let v = try!(self.get_cf(*handle, key));
         Ok(v)
     }
@@ -204,7 +168,7 @@ impl Iterable for DB {
     }
 
     fn new_iterator_cf(&self, cf: &str) -> Result<DBIterator> {
-        let handle = try!(get_cf_handle(self, cf));
+        let handle = try!(rocksdb::get_cf_handle(self, cf));
         Ok(self.iter_cf(*handle))
     }
 }
@@ -220,7 +184,7 @@ impl Peekable for Snapshot {
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = try!(get_cf_handle(&self.db, cf));
+        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
         let mut opt = ReadOptions::new();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -240,7 +204,7 @@ impl Iterable for Snapshot {
     }
 
     fn new_iterator_cf(&self, cf: &str) -> Result<DBIterator> {
-        let handle = try!(get_cf_handle(&self.db, cf));
+        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
         let mut opt = ReadOptions::new();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -278,16 +242,18 @@ impl Mutable for WriteBatch {}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use tempdir::TempDir;
     use rocksdb::Writable;
 
     use super::*;
     use kvproto::metapb::Region;
+    use util::rocksdb;
 
     #[test]
     fn test_base() {
         let path = TempDir::new("var").unwrap();
-        let engine = new_engine(path.path().to_str().unwrap(), &[]).unwrap();
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[]).unwrap());
 
         let mut r = Region::new();
         r.set_id(10);
@@ -328,7 +294,7 @@ mod tests {
     #[test]
     fn test_peekable() {
         let path = TempDir::new("var").unwrap();
-        let engine = new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap();
+        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         let handle = engine.cf_handle("cf").unwrap();
@@ -342,7 +308,7 @@ mod tests {
     #[test]
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
-        let engine = new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap();
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap());
         let handle = engine.cf_handle("cf").unwrap();
 
         engine.put(b"a1", b"v1").unwrap();

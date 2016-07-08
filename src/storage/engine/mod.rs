@@ -181,6 +181,11 @@ quick_error! {
             description("request to underhook engine failed")
             display("{:?}", err)
         }
+        RocksDb(msg: String) {
+            from()
+            description("RocksDb error")
+            display("RocksDb {}", msg)
+        }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
