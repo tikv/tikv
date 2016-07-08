@@ -58,24 +58,26 @@ pd-root = "/pd"
 #   bzip2: kBZip2Compression
 #   lz4: kLZ4Compression
 #   lz4hc: kLZ4HCCompression
-compression = "lz4"
+
+# per level compression
+compression_per_level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
 
 # Amount of data to build up in memory (backed by an unsorted log
 # on disk) before converting to a sorted on-disk file.
-write-buffer-size = 100663296 # 96 * 1024 * 1024
+write-buffer-size = 67108864 # 64 * 1024 * 1024
 
 # The maximum number of write buffers that are built up in memory.
 max-write-buffer-number = 5
 
 # The minimum number of write buffers that will be merged together
 # before writing to storage.
-min-write-buffer-number-to-merge = 2
+min-write-buffer-number-to-merge = 1
 
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
-max-background-compactions = 3
+max-background-compactions = 4
 
-# Control maximum total data size for a level.
+# Control maximum total data size for base level (level 1).
 max-bytes-for-level-base = 67108864 # 64 * 1024 * 1024
 
 # Target file size for compaction.
@@ -88,7 +90,7 @@ create-if-missing = true
 level0-slowdown-writes-trigger = 12
 
 # Maximum number of level-0 files.  We stop writes at this point.
-level0-stop-writes-trigger = 24
+level0-stop-writes-trigger = 16
 
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/table.h
 [rocksdb.block-based-table]
