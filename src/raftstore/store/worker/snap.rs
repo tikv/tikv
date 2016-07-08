@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rocksdb::{DB, Writable, WriteBatch};
-use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, PeerState};
+use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 
 use util::worker::Runnable;
 use util::codec::bytes::CompactBytesDecoder;
@@ -122,13 +122,13 @@ impl<T: MsgSender> Runner<T> {
 
     fn apply_snap(&self, region_id: u64) -> Result<(), Error> {
         info!("begin apply snap data for {}", region_id);
-        let state_key = keys::raft_state_key(region_id);
-        let raft_state: RaftLocalState = match box_try!(self.db.get_msg(&state_key)) {
+        let state_key = keys::apply_state_key(region_id);
+        let apply_state: RaftApplyState = match box_try!(self.db.get_msg(&state_key)) {
             Some(state) => state,
             None => return Err(box_err!("failed to get raftstate from {}", escape(&state_key))),
         };
-        let term = raft_state.get_truncated_state().get_term();
-        let idx = raft_state.get_truncated_state().get_index();
+        let term = apply_state.get_truncated_state().get_term();
+        let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
         let snap_file = box_try!(self.mgr.rl().get_snap_file(&snap_key, false));
         self.mgr.wl().register(snap_key.clone(), SnapEntry::Applying);
@@ -149,7 +149,7 @@ impl<T: MsgSender> Runner<T> {
             // TODO: avoid too many allocation
             let key = box_try!(reader.decode_compact_bytes());
             if key.is_empty() {
-                box_try!(self.db.write_without_wal(wb));
+                box_try!(self.db.write(wb));
                 break;
             }
             batch_size += key.len();
@@ -157,7 +157,7 @@ impl<T: MsgSender> Runner<T> {
             batch_size += value.len();
             box_try!(wb.put(&key, &value));
             if batch_size > BATCH_SIZE {
-                box_try!(self.db.write_without_wal(wb));
+                box_try!(self.db.write(wb));
                 wb = WriteBatch::new();
                 batch_size = 0;
             }

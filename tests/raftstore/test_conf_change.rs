@@ -17,7 +17,7 @@ use std::thread;
 
 use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::RaftResponseHeader;
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::raft_serverpb::RaftApplyState;
 use kvproto::metapb;
 use tikv::pd::PdClient;
 
@@ -27,7 +27,6 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::*;
 use super::pd::TestPdClient;
-
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
@@ -360,11 +359,12 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         .clone();
 
     let engine1 = cluster.get_engine(1);
-    let state = engine1.get_msg::<RaftLocalState>(&keys::raft_state_key(r1)).unwrap().unwrap();
+    let state = engine1.get_msg::<RaftApplyState>(&keys::apply_state_key(r1)).unwrap().unwrap();
     let index = state.get_applied_index();
     let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
     compact_log.mut_header().set_peer(new_peer(1, 1));
     // ignore error, we just want to send this command to peer (1, 1),
+
     // and the command can't be executed because we have only one peer,
     // so here will return timeout error, we should ignore it.
     let _ = cluster.call_command(compact_log, Duration::from_millis(1));
@@ -421,7 +421,9 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(6), b"k2", b"v2");
     let region_detail = cluster.region_detail(r1, 1);
-    for peer in region_detail.get_region().get_peers() {
+    let region_peers = region_detail.get_region().get_peers();
+    assert_eq!(region_peers.len(), 3);
+    for peer in region_peers {
         assert!(peer.get_id() < 4);
     }
     assert!(region_detail.get_leader().get_id() < 4);

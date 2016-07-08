@@ -118,7 +118,7 @@ impl BufferedUdpMetricSink {
         }
 
         buffer.extend_from_slice(metric.as_bytes());
-        buffer.push('\n' as u8);
+        buffer.push(b'\n');
         Ok(metric.len())
     }
 
