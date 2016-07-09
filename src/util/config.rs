@@ -33,22 +33,23 @@ pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ParseCon
     }
 }
 
-pub fn get_per_level_compression_by_string(tp: &str) -> Vec<DBCompressionType> {
+pub fn parse_rocksdb_per_level_compression(tp: &str)
+                                           -> Result<Vec<DBCompressionType>, ParseConfigError> {
     let mut result: Vec<DBCompressionType> = vec![];
     let v: Vec<&str> = tp.split(':').collect();
     for i in &v {
-        match &*i.to_owned().to_lowercase() {
+        match &*i.to_lowercase() {
             "no" => result.push(DBCompressionType::DBNo),
             "snappy" => result.push(DBCompressionType::DBSnappy),
             "zlib" => result.push(DBCompressionType::DBZlib),
             "bzip2" => result.push(DBCompressionType::DBBz2),
             "lz4" => result.push(DBCompressionType::DBLz4),
             "lz4hc" => result.push(DBCompressionType::DBLz4hc),
-            _ => panic!("unsupported compression type {}", tp),
+            _ => return Err(ParseConfigError::MalformedRocksDB),
         }
     }
 
-    result
+    Ok(result)
 }
 
 fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {

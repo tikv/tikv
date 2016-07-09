@@ -171,12 +171,12 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
-                              "rocksdb.compression_per_level",
-                              matches,
-                              config,
-                              Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
-                              |v| v.as_str().map(|s| s.to_owned()));
-    let per_level_compression = util::config::get_per_level_compression_by_string(&cpl);
+                               "rocksdb.compression_per_level",
+                               matches,
+                               config,
+                               Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
+                               |v| v.as_str().map(|s| s.to_owned()));
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_integer_value("",
