@@ -11,6 +11,9 @@ store = "/tmp/tikv/store"
 log-level = "info"
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960
+# socket send/recv buffer size.
+send-buffer-size = 131072
+recv-buffer-size = 131072
 
 # set store capacity, if no set, use unlimited or disk size later.
 # capacity = 0 # 0 is unlimited.
