@@ -498,9 +498,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut ready_peers = Vec::with_capacity(ids.len());
         for region_id in ids {
-            if let Entry::Occupied(e) = self.region_peers.entry(region_id) {
-                if e.get().raft_group.has_ready() {
-                    ready_peers.push(e.remove());
+            if let Entry::Occupied(mut e) = self.region_peers.entry(region_id) {
+                if let Some(ready) = try!(e.get_mut().maybe_ready(&self.trans)) {
+                    ready_peers.push((ready, e.remove()));
                 }
             }
         }
@@ -509,8 +509,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         match ready_cnt {
             0 => return Ok(()),
             1 => {
-                let mut peer = ready_peers.pop().unwrap();
-                let res = peer.handle_raft_ready(&self.trans);
+                let (ready, mut peer) = ready_peers.pop().unwrap();
+                let res = peer.handle_raft_ready(ready, &self.trans);
                 // can't fail.
                 let region_id = peer.region_id();
                 // if the peer appears again, it means that existing peer is inserted
@@ -518,19 +518,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.region_peers.insert(region_id, peer);
 
                 match try!(res) {
-                    Some(ready_result) => {
-                        try!(self.on_ready_result(region_id, ready_result))
-                    }
+                    Some(ready_result) => try!(self.on_ready_result(region_id, ready_result)),
                     None => {}
                 }
-                return Ok(())
+                return Ok(());
             }
             _ => {
-                for mut peer in ready_peers {
+                for (ready, mut peer) in ready_peers {
                     let sender = self.apply_sender.clone();
                     let trans = self.trans.clone();
                     self.apply_pool.execute(move || {
-                        let res = peer.handle_raft_ready(&trans);
+                        let res = peer.handle_raft_ready(ready, &trans);
                         // can't fail.
                         sender.send((peer, res)).expect("report ready result should not fail");
                     });
