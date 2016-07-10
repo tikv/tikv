@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{ToSocketAddrs, SocketAddr, UdpSocket};
 
+use super::worker::{Worker, Runnable};
+
 use cadence::prelude::*;
 use cadence::{MetricSink, MetricResult, ErrorKind};
 
@@ -71,14 +73,37 @@ pub fn client() -> Option<&'static Metric> {
     unsafe { CLIENT.map(|c| &*c) }
 }
 
-static BUFFER_SIZE: usize = 1024;
+const BUFFER_SIZE: usize = 1024;
 
-pub struct BufferedUdpMetricSink {
+struct MetricBuffer(Vec<u8>);
+
+impl fmt::Display for MetricBuffer {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "MetricBuffer")
+    }
+}
+
+struct BufferSender {
     sink_addr: SocketAddr,
     socket: UdpSocket,
+}
 
-    buffer: Mutex<Vec<u8>>,
-    last_flush_time: Mutex<Instant>,
+impl Runnable<MetricBuffer> for BufferSender {
+    fn run(&mut self, buffer: MetricBuffer) {
+        if let Err(e) = self.socket.send_to(buffer.0.as_slice(), &self.sink_addr) {
+            warn!("send metric failed {:?}", e);
+        }
+    }
+}
+
+struct MutexBundle {
+    buffer: MetricBuffer,
+    last_flush_time: Instant,
+    worker: Worker<MetricBuffer>,
+}
+
+pub struct BufferedUdpMetricSink {
+    buffer: Mutex<MutexBundle>,
     flush_period: Duration,
 }
 
@@ -93,41 +118,40 @@ impl BufferedUdpMetricSink {
         let addr = try!(addr_iter.next()
             .ok_or((ErrorKind::InvalidInput, "No socket addresses yielded")));
 
-        // Moves this UDP stream into nonblocking mode.
-        try!(socket.set_nonblocking(true));
-
-        Ok(BufferedUdpMetricSink {
+        let sender = BufferSender {
             sink_addr: addr,
             socket: socket,
+        };
 
-            buffer: Mutex::new(Vec::with_capacity(BUFFER_SIZE)),
+        let mut worker = Worker::new("mteric-worker");
+        worker.start(sender).unwrap();
+
+        let mb = MutexBundle {
+            buffer: MetricBuffer(Vec::with_capacity(BUFFER_SIZE)),
+            last_flush_time: Instant::now(),
+            worker: worker,
+        };
+
+        Ok(BufferedUdpMetricSink {
+            buffer: Mutex::new(mb),
             flush_period: flush_period,
-            last_flush_time: Mutex::new(Instant::now()),
         })
     }
 
     fn append_to_buffer(&self, metric: &str) -> io::Result<usize> {
-        let mut buffer = self.buffer.lock().unwrap();
-        let mut last_flush_time = self.last_flush_time.lock().unwrap();
+        let mut mb = self.buffer.lock().unwrap();
 
         // +1 for '\n'
-        if (buffer.len() + metric.len() + 1) > buffer.capacity() ||
-           (last_flush_time.elapsed() >= self.flush_period) {
-            self.flush(&mut buffer);
-            *last_flush_time = Instant::now();
+        if (mb.buffer.0.len() + metric.len() + 1) > mb.buffer.0.capacity() ||
+           (mb.last_flush_time.elapsed() >= self.flush_period) {
+            mb.last_flush_time = Instant::now();
+            mb.worker.schedule(MetricBuffer(mb.buffer.0.clone())).unwrap();
+            mb.buffer.0.clear()
         }
 
-        buffer.extend_from_slice(metric.as_bytes());
-        buffer.push(b'\n');
+        mb.buffer.0.extend_from_slice(metric.as_bytes());
+        mb.buffer.0.push(b'\n');
         Ok(metric.len())
-    }
-
-    fn flush(&self, buffer: &mut Vec<u8>) {
-        if let Err(e) = self.socket.send_to(buffer.as_slice(), &self.sink_addr) {
-            warn!("send metric failed {:?}", e);
-        }
-
-        buffer.clear();
     }
 }
 

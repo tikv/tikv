@@ -98,10 +98,19 @@ fn get_integer_value<F>(short: &str,
     };
 
     i.or_else(|| {
-            config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("{}, use default {:?}", long, default);
-                default
-            })
+            config.lookup(long)
+                .and_then(|v| {
+                    if let toml::Value::String(ref s) = *v {
+                        Some(util::config::parse_readable_int(s)
+                            .expect(&format!("malformed {}", long)))
+                    } else {
+                        f(v)
+                    }
+                })
+                .or_else(|| {
+                    info!("{}, use default {:?}", long, default);
+                    default
+                })
         })
         .expect(&format!("please specify {}", long))
 }
@@ -161,20 +170,20 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
     block_base_opts.set_block_size(block_size as u64);
     opts.set_block_based_table_factory(&block_base_opts);
 
-    let tp = get_string_value("",
-                              "rocksdb.compression",
-                              matches,
-                              config,
-                              Some("lz4".to_owned()),
-                              |v| v.as_str().map(|s| s.to_owned()));
-    let compression = util::rocksdb_option::get_compression_by_string(&tp);
-    opts.compression(compression);
+    let cpl = get_string_value("",
+                               "rocksdb.compression_per_level",
+                               matches,
+                               config,
+                               Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
+                               |v| v.as_str().map(|s| s.to_owned()));
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
+    opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_integer_value("",
                                               "rocksdb.write-buffer-size",
                                               matches,
                                               config,
-                                              Some(96 * 1024 * 1024),
+                                              Some(64 * 1024 * 1024),
                                               |v| v.as_integer());
     opts.set_write_buffer_size(write_buffer_size as u64);
 
@@ -193,7 +202,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                           "rocksdb.min-write-buffer-number-to-merge",
                           matches,
                           config,
-                          Some(2),
+                          Some(1),
                           |v| v.as_integer())
     };
     opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
@@ -202,7 +211,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                                        "rocksdb.max-background-compactions",
                                                        matches,
                                                        config,
-                                                       Some(3),
+                                                       Some(4),
                                                        |v| v.as_integer());
     opts.set_max_background_compactions(max_background_compactions as i32);
 
@@ -242,7 +251,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                                            "rocksdb.level0-stop-writes-trigger",
                                                            matches,
                                                            config,
-                                                           Some(24),
+                                                           Some(16),
                                                            |v| v.as_integer());
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
@@ -278,6 +287,21 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                                           config,
                                           Some(addr.to_owned()),
                                           |v| v.as_str().map(|s| s.to_owned()));
+    cfg.send_buffer_size =
+        get_integer_value("send-buffer-size",
+                          "server.send-buffer-size",
+                          matches,
+                          config,
+                          Some(128 * 1024),
+                          |v| v.as_integer()) as usize;
+    cfg.recv_buffer_size =
+        get_integer_value("recv-buffer-size",
+                          "server.recv-buffer-size",
+                          matches,
+                          config,
+                          Some(128 * 1024),
+                          |v| v.as_integer()) as usize;
+
     cfg.store_cfg.notify_capacity =
         get_integer_value("",
                           "raftstore.notify-capacity",
@@ -495,6 +519,14 @@ fn main() {
                 "pd-store-heartbeat-tick-interval",
                 "set region store heartbeat tick interval",
                 "default 5000 (ms)");
+    opts.optopt("",
+                "send-buffer-size",
+                "server socket send buffer size",
+                "default 128 KB");
+    opts.optopt("",
+                "recv-buffer-size",
+                "server socket recv buffer size",
+                "default 128 KB");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {

@@ -36,6 +36,7 @@ use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
 use raft::SnapshotStatus;
+use util::sockopt::SocketOpt;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
@@ -58,7 +59,6 @@ pub fn bind(addr: &str) -> Result<TcpListener> {
 }
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
-    server_cfg: Config,
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
     // In our raft server, a client with token 1 sends a raft command, we will
@@ -86,6 +86,8 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     snap_worker: Worker<SnapTask>,
 
     resolver: S,
+
+    cfg: Config,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -95,7 +97,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // create the listener outer, get the real listening address for
     // Node and then pass it here.
     pub fn new(event_loop: &mut EventLoop<Self>,
-               server_cfg: Config,
+               cfg: Config,
                listener: TcpListener,
                storage: Storage,
                raft_router: Arc<RwLock<T>>,
@@ -113,7 +115,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let snap_worker = Worker::new("snap-handler");
 
         let svr = Server {
-            server_cfg: server_cfg,
             listener: listener,
             sendch: sendch,
             conns: HashMap::new(),
@@ -126,14 +127,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
             resolver: resolver,
+            cfg: cfg.clone(),
         };
 
         Ok(svr)
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        let end_point = EndPointHost::new(self.store.engine(),
-                                          self.server_cfg.end_point_concurrency);
+        let end_point = EndPointHost::new(self.store.engine(), self.cfg.end_point_concurrency);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
         let ch = self.get_sendch();
@@ -192,6 +193,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         // TODO: check conn max capacity.
 
         try!(sock.set_nodelay(true));
+        try!(sock.set_send_buffer_size(self.cfg.send_buffer_size));
+        try!(sock.set_recv_buffer_size(self.cfg.recv_buffer_size));
 
         try!(event_loop.register(&sock,
                                  new_token,
