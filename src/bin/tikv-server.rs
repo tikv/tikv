@@ -98,10 +98,19 @@ fn get_integer_value<F>(short: &str,
     };
 
     i.or_else(|| {
-            config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("{}, use default {:?}", long, default);
-                default
-            })
+            config.lookup(long)
+                .and_then(|v| {
+                    if let toml::Value::String(ref s) = *v {
+                        Some(util::config::parse_readable_int(s)
+                            .expect(&format!("malformed {}", long)))
+                    } else {
+                        f(v)
+                    }
+                })
+                .or_else(|| {
+                    info!("{}, use default {:?}", long, default);
+                    default
+                })
         })
         .expect(&format!("please specify {}", long))
 }
@@ -162,12 +171,12 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
-                              "rocksdb.compression_per_level",
-                              matches,
-                              config,
-                              Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
-                              |v| v.as_str().map(|s| s.to_owned()));
-    let per_level_compression = util::rocksdb_option::get_per_level_compression_by_string(&cpl);
+                               "rocksdb.compression_per_level",
+                               matches,
+                               config,
+                               Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
+                               |v| v.as_str().map(|s| s.to_owned()));
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_integer_value("",
