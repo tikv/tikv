@@ -353,10 +353,6 @@ impl Peer {
     pub fn handle_raft_ready<T: Transport>(&mut self,
                                            trans: &Arc<RwLock<T>>)
                                            -> Result<Option<ReadyResult>> {
-        if !self.raft_group.has_ready() {
-            return Ok(None);
-        }
-
         debug!("handle raft ready: peer {:?}, region {}",
                self.peer,
                self.region_id);

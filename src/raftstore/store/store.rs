@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::{Arc, RwLock, mpsc};
-use std::sync::mpsc::SendError;
+use std::sync::mpsc::{Sender as StdSender, Receiver as StdReceiver};
 use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
@@ -54,6 +54,7 @@ use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 
 type Key = Vec<u8>;
+type ReadyRes = (Peer, Result<Option<ReadyResult>>);
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 
@@ -73,7 +74,10 @@ pub struct Store<T: Transport + 'static, C: PdClient + 'static> {
     snap_worker: Worker<SnapTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
+
     apply_pool: ThreadPool,
+    apply_sender: StdSender<ReadyRes>,
+    apply_recv: StdReceiver<ReadyRes>,
 
     trans: Arc<RwLock<T>>,
     pd_client: Arc<C>,
@@ -111,6 +115,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer_cache = HashMap::new();
         let apply_concurrency = cfg.apply_concurrency;
 
+        let (tx, rx) = mpsc::channel();
+
         Ok(Store {
             cfg: cfg,
             store: meta,
@@ -123,6 +129,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             apply_pool: ThreadPool::new_with_name(thd_name!("apply-pool"), apply_concurrency),
+            apply_sender: tx,
+            apply_recv: rx,
             region_ranges: BTreeMap::new(),
             trans: trans,
             pd_client: pd_client,
@@ -488,30 +496,52 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
-        let mut sent_cnt = 0;
-        let (tx, rx) = mpsc::channel();
-        for &region_id in &ids {
-            if let Some(mut peer) = self.region_peers.remove(&region_id) {
-                let sender = tx.clone();
-                let trans = self.trans.clone();
-                self.apply_pool.execute(move || {
-                    let res = peer.handle_raft_ready(&trans);
-                    if let Err(SendError((peer, _))) = sender.send((peer, res)) {
-                        // TODO: retry here.
-                        error!("failed to report ready result of [{}] {}, will retry",
-                               peer.region_id(),
-                               peer.peer_id());
+        let mut ready_peers = Vec::with_capacity(ids.len());
+        for region_id in ids {
+            if let Entry::Occupied(e) = self.region_peers.entry(region_id) {
+                if e.get().raft_group.has_ready() {
+                    ready_peers.push(e.remove());
+                }
+            }
+        }
+
+        let ready_cnt = ready_peers.len();
+        match ready_cnt {
+            0 => return Ok(()),
+            1 => {
+                let mut peer = ready_peers.pop().unwrap();
+                let res = peer.handle_raft_ready(&self.trans);
+                // can't fail.
+                let region_id = peer.region_id();
+                // if the peer appears again, it means that existing peer is inserted
+                // by handle split, so returned peer should be skipped.
+                self.region_peers.insert(region_id, peer);
+
+                match try!(res) {
+                    Some(ready_result) => {
+                        try!(self.on_ready_result(region_id, ready_result))
                     }
-                });
-                sent_cnt += 1;
+                    None => {}
+                }
+                return Ok(())
+            }
+            _ => {
+                for mut peer in ready_peers {
+                    let sender = self.apply_sender.clone();
+                    let trans = self.trans.clone();
+                    self.apply_pool.execute(move || {
+                        let res = peer.handle_raft_ready(&trans);
+                        // can't fail.
+                        sender.send((peer, res)).expect("report ready result should not fail");
+                    });
+                }
             }
         }
 
         let mut has_err = false;
-        drop(tx);
-        for _ in 0..sent_cnt {
+        for _ in 0..ready_cnt {
             // if err, means we lost some peer.
-            let (peer, res) = rx.recv().expect("recv ready result shouldn't fail");
+            let (peer, res) = self.apply_recv.recv().expect("recv ready result shouldn't fail");
             let region_id = peer.region_id();
             // if the peer appears again, it means that existing peer is inserted
             // by handle split, so returned peer should be skipped.
