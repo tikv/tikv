@@ -94,7 +94,11 @@ fn get_integer_value<F>(short: &str,
     let mut i = None;
     // avoid panic if short is not defined.
     if matches.opt_defined(short) {
-        i = matches.opt_str(short).map(|x| x.parse::<i64>().unwrap());
+        i = matches.opt_str(short).map(|x| {
+            x.parse::<i64>()
+                .or_else(|_| util::config::parse_readable_int(&x))
+                .unwrap()
+        });
     };
 
     i.or_else(|| {
