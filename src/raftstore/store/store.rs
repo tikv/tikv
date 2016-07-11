@@ -87,6 +87,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     let mut builder = EventLoopBuilder::new();
     builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval));
     builder.notify_capacity(cfg.notify_capacity);
+    builder.messages_per_tick(cfg.messages_per_tick);
     let event_loop = try!(builder.build());
     Ok(event_loop)
 }
