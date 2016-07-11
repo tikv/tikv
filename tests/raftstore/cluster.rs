@@ -72,6 +72,7 @@ impl<T: Simulator> Cluster<T> {
     // Create the default Store cluster.
     pub fn new(id: u64,
                count: usize,
+               cfs: &[&str],
                sim: Arc<RwLock<T>>,
                pd_client: Arc<TestPdClient>)
                -> Cluster<T> {
@@ -85,7 +86,7 @@ impl<T: Simulator> Cluster<T> {
             pd_client: pd_client,
         };
 
-        c.create_engines(count);
+        c.create_engines(count, cfs);
 
         c
     }
@@ -94,13 +95,13 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.cluster_id
     }
 
-    fn create_engines(&mut self, count: usize) {
+    fn create_engines(&mut self, count: usize, cfs: &[&str]) {
         for _ in 0..count {
             self.paths.push(TempDir::new("test_cluster").unwrap());
         }
 
         for item in &self.paths {
-            self.dbs.push(new_engine(item));
+            self.dbs.push(new_engine(item.path().to_str().unwrap(), cfs).unwrap());
         }
     }
 
@@ -372,7 +373,7 @@ impl<T: Simulator> Cluster<T> {
                    reqs: Vec<Request>,
                    timeout: Duration)
                    -> RaftCmdResponse {
-        for _ in 0..10 {
+        for _ in 0..20 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(region_id, region.take_region_epoch(), reqs.clone());
@@ -380,12 +381,14 @@ impl<T: Simulator> Cluster<T> {
 
             if let Err(Error::Timeout(_)) = result {
                 warn!("call command timeout, let's retry");
+                sleep_ms(100);
                 continue;
             }
 
             let resp = result.unwrap();
             if resp.get_header().get_error().has_stale_epoch() {
                 warn!("seems split, let's retry");
+                sleep_ms(100);
                 continue;
             }
             return resp;

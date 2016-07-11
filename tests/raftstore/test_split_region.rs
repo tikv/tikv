@@ -16,6 +16,8 @@ use std::thread;
 use std::cmp;
 use rand::{self, Rng};
 
+use kvproto::raftpb::MessageType;
+
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
@@ -94,7 +96,9 @@ fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>,
     let mut rng = rand::thread_rng();
     let mut max_key = vec![];
     while len < limit {
-        let key = range.next().unwrap().to_string().into_bytes();
+        let key_id = range.next().unwrap();
+        let key_str = format!("{:09}", key_id);
+        let key = key_str.into_bytes();
         let mut value = vec![0; 64];
         rng.fill_bytes(&mut value);
         cluster.must_put(&key, &value);
@@ -302,7 +306,8 @@ fn test_server_split_overlap_snapshot() {
 fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20;
-    cluster.cfg.store_cfg.raft_log_gc_limit = 2;
+    cluster.cfg.store_cfg.raft_log_gc_limit = 5;
+    cluster.cfg.store_cfg.raft_log_gc_threshold = 5;
 
     // We use three nodes([1, 2, 3]) for this test.
     cluster.run();
@@ -332,6 +337,9 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let engine3 = cluster.get_engine(3);
     util::must_get_none(&engine3, b"k2");
+
+    // transfer leader to ease the preasure of store 1.
+    cluster.must_transfer_leader(1, util::new_peer(2, 2));
 
     for _ in 0..100 {
         // write many logs to force log GC for region 1 and region 2.
@@ -384,7 +392,8 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_transfer_leader(r1, util::new_peer(1, 1));
 
     // isolate node 3 for region 1.
-    cluster.add_filter(IsolateRegionStore::new(1, 3));
+    // only filter MsgAppend to avoid election when recover.
+    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
 
     let region = pd_client.get_region(b"").unwrap();
 
@@ -433,4 +442,56 @@ fn test_node_split_with_stale_peer() {
 fn test_server_split_with_stale_peer() {
     let mut cluster = new_server_cluster(0, 3);
     test_split_with_stale_peer(&mut cluster);
+}
+
+fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
+    let region_max_size = 2000;
+    let region_split_size = 1000;
+    cluster.cfg.store_cfg.split_region_check_tick_interval = 100;
+    cluster.cfg.store_cfg.region_check_size_diff = 10;
+    cluster.cfg.store_cfg.region_max_size = region_max_size;
+    cluster.cfg.store_cfg.region_split_size = region_split_size;
+    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20000;
+
+    let mut range = 1..;
+
+    cluster.run();
+
+    let pd_client = cluster.pd_client.clone();
+
+    put_till_size(cluster, region_max_size * 10, &mut range);
+    // Peer will split when size of region meet region_max_size,
+    // so assume the last region_max_size of data is not involved in split,
+    // there will be at least (region_max_size * 10 - region_max_size) / region_split_size regions.
+    // But region_max_size of data should be split too, so there will be at least 2 more regions.
+    let min_region_cnt = (region_max_size * 10 - region_max_size) / region_split_size + 2;
+
+    let mut try_cnt = 0;
+    loop {
+        util::sleep_ms(20);
+        let region_cnt = pd_client.get_split_count() + 1;
+        if region_cnt >= min_region_cnt as usize {
+            return;
+        }
+        try_cnt += 1;
+        if try_cnt == 500 {
+            panic!("expect split cnt {}, but got {}",
+                   min_region_cnt,
+                   region_cnt);
+        }
+    }
+}
+
+#[test]
+fn test_server_split_region_diff_check() {
+    let count = 1;
+    let mut cluster = new_server_cluster(0, count);
+    test_split_region_diff_check(&mut cluster);
+}
+
+#[test]
+fn test_node_split_region_diff_check() {
+    let count = 1;
+    let mut cluster = new_node_cluster(0, count);
+    test_split_region_diff_check(&mut cluster);
 }

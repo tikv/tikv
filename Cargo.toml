@@ -45,6 +45,7 @@ fs2 = "0.2"
 clippy = {version = "*", optional = true}
 rustc-serialize = "0.3"
 bytes  = "0.3.0"
+nix = "0.6.0"
 
 # The getopts in crate.io is outdated, use the latest getopts instead.
 [dependencies.getopts]
@@ -58,7 +59,6 @@ git = "https://github.com/stepancheg/rust-protobuf.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
-branch = "siddontang/gc-peer"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

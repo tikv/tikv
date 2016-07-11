@@ -342,4 +342,9 @@ impl<T: Storage> RawNode<T> {
         m.set_from(transferee);
         self.raft.step(m).is_ok();
     }
+
+    #[inline]
+    pub fn get_store(&self) -> &T {
+        self.raft.get_store()
+    }
 }

@@ -19,6 +19,8 @@ pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
+const DEFAULT_SEND_BUFFER_SIZE: usize = 128 * 1024;
+const DEFAULT_RECV_BUFFER_SIZE: usize = 128 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -32,6 +34,8 @@ pub struct Config {
     pub advertise_addr: String,
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
+    pub send_buffer_size: usize,
+    pub recv_buffer_size: usize,
     pub store_cfg: StoreConfig,
 }
 
@@ -43,6 +47,8 @@ impl Default for Config {
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
+            send_buffer_size: DEFAULT_SEND_BUFFER_SIZE,
+            recv_buffer_size: DEFAULT_RECV_BUFFER_SIZE,
             store_cfg: StoreConfig::default(),
         }
     }
