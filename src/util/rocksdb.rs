@@ -11,20 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{DB, DBCompressionType, Options};
+use rocksdb::{DB, Options};
 use rocksdb::rocksdb_ffi::DBCFHandle;
-
-pub fn get_compression_by_string(tp: &str) -> DBCompressionType {
-    match &*tp.to_owned().to_lowercase() {
-        "no" => DBCompressionType::DBNo,
-        "snappy" => DBCompressionType::DBSnappy,
-        "zlib" => DBCompressionType::DBZlib,
-        "bzip2" => DBCompressionType::DBBz2,
-        "lz4" => DBCompressionType::DBLz4,
-        "lz4hc" => DBCompressionType::DBLz4hc,
-        _ => panic!("unsupported compression type {}", tp),
-    }
-}
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a DBCFHandle, String> {
     db.cf_handle(cf)

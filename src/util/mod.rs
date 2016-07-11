@@ -37,8 +37,10 @@ pub mod codec;
 pub mod xeval;
 pub mod event;
 pub mod rocksdb;
+pub mod config;
 pub mod fs;
 pub mod buf;
+pub mod sockopt;
 
 pub use self::fs::{DiskStat, get_disk_stat};
 

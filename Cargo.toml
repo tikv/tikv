@@ -45,14 +45,14 @@ fs2 = "0.2"
 clippy = {version = "*", optional = true}
 rustc-serialize = "0.3"
 bytes  = "0.3.0"
+nix = "0.6.0"
 
 # The getopts in crate.io is outdated, use the latest getopts instead.
 [dependencies.getopts]
 git = "https://github.com/rust-lang-nursery/getopts"
 
 [dependencies.rocksdb]
-git = "https://github.com/disksing/rust-rocksdb.git"
-branch = "update-cf2"
+git = "https://github.com/ngaut/rust-rocksdb.git"
 
 [dependencies.protobuf]
 git = "https://github.com/stepancheg/rust-protobuf.git"
