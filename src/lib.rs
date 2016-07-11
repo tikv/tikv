@@ -47,6 +47,8 @@ extern crate libc;
 extern crate crc;
 extern crate rustc_serialize;
 extern crate hyper;
+#[cfg(unix)]
+extern crate nix;
 
 #[macro_use]
 pub mod util;
