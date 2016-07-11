@@ -16,10 +16,9 @@ use std::time::Duration;
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
 use std::boxed::{Box, FnBox};
+use std::io::Write;
 
-use bytes::ByteBuf;
 use mio::{self, Token, NotifyError};
-use protobuf::Message;
 
 use kvproto::msgpb::{self, MessageType};
 use util::codec::rpc;
@@ -86,22 +85,17 @@ impl ConnData {
         }
     }
 
-    pub fn encode_to_buf(&self) -> ByteBuf {
-        let mut buf = ByteBuf::mut_with_capacity(rpc::MSG_HEADER_LEN +
-                                                 self.msg.compute_size() as usize);
-
-        // Must ok here
-        rpc::encode_msg(&mut buf, self.msg_id, &self.msg).unwrap();
-
-        buf.flip()
-    }
-
     pub fn is_snapshot(&self) -> bool {
         if !self.msg.has_raft() {
             return false;
         }
 
         self.msg.get_raft().get_message().get_msg_type() == RaftMessageType::MsgSnapshot
+    }
+
+    pub fn encode_to<T: Write>(&self, w: &mut T) -> Result<()> {
+        try!(rpc::encode_msg(w, self.msg_id, &self.msg));
+        Ok(())
     }
 }
 

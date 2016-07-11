@@ -1,16 +1,16 @@
 use tikv::util::HandyRwLock;
 use tikv::storage::engine::*;
-use tikv::storage::Key;
+use tikv::storage::{Key, CfName};
 use tikv::util::codec::bytes;
 use tikv::util::escape;
 use kvproto::kvrpcpb::Context;
 
-use raftstore::server::new_server_cluster;
+use raftstore::server::new_server_cluster_with_cfs;
 
 #[test]
 fn test_raftkv() {
     let count = 1;
-    let mut cluster = new_server_cluster(0, count);
+    let mut cluster = new_server_cluster_with_cfs(0, count, &["cf"]);
     cluster.run();
 
     // make sure leader has been elected.
@@ -29,6 +29,7 @@ fn test_raftkv() {
     batch(&ctx, storage.as_ref().as_ref());
     seek(&ctx, storage.as_ref().as_ref());
     near_seek(&ctx, storage.as_ref().as_ref());
+    cf(&ctx, storage.as_ref().as_ref());
     // TODO: test multiple node
 }
 
@@ -40,16 +41,33 @@ fn must_put(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) {
     engine.put(ctx, make_key(key), value.to_vec()).unwrap();
 }
 
+fn must_put_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
+    engine.put_cf(ctx, cf, make_key(key), value.to_vec()).unwrap();
+}
+
 fn must_delete(ctx: &Context, engine: &Engine, key: &[u8]) {
     engine.delete(ctx, make_key(key)).unwrap();
+}
+
+fn must_delete_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8]) {
+    engine.delete_cf(ctx, cf, make_key(key)).unwrap();
 }
 
 fn assert_has(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) {
     assert_eq!(engine.get(ctx, &make_key(key)).unwrap().unwrap(), value);
 }
 
+fn assert_has_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
+    assert_eq!(engine.get_cf(ctx, cf, &make_key(key)).unwrap().unwrap(),
+               value);
+}
+
 fn assert_none(ctx: &Context, engine: &Engine, key: &[u8]) {
     assert_eq!(engine.get(ctx, &make_key(key)).unwrap(), None);
+}
+
+fn assert_none_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8]) {
+    assert_eq!(engine.get_cf(ctx, cf, &make_key(key)).unwrap(), None);
 }
 
 fn assert_seek(ctx: &Context, engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
@@ -123,4 +141,12 @@ fn near_seek(ctx: &Context, engine: &Engine) {
     assert!(!cursor_mut.near_seek(&make_key(b"z\x00")).unwrap());
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
+}
+
+fn cf(ctx: &Context, engine: &Engine) {
+    assert_none_cf(ctx, engine, "cf", b"key");
+    must_put_cf(ctx, engine, "cf", b"key", b"value");
+    assert_has_cf(ctx, engine, "cf", b"key", b"value");
+    must_delete_cf(ctx, engine, "cf", b"key");
+    assert_none_cf(ctx, engine, "cf", b"key");
 }
