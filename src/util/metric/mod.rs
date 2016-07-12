@@ -23,9 +23,36 @@ use super::worker::{Worker, Runnable};
 
 use cadence::prelude::*;
 use cadence::{MetricSink, MetricResult, ErrorKind};
+use metrics::registry::StdRegistry;
 
 #[macro_use]
 pub mod macros;
+
+// Prometheus Metric
+static mut COLLECTOR: Option<*const StdRegistry<'static>> = None;
+static IS_COLLECTOR_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+pub fn init_collector() -> Result<(), SetMetricError> {
+    unsafe {
+        if IS_COLLECTOR_INITIALIZED.compare_and_swap(false, true, Ordering::SeqCst) != false {
+            return Err(SetMetricError);
+        }
+
+        let c = Box::new(StdRegistry::<'static>::new());
+        COLLECTOR = Some(Box::into_raw(c));
+        Ok(())
+    }
+}
+
+pub fn collector() -> Option<&'static StdRegistry<'static>> {
+    if IS_COLLECTOR_INITIALIZED.load(Ordering::SeqCst) != true {
+        return None;
+    }
+
+    unsafe { COLLECTOR.map(|c| &*c) }
+}
+
+
 
 static mut CLIENT: Option<*const Metric> = None;
 // IS_INITIALIZED indicates the state of CLIENT,

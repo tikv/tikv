@@ -49,6 +49,7 @@ extern crate rustc_serialize;
 extern crate hyper;
 #[cfg(unix)]
 extern crate nix;
+extern crate metrics;
 
 #[macro_use]
 pub mod util;
