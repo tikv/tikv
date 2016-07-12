@@ -53,23 +53,6 @@ impl Debug for EngineRocksdb {
 }
 
 impl Engine for EngineRocksdb {
-    fn get(&self, _: &Context, key: &Key) -> Result<Option<Value>> {
-        trace!("EngineRocksdb: get {}", key);
-        let v = try!(self.db
-            .get(key.encoded())
-            .map(|r| r.map(|v| v.to_vec())));
-        Ok(v)
-    }
-
-    fn get_cf(&self, _: &Context, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        trace!("EngineRocksdb: get_cf {} {}", key, cf);
-        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
-        let v = try!(self.db
-            .get_cf(*handle, key.encoded())
-            .map(|r| r.map(|v| v.to_vec())));
-        Ok(v)
-    }
-
     fn write(&self, _: &Context, batch: Vec<Modify>) -> Result<()> {
         let wb = WriteBatch::new();
         for rev in batch {
@@ -108,10 +91,6 @@ impl Engine for EngineRocksdb {
     fn snapshot(&self, _: &Context) -> Result<Box<Snapshot>> {
         let snapshot = RocksSnapshot::new(self.db.clone());
         Ok(box snapshot)
-    }
-
-    fn iter<'a>(&'a self, _: &Context) -> Result<Box<Cursor + 'a>> {
-        Ok(box self.db.iter())
     }
 }
 

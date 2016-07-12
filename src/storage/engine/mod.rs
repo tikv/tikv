@@ -38,8 +38,6 @@ pub enum Modify {
 }
 
 pub trait Engine: Send + Sync + Debug {
-    fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
-    fn get_cf(&self, ctx: &Context, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
     fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>>;
 
@@ -58,8 +56,6 @@ pub trait Engine: Send + Sync + Debug {
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
-
-    fn iter<'a>(&'a self, ctx: &Context) -> Result<Box<Cursor + 'a>>;
 
     // maybe mut is better.
     fn close(&self) {}
@@ -256,26 +252,28 @@ mod tests {
     }
 
     fn assert_has(engine: &Engine, key: &[u8], value: &[u8]) {
-        assert_eq!(engine.get(&Context::new(), &make_key(key)).unwrap().unwrap(),
-                   value);
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        assert_eq!(snapshot.get(&make_key(key)).unwrap().unwrap(), value);
     }
 
     fn assert_has_cf(engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
-        assert_eq!(engine.get_cf(&Context::new(), cf, &make_key(key)).unwrap().unwrap(),
-                   value);
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap().unwrap(), value);
     }
 
     fn assert_none(engine: &Engine, key: &[u8]) {
-        assert_eq!(engine.get(&Context::new(), &make_key(key)).unwrap(), None);
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        assert_eq!(snapshot.get(&make_key(key)).unwrap(), None);
     }
 
     fn assert_none_cf(engine: &Engine, cf: CfName, key: &[u8]) {
-        assert_eq!(engine.get_cf(&Context::new(), cf, &make_key(key)).unwrap(),
-                   None);
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap(), None);
     }
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
-        let mut iter = engine.iter(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut iter = snapshot.iter().unwrap();
         iter.seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -325,7 +323,8 @@ mod tests {
         must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
-        let mut iter = engine.iter(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut iter = snapshot.iter().unwrap();
         assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
@@ -334,7 +333,8 @@ mod tests {
     fn test_near_seek(engine: &Engine) {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
-        let mut cursor = engine.iter(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cursor = snapshot.iter().unwrap();
         let cursor_mut = cursor.as_mut();
         assert_near_seek(cursor_mut, b"x", (b"x", b"1"));
         assert_near_seek(cursor_mut, b"a", (b"x", b"1"));

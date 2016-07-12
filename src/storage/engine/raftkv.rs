@@ -198,21 +198,6 @@ impl<C: PdClient> Debug for RaftKv<C> {
 }
 
 impl<C: PdClient> Engine for RaftKv<C> {
-    fn get(&self, ctx: &Context, key: &Key) -> engine::Result<Option<Value>> {
-        let snap = try!(self.snapshot(ctx));
-        snap.get(key)
-    }
-
-    fn get_cf(&self, ctx: &Context, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
-        let snap = try!(self.snapshot(ctx));
-        snap.get_cf(cf, key)
-    }
-
-    fn iter<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Cursor + 'a>> {
-        let snap = try!(self.raw_snapshot(ctx));
-        Ok(box RegionIterator::new(self.db.iter(), snap.get_region().clone()))
-    }
-
     fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
         if modifies.len() == 0 {
             return Ok(());
