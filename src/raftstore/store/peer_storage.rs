@@ -12,9 +12,11 @@
 // limitations under the License.
 
 use std::sync::{self, Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::{RefCell, Ref, RefMut};
 use std::error;
 use std::time::Instant;
+use std::mem;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::Message;
@@ -37,7 +39,7 @@ use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 // so that we can force the follower peer to sync the snapshot first.
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
-const MAX_SNAP_TRY_CNT: u8 = 5;
+const MAX_SNAP_TRY_CNT: usize = 5;
 
 pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -45,6 +47,7 @@ pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 pub enum SnapState {
     Relax,
     Generating,
+    Snap(Snapshot),
     Applying,
     Failed,
 }
@@ -56,10 +59,9 @@ pub struct PeerStorage {
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
 
-    pub snap_state: SnapState,
-    pub snap: Option<Snapshot>,
+    snap_state: RefCell<SnapState>,
     snap_sched: Scheduler<SnapTask>,
-    snap_tried_cnt: u8,
+    snap_tried_cnt: AtomicUsize,
 }
 
 fn storage_error<E>(error: E) -> raft::Error
@@ -147,10 +149,9 @@ impl PeerStorage {
             region: region.clone(),
             raft_state: raft_state,
             apply_state: apply_state,
-            snap_state: SnapState::Relax,
-            snap: None,
+            snap_state: RefCell::new(SnapState::Relax),
             snap_sched: snap_sched,
-            snap_tried_cnt: 0,
+            snap_tried_cnt: AtomicUsize::new(0),
         })
     }
 
@@ -284,30 +285,37 @@ impl PeerStorage {
         DbSnapshot::new(self.engine.clone())
     }
 
-    pub fn snapshot(&mut self) -> raft::Result<Snapshot> {
-        if self.snap.is_some() {
-            return Ok(self.snap.take().unwrap());
-        }
-        if SnapState::Relax == self.snap_state {
-            info!("requesting snapshot on {}...", self.get_region_id());
-            self.snap_tried_cnt = 0;
-            self.snap_state = SnapState::Generating;
-        } else if SnapState::Failed == self.snap_state {
-            if self.snap_tried_cnt >= MAX_SNAP_TRY_CNT {
-                return Err(raft::Error::Store(box_err!("failed to get snapshot after {} times",
-                                                       self.snap_tried_cnt)));
+    pub fn snapshot(&self) -> raft::Result<Snapshot> {
+        let mut snap_state = self.snap_state.borrow_mut();
+
+        if let SnapState::Snap(_) = *snap_state {
+            match mem::replace(&mut *snap_state, SnapState::Relax) {
+                SnapState::Snap(s) => return Ok(s),
+                _ => unreachable!(),
             }
-            self.snap_tried_cnt += 1;
-            warn!("snapshot generating failed, retry {} time",
-                  self.snap_tried_cnt);
-            self.snap_state = SnapState::Generating;
+        }
+
+        if SnapState::Relax == *snap_state {
+            info!("requesting snapshot on {}...", self.get_region_id());
+            self.snap_tried_cnt.store(0, Ordering::Relaxed);
+            *snap_state = SnapState::Generating;
+        } else if SnapState::Failed == *snap_state {
+            let mut snap_tried_cnt = self.snap_tried_cnt.load(Ordering::Relaxed);
+            if snap_tried_cnt >= MAX_SNAP_TRY_CNT {
+                return Err(raft::Error::Store(box_err!("failed to get snapshot after {} times",
+                                                       snap_tried_cnt)));
+            }
+            snap_tried_cnt += 1;
+            warn!("snapshot generating failed, retry {} time", snap_tried_cnt);
+            self.snap_tried_cnt.store(snap_tried_cnt, Ordering::Relaxed);
+            *snap_state = SnapState::Generating;
         } else {
             return Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable));
         }
         let task = SnapTask::Gen { region_id: self.get_region_id() };
         if let Err(e) = self.snap_sched.schedule(task) {
             error!("failed to schedule task snap generation: {:?}", e);
-            self.snap_state = SnapState::Failed;
+            *snap_state = SnapState::Failed;
         }
         Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable))
     }
@@ -424,7 +432,17 @@ impl PeerStorage {
 
     #[inline]
     pub fn is_applying_snap(&self) -> bool {
-        self.snap_state == SnapState::Applying
+        self.is_snap_state(SnapState::Applying)
+    }
+
+    #[inline]
+    pub fn set_snap_state(&mut self, state: SnapState) {
+        *self.snap_state.borrow_mut() = state
+    }
+
+    #[inline]
+    pub fn is_snap_state(&self, state: SnapState) -> bool {
+        *self.snap_state.borrow() == state
     }
 
     // For region snapshot, we return three key ranges in database for this region.
@@ -497,8 +515,7 @@ impl PeerStorage {
         self.apply_state = ctx.apply_state;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
-            self.snap_state = SnapState::Applying;
-            self.snap.take();
+            self.set_snap_state(SnapState::Applying);
             let task = SnapTask::Apply { region_id: region_id };
             // TODO: gracefully remove region instead.
             self.snap_sched.schedule(task).expect("snap apply job should not fail");
@@ -676,7 +693,7 @@ impl Storage for RaftStorage {
     }
 
     fn snapshot(&self) -> raft::Result<Snapshot> {
-        self.wl().snapshot()
+        self.rl().snapshot()
     }
 }
 
@@ -854,7 +871,7 @@ mod test {
         let snap = s.wl().snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
-        assert_eq!(s.rl().snap_state, SnapState::Generating);
+        assert!(s.rl().is_snap_state(SnapState::Generating));
 
         let snap = match rx.recv().unwrap() {
             Msg::SnapGenRes { snap, .. } => snap.unwrap(),
@@ -869,7 +886,7 @@ mod test {
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
 
-        s.wl().snap = Some(snap.clone());
+        s.wl().set_snap_state(SnapState::Snap(snap.clone()));
         assert_eq!(s.wl().snapshot(), Ok(snap));
     }
 
