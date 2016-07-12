@@ -347,4 +347,9 @@ impl<T: Storage> RawNode<T> {
     pub fn get_store(&self) -> &T {
         self.raft.get_store()
     }
+
+    #[inline]
+    pub fn mut_store(&mut self) -> &mut T {
+        self.raft.mut_store()
+    }
 }
