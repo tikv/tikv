@@ -155,7 +155,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("region {:?} is applying in store {}",
                       local_state.get_region(),
                       self.store_id());
-                peer.get_store().wl().snap_state = SnapState::Applying;
+                peer.get_store().wl().set_snap_state(SnapState::Applying);
                 box_try!(self.snap_worker.schedule(SnapTask::Apply { region_id: region_id }));
             }
 
@@ -1117,17 +1117,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(peer) => peer,
         };
         let mut storage = peer.get_store().wl();
-        if storage.snap_state != SnapState::Generating {
+        if !storage.is_snap_state(SnapState::Generating) {
             // snapshot no need anymore.
             return;
         }
         match snap {
             Some(snap) => {
-                storage.snap_state = SnapState::Relax;
-                storage.snap = Some(snap);
+                storage.set_snap_state(SnapState::Snap(snap));
             }
             None => {
-                storage.snap_state = SnapState::Failed;
+                storage.set_snap_state(SnapState::Failed);
             }
         }
     }
@@ -1135,13 +1134,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool) {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let mut storage = peer.get_store().wl();
-        assert!(storage.snap_state == SnapState::Applying,
+        assert!(storage.is_snap_state(SnapState::Applying),
                 "snap state should not change during applying");
         if !is_success {
             // TODO: cleanup region and treat it as tombstone.
             panic!("applying snapshot to {} failed", region_id);
         }
-        storage.snap_state = SnapState::Relax;
+        storage.set_snap_state(SnapState::Relax);
     }
 }
 
