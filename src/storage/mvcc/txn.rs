@@ -74,7 +74,7 @@ impl<'a> MvccTxn<'a> {
         self.writes.push(modify);
     }
 
-    fn lock_key(&mut self, key: &Key, lock_type: MetaLockType, primary: Vec<u8>) {
+    fn lock_key(&mut self, key: Key, lock_type: MetaLockType, primary: Vec<u8>) {
         let mut lock = MetaLock::new();
         lock.set_field_type(lock_type);
         lock.set_primary_key(primary);
@@ -82,11 +82,11 @@ impl<'a> MvccTxn<'a> {
 
         let mut b = vec![];
         lock.write_to_vec(&mut b).unwrap();
-        self.writes.push(Modify::Put("lock", key.clone(), b));
+        self.writes.push(Modify::Put("lock", key, b));
     }
 
-    fn unlock_key(&mut self, key: &Key) {
-        self.writes.push(Modify::Delete("lock", key.clone()));
+    fn unlock_key(&mut self, key: Key) {
+        self.writes.push(Modify::Delete("lock", key));
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
@@ -112,7 +112,7 @@ impl<'a> MvccTxn<'a> {
                 });
             }
         }
-        self.lock_key(&key, meta_lock_type(&mutation), primary.to_vec());
+        self.lock_key(key.clone(), meta_lock_type(&mutation), primary.to_vec());
 
         if let Mutation::Put((_, ref value)) = mutation {
             let value_key = key.append_ts(self.start_ts);
@@ -146,7 +146,7 @@ impl<'a> MvccTxn<'a> {
             item.set_commit_ts(commit_ts);
             meta.push_item(item);
         }
-        self.unlock_key(key);
+        self.unlock_key(key.clone());
         Ok(())
     }
 
@@ -184,7 +184,7 @@ impl<'a> MvccTxn<'a> {
                 };
             }
         }
-        self.unlock_key(key);
+        self.unlock_key(key.clone());
         Ok(())
     }
 
