@@ -279,6 +279,11 @@ impl<T: Storage> Raft<T> {
     }
 
     #[inline]
+    pub fn mut_store(&mut self) -> &mut T {
+        self.raft_log.mut_store()
+    }
+
+    #[inline]
     pub fn get_snap(&self) -> Option<&Snapshot> {
         self.raft_log.get_unstable().snapshot.as_ref()
     }
