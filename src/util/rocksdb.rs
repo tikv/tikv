@@ -42,7 +42,10 @@ pub fn new_engine_opt(mut opts: Options, path: &str, cfs: &[&str]) -> Result<DB,
         Ok(db) => db,
         Err(e) => return Err(e),
     };
-    for cf in cfs {
+    for &cf in cfs {
+        if cf == "default" {
+            continue;
+        }
         if let Err(e) = db.create_cf(cf, &opts) {
             return Err(e);
         }

@@ -30,7 +30,7 @@ pub use self::types::{Key, Value, KvPair};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
-pub const DEFAULT_CFS: &'static [CfName] = &["lock"];
+pub const DEFAULT_CFS: &'static [CfName] = &["default", "lock"];
 
 #[cfg(test)]
 pub use self::types::make_key;
