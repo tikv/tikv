@@ -465,7 +465,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .range(Excluded(&enc_start_key(snap_region)), Unbounded::<&Key>)
                 .next() {
                 let exist_region = self.region_peers[&exist_region_id].region();
-                if enc_start_key(&exist_region) < enc_end_key(snap_region) {
+                if enc_start_key(exist_region) < enc_end_key(snap_region) {
                     warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
                     return Ok(true);
                 }
@@ -524,7 +524,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         assert!(!p.is_applying_snap());
 
         let is_initialized = p.is_initialized();
-        let end_key = enc_end_key(&p.region());
+        let end_key = enc_end_key(p.region());
         if let Err(e) = p.destroy() {
             // should panic here?
             error!("destroy peer {:?} for region {} in store {} err {:?}",
@@ -640,8 +640,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Now pd only uses ReportSplit for history operation show,
         // so we send it independently here.
         let task = PdTask::ReportSplit {
-            left: left_region,
-            right: right_region,
+            left: left_region.clone(),
+            right: right_region.clone(),
         };
 
         if let Err(e) = self.pd_worker.schedule(task) {
@@ -903,7 +903,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let key = keys::origin_key(&split_key);
         let task = PdTask::AskSplit {
-            region: region,
+            region: region.clone(),
             split_key: key.to_vec(),
             peer: peer.peer.clone(),
         };
@@ -918,7 +918,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn heartbeat_pd(&self, peer: &Peer) {
         let task = PdTask::Heartbeat {
-            region: peer.region(),
+            region: peer.region().clone(),
             peer: peer.peer.clone(),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
@@ -1308,7 +1308,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Err(Error::RegionNotInitialized(region_id));
         }
         let mut resp = StatusResponse::new();
-        resp.mut_region_detail().set_region(peer.region());
+        resp.mut_region_detail().set_region(peer.region().clone());
         if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
             resp.mut_region_detail().set_leader(leader);
         }

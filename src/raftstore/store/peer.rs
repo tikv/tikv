@@ -287,8 +287,8 @@ impl Peer {
         self.coprocessor_host.registry.register_observer(100, box SplitObserver);
     }
 
-    pub fn region(&self) -> metapb::Region {
-        self.get_store().get_region().clone()
+    pub fn region(&self) -> &metapb::Region {
+        self.get_store().get_region()
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -962,7 +962,7 @@ impl Peer {
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
         let change_type = request.get_change_type();
-        let mut region = self.region();
+        let mut region = self.region().clone();
 
         warn!("my peer id {}, {}, {:?}, epoch: {:?}",
               self.peer_id(),
@@ -1054,7 +1054,7 @@ impl Peer {
         }
 
         let split_key = split_req.get_split_key();
-        let mut region = self.region();
+        let mut region = self.region().clone();
         if split_key <= region.get_start_key() {
             return Err(box_err!("invalid split request: {:?}", split_req));
         }
