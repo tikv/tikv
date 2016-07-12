@@ -454,7 +454,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
-        // TODO: we need to inject failure or re-order network packet to test the situation
         if !self.region_peers[&region_id].get_store().is_initialized() &&
            msg.get_message().has_snapshot() {
             let snap = msg.get_message().get_snapshot();
