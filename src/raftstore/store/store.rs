@@ -95,6 +95,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     let mut builder = EventLoopBuilder::new();
     builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval));
     builder.notify_capacity(cfg.notify_capacity);
+    builder.messages_per_tick(cfg.messages_per_tick);
     let event_loop = try!(builder.build());
     Ok(event_loop)
 }
@@ -161,13 +162,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(true);
             }
             let region = local_state.get_region();
-            let peer = try!(Peer::create(self, region));
+            let mut peer = try!(Peer::create(self, region));
 
             if local_state.get_state() == PeerState::Applying {
                 info!("region {:?} is applying in store {}",
                       local_state.get_region(),
                       self.store_id());
-                peer.get_store().wl().snap_state = SnapState::Applying;
+                peer.mut_store().set_snap_state(SnapState::Applying);
                 box_try!(self.snap_worker.schedule(SnapTask::Apply { region_id: region_id }));
             }
 
@@ -251,7 +252,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
-            if !peer.get_store().rl().is_applying_snap() {
+            if !peer.get_store().is_applying_snap() {
                 peer.raft_group.tick();
                 self.pending_raft_groups.insert(region_id);
             }
@@ -370,7 +371,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // TODO: for case f, if 2 is stale for a long time, 2 will communicate with pd and pd will
         // tell 2 is stale, so 2 can remove itself.
         if let Some(peer) = self.region_peers.get(&region_id) {
-            let region = &peer.get_store().rl().region;
+            let region = &peer.get_store().region;
             let epoch = region.get_region_epoch();
 
             if util::is_epoch_stale(from_epoch, epoch) &&
@@ -448,7 +449,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(peer) = self.region_peers.get(&region_id) {
             // TODO: need checking peer id changed?
             let from_epoch = msg.get_region_epoch();
-            if util::is_epoch_stale(peer.get_store().rl().region.get_region_epoch(), from_epoch) {
+            if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
                 // TODO: ask pd to guarantee we are stale now.
                 warn!("peer {:?} for region {} receives gc message, remove",
                       msg.get_to_peer(),
@@ -467,7 +468,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // Check if we can accept the snapshot
         // TODO: we need to inject failure or re-order network packet to test the situation
-        if !self.region_peers[&region_id].get_store().rl().is_initialized() &&
+        if !self.region_peers[&region_id].get_store().is_initialized() &&
            msg.get_message().has_snapshot() {
             let snap = msg.get_message().get_snapshot();
             let mut snap_data = RaftSnapshotData::new();
@@ -517,9 +518,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // by handle split, so returned peer should be skipped.
                 self.region_peers.insert(region_id, peer);
 
-                match try!(res) {
-                    Some(ready_result) => try!(self.on_ready_result(region_id, ready_result)),
-                    None => {}
+                if let Some(ready_result) = try!(res) {
+                    try!(self.on_ready_result(region_id, ready_result));
                 }
                 return Ok(());
             }
@@ -545,7 +545,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // by handle split, so returned peer should be skipped.
             match self.region_peers.entry(region_id) {
                 Entry::Occupied(_) => {
-                    assert!(!peer.get_store().rl().is_initialized());
+                    assert!(!peer.get_store().is_initialized());
                 }
                 Entry::Vacant(e) => {
                     e.insert(peer);
@@ -632,7 +632,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_ready_compact_log(&mut self, region_id: u64, state: RaftTruncatedState) {
         let peer = self.region_peers.get(&region_id).unwrap();
-        let task = CompactTask::new(&peer.get_store().rl(), state.get_index() + 1);
+        let task = CompactTask::new(peer.get_store(), state.get_index() + 1);
         if let Err(e) = self.compact_worker.schedule(task) {
             error!("failed to schedule compact task: {}", e);
         }
@@ -647,7 +647,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // If the store received a raft msg with the new region raft group
             // before splitting, it will creates a uninitialized peer.
             // We can remove this uninitialized peer directly.
-            if peer.get_store().rl().is_initialized() {
+            if peer.get_store().is_initialized() {
                 panic!("duplicated region {} for split region", new_region_id);
             }
         }
@@ -871,8 +871,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .map(|p| p.matched)
                 .min()
                 .unwrap();
-            let applied_idx = peer.get_store().rl().applied_index();
-            let first_idx = peer.get_store().rl().first_index();
+            let applied_idx = peer.get_store().applied_index();
+            let first_idx = peer.get_store().first_index();
             let compact_idx;
             if applied_idx > first_idx && applied_idx - first_idx >= self.cfg.raft_log_gc_limit {
                 compact_idx = applied_idx;
@@ -930,7 +930,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   id,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
-            let task = SplitCheckTask::new(&peer.get_store().rl());
+            let task = SplitCheckTask::new(peer.get_store());
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("failed to schedule split check: {}", e);
             }
@@ -1096,7 +1096,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         is_applying_snap = false;
                     }
                     Some(peer) => {
-                        let s = peer.get_store().rl();
+                        let s = peer.get_store();
                         compacted_idx = s.truncated_index();
                         compacted_term = s.truncated_term();
                         is_applying_snap = s.is_applying_snap();
@@ -1183,32 +1183,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             None => return,
             Some(peer) => peer,
         };
-        let mut storage = peer.get_store().wl();
-        if storage.snap_state != SnapState::Generating {
+        let mut storage = peer.mut_store();
+        if !storage.is_snap_state(SnapState::Generating) {
             // snapshot no need anymore.
             return;
         }
         match snap {
             Some(snap) => {
-                storage.snap_state = SnapState::Relax;
-                storage.snap = Some(snap);
+                storage.set_snap_state(SnapState::Snap(snap));
             }
             None => {
-                storage.snap_state = SnapState::Failed;
+                storage.set_snap_state(SnapState::Failed);
             }
         }
     }
 
     fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool) {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let mut storage = peer.get_store().wl();
-        assert!(storage.snap_state == SnapState::Applying,
+        let mut storage = peer.mut_store();
+        assert!(storage.is_snap_state(SnapState::Applying),
                 "snap state should not change during applying");
         if !is_success {
             // TODO: cleanup region and treat it as tombstone.
             panic!("applying snapshot to {} failed", region_id);
         }
-        storage.snap_state = SnapState::Relax;
+        storage.set_snap_state(SnapState::Relax);
     }
 }
 
@@ -1371,7 +1370,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn execute_region_detail(&mut self, request: RaftCmdRequest) -> Result<StatusResponse> {
         let peer = try!(self.mut_target_peer(&request));
-        if !peer.get_store().rl().is_initialized() {
+        if !peer.get_store().is_initialized() {
             let region_id = request.get_header().get_region_id();
             return Err(Error::RegionNotInitialized(region_id));
         }

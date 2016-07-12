@@ -34,6 +34,7 @@ const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
 const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
 const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
 const APPLY_CONCURRENCY: usize = 3;
+const DEFAULT_MESSAGES_PER_TICK: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -68,11 +69,12 @@ pub struct Config {
     pub region_check_size_diff: u64,
     pub pd_heartbeat_tick_interval: u64,
     pub pd_store_heartbeat_tick_interval: u64,
-    pub notify_capacity: usize,
     pub snap_mgr_gc_tick_interval: u64,
     pub snap_gc_timeout: u64,
 
     pub apply_concurrency: usize,
+    pub notify_capacity: usize,
+    pub messages_per_tick: usize,
 }
 
 impl Default for Config {
@@ -97,6 +99,7 @@ impl Default for Config {
             snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL_MS,
             snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
             apply_concurrency: APPLY_CONCURRENCY,
+            messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
         }
     }
 }

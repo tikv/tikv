@@ -17,8 +17,8 @@ quick_error! {
     #[derive(Debug)]
     #[allow(enum_variant_names)]
     pub enum ParseConfigError {
-        MalformedRocksDB
-        MalformedReadableNumber
+        RocksDB
+        ReadableNumber
     }
 }
 
@@ -30,7 +30,7 @@ pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ParseCon
         "bzip2" => Ok(DBCompressionType::DBBz2),
         "lz4" => Ok(DBCompressionType::DBLz4),
         "lz4hc" => Ok(DBCompressionType::DBLz4hc),
-        _ => Err(ParseConfigError::MalformedRocksDB),
+        _ => Err(ParseConfigError::RocksDB),
     }
 }
 
@@ -46,7 +46,7 @@ pub fn parse_rocksdb_per_level_compression(tp: &str)
             "bzip2" => result.push(DBCompressionType::DBBz2),
             "lz4" => result.push(DBCompressionType::DBLz4),
             "lz4hc" => result.push(DBCompressionType::DBLz4hc),
-            _ => return Err(ParseConfigError::MalformedRocksDB),
+            _ => return Err(ParseConfigError::RocksDB),
         }
     }
 
@@ -67,7 +67,7 @@ fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
     }
 
     let (num, unit) = property.split_at(indx);
-    num.parse::<f64>().map(|f| (f, unit)).or(Err(ParseConfigError::MalformedReadableNumber))
+    num.parse::<f64>().map(|f| (f, unit)).or(Err(ParseConfigError::ReadableNumber))
 }
 
 const UNIT: usize = 1;
@@ -104,7 +104,7 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
         "m" => Ok((num * (MINTUE as f64)) as i64),
         "h" => Ok((num * (HOUR as f64)) as i64),
 
-        _ => Err(ParseConfigError::MalformedReadableNumber),
+        _ => Err(ParseConfigError::ReadableNumber),
     }
 }
 
