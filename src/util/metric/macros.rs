@@ -88,11 +88,15 @@ macro_rules! metric_meter {
     };
 }
 
+// Prometheus
 // Register a metric
 #[macro_export]
 macro_rules! register_metric {
     ($name:expr, $metric:expr) => {
-        if let Some(c) = $crate::util::metric::collector() {
+        use metrics::registry::Registry;
+
+        if let Some(l) = $crate::util::metric::collector() {
+            let mut c = l.wl();
             c.insert($name, $metric);
         }
     };
@@ -104,15 +108,16 @@ macro_rules! register_metric {
 // inc(double v): Increment the counter by the given amount. MUST check that v >= 0.
 #[macro_export]
 macro_rules! counter_inc {
-    ($name:expr, $value:expr) => {
+    ($name:expr, $value:expr) => {{
         use metrics::metrics::Metric;
 
-        if let Some(registry) = $crate::util::metric::collector() {
-            if let &Metric::Counter(ref c) = registry.get($name) {
-                c.inc($value);
+        if let Some(l) = $crate::util::metric::collector() {
+            let collector = l.rl();
+            if let &Metric::Counter(ref c) = collector.get($name) {
+                c.add($value);
             }
         }
-    };
+    }};
 
     ($name:expr) => {
         counter_inc!($name, 1);
@@ -128,18 +133,19 @@ macro_rules! counter_inc {
 // set(double v): Set the gauge to the given value
 // #[macro_export]
 // macro_rules! gauge_inc {
-//     ($name:expr, $value:expr) => {
-//         use metrics::metric::Metric;
+//     ($name:expr, $value:expr) => {{
+//         use metrics::metrics::Metric;
 
-//         if let Some(c) = $crate::util::metric::collector() {
-//             if let &Metric::Counter(ref c) = registry.get($name) {
-//                 c.inc($value);
+//         if let Some(l) = $crate::util::metric::collector() {
+//             let collector = l.rl();
+//             if let &Metric::Gauge(ref g) = collector.get($name) {
+//                 g.add($value);
 //             }
 //         }
-//     };
+//     }};
 
 //     ($name:expr) => {
-//         counter_inc!($name, 1);
+//         gauge_inc!($name, 1);
 //     };
 // }
 

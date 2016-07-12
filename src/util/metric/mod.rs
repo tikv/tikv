@@ -14,22 +14,24 @@
 use std::error;
 use std::fmt;
 use std::io;
-use std::sync::{Mutex, Arc};
+use std::thread;
+use std::sync::{Mutex,Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{ToSocketAddrs, SocketAddr, UdpSocket};
 
 use super::worker::{Worker, Runnable};
+use super::HandyRwLock;
 
 use cadence::prelude::*;
 use cadence::{MetricSink, MetricResult, ErrorKind};
-use metrics::registry::StdRegistry;
+use metrics::registry::{Registry, StdRegistry};
 
 #[macro_use]
 pub mod macros;
 
 // Prometheus Metric
-static mut COLLECTOR: Option<Arc<StdRegistry<'static>>> = None;
+static mut COLLECTOR: Option<Arc<RwLock<StdRegistry<'static>>>> = None;
 static IS_COLLECTOR_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub fn init_collector() -> Result<(), SetMetricError> {
@@ -38,17 +40,50 @@ pub fn init_collector() -> Result<(), SetMetricError> {
             return Err(SetMetricError);
         }
 
-        COLLECTOR = Some(Arc::new(StdRegistry::<'static>::new()));
+        COLLECTOR = Some(Arc::new(RwLock::new(StdRegistry::<'static>::new())));
         Ok(())
     }
 }
 
-pub fn collector() -> Option<Arc<StdRegistry<'static>>> {
+pub fn collector() -> Option<Arc<RwLock<StdRegistry<'static>>>> {
     if IS_COLLECTOR_INITIALIZED.load(Ordering::SeqCst) != true {
         return None;
     }
 
     unsafe { COLLECTOR.clone() }
+}
+
+pub struct ConsoleReporter;
+
+impl ConsoleReporter {
+    pub fn start(&self, delay_ms: u64) {
+        thread::spawn(move || {
+            use metrics::metrics::Metric;
+            loop {
+                if let Some(c) = collector() {
+                    let r = c.rl();
+                    for metric_name in r.get_metrics_names() {
+                        let metric = r.get(metric_name);
+                        match *metric {
+                            Metric::Meter(ref x) => {
+                                println!("{:?}", x.snapshot());
+                            }
+                            Metric::Gauge(ref x) => {
+                                println!("{:?}", x.snapshot());
+                            }
+                            Metric::Counter(ref x) => {
+                                println!("{:?}", x.snapshot());
+                            }
+                            Metric::Histogram(ref x) => {
+                                println!("histogram{:?}", x);
+                            }
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_millis(delay_ms));
+            }
+        });
+    }
 }
 
 
