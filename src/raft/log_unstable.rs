@@ -143,13 +143,9 @@ impl Unstable {
         } else {
             // truncate to after and copy to self.entries then append
             let off = self.offset;
-            self.entries = {
-                let cut_ents = self.slice(off, after);
-                let mut entries = Vec::with_capacity(cut_ents.len() + ents.len());
-                entries.extend_from_slice(cut_ents);
-                entries.extend_from_slice(ents);
-                entries
-            };
+            self.must_check_outofbounds(off, after);
+            self.entries.truncate((after - off) as usize);
+            self.entries.extend_from_slice(ents);
         }
     }
 
