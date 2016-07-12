@@ -698,19 +698,11 @@ fn test_dueling_candidates() {
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
-    {
-        // 1 becomes leader since it receives votes from 1 and 2
-        let sm = nt.peers.get(&1).unwrap();
-        if sm.state != StateRole::Leader {
-            panic!("state = {:?}, want {:?}", sm.state, StateRole::Leader);
-        }
+    // 1 becomes leader since it receives votes from 1 and 2
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
 
-        // 3 stays as candidate since it receives a vote from 3 and a rejection from 2
-        let sm = nt.peers.get(&3).unwrap();
-        if sm.state != StateRole::Candidate {
-            panic!("state = {:?}, want {:?}", sm.state, StateRole::Candidate);
-        }
-    }
+    // 3 stays as candidate since it receives a vote from 3 and a rejection from 2
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
 
     nt.recover();
 
@@ -1712,9 +1704,7 @@ fn test_restore_from_snap_msg() {
 
     sm.step(m).expect("");
 
-    if sm.leader_id != 1 {
-        panic!("sm.leader_id = {}, want 1", sm.leader_id);
-    }
+    assert_eq!(sm.leader_id, 1);
 
     // TODO: port the remaining if upstream completed this test.
 }
