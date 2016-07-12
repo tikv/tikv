@@ -87,3 +87,59 @@ macro_rules! metric_meter {
         }
     };
 }
+
+// Register a metric
+#[macro_export]
+macro_rules! register_metric {
+    ($name:expr, $metric:expr) => {
+        if let Some(c) = $crate::util::metric::collector() {
+            c.insert($name, $metric);
+        }
+    };
+}
+
+// A counter MUST have the following methods:
+//
+// inc(): Increment the counter by 1
+// inc(double v): Increment the counter by the given amount. MUST check that v >= 0.
+#[macro_export]
+macro_rules! counter_inc {
+    ($name:expr, $value:expr) => {
+        use metrics::metrics::Metric;
+
+        if let Some(registry) = $crate::util::metric::collector() {
+            if let &Metric::Counter(ref c) = registry.get($name) {
+                c.inc($value);
+            }
+        }
+    };
+
+    ($name:expr) => {
+        counter_inc!($name, 1);
+    };
+}
+
+// A gauge MUST have the following methods:
+// 
+// inc(): Increment the gauge by 1
+// inc(double v): Increment the gauge by the given amount
+// dec(): Decrement the gauge by 1
+// dec(double v): Decrement the gauge by the given amount
+// set(double v): Set the gauge to the given value
+// #[macro_export]
+// macro_rules! gauge_inc {
+//     ($name:expr, $value:expr) => {
+//         use metrics::metric::Metric;
+
+//         if let Some(c) = $crate::util::metric::collector() {
+//             if let &Metric::Counter(ref c) = registry.get($name) {
+//                 c.inc($value);
+//             }
+//         }
+//     };
+
+//     ($name:expr) => {
+//         counter_inc!($name, 1);
+//     };
+// }
+

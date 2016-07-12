@@ -14,6 +14,7 @@
 #![feature(plugin)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 
+#[macro_use]
 extern crate tikv;
 extern crate getopts;
 #[macro_use]
@@ -24,6 +25,7 @@ extern crate toml;
 extern crate cadence;
 extern crate libc;
 extern crate fs2;
+extern crate metrics;
 
 use std::env;
 use std::fs::{self, File};
@@ -32,12 +34,15 @@ use std::sync::{Arc, RwLock};
 use std::io::Read;
 use std::net::UdpSocket;
 use std::time::Duration;
+use std::thread;
 
 use getopts::{Options, Matches};
 use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
+use metrics::reporter::ConsoleReporter;
+use metrics::metrics::StdCounter;
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR, DEFAULT_CFS};
 use tikv::util::{self, logger, panic_hook};
@@ -156,6 +161,22 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
             error!("{}", r);
         }
     }
+}
+
+fn initial_new_metric() {
+    if let Err(e) = metric::init_collector() {
+        panic!("{}", e);
+    }
+    let c = metric::collector().unwrap();
+    let r = ConsoleReporter::new(c, "ConsoleReporter");
+    r.start(1000);
+
+    // register_metric!("foo", StdCounter::new());
+    // counter_inc!("foo", 2);
+    // thread::spawn(|| {
+    //     counter_inc!("foo", 2);
+    //     thread::sleep_ms(1000);
+    // })
 }
 
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
@@ -533,6 +554,8 @@ fn main() {
         print_usage(&program, opts);
         return;
     }
+
+    initial_new_metric();
 
     let config = match matches.opt_str("C") {
         Some(path) => {

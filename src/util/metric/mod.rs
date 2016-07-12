@@ -14,7 +14,7 @@
 use std::error;
 use std::fmt;
 use std::io;
-use std::sync::Mutex;
+use std::sync::{Mutex, Arc};
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{ToSocketAddrs, SocketAddr, UdpSocket};
@@ -29,7 +29,7 @@ use metrics::registry::StdRegistry;
 pub mod macros;
 
 // Prometheus Metric
-static mut COLLECTOR: Option<*const StdRegistry<'static>> = None;
+static mut COLLECTOR: Option<Arc<StdRegistry<'static>>> = None;
 static IS_COLLECTOR_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub fn init_collector() -> Result<(), SetMetricError> {
@@ -38,18 +38,17 @@ pub fn init_collector() -> Result<(), SetMetricError> {
             return Err(SetMetricError);
         }
 
-        let c = Box::new(StdRegistry::<'static>::new());
-        COLLECTOR = Some(Box::into_raw(c));
+        COLLECTOR = Some(Arc::new(StdRegistry::<'static>::new()));
         Ok(())
     }
 }
 
-pub fn collector() -> Option<&'static StdRegistry<'static>> {
+pub fn collector() -> Option<Arc<StdRegistry<'static>>> {
     if IS_COLLECTOR_INITIALIZED.load(Ordering::SeqCst) != true {
         return None;
     }
 
-    unsafe { COLLECTOR.map(|c| &*c) }
+    unsafe { COLLECTOR.clone() }
 }
 
 
