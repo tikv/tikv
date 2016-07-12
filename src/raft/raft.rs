@@ -1111,6 +1111,7 @@ impl<T: Storage> Raft<T> {
             }
             MessageType::MsgSnapshot => {
                 self.election_elapsed = 0;
+                self.leader_id = m.get_from();
                 self.handle_snapshot(m);
             }
             MessageType::MsgRequestVote => {
