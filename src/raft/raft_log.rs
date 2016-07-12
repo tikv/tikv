@@ -85,8 +85,14 @@ impl<T: Storage> RaftLog<T> {
         self.term(self.last_index()).expect("unexpected error when getting the last term")
     }
 
+    #[inline]
     pub fn get_store(&self) -> &T {
         &self.store
+    }
+
+    #[inline]
+    pub fn mut_store(&mut self) -> &mut T {
+        &mut self.store
     }
 
     pub fn term(&self, idx: u64) -> Result<u64> {
