@@ -272,6 +272,13 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                                             config,
                                             Some(40960),
                                             |v| v.as_integer()) as usize;
+    cfg.messages_per_tick =
+        get_integer_value("",
+                          "server.messages-per-tick",
+                          matches,
+                          config,
+                          Some(4096),
+                          |v| v.as_integer()) as usize;
     let capacity = get_integer_value("capacity",
                                      "server.capacity",
                                      matches,
@@ -312,6 +319,13 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           matches,
                           config,
                           Some(40960),
+                          |v| v.as_integer()) as usize;
+    cfg.store_cfg.messages_per_tick =
+        get_integer_value("",
+                          "raftstore.messages-per-tick",
+                          matches,
+                          config,
+                          Some(4096),
                           |v| v.as_integer()) as usize;
     cfg.store_cfg.region_split_size =
         get_integer_value("region-split-size",

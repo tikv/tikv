@@ -12,9 +12,11 @@
 // limitations under the License.
 
 use std::sync::{self, Arc};
-use std::cell::{RefCell, Ref, RefMut};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::RefCell;
 use std::error;
 use std::time::Instant;
+use std::mem;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::Message;
@@ -37,7 +39,7 @@ use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 // so that we can force the follower peer to sync the snapshot first.
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
-const MAX_SNAP_TRY_CNT: u8 = 5;
+const MAX_SNAP_TRY_CNT: usize = 5;
 
 pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -45,21 +47,21 @@ pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 pub enum SnapState {
     Relax,
     Generating,
+    Snap(Snapshot),
     Applying,
     Failed,
 }
 
 pub struct PeerStorage {
-    engine: Arc<DB>,
+    pub engine: Arc<DB>,
 
     pub region: metapb::Region,
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
 
-    pub snap_state: SnapState,
-    pub snap: Option<Snapshot>,
+    snap_state: RefCell<SnapState>,
     snap_sched: Scheduler<SnapTask>,
-    snap_tried_cnt: u8,
+    snap_tried_cnt: AtomicUsize,
 }
 
 fn storage_error<E>(error: E) -> raft::Error
@@ -147,10 +149,9 @@ impl PeerStorage {
             region: region.clone(),
             raft_state: raft_state,
             apply_state: apply_state,
-            snap_state: SnapState::Relax,
-            snap: None,
+            snap_state: RefCell::new(SnapState::Relax),
             snap_sched: snap_sched,
-            snap_tried_cnt: 0,
+            snap_tried_cnt: AtomicUsize::new(0),
         })
     }
 
@@ -284,30 +285,37 @@ impl PeerStorage {
         DbSnapshot::new(self.engine.clone())
     }
 
-    pub fn snapshot(&mut self) -> raft::Result<Snapshot> {
-        if self.snap.is_some() {
-            return Ok(self.snap.take().unwrap());
-        }
-        if SnapState::Relax == self.snap_state {
-            info!("requesting snapshot on {}...", self.get_region_id());
-            self.snap_tried_cnt = 0;
-            self.snap_state = SnapState::Generating;
-        } else if SnapState::Failed == self.snap_state {
-            if self.snap_tried_cnt >= MAX_SNAP_TRY_CNT {
-                return Err(raft::Error::Store(box_err!("failed to get snapshot after {} times",
-                                                       self.snap_tried_cnt)));
+    pub fn snapshot(&self) -> raft::Result<Snapshot> {
+        let mut snap_state = self.snap_state.borrow_mut();
+
+        if let SnapState::Snap(_) = *snap_state {
+            match mem::replace(&mut *snap_state, SnapState::Relax) {
+                SnapState::Snap(s) => return Ok(s),
+                _ => unreachable!(),
             }
-            self.snap_tried_cnt += 1;
-            warn!("snapshot generating failed, retry {} time",
-                  self.snap_tried_cnt);
-            self.snap_state = SnapState::Generating;
+        }
+
+        if SnapState::Relax == *snap_state {
+            info!("requesting snapshot on {}...", self.get_region_id());
+            self.snap_tried_cnt.store(0, Ordering::Relaxed);
+            *snap_state = SnapState::Generating;
+        } else if SnapState::Failed == *snap_state {
+            let mut snap_tried_cnt = self.snap_tried_cnt.load(Ordering::Relaxed);
+            if snap_tried_cnt >= MAX_SNAP_TRY_CNT {
+                return Err(raft::Error::Store(box_err!("failed to get snapshot after {} times",
+                                                       snap_tried_cnt)));
+            }
+            snap_tried_cnt += 1;
+            warn!("snapshot generating failed, retry {} time", snap_tried_cnt);
+            self.snap_tried_cnt.store(snap_tried_cnt, Ordering::Relaxed);
+            *snap_state = SnapState::Generating;
         } else {
             return Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable));
         }
         let task = SnapTask::Gen { region_id: self.get_region_id() };
         if let Err(e) = self.snap_sched.schedule(task) {
             error!("failed to schedule task snap generation: {:?}", e);
-            self.snap_state = SnapState::Failed;
+            *snap_state = SnapState::Failed;
         }
         Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable))
     }
@@ -424,7 +432,17 @@ impl PeerStorage {
 
     #[inline]
     pub fn is_applying_snap(&self) -> bool {
-        self.snap_state == SnapState::Applying
+        self.is_snap_state(SnapState::Applying)
+    }
+
+    #[inline]
+    pub fn set_snap_state(&mut self, state: SnapState) {
+        *self.snap_state.borrow_mut() = state
+    }
+
+    #[inline]
+    pub fn is_snap_state(&self, state: SnapState) -> bool {
+        *self.snap_state.borrow() == state
     }
 
     // For region snapshot, we return three key ranges in database for this region.
@@ -497,8 +515,7 @@ impl PeerStorage {
         self.apply_state = ctx.apply_state;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
-            self.snap_state = SnapState::Applying;
-            self.snap.take();
+            self.set_snap_state(SnapState::Applying);
             let task = SnapTask::Apply { region_id: region_id };
             // TODO: gracefully remove region instead.
             self.snap_sched.schedule(task).expect("snap apply job should not fail");
@@ -639,49 +656,30 @@ pub fn write_initial_state<T: Mutable>(w: &T, region_id: u64) -> Result<()> {
     Ok(())
 }
 
-pub struct RaftStorage {
-    store: RefCell<PeerStorage>,
-}
 
-impl RaftStorage {
-    pub fn new(store: PeerStorage) -> RaftStorage {
-        RaftStorage { store: RefCell::new(store) }
-    }
-
-    #[inline]
-    pub fn rl(&self) -> Ref<PeerStorage> {
-        self.store.borrow()
-    }
-
-    #[inline]
-    pub fn wl(&self) -> RefMut<PeerStorage> {
-        self.store.borrow_mut()
-    }
-}
-
-impl Storage for RaftStorage {
+impl Storage for PeerStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
-        self.rl().initial_state()
+        self.initial_state()
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
-        self.rl().entries(low, high, max_size)
+        self.entries(low, high, max_size)
     }
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
-        self.rl().term(idx)
+        self.term(idx)
     }
 
     fn first_index(&self) -> raft::Result<u64> {
-        Ok(self.rl().first_index())
+        Ok(self.first_index())
     }
 
     fn last_index(&self) -> raft::Result<u64> {
-        Ok(self.rl().last_index())
+        Ok(self.last_index())
     }
 
     fn snapshot(&self) -> raft::Result<Snapshot> {
-        self.wl().snapshot()
+        self.snapshot()
     }
 }
 
@@ -714,28 +712,28 @@ mod test {
         }
     }
 
-    fn new_storage(sched: Scheduler<SnapTask>, path: &TempDir) -> RaftStorage {
+    fn new_storage(sched: Scheduler<SnapTask>, path: &TempDir) -> PeerStorage {
         let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
         let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
-        RaftStorage::new(PeerStorage::new(db, &region, sched).unwrap())
+        PeerStorage::new(db, &region, sched).unwrap()
     }
 
     fn new_storage_from_ents(sched: Scheduler<SnapTask>,
                              path: &TempDir,
                              ents: &[Entry])
-                             -> RaftStorage {
-        let store = new_storage(sched, path);
-        let mut ctx = InvokeContext::new(&store.rl());
-        store.rl().append(&mut ctx, &ents[1..]).expect("");
+                             -> PeerStorage {
+        let mut store = new_storage(sched, path);
+        let mut ctx = InvokeContext::new(&store);
+        store.append(&mut ctx, &ents[1..]).expect("");
         ctx.apply_state.mut_truncated_state().set_index(ents[0].get_index());
         ctx.apply_state.mut_truncated_state().set_term(ents[0].get_term());
         ctx.apply_state.set_applied_index(ents.last().unwrap().get_index());
-        ctx.save_apply(store.rl().get_region_id()).unwrap();
-        store.rl().engine.write(ctx.wb).expect("");
-        store.wl().raft_state = ctx.raft_state;
-        store.wl().apply_state = ctx.apply_state;
+        ctx.save_apply(store.get_region_id()).unwrap();
+        store.engine.write(ctx.wb).expect("");
+        store.raft_state = ctx.raft_state;
+        store.apply_state = ctx.apply_state;
         store
     }
 
@@ -769,7 +767,7 @@ mod test {
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
-            let t = store.rl().term(idx);
+            let t = store.term(idx);
             if wterm != t {
                 panic!("#{}: expect res {:?}, got {:?}", i, wterm, t);
             }
@@ -805,7 +803,7 @@ mod test {
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
-            let e = store.rl().entries(lo, hi, maxsize);
+            let e = store.entries(lo, hi, maxsize);
             if e != wentries {
                 panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
             }
@@ -829,14 +827,14 @@ mod test {
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
-            let mut ctx = InvokeContext::new(&store.rl());
-            let res = store.rl().compact(&mut ctx.apply_state, idx);
+            let mut ctx = InvokeContext::new(&store);
+            let res = store.compact(&mut ctx.apply_state, idx);
             // TODO check exact error type after refactoring error.
             if res.is_err() ^ werr.is_err() {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
             }
             if res.is_ok() {
-                store.rl().engine.write(ctx.wb).expect("");
+                store.engine.write(ctx.wb).expect("");
             }
         }
     }
@@ -852,14 +850,14 @@ mod test {
         let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
-        let s = new_storage_from_ents(sched, &td, &ents);
+        let mut s = new_storage_from_ents(sched, &td, &ents);
         let (tx, rx) = channel();
-        let runner = SnapRunner::new(s.rl().engine.clone(), tx, mgr);
+        let runner = SnapRunner::new(s.engine.clone(), tx, mgr);
         worker.start(runner).unwrap();
-        let snap = s.wl().snapshot();
+        let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
-        assert_eq!(s.rl().snap_state, SnapState::Generating);
+        assert!(s.is_snap_state(SnapState::Generating));
 
         let snap = match rx.recv().unwrap() {
             Msg::SnapGenRes { snap, .. } => snap.unwrap(),
@@ -874,8 +872,8 @@ mod test {
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
 
-        s.wl().snap = Some(snap.clone());
-        assert_eq!(s.wl().snapshot(), Ok(snap));
+        s.set_snap_state(SnapState::Snap(snap.clone()));
+        assert_eq!(s.snapshot(), Ok(snap));
     }
 
     #[test]
@@ -914,13 +912,13 @@ mod test {
             let td = TempDir::new("tikv-store-test").unwrap();
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
-            let store = new_storage_from_ents(sched, &td, &ents);
-            let mut ctx = InvokeContext::new(&store.rl());
-            store.wl().append(&mut ctx, &entries).expect("");
-            store.wl().engine.write(ctx.wb).expect("");
-            store.wl().raft_state = ctx.raft_state;
-            let li = store.wl().last_index();
-            let actual_entries = store.rl().entries(4, li + 1, u64::max_value()).expect("");
+            let mut store = new_storage_from_ents(sched, &td, &ents);
+            let mut ctx = InvokeContext::new(&store);
+            store.append(&mut ctx, &entries).expect("");
+            store.engine.write(ctx.wb).expect("");
+            store.raft_state = ctx.raft_state;
+            let li = store.last_index();
+            let actual_entries = store.entries(4, li + 1, u64::max_value()).expect("");
             if actual_entries != wentries {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
             }
@@ -940,15 +938,15 @@ mod test {
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let (tx, rx) = channel();
-        let runner = SnapRunner::new(s1.rl().engine.clone(), tx, mgr.clone());
+        let runner = SnapRunner::new(s1.engine.clone(), tx, mgr.clone());
         worker.start(runner).unwrap();
-        assert!(s1.wl().snapshot().is_err());
+        assert!(s1.snapshot().is_err());
         let snap1 = match rx.recv().unwrap() {
             Msg::SnapGenRes { snap, .. } => snap.unwrap(),
             m => panic!("unexpected message: {:?}", m),
         };
-        assert_eq!(s1.rl().truncated_index(), 3);
-        assert_eq!(s1.rl().truncated_term(), 3);
+        assert_eq!(s1.truncated_index(), 3);
+        assert_eq!(s1.truncated_term(), 3);
 
         let key = SnapKey::from_snap(&snap1).unwrap();
         let source_snap = mgr.rl().get_snap_file(&key, true).unwrap();
@@ -960,13 +958,13 @@ mod test {
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let s2 = new_storage(sched, &td2);
-        assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
-        let mut ctx = InvokeContext::new(&s2.rl());
-        s2.wl().apply_snapshot(&mut ctx, &snap1).unwrap();
+        assert_eq!(s2.first_index(), s2.applied_index() + 1);
+        let mut ctx = InvokeContext::new(&s2);
+        s2.apply_snapshot(&mut ctx, &snap1).unwrap();
         assert_eq!(ctx.apply_state.get_applied_index(), 5);
         assert_eq!(ctx.raft_state.get_last_index(), 5);
         assert_eq!(ctx.apply_state.get_truncated_state().get_index(), 5);
         assert_eq!(ctx.apply_state.get_truncated_state().get_term(), 5);
-        assert_eq!(s2.rl().first_index(), s2.rl().applied_index() + 1);
+        assert_eq!(s2.first_index(), s2.applied_index() + 1);
     }
 }

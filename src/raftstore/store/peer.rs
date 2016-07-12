@@ -34,7 +34,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer, rocksdb};
 use pd::PdClient;
 use super::store::Store;
-use super::peer_storage::{PeerStorage, RaftStorage, ApplySnapResult, write_initial_state};
+use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -145,7 +145,7 @@ pub struct Peer {
     engine: Arc<DB>,
     pub peer: metapb::Peer,
     region_id: u64,
-    pub raft_group: RawNode<RaftStorage>,
+    pub raft_group: RawNode<PeerStorage>,
     pending_cmds: PendingCmdQueue,
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
     coprocessor_host: CoprocessorHost,
@@ -205,7 +205,6 @@ impl Peer {
         let sched = store.snap_scheduler();
         let ps = try!(PeerStorage::new(store.engine(), &region, sched));
         let applied_index = ps.applied_index();
-        let storage = RaftStorage::new(ps);
 
         let raft_cfg = raft::Config {
             id: peer_id,
@@ -219,7 +218,7 @@ impl Peer {
             tag: format!("[region {}]", region.get_id()),
         };
 
-        let raft_group = try!(RawNode::new(&raft_cfg, storage, &[]));
+        let raft_group = try!(RawNode::new(&raft_cfg, ps, &[]));
 
         let mut peer = Peer {
             engine: store.engine(),
@@ -258,14 +257,14 @@ impl Peer {
         }
 
         let wb = WriteBatch::new();
-        try!(self.get_store().rl().scan_region(self.engine.as_ref(),
-                                               &mut |key, _| {
-                                                   try!(wb.delete(key));
-                                                   Ok(true)
-                                               }));
+        try!(self.get_store().scan_region(self.engine.as_ref(),
+                                          &mut |key, _| {
+                                              try!(wb.delete(key));
+                                              Ok(true)
+                                          }));
         let mut local_state = RegionLocalState::new();
         local_state.set_state(PeerState::Tombstone);
-        local_state.set_region(self.get_store().rl().get_region().clone());
+        local_state.set_region(self.get_store().get_region().clone());
         try!(wb.put_msg(&keys::region_state_key(self.region_id), &local_state));
         try!(self.engine.write(wb));
 
@@ -279,7 +278,7 @@ impl Peer {
     }
 
     pub fn is_initialized(&self) -> bool {
-        self.get_store().rl().is_initialized()
+        self.get_store().is_initialized()
     }
 
     pub fn load_all_coprocessors(&mut self) {
@@ -288,7 +287,7 @@ impl Peer {
     }
 
     pub fn region(&self) -> metapb::Region {
-        self.get_store().rl().get_region().clone()
+        self.get_store().get_region().clone()
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -308,12 +307,17 @@ impl Peer {
     }
 
     #[inline]
-    pub fn get_store(&self) -> &RaftStorage {
+    pub fn get_store(&self) -> &PeerStorage {
         self.raft_group.get_store()
     }
 
+    #[inline]
+    pub fn mut_store(&mut self) -> &mut PeerStorage {
+        self.raft_group.mut_store()
+    }
+
     pub fn is_applying_snap(&self) -> bool {
-        self.get_store().rl().is_applying_snap()
+        self.get_store().is_applying_snap()
     }
 
     fn send_ready_metric(&self, ready: &Ready) {
@@ -357,7 +361,7 @@ impl Peer {
                self.region_id);
 
         let mut ready = self.raft_group.ready();
-        let is_applying = self.get_store().rl().is_applying_snap();
+        let is_applying = self.get_store().is_applying_snap();
         if is_applying {
             // skip apply and snapshot
             ready.committed_entries = vec![];
@@ -374,7 +378,7 @@ impl Peer {
             try!(self.send(trans, &ready.messages));
         }
 
-        let apply_result = try!(self.get_store().wl().handle_raft_ready(&ready));
+        let apply_result = try!(self.mut_store().handle_raft_ready(&ready));
 
         if !self.is_leader() {
             try!(self.send(trans, &ready.messages));
@@ -488,7 +492,7 @@ impl Peer {
 
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
         // TODO: validate request for unexpected changes.
-        try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store().rl(), &mut cmd));
+        try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
         try!(self.raft_group.propose(data));
         Ok(())
@@ -520,7 +524,7 @@ impl Peer {
             }
         }
 
-        let last_index = self.get_store().rl().last_index();
+        let last_index = self.get_store().last_index();
         last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
@@ -594,7 +598,7 @@ impl Peer {
         }
 
         // Try to find in region, if found, set in cache.
-        for peer in self.get_store().rl().get_region().get_peers() {
+        for peer in self.get_store().get_region().get_peers() {
             if peer.get_id() == peer_id {
                 self.peer_cache.wl().insert(peer_id, peer.clone());
                 return Some(peer.clone());
@@ -704,11 +708,11 @@ impl Peer {
         if data.is_empty() {
             // when a peer become leader, it will send an empty entry.
             let wb = WriteBatch::new();
-            let mut state = self.get_store().rl().apply_state.clone();
+            let mut state = self.get_store().apply_state.clone();
             state.set_applied_index(index);
             try!(wb.put_msg(&keys::apply_state_key(self.region_id), &state));
             try!(self.engine.write_without_wal(wb));
-            self.get_store().wl().apply_state = state;
+            self.mut_store().apply_state = state;
             return Ok(None);
         }
 
@@ -794,7 +798,7 @@ impl Peer {
         }
 
         let cb = cb.unwrap();
-        self.coprocessor_host.post_apply(&self.raft_group.get_store().rl(), &cmd, &mut resp);
+        self.coprocessor_host.post_apply(self.raft_group.get_store(), &cmd, &mut resp);
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
         // Bind uuid here.
@@ -824,7 +828,7 @@ impl Peer {
             return Ok((resp, None));
         }
 
-        let last_applied_index = self.get_store().rl().applied_index();
+        let last_applied_index = self.get_store().applied_index();
         if last_applied_index >= index {
             return Err(box_err!("applied index moved backwards, {} >= {}",
                                 last_applied_index,
@@ -834,7 +838,7 @@ impl Peer {
         let engine = self.engine.clone();
         let mut ctx = ExecContext {
             snap: Snapshot::new(engine),
-            apply_state: self.get_store().rl().apply_state.clone(),
+            apply_state: self.get_store().apply_state.clone(),
             wb: WriteBatch::new(),
             req: req,
         };
@@ -847,8 +851,8 @@ impl Peer {
         ctx.save(self.region_id).expect("save state must not fail");
 
         // Commit write and change storage fields atomically.
-        let mut storage = self.get_store().wl();
-        match self.engine.write_without_wal(ctx.wb) {
+        let mut storage = self.mut_store();
+        match storage.engine.write_without_wal(ctx.wb) {
             Ok(_) => {
                 storage.apply_state = ctx.apply_state;
 
@@ -1118,7 +1122,7 @@ impl Peer {
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::new();
 
-        let first_index = self.get_store().rl().first_index();
+        let first_index = self.get_store().first_index();
         if compact_index <= first_index {
             debug!("compact index {} <= first index {}, no need to compact",
                    compact_index,
@@ -1126,7 +1130,7 @@ impl Peer {
             return Ok((resp, None));
         }
 
-        try!(self.get_store().rl().compact(&mut ctx.apply_state, compact_index));
+        try!(self.get_store().compact(&mut ctx.apply_state, compact_index));
         Ok((resp,
             Some(ExecResult::CompactLog { state: ctx.apply_state.get_truncated_state().clone() })))
     }
@@ -1158,7 +1162,7 @@ impl Peer {
 
     fn check_data_key(&self, key: &[u8]) -> Result<()> {
         // region key range has no data prefix, so we must use origin key to check.
-        try!(util::check_key_in_region(key, self.get_store().rl().get_region()));
+        try!(util::check_key_in_region(key, self.get_store().get_region()));
 
         Ok(())
     }
@@ -1246,7 +1250,7 @@ impl Peer {
 
     fn do_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
         let mut resp = Response::new();
-        resp.mut_snap().set_region(self.get_store().rl().get_region().clone());
+        resp.mut_snap().set_region(self.get_store().get_region().clone());
         Ok(resp)
     }
 }
