@@ -254,7 +254,7 @@ fn test_select() {
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn test_group_by() {
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -305,7 +305,7 @@ fn test_aggr_count() {
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn test_aggr_first() {
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -356,7 +356,7 @@ fn test_limit() {
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -377,7 +377,7 @@ fn test_reverse() {
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 fn prepare_idx(store: &mut Store,
@@ -440,7 +440,7 @@ fn test_index() {
     for (i, &h) in handles.iter().enumerate() {
         assert_eq!(i as i64 + 1, h);
     }
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -465,7 +465,7 @@ fn test_index_reverse_limit() {
     for (i, &h) in handles.iter().enumerate() {
         assert_eq!(10 - i as i64, h);
     }
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
@@ -487,5 +487,5 @@ fn test_del_select() {
 
     assert_eq!(resp.get_rows().len(), count as usize - 1);
 
-    end_point.stop().unwrap();
+    end_point.stop().unwrap().join().unwrap();
 }

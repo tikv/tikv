@@ -120,7 +120,7 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 
 impl Drop for PdStoreAddrResolver {
     fn drop(&mut self) {
-        if let Err(e) = self.worker.stop() {
+        if let Some(Err(e)) = self.worker.stop().map(|h| h.join()) {
             error!("failed to stop store address resolve thread: {:?}!!!", e);
         }
     }

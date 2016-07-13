@@ -570,11 +570,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
         if !el.is_running() {
-            if let Err(e) = self.end_point_worker.stop() {
-                error!("failed to stop end point: {:?}", e);
-            }
+            let end_point_handle = self.end_point_worker.stop();
             if let Err(e) = self.store.stop() {
                 error!("failed to stop store: {:?}", e);
+            }
+            if let Some(Err(e)) = end_point_handle.map(|h| h.join()) {
+                error!("failed to stop end point: {:?}", e);
             }
         }
     }
