@@ -298,6 +298,18 @@ impl Datum {
         }
     }
 
+    pub fn into_dec(self) -> Result<Decimal> {
+        match self {
+            Datum::Dur(d) => d.to_decimal().map_err(From::from),
+            d => {
+                match d.coerce_to_dec() {
+                    Datum::Dec(d) => Ok(d),
+                    d => Err(box_err!("failed to conver {} to decimal", d)),
+                }
+            }
+        }
+    }
+
     /// Try its best effort to convert into a decimal datum.
     fn coerce_to_dec(self) -> Datum {
         let dec_opt = match self {

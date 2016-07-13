@@ -217,8 +217,15 @@ fn prepare_sel(store: &mut Store,
 // This function will insert `count` rows data into table.
 // each row contains 3 column, first column primary key, which
 // id is 1. Second column's type is a varchar, id is 3, value is
-// `varchar$((handle / 2))`. Third column's type is long, id is 4,
+// `varchar:$((handle / 2))`. Third column's type is long, id is 4,
 // value is the same as handle.
+// For example:
+// 1 varchar:0 1
+// 2 varchar:1 2
+// 3 varchar:1 3
+// ...
+// 9 varchar:4 9
+// 10 varchar:5 10
 fn initial_data(count: i64) -> (Store, Worker<RequestTask>, TableInfo) {
     let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap());
     let mut store = Store::new(engine.clone());
@@ -331,6 +338,36 @@ fn test_aggr_first() {
         };
         let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
         let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::I64(idx as i64)];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap();
+}
+
+#[test]
+fn test_aggr_sum() {
+    let count = 10;
+    let (mut store, mut end_point, ti) = initial_data(count);
+
+    let mut col = Expr::new();
+    col.set_tp(ExprType::ColumnRef);
+    col.mut_val().encode_i64(1).unwrap();
+    let mut expr = Expr::new();
+    expr.set_tp(ExprType::Sum);
+    expr.mut_children().push(col);
+
+    let req = prepare_sel(&mut store, &ti, None, None, vec![expr], vec![3]);
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 6);
+    for (i, row) in resp.get_rows().iter().enumerate() {
+        let s = if i == 5 {
+            10
+        } else {
+            i * 4 + 1
+        };
+        let gk = datum::encode_value(&[Datum::Bytes(format!("varchar:{}", i).into_bytes())]);
+        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::Dec(s.into())];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
