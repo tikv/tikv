@@ -12,13 +12,11 @@
 // limitations under the License.
 
 use rand::{self, Rng, ThreadRng};
-use std::ops::RangeFrom;
 use std::io::{self, Write};
 use std::env;
 use std::fs::File;
 use std::sync::Mutex;
 
-use tikv::storage::mvcc::TEST_TS_BASE;
 use tikv::util::{self, logger};
 
 use time;
@@ -60,20 +58,6 @@ impl Iterator for KvGenerator {
 pub fn generate_random_kvs(n: usize, key_len: usize, value_len: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     let kv_generator = KvGenerator::new(key_len, value_len);
     kv_generator.take(n).collect()
-}
-
-pub struct TsGenerator {
-    ts_pool: RangeFrom<u64>,
-}
-
-impl TsGenerator {
-    pub fn new() -> TsGenerator {
-        TsGenerator { ts_pool: TEST_TS_BASE.. }
-    }
-
-    pub fn gen(&mut self) -> u64 {
-        self.ts_pool.next().unwrap()
-    }
 }
 
 /// A logger that add a test case tag before each line of log.

@@ -298,7 +298,7 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
             } else {
                 let value = match values.get(&col_id) {
                     None if mysql::has_not_null_flag(col.get_flag() as u64) => {
-                        return Err(box_err!("column {} is missing", col_id));
+                        return Err(box_err!("column {} of {} is missing", col_id, h));
                     }
                     None => Datum::Null,
                     Some(bs) => box_try!(bs.clone().decode_col_value(col)),
@@ -393,7 +393,7 @@ impl SelectContextCore {
             if col.get_pk_handle() {
                 box_try!(datum::encode_to(row.mut_data(), &[get_pk(col, h)], false));
             } else if mysql::has_not_null_flag(col.get_flag() as u64) {
-                return Err(box_err!("column {} is missing", col_id));
+                return Err(box_err!("column {} of {} is missing", col_id, h));
             } else {
                 box_try!(datum::encode_to(row.mut_data(), &[Datum::Null], false));
             }
