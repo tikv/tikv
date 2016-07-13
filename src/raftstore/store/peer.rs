@@ -17,7 +17,6 @@ use std::vec::Vec;
 use std::default::Default;
 
 use rocksdb::{DB, WriteBatch, Writable};
-use rocksdb::rocksdb_ffi::DBCFHandle;
 use protobuf::{self, Message};
 use uuid::Uuid;
 
@@ -32,7 +31,7 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use util::{escape, HandyRwLock, SlowTimer};
+use util::{escape, HandyRwLock, SlowTimer, rocksdb};
 use pd::PdClient;
 use super::store::Store;
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state};
@@ -1201,10 +1200,6 @@ impl Peer {
         Ok(resp)
     }
 
-    fn get_cf_handle(&self, cf: &str) -> Result<&DBCFHandle> {
-        self.engine.cf_handle(cf).ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf)))
-    }
-
     fn do_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         try!(self.check_data_key(key));
@@ -1221,7 +1216,7 @@ impl Peer {
         self.size_diff_hint += value.len() as u64;
         if req.get_put().has_cf() {
             let cf = req.get_put().get_cf();
-            let handle = try!(self.get_cf_handle(cf));
+            let handle = try!(rocksdb::get_cf_handle(&self.engine, cf));
             try!(ctx.wb.put_cf(*handle, &key, value));
         } else {
             try!(ctx.wb.put(&key, value));
@@ -1244,7 +1239,7 @@ impl Peer {
         let resp = Response::new();
         if req.get_delete().has_cf() {
             let cf = req.get_delete().get_cf();
-            let handle = try!(self.get_cf_handle(cf));
+            let handle = try!(rocksdb::get_cf_handle(&self.engine, cf));
             try!(ctx.wb.delete_cf(*handle, &key));
         } else {
             try!(ctx.wb.delete(&key));

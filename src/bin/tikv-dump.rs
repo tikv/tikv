@@ -27,9 +27,10 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
 use kvproto::raftpb::Entry;
 use rocksdb::DB;
-use tikv::util::{escape, unescape};
+use tikv::util::{self, escape, unescape};
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
+use tikv::storage::DEFAULT_CFS;
 
 /// # Message dump tool
 ///
@@ -60,6 +61,10 @@ fn main() {
                 "");
     opts.optopt("t", "to", "set the scan end raw key, in escaped format", "");
     opts.optopt("l", "limit", "set the scan limit", "");
+    opts.optopt("c",
+                "cf",
+                "column family name, only avialbe for dump-range",
+                "");
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
         print_usage(&program, opts);
@@ -67,13 +72,15 @@ fn main() {
     }
 
     let db_str = matches.opt_str("db").unwrap();
-    let db = DB::open_default(&db_str).unwrap();
+    let db = util::rocksdb::new_engine(&db_str, DEFAULT_CFS).unwrap();
     let key = matches.opt_str("k");
     let from = matches.opt_str("f");
     let to = matches.opt_str("t");
     let limit = matches.opt_str("l").map(|s| s.parse().unwrap());
     let idx = matches.opt_str("i");
     let region = matches.opt_str("r");
+    let cf = matches.opt_str("c");
+    let cf_name = cf.as_ref().map_or("default", |s| s.as_str());
     if let Some(key) = key {
         dump_raw_value(db, key);
     } else if let Some(idx) = idx {
@@ -81,7 +88,7 @@ fn main() {
     } else if matches.opt_present("info") {
         dump_region_info(db, region.unwrap());
     } else if let Some(from) = from {
-        dump_range(db, from, to, limit);
+        dump_range(db, from, to, limit, cf_name);
     } else {
         panic!("currently only random key-value and raft log entry query are supported.");
     }
@@ -115,7 +122,7 @@ fn dump_region_info(db: DB, region_id_str: String) {
     println!("info: {:?}", region);
 }
 
-fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>) {
+fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: &str) {
     let from = unescape(&from);
     let to = to.map_or_else(|| vec![0xff], |s| unescape(&s));
     let limit = limit.unwrap_or(u64::MAX);
@@ -125,12 +132,13 @@ fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>) {
     }
 
     let mut cnt = 0;
-    db.scan(&from,
-              &to,
-              &mut |k, v| {
-                  println!("key: {}, value: {}", escape(k), escape(v));
-                  cnt += 1;
-                  Ok(cnt < limit)
-              })
+    db.scan_cf(cf,
+                 &from,
+                 &to,
+                 &mut |k, v| {
+                     println!("key: {}, value: {}", escape(k), escape(v));
+                     cnt += 1;
+                     Ok(cnt < limit)
+                 })
         .unwrap();
 }

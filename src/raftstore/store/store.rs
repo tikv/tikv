@@ -1226,22 +1226,17 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());
     }
 
+    #[allow(useless_vec)]
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            if let Err(e) = self.split_check_worker.stop() {
-                error!("failed to stop split scan thread: {:?}!!!", e);
-            }
-
-            if let Err(e) = self.snap_worker.stop() {
-                error!("failed to stop snap thread: {:?}!!!", e);
-            }
-
-            if let Err(e) = self.compact_worker.stop() {
-                error!("failed to stop compact thread: {:?}!!!", e);
-            }
-
-            if let Err(e) = self.pd_worker.stop() {
-                error!("failed to stop pd thread: {:?}!!!", e);
+            for (handle, name) in vec![(self.split_check_worker.stop(),
+                                        self.split_check_worker.name()),
+                                       (self.snap_worker.stop(), self.snap_worker.name()),
+                                       (self.compact_worker.stop(), self.compact_worker.name()),
+                                       (self.pd_worker.stop(), self.pd_worker.name())] {
+                if let Some(Err(e)) = handle.map(|h| h.join()) {
+                    error!("failed to stop {}: {:?}", name, e);
+                }
             }
 
             return;

@@ -40,13 +40,13 @@ use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR, DEFAULT_CFS};
-use tikv::util::{self, logger, panic_hook};
+use tikv::util::{self, logger, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::metric::{self, BufferedUdpMetricSink};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
-use tikv::raftstore::store::{self, SnapManager, new_engine_opt};
+use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{new_rpc_client, RpcClient};
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -379,7 +379,9 @@ fn build_raftkv(matches: &Matches,
     let opts = get_rocksdb_option(matches, config);
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine = new_engine_opt(opts, db_path.to_str().unwrap(), DEFAULT_CFS).unwrap();
+    let engine =
+        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), DEFAULT_CFS)
+            .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
     let mut node = Node::new(&mut event_loop, cfg, pd_client);

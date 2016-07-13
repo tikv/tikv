@@ -262,16 +262,23 @@ impl Evaluator {
         where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
     {
         let (left, right) = try!(self.eval_two_children(expr));
-        let left = try!(left.into_arith());
-        let right = try!(right.into_arith());
-
-        let (left, right) = Datum::coerce(left, right);
-        if left == Datum::Null || right == Datum::Null {
-            return Ok(Datum::Null);
-        }
-
-        f(left, right).map_err(From::from)
+        eval_arith(left, right, f)
     }
+}
+
+#[inline]
+pub fn eval_arith<F>(left: Datum, right: Datum, f: F) -> Result<Datum>
+    where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
+{
+    let left = try!(left.into_arith());
+    let right = try!(right.into_arith());
+
+    let (left, right) = Datum::coerce(left, right);
+    if left == Datum::Null || right == Datum::Null {
+        return Ok(Datum::Null);
+    }
+
+    f(left, right).map_err(From::from)
 }
 
 /// Check if `target` is in `value_list`.

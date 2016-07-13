@@ -192,19 +192,18 @@ impl<T: Display + Send + 'static> Worker<T> {
         self.handle.is_none() || self.scheduler.is_busy()
     }
 
-    /// Stop the worker thread.
-    pub fn stop(&mut self) -> thread::Result<()> {
-        let handler = match self.handle.take() {
-            Some(h) => h,
-            None => return Ok(()),
-        };
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
 
+    /// Stop the worker thread.
+    pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.name);
         if let Err(e) = self.scheduler.sender.send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
-        handler.join()
+        self.handle.take()
     }
 }
 
@@ -259,7 +258,7 @@ mod test {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(!worker.is_busy());
-        worker.stop().unwrap();
+        worker.stop().unwrap().join().unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 150);
         // now worker can't handle any task
         assert!(worker.is_busy());
@@ -281,7 +280,7 @@ mod test {
             }
             thread::sleep(Duration::from_millis(1));
         }
-        worker.stop().unwrap();
+        worker.stop().unwrap().join().unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 200);
     }
 
@@ -293,7 +292,7 @@ mod test {
         for _ in 0..20 {
             worker.schedule(50).unwrap();
         }
-        worker.stop().unwrap();
+        worker.stop().unwrap().join().unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 20 * 50);
     }
 }

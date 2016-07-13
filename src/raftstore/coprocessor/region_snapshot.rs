@@ -216,7 +216,7 @@ mod tests {
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
     use storage::{Cursor, Key, DEFAULT_CFS};
-    use util::worker;
+    use util::{worker, rocksdb};
 
     use super::*;
     use std::sync::Arc;
@@ -225,7 +225,7 @@ mod tests {
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
     fn new_temp_engine(path: &TempDir) -> Arc<DB> {
-        new_engine(path.path().to_str().unwrap(), DEFAULT_CFS).unwrap()
+        Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), DEFAULT_CFS).unwrap())
     }
 
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {

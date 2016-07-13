@@ -698,7 +698,18 @@ fn test_dueling_candidates() {
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
+    // 1 becomes leader since it receives votes from 1 and 2
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+
+    // 3 stays as candidate since it receives a vote from 3 and a rejection from 2
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
+
     nt.recover();
+
+    // candidate 3 now increases its term and tries to vote again, we except it to
+    // disrupt the leader 1 since it has a higher term, 3 will be follower again
+    // since both 1 and 2 rejects its vote request since 3 does not have a long
+    // enough log.
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
     let wlog = new_raft_log(vec![empty_entry(1, 1)], 2, 1);
@@ -1692,6 +1703,8 @@ fn test_restore_from_snap_msg() {
     m.set_snapshot(s);
 
     sm.step(m).expect("");
+
+    assert_eq!(sm.leader_id, 1);
 
     // TODO: port the remaining if upstream completed this test.
 }
