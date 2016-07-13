@@ -19,7 +19,7 @@ use storage::{Key, Value, CfName};
 use raftstore::store::engine::{Snapshot as RocksSnapshot, Peekable, Iterable};
 use util::escape;
 use util::rocksdb;
-use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result, Error, DEFAULT_CFNAME};
+use super::{Engine, Snapshot, Modify, Cursor, Callback, TEMP_DIR, Result, Error, DEFAULT_CFNAME};
 use tempdir::TempDir;
 
 
@@ -91,6 +91,14 @@ impl Engine for EngineRocksdb {
     fn snapshot(&self, _: &Context) -> Result<Box<Snapshot>> {
         let snapshot = RocksSnapshot::new(self.db.clone());
         Ok(box snapshot)
+    }
+
+    fn async_write(&self, _: &Context, _: Vec<Modify>, _: Callback<()>) -> Result<()> {
+        Ok(())
+    }
+
+    fn async_snapshot(&self, _: &Context, _: Callback<Box<Snapshot>>) -> Result<()> {
+        Ok(())
     }
 }
 

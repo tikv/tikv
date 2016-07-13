@@ -14,11 +14,14 @@
 use std::{error, result};
 use std::fmt::Debug;
 use std::cmp::Ordering;
+use std::boxed::FnBox;
+use std::time::Duration;
 
 use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value, CfName};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
+use util::event::Event;
 
 mod rocksdb;
 pub mod raftkv;
@@ -30,6 +33,9 @@ pub const TEMP_DIR: &'static str = "";
 pub const DEFAULT_CFNAME: CfName = "default";
 
 const SEEK_BOUND: usize = 30;
+const DEFAULT_TIMEOUT_SECS: u64 = 5;
+
+pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 #[derive(Debug)]
 pub enum Modify {
@@ -38,8 +44,36 @@ pub enum Modify {
 }
 
 pub trait Engine: Send + Sync + Debug {
-    fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
-    fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>>;
+    fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
+        let finished = Event::new();
+        let finished2 = finished.clone();
+        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
+
+        try!(self.async_write(ctx, batch, box move |res| finished2.set(res)));
+        if finished.wait_timeout(Some(timeout)) {
+            return finished.take().unwrap();
+        }
+        Err(Error::Timeout(timeout))
+    }
+
+    fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
+        let finished = Event::new();
+        let finished2 = finished.clone();
+        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
+
+        try!(self.async_snapshot(ctx, box move |res| finished2.set(res)));
+        if finished.wait_timeout(Some(timeout)) {
+            return finished.take().unwrap();
+        }
+        Err(Error::Timeout(timeout))
+    }
+
+    fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
+    fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
+
+    // maybe mut is better.
+    fn close(&self) {}
+
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
         self.put_cf(ctx, DEFAULT_CFNAME, key, value)
@@ -56,9 +90,6 @@ pub trait Engine: Send + Sync + Debug {
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
-
-    // maybe mut is better.
-    fn close(&self) {}
 }
 
 pub trait Snapshot: Send {
@@ -181,6 +212,10 @@ quick_error! {
             from()
             description("RocksDb error")
             display("RocksDb {}", msg)
+        }
+        Timeout(d: Duration) {
+            description("request timeout")
+            display("timeout after {:?}", d)
         }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
