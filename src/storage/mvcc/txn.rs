@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::fmt;
+use protobuf::core::Message;
 use storage::{Key, Value, Mutation};
 use storage::engine::{Engine, Snapshot, Modify, Cursor, DEFAULT_CFNAME};
 use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
@@ -73,13 +74,28 @@ impl<'a> MvccTxn<'a> {
         self.writes.push(modify);
     }
 
+    fn lock_key(&mut self, key: Key, lock_type: MetaLockType, primary: Vec<u8>) {
+        let mut lock = MetaLock::new();
+        lock.set_field_type(lock_type);
+        lock.set_primary_key(primary);
+        lock.set_start_ts(self.start_ts);
+
+        let mut b = vec![];
+        lock.write_to_vec(&mut b).unwrap();
+        self.writes.push(Modify::Put("lock", key, b));
+    }
+
+    fn unlock_key(&mut self, key: Key) {
+        self.writes.push(Modify::Delete("lock", key));
+    }
+
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.snapshot.get(key)
     }
 
     pub fn prewrite(&mut self, mutation: Mutation, primary: &[u8]) -> Result<()> {
         let key = mutation.key();
-        let mut meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
+        let meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
         // Abort on writes after our start timestamp ...
         if let Some(latest) = meta.iter_items().nth(0) {
             if latest.get_commit_ts() >= self.start_ts {
@@ -87,7 +103,7 @@ impl<'a> MvccTxn<'a> {
             }
         }
         // ... or locks at any timestamp.
-        if let Some(lock) = meta.get_lock() {
+        if let Some(lock) = try!(self.snapshot.load_lock(&key)) {
             if lock.get_start_ts() != self.start_ts {
                 return Err(Error::KeyIsLocked {
                     key: try!(key.raw()),
@@ -96,13 +112,7 @@ impl<'a> MvccTxn<'a> {
                 });
             }
         }
-
-        let mut lock = MetaLock::new();
-        lock.set_field_type(meta_lock_type(&mutation));
-        lock.set_primary_key(primary.to_vec());
-        lock.set_start_ts(self.start_ts);
-        meta.set_lock(lock);
-        self.write_meta(&key, &mut meta);
+        self.lock_key(key.clone(), meta_lock_type(&mutation), primary.to_vec());
 
         if let Mutation::Put((_, ref value)) = mutation {
             let value_key = key.append_ts(self.start_ts);
@@ -113,14 +123,14 @@ impl<'a> MvccTxn<'a> {
 
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
         let mut meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
-        try!(self.commit_impl(commit_ts, &mut meta));
+        try!(self.commit_impl(key, commit_ts, &mut meta));
         self.write_meta(key, &mut meta);
         Ok(())
     }
 
-    fn commit_impl(&mut self, commit_ts: u64, meta: &mut Meta) -> Result<()> {
-        let lock_type = match meta.get_lock() {
-            Some(lock) if lock.get_start_ts() == self.start_ts => lock.get_field_type(),
+    fn commit_impl(&mut self, key: &Key, commit_ts: u64, meta: &mut Meta) -> Result<()> {
+        let lock_type = match try!(self.snapshot.load_lock(key)) {
+            Some(ref lock) if lock.get_start_ts() == self.start_ts => lock.get_field_type(),
             _ => {
                 return match meta.get_item_by_start_ts(self.start_ts) {
                     // Committed by concurrent transaction.
@@ -136,7 +146,7 @@ impl<'a> MvccTxn<'a> {
             item.set_commit_ts(commit_ts);
             meta.push_item(item);
         }
-        meta.clear_lock();
+        self.unlock_key(key.clone());
         Ok(())
     }
 
@@ -146,7 +156,7 @@ impl<'a> MvccTxn<'a> {
                            get_ts: u64)
                            -> Result<Option<Value>> {
         let mut meta = try!(self.snapshot.load_meta(key, FIRST_META_INDEX));
-        try!(self.commit_impl(commit_ts, &mut meta));
+        try!(self.commit_impl(key, commit_ts, &mut meta));
         let res = try!(self.snapshot.get_impl(key, &meta, get_ts));
         self.write_meta(key, &mut meta);
         Ok(res)
@@ -160,8 +170,8 @@ impl<'a> MvccTxn<'a> {
     }
 
     fn rollback_impl(&mut self, key: &Key, meta: &mut Meta) -> Result<()> {
-        match meta.get_lock() {
-            Some(lock) if lock.get_start_ts() == self.start_ts => {
+        match try!(self.snapshot.load_lock(key)) {
+            Some(ref lock) if lock.get_start_ts() == self.start_ts => {
                 let value_key = key.append_ts(lock.get_start_ts());
                 self.writes.push(Modify::Delete(DEFAULT_CFNAME, value_key));
             }
@@ -174,7 +184,7 @@ impl<'a> MvccTxn<'a> {
                 };
             }
         }
-        meta.clear_lock();
+        self.unlock_key(key.clone());
         Ok(())
     }
 
@@ -206,6 +216,17 @@ impl<'a> MvccSnapshot<'a> {
         }
     }
 
+    fn load_lock(&self, key: &Key) -> Result<Option<MetaLock>> {
+        match try!(self.snapshot.get_cf("lock", &key)) {
+            Some(x) => {
+                let mut pb = MetaLock::new();
+                try!(pb.merge_from_bytes(&x));
+                Ok(Some(pb))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn load_meta(&self, key: &Key, index: u64) -> Result<Meta> {
         let meta = match try!(self.snapshot.get(&key.append_ts(index))) {
             Some(x) => try!(Meta::parse(&x)),
@@ -215,14 +236,9 @@ impl<'a> MvccSnapshot<'a> {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let meta = try!(self.load_meta(key, FIRST_META_INDEX));
-        self.get_impl(key, &meta, self.start_ts)
-    }
-
-    fn get_impl(&self, key: &Key, first_meta: &Meta, ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
-        if let Some(lock) = first_meta.get_lock() {
-            if lock.get_start_ts() <= ts {
+        if let Some(lock) = try!(self.load_lock(key)) {
+            if lock.get_start_ts() <= self.start_ts {
                 // There is a pending lock. Client should wait or clean it.
                 return Err(Error::KeyIsLocked {
                     key: try!(key.raw()),
@@ -231,6 +247,11 @@ impl<'a> MvccSnapshot<'a> {
                 });
             }
         }
+        let meta = try!(self.load_meta(key, FIRST_META_INDEX));
+        self.get_impl(key, &meta, self.start_ts)
+    }
+
+    fn get_impl(&self, key: &Key, first_meta: &Meta, ts: u64) -> Result<Option<Value>> {
         // Find the latest write below our start timestamp.
         if let Some(x) = first_meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
             let data_key = key.append_ts(x.get_start_ts());
@@ -254,13 +275,18 @@ impl<'a> MvccSnapshot<'a> {
 
 pub struct MvccCursor<'a> {
     cursor: &'a mut Cursor,
+    snapshot: &'a MvccSnapshot<'a>,
     start_ts: u64,
 }
 
 impl<'a> MvccCursor<'a> {
-    pub fn new(cursor: &'a mut Cursor, start_ts: u64) -> MvccCursor {
+    pub fn new(cursor: &'a mut Cursor,
+               snapshot: &'a MvccSnapshot,
+               start_ts: u64)
+               -> MvccCursor<'a> {
         MvccCursor {
             cursor: cursor,
+            snapshot: snapshot,
             start_ts: start_ts,
         }
     }
@@ -274,6 +300,17 @@ impl<'a> MvccCursor<'a> {
     }
 
     pub fn get(&mut self, key: &Key) -> Result<Option<&[u8]>> {
+        // Check for locks that signal concurrent writes.
+        if let Some(lock) = try!(self.snapshot.load_lock(key)) {
+            if lock.get_start_ts() <= self.start_ts {
+                // There is a pending lock. Client should wait or clean it.
+                return Err(Error::KeyIsLocked {
+                    key: try!(key.raw()),
+                    primary: lock.get_primary_key().to_vec(),
+                    ts: lock.get_start_ts(),
+                });
+            }
+        }
         match try!(self.get_version(key)) {
             Some(ts) => {
                 let key = key.append_ts(ts);
@@ -285,17 +322,6 @@ impl<'a> MvccCursor<'a> {
 
     pub fn get_version(&mut self, key: &Key) -> Result<Option<u64>> {
         let mut meta = try!(self.load_meta(key, FIRST_META_INDEX));
-        // Check for locks that signal concurrent writes.
-        if let Some(lock) = meta.get_lock() {
-            if lock.get_start_ts() <= self.start_ts {
-                // There is a pending lock. Client should wait or clean it.
-                return Err(Error::KeyIsLocked {
-                    key: try!(key.raw()),
-                    primary: lock.get_primary_key().to_vec(),
-                    ts: lock.get_start_ts(),
-                });
-            }
-        }
         loop {
             // Find the latest write below our start timestamp.
             if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= self.start_ts) {

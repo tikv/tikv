@@ -26,7 +26,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
 use tikv::pd::PdClient;
-use tikv::util::{HandyRwLock, escape};
+use tikv::util::{HandyRwLock, escape, rocksdb};
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use tikv::raftstore::store::keys::data_key;
@@ -101,7 +101,8 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for item in &self.paths {
-            self.dbs.push(new_engine(item.path().to_str().unwrap(), cfs).unwrap());
+            self.dbs
+                .push(Arc::new(rocksdb::new_engine(item.path().to_str().unwrap(), cfs).unwrap()));
         }
     }
 
