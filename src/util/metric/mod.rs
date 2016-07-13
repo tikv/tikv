@@ -14,79 +14,39 @@
 use std::error;
 use std::fmt;
 use std::io;
-use std::thread;
-use std::sync::{Mutex,Arc, RwLock};
+use std::sync::{Mutex, Arc};
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{ToSocketAddrs, SocketAddr, UdpSocket};
 
 use super::worker::{Worker, Runnable};
-use super::HandyRwLock;
 
 use cadence::prelude::*;
 use cadence::{MetricSink, MetricResult, ErrorKind};
 use metrics::registry::{Registry, StdRegistry};
+use metrics::reporter::ConsoleReporter;
 
 #[macro_use]
 pub mod macros;
 
-// Prometheus Metric
-static mut COLLECTOR: Option<Arc<RwLock<StdRegistry<'static>>>> = None;
-static IS_COLLECTOR_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
-pub fn init_collector() -> Result<(), SetMetricError> {
-    unsafe {
-        if IS_COLLECTOR_INITIALIZED.compare_and_swap(false, true, Ordering::SeqCst) != false {
-            return Err(SetMetricError);
-        }
-
-        COLLECTOR = Some(Arc::new(RwLock::new(StdRegistry::<'static>::new())));
-        Ok(())
-    }
+lazy_static! {
+    pub static ref REG: Arc<StdRegistry<'static>> = {
+        let mut r = StdRegistry::new();
+        // {
+        //     use some_mod::__metrics;
+        //     for (label, metric) in __metrics() {
+        //         r.insert(label, metric);
+        //     }
+        // }
+        Arc::new(r)
+    };
 }
 
-pub fn collector() -> Option<Arc<RwLock<StdRegistry<'static>>>> {
-    if IS_COLLECTOR_INITIALIZED.load(Ordering::SeqCst) != true {
-        return None;
-    }
-
-    unsafe { COLLECTOR.clone() }
+pub fn start_reporter() {
+    let arc_registry = (*REG).clone();
+    let reporter = ConsoleReporter::new(arc_registry, "test");
+    reporter.start(500);
 }
-
-pub struct ConsoleReporter;
-
-impl ConsoleReporter {
-    pub fn start(&self, delay_ms: u64) {
-        thread::spawn(move || {
-            use metrics::metrics::Metric;
-            loop {
-                if let Some(c) = collector() {
-                    let r = c.rl();
-                    for metric_name in r.get_metrics_names() {
-                        let metric = r.get(metric_name);
-                        match *metric {
-                            Metric::Meter(ref x) => {
-                                println!("{:?}", x.snapshot());
-                            }
-                            Metric::Gauge(ref x) => {
-                                println!("{:?}", x.snapshot());
-                            }
-                            Metric::Counter(ref x) => {
-                                println!("{:?}", x.snapshot());
-                            }
-                            Metric::Histogram(ref x) => {
-                                println!("histogram{:?}", x);
-                            }
-                        }
-                    }
-                }
-                thread::sleep(Duration::from_millis(delay_ms));
-            }
-        });
-    }
-}
-
-
 
 static mut CLIENT: Option<*const Metric> = None;
 // IS_INITIALIZED indicates the state of CLIENT,

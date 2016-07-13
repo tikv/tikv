@@ -34,18 +34,16 @@ use std::sync::{Arc, RwLock};
 use std::io::Read;
 use std::net::UdpSocket;
 use std::time::Duration;
-use std::thread;
 
 use getopts::{Options, Matches};
 use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
-use metrics::metrics::{Metric, StdCounter};
 
 use tikv::storage::{Storage, Dsn, TEMP_DIR, DEFAULT_CFS};
-use tikv::util::{self, logger, panic_hook, HandyRwLock};
-use tikv::util::metric::{self, BufferedUdpMetricSink, ConsoleReporter};
+use tikv::util::{self, logger, panic_hook};
+use tikv::util::metric::{self, BufferedUdpMetricSink};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
@@ -160,35 +158,6 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
             error!("{}", r);
         }
     }
-}
-
-fn initial_new_metric() {
-    if let Err(e) = metric::init_collector() {
-        panic!("{}", e);
-    }
-
-    let c = StdCounter::new();
-    register_metric!("foo", Metric::Counter(c.clone()));
-
-    let r = ConsoleReporter;
-    r.start(1000);
-
-    thread::spawn(move || {
-        // use metrics::metrics::Counter;
-        // counter_inc!("foo", 2);
-        // or
-        // c.inc();
-
-        // register a new metric after report stated
-        register_metric!("bar", Metric::Counter(StdCounter::new()));
-
-        loop {
-            counter_inc!("foo", 2);
-            counter_inc!("bar");
-
-            thread::sleep(Duration::from_millis(1000));
-        }
-    });
 }
 
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
@@ -566,8 +535,6 @@ fn main() {
         print_usage(&program, opts);
         return;
     }
-
-    initial_new_metric();
 
     let config = match matches.opt_str("C") {
         Some(path) => {

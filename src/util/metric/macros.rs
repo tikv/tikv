@@ -88,64 +88,34 @@ macro_rules! metric_meter {
     };
 }
 
-// Prometheus
 // Register a metric
 #[macro_export]
 macro_rules! register_metric {
-    ($name:expr, $metric:expr) => {
-        use metrics::registry::Registry;
+    ($(static ref $N:ident : $T:ty = $e:expr; $label:expr)*) => {
+        $(
+            lazy_static!(static ref $N : $T = $e;);
+        )*
 
-        if let Some(l) = $crate::util::metric::collector() {
-            let mut c = l.wl();
-            c.insert($name, $metric);
+        use metrics;
+        pub fn __metrics() -> Vec<(&'static str, metrics::metrics::Metric)> {
+            let mut temp_vec = Vec::<(&'static str, metrics::metrics::Metric)>::new();
+            $(
+                match *$N {
+                    metrics::metrics::Metric::Counter(ref c) => {
+                        temp_vec.push(($label, metrics::metrics::Metric::Counter(c.clone())))
+                    }
+                    metrics::metrics::Metric::Gauge(ref g) => {
+                        temp_vec.push(($label, metrics::metrics::Metric::Gauge(g.clone())))
+                    }
+                    metrics::metrics::Metric::Meter(ref m) => {
+                        temp_vec.push(($label, metrics::metrics::Metric::Meter(m.clone())))
+                    }
+                    metrics::metrics::Metric::Histogram(ref h) => {
+                        temp_vec.push(($label, metrics::metrics::Metric::Histogram(h.clone())))
+                    }
+                }
+            )*
+            temp_vec
         }
     };
 }
-
-// A counter MUST have the following methods:
-//
-// inc(): Increment the counter by 1
-// inc(double v): Increment the counter by the given amount. MUST check that v >= 0.
-#[macro_export]
-macro_rules! counter_inc {
-    ($name:expr, $value:expr) => {{
-        use metrics::metrics::Metric;
-
-        if let Some(l) = $crate::util::metric::collector() {
-            let collector = l.rl();
-            if let &Metric::Counter(ref c) = collector.get($name) {
-                c.add($value);
-            }
-        }
-    }};
-
-    ($name:expr) => {
-        counter_inc!($name, 1);
-    };
-}
-
-// A gauge MUST have the following methods:
-// 
-// inc(): Increment the gauge by 1
-// inc(double v): Increment the gauge by the given amount
-// dec(): Decrement the gauge by 1
-// dec(double v): Decrement the gauge by the given amount
-// set(double v): Set the gauge to the given value
-// #[macro_export]
-// macro_rules! gauge_inc {
-//     ($name:expr, $value:expr) => {{
-//         use metrics::metrics::Metric;
-
-//         if let Some(l) = $crate::util::metric::collector() {
-//             let collector = l.rl();
-//             if let &Metric::Gauge(ref g) = collector.get($name) {
-//                 g.add($value);
-//             }
-//         }
-//     }};
-
-//     ($name:expr) => {
-//         gauge_inc!($name, 1);
-//     };
-// }
-

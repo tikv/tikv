@@ -51,6 +51,8 @@ extern crate hyper;
 #[cfg(unix)]
 extern crate nix;
 extern crate metrics;
+#[macro_use]
+extern crate lazy_static;
 
 #[macro_use]
 pub mod util;
