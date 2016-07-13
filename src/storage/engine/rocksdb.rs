@@ -12,7 +12,8 @@
 // limitations under the License.
 
 use std::fmt::{self, Formatter, Debug};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use threadpool::ThreadPool;
 use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, CfName};
@@ -27,6 +28,7 @@ pub struct EngineRocksdb {
     db: Arc<DB>,
     // only use for memory mode
     temp_dir: Option<TempDir>,
+    pool: Mutex<ThreadPool>,
 }
 
 impl EngineRocksdb {
@@ -42,6 +44,7 @@ impl EngineRocksdb {
         Ok(EngineRocksdb {
             db: Arc::new(try!(rocksdb::new_engine(&path, cfs))),
             temp_dir: temp_dir,
+            pool: Mutex::new(ThreadPool::new_with_name(thd_name!("engine-rocksdb"), 1)),
         })
     }
 }
@@ -52,52 +55,53 @@ impl Debug for EngineRocksdb {
     }
 }
 
-impl Engine for EngineRocksdb {
-    fn write(&self, _: &Context, batch: Vec<Modify>) -> Result<()> {
-        let wb = WriteBatch::new();
-        for rev in batch {
-            let res = match rev {
-                Modify::Delete(cf, k) => {
-                    if cf == DEFAULT_CFNAME {
-                        trace!("EngineRocksdb: delete {}", k);
-                        wb.delete(k.encoded())
-                    } else {
-                        trace!("EngineRocksdb: delete_cf {} {}", cf, k);
-                        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
-                        wb.delete_cf(*handle, k.encoded())
-                    }
+fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
+    let wb = WriteBatch::new();
+    for rev in modifies {
+        let res = match rev {
+            Modify::Delete(cf, k) => {
+                if cf == DEFAULT_CFNAME {
+                    trace!("EngineRocksdb: delete {}", k);
+                    wb.delete(k.encoded())
+                } else {
+                    trace!("EngineRocksdb: delete_cf {} {}", cf, k);
+                    let handle = try!(rocksdb::get_cf_handle(db, cf));
+                    wb.delete_cf(*handle, k.encoded())
                 }
-                Modify::Put(cf, k, v) => {
-                    if cf == DEFAULT_CFNAME {
-                        trace!("EngineRocksdb: put {},{}", k, escape(&v));
-                        wb.put(k.encoded(), &v)
-                    } else {
-                        trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
-                        let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
-                        wb.put_cf(*handle, k.encoded(), &v)
-                    }
-                }
-            };
-            if let Err(msg) = res {
-                return Err(Error::RocksDb(msg));
             }
-        }
-        if let Err(msg) = self.db.write(wb) {
+            Modify::Put(cf, k, v) => {
+                if cf == DEFAULT_CFNAME {
+                    trace!("EngineRocksdb: put {},{}", k, escape(&v));
+                    wb.put(k.encoded(), &v)
+                } else {
+                    trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
+                    let handle = try!(rocksdb::get_cf_handle(db, cf));
+                    wb.put_cf(*handle, k.encoded(), &v)
+                }
+            }
+        };
+        if let Err(msg) = res {
             return Err(Error::RocksDb(msg));
         }
+    }
+    if let Err(msg) = db.write(wb) {
+        return Err(Error::RocksDb(msg));
+    }
+    Ok(())
+}
+
+impl Engine for EngineRocksdb {
+    fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
+        let db = self.db.clone();
+        self.pool.lock().unwrap().execute(move || cb(write_modifies(&db, modifies)));
         Ok(())
     }
 
-    fn snapshot(&self, _: &Context) -> Result<Box<Snapshot>> {
-        let snapshot = RocksSnapshot::new(self.db.clone());
-        Ok(box snapshot)
-    }
-
-    fn async_write(&self, _: &Context, _: Vec<Modify>, _: Callback<()>) -> Result<()> {
-        Ok(())
-    }
-
-    fn async_snapshot(&self, _: &Context, _: Callback<Box<Snapshot>>) -> Result<()> {
+    fn async_snapshot(&self, _: &Context, cb: Callback<Box<Snapshot>>) -> Result<()> {
+        let db = self.db.clone();
+        self.pool.lock().unwrap().execute(move || {
+            cb(Ok(box RocksSnapshot::new(db)));
+        });
         Ok(())
     }
 }
