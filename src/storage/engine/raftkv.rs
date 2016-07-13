@@ -250,7 +250,7 @@ impl<C: PdClient> Engine for RaftKv<C> {
         }
     }
 
-    fn snapshot<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Snapshot + 'a>> {
+    fn snapshot(&self, ctx: &Context) -> engine::Result<Box<Snapshot>> {
         let snap = try!(self.raw_snapshot(ctx));
         Ok(box snap)
     }

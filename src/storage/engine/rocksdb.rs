@@ -12,10 +12,11 @@
 // limitations under the License.
 
 use std::fmt::{self, Formatter, Debug};
+use std::sync::Arc;
 use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
-use rocksdb::rocksdb::Snapshot as DBSnapshot;
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, CfName};
+use raftstore::store::engine::{Snapshot as RocksSnapshot, Peekable, Iterable};
 use util::escape;
 use util::rocksdb;
 use super::{Engine, Snapshot, Modify, Cursor, TEMP_DIR, Result, Error, DEFAULT_CFNAME};
@@ -23,7 +24,7 @@ use tempdir::TempDir;
 
 
 pub struct EngineRocksdb {
-    db: DB,
+    db: Arc<DB>,
     // only use for memory mode
     temp_dir: Option<TempDir>,
 }
@@ -39,7 +40,7 @@ impl EngineRocksdb {
             _ => (path.to_owned(), None),
         };
         Ok(EngineRocksdb {
-            db: try!(rocksdb::new_engine(&path, cfs)),
+            db: Arc::new(try!(rocksdb::new_engine(&path, cfs))),
             temp_dir: temp_dir,
         })
     }
@@ -104,13 +105,32 @@ impl Engine for EngineRocksdb {
         Ok(())
     }
 
-    fn snapshot<'a>(&'a self, _: &Context) -> Result<Box<Snapshot + 'a>> {
-        let snapshot = RocksSnapshot::new(self);
+    fn snapshot(&self, _: &Context) -> Result<Box<Snapshot>> {
+        let snapshot = RocksSnapshot::new(self.db.clone());
         Ok(box snapshot)
     }
 
     fn iter<'a>(&'a self, _: &Context) -> Result<Box<Cursor + 'a>> {
         Ok(box self.db.iter())
+    }
+}
+
+impl Snapshot for RocksSnapshot {
+    fn get(&self, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get {}", key);
+        let v = box_try!(self.get_value(key.encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get_cf {} {}", cf, key);
+        let v = box_try!(self.get_value_cf(cf, key.encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn iter<'b>(&'b self) -> Result<Box<Cursor + 'b>> {
+        trace!("RocksSnapshot: create iterator");
+        Ok(box self.new_iterator())
     }
 }
 
@@ -145,43 +165,5 @@ impl<'a> Cursor for DBIterator<'a> {
 
     fn value(&self) -> &[u8] {
         DBIterator::value(self)
-    }
-}
-
-struct RocksSnapshot<'a> {
-    db: &'a DB,
-    snap: DBSnapshot<'a>,
-}
-
-impl<'a> RocksSnapshot<'a> {
-    fn new(db: &EngineRocksdb) -> RocksSnapshot {
-        RocksSnapshot {
-            db: &db.db,
-            snap: DBSnapshot::new(&db.db),
-        }
-    }
-}
-
-impl<'a> Snapshot for RocksSnapshot<'a> {
-    fn get(&self, key: &Key) -> Result<Option<Value>> {
-        trace!("RocksSnapshot: get {}", key);
-        let v = try!(self.snap
-            .get(key.encoded())
-            .map(|r| r.map(|v| v.to_vec())));
-        Ok(v)
-    }
-
-    fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        trace!("RocksSnapshot: get_cf {} {}", cf, key);
-        let handle = try!(rocksdb::get_cf_handle(self.db, cf));
-        let v = try!(self.snap
-            .get_cf(*handle, key.encoded())
-            .map(|r| r.map(|v| v.to_vec())));
-        Ok(v)
-    }
-
-    fn iter<'b>(&'b self) -> Result<Box<Cursor + 'b>> {
-        trace!("RocksSnapshot: create iterator");
-        Ok(box DBSnapshot::iter(&self.snap))
     }
 }

@@ -41,7 +41,7 @@ pub trait Engine: Send + Sync + Debug {
     fn get(&self, ctx: &Context, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, ctx: &Context, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()>;
-    fn snapshot<'a>(&'a self, ctx: &Context) -> Result<Box<Snapshot + 'a>>;
+    fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>>;
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
         self.put_cf(ctx, DEFAULT_CFNAME, key, value)
@@ -65,7 +65,7 @@ pub trait Engine: Send + Sync + Debug {
     fn close(&self) {}
 }
 
-pub trait Snapshot {
+pub trait Snapshot: Send {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
