@@ -132,10 +132,10 @@ impl Drop for CoprocessorHost {
 mod test {
     use raftstore::coprocessor::*;
     use tempdir::TempDir;
-    use raftstore::store::engine::*;
     use raftstore::store::PeerStorage;
     use util::HandyRwLock;
     use util::worker;
+    use util::rocksdb;
     use std::sync::*;
     use std::fmt::Debug;
     use protobuf::RepeatedField;
@@ -215,7 +215,8 @@ mod test {
     }
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
-        let engine = new_engine(path.path().to_str().unwrap(), DEFAULT_CFS).unwrap();
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), DEFAULT_CFS)
+            .unwrap());
         PeerStorage::new(engine, &Region::new(), worker::dummy_scheduler()).unwrap()
     }
 
