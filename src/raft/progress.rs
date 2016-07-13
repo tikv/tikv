@@ -129,19 +129,17 @@ impl Progress {
     // maybe_update returns false if the given n index comes from an outdated message.
     // Otherwise it updates the progress and returns true.
     pub fn maybe_update(&mut self, n: u64) -> bool {
-        let updated = if self.matched < n {
+        let need_update = self.matched < n;
+        if need_update {
             self.matched = n;
             self.resume();
-            true
-        } else {
-            false
         };
 
         if self.next_idx < n + 1 {
             self.next_idx = n + 1
         }
 
-        updated
+        need_update
     }
 
     pub fn optimistic_update(&mut self, n: u64) {

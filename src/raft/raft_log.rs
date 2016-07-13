@@ -260,8 +260,7 @@ impl<T: Storage> RaftLog<T> {
 
     pub fn all_entries(&self) -> Vec<Entry> {
         let first_index = self.first_index();
-        let ents = self.entries(first_index, NO_LIMIT);
-        match ents {
+        match self.entries(first_index, NO_LIMIT) {
             Err(e) => {
                 // try again if there was a racing compaction
                 if e == Error::Store(StorageError::Compacted) {
@@ -304,11 +303,7 @@ impl<T: Storage> RaftLog<T> {
     }
 
     pub fn snapshot(&self) -> Result<Snapshot> {
-        if self.unstable.snapshot.is_some() {
-            Ok(self.unstable.get_snapshot())
-        } else {
-            self.store.snapshot()
-        }
+        self.unstable.snapshot.clone().map_or_else(|| self.store.snapshot(), Ok)
     }
 
     fn must_check_outofbounds(&self, low: u64, high: u64) -> Option<Error> {
