@@ -425,7 +425,7 @@ fn run_local_server(listener: TcpListener, store: Storage, config: &Config) {
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
     let mut svr = Server::new(&mut event_loop,
-                              config,
+                              config.clone(),
                               listener,
                               store,
                               router,
@@ -468,7 +468,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     info!("tikv server config: {:?}", cfg);
     initial_metric(matches, config, Some(node_id));
     let mut svr = Server::new(&mut event_loop,
-                              cfg,
+                              cfg.clone(),
                               listener,
                               store,
                               raft_router,

@@ -15,6 +15,7 @@ use rocksdb::DBCompressionType;
 
 quick_error! {
     #[derive(Debug)]
+    #[allow(enum_variant_names)]
     pub enum ParseConfigError {
         RocksDB
         ReadableNumber

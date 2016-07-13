@@ -18,6 +18,7 @@ const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
+const DEFAULT_END_POINT_CONCURRENCY: usize = 8;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
 const DEFAULT_SEND_BUFFER_SIZE: usize = 128 * 1024;
 const DEFAULT_RECV_BUFFER_SIZE: usize = 128 * 1024;
@@ -37,6 +38,8 @@ pub struct Config {
     pub send_buffer_size: usize,
     pub recv_buffer_size: usize,
     pub store_cfg: StoreConfig,
+
+    pub end_point_concurrency: usize,
 }
 
 impl Default for Config {
@@ -50,6 +53,7 @@ impl Default for Config {
             send_buffer_size: DEFAULT_SEND_BUFFER_SIZE,
             recv_buffer_size: DEFAULT_RECV_BUFFER_SIZE,
             store_cfg: StoreConfig::default(),
+            end_point_concurrency: DEFAULT_END_POINT_CONCURRENCY,
         }
     }
 }
@@ -61,6 +65,10 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         try!(self.store_cfg.validate());
+
+        if self.end_point_concurrency == 0 {
+            return Err(box_err!("end point concurrency should not be 0."));
+        }
 
         Ok(())
     }

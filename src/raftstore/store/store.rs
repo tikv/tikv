@@ -11,18 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
+use std::sync::mpsc::{Sender as StdSender, Receiver as StdReceiver};
 use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::Duration;
 use std::{cmp, u64};
+use std::collections::hash_map::Entry;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use uuid::Uuid;
+use threadpool::ThreadPool;
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
@@ -51,10 +54,11 @@ use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 
 type Key = Vec<u8>;
+type ReadyRes = (Peer, Result<Option<ReadyResult>>);
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 
-pub struct Store<T: Transport, C: PdClient + 'static> {
+pub struct Store<T: Transport + 'static, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
@@ -70,6 +74,10 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     snap_worker: Worker<SnapTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
+
+    apply_pool: ThreadPool,
+    apply_sender: StdSender<ReadyRes>,
+    apply_recv: StdReceiver<ReadyRes>,
 
     trans: Arc<RwLock<T>>,
     pd_client: Arc<C>,
@@ -105,8 +113,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         try!(cfg.validate());
 
         let sendch = SendCh::new(sender);
-
         let peer_cache = HashMap::new();
+        let apply_concurrency = cfg.apply_concurrency;
+
+        let (tx, rx) = mpsc::channel();
 
         Ok(Store {
             cfg: cfg,
@@ -119,6 +129,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             snap_worker: Worker::new("snapshot worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
+            apply_pool: ThreadPool::new_with_name(thd_name!("apply-pool"), apply_concurrency),
+            apply_sender: tx,
+            apply_recv: rx,
             region_ranges: BTreeMap::new(),
             trans: trans,
             pd_client: pd_client,
@@ -483,26 +496,76 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
+        let mut ready_peers = Vec::with_capacity(ids.len());
         for region_id in ids {
-            let mut ready_result = None;
-            if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans) {
-                    Err(e) => {
-                        // TODO: should we panic or shutdown the store?
-                        error!("handle raft ready at region {} err: {:?}", region_id, e);
-                        return Err(e);
-                    }
-                    Ok(ready) => ready_result = ready,
+            if let Entry::Occupied(mut e) = self.region_peers.entry(region_id) {
+                if let Some(ready) = try!(e.get_mut().maybe_ready(&self.trans)) {
+                    ready_peers.push((ready, e.remove()));
+                }
+            }
+        }
+
+        let ready_cnt = ready_peers.len();
+        match ready_cnt {
+            0 => return Ok(()),
+            1 => {
+                let (ready, mut peer) = ready_peers.pop().unwrap();
+                let res = peer.handle_raft_ready(ready, &self.trans);
+                // can't fail.
+                let region_id = peer.region_id();
+                // if the peer appears again, it means that existing peer is inserted
+                // by handle split, so returned peer should be skipped.
+                self.region_peers.insert(region_id, peer);
+
+                if let Some(ready_result) = try!(res) {
+                    try!(self.on_ready_result(region_id, ready_result));
+                }
+                return Ok(());
+            }
+            _ => {
+                for (ready, mut peer) in ready_peers {
+                    let sender = self.apply_sender.clone();
+                    let trans = self.trans.clone();
+                    self.apply_pool.execute(move || {
+                        let res = peer.handle_raft_ready(ready, &trans);
+                        // can't fail.
+                        sender.send((peer, res)).expect("report ready result should not fail");
+                    });
+                }
+            }
+        }
+
+        let mut has_err = false;
+        for _ in 0..ready_cnt {
+            // if err, means we lost some peer.
+            let (peer, res) = self.apply_recv.recv().expect("recv ready result shouldn't fail");
+            let region_id = peer.region_id();
+            // if the peer appears again, it means that existing peer is inserted
+            // by handle split, so returned peer should be skipped.
+            match self.region_peers.entry(region_id) {
+                Entry::Occupied(_) => {
+                    assert!(!peer.get_store().is_initialized());
+                }
+                Entry::Vacant(e) => {
+                    e.insert(peer);
                 }
             }
 
-            if let Some(ready_result) = ready_result {
-                if let Err(e) = self.on_ready_result(region_id, ready_result) {
-                    error!("handle raft ready result at region {} err: {:?}",
-                           region_id,
-                           e);
-                    return Err(e);
+            match res {
+                Err(e) => {
+                    // TODO: should we panic or shutdown the store?
+                    error!("handle raft ready at region {} err: {:?}", region_id, e);
+                    has_err = true;
                 }
+                Ok(Some(ready_result)) => {
+                    if let Err(e) = self.on_ready_result(region_id, ready_result) {
+                        error!("handle raft ready result at region {} err: {:?}",
+                               region_id,
+                               e);
+                        has_err = true;
+                    }
+                }
+                Ok(None) => {}
             }
         }
 
@@ -511,7 +574,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   pending_count,
                   t.elapsed());
 
-        Ok(())
+        if has_err {
+            Err(box_err!("some errors happen during handle ready."))
+        } else {
+            Ok(())
+        }
     }
 
     fn destory_peer(&mut self, region_id: u64, peer: metapb::Peer) {

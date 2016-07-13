@@ -171,7 +171,7 @@ impl Simulator for ServerCluster {
         self.storages.insert(node_id, store.get_engine());
 
         let mut server = Server::new(&mut event_loop,
-                                     &cfg,
+                                     cfg,
                                      listener,
                                      store,
                                      router,

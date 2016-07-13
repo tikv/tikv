@@ -35,7 +35,6 @@ quick-error = "0.2"
 tempdir = "0.3"
 uuid = "0.1"
 time = "0.1"
-threadpool = "1.0.0"
 toml = "0.1"
 num = "0.1"
 cadence = "0.5.0"
@@ -50,6 +49,10 @@ nix = "0.6.0"
 # The getopts in crate.io is outdated, use the latest getopts instead.
 [dependencies.getopts]
 git = "https://github.com/rust-lang-nursery/getopts"
+
+[dependencies.threadpool]
+git = "https://github.com/busyjay/rust-threadpool.git"
+branch = "busyjay/crossbeam"
 
 [dependencies.rocksdb]
 git = "https://github.com/ngaut/rust-rocksdb.git"

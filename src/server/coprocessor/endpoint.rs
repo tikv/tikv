@@ -48,9 +48,6 @@ pub const REQ_TYPE_INDEX: i64 = 102;
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
-// TODO: make this number configurable.
-const DEFAULT_POOL_SIZE: usize = 8;
-
 pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
 
 pub struct Host {
@@ -59,10 +56,10 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(engine: Arc<Box<Engine>>) -> Host {
+    pub fn new(engine: Arc<Box<Engine>>, concurrency: usize) -> Host {
         Host {
             snap_endpoint: Arc::new(TiDbEndPoint::new(engine)),
-            pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), DEFAULT_POOL_SIZE),
+            pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), concurrency),
         }
     }
 }
