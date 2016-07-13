@@ -28,6 +28,8 @@ pub struct EngineRocksdb {
     db: Arc<DB>,
     // only use for memory mode
     temp_dir: Option<TempDir>,
+    // ThreadPool is handy for executing task asynchronously, each Engine will
+    // contain only 1 thread.
     pool: Mutex<ThreadPool>,
 }
 
