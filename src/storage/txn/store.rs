@@ -793,7 +793,7 @@ mod tests {
             let keys: Vec<Key> = (0..n).map(format_key).map(|x| make_key(&x)).collect();
             let mut mutations = vec![];
             for key in keys.iter().take(n) {
-                let number = match store.get(Context::new(), &key, start_ts) {
+                let number = match store.get(Context::new(), key, start_ts) {
                     Ok(Some(n)) => String::from_utf8(n).unwrap().parse().unwrap(),
                     Ok(None) => 0,
                     Err(_) => {
