@@ -242,8 +242,10 @@ impl<C: PdClient> Engine for RaftKv<C> {
         }));
         Ok(())
     }
+}
 
-    fn close(&self) {
+impl<C: PdClient> Drop for RaftKv<C> {
+    fn drop(&mut self) {
         self.node.lock().unwrap().stop();
     }
 }

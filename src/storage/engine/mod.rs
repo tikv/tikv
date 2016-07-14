@@ -46,8 +46,6 @@ pub enum Modify {
 pub trait Engine: Send + Sync + Debug {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
-    // maybe mut is better.
-    fn close(&self) {}
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let finished = Event::new();

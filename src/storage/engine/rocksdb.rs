@@ -11,26 +11,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{self, Formatter, Debug};
+use std::fmt::{self, Formatter, Debug, Display};
 use std::sync::{Arc, Mutex};
-use threadpool::ThreadPool;
 use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, CfName};
 use raftstore::store::engine::{Snapshot as RocksSnapshot, Peekable, Iterable};
 use util::escape;
 use util::rocksdb;
+use util::worker::{Runnable, Worker};
 use super::{Engine, Snapshot, Modify, Cursor, Callback, TEMP_DIR, Result, Error, DEFAULT_CFNAME};
 use tempdir::TempDir;
 
+enum Task {
+    Write(Vec<Modify>, Callback<()>),
+    Snapshot(Callback<Box<Snapshot>>),
+}
+
+impl Display for Task {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match *self {
+            Task::Write(..) => write!(f, "write task"),
+            Task::Snapshot(_) => write!(f, "snapshot task"),
+        }
+    }
+}
+
+struct Runner(Arc<DB>);
+
+impl Runnable<Task> for Runner {
+    fn run(&mut self, t: Task) {
+        match t {
+            Task::Write(modifies, cb) => cb(write_modifies(&self.0, modifies)),
+            Task::Snapshot(cb) => cb(Ok(box RocksSnapshot::new(self.0.clone()))),
+        }
+    }
+}
+
+impl Display for Runner {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "engine rocksdb runner")
+    }
+}
 
 pub struct EngineRocksdb {
-    db: Arc<DB>,
     // only use for memory mode
     temp_dir: Option<TempDir>,
-    // ThreadPool is handy for executing task asynchronously, each Engine will
-    // contain only 1 thread.
-    pool: Mutex<ThreadPool>,
+    worker: Mutex<Worker<Task>>,
 }
 
 impl EngineRocksdb {
@@ -43,10 +70,12 @@ impl EngineRocksdb {
             }
             _ => (path.to_owned(), None),
         };
+        let mut worker = Worker::new("engine-rocksdb");
+        let db = try!(rocksdb::new_engine(&path, cfs));
+        box_try!(worker.start(Runner(Arc::new(db))));
         Ok(EngineRocksdb {
-            db: Arc::new(try!(rocksdb::new_engine(&path, cfs))),
             temp_dir: temp_dir,
-            pool: Mutex::new(ThreadPool::new_with_name(thd_name!("engine-rocksdb"), 1)),
+            worker: Mutex::new(worker),
         })
     }
 }
@@ -94,17 +123,21 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
 
 impl Engine for EngineRocksdb {
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
-        let db = self.db.clone();
-        self.pool.lock().unwrap().execute(move || cb(write_modifies(&db, modifies)));
+        box_try!(self.worker.lock().unwrap().schedule(Task::Write(modifies, cb)));
         Ok(())
     }
 
     fn async_snapshot(&self, _: &Context, cb: Callback<Box<Snapshot>>) -> Result<()> {
-        let db = self.db.clone();
-        self.pool.lock().unwrap().execute(move || {
-            cb(Ok(box RocksSnapshot::new(db)));
-        });
+        box_try!(self.worker.lock().unwrap().schedule(Task::Snapshot(cb)));
         Ok(())
+    }
+}
+
+impl Drop for EngineRocksdb {
+    fn drop(&mut self) {
+        if let Some(h) = self.worker.lock().unwrap().stop() {
+            h.join().unwrap();
+        }
     }
 }
 
