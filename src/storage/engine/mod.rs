@@ -200,6 +200,8 @@ pub type Result<T> = result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
+    use std::time::Duration;
     use tempdir::TempDir;
     use storage::{CfName, make_key};
     use util::codec::bytes;
@@ -231,6 +233,8 @@ mod tests {
                 .unwrap();
             must_put_cf(e.as_ref(), "cf", b"k", b"v1");
         }
+        // Sleep a while to make sure the `LOCK` file is deleted.
+        thread::sleep(Duration::from_millis(100));
         {
             let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
                                TEST_ENGINE_CFS)
