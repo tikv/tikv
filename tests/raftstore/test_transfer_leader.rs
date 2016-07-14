@@ -13,9 +13,10 @@
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
-use super::transport_simulate::DropSnapshot;
+use super::transport_simulate::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
+use kvproto::raftpb::MessageType;
 use std::time::Duration;
 
 fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -59,8 +60,7 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(b"k", b"v");
 
-    for i in 1..4 {
-        let id = i as u64;
+    for id in 1..4 {
         // select a new leader to transfer
         pd_client.set_rule(box move |_, peer| {
             if peer.get_id() == id {
@@ -91,8 +91,9 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
                                   region.take_region_epoch(),
                                   vec![new_get_cmd(b"k")]);
         req.mut_header().set_peer(new_peer(id, id));
+        debug!("requesting {:?}", req);
         let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
-        assert!(!resp.get_header().has_error());
+        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
         assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
     }
 }
@@ -130,19 +131,22 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     // hook transport and drop all snapshot packet, so follower's status
     // will stay at snapshot.
     cluster.add_filter(DropSnapshot);
+    // don't allow leader transfer succeed if it is actually triggered.
+    cluster.add_filter(IsolateRegionStore::new(1, 2)
+        .msg_type(MessageType::MsgTimeoutNow)
+        .direction(Direction::Recv));
+
     pd_client.must_add_peer(r1, new_peer(3, 3));
     // a just added peer needs wait a couple of ticks, it'll communicate with leader
     // before getting snapshot
     sleep_ms(1000);
 
+    let epoch = cluster.get_region_epoch(1);
+    let put = new_request(1, epoch, vec![new_put_cmd(b"k1", b"v1")]);
     cluster.transfer_leader(r1, new_peer(2, 2));
-    cluster.clear_filters();
-
-    sleep_ms(1000);
-    cluster.must_put(b"k1", b"v1");
-    let leader = cluster.leader_of_region(r1).unwrap();
-    must_get_equal(&cluster.engines[&2], b"k1", b"v1");
-    assert_eq!(leader, new_peer(1, 1));
+    let resp = cluster.call_command_on_leader(put, Duration::from_secs(3));
+    // if it's transfering leader, resp will timeout.
+    assert!(resp.is_ok(), format!("{:?}", resp));
 }
 
 #[test]

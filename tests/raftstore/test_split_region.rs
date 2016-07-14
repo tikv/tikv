@@ -65,8 +65,9 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
         let epoch = left.get_region_epoch().clone();
         let get = util::new_request(left.get_id(), epoch, vec![util::new_get_cmd(right_key)]);
+        debug!("requesting {:?}", get);
         let resp = cluster.call_command_on_leader(get, Duration::from_secs(3)).unwrap();
-        assert!(resp.get_header().has_error());
+        assert!(resp.get_header().has_error(), format!("{:?}", resp));
         assert!(resp.get_header().get_error().has_key_not_in_region(),
                 format!("{:?}", resp));
 
