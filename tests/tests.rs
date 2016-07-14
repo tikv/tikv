@@ -17,6 +17,7 @@
 #![feature(btree_range, collections_bound)]
 #![feature(box_syntax)]
 #![allow(new_without_default)]
+#![feature(const_fn)]
 
 #[macro_use]
 extern crate log;
