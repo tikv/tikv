@@ -209,7 +209,7 @@ impl<T: Simulator> Cluster<T> {
         // To get region leader, we don't care real peer id, so use 0 instead.
         let peer = new_peer(store_id, 0);
         let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-        let mut resp = self.call_command(find_leader, Duration::from_secs(3)).unwrap();
+        let mut resp = self.call_command(find_leader, Duration::from_secs(5)).unwrap();
         let mut region_leader = resp.take_status_response().take_region_leader();
         // NOTE: node id can't be 0.
         if self.valid_leader_id(region_id, region_leader.get_leader().get_store_id()) {
@@ -418,7 +418,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        let mut resp = self.request(key, vec![new_get_cmd(key)], Duration::from_secs(3));
+        let mut resp = self.request(key, vec![new_get_cmd(key)], Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -433,7 +433,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
-        let resp = self.request(key, vec![new_put_cmd(key, value)], Duration::from_secs(3));
+        let resp = self.request(key, vec![new_put_cmd(key, value)], Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -442,7 +442,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-        let resp = self.request(key, vec![new_seek_cmd(key)], Duration::from_secs(3));
+        let resp = self.request(key, vec![new_seek_cmd(key)], Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -457,7 +457,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_delete(&mut self, key: &[u8]) {
-        let resp = self.request(key, vec![new_delete_cmd(key)], Duration::from_secs(3));
+        let resp = self.request(key, vec![new_delete_cmd(key)], Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -477,7 +477,7 @@ impl<T: Simulator> Cluster<T> {
         let status_cmd = new_region_detail_cmd();
         let peer = new_peer(peer_id, peer_id);
         let req = new_status_request(region_id, peer, status_cmd);
-        let resp = self.call_command(req, Duration::from_secs(3));
+        let resp = self.call_command(req, Duration::from_secs(5));
         assert!(resp.is_ok(), format!("{:?}", resp));
 
         let mut resp = resp.unwrap();
@@ -500,7 +500,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
-        let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(3))
+        let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
                 format!("{:?}", resp));

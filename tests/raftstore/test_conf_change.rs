@@ -459,7 +459,7 @@ fn find_leader_response_header<T: Simulator>(cluster: &mut Cluster<T>,
                                              peer: metapb::Peer)
                                              -> RaftResponseHeader {
     let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-    let resp = cluster.call_command(find_leader, Duration::from_secs(3));
+    let resp = cluster.call_command(find_leader, Duration::from_secs(5));
     resp.unwrap().take_header()
 }
 
