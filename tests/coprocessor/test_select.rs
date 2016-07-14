@@ -439,17 +439,17 @@ impl ProductTable {
 
 // This function will create a Product table and initialize with the specified data.
 fn init_with_data(tbl: &ProductTable,
-                  vals: &[(Datum, Datum, Datum)])
+                  vals: &[(i64, Option<&str>, i64)])
                   -> (Store, Worker<RequestTask>) {
     let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap());
     let mut store = Store::new(engine.clone());
 
     store.begin();
-    for &(ref id, ref name, ref count) in vals {
+    for &(id, name, count) in vals {
         store.insert_into(&tbl.table)
-            .set(tbl.id, id.clone())
-            .set(tbl.name, name.clone())
-            .set(tbl.count, count.clone())
+            .set(tbl.id, Datum::I64(id))
+            .set(tbl.name, name.map(|s| s.as_bytes()).into())
+            .set(tbl.count, Datum::I64(count))
             .execute();
     }
     store.commit();
@@ -464,10 +464,10 @@ fn init_with_data(tbl: &ProductTable,
 #[test]
 fn test_select() {
     let data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:4".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:1".to_vec()), Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
     ];
 
     let product = ProductTable::new();
@@ -477,7 +477,8 @@ fn test_select() {
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_rows().len(), data.len());
     for (row, (id, name, cnt)) in resp.get_rows().iter().zip(data) {
-        let expected_encoded = datum::encode_value(&[id, name, cnt]).unwrap();
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
@@ -487,10 +488,10 @@ fn test_select() {
 #[test]
 fn test_group_by() {
     let data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:2".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:1".to_vec()), Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:2"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:1"), 4),
     ];
 
     let product = ProductTable::new();
@@ -512,12 +513,12 @@ fn test_group_by() {
 #[test]
 fn test_aggr_count() {
     let data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(6), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(7), Datum::Null, Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
     ];
 
     let product = ProductTable::new();
@@ -569,12 +570,12 @@ fn test_aggr_count() {
 #[test]
 fn test_aggr_first() {
     let data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(6), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(7), Datum::Null, Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
     ];
 
     let product = ProductTable::new();
@@ -602,12 +603,12 @@ fn test_aggr_first() {
 #[test]
 fn test_aggr_sum() {
     let data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(6), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(7), Datum::Null, Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
     ];
 
     let product = ProductTable::new();
@@ -634,12 +635,12 @@ fn test_aggr_sum() {
 #[test]
 fn test_limit() {
     let mut data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(6), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(7), Datum::Null, Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
     ];
 
     let product = ProductTable::new();
@@ -649,7 +650,8 @@ fn test_limit() {
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_rows().len(), 5);
     for (row, (id, name, cnt)) in resp.get_rows().iter().zip(data.drain(..5)) {
-        let expected_encoded = datum::encode_value(&[id, name, cnt]).unwrap();
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
@@ -659,12 +661,12 @@ fn test_limit() {
 #[test]
 fn test_reverse() {
     let mut data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(6), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(7), Datum::Null, Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
     ];
 
     let product = ProductTable::new();
@@ -675,7 +677,8 @@ fn test_reverse() {
     assert_eq!(resp.get_rows().len(), 5);
     data.reverse();
     for (row, (id, name, cnt)) in resp.get_rows().iter().zip(data.drain(..5)) {
-        let expected_encoded = datum::encode_value(&[id, name, cnt]).unwrap();
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
@@ -701,12 +704,12 @@ fn handle_select(end_point: &Worker<RequestTask>, req: Request) -> SelectRespons
 #[test]
 fn test_index() {
     let data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(6), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(7), Datum::Null, Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
     ];
 
     let product = ProductTable::new();
@@ -727,7 +730,7 @@ fn test_index() {
     }
     handles.sort();
     for (&h, (id, _, _)) in handles.iter().zip(data) {
-        assert_eq!(id.i64(), h);
+        assert_eq!(id, h);
     }
 
     end_point.stop().unwrap().join().unwrap();
@@ -736,12 +739,12 @@ fn test_index() {
 #[test]
 fn test_index_reverse_limit() {
     let mut data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(6), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(7), Datum::Null, Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
     ];
 
     let product = ProductTable::new();
@@ -762,7 +765,7 @@ fn test_index_reverse_limit() {
     }
     data.reverse();
     for (&h, (id, _, _)) in handles.iter().zip(data.drain(..5)) {
-        assert_eq!(id.i64(), h);
+        assert_eq!(id, h);
     }
 
     end_point.stop().unwrap().join().unwrap();
@@ -771,12 +774,12 @@ fn test_index_reverse_limit() {
 #[test]
 fn test_del_select() {
     let mut data = vec![
-        (Datum::I64(1), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-        (Datum::I64(2), Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)),
-        (Datum::I64(4), Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)),
-        (Datum::I64(5), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(6), Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)),
-        (Datum::I64(7), Datum::Null, Datum::I64(4)),
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
     ];
 
     let product = ProductTable::new();
@@ -784,7 +787,8 @@ fn test_del_select() {
 
     store.begin();
     let (id, name, cnt) = data.remove(3);
-    store.delete_from(&product.table).execute(id.i64(), vec![id, name, cnt]);
+    let name_datum = name.map(|s| s.as_bytes()).into();
+    store.delete_from(&product.table).execute(id, vec![id.into(), name_datum, cnt.into()]);
     store.commit();
 
     let req = Select::from_index(&product.table, product.id).build();
