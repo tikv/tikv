@@ -54,24 +54,28 @@ fn must_delete_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8]) {
 }
 
 fn assert_has(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) {
-    assert_eq!(engine.get(ctx, &make_key(key)).unwrap().unwrap(), value);
+    let snapshot = engine.snapshot(ctx).unwrap();
+    assert_eq!(snapshot.get(&make_key(key)).unwrap().unwrap(), value);
 }
 
 fn assert_has_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {
-    assert_eq!(engine.get_cf(ctx, cf, &make_key(key)).unwrap().unwrap(),
-               value);
+    let snapshot = engine.snapshot(ctx).unwrap();
+    assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap().unwrap(), value);
 }
 
 fn assert_none(ctx: &Context, engine: &Engine, key: &[u8]) {
-    assert_eq!(engine.get(ctx, &make_key(key)).unwrap(), None);
+    let snapshot = engine.snapshot(ctx).unwrap();
+    assert_eq!(snapshot.get(&make_key(key)).unwrap(), None);
 }
 
 fn assert_none_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8]) {
-    assert_eq!(engine.get_cf(ctx, cf, &make_key(key)).unwrap(), None);
+    let snapshot = engine.snapshot(ctx).unwrap();
+    assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap(), None);
 }
 
 fn assert_seek(ctx: &Context, engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
-    let mut iter = engine.iter(ctx).unwrap();
+    let snapshot = engine.snapshot(ctx).unwrap();
+    let mut iter = snapshot.iter().unwrap();
     iter.seek(&make_key(key)).unwrap();
     assert_eq!((iter.key(), iter.value()),
                (&*bytes::encode_bytes(pair.0), pair.1));
@@ -121,7 +125,8 @@ fn seek(ctx: &Context, engine: &Engine) {
     must_put(ctx, engine, b"z", b"2");
     assert_seek(ctx, engine, b"y", (b"z", b"2"));
     assert_seek(ctx, engine, b"x\x00", (b"z", b"2"));
-    let mut iter = engine.iter(ctx).unwrap();
+    let snapshot = engine.snapshot(ctx).unwrap();
+    let mut iter = snapshot.iter().unwrap();
     assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
@@ -130,7 +135,8 @@ fn seek(ctx: &Context, engine: &Engine) {
 fn near_seek(ctx: &Context, engine: &Engine) {
     must_put(ctx, engine, b"x", b"1");
     must_put(ctx, engine, b"z", b"2");
-    let mut cursor = engine.iter(ctx).unwrap();
+    let snapshot = engine.snapshot(ctx).unwrap();
+    let mut cursor = snapshot.iter().unwrap();
     let cursor_mut = cursor.as_mut();
     assert_near_seek(cursor_mut, b"x", (b"x", b"1"));
     assert_near_seek(cursor_mut, b"a", (b"x", b"1"));
