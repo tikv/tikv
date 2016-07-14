@@ -48,12 +48,6 @@ impl Runnable<Task> for Runner {
     }
 }
 
-impl Display for Runner {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "engine rocksdb runner")
-    }
-}
-
 pub struct EngineRocksdb {
     // only use for memory mode
     temp_dir: Option<TempDir>,
