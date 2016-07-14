@@ -132,7 +132,7 @@ impl<'a> MvccTxn<'a> {
         let lock_type = match try!(self.snapshot.load_lock(key)) {
             Some(ref lock) if lock.get_start_ts() == self.start_ts => lock.get_field_type(),
             _ => {
-                return match meta.get_item_by_start_ts(self.start_ts) {
+                return match try!(self.snapshot.get_txn_commit_ts(key, meta, self.start_ts)) {
                     // Committed by concurrent transaction.
                     Some(_) => Ok(()),
                     // Rollbacked by concurrent transaction.
@@ -176,9 +176,9 @@ impl<'a> MvccTxn<'a> {
                 self.writes.push(Modify::Delete(DEFAULT_CFNAME, value_key));
             }
             _ => {
-                return match meta.get_item_by_start_ts(self.start_ts) {
+                return match try!(self.snapshot.get_txn_commit_ts(key, meta, self.start_ts)) {
                     // Already committed by concurrent transaction.
-                    Some(lock) => Err(Error::AlreadyCommitted { commit_ts: lock.get_commit_ts() }),
+                    Some(ts) => Err(Error::AlreadyCommitted { commit_ts: ts }),
                     // Rollbacked by concurrent transaction.
                     None => Ok(()),
                 };
@@ -266,6 +266,36 @@ impl<'a> MvccSnapshot<'a> {
             if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
                 let data_key = key.append_ts(x.get_start_ts());
                 return Ok(try!(self.snapshot.get(&data_key)));
+            }
+            next = meta.next_index();
+        }
+        Ok(None)
+    }
+
+    fn get_txn_commit_ts(&self,
+                         key: &Key,
+                         first_meta: &Meta,
+                         start_ts: u64)
+                         -> Result<Option<u64>> {
+        if let Some(x) = first_meta.iter_items().find(|x| x.get_start_ts() <= start_ts) {
+            return if x.get_start_ts() == start_ts {
+                Ok(Some(x.get_commit_ts()))
+            } else {
+                Ok(None)
+            };
+        }
+        let mut next = first_meta.next_index();
+        loop {
+            let meta = match next {
+                Some(x) => try!(self.load_meta(key, x)),
+                None => break,
+            };
+            if let Some(x) = meta.iter_items().find(|x| x.get_start_ts() <= start_ts) {
+                return if x.get_start_ts() == start_ts {
+                    Ok(Some(x.get_commit_ts()))
+                } else {
+                    Ok(None)
+                };
             }
             next = meta.next_index();
         }
