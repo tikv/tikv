@@ -198,7 +198,6 @@ impl Storage {
         }
         self.sched.take();
         info!("storage {:?} closed.", self.engine);
-        self.engine.close();
         Ok(())
     }
 

@@ -34,11 +34,8 @@ use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
-use super::{Engine, Modify, Cursor, Snapshot, DEFAULT_CFNAME};
-use util::event::Event;
+use super::{Engine, Modify, Cursor, Snapshot, Callback, DEFAULT_CFNAME};
 use storage::{Key, Value, CfName};
-
-const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 quick_error! {
     #[derive(Debug)]
@@ -138,26 +135,17 @@ impl<C: PdClient> RaftKv<C> {
         }
     }
 
-    fn call_command(&self, req: RaftCmdRequest) -> Result<CmdRes> {
+    fn call_command(&self, req: RaftCmdRequest, cb: Callback<CmdRes>) -> Result<()> {
         let uuid = req.get_header().get_uuid().to_vec();
         let l = req.get_requests().len();
         let db = self.db.clone();
-        let finished = Event::new();
-        let finished2 = finished.clone();
-        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-
         try!(self.router.rl().send_command(req,
                                            box move |resp| {
-                                               let res = on_result(resp, l, &uuid, db);
-                                               finished2.set(res);
+                                               cb(on_result(resp, l, &uuid, db)
+                                                   .map_err(Error::into));
                                                Ok(())
                                            }));
-
-        if finished.wait_timeout(Some(timeout)) {
-            return finished.take().unwrap();
-        }
-
-        Err(Error::Timeout(timeout))
+        Ok(())
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -169,21 +157,12 @@ impl<C: PdClient> RaftKv<C> {
         header
     }
 
-    fn exec_requests(&self, ctx: &Context, reqs: Vec<Request>) -> Result<CmdRes> {
+    fn exec_requests(&self, ctx: &Context, reqs: Vec<Request>, cb: Callback<CmdRes>) -> Result<()> {
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::new();
         cmd.set_header(header);
         cmd.set_requests(RepeatedField::from_vec(reqs));
-        self.call_command(cmd)
-    }
-
-    fn raw_snapshot(&self, ctx: &Context) -> Result<RegionSnapshot> {
-        let mut req = Request::new();
-        req.set_cmd_type(CmdType::Snap);
-        match try!(self.exec_requests(ctx, vec![req])) {
-            CmdRes::Resp(rs) => Err(invalid_resp_type(CmdType::Snap, rs[0].get_cmd_type()).into()),
-            CmdRes::Snap(s) => Ok(s),
-        }
+        self.call_command(cmd, cb)
     }
 }
 
@@ -198,22 +177,11 @@ impl<C: PdClient> Debug for RaftKv<C> {
 }
 
 impl<C: PdClient> Engine for RaftKv<C> {
-    fn get(&self, ctx: &Context, key: &Key) -> engine::Result<Option<Value>> {
-        let snap = try!(self.snapshot(ctx));
-        snap.get(key)
-    }
-
-    fn get_cf(&self, ctx: &Context, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
-        let snap = try!(self.snapshot(ctx));
-        snap.get_cf(cf, key)
-    }
-
-    fn iter<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Cursor + 'a>> {
-        let snap = try!(self.raw_snapshot(ctx));
-        Ok(box RegionIterator::new(self.db.iter(), snap.get_region().clone()))
-    }
-
-    fn write(&self, ctx: &Context, mut modifies: Vec<Modify>) -> engine::Result<()> {
+    fn async_write(&self,
+                   ctx: &Context,
+                   mut modifies: Vec<Modify>,
+                   cb: Callback<()>)
+                   -> engine::Result<()> {
         if modifies.len() == 0 {
             return Ok(());
         }
@@ -244,18 +212,40 @@ impl<C: PdClient> Engine for RaftKv<C> {
             }
             reqs.push(req);
         }
-        match try!(self.exec_requests(ctx, reqs)) {
-            CmdRes::Resp(_) => Ok(()),
-            CmdRes::Snap(_) => Err(box_err!("unexpect snapshot, should mutate instead.")),
-        }
+        try!(self.exec_requests(ctx,
+                                reqs,
+                                box move |res| {
+            match res {
+                Ok(CmdRes::Resp(_)) => cb(Ok(())),
+                Ok(CmdRes::Snap(_)) => {
+                    cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
+                }
+                Err(e) => cb(Err(e)),
+            }
+        }));
+        Ok(())
     }
 
-    fn snapshot<'a>(&'a self, ctx: &Context) -> engine::Result<Box<Snapshot + 'a>> {
-        let snap = try!(self.raw_snapshot(ctx));
-        Ok(box snap)
+    fn async_snapshot(&self, ctx: &Context, cb: Callback<Box<Snapshot>>) -> engine::Result<()> {
+        let mut req = Request::new();
+        req.set_cmd_type(CmdType::Snap);
+        try!(self.exec_requests(ctx,
+                                vec![req],
+                                box move |res| {
+            match res {
+                Ok(CmdRes::Resp(r)) => {
+                    cb(Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()))
+                }
+                Ok(CmdRes::Snap(s)) => cb(Ok(box s)),
+                Err(e) => cb(Err(e)),
+            }
+        }));
+        Ok(())
     }
+}
 
-    fn close(&self) {
+impl<C: PdClient> Drop for RaftKv<C> {
+    fn drop(&mut self) {
         self.node.lock().unwrap().stop();
     }
 }
