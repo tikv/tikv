@@ -11,6 +11,12 @@ pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
         ExprType::Count => Ok(box 0),
         ExprType::First => Ok(box None),
         ExprType::Sum => Ok(box Sum { res: None }),
+        ExprType::Avg => {
+            Ok(box Avg {
+                sum: Sum { res: None },
+                cnt: 0,
+            })
+        }
         et => Err(box_err!("unsupport AggrExprType: {:?}", et)),
     }
 }
@@ -66,25 +72,35 @@ struct Sum {
     res: Option<Datum>,
 }
 
-impl AggrFunc for Sum {
-    fn update(&mut self, mut args: Vec<Datum>) -> Result<()> {
+impl Sum {
+    /// add others to res.
+    ///
+    /// return false means the others is skipped.
+    fn add_asssign(&mut self, mut args: Vec<Datum>) -> Result<bool> {
         if args.len() != 1 {
             return Err(box_err!("sum only support one column, but got {}", args.len()));
         }
         let a = args.pop().unwrap();
         if a == Datum::Null {
-            return Ok(());
+            return Ok(false);
         }
         let res = match self.res.take() {
             Some(b) => box_try!(evaluator::eval_arith(a, b, Datum::checked_add)),
             None => a,
         };
         self.res = Some(res);
+        Ok(true)
+    }
+}
+
+impl AggrFunc for Sum {
+    fn update(&mut self, args: Vec<Datum>) -> Result<()> {
+        try!(self.add_asssign(args));
         Ok(())
     }
 
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
-        let res = self.res.take().unwrap();
+        let res = self.res.take().unwrap_or(Datum::Null);
         if res == Datum::Null {
             collector.push(res);
             return Ok(());
@@ -92,5 +108,24 @@ impl AggrFunc for Sum {
         let d = box_try!(res.into_dec());
         collector.push(Datum::Dec(d));
         Ok(())
+    }
+}
+
+struct Avg {
+    sum: Sum,
+    cnt: u64,
+}
+
+impl AggrFunc for Avg {
+    fn update(&mut self, args: Vec<Datum>) -> Result<()> {
+        if try!(self.sum.add_asssign(args)) {
+            self.cnt += 1;
+        }
+        Ok(())
+    }
+
+    fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
+        collector.push(Datum::U64(self.cnt));
+        self.sum.calc(collector)
     }
 }
