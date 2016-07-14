@@ -15,7 +15,6 @@
 #![feature(test)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
-#![allow(new_without_default)]
 
 #[macro_use]
 extern crate log;

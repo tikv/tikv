@@ -1,4 +1,4 @@
-ENABLE_FEATURES ?= dev
+ENABLE_FEATURES ?= default
 
 DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
@@ -6,6 +6,9 @@ BIN_PATH = $(CURDIR)/bin
 .PHONY: all
 
 all: format build test
+
+dev:
+	@export ENABLE_FEATURES=dev && make
 
 build:
 	cargo build --features ${ENABLE_FEATURES}
