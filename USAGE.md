@@ -12,6 +12,12 @@
 
 You can use `make install` to install all binary executions in `bin` directory.
 
+Notice:
+
+Now `make install` only supports Linux Ubuntu and Mac OS X. If you use other Linux platforms, 
+you should follow [INSTALL.md](https://github.com/facebook/rocksdb/blob/master/INSTALL.md) to
+install RocksDB manually first. 
+
 ### Running in the standalone mode
 
 1. Start etcd on the default listening port 2379.
