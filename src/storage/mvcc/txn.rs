@@ -132,7 +132,7 @@ impl<'a> MvccTxn<'a> {
         let lock_type = match try!(self.snapshot.load_lock(key)) {
             Some(ref lock) if lock.get_start_ts() == self.start_ts => lock.get_field_type(),
             _ => {
-                return match meta.get_item_by_start_ts(self.start_ts) {
+                return match try!(self.snapshot.get_txn_commit_ts(key, meta, self.start_ts)) {
                     // Committed by concurrent transaction.
                     Some(_) => Ok(()),
                     // Rollbacked by concurrent transaction.
@@ -176,9 +176,9 @@ impl<'a> MvccTxn<'a> {
                 self.writes.push(Modify::Delete(DEFAULT_CFNAME, value_key));
             }
             _ => {
-                return match meta.get_item_by_start_ts(self.start_ts) {
+                return match try!(self.snapshot.get_txn_commit_ts(key, meta, self.start_ts)) {
                     // Already committed by concurrent transaction.
-                    Some(lock) => Err(Error::AlreadyCommitted { commit_ts: lock.get_commit_ts() }),
+                    Some(ts) => Err(Error::AlreadyCommitted { commit_ts: ts }),
                     // Rollbacked by concurrent transaction.
                     None => Ok(()),
                 };
@@ -268,6 +268,33 @@ impl<'a> MvccSnapshot<'a> {
         }
         Ok(None)
     }
+
+    fn get_txn_commit_ts(&self,
+                         key: &Key,
+                         first_meta: &Meta,
+                         start_ts: u64)
+                         -> Result<Option<u64>> {
+        if let Some(x) = first_meta.iter_items().find(|x| x.get_start_ts() <= start_ts) {
+            return if x.get_start_ts() == start_ts {
+                Ok(Some(x.get_commit_ts()))
+            } else {
+                Ok(None)
+            };
+        }
+        let mut next = first_meta.next_index();
+        while let Some(idx) = next {
+            let meta = try!(self.load_meta(key, idx));
+            if let Some(x) = meta.iter_items().find(|x| x.get_start_ts() <= start_ts) {
+                return if x.get_start_ts() == start_ts {
+                    Ok(Some(x.get_commit_ts()))
+                } else {
+                    Ok(None)
+                };
+            }
+            next = meta.next_index();
+        }
+        Ok(None)
+    }
 }
 
 pub struct MvccCursor<'a> {
@@ -340,6 +367,7 @@ mod tests {
     use storage::{make_key, Mutation, DEFAULT_CFS};
     use storage::engine::{self, Engine, Dsn, TEMP_DIR};
     use storage::mvcc::TEST_TS_BASE;
+    use storage::mvcc::meta::META_SPLIT_SIZE;
 
     #[test]
     fn test_mvcc_txn_read() {
@@ -457,6 +485,17 @@ mod tests {
         must_prewrite_put(engine.as_ref(), b"x", b"x15", b"x", 15);
         must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
         must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
+    }
+
+    #[test]
+    fn test_mvcc_commit_after_meta_split() {
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        for i in (1u64..).take(META_SPLIT_SIZE + 1) {
+            must_prewrite_put(engine.as_ref(), b"x", b"v", b"x", i * 10);
+            must_commit(engine.as_ref(), b"x", i * 10, i * 10 + 5);
+        }
+        // Make sure we can still commit the 1st txn after meta splits.
+        must_commit(engine.as_ref(), b"x", 10, 15);
     }
 
     fn to_fake_ts(ts: u64) -> u64 {
