@@ -48,10 +48,7 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
             let task_str = format!("{}", t);
             let timer = SlowTimer::new();
             self.run(t);
-            slow_log!(timer,
-                      "task {} takes {:?} to finish.",
-                      task_str,
-                      timer.elapsed());
+            slow_log!(timer, "handle task {}", task_str);
         }
     }
 }
