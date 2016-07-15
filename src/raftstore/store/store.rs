@@ -298,7 +298,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
         try!(peer.raft_group.step(msg.take_message()));
-        slow_log!(timer, "step takes {:?}", timer.elapsed());
+        slow_log!(timer, "region {} raft step", region_id);
 
         // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
@@ -506,10 +506,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        slow_log!(t,
-                  "on {} regions raft ready takes {:?}",
-                  pending_count,
-                  t.elapsed());
+        slow_log!(t, "on {} regions raft ready", pending_count);
 
         Ok(())
     }
@@ -686,11 +683,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
-        slow_log!(t,
-                  "on region {} ready {} results takes {:?}",
-                  region_id,
-                  result_count,
-                  t.elapsed());
+        slow_log!(t, "on region {} ready {} results", region_id, result_count);
 
         Ok(())
     }
@@ -1210,7 +1203,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_snap_gen_res(region_id, snap);
             }
         }
-        slow_log!(t, "handle {:?} takes {:?}", msg_str, t.elapsed());
+        slow_log!(t, "handle {:?}", msg_str);
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
@@ -1223,7 +1216,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
         }
-        slow_log!(t, "handle timeout {:?} takes {:?}", timeout, t.elapsed());
+        slow_log!(t, "handle timeout {:?}", timeout);
     }
 
     #[allow(useless_vec)]
