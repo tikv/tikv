@@ -258,11 +258,8 @@ impl<'a> MvccSnapshot<'a> {
             return Ok(try!(self.snapshot.get(&data_key)));
         }
         let mut next = first_meta.next_index();
-        loop {
-            let meta = match next {
-                Some(x) => try!(self.load_meta(key, x)),
-                None => break,
-            };
+        while let Some(x) = next {
+            let meta = try!(self.load_meta(key, x));
             if let Some(x) = meta.iter_items().find(|x| x.get_commit_ts() <= ts) {
                 let data_key = key.append_ts(x.get_start_ts());
                 return Ok(try!(self.snapshot.get(&data_key)));

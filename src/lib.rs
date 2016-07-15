@@ -52,7 +52,6 @@ extern crate nix;
 #[macro_use]
 pub mod util;
 pub mod raft;
-#[allow(clippy)]
 pub mod storage;
 
 pub use storage::{Storage, Dsn};
