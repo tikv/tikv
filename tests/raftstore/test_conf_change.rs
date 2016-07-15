@@ -17,7 +17,7 @@ use std::thread;
 
 use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::RaftResponseHeader;
-use kvproto::raft_serverpb::RaftApplyState;
+use kvproto::raft_serverpb::*;
 use kvproto::metapb;
 use tikv::pd::PdClient;
 
@@ -372,10 +372,16 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(2);
     cluster.run_node(3);
 
-    sleep_ms(2000);
-
-    cluster.reset_leader_of_region(r1);
-    cluster.must_put(b"k3", b"v3");
+    for _ in 0..250 {
+        let region: RegionLocalState =
+            engine1.get_msg(&keys::region_state_key(r1)).unwrap().unwrap();
+        if region.get_state() == PeerState::Tombstone {
+            return;
+        }
+        sleep_ms(20);
+    }
+    let region: RegionLocalState = engine1.get_msg(&keys::region_state_key(r1)).unwrap().unwrap();
+    assert_eq!(region.get_state(), PeerState::Tombstone);
 
     // TODO: add split after removing itself test later.
 }
@@ -459,7 +465,7 @@ fn find_leader_response_header<T: Simulator>(cluster: &mut Cluster<T>,
                                              peer: metapb::Peer)
                                              -> RaftResponseHeader {
     let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-    let resp = cluster.call_command(find_leader, Duration::from_secs(3));
+    let resp = cluster.call_command(find_leader, Duration::from_secs(5));
     resp.unwrap().take_header()
 }
 

@@ -113,12 +113,12 @@ mod tests {
         let s1 = sock.send_buffer_size().unwrap();
         sock.set_send_buffer_size(8192).unwrap();
         let s2 = sock.send_buffer_size().unwrap();
-        assert!(s2 > s1);
+        assert!(s2 != s1, format!("{} should not equal {}", s2, s1));
 
         sock.set_recv_buffer_size(4096).unwrap();
         let r1 = sock.recv_buffer_size().unwrap();
         sock.set_recv_buffer_size(8192).unwrap();
         let r2 = sock.recv_buffer_size().unwrap();
-        assert!(r2 > r1);
+        assert!(r2 != r1, format!("{} should not equal {}", r2, r1));
     }
 }
