@@ -44,6 +44,9 @@ for l in sys.stdin:
     echo
 done
 
+echo other error log:
+grep " - ERROR - " $LOG_FILE
+
 rm $LOG_FILE || true
 
 exit $status
