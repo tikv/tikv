@@ -373,6 +373,7 @@ mod tests {
     use storage::{make_key, Mutation, DEFAULT_CFS};
     use storage::engine::{self, Engine, Dsn, TEMP_DIR};
     use storage::mvcc::TEST_TS_BASE;
+    use storage::mvcc::meta::META_SPLIT_SIZE;
 
     #[test]
     fn test_mvcc_txn_read() {
@@ -490,6 +491,17 @@ mod tests {
         must_prewrite_put(engine.as_ref(), b"x", b"x15", b"x", 15);
         must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
         must_rollback_then_get(engine.as_ref(), b"x", 15, b"x5");
+    }
+
+    #[test]
+    fn test_mvcc_commit_after_meta_split() {
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        for i in (1u64..).take(META_SPLIT_SIZE + 1) {
+            must_prewrite_put(engine.as_ref(), b"x", b"v", b"x", i * 10);
+            must_commit(engine.as_ref(), b"x", i * 10, i * 10 + 5);
+        }
+        // Make sure we can still commit the 1st txn after meta splits.
+        must_commit(engine.as_ref(), b"x", 10, 15);
     }
 
     fn to_fake_ts(ts: u64) -> u64 {
