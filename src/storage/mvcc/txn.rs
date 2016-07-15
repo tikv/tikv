@@ -58,6 +58,9 @@ impl<'a> MvccTxn<'a> {
     }
 
     pub fn submit(&mut self) -> Result<()> {
+        if self.writes.is_empty() {
+            return Ok(());
+        }
         let batch = self.writes.drain(..).collect();
         try!(self.engine.write(self.ctx, batch));
         Ok(())

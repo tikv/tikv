@@ -30,6 +30,7 @@ fn test_raftkv() {
     seek(&ctx, storage.as_ref().as_ref());
     near_seek(&ctx, storage.as_ref().as_ref());
     cf(&ctx, storage.as_ref().as_ref());
+    empty_write(&ctx, storage.as_ref().as_ref());
     // TODO: test multiple node
 }
 
@@ -155,4 +156,8 @@ fn cf(ctx: &Context, engine: &Engine) {
     assert_has_cf(ctx, engine, "cf", b"key", b"value");
     must_delete_cf(ctx, engine, "cf", b"key");
     assert_none_cf(ctx, engine, "cf", b"key");
+}
+
+fn empty_write(ctx: &Context, engine: &Engine) {
+    engine.write(&ctx, vec![]).unwrap();
 }
