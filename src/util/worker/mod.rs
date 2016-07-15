@@ -15,7 +15,7 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         Stopped
-        IoError(e: io::Error) {
+        Io(e: io::Error) {
             from()
             display("{}", e)
         }
