@@ -148,6 +148,7 @@ impl Snapshot for RocksSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
+    #[allow(needless_lifetimes)]
     fn iter<'b>(&'b self) -> Result<Box<Cursor + 'b>> {
         trace!("RocksSnapshot: create iterator");
         Ok(box self.new_iterator())

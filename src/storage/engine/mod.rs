@@ -91,6 +91,7 @@ pub trait Engine: Send + Sync + Debug {
 pub trait Snapshot: Send {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+    #[allow(needless_lifetimes)]
     fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
 }
 
@@ -122,7 +123,7 @@ pub trait Cursor {
             (Cursor::next, Ordering::Less)
         };
         let mut cnt = 0;
-        while self.key().cmp(&key.encoded()) == ord && nav(self) {
+        while self.key().cmp(key.encoded()) == ord && nav(self) {
             cnt += 1;
             if cnt >= SEEK_BOUND {
                 return self.seek(key);
