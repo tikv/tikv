@@ -261,7 +261,7 @@ impl Simulator for ServerCluster {
         let msg_id = self.alloc_msg_id();
 
         let mut conn = self.pool_get(addr).unwrap();
-        conn.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
+        conn.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
         try!(rpc::encode_msg(&mut conn, msg_id, &msg));
 
         self.pool_put(addr, conn);
