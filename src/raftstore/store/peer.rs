@@ -269,10 +269,7 @@ impl Peer {
         try!(self.engine.write(wb));
 
         self.coprocessor_host.shutdown();
-        slow_log!(t,
-                  "destroy region {} takes {:?}",
-                  self.region_id,
-                  t.elapsed());
+        slow_log!(t, "destroy region {}", self.region_id);
 
         Ok(())
     }
@@ -388,15 +385,14 @@ impl Peer {
 
         slow_log!(t,
                   "handle peer {:?}, region {} ready, entries {}, committed entries {}, messages \
-                   {}, snapshot {}, hard state changed {}, takes {:?}",
+                   {}, snapshot {}, hard state changed {}",
                   self.peer,
                   self.region_id,
                   ready.entries.len(),
                   ready.committed_entries.len(),
                   ready.messages.len(),
                   apply_result.is_some(),
-                  ready.hs.is_some(),
-                  t.elapsed());
+                  ready.hs.is_some());
 
         if is_applying {
             // remove hard state so raft won't change the apply index.
@@ -693,10 +689,9 @@ impl Peer {
         }
 
         slow_log!(t,
-                  "handle region {} {} committed entries takes {:?}",
+                  "handle region {} {} committed entries",
                   self.region_id,
-                  committed_count,
-                  t.elapsed());
+                  committed_count);
         Ok(results)
     }
 
