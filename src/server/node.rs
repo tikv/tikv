@@ -230,11 +230,12 @@ impl<C> Node<C>
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
         info!("stop raft store {} thread", store_id);
+        let h = match self.store_handle.take() {
+            None => return Ok(()),
+            Some(h) => h,
+        };
+
         try!(self.ch.send(Msg::Quit));
-
-        // Handler must exist here.
-        let h = self.store_handle.take().unwrap();
-
         if let Err(e) = h.join() {
             return Err(box_err!("join store {} thread err {:?}", store_id, e));
         }
