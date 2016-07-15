@@ -248,6 +248,7 @@ mod tests {
         test_seek(e.as_ref());
         test_near_seek(e.as_ref());
         test_cf(e.as_ref());
+        test_empty_write(e.as_ref());
     }
 
     #[test]
@@ -385,5 +386,9 @@ mod tests {
         assert_has_cf(engine, "cf", b"key", b"value");
         muest_delete_cf(engine, "cf", b"key");
         assert_none_cf(engine, "cf", b"key");
+    }
+
+    fn test_empty_write(engine: &Engine) {
+        engine.write(&Context::new(), vec![]).unwrap();
     }
 }
