@@ -255,26 +255,27 @@ impl<'a> Select<'a> {
         self
     }
 
-    fn first(mut self, col: Column) -> Select<'a> {
+    fn aggr_col(mut self, col: Column, aggr_t: ExprType) -> Select<'a> {
         let mut col_expr = Expr::new();
         col_expr.set_tp(ExprType::ColumnRef);
         col_expr.mut_val().encode_i64(col.id).unwrap();
         let mut expr = Expr::new();
-        expr.set_tp(ExprType::First);
+        expr.set_tp(aggr_t);
         expr.mut_children().push(col_expr);
         self.sel.mut_aggregates().push(expr);
         self
     }
 
-    fn sum(mut self, col: Column) -> Select<'a> {
-        let mut col_expr = Expr::new();
-        col_expr.set_tp(ExprType::ColumnRef);
-        col_expr.mut_val().encode_i64(col.id).unwrap();
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::Sum);
-        expr.mut_children().push(col_expr);
-        self.sel.mut_aggregates().push(expr);
-        self
+    fn first(self, col: Column) -> Select<'a> {
+        self.aggr_col(col, ExprType::First)
+    }
+
+    fn sum(self, col: Column) -> Select<'a> {
+        self.aggr_col(col, ExprType::Sum)
+    }
+
+    fn avg(self, col: Column) -> Select<'a> {
+        self.aggr_col(col, ExprType::Avg)
     }
 
     fn group_by(mut self, cols: &[Column]) -> Select<'a> {
@@ -598,6 +599,45 @@ fn test_aggr_first() {
     }
 
     end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_aggr_avg() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (mut store, mut end_point) = init_with_data(&product, &data);
+
+    store.begin();
+    store.insert_into(&product.table)
+        .set(product.id, Datum::I64(8))
+        .set(product.name, Datum::Bytes(b"name:4".to_vec()))
+        .set(product.count, Datum::Null)
+        .execute();
+    store.commit();
+
+    let exp = vec![(Datum::Bytes(b"name:0".to_vec()), (Datum::Dec(3.into()), 2)),
+                   (Datum::Bytes(b"name:3".to_vec()), (Datum::Dec(3.into()), 1)),
+                   (Datum::Bytes(b"name:5".to_vec()), (Datum::Dec(8.into()), 2)),
+                   (Datum::Null, (Datum::Dec(4.into()), 1)),
+                   (Datum::Bytes(b"name:4".to_vec()), (Datum::Null, 0))];
+    let req = Select::from(&product.table).avg(product.count).group_by(&[product.name]).build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), exp.len());
+    for (row, (name, (sum, cnt))) in resp.get_rows().iter().zip(exp) {
+        let gk = datum::encode_value(&[name]).unwrap();
+        let expected_datum = vec![Datum::Bytes(gk), Datum::U64(cnt), sum];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+    end_point.stop().unwrap();
 }
 
 #[test]

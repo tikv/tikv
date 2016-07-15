@@ -116,7 +116,7 @@ impl CoprocessorHost {
     }
 
     pub fn shutdown(&mut self) {
-        for entry in &mut self.registry.observers {
+        for mut entry in &mut self.registry.observers.drain(..) {
             entry.observer.stop();
         }
     }

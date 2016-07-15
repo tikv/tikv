@@ -15,7 +15,7 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         Stopped
-        IoError(e: io::Error) {
+        Io(e: io::Error) {
             from()
             display("{}", e)
         }
@@ -48,10 +48,7 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
             let task_str = format!("{}", t);
             let timer = SlowTimer::new();
             self.run(t);
-            slow_log!(timer,
-                      "task {} takes {:?} to finish.",
-                      task_str,
-                      timer.elapsed());
+            slow_log!(timer, "handle task {}", task_str);
         }
     }
 }
@@ -200,6 +197,9 @@ impl<T: Display + Send + 'static> Worker<T> {
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
         info!("stoping {}", self.name);
+        if self.handle.is_none() {
+            return None;
+        }
         if let Err(e) = self.scheduler.sender.send(None) {
             warn!("failed to stop worker thread: {:?}", e);
         }
