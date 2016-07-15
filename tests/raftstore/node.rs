@@ -168,10 +168,8 @@ impl Simulator for NodeCluster {
     }
 
     fn stop_node(&mut self, node_id: u64) {
-        let node = self.nodes.remove(&node_id).unwrap();
+        self.nodes.remove(&node_id);
         self.trans.wl().routers.remove(&node_id).unwrap();
-
-        drop(node);
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {
