@@ -182,9 +182,6 @@ impl<C: PdClient> Engine for RaftKv<C> {
                    mut modifies: Vec<Modify>,
                    cb: Callback<()>)
                    -> engine::Result<()> {
-        if modifies.is_empty() {
-            return Ok(());
-        }
         let mut reqs = Vec::with_capacity(modifies.len());
         while !modifies.is_empty() {
             let m = modifies.pop().unwrap();
