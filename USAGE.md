@@ -4,7 +4,7 @@
 
 ### System requirement
 
-+ Linux or Mac OS X.
++ Linux (Ubuntu 14.04+ or CentOS 7+) or Mac OS X.
 + Rust, [nightly version](https://www.rust-lang.org/downloads.html) is required.
 + Go, [1.5+](https://golang.org/doc/install) is required.
 + GCC 4.8+ is required.
@@ -12,6 +12,12 @@
 ### Installing TiKV
 
 You can use `make install` to install all binary executions in `bin` directory.
+
+Notice:
+
+Now `make install` only supports Linux Ubuntu, CentOS and Mac OS X. If you use other Linux platforms, 
+you should follow [INSTALL.md](https://github.com/facebook/rocksdb/blob/master/INSTALL.md) to
+install RocksDB manually first. 
 
 ### Running in the standalone mode
 
