@@ -14,18 +14,19 @@ if which sudo; then
 fi
 
 function get_linux_platform {
-    if [ -f /etc/lsb-release ]; then 
-        # For Ubuntu or debian, we can use apt-get.
-        echo "Ubuntu"
-    elif [ -f /etc/redhat-release ]; then
-        # For CentOS or redhat, we can use yum.
+    if [ -f /etc/redhat-release ]; then 
+        # For CentOS or redhat, we treat all as CentOS.
         echo "CentOS"
+    elif [ -f /etc/lsb-release ]; then
+        DIST=`cat /etc/lsb-release | grep '^DISTRIB_ID' | awk -F=  '{ print $2 }'`
+        echo "$DIST"
     else
         echo "Unknown"
     fi 
 }
 
 function install_in_ubuntu {
+    echo "building RocksDB in Ubuntu..."
     if [ ! -d rocksdb-rocksdb-${ROCKSDB_VER} ]; then
         ${SUDO} apt-get update 
         ${SUDO} apt-get install -y --no-install-recommends zlib1g-dev libbz2-dev libsnappy-dev libgflags-dev liblz4-dev 
@@ -41,6 +42,7 @@ function install_in_ubuntu {
 }
 
 function install_in_centos {
+    echo "building RocksDB in CentOS..."
     if [ ! -d rocksdb-rocksdb-${ROCKSDB_VER} ]; then
         ${SUDO} yum install -y epel-release
         ${SUDO} yum install -y snappy-devel zlib-devel bzip2-devel lz4-devel
