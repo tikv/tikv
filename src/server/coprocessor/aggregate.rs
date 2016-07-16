@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use tipb::expression::{Expr, ExprType};
 
 use util::codec::Datum;
@@ -17,6 +18,8 @@ pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
                 cnt: 0,
             })
         }
+        ExprType::Max => Ok(box Extremum::new(Ordering::Less)),
+        ExprType::Min => Ok(box Extremum::new(Ordering::Greater)),
         et => Err(box_err!("unsupport AggrExprType: {:?}", et)),
     }
 }
@@ -127,5 +130,42 @@ impl AggrFunc for Avg {
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
         collector.push(Datum::U64(self.cnt));
         self.sum.calc(collector)
+    }
+}
+
+struct Extremum {
+    datum: Option<Datum>,
+    ord: Ordering,
+}
+
+impl Extremum {
+    fn new(ord: Ordering) -> Extremum {
+        Extremum {
+            datum: None,
+            ord: ord,
+        }
+    }
+}
+
+impl AggrFunc for Extremum {
+    fn update(&mut self, mut args: Vec<Datum>) -> Result<()> {
+        if args.len() != 1 {
+            return Err(box_err!("max/min only support one column, but got {}", args.len()));
+        }
+        if args[0] == Datum::Null {
+            return Ok(());
+        }
+        if let Some(ref d) = self.datum {
+            if box_try!(d.cmp(&args[0])) != self.ord {
+                return Ok(());
+            }
+        }
+        self.datum = args.pop();
+        Ok(())
+    }
+
+    fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
+        collector.push(self.datum.take().unwrap_or(Datum::Null));
+        Ok(())
     }
 }
