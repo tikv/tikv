@@ -509,9 +509,9 @@ impl Peer {
         metric_incr!("raftstore.transfer_leader");
 
         info!("{} {} transfer leader to {:?}",
-            self.tag, self.peer_id(),
-              peer,
-        );
+              self.tag,
+              self.peer_id(),
+              peer);
 
         self.raft_group.transfer_leader(peer.get_id());
     }
