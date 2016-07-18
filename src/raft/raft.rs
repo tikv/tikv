@@ -1047,11 +1047,12 @@ impl<T: Storage> Raft<T> {
     }
 
     fn step_follower(&mut self, mut m: Message) {
-        let term = self.term;
         match m.get_msg_type() {
             MessageType::MsgPropose => {
                 if self.leader_id == INVALID_ID {
-                    info!("{} no leader at term {}; dropping proposal", self.tag, term);
+                    info!("{} no leader at term {}; dropping proposal",
+                          self.tag,
+                          self.term);
                     return;
                 }
                 m.set_to(self.leader_id);

@@ -51,10 +51,6 @@ impl Meta {
         self.pb.get_items().iter()
     }
 
-    pub fn get_item_by_start_ts(&self, ts: u64) -> Option<&MetaItem> {
-        self.iter_items().take_while(|x| x.get_start_ts() >= ts).find(|x| x.get_start_ts() == ts)
-    }
-
     pub fn push_item(&mut self, item: MetaItem) {
         self.pb.mut_items().insert(0, item);
     }
@@ -119,11 +115,6 @@ mod tests {
         assert_eq!(items[0].get_commit_ts(), 4);
         assert_eq!(items[1].get_start_ts(), 1);
         assert_eq!(items[1].get_commit_ts(), 2);
-
-        let item = meta2.get_item_by_start_ts(3).unwrap();
-        assert_eq!(item.get_start_ts(), 3);
-        assert!(meta2.get_item_by_start_ts(4).is_none());
-        assert!(meta2.get_item_by_start_ts(0).is_none());
     }
 
     #[test]

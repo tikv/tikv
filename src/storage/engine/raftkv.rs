@@ -88,7 +88,7 @@ impl From<RaftServerError> for engine::Error {
     }
 }
 
-/// RaftKv is a storage engine base on RaftKvServer.
+/// `RaftKv` is a storage engine base on `RaftStore`.
 pub struct RaftKv<C: PdClient + 'static> {
     node: Mutex<Node<C>>,
     db: Arc<DB>,
@@ -182,9 +182,6 @@ impl<C: PdClient> Engine for RaftKv<C> {
                    mut modifies: Vec<Modify>,
                    cb: Callback<()>)
                    -> engine::Result<()> {
-        if modifies.len() == 0 {
-            return Ok(());
-        }
         let mut reqs = Vec::with_capacity(modifies.len());
         while !modifies.is_empty() {
             let m = modifies.pop().unwrap();
@@ -261,6 +258,7 @@ impl Snapshot for RegionSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
+    #[allow(needless_lifetimes)]
     fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
         Ok(box RegionSnapshot::iter(self))
     }
@@ -276,7 +274,7 @@ impl<'a> Cursor for RegionIterator<'a> {
     }
 
     fn seek(&mut self, key: &Key) -> engine::Result<bool> {
-        RegionIterator::seek(self, &key.encoded()).map_err(|e| {
+        RegionIterator::seek(self, key.encoded()).map_err(|e| {
             let pb = e.into();
             engine::Error::Request(pb)
         })

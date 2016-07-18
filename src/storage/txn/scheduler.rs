@@ -40,7 +40,8 @@ impl Scheduler {
 }
 
 fn handle_cmd(store: Arc<TxnStore>, cmd: Command) {
-    debug!("scheduler::handle_cmd: {}", cmd);
+    let cmd_str = format!("{}", cmd);
+    debug!("scheduler::handle_cmd begin: {}", cmd_str);
     match cmd {
         Command::Get { ctx, key, start_ts, callback } => {
             callback(store.get(ctx, &key, start_ts).map_err(::storage::Error::from));
@@ -97,4 +98,5 @@ fn handle_cmd(store: Arc<TxnStore>, cmd: Command) {
                 .map_err(::storage::Error::from));
         }
     }
+    debug!("scheduler::handle_cmd done: {}", cmd_str);
 }

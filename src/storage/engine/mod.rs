@@ -91,6 +91,7 @@ pub trait Engine: Send + Sync + Debug {
 pub trait Snapshot: Send {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+    #[allow(needless_lifetimes)]
     fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
 }
 
@@ -122,7 +123,7 @@ pub trait Cursor {
             (Cursor::next, Ordering::Less)
         };
         let mut cnt = 0;
-        while self.key().cmp(&key.encoded()) == ord && nav(self) {
+        while self.key().cmp(key.encoded()) == ord && nav(self) {
             cnt += 1;
             if cnt >= SEEK_BOUND {
                 return self.seek(key);
@@ -247,6 +248,7 @@ mod tests {
         test_seek(e.as_ref());
         test_near_seek(e.as_ref());
         test_cf(e.as_ref());
+        test_empty_write(e.as_ref());
     }
 
     #[test]
@@ -384,5 +386,9 @@ mod tests {
         assert_has_cf(engine, "cf", b"key", b"value");
         muest_delete_cf(engine, "cf", b"key");
         assert_none_cf(engine, "cf", b"key");
+    }
+
+    fn test_empty_write(engine: &Engine) {
+        engine.write(&Context::new(), vec![]).unwrap();
     }
 }
