@@ -2,6 +2,7 @@ ENABLE_FEATURES ?= default
 
 DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
+GOROOT = $(DEPS_PATH)/go
 
 .PHONY: all
 
@@ -44,12 +45,12 @@ $(BIN_PATH)/etcd:
 etcd: $(BIN_PATH)/etcd
 
 $(BIN_PATH)/pd-server: 
-	@DEPS_PATH=$(DEPS_PATH) BIN_PATH=$(BIN_PATH) ./scripts/build_pd.sh
+	@DEPS_PATH=$(DEPS_PATH) BIN_PATH=$(BIN_PATH) PATH=$(PATH):/$(GOROOT)/bin ./scripts/build_pd.sh
 
 pd: $(BIN_PATH)/pd-server
 
 $(BIN_PATH)/tidb-server: 
-	@DEPS_PATH=$(DEPS_PATH) BIN_PATH=$(BIN_PATH) ./scripts/build_tidb.sh
+	@DEPS_PATH=$(DEPS_PATH) BIN_PATH=$(BIN_PATH) PATH=$(PATH):/$(GOROOT)/bin ./scripts/build_tidb.sh
 
 tidb: $(BIN_PATH)/tidb-server
 

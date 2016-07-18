@@ -6,6 +6,9 @@ echo "Checking requirements..."
 mkdir -p ${DEPS_PATH}
 cd $DEPS_PATH
 
+export GOROOT=$DEPS_PATH/go
+export PATH=$PATH:$GOROOT/bin
+
 SUDO=
 if which sudo > /dev/null; then 
     SUDO=sudo
@@ -36,12 +39,11 @@ function install_go {
                     ${SUDO} apt-get install -y golang mercurial git
                 ;;
                 CentOS)
-                    curl -L https://storage.googleapis.com/golang/go1.6.2.linux-amd64.tar.gz -o golang.tar.gz
-                    ${SUDO} tar -C /usr/local -xzf golang.tar.gz
-                    ${SUDO} yum install -y hg git
-                    echo 'export GOROOT=/usr/local/go' >> ${HOME}/.bashrc
-                    echo 'export PATH=$PATH:$GOROOT/bin' >> ${HOME}/.bashrc
-                    . ${HOME}/.bashrc
+                    if [ ! -d $GOROOT ]; then
+                        curl -L https://storage.googleapis.com/golang/go1.6.2.linux-amd64.tar.gz -o golang.tar.gz
+                        tar -C ${DEPS_PATH}/ -xzf golang.tar.gz
+                        ${SUDO} yum install -y hg git
+                    fi
                 ;;
                 *)
                     echo "unsupported platform $dist, you may install RocksDB manually"
@@ -55,9 +57,9 @@ function install_go {
             brew install go
             brew install git
             brew install mercurial
-            echo 'export GOROOT=/usr/local/opt/go/libexec' >> ${HOME}/.bashrc
+            echo 'export GOVERSION=$(brew list go | head -n 1 | cut -d '/' -f 6)' >> ${HOME}/.bashrc 
+            echo 'export GOROOT=$(brew --prefix)/Cellar/go/${GOVERSION}/libexec' >> ${HOME}/.bashrc
             echo 'export PATH=$PATH:$GOROOT/bin' >> ${HOME}/.bashrc
-            . ${HOME}/.bashrc
         ;;
 
         *)
