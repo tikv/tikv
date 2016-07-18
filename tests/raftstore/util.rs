@@ -68,7 +68,7 @@ pub fn new_store_cfg() -> Config {
     Config {
         raft_base_tick_interval: 10,
         raft_heartbeat_ticks: 2,
-        raft_election_timeout_ticks: 20,
+        raft_election_timeout_ticks: 25,
         raft_log_gc_tick_interval: 100,
         raft_log_gc_threshold: 1,
         pd_heartbeat_tick_interval: 20,
