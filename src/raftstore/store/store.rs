@@ -275,10 +275,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let peer = match Peer::replicate(self, region_id, msg.get_to_peer().get_id()) {
                 Ok(peer) => peer,
                 Err(e) => {
-                    error!("peer replication from {:?} to {:?} in region {} failed {:?}",
+                    error!("[region {}] peer replication from {:?} to {:?} failed {:?}",
+                           region_id,
                            msg.get_from_peer(),
                            msg.get_to_peer(),
-                           region_id,
                            e);
                     return Err(e);
                 }
@@ -298,7 +298,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
         try!(peer.raft_group.step(msg.take_message()));
-        slow_log!(timer, "region {} raft step", region_id);
+        slow_log!(timer, "{} raft step", peer.tag);
 
         // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
@@ -312,21 +312,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let from = msg.get_from_peer();
         let to = msg.get_to_peer();
 
-        debug!("handle raft message {:?} for region {}, from {} to {}",
-               msg.get_message().get_msg_type(),
+        debug!("[region {}] handle raft message {:?}, from {} to {}",
                region_id,
+               msg.get_message().get_msg_type(),
                from.get_id(),
                to.get_id());
 
         if to.get_store_id() != self.store_id() {
-            warn!("store not match, to store id {}, mine {}, ignore it",
+            warn!("[region {}] store not match, to store id {}, mine {}, ignore it",
+                  region_id,
                   to.get_store_id(),
                   self.store_id());
             return false;
         }
 
         if !msg.has_region_epoch() {
-            error!("missing epoch in raft message, ignore it");
+            error!("[region {}] missing epoch in raft message, ignore it",
+                   region_id);
             return false;
         }
 
@@ -379,7 +381,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 let region_epoch = region.get_region_epoch();
                 // The region in this peer is already destroyed
                 if util::is_epoch_stale(from_epoch, region_epoch) {
-                    info!("tombstone peer [epoch: {:?}] receive a stale message {:?}",
+                    info!("[region {}] tombstone peer [epoch: {:?}] \
+                        receive a stale message {:?}", region_id,
                         region_epoch,
                           msg,
                           );
@@ -408,13 +411,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let to_peer = msg.get_to_peer();
 
         if !need_gc {
-            warn!("raft message {:?} is stale, current {:?}, ignore it",
+            warn!("[region {}] raft message {:?} is stale, current {:?}, ignore it",
+                  region_id,
                   msg,
                   cur_epoch);
             return;
         }
 
-        warn!("raft message {:?} is stale, current {:?}, tell to gc",
+        warn!("[region {}] raft message {:?} is stale, current {:?}, tell to gc",
+              region_id,
               msg,
               cur_epoch);
 
@@ -425,7 +430,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         gc_msg.set_region_epoch(cur_epoch.clone());
         gc_msg.set_is_tombstone(true);
         if let Err(e) = self.trans.rl().send(gc_msg) {
-            error!("send gc message failed {:?}", e);
+            error!("[region {}] send gc message failed {:?}", region_id, e);
         }
     }
 
@@ -438,9 +443,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let from_epoch = msg.get_region_epoch();
             if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
                 // TODO: ask pd to guarantee we are stale now.
-                warn!("peer {:?} for region {} receives gc message, remove",
-                      msg.get_to_peer(),
-                      region_id);
+                warn!("[region {}] peer {:?} receives gc message, remove",
+                      region_id,
+                      msg.get_to_peer());
                 need_remove = true;
             }
         }
@@ -489,7 +494,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 match peer.handle_raft_ready(&self.trans) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
-                        error!("handle raft ready at region {} err: {:?}", region_id, e);
+                        error!("{} handle raft ready err: {:?}", peer.tag, e);
                         return Err(e);
                     }
                     Ok(ready) => ready_result = ready,
@@ -498,7 +503,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             if let Some(ready_result) = ready_result {
                 if let Err(e) = self.on_ready_result(region_id, ready_result) {
-                    error!("handle raft ready result at region {} err: {:?}",
+                    error!("[region {}] handle raft ready result err: {:?}",
                            region_id,
                            e);
                     return Err(e);
@@ -512,7 +517,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn destory_peer(&mut self, region_id: u64, peer: metapb::Peer) {
-        warn!("destroy peer {:?} for region {}", peer, region_id);
+        warn!("[region {}] destroy peer {:?}", region_id, peer);
         // TODO: should we check None here?
         // Can we destroy it in another thread later?
         let mut p = self.region_peers.remove(&region_id).unwrap();
@@ -523,18 +528,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let end_key = enc_end_key(p.region());
         if let Err(e) = p.destroy() {
             // should panic here?
-            error!("destroy peer {:?} for region {} in store {} err {:?}",
-                   peer,
+            error!("[region {}] destroy peer {:?} in store {} err {:?}",
                    region_id,
+                   peer,
                    self.store_id(),
                    e);
             return;
         }
 
         if is_initialized && self.region_ranges.remove(&end_key).is_none() {
-            panic!("Remove region, peer {:?}, region {} in store {}",
-                   peer,
+            panic!("[region {}] remove peer {:?} in store {}",
                    region_id,
+                   peer,
                    self.store_id());
 
         }
@@ -547,7 +552,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(p) = self.region_peers.get(&region_id) {
             if p.is_leader() {
                 // Notify pd immediately.
-                info!("notify pd with change peer region {:?}", p.region());
+                info!("{} notify pd with change peer region {:?}",
+                      p.tag,
+                      p.region());
                 self.heartbeat_pd(p);
             }
         }
@@ -563,7 +570,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = self.region_peers.get(&region_id).unwrap();
         let task = CompactTask::new(peer.get_store(), state.get_index() + 1);
         if let Err(e) = self.compact_worker.schedule(task) {
-            error!("failed to schedule compact task: {}", e);
+            error!("[region {}] failed to schedule compact task: {}",
+                   region_id,
+                   e);
         }
     }
 
@@ -592,9 +601,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 let is_leader = self.region_peers.get(&region_id).unwrap().is_leader();
                 if is_leader && right.get_peers().len() > 1 {
                     if let Err(e) = new_peer.raft_group.campaign() {
-                        error!("peer {:?} campaigns for region {} err {:?}",
-                               new_peer.peer,
+                        error!("[region {}] peer {:?} campaigns  err {:?}",
                                new_region_id,
+                               new_peer.peer,
                                e);
                     }
                 }
@@ -648,16 +657,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_apply_snapshot(&mut self, apply_result: ApplySnapResult) {
         let prev_region = apply_result.prev_region;
         let region = apply_result.region;
+        let region_id = region.get_id();
 
-        info!("snapshot for region {:?} is applied", region);
+        info!("[region {}] snapshot for region {:?} is applied",
+              region_id,
+              region);
 
         if !prev_region.get_peers().is_empty() {
-            info!("region changed from {:?} -> {:?} after applying snapshot",
+            info!("[region {}] region changed from {:?} -> {:?} after applying snapshot",
+                  region_id,
                   prev_region,
                   region);
             // we have already initialized the peer, so it must exist in region_ranges.
             if self.region_ranges.remove(&enc_end_key(&prev_region)).is_none() {
-                panic!("region should exist {:?}", prev_region);
+                panic!("[region {}] region should exist {:?}",
+                       region_id,
+                       prev_region);
             }
         }
 
@@ -683,7 +698,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
-        slow_log!(t, "on region {} ready {} results", region_id, result_count);
+        slow_log!(t,
+                  "[region {}] on ready {} results",
+                  region_id,
+                  result_count);
 
         Ok(())
     }
@@ -817,10 +835,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 request: request,
                 callback: cb,
             }) {
-                error!("send compact log {} to region {} err {:?}",
-                       compact_idx,
-                       region_id,
-                       e);
+                error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
             }
         }
 
@@ -843,7 +858,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.register_split_region_check_tick(event_loop);
             return;
         }
-        for (id, peer) in &mut self.region_peers {
+        for (_, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
             }
@@ -851,8 +866,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if peer.size_diff_hint < self.cfg.region_check_size_diff {
                 continue;
             }
-            info!("region {}'s size diff {} >= {}, need to check whether should split",
-                  id,
+            info!("{} region's size diff {} >= {}, need to check whether should split",
+                  peer.tag,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
             let task = SplitCheckTask::new(peer.get_store());
@@ -870,13 +885,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              epoch: metapb::RegionEpoch,
                              split_key: Vec<u8>) {
         if split_key.is_empty() {
-            error!("split key should not be empty!!!");
+            error!("[region {}] split key should not be empty!!!", region_id);
             return;
         }
         let p = self.region_peers.get(&region_id);
         if p.is_none() || !p.unwrap().is_leader() {
             // region on this store is no longer leader, skipped.
-            info!("{} on {} doesn't exist or is not leader, skip.",
+            info!("[region {}] region on {} doesn't exist or is not leader, skip.",
                   region_id,
                   self.store_id());
             return;
@@ -887,7 +902,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if region.get_region_epoch().get_version() != epoch.get_version() {
             info!("{} epoch changed {:?} != {:?}, need re-check later",
-                  region_id,
+                  peer.tag,
                   region.get_region_epoch(),
                   epoch);
             return;
@@ -901,8 +916,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         if let Err(e) = self.pd_worker.schedule(task) {
-            error!("failed to notify pd to split region {} at {:?}: {}",
-                   region_id,
+            error!("{} failed to notify pd to split at {:?}: {}",
+                   peer.tag,
                    split_key,
                    e);
         }
@@ -914,7 +929,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer: peer.peer.clone(),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
-            error!("failed to notify pd: {}", e);
+            error!("{} failed to notify pd: {}", peer.tag, e);
         }
     }
 
@@ -1083,15 +1098,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 None => {
                     // If to_peer is removed immediately after sending snapshot, the command
                     // may be applied before SnapshotStatus is reported. So here just ignore.
-                    warn!("peer {} not found, skip reporting snap {:?}",
+                    warn!("[region {}] peer {} not found, skip reporting snap {:?}",
+                          region_id,
                           to_peer_id,
                           status);
                     return;
                 }
             };
-            info!("report snapshot status {:?} for {} {:?}",
-                  to_peer,
+            info!("[region {}] report snapshot status {:?} {:?}",
                   region_id,
+                  to_peer,
                   status);
             peer.raft_group.report_snapshot(to_peer_id, status)
         }
@@ -1186,7 +1202,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 event_loop.shutdown();
             }
             Msg::SplitCheckResult { region_id, epoch, split_key } => {
-                info!("split check of {} complete.", region_id);
+                info!("[region {}] split check complete.", region_id);
                 self.on_split_check_result(region_id, epoch, split_key);
             }
             Msg::ReportSnapshot { region_id, to_peer_id, status } => {

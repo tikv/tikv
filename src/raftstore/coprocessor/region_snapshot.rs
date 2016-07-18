@@ -229,7 +229,7 @@ mod tests {
     }
 
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
-        PeerStorage::new(engine, r, worker::dummy_scheduler()).unwrap()
+        PeerStorage::new(engine, r, worker::dummy_scheduler(), "".to_owned()).unwrap()
     }
 
     fn load_default_dataset(engine: Arc<DB>) -> (PeerStorage, DataSet) {
