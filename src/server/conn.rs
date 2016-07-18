@@ -27,7 +27,7 @@ use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use util::worker::Scheduler;
-use util::buf::{TryRead, create_mem_buf, SendBuffer};
+use util::buf::{TryRead, create_mem_buf, PipeBuffer};
 
 
 #[derive(PartialEq)]
@@ -61,7 +61,7 @@ pub struct Conn {
     read_size: usize,
     snap_scheduler: Scheduler<SnapTask>,
 
-    send_buffer: SendBuffer,
+    send_buffer: PipeBuffer,
 }
 
 fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
@@ -97,10 +97,8 @@ impl Conn {
             last_msg_id: 0,
             snap_scheduler: snap_scheduler,
             store_id: store_id,
-            // send buffer can be grown automatically, first using
-            // DEFAULT_SEND_BUFFER_SIZE is ok. Maybe we should need
-            // max size to shrink later.
-            send_buffer: SendBuffer::new(DEFAULT_SEND_BUFFER_SIZE),
+            // TODO: Maybe we should need max size to shrink later.
+            send_buffer: PipeBuffer::new(DEFAULT_SEND_BUFFER_SIZE),
         }
     }
 
@@ -258,7 +256,7 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        try!(self.send_buffer.send_to(&mut self.sock));
+        try!(self.send_buffer.write_to(&mut self.sock));
         if !self.send_buffer.is_empty() {
             // we don't write all data, so must try later.
             // we have already registered writable, no need registering again.
