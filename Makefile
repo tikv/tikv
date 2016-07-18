@@ -32,6 +32,9 @@ format:
 	@cargo fmt -- --write-mode diff | grep "Diff at line" > /dev/null && cargo fmt -- --write-mode overwrite | grep -v "found TODO" || exit 0
 	@rustfmt --write-mode diff tests/tests.rs benches/benches.rs | grep "Diff at line" > /dev/null && rustfmt --write-mode overwrite tests/tests.rs benches/benches.rs | grep -v "found TODO" || exit 0
 
+check_req:
+	DEPS_PATH=$(DEPS_PATH) ./scripts/check_req.sh
+
 rocksdb: 
 	DEPS_PATH=$(DEPS_PATH) ./scripts/build_rocksdb.sh
 
@@ -52,7 +55,7 @@ tidb: $(BIN_PATH)/tidb-server
 
 deps: rocksdb etcd pd tidb
 
-install: deps release
+install: check_req deps release
 	@cp -f ./target/release/tikv-server $(BIN_PATH)
 
 clean_etcd:
