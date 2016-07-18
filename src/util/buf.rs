@@ -387,6 +387,7 @@ mod tests {
                     assert_eq!(l, s.read_from(&mut input).unwrap());
                     s.shrink_to(shrink);
 
+                    assert_eq!(shrink, s.capacity());
                     if shrink > l {
                         assert_eq!(s, expect.as_slice());
                     } else {
