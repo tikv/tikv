@@ -26,6 +26,7 @@ fi
 
 export ENABLE_FEATURES=default
 export LOG_FILE=tests.log
+export RUST_TEST_THREADS=1
 make test 2>&1 | tee tests.out
 status=$?
 for case in `cat tests.out | python -c "import sys
@@ -41,10 +42,12 @@ print '\n'.join(cases)
 "`; do
     echo find fail cases: $case
     grep $case $LOG_FILE | cut -d ' ' -f 2-
+    # there is a thread panic, which should not happen.
+    status=1
     echo
 done
 
-rm tests.out || true
+# don't remove the tests.out, coverage counts on it.
 rm $LOG_FILE || true
 
 exit $status

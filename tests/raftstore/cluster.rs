@@ -173,7 +173,7 @@ impl<T: Simulator> Cluster<T> {
         let region_id = request.get_header().get_region_id();
         loop {
             let leader = match self.leader_of_region(region_id) {
-                None => return Err(box_err!("can't get leader of region")),
+                None => return Err(box_err!("can't get leader of region {}", region_id)),
                 Some(l) => l,
             };
             request.mut_header().set_peer(leader);
