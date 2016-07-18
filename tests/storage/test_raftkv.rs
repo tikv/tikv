@@ -159,5 +159,5 @@ fn cf(ctx: &Context, engine: &Engine) {
 }
 
 fn empty_write(ctx: &Context, engine: &Engine) {
-    engine.write(&ctx, vec![]).unwrap();
+    engine.write(ctx, vec![]).unwrap();
 }
