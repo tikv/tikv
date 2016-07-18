@@ -298,7 +298,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
         try!(peer.raft_group.step(msg.take_message()));
-        slow_log!(timer, "{} {} raft step", peer.tag, peer.peer_id());
+        slow_log!(timer, "{} raft step", peer.tag);
 
         // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
@@ -494,10 +494,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 match peer.handle_raft_ready(&self.trans) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
-                        error!("{} {} handle raft ready err: {:?}",
-                               peer.tag,
-                               peer.peer_id(),
-                               e);
+                        error!("{} handle raft ready err: {:?}", peer.tag, e);
                         return Err(e);
                     }
                     Ok(ready) => ready_result = ready,
@@ -555,9 +552,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(p) = self.region_peers.get(&region_id) {
             if p.is_leader() {
                 // Notify pd immediately.
-                info!("{} {} notify pd with change peer region {:?}",
+                info!("{} notify pd with change peer region {:?}",
                       p.tag,
-                      p.peer_id(),
                       p.region());
                 self.heartbeat_pd(p);
             }
@@ -839,11 +835,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 request: request,
                 callback: cb,
             }) {
-                error!("{} {} send compact log {} err {:?}",
-                       peer.tag,
-                       peer.peer_id(),
-                       compact_idx,
-                       e);
+                error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
             }
         }
 
@@ -874,9 +866,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if peer.size_diff_hint < self.cfg.region_check_size_diff {
                 continue;
             }
-            info!("{} {} region's size diff {} >= {}, need to check whether should split",
+            info!("{} region's size diff {} >= {}, need to check whether should split",
                   peer.tag,
-                  peer.peer_id(),
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
             let task = SplitCheckTask::new(peer.get_store());
@@ -910,9 +901,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region = peer.region();
 
         if region.get_region_epoch().get_version() != epoch.get_version() {
-            info!("{} {} epoch changed {:?} != {:?}, need re-check later",
+            info!("{} epoch changed {:?} != {:?}, need re-check later",
                   peer.tag,
-                  peer.peer_id(),
                   region.get_region_epoch(),
                   epoch);
             return;
@@ -926,9 +916,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         if let Err(e) = self.pd_worker.schedule(task) {
-            error!("{} {} failed to notify pd to split at {:?}: {}",
+            error!("{} failed to notify pd to split at {:?}: {}",
                    peer.tag,
-                   peer.peer_id(),
                    split_key,
                    e);
         }
@@ -940,7 +929,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer: peer.peer.clone(),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
-            error!("{} {} failed to notify pd: {}", peer.tag, peer.peer_id(), e);
+            error!("{} failed to notify pd: {}", peer.tag, e);
         }
     }
 

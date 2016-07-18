@@ -217,7 +217,11 @@ mod test {
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
         let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), DEFAULT_CFS)
             .unwrap());
-        PeerStorage::new(engine, &Region::new(), worker::dummy_scheduler()).unwrap()
+        PeerStorage::new(engine,
+                         &Region::new(),
+                         worker::dummy_scheduler(),
+                         "".to_owned())
+            .unwrap()
     }
 
     fn share<T>(t: T) -> Arc<RwLock<T>> {

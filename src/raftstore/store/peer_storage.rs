@@ -64,7 +64,6 @@ pub struct PeerStorage {
     snap_tried_cnt: AtomicUsize,
 
     pub tag: String,
-    pub id: u64,
 }
 
 fn storage_error<E>(error: E) -> raft::Error
@@ -120,7 +119,8 @@ impl InvokeContext {
 impl PeerStorage {
     pub fn new(engine: Arc<DB>,
                region: &metapb::Region,
-               snap_sched: Scheduler<SnapTask>)
+               snap_sched: Scheduler<SnapTask>,
+               tag: String)
                -> Result<PeerStorage> {
         debug!("creating storage on {} for {:?}", engine.path(), region);
         let raft_state = match try!(engine.get_msg(&keys::raft_state_key(region.get_id()))) {
@@ -155,8 +155,7 @@ impl PeerStorage {
             snap_state: RefCell::new(SnapState::Relax),
             snap_sched: snap_sched,
             snap_tried_cnt: AtomicUsize::new(0),
-            tag: "".to_owned(),
-            id: 0,
+            tag: tag,
         })
     }
 
@@ -301,7 +300,7 @@ impl PeerStorage {
         }
 
         if SnapState::Relax == *snap_state {
-            info!("{} {} requesting snapshot...", self.tag, self.id);
+            info!("{} requesting snapshot...", self.tag);
             self.snap_tried_cnt.store(0, Ordering::Relaxed);
             *snap_state = SnapState::Generating;
         } else if SnapState::Failed == *snap_state {
@@ -311,9 +310,8 @@ impl PeerStorage {
                                                        snap_tried_cnt)));
             }
             snap_tried_cnt += 1;
-            warn!("{} {} snapshot generating failed, retry {} time",
+            warn!("{} snapshot generating failed, retry {} time",
                   self.tag,
-                  self.id,
                   snap_tried_cnt);
             self.snap_tried_cnt.store(snap_tried_cnt, Ordering::Relaxed);
             *snap_state = SnapState::Generating;
@@ -322,9 +320,8 @@ impl PeerStorage {
         }
         let task = SnapTask::Gen { region_id: self.get_region_id() };
         if let Err(e) = self.snap_sched.schedule(task) {
-            error!("{} {} failed to schedule task snap generation: {:?}",
+            error!("{} failed to schedule task snap generation: {:?}",
                    self.tag,
-                   self.id,
                    e);
             *snap_state = SnapState::Failed;
         }
@@ -335,7 +332,7 @@ impl PeerStorage {
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
     pub fn append(&self, ctx: &mut InvokeContext, entries: &[Entry]) -> Result<u64> {
-        debug!("{} {} append {} entries", self.tag, self.id, entries.len());
+        debug!("{} append {} entries", self.tag, entries.len());
         let prev_last_index = ctx.raft_state.get_last_index();
         if entries.len() == 0 {
             return Ok(prev_last_index);
@@ -363,7 +360,7 @@ impl PeerStorage {
                           ctx: &mut InvokeContext,
                           snap: &Snapshot)
                           -> Result<ApplySnapResult> {
-        info!("{} {} begin to apply snapshot", self.tag, self.id);
+        info!("{} begin to apply snapshot", self.tag);
 
         let mut snap_data = RaftSnapshotData::new();
         try!(snap_data.merge_from_bytes(snap.get_data()));
@@ -384,10 +381,7 @@ impl PeerStorage {
                                       try!(ctx.wb.delete(key));
                                       Ok(true)
                                   }));
-            info!("{} {} clean old region takes {:?}",
-                  self.tag,
-                  self.id,
-                  timer.elapsed());
+            info!("{} clean old region takes {:?}", self.tag, timer.elapsed());
         }
 
         let mut region_state = RegionLocalState::new();
@@ -405,7 +399,7 @@ impl PeerStorage {
         ctx.apply_state.mut_truncated_state().set_index(last_index);
         ctx.apply_state.mut_truncated_state().set_term(snap.get_metadata().get_term());
 
-        info!("{} {} apply snapshot meta ok", self.tag, self.id);
+        info!("{} apply snapshot meta ok", self.tag);
 
         Ok(ApplySnapResult {
             prev_region: self.region.clone(),
@@ -416,9 +410,8 @@ impl PeerStorage {
     // Discard all log entries prior to compact_index. We must guarantee
     // that the compact_index is not greater than applied index.
     pub fn compact(&self, state: &mut RaftApplyState, compact_index: u64) -> Result<()> {
-        debug!("{} {} compact log entries to prior to {}",
+        debug!("{} compact log entries to prior to {}",
                self.tag,
-               self.id,
                compact_index);
 
         if compact_index <= self.truncated_index() {
@@ -730,7 +723,7 @@ mod test {
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
         let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
-        PeerStorage::new(db, &region, sched).unwrap()
+        PeerStorage::new(db, &region, sched, "".to_owned()).unwrap()
     }
 
     fn new_storage_from_ents(sched: Scheduler<SnapTask>,
