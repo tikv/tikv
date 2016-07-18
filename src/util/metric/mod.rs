@@ -14,7 +14,7 @@
 use std::error;
 use std::fmt;
 use std::io;
-use std::sync::Mutex;
+use std::sync::{Mutex, Arc};
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{ToSocketAddrs, SocketAddr, UdpSocket};
@@ -23,9 +23,30 @@ use super::worker::{Worker, Runnable};
 
 use cadence::prelude::*;
 use cadence::{MetricSink, MetricResult, ErrorKind};
+use metrics::registry::{Registry, StdRegistry};
+use metrics::reporter::ConsoleReporter;
 
 #[macro_use]
 pub mod macros;
+
+lazy_static! {
+    pub static ref REG: Arc<StdRegistry<'static>> = {
+        let mut r = StdRegistry::new();
+        // {
+        //     use some_mod::__metrics;
+        //     for (label, metric) in __metrics() {
+        //         r.insert(label, metric);
+        //     }
+        // }
+        Arc::new(r)
+    };
+}
+
+pub fn start_reporter() {
+    let arc_registry = (*REG).clone();
+    let reporter = ConsoleReporter::new(arc_registry, "test");
+    reporter.start(500);
+}
 
 static mut CLIENT: Option<*const Metric> = None;
 // IS_INITIALIZED indicates the state of CLIENT,

@@ -22,6 +22,7 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![recursion_limit="100"]
+#![feature(drop_types_in_const)]
 
 #[macro_use]
 extern crate log;
@@ -48,6 +49,9 @@ extern crate rustc_serialize;
 extern crate hyper;
 #[cfg(unix)]
 extern crate nix;
+extern crate metrics;
+#[macro_use]
+extern crate lazy_static;
 
 #[macro_use]
 pub mod util;

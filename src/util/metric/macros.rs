@@ -87,3 +87,35 @@ macro_rules! metric_meter {
         }
     };
 }
+
+// Register a metric
+#[macro_export]
+macro_rules! register_metric {
+    ($(static ref $N:ident : $T:ty = $e:expr; $label:expr)*) => {
+        $(
+            lazy_static!(static ref $N : $T = $e;);
+        )*
+
+        use metrics;
+        pub fn __metrics() -> Vec<(&'static str, metrics::metrics::Metric)> {
+            let mut temp_vec = Vec::<(&'static str, metrics::metrics::Metric)>::new();
+            $(
+                match *$N {
+                    metrics::metrics::Metric::Counter(ref c) => {
+                        temp_vec.push(($label, metrics::metrics::Metric::Counter(c.clone())))
+                    }
+                    metrics::metrics::Metric::Gauge(ref g) => {
+                        temp_vec.push(($label, metrics::metrics::Metric::Gauge(g.clone())))
+                    }
+                    metrics::metrics::Metric::Meter(ref m) => {
+                        temp_vec.push(($label, metrics::metrics::Metric::Meter(m.clone())))
+                    }
+                    metrics::metrics::Metric::Histogram(ref h) => {
+                        temp_vec.push(($label, metrics::metrics::Metric::Histogram(h.clone())))
+                    }
+                }
+            )*
+            temp_vec
+        }
+    };
+}

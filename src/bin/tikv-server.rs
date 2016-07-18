@@ -14,6 +14,7 @@
 #![feature(plugin)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 
+#[macro_use]
 extern crate tikv;
 extern crate getopts;
 #[macro_use]
@@ -24,6 +25,7 @@ extern crate toml;
 extern crate cadence;
 extern crate libc;
 extern crate fs2;
+extern crate metrics;
 
 use std::env;
 use std::fs::{self, File};
