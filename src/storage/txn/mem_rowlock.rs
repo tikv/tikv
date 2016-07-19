@@ -12,13 +12,13 @@
 // limitations under the License.
 
 
-use std::collections::{LinkedList, BTreeSet};
+use std::collections::{VecDeque, BTreeSet};
 use std::hash::{Hash, SipHasher, Hasher};
 
 // simulate lock of one row
 pub struct RowLock {
     // store waiting commands
-    pub waiting: LinkedList<u64>,
+    pub waiting: VecDeque<u64>,
 
     // use to check existed
     pub set: BTreeSet<u64>,
@@ -27,7 +27,7 @@ pub struct RowLock {
 impl RowLock {
     pub fn new() -> RowLock {
         RowLock {
-            waiting: LinkedList::new(),
+            waiting: VecDeque::new(),
             set: BTreeSet::new(),
         }
     }
@@ -61,7 +61,7 @@ impl MemRowLocks {
 
         let mut acquired_count: usize = 0;
         for i in indexs {
-            let ref mut rowlock = self.locks.get_mut(*i).unwrap();
+            let rowlock = &mut self.locks.get_mut(*i).unwrap();
 
             let mut front: Option<u64> = None;
             if let Some(cid) = rowlock.waiting.front() {
@@ -96,7 +96,7 @@ impl MemRowLocks {
         let mut wakeup_list: Vec<u64> = vec![];
 
         for i in indexs {
-            let ref mut rowlock = self.locks.get_mut(*i).unwrap();
+            let rowlock = &mut self.locks.get_mut(*i).unwrap();
 
             match rowlock.waiting.pop_front() {
                 Some(head) => {
@@ -110,11 +110,8 @@ impl MemRowLocks {
             }
             rowlock.set.remove(&who);
 
-            match rowlock.waiting.front() {
-                Some(wakeup) => {
-                    wakeup_list.push(*wakeup);
-                }
-                None => {}
+            if let Some(wakeup) = rowlock.waiting.front() {
+                wakeup_list.push(*wakeup);
             }
         }
 

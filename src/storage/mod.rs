@@ -210,7 +210,7 @@ impl Storage {
         }
 
         let engine = self.engine.clone();
-        let builder = thread::Builder::new().name(thd_name!(format!("storage-scheduler")));
+        let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
         let mut sched_event_loop = self.sched_event_loop.take().unwrap();
         let h = try!(builder.spawn(move || {
             let ch = SchedCh::new(sched_event_loop.channel());

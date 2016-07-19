@@ -167,9 +167,8 @@ impl Scheduler {
     }
 
     fn save_cmd_context(&mut self, cid: u64, ctx: RunningCtx) {
-        match self.cmd_ctxs.insert(cid, ctx) {
-            Some(_) => panic!("cid = {} existed, fatal", cid),
-            None => {}
+        if let Some(_) = self.cmd_ctxs.insert(cid, ctx) {
+            panic!("cid = {} existed, fatal", cid);
         }
     }
 
@@ -181,7 +180,7 @@ impl Scheduler {
 
             // release lock and wake up waiting commands
             if !rctx.needed_locks().is_empty() {
-                let wakeup_list = self.rowlocks.release_by_indexs(&rctx.needed_locks(), cid);
+                let wakeup_list = self.rowlocks.release_by_indexs(rctx.needed_locks(), cid);
                 for wcid in wakeup_list {
                     if let Err(e) = self.schedch.send(Msg::AcquireLock { cid: wcid }) {
                         error!("wake up cmd failed, cid = {}, error = {:?}", wcid, e);
@@ -208,18 +207,12 @@ impl Scheduler {
                 let locked_keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
                 self.rowlocks.calc_lock_indexs(&locked_keys)
             }
-            Command::Commit { ref keys, .. } => {
-                self.rowlocks.calc_lock_indexs(keys)
-            }
-            Command::CommitThenGet { ref key, .. } => {
-                self.rowlocks.calc_lock_indexs(&[key])
-            }
-            Command::Cleanup { ref key, .. } => {
-                self.rowlocks.calc_lock_indexs(&[key])
-            }
+            Command::Commit { ref keys, .. } |
             Command::Rollback { ref keys, .. } => {
                 self.rowlocks.calc_lock_indexs(keys)
             }
+            Command::CommitThenGet { ref key, .. } |
+            Command::Cleanup { ref key, .. } |
             Command::RollbackThenGet { ref key, .. } => {
                 self.rowlocks.calc_lock_indexs(&[key])
             }
@@ -347,7 +340,9 @@ impl Scheduler {
         let rctx = self.cmd_ctxs.get_mut(&cid).unwrap();
 
         match rctx.cmd {
-            Command::Get { ref mut callback, .. } => {
+            Command::Get { ref mut callback, .. } |
+            Command::CommitThenGet { ref mut callback, .. } |
+            Command::RollbackThenGet { ref mut callback, .. } => {
                 callback.take().unwrap()(Err(err.into()));
             }
             Command::BatchGet { ref mut callback, .. } => {
@@ -362,16 +357,10 @@ impl Scheduler {
             Command::Commit { ref mut callback, .. } => {
                 callback.take().unwrap()(Err(err.into()));
             }
-            Command::CommitThenGet { ref mut callback, .. } => {
-                callback.take().unwrap()(Err(err.into()));
-            }
             Command::Cleanup { ref mut callback, .. } => {
                 callback.take().unwrap()(Err(err.into()));
             }
             Command::Rollback { ref mut callback, .. } => {
-                callback.take().unwrap()(Err(err.into()));
-            }
-            Command::RollbackThenGet { ref mut callback, .. } => {
                 callback.take().unwrap()(Err(err.into()));
             }
         }
@@ -380,30 +369,14 @@ impl Scheduler {
     fn extract_cmd_context_by_id(&self, cid: u64) -> &Context {
         let rctx: &RunningCtx = self.cmd_ctxs.get(&cid).unwrap();
         match rctx.cmd {
-            Command::Get { ref ctx, .. } => {
-                ctx
-            }
-            Command::BatchGet { ref ctx, .. } => {
-                ctx
-            }
-            Command::Scan { ref ctx, .. } => {
-                ctx
-            }
-            Command::Prewrite { ref ctx, .. } => {
-                ctx
-            }
-            Command::Commit { ref ctx, .. } => {
-                ctx
-            }
-            Command::CommitThenGet { ref ctx, .. } => {
-                ctx
-            }
-            Command::Cleanup { ref ctx, .. } => {
-                ctx
-            }
-            Command::Rollback { ref ctx, .. } => {
-                ctx
-            }
+            Command::Get { ref ctx, .. } |
+            Command::BatchGet { ref ctx, .. } |
+            Command::Scan { ref ctx, .. } |
+            Command::Prewrite { ref ctx, .. } |
+            Command::Commit { ref ctx, .. } |
+            Command::CommitThenGet { ref ctx, .. } |
+            Command::Cleanup { ref ctx, .. } |
+            Command::Rollback { ref ctx, .. } |
             Command::RollbackThenGet { ref ctx, .. } => {
                 ctx
             }
@@ -461,7 +434,7 @@ impl Scheduler {
     fn acquire_lock_for_cmd(&mut self, cid: u64) {
         let mut all_lock_acquired = false;
         {
-            let ref mut ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
+            let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
 
             let new_acquired = {
                 let needed_locks = ctx.needed_locks();
@@ -545,9 +518,6 @@ impl Scheduler {
                     Err(e) => Err(e.into())
                 });
             }
-            Command::Commit { ref mut callback, .. } => {
-                callback.take().unwrap()(result.map_err(::storage::Error::from));
-            }
             Command::CommitThenGet { ref mut callback, .. } => {
                 callback.take().unwrap()(match result {
                     Ok(()) => {
@@ -561,9 +531,8 @@ impl Scheduler {
                     }
                 });
             }
-            Command::Cleanup { ref mut callback, .. } => {
-                callback.take().unwrap()(result.map_err(::storage::Error::from));
-            }
+            Command::Commit { ref mut callback, .. } |
+            Command::Cleanup { ref mut callback, .. } |
             Command::Rollback { ref mut callback, .. } => {
                 callback.take().unwrap()(result.map_err(::storage::Error::from));
             }
