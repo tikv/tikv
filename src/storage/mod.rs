@@ -178,37 +178,40 @@ pub struct Storage {
     engine: Arc<Box<Engine>>,
     schedch: SchedCh,
     sched_handle: Option<thread::JoinHandle<()>>,
+    sched_event_loop: Option<EventLoop<Scheduler>>,
 }
 
 impl Storage {
     pub fn from_engine(engine: Box<Engine>,
-                       sched_event_loop: &mut EventLoop<Scheduler>)
+                       notify_cap: usize,
+                       msg_per_tick: usize)
                        -> Result<Storage> {
         let engine = Arc::new(engine);
-        let schedch = SchedCh::new(sched_event_loop.channel());
+        let event_loop = try!(create_event_loop(notify_cap, msg_per_tick));
+        let schedch = SchedCh::new(event_loop.channel());
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
             engine: engine,
             schedch: schedch,
             sched_handle: None,
+            sched_event_loop: Some(event_loop),
         })
     }
 
-    pub fn new(dsn: Dsn, sched_event_loop: &mut EventLoop<Scheduler>) -> Result<Storage> {
+    pub fn new(dsn: Dsn, notify_cap: usize, msg_per_tick: usize) -> Result<Storage> {
         let engine = try!(engine::new_engine(dsn, DEFAULT_CFS));
-        Storage::from_engine(engine, sched_event_loop)
+        Storage::from_engine(engine, notify_cap, msg_per_tick)
     }
 
-    pub fn start(&mut self, mut sched_event_loop: EventLoop<Scheduler>, concurrency: usize) -> Result<()> {
+    pub fn start(&mut self, concurrency: usize) -> Result<()> {
         if self.sched_handle.is_some() {
             return Err(box_err!("scheduler is already running"));
         }
 
-        let builder = thread::Builder::new().name(thd_name!(format!("storage-scheduler")));
-
         let engine = self.engine.clone();
-
+        let builder = thread::Builder::new().name(thd_name!(format!("storage-scheduler")));
+        let mut sched_event_loop = self.sched_event_loop.take().unwrap();
         let h = try!(builder.spawn(move || {
             let ch = SchedCh::new(sched_event_loop.channel());
             let mut sched = Scheduler::new(engine, ch, concurrency);
@@ -238,7 +241,6 @@ impl Storage {
         }
 
         info!("storage {:?} closed.", self.engine);
-
         Ok(())
     }
 
@@ -498,9 +500,8 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let mut event_loop = create_event_loop(4096, 256).unwrap();
-        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), &mut event_loop).unwrap();
-        if let Err(e) = storage.start(event_loop, 4096) {
+        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), 4096, 256).unwrap();
+        if let Err(e) = storage.start(1024) {
             panic!("storage start failed, err={:?}", e);
         }
         let (tx, rx) = channel();
@@ -542,9 +543,8 @@ mod tests {
     }
     #[test]
     fn test_scan() {
-        let mut event_loop = create_event_loop(4096, 256).unwrap();
-        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), &mut event_loop).unwrap();
-        if let Err(e) = storage.start(event_loop, 4096) {
+        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), 4096, 256).unwrap();
+        if let Err(e) = storage.start(1024) {
             panic!("storage start failed, err={:?}", e);
         }
         let (tx, rx) = channel();
@@ -585,9 +585,8 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let mut event_loop = create_event_loop(4096, 256).unwrap();
-        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), &mut event_loop).unwrap();
-        if let Err(e) = storage.start(event_loop, 4096) {
+        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), 4096, 256).unwrap();
+        if let Err(e) = storage.start(1024) {
             panic!("storage start failed, err={:?}", e);
         }
         let (tx, rx) = channel();

@@ -39,8 +39,7 @@ use mio::tcp::TcpListener;
 use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
 
-use mio::EventLoop;
-use tikv::storage::{self, Scheduler, Storage, Dsn, TEMP_DIR, DEFAULT_CFS};
+use tikv::storage::{Storage, Dsn, TEMP_DIR, DEFAULT_CFS};
 use tikv::util::{self, logger, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::metric::{self, BufferedUdpMetricSink};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
@@ -372,7 +371,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
 fn build_raftkv(matches: &Matches,
                 config: &toml::Value,
                 ch: SendCh,
-                sched_event_loop: &mut EventLoop<Scheduler>,
+//                sched_event_loop: &mut EventLoop<Scheduler>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, SnapManager) {
@@ -397,7 +396,8 @@ fn build_raftkv(matches: &Matches,
     let raft_router = node.raft_store_router();
     let node_id = node.id();
 
-    (create_raft_storage(node, engine, sched_event_loop).unwrap(), raft_router, node_id, snap_mgr)
+    (create_raft_storage(node, engine, cfg.notify_capacity, cfg.messages_per_tick).unwrap(),
+        raft_router, node_id, snap_mgr)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -422,12 +422,14 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
-fn run_local_server(listener: TcpListener, mut store: Storage, sched_event_loop: EventLoop<Scheduler>, config: &Config) {
+fn run_local_server(listener: TcpListener, path: String, config: &Config) {
     let mut event_loop = create_event_loop(config).unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
 
-    if let Err(e) = store.start(sched_event_loop, config.storage_sched_concurrency) {
+    let mut store = Storage::new(Dsn::RocksDBPath(&path), config.notify_capacity,
+                                 config.messages_per_tick).unwrap();
+    if let Err(e) = store.start(config.storage_sched_concurrency) {
         panic!("failed to start storage, error = {:?}", e);
     }
 
@@ -470,16 +472,13 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                store_path);
     }
 
-    let mut sched_event_loop = storage::create_event_loop(cfg.notify_capacity, cfg.messages_per_tick).unwrap();
-
     let (mut store, raft_router, node_id, snap_mgr) =
-        build_raftkv(matches, config, ch.clone(), &mut sched_event_loop, pd_client, cfg);
+        build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
     initial_metric(matches, config, Some(node_id));
 
     info!("start storage");
-
-    if let Err(e) = store.start(sched_event_loop, cfg.storage_sched_concurrency) {
+    if let Err(e) = store.start(cfg.storage_sched_concurrency) {
         panic!("failed to start storage, error = {:?}", e);
     }
 
@@ -613,9 +612,7 @@ fn main() {
             initial_metric(&matches, &config, None);
             let path = get_store_path(&matches, &config);
 
-            let mut sched_event_loop = storage::create_event_loop(cfg.notify_capacity, cfg.messages_per_tick).unwrap();
-            let store = Storage::new(Dsn::RocksDBPath(&path), &mut sched_event_loop).unwrap();
-            run_local_server(listener, store, sched_event_loop, &cfg);
+            run_local_server(listener, path, &cfg);
         }
         RAFTKV_DSN => {
             run_raft_server(listener, &matches, &config, &cfg);

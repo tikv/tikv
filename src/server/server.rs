@@ -631,7 +631,7 @@ mod tests {
     use super::super::{Msg, ConnData, Result, Config};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
-    use storage::{self, Storage, Dsn};
+    use storage::{Storage, Dsn};
     use kvproto::msgpb::{Message, MessageType};
     use raftstore::Result as RaftStoreResult;
     use kvproto::raft_serverpb::RaftMessage;
@@ -684,9 +684,8 @@ mod tests {
 
         let cfg = Config::new();
         let mut event_loop = create_event_loop(&cfg).unwrap();
-        let mut sched_event_loop = storage::create_event_loop(4096, 256).unwrap();
-        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), &mut sched_event_loop).unwrap();
-        if let Err(e) = storage.start(sched_event_loop, 4096) {
+        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), 4096, 256).unwrap();
+        if let Err(e) = storage.start(1024) {
             panic!("storage start failed, err={:?}", e);
         }
         let (tx, rx) = mpsc::channel();

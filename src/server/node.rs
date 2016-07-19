@@ -24,17 +24,18 @@ use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, 
                        SnapManager};
 use super::Result;
 use super::config::Config;
-use storage::{Storage, RaftKv, Scheduler};
+use storage::{Storage, RaftKv};
 use super::transport::ServerRaftStoreRouter;
 
 pub fn create_raft_storage<C>(node: Node<C>,
                               db: Arc<DB>,
-                              sched_event_loop: &mut EventLoop<Scheduler>)
+                              notify_cap: usize,
+                              msg_per_tick: usize)
                               -> Result<Storage>
     where C: PdClient + 'static
 {
     let engine = box RaftKv::new(node, db);
-    let store = try!(Storage::from_engine(engine, sched_event_loop));
+    let store = try!(Storage::from_engine(engine, notify_cap, msg_per_tick));
     Ok(store)
 }
 
