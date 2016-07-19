@@ -172,6 +172,13 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                        Some(64 * 1024),
                                        |v| v.as_integer());
     block_base_opts.set_block_size(block_size as u64);
+    let block_cache_size = get_integer_value("",
+                                             "rocksdb.block-based-table.block-cache-size",
+                                             matches,
+                                             config,
+                                             Some(1024 * 1024 * 1024),
+                                             |v| v.as_integer());
+    block_base_opts.set_lru_cache(block_cache_size as u64);
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
