@@ -371,7 +371,6 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
 fn build_raftkv(matches: &Matches,
                 config: &toml::Value,
                 ch: SendCh,
-//                sched_event_loop: &mut EventLoop<Scheduler>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, SnapManager) {
@@ -396,7 +395,7 @@ fn build_raftkv(matches: &Matches,
     let raft_router = node.raft_store_router();
     let node_id = node.id();
 
-    (create_raft_storage(node, engine, cfg.notify_capacity, cfg.messages_per_tick).unwrap(),
+    (create_raft_storage(node, engine, cfg).unwrap(),
         raft_router, node_id, snap_mgr)
 }
 
@@ -422,12 +421,13 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
-fn run_local_server(listener: TcpListener, path: String, config: &Config) {
+fn run_local_server(listener: TcpListener, config: &Config) {
     let mut event_loop = create_event_loop(config).unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
 
-    let mut store = Storage::new(Dsn::RocksDBPath(&path), config.notify_capacity,
+    let mut store = Storage::new(Dsn::RocksDBPath(&config.local_store_path),
+                                 config.notify_capacity,
                                  config.messages_per_tick).unwrap();
     if let Err(e) = store.start(config.storage_sched_concurrency) {
         panic!("failed to start storage, error = {:?}", e);
@@ -603,16 +603,16 @@ fn main() {
                               None,
                               |v| v.as_integer().map(|i| i.to_string()));
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
-    let cfg = build_cfg(&matches,
-                        &config,
-                        cluster_id,
-                        &format!("{}", listener.local_addr().unwrap()));
+    let mut cfg = build_cfg(&matches,
+                            &config,
+                            cluster_id,
+                            &format!("{}", listener.local_addr().unwrap()));
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
             initial_metric(&matches, &config, None);
-            let path = get_store_path(&matches, &config);
+            cfg.local_store_path = get_store_path(&matches, &config);
 
-            run_local_server(listener, path, &cfg);
+            run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {
             run_raft_server(listener, &matches, &config, &cfg);

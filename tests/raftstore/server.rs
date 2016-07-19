@@ -168,7 +168,7 @@ impl Simulator for ServerCluster {
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
 
-        let mut store = create_raft_storage(node, engine, cfg.notify_capacity, cfg.messages_per_tick).unwrap();
+        let mut store = create_raft_storage(node, engine, &cfg).unwrap();
         if let Err(e) = store.start(cfg.storage_sched_concurrency){
             panic!("storage start failed, error = {:?}", e);
         }

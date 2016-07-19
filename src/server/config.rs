@@ -16,6 +16,7 @@ use super::Result;
 
 const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
+pub const DEFAULT_LOCAL_STORE_PATH: &'static str = "";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
@@ -29,6 +30,9 @@ pub struct Config {
 
     // Server listening address.
     pub addr: String,
+
+    // local store path
+    pub local_store_path: String,
 
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
@@ -46,6 +50,7 @@ impl Default for Config {
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
+            local_store_path: DEFAULT_LOCAL_STORE_PATH.to_owned(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,

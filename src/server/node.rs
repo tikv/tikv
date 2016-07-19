@@ -29,13 +29,12 @@ use super::transport::ServerRaftStoreRouter;
 
 pub fn create_raft_storage<C>(node: Node<C>,
                               db: Arc<DB>,
-                              notify_cap: usize,
-                              msg_per_tick: usize)
+                              cfg: &Config)
                               -> Result<Storage>
     where C: PdClient + 'static
 {
     let engine = box RaftKv::new(node, db);
-    let store = try!(Storage::from_engine(engine, notify_cap, msg_per_tick));
+    let store = try!(Storage::from_engine(engine, cfg.notify_capacity, cfg.messages_per_tick));
     Ok(store)
 }
 
