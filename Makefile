@@ -2,7 +2,10 @@ ENABLE_FEATURES ?= default
 
 DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
-GOROOT = $(DEPS_PATH)/go
+
+ifeq "$(GOROOT)" ""
+  GOROOT = $(DEPS_PATH)/go
+endif
 
 .PHONY: all
 
