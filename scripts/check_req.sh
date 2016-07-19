@@ -29,23 +29,21 @@ function install_go {
     echo "Intall go ..."
     case "$OSTYPE" in 
         linux*) 
+            if [ ! -d $GOROOT ]; then
+                curl -L https://storage.googleapis.com/golang/go1.6.2.linux-amd64.tar.gz -o golang.tar.gz
+                tar -C ${DEPS_PATH}/ -xzf golang.tar.gz
+            fi
+            # `go get` needs git and hg.
             dist=$(get_linux_platform)
             case $dist in
                 Ubuntu)
-                    # refer to https://github.com/golang/go/wiki/Ubuntu
-                    ${SUDO} add-apt-repository ppa:ubuntu-lxc/lxd-stable
-                    ${SUDO} apt-get update
-                    ${SUDO} apt-get install -y golang mercurial git
+                    ${SUDO} apt-get install -y mercurial git
                 ;;
                 CentOS)
-                    if [ ! -d $GOROOT ]; then
-                        curl -L https://storage.googleapis.com/golang/go1.6.2.linux-amd64.tar.gz -o golang.tar.gz
-                        tar -C ${DEPS_PATH}/ -xzf golang.tar.gz
-                        ${SUDO} yum install -y hg git
-                    fi
+                    ${SUDO} yum install -y hg git
                 ;;
                 *)
-                    echo "unsupported platform $dist, you may install RocksDB manually"
+                    echo "unsupported platform $dist, you may install Go manually"
                     exit 1
                 ;;
             esac
@@ -113,7 +111,7 @@ if which go > /dev/null; then
     GO_VER_1=`go version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[1]}'`
     GO_VER_2=`go version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[2]}'`
     if [[ (($GO_VER_1 -eq 1 && $GO_VER_2 -lt 5)) || (($GO_VER_1 -lt 1)) ]]; then
-        echo "Please upgrade go first."
+        echo "Please upgrade Go to 1.5 or later."
         exit 1
     fi
 else
@@ -126,7 +124,7 @@ if which g++ > /dev/null; then
     G_VER_1=`g++ --version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[1]}'`
     G_VER_2=`g++ --version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[2]}'`
     if [[ (($G_VER_1 -eq 4 && $G_VER_2 -lt 7)) || (($G_VER_1 -lt 4)) ]]; then
-        echo "Please upgrade g++ first."
+        echo "Please upgrade g++ to 4.7 or later."
         exit 1
     fi
 else
