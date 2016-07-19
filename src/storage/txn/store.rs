@@ -87,7 +87,7 @@ impl TxnStore {
 
         let engine = self.engine.as_ref().as_ref();
         let snapshot = try!(engine.snapshot(&ctx));
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+        let mut txn = MvccTxn::new(snapshot.as_ref(), start_ts);
 
         let mut results = vec![];
         for m in mutations {
@@ -97,7 +97,7 @@ impl TxnStore {
                 Err(e) => return Err(Error::from(e)),
             }
         }
-        try!(txn.submit());
+        try!(engine.write(&ctx, txn.modifies()));
         Ok(results)
     }
 
@@ -111,12 +111,12 @@ impl TxnStore {
 
         let engine = self.engine.as_ref().as_ref();
         let snapshot = try!(engine.snapshot(&ctx));
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+        let mut txn = MvccTxn::new(snapshot.as_ref(), start_ts);
 
         for k in keys {
             try!(txn.commit(&k, commit_ts));
         }
-        try!(txn.submit());
+        try!(engine.write(&ctx, txn.modifies()));
         Ok(())
     }
 
@@ -131,11 +131,10 @@ impl TxnStore {
 
         let engine = self.engine.as_ref().as_ref();
         let snapshot = try!(engine.snapshot(&ctx));
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, lock_ts);
-
+        let mut txn = MvccTxn::new(snapshot.as_ref(), lock_ts);
 
         let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
-        try!(txn.submit());
+        try!(engine.write(&ctx, txn.modifies()));
         Ok(val)
     }
 
@@ -144,10 +143,10 @@ impl TxnStore {
 
         let engine = self.engine.as_ref().as_ref();
         let snapshot = try!(engine.snapshot(&ctx));
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+        let mut txn = MvccTxn::new(snapshot.as_ref(), start_ts);
 
         try!(txn.rollback(&key));
-        try!(txn.submit());
+        try!(engine.write(&ctx, txn.modifies()));
         Ok(())
     }
 
@@ -156,12 +155,12 @@ impl TxnStore {
 
         let engine = self.engine.as_ref().as_ref();
         let snapshot = try!(engine.snapshot(&ctx));
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, start_ts);
+        let mut txn = MvccTxn::new(snapshot.as_ref(), start_ts);
 
         for k in keys {
             try!(txn.rollback(&k));
         }
-        try!(txn.submit());
+        try!(engine.write(&ctx, txn.modifies()));
         Ok(())
     }
 
@@ -170,13 +169,14 @@ impl TxnStore {
 
         let engine = self.engine.as_ref().as_ref();
         let snapshot = try!(engine.snapshot(&ctx));
-        let mut txn = MvccTxn::new(engine, snapshot.as_ref(), &ctx, lock_ts);
+        let mut txn = MvccTxn::new(snapshot.as_ref(), lock_ts);
 
         let val = try!(txn.rollback_then_get(&key));
-        try!(txn.submit());
+        try!(engine.write(&ctx, txn.modifies()));
         Ok(val)
     }
 }
+
 
 pub struct SnapshotStore<'a> {
     snapshot: &'a Snapshot,

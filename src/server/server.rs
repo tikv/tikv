@@ -545,7 +545,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
-            Msg::Quit => event_loop.shutdown(),
+            Msg::Quit => {
+                if let Err(e) = self.store.stop() {
+                    error!("storage stop failed err={:?}", e);
+                }
+                event_loop.shutdown();
+            }
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {
@@ -626,7 +631,7 @@ mod tests {
     use super::super::{Msg, ConnData, Result, Config};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
-    use storage::{Storage, Dsn};
+    use storage::{self, Storage, Dsn};
     use kvproto::msgpb::{Message, MessageType};
     use raftstore::Result as RaftStoreResult;
     use kvproto::raft_serverpb::RaftMessage;
@@ -679,12 +684,17 @@ mod tests {
 
         let cfg = Config::new();
         let mut event_loop = create_event_loop(&cfg).unwrap();
+        let mut sched_event_loop = storage::create_event_loop(4096, 256).unwrap();
+        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), &mut sched_event_loop).unwrap();
+        if let Err(e) = storage.start(sched_event_loop, 4096) {
+            panic!("storage start failed, err={:?}", e);
+        }
         let (tx, rx) = mpsc::channel();
         let mut server =
             Server::new(&mut event_loop,
                         &cfg,
                         listener,
-                        Storage::new(Dsn::RocksDBPath(TEMP_DIR)).unwrap(),
+                        storage,
                         Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
                         resolver,
                         store::new_snap_mgr("", None))
