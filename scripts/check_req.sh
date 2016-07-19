@@ -6,7 +6,6 @@ echo "Checking requirements..."
 mkdir -p ${DEPS_PATH}
 cd $DEPS_PATH
 
-export GOROOT=$DEPS_PATH/go
 export PATH=$PATH:$GOROOT/bin
 
 SUDO=
@@ -111,9 +110,9 @@ fi
 # Check go
 if which go > /dev/null; then
     # requires go >= 1.5
-    GO_VER_1=`go version |  grep -m 1 -o '\([0-9]\)\+' | awk 'NR==1'`
-    GO_VER_2=`go version |  grep -m 1 -o '\([0-9]\)\+' | awk 'NR==2'`
-    if [[ $GO_VER_1 -lt 1 && $GO_VER_2 -lt 5 ]]; then 
+    GO_VER_1=`go version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[1]}'`
+    GO_VER_2=`go version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[2]}'`
+    if [[ (($GO_VER_1 -eq 1 && $GO_VER_2 -lt 5)) || (($GO_VER_1 -lt 1)) ]]; then
         echo "Please upgrade go first."
         exit 1
     fi
@@ -124,9 +123,9 @@ fi
 # Check g++
 if which g++ > /dev/null; then
     # Check g++ version, RocksDB requires > 4.7
-    G_VER_1=`g++ --version | grep -m 1 -o '\([0-9]\)\+\(\.[0-9]\)\+' | tail -n 1 | grep -m 1 -o '\([0-9]\)\+' | awk 'NR==1'`
-    G_VER_2=`g++ --version | grep -m 1 -o '\([0-9]\)\+\(\.[0-9]\)\+' | tail -n 1 | grep -m 1 -o '\([0-9]\)\+' | awk 'NR==2'`
-    if [[ $G_VER_1 -lt 4 && $G_VER_2 -lt 7 ]]; then
+    G_VER_1=`g++ --version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[1]}'`
+    G_VER_2=`g++ --version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[2]}'`
+    if [[ (($G_VER_1 -eq 4 && $G_VER_2 -lt 7)) || (($G_VER_1 -lt 4)) ]]; then
         echo "Please upgrade g++ first."
         exit 1
     fi
