@@ -13,7 +13,6 @@
 
 use std::time::Duration;
 use std::boxed::Box;
-
 use std::sync::Arc;
 use storage::{Engine, Command, Snapshot};
 use kvproto::kvrpcpb::Context;
@@ -26,9 +25,8 @@ use storage::engine::{Result as EngineResult, Callback};
 use super::Result;
 use super::Error;
 use super::SchedCh;
-
 use super::store::SnapshotStore;
-use super::mem_rowlock::MemRowLocks;
+use super::latch::Latches;
 
 const REPORT_STATISTIC_INTERVAL: u64 = 60000; // 60 seconds
 
@@ -54,7 +52,7 @@ pub enum Msg {
     },
 
     // inner message
-    AcquireLock {
+    AcquireLatches {
         cid: u64,
     },
     GetSnapshot {
@@ -71,31 +69,31 @@ pub enum Msg {
     },
 }
 
-type LockIdxs = Vec<usize>;
+type LatchIndices = Vec<usize>;
 
 struct RunningCtx {
     pub cid: u64,
     pub cmd: Command,
-    needed_locks: LockIdxs,
-    pub owned_lock_count: usize,
+    needed_latches: LatchIndices,
+    pub owned_latches_count: usize,
 }
 
 impl RunningCtx {
-    pub fn new(cid: u64, cmd: Command, needed_locks: LockIdxs) -> RunningCtx {
+    pub fn new(cid: u64, cmd: Command, needed_latches: LatchIndices) -> RunningCtx {
         RunningCtx {
             cid: cid,
             cmd: cmd,
-            needed_locks: needed_locks,
-            owned_lock_count: 0,
+            needed_latches: needed_latches,
+            owned_latches_count: 0,
         }
     }
 
-    pub fn needed_locks(&self) -> &LockIdxs {
-        &self.needed_locks
+    pub fn needed_latches(&self) -> &LatchIndices {
+        &self.needed_latches
     }
 
-    pub fn all_lock_acquired(&self) -> bool {
-        self.needed_locks.len() == self.owned_lock_count
+    pub fn all_latches_acquired(&self) -> bool {
+        self.needed_latches.len() == self.owned_latches_count
     }
 }
 
@@ -106,9 +104,7 @@ fn make_write_cb(pr: ProcessResult, cid: u64, ch: SchedCh) -> Callback<()> {
             pr: pr,
             result: result,
         }) {
-            error!("write engine failed cmd id {}, err {:?}",
-            cid,
-            e);
+            error!("write engine failed cmd id {}, err {:?}", cid, e);
         }
     })
 }
@@ -125,20 +121,8 @@ pub struct Scheduler {
     // cmd id generator
     idalloc: u64,
 
-    // simulate memory row locks
-    rowlocks: MemRowLocks,
-
-    // statistics for flow control
-    running_cmd_count: u64,
-}
-
-fn readonly_cmd(cmd: &Command) -> bool {
-    match *cmd {
-        Command::Get { .. } |
-        Command::BatchGet { .. } |
-        Command::Scan { .. } => true,
-        _ => false,
-    }
+    // write concurrency control
+    latches: Latches,
 }
 
 impl Scheduler {
@@ -148,27 +132,18 @@ impl Scheduler {
             cmd_ctxs: HashMap::new(),
             schedch: schedch,
             idalloc: 0,
-            rowlocks: MemRowLocks::new(concurrency),
-            running_cmd_count: 0,
+            latches: Latches::new(concurrency),
         }
     }
 
-    fn next_id(&mut self) -> u64 {
+    fn gen_id(&mut self) -> u64 {
         self.idalloc += 1;
         self.idalloc
     }
 
-    fn incr_running_cmd(&mut self) {
-        self.running_cmd_count += 1;
-    }
-
-    fn decr_running_cmd(&mut self) {
-        self.running_cmd_count -= 1;
-    }
-
     fn save_cmd_context(&mut self, cid: u64, ctx: RunningCtx) {
-        if let Some(_) = self.cmd_ctxs.insert(cid, ctx) {
-            panic!("cid = {} existed, fatal", cid);
+        if self.cmd_ctxs.insert(cid, ctx).is_some() {
+            panic!("cid = {} shouldn't exist", cid);
         }
     }
 
@@ -178,21 +153,20 @@ impl Scheduler {
             let rctx = self.cmd_ctxs.get(&cid).unwrap();
             assert_eq!(cid, rctx.cid);
 
-            // release lock and wake up waiting commands
-            if !rctx.needed_locks().is_empty() {
-                let wakeup_list = self.rowlocks.release_by_indexs(rctx.needed_locks(), cid);
+            // release latches and wake up waiting commands
+            if !rctx.needed_latches().is_empty() {
+                let wakeup_list = self.latches.release_by_indices(rctx.needed_latches(), cid);
                 for wcid in wakeup_list {
-                    if let Err(e) = self.schedch.send(Msg::AcquireLock { cid: wcid }) {
+                    if let Err(e) = self.schedch.send(Msg::AcquireLatches { cid: wcid }) {
                         error!("wake up cmd failed, cid = {}, error = {:?}", wcid, e);
                     } else {
-                        debug!("wake up cmd for acquire lock, cid = {}", wcid);
+                        debug!("wake up cmd for acquire latches, cid = {}", wcid);
                     }
                 }
             }
         }
 
         self.cmd_ctxs.remove(&cid);
-        self.decr_running_cmd();
     }
 
     pub fn dispatch_cmd(&self, cmd: Command) {
@@ -201,23 +175,23 @@ impl Scheduler {
         }
     }
 
-    fn calc_lock_indexs(&self, cmd: &Command) -> Vec<usize> {
+    fn calc_latches_indices(&self, cmd: &Command) -> Vec<usize> {
         match *cmd {
             Command::Prewrite { ref mutations, .. } => {
-                let locked_keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
-                self.rowlocks.calc_lock_indexs(&locked_keys)
+                let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
+                self.latches.calc_latches_indices(&keys)
             }
             Command::Commit { ref keys, .. } |
             Command::Rollback { ref keys, .. } => {
-                self.rowlocks.calc_lock_indexs(keys)
+                self.latches.calc_latches_indices(keys)
             }
             Command::CommitThenGet { ref key, .. } |
             Command::Cleanup { ref key, .. } |
             Command::RollbackThenGet { ref key, .. } => {
-                self.rowlocks.calc_lock_indexs(&[key])
+                self.latches.calc_latches_indices(&[key])
             }
             _ => {
-                panic!("unsupport cmd that need lock");
+                panic!("unsupported cmd that need latches");
             }
         }
     }
@@ -231,7 +205,6 @@ impl Scheduler {
                 let snap_store = SnapshotStore::new(snapshot, start_ts);
                 callback.take().unwrap()(snap_store.get(key).map_err(::storage::Error::from));
             }
-
             Command::BatchGet { ref keys, start_ts, ref mut callback, .. } => {
                 let snap_store = SnapshotStore::new(snapshot, start_ts);
                 callback.take().unwrap()(match snap_store.batch_get(keys) {
@@ -249,7 +222,6 @@ impl Scheduler {
                     Err(e) => Err(e.into()),
                 });
             }
-
             Command::Scan { ref start_key, limit, start_ts, ref mut callback, .. } => {
                 let snap_store = SnapshotStore::new(snapshot, start_ts);
                 let mut scanner = try!(snap_store.scanner());
@@ -261,10 +233,8 @@ impl Scheduler {
                     Err(e) => Err(e.into()),
                 });
             }
-
             Command::Prewrite { ref ctx, ref mutations, ref primary, start_ts, .. } => {
                 let mut txn = MvccTxn::new(snapshot, start_ts);
-
                 let mut results = vec![];
                 for m in mutations {
                     match txn.prewrite(m.clone(), primary) {
@@ -279,10 +249,8 @@ impl Scheduler {
 
                 try!(self.engine.async_write(ctx, txn.modifies(), cb));
             }
-
             Command::Commit { ref ctx, ref keys, lock_ts, commit_ts, .. } => {
                 let mut txn = MvccTxn::new(snapshot, lock_ts);
-
                 for k in keys {
                     try!(txn.commit(&k, commit_ts));
                 }
@@ -291,20 +259,16 @@ impl Scheduler {
                 let cb = make_write_cb(pr, cid, self.schedch.clone());
                 try!(self.engine.async_write(ctx, txn.modifies(), cb));
             }
-
             Command::CommitThenGet { ref ctx, ref key, lock_ts, commit_ts, get_ts, .. } => {
                 let mut txn = MvccTxn::new(snapshot, lock_ts);
-
                 let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
 
                 let pr: ProcessResult = ProcessResult::Value { value: val };
                 let cb = make_write_cb(pr, cid, self.schedch.clone());
                 try!(self.engine.async_write(ctx, txn.modifies(), cb));
             }
-
             Command::Cleanup { ref ctx, ref key, start_ts, .. } => {
                 let mut txn = MvccTxn::new(snapshot, start_ts);
-
                 try!(txn.rollback(&key));
 
                 let pr: ProcessResult = ProcessResult::Nothing;
@@ -313,7 +277,6 @@ impl Scheduler {
             }
             Command::Rollback { ref ctx, ref keys, start_ts, .. } => {
                 let mut txn = MvccTxn::new(snapshot, start_ts);
-
                 for k in keys {
                     try!(txn.rollback(&k));
                 }
@@ -324,7 +287,6 @@ impl Scheduler {
             }
             Command::RollbackThenGet { ref ctx, ref key, lock_ts, .. } => {
                 let mut txn = MvccTxn::new(snapshot, lock_ts);
-
                 let val = try!(txn.rollback_then_get(&key));
 
                 let pr: ProcessResult = ProcessResult::Value { value: val };
@@ -390,17 +352,16 @@ impl Scheduler {
     }
 
     fn on_report_staticstic_tick(&self, event_loop: &mut EventLoop<Self>) {
-        info!("all running cmd count = {}", self.running_cmd_count);
+        info!("all running cmd count = {}", self.cmd_ctxs.len());
 
         self.register_report_tick(event_loop);
     }
 
     fn received_new_cmd(&mut self, cmd: Command) {
-        let cid = self.next_id();
-        self.incr_running_cmd();
+        let cid = self.gen_id();
 
-        if readonly_cmd(&cmd) {
-            // readonly command don't need lock, step to GetSnapshot
+        if cmd.readonly() {
+            // readonly command don't need latch, step to GetSnapshot
             let ctx: RunningCtx = RunningCtx::new(cid, cmd, vec![]);
             self.save_cmd_context(cid, ctx);
 
@@ -411,15 +372,15 @@ impl Scheduler {
             }
 
         } else {
-            // write command need acquire row lock first
-            // if acquire all locks then get snapshot, or this command
-            // will be wake up by who owned lock when it release the lock
-            let lock_idxs = self.calc_lock_indexs(&cmd);
-            let mut ctx: RunningCtx = RunningCtx::new(cid, cmd, lock_idxs);
+            // write command need acquire latches first, if acquire all latches
+            // then can step forward to get snapshot, or this command will be
+            // wake up by who currently owned this latches when it release latches
+            let indices = self.calc_latches_indices(&cmd);
+            let mut ctx: RunningCtx = RunningCtx::new(cid, cmd, indices);
 
-            let acquire_count = self.rowlocks.acquire_by_indexs(ctx.needed_locks(), cid);
-            ctx.owned_lock_count += acquire_count;
-            if ctx.all_lock_acquired() {
+            let acquire_count = self.latches.acquire_by_indices(ctx.needed_latches(), cid);
+            ctx.owned_latches_count += acquire_count;
+            if ctx.all_latches_acquired() {
                 if let Err(e) = self.schedch.send(Msg::GetSnapshot { cid: cid }) {
                     error!("send msg getsnapshot failed, cid = {}, error = {:?}", cid, e);
                     self.process_failed_cmd(cid, e);
@@ -431,23 +392,23 @@ impl Scheduler {
         }
     }
 
-    fn acquire_lock_for_cmd(&mut self, cid: u64) {
-        let mut all_lock_acquired = false;
+    fn acquire_latches_for_cmd(&mut self, cid: u64) {
+        let mut all_latches_acquired = false;
         {
             let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
 
             let new_acquired = {
-                let needed_locks = ctx.needed_locks();
-                let owned_count = ctx.owned_lock_count;
-                self.rowlocks.acquire_by_indexs(&needed_locks[owned_count..], cid)
+                let needed_latches = ctx.needed_latches();
+                let owned_count = ctx.owned_latches_count;
+                self.latches.acquire_by_indices(&needed_latches[owned_count..], cid)
             };
-            ctx.owned_lock_count += new_acquired;
-            if ctx.all_lock_acquired() {
-                all_lock_acquired = true;
+            ctx.owned_latches_count += new_acquired;
+            if ctx.all_latches_acquired() {
+                all_latches_acquired = true;
             }
         }
 
-        if all_lock_acquired {
+        if all_latches_acquired {
             if let Err(e) = self.schedch.send(Msg::GetSnapshot{ cid: cid }) {
                 error!("send msg getsnapshot failed, cid = {}, error = {:?}", cid, e);
                 self.process_failed_cmd(cid, e);
@@ -483,7 +444,7 @@ impl Scheduler {
                 match res {
                     Ok(()) => {
                         let rctx = self.cmd_ctxs.get(&cid).unwrap();
-                        if readonly_cmd(&rctx.cmd) { finished = true; }
+                        if rctx.cmd.readonly() { finished = true; }
                     }
                     Err(e) => {
                         self.process_failed_cmd(cid, Error::from(e));
@@ -585,7 +546,7 @@ impl mio::Handler for Scheduler {
             Msg::RawCmd { cmd } => self.received_new_cmd(cmd),
 
             // inner message
-            Msg::AcquireLock { cid } => self.acquire_lock_for_cmd(cid),
+            Msg::AcquireLatches { cid } => self.acquire_latches_for_cmd(cid),
             Msg::GetSnapshot { cid } => self.get_snapshot_for_cmd(cid),
             Msg::SnapshotFinish { cid, snapshot } => self.snapshot_finished_for_cmd(cid, snapshot),
             Msg::WriteFinish { cid, pr, result } => {

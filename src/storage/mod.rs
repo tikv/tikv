@@ -174,6 +174,17 @@ impl fmt::Display for Command {
     }
 }
 
+impl Command {
+    pub fn readonly(&self) -> bool {
+        match *self {
+            Command::Get { .. } |
+            Command::BatchGet { .. } |
+            Command::Scan { .. } => true,
+            _ => false,
+        }
+    }
+}
+
 pub struct Storage {
     engine: Arc<Box<Engine>>,
     schedch: SchedCh,

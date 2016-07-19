@@ -16,7 +16,7 @@ use std::collections::{VecDeque, BTreeSet};
 use std::hash::{Hash, SipHasher, Hasher};
 
 // simulate lock of one row
-pub struct RowLock {
+struct Latch {
     // store waiting commands
     pub waiting: VecDeque<u64>,
 
@@ -24,29 +24,29 @@ pub struct RowLock {
     pub set: BTreeSet<u64>,
 }
 
-impl RowLock {
-    pub fn new() -> RowLock {
-        RowLock {
+impl Latch {
+    pub fn new() -> Latch {
+        Latch {
             waiting: VecDeque::new(),
             set: BTreeSet::new(),
         }
     }
 }
 
-pub struct MemRowLocks {
-    locks: Vec<RowLock>,
+pub struct Latches {
+    locks: Vec<Latch>,
     size: usize,
 }
 
-impl MemRowLocks {
-    pub fn new(size: usize) -> MemRowLocks {
-        MemRowLocks {
-            locks: (0..size).map(|_|  RowLock::new()).collect(),
+impl Latches {
+    pub fn new(size: usize) -> Latches {
+        Latches {
+            locks: (0..size).map(|_|  Latch::new()).collect(),
             size: size,
         }
     }
 
-    pub fn calc_lock_indexs<H>(&self, keys: &[H]) -> Vec<usize>
+    pub fn calc_latches_indices<H>(&self, keys: &[H]) -> Vec<usize>
         where H: Hash
     {
         let mut indices: Vec<usize> = keys.iter().map(|x| self.calc_index(x)).collect();
@@ -57,10 +57,10 @@ impl MemRowLocks {
         indices
     }
 
-    pub fn acquire_by_indexs(&mut self, indexs: &[usize], who: u64) -> usize {
+    pub fn acquire_by_indices(&mut self, indices: &[usize], who: u64) -> usize {
 
         let mut acquired_count: usize = 0;
-        for i in indexs {
+        for i in indices {
             let rowlock = &mut self.locks.get_mut(*i).unwrap();
 
             let mut front: Option<u64> = None;
@@ -92,10 +92,10 @@ impl MemRowLocks {
     }
 
     // release all locks owned, and return wakeup list
-    pub fn release_by_indexs(&mut self, indexs: &[usize], who: u64) -> Vec<u64> {
+    pub fn release_by_indices(&mut self, indices: &[usize], who: u64) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
 
-        for i in indexs {
+        for i in indices {
             let rowlock = &mut self.locks.get_mut(*i).unwrap();
 
             match rowlock.waiting.pop_front() {
@@ -129,24 +129,24 @@ impl MemRowLocks {
 
 #[cfg(test)]
 mod tests {
-    use super::MemRowLocks;
+    use super::Latches;
 
     #[test]
     fn test_wakeup_cmd() {
-        let mut mem_rowlocks = MemRowLocks::new(256);
+        let mut latches = Latches::new(256);
 
-        let indexs_a: Vec<usize> = vec![1, 3, 5];
-        let indexs_b: Vec<usize> = vec![4, 5, 6];
+        let indices_a: Vec<usize> = vec![1, 3, 5];
+        let indices_b: Vec<usize> = vec![4, 5, 6];
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
 
-        let acquired_a: usize = mem_rowlocks.acquire_by_indexs(&indexs_a, cid_a);
+        let acquired_a: usize = latches.acquire_by_indices(&indices_a, cid_a);
         assert_eq!(acquired_a, 3);
 
-        let acquired_b: usize = mem_rowlocks.acquire_by_indexs(&indexs_b, cid_b);
+        let acquired_b: usize = latches.acquire_by_indices(&indices_b, cid_b);
         assert_eq!(acquired_b, 1);
 
-        let wakeup = mem_rowlocks.release_by_indexs(&indexs_a, cid_a);
+        let wakeup = latches.release_by_indices(&indices_a, cid_a);
         assert_eq!(wakeup[0], cid_b);
     }
 }

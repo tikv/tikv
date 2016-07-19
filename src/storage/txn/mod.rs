@@ -13,7 +13,7 @@
 
 mod store;
 mod scheduler;
-mod mem_rowlock;
+mod latch;
 mod shard_mutex;
 
 use std::error;
