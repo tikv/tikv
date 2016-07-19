@@ -92,7 +92,7 @@ function install_gpp {
             xcode-select --install
             brew update
             brew tap homebrew/versions
-            brew install gcc47 --use-llvm
+            brew install gcc48 --use-llvm
         ;;
 
         *)
@@ -122,7 +122,7 @@ fi
 
 # Check g++
 if which g++ > /dev/null; then
-    # Check g++ version, RocksDB requires > 4.7
+    # Check g++ version, RocksDB requires >= 4.7
     G_VER_1=`g++ --version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[1]}'`
     G_VER_2=`g++ --version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[2]}'`
     if [[ (($G_VER_1 -eq 4 && $G_VER_2 -lt 7)) || (($G_VER_1 -lt 4)) ]]; then
