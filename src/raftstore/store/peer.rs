@@ -703,7 +703,7 @@ impl Peer {
             let mut state = self.get_store().apply_state.clone();
             state.set_applied_index(index);
             try!(wb.put_msg(&keys::apply_state_key(self.region_id), &state));
-            try!(self.engine.write_without_wal(wb));
+            try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
             return Ok(None);
         }
@@ -849,7 +849,7 @@ impl Peer {
 
         // Commit write and change storage fields atomically.
         let mut storage = self.mut_store();
-        match storage.engine.write_without_wal(ctx.wb) {
+        match storage.engine.write(ctx.wb) {
             Ok(_) => {
                 storage.apply_state = ctx.apply_state;
 
