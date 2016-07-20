@@ -26,7 +26,7 @@
 // limitations under the License.
 
 
-use kvproto::raftpb::HardState;
+use kvproto::eraftpb::HardState;
 use raft::raft::{Raft, SoftState, StateRole};
 use raft::storage::Storage;
 use raft::progress::Progress;

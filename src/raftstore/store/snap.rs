@@ -10,7 +10,7 @@ use crc::crc32::{self, Digest, Hasher32};
 use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use protobuf::Message;
 
-use kvproto::raftpb::Snapshot;
+use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use raftstore::store::{SendCh, Msg};
 

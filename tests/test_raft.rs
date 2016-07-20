@@ -32,8 +32,8 @@ use protobuf::{self, RepeatedField};
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::cmp;
-use kvproto::raftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
-                      ConfChange, ConfChangeType};
+use kvproto::eraftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
+                       ConfChange, ConfChangeType};
 use rand;
 
 pub fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {

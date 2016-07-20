@@ -16,7 +16,7 @@ use std::thread;
 use std::cmp;
 use rand::{self, Rng};
 
-use kvproto::raftpb::MessageType;
+use kvproto::eraftpb::MessageType;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;

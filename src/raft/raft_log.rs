@@ -28,7 +28,7 @@
 
 use raft::storage::Storage;
 use raft::log_unstable::Unstable;
-use kvproto::raftpb::{Entry, Snapshot};
+use kvproto::eraftpb::{Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
 use std::{cmp, u64};
 use util;
@@ -396,22 +396,22 @@ impl<T: Storage> RaftLog<T> {
 mod test {
     use raft::raft_log::{self, RaftLog};
     use raft::storage::MemStorage;
-    use kvproto::raftpb;
+    use kvproto::eraftpb;
     use raft::errors::{Error, StorageError};
     use protobuf;
 
-    fn new_entry(index: u64, term: u64) -> raftpb::Entry {
-        let mut e = raftpb::Entry::new();
+    fn new_entry(index: u64, term: u64) -> eraftpb::Entry {
+        let mut e = eraftpb::Entry::new();
         e.set_term(term);
         e.set_index(index);
         e
     }
 
-    fn new_snapshot(meta_index: u64, meta_term: u64) -> raftpb::Snapshot {
-        let mut meta = raftpb::SnapshotMetadata::new();
+    fn new_snapshot(meta_index: u64, meta_term: u64) -> eraftpb::Snapshot {
+        let mut meta = eraftpb::SnapshotMetadata::new();
         meta.set_index(meta_index);
         meta.set_term(meta_term);
-        let mut snapshot = raftpb::Snapshot::new();
+        let mut snapshot = eraftpb::Snapshot::new();
         snapshot.set_metadata(meta);
         snapshot
     }

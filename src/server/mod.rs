@@ -22,7 +22,7 @@ use mio::{self, Token, NotifyError};
 
 use kvproto::msgpb::{self, MessageType};
 use util::codec::rpc;
-use kvproto::raftpb::MessageType as RaftMessageType;
+use kvproto::eraftpb::MessageType as RaftMessageType;
 
 pub mod config;
 pub mod errors;

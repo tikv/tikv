@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
-use kvproto::raftpb::{ConfChangeType, Snapshot, MessageType};
+use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer};
 use pd::PdClient;

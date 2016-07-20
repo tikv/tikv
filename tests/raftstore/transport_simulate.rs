@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::raftpb::MessageType;
+use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::Transport;
 use tikv::util::HandyRwLock;

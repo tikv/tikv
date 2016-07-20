@@ -17,7 +17,7 @@ use std::fmt::{self, Formatter, Display};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::raftpb::ConfChangeType;
+use kvproto::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, AdminRequest, AdminCmdType};
 use kvproto::pdpb;
 
