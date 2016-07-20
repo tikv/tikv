@@ -129,17 +129,20 @@ impl PipeBuffer {
         self.buf.reserve(cap, capacity + 1 - cap);
         let new_cap = self.buf.cap();
 
+        // After the buf being extended, we have to make the written data layout correctly.
         unsafe {
             if self.start <= self.end {
                 // written data are linear, no need to move.
                 return;
             } else if new_cap - cap > self.end && self.end <= cap - self.start {
                 // left part can be fit in new buf and is shorter.
+                // [ll...rrr...] -> [.....rrrll.]
                 let left = self.buf.ptr();
                 let new_pos = self.buf.ptr().offset(cap as isize);
                 ptr::copy_nonoverlapping(left, new_pos, self.end);
                 self.end += cap;
             } else {
+                // [lll..rr..] -> [lll....rr]
                 let right = self.buf.ptr().offset(self.start as isize);
                 self.start = new_cap - (cap - self.start);
                 let new_pos = self.buf.ptr().offset(self.start as isize);
@@ -157,11 +160,14 @@ impl PipeBuffer {
         assert!(len < self.capacity());
 
         let new_cap = len + 1;
+        // Before actually shrinking, written data need to be fit in target capacity.
+        // If target capacity is too short, extra data should be truncated.
         let to_keep = cmp::min(len, self.len());
         unsafe {
             if self.start <= self.end {
                 let dest = self.buf.ptr();
                 if self.start >= len {
+                    // [...|.ll.] -> [ll.]
                     self.start = 0;
                     self.end = to_keep;
                     let source = self.buf.ptr().offset(self.start as isize);
@@ -169,8 +175,10 @@ impl PipeBuffer {
                 } else {
                     let right_len = new_cap - self.start;
                     if right_len >= to_keep {
+                        // [.rr|...] -> [.rr] or [rrr|r] -> [rr.]
                         self.end = self.start + to_keep;
                     } else {
+                        // [..r|l.] -> [l.r]
                         self.end = to_keep - right_len;
                         let source = self.buf.ptr().offset(new_cap as isize);
                         ptr::copy_nonoverlapping(source, dest, self.end);
@@ -180,10 +188,12 @@ impl PipeBuffer {
                 let source = self.buf.ptr().offset(self.start as isize);
                 let right_len = self.buf.cap() - self.start;
                 if right_len >= to_keep {
+                    // [ll...|.rrrrr] -> [rrrr.]
                     self.start = 0;
                     self.end = to_keep;
                     ptr::copy(source, self.buf.ptr(), to_keep);
                 } else {
+                    // [ll...|.rr] -> [ll.rr]
                     self.start = new_cap - right_len;
                     if self.end >= self.start {
                         self.end = self.start - 1;
