@@ -21,7 +21,7 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::raftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
+use kvproto::eraftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -341,7 +341,7 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T>(&mut self, trans: &Arc<RwLock<T>>, msgs: &[raftpb::Message]) -> Result<()>
+    fn send<T>(&mut self, trans: &Arc<RwLock<T>>, msgs: &[eraftpb::Message]) -> Result<()>
         where T: Transport
     {
         for msg in msgs {
@@ -525,7 +525,7 @@ impl Peer {
         let data = try!(cmd.write_to_bytes());
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
 
-        let mut cc = raftpb::ConfChange::new();
+        let mut cc = eraftpb::ConfChange::new();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
         cc.set_context(data);
@@ -602,7 +602,7 @@ impl Peer {
     }
 
     fn send_raft_message<T: Transport>(&mut self,
-                                       msg: &raftpb::Message,
+                                       msg: &eraftpb::Message,
                                        trans: &Arc<RwLock<T>>)
                                        -> Result<()> {
         let mut send_msg = RaftMessage::new();
@@ -657,7 +657,7 @@ impl Peer {
         if unreachable {
             self.raft_group.report_unreachable(to_peer_id);
 
-            if msg_type == raftpb::MessageType::MsgSnapshot {
+            if msg_type == eraftpb::MessageType::MsgSnapshot {
                 self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
         }
@@ -666,7 +666,7 @@ impl Peer {
     }
 
     fn handle_raft_commit_entries(&mut self,
-                                  committed_entries: &[raftpb::Entry])
+                                  committed_entries: &[eraftpb::Entry])
                                   -> Result<Vec<ExecResult>> {
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
@@ -676,8 +676,8 @@ impl Peer {
         let committed_count = committed_entries.len();
         for entry in committed_entries {
             let res = try!(match entry.get_entry_type() {
-                raftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
-                raftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
+                eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
+                eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
             });
 
             if let Some(res) = res {
@@ -692,7 +692,7 @@ impl Peer {
         Ok(results)
     }
 
-    fn handle_raft_entry_normal(&mut self, entry: &raftpb::Entry) -> Result<Option<ExecResult>> {
+    fn handle_raft_entry_normal(&mut self, entry: &eraftpb::Entry) -> Result<Option<ExecResult>> {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
@@ -720,12 +720,12 @@ impl Peer {
     }
 
     fn handle_raft_entry_conf_change(&mut self,
-                                     entry: &raftpb::Entry)
+                                     entry: &eraftpb::Entry)
                                      -> Result<Option<ExecResult>> {
         let index = entry.get_index();
         let term = entry.get_term();
         let mut conf_change =
-            try!(protobuf::parse_from_bytes::<raftpb::ConfChange>(entry.get_data()));
+            try!(protobuf::parse_from_bytes::<eraftpb::ConfChange>(entry.get_data()));
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
         let res = match self.process_raft_cmd(index, term, cmd) {
             a @ Ok(Some(_)) => a,
@@ -735,7 +735,7 @@ impl Peer {
                        index,
                        e);
                 // If failed, tell raft that the config change was aborted.
-                conf_change = raftpb::ConfChange::new();
+                conf_change = eraftpb::ConfChange::new();
                 Ok(None)
             }
         };
@@ -970,7 +970,7 @@ impl Peer {
         region.mut_region_epoch().set_conf_ver(conf_ver);
 
         match change_type {
-            raftpb::ConfChangeType::AddNode => {
+            eraftpb::ConfChangeType::AddNode => {
                 metric_incr!("raftstore.add_peer");
                 if exists {
                     error!("{} can't add duplicated peer {:?} to region {:?}",
@@ -994,7 +994,7 @@ impl Peer {
                       peer,
                       self.region());
             }
-            raftpb::ConfChangeType::RemoveNode => {
+            eraftpb::ConfChangeType::RemoveNode => {
                 metric_incr!("raftstore.remove_peer");
                 if !exists {
                     error!("{} remove missing peer {:?} from region {:?}",

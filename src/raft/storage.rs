@@ -28,7 +28,7 @@
 
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use kvproto::raftpb::{HardState, ConfState, Entry, Snapshot};
+use kvproto::eraftpb::{HardState, ConfState, Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
 use util::{self, HandyRwLock};
 

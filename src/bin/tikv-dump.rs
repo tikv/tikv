@@ -25,7 +25,7 @@ use getopts::Options;
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::metapb::Region;
-use kvproto::raftpb::Entry;
+use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
 use tikv::raftstore::store::keys;

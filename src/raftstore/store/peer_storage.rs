@@ -22,7 +22,7 @@ use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::Message;
 
 use kvproto::metapb;
-use kvproto::raftpb::{Entry, Snapshot, ConfState, HardState};
+use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
 use util::HandyRwLock;
@@ -696,7 +696,7 @@ mod test {
     use std::io;
     use std::fs::File;
     use rocksdb::*;
-    use kvproto::raftpb::{Entry, ConfState};
+    use kvproto::eraftpb::{Entry, ConfState};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;

@@ -16,7 +16,7 @@ use super::cluster::{Cluster, Simulator};
 use super::transport_simulate::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use kvproto::raftpb::MessageType;
+use kvproto::eraftpb::MessageType;
 use std::time::Duration;
 
 fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {

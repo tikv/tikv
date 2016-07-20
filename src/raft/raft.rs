@@ -29,7 +29,7 @@
 use std::cmp;
 use raft::storage::Storage;
 use rand::{self, Rng};
-use kvproto::raftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
+use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
 use protobuf::repeated::RepeatedField;
 use raft::progress::{Progress, Inflights, ProgressState};
 use raft::errors::{Result, Error, StorageError};

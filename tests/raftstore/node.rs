@@ -25,7 +25,7 @@ use tikv::server::Node;
 use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
-use kvproto::raftpb::MessageType;
+use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{store, Result};
 use tikv::util::HandyRwLock;
 use tikv::server::Config as ServerConfig;

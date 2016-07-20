@@ -18,7 +18,7 @@ use std::time::Duration;
 use mio;
 
 use raftstore::{Result, send_msg, Error};
-use kvproto::raftpb::Snapshot;
+use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;

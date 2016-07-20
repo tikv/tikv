@@ -15,7 +15,7 @@
 use std::fs;
 
 use tikv::pd::PdClient;
-use kvproto::raftpb::MessageType;
+use kvproto::eraftpb::MessageType;
 
 use super::transport_simulate::IsolateRegionStore;
 use super::cluster::{Cluster, Simulator};
