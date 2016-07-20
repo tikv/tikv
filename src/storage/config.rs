@@ -12,8 +12,8 @@
 // limitations under the License.
 
 const DEFAULT_STORE_PATH: &'static str = "";
-const DEFAULT_SCHED_CAPACITY: usize = 4096;
-const DEFAULT_SCHED_MSG_PER_TICK: usize = 256;
+const DEFAULT_SCHED_CAPACITY: usize = 10240;
+const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024;
 
 #[derive(Clone, Debug)]

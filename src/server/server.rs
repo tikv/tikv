@@ -684,9 +684,7 @@ mod tests {
         let cfg = Config::new();
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let mut storage = Storage::new(&cfg.storage).unwrap();
-        if let Err(e) = storage.start(&cfg.storage) {
-            panic!("storage start failed, err={:?}", e);
-        }
+        storage.start(&cfg.storage).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut server =
             Server::new(&mut event_loop,

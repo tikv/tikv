@@ -65,37 +65,33 @@ type LatchSlots = Vec<usize>;
 struct RunningCtx {
     pub cid: u64,
     pub cmd: Command,
-    needed_latches: LatchSlots,
+    required_latches: LatchSlots,
     pub owned_latches_count: usize,
 }
 
 impl RunningCtx {
-    pub fn new(cid: u64, cmd: Command, needed_latches: LatchSlots) -> RunningCtx {
+    pub fn new(cid: u64, cmd: Command, required_latches: LatchSlots) -> RunningCtx {
         RunningCtx {
             cid: cid,
             cmd: cmd,
-            needed_latches: needed_latches,
+            required_latches: required_latches,
             owned_latches_count: 0,
         }
     }
 
-    pub fn needed_latches(&self) -> &LatchSlots {
-        &self.needed_latches
+    pub fn required_latches(&self) -> &LatchSlots {
+        &self.required_latches
     }
 
     pub fn all_latches_acquired(&self) -> bool {
-        self.needed_latches.len() == self.owned_latches_count
+        self.required_latches.len() == self.owned_latches_count
     }
 }
 
 fn make_write_cb(pr: ProcessResult, cid: u64, ch: SchedCh) -> Callback<()> {
     Box::new(move |result: EngineResult<()>| {
-        if let Err(e) = ch.send(Msg::WriteFinish{
-            cid: cid,
-            pr: pr,
-            result: result,
-        }) {
-            error!("write engine failed cmd id {}, err {:?}", cid, e);
+        if let Err(e) = ch.send(Msg::WriteFinish{ cid: cid, pr: pr, result: result, }) {
+            error!("send write finished to scheduler failed cid = {}, err:{:?}", cid, e);
         }
     })
 }
@@ -137,13 +133,7 @@ impl Scheduler {
         }
     }
 
-    pub fn dispatch_cmd(&self, cmd: Command) {
-        if let Err(e) = self.schedch.send(Msg::RawCmd{ cmd: cmd }) {
-            error!("dispatch cmd failed, error = {:?}", e);
-        }
-    }
-
-    fn calc_latches_indices(&self, cmd: &Command) -> Vec<usize> {
+    fn calc_latches_slots(&self, cmd: &Command) -> Vec<usize> {
         match *cmd {
             Command::Prewrite { ref mutations, .. } => {
                 let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
@@ -338,11 +328,10 @@ impl Scheduler {
             self.save_cmd_context(cid, ctx);
             self.get_snapshot(cid);
         } else {
-            // write command need acquire latches first, if acquire all latches
-            // then can step forward to get snapshot, or this command will be
-            // wake up by who currently owned this latches when it release latches
-            let indices = self.calc_latches_indices(&cmd);
-            let ctx = RunningCtx::new(cid, cmd, indices);
+            // write command needs acquire latches first, or this command will not
+            // be handled currently, it will be woken up by other command
+            let slots = self.calc_latches_slots(&cmd);
+            let ctx = RunningCtx::new(cid, cmd, slots);
             self.save_cmd_context(cid, ctx);
 
             let all_acquired = self.acquire_latches(cid);
@@ -355,9 +344,9 @@ impl Scheduler {
     fn acquire_latches(&mut self, cid: u64) -> bool {
         let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
         let new_acquired = {
-            let needed_latches = ctx.needed_latches();
+            let required_latches = ctx.required_latches();
             let owned_count = ctx.owned_latches_count;
-            self.latches.acquire(&needed_latches[owned_count..], cid)
+            self.latches.acquire(&required_latches[owned_count..], cid)
         };
         ctx.owned_latches_count += new_acquired;
         ctx.all_latches_acquired()
@@ -457,11 +446,11 @@ impl Scheduler {
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(cid, ctx.cid);
 
-        if ctx.needed_latches().is_empty() {
+        if ctx.required_latches().is_empty() {
             return;
         }
 
-        let wakeup_list = self.latches.release(ctx.needed_latches(), cid);
+        let wakeup_list = self.latches.release(ctx.required_latches(), cid);
         for wcid in wakeup_list {
             self.wakeup_cmd(wcid);
         }
