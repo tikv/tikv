@@ -104,6 +104,7 @@ function install_gpp {
 if which cargo > /dev/null; then
     if ! cargo --version | grep nightly > /dev/null; then
         echo "Please upgrade Rust to nightly."
+        exit 1
     fi
 else
     echo "Install Rust ..."
