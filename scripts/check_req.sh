@@ -101,8 +101,13 @@ function install_gpp {
 }
 
 # Check rust
-if ! which cargo > /dev/null; then
-    curl -sSf https://static.rust-lang.org/rustup.sh | sh -s -- --channel=nightly
+if which cargo > /dev/null; then
+    if ! cargo --version | grep nightly > /dev/null; then
+        echo "Please upgrade Rust to nightly."
+    fi
+else
+    echo "Install Rust ..."
+    ${SUDO} curl -sSf https://static.rust-lang.org/rustup.sh | sh -s -- --channel=nightly
 fi
 
 # Check go
