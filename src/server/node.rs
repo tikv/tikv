@@ -34,7 +34,7 @@ pub fn create_raft_storage<C>(node: Node<C>,
     where C: PdClient + 'static
 {
     let engine = box RaftKv::new(node, db);
-    let store = try!(Storage::from_engine(engine, cfg.notify_capacity, cfg.messages_per_tick));
+    let store = try!(Storage::from_engine(engine, &cfg.storage_cfg));
     Ok(store)
 }
 
@@ -74,7 +74,7 @@ impl<C> Node<C>
         Node {
             cluster_id: cfg.cluster_id,
             store: store,
-            store_cfg: cfg.store_cfg.clone(),
+            store_cfg: cfg.raft_store_cfg.clone(),
             store_handle: None,
             pd_client: pd_client,
             ch: ch,

@@ -187,7 +187,7 @@ impl StoreHandler {
                            f: fn(StorageResult<T>, &mut Response),
                            on_resp: OnResponse)
                            -> Callback<T> {
-        Some(Box::new(move |r: StorageResult<T>| {
+        Box::new(move |r: StorageResult<T>| {
             let mut resp = Response::new();
             match extract_region_error(&r) {
                 Some(e) => resp.set_region_error(e),
@@ -197,7 +197,7 @@ impl StoreHandler {
             resp_msg.set_msg_type(msgpb::MessageType::KvResp);
             resp_msg.set_kv_resp(resp);
             on_resp.call_box((resp_msg,))
-        }))
+        })
     }
 
     fn cmd_get_done(r: StorageResult<Option<Value>>, resp: &mut Response) {

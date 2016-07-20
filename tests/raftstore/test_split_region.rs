@@ -114,11 +114,11 @@ fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>,
 }
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.store_cfg.split_region_check_tick_interval = 100;
-    cluster.cfg.store_cfg.region_max_size = REGION_MAX_SIZE;
-    cluster.cfg.store_cfg.region_split_size = REGION_SPLIT_SIZE;
+    cluster.cfg.raft_store_cfg.split_region_check_tick_interval = 100;
+    cluster.cfg.raft_store_cfg.region_max_size = REGION_MAX_SIZE;
+    cluster.cfg.raft_store_cfg.region_split_size = REGION_SPLIT_SIZE;
 
-    let check_size_diff = cluster.cfg.store_cfg.region_check_size_diff;
+    let check_size_diff = cluster.cfg.raft_store_cfg.region_check_size_diff;
     let mut range = 1..;
 
     cluster.run();
@@ -306,9 +306,9 @@ fn test_server_split_overlap_snapshot() {
 
 fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20;
-    cluster.cfg.store_cfg.raft_log_gc_limit = 5;
-    cluster.cfg.store_cfg.raft_log_gc_threshold = 5;
+    cluster.cfg.raft_store_cfg.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store_cfg.raft_log_gc_limit = 5;
+    cluster.cfg.raft_store_cfg.raft_log_gc_threshold = 5;
 
     // We use three nodes([1, 2, 3]) for this test.
     cluster.run();
@@ -370,7 +370,7 @@ fn test_server_apply_new_version_snapshot() {
 
 fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     // disable raft log gc.
-    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 60000;
+    cluster.cfg.raft_store_cfg.raft_log_gc_tick_interval = 60000;
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -448,11 +448,11 @@ fn test_server_split_with_stale_peer() {
 fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
     let region_max_size = 2000;
     let region_split_size = 1000;
-    cluster.cfg.store_cfg.split_region_check_tick_interval = 100;
-    cluster.cfg.store_cfg.region_check_size_diff = 10;
-    cluster.cfg.store_cfg.region_max_size = region_max_size;
-    cluster.cfg.store_cfg.region_split_size = region_split_size;
-    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20000;
+    cluster.cfg.raft_store_cfg.split_region_check_tick_interval = 100;
+    cluster.cfg.raft_store_cfg.region_check_size_diff = 10;
+    cluster.cfg.raft_store_cfg.region_max_size = region_max_size;
+    cluster.cfg.raft_store_cfg.region_split_size = region_split_size;
+    cluster.cfg.raft_store_cfg.raft_log_gc_tick_interval = 20000;
 
     let mut range = 1..;
 

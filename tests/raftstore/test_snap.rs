@@ -73,10 +73,10 @@ fn test_server_huge_snapshot() {
 
 fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
-    cluster.cfg.store_cfg.raft_log_gc_tick_interval = 20;
-    cluster.cfg.store_cfg.raft_log_gc_limit = 2;
-    cluster.cfg.store_cfg.snap_mgr_gc_tick_interval = 50;
-    cluster.cfg.store_cfg.snap_gc_timeout = 2;
+    cluster.cfg.raft_store_cfg.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store_cfg.raft_log_gc_limit = 2;
+    cluster.cfg.raft_store_cfg.snap_mgr_gc_tick_interval = 50;
+    cluster.cfg.raft_store_cfg.snap_gc_timeout = 2;
 
     // We use three nodes([1, 2, 3]) for this test.
     cluster.run();

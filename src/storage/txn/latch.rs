@@ -47,18 +47,15 @@ impl Latches {
     }
 
     pub fn calc_latches_indices<H>(&self, keys: &[H]) -> Vec<usize>
-        where H: Hash
-    {
-        let mut indices: Vec<usize> = keys.iter().map(|x| self.calc_index(x)).collect();
-
+        where H: Hash {
         // prevent from deadlock, so we sort and deduplicate the index
+        let mut indices: Vec<usize> = keys.iter().map(|x| self.calc_index(x)).collect();
         indices.sort();
         indices.dedup();
         indices
     }
 
     pub fn acquire_by_indices(&mut self, indices: &[usize], who: u64) -> usize {
-
         let mut acquired_count: usize = 0;
         for i in indices {
             let rowlock = &mut self.locks.get_mut(*i).unwrap();
@@ -94,27 +91,16 @@ impl Latches {
     // release all locks owned, and return wakeup list
     pub fn release_by_indices(&mut self, indices: &[usize], who: u64) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
-
         for i in indices {
             let rowlock = &mut self.locks.get_mut(*i).unwrap();
 
-            match rowlock.waiting.pop_front() {
-                Some(head) => {
-                    if head != who {
-                        panic!("release lock not owned");
-                    }
-                }
-                None => {
-                    panic!("should not happen");
-                }
-            }
+            assert_eq!(rowlock.waiting.pop_front().unwrap(), who);
             rowlock.set.remove(&who);
 
             if let Some(wakeup) = rowlock.waiting.front() {
                 wakeup_list.push(*wakeup);
             }
         }
-
         wakeup_list
     }
 

@@ -23,14 +23,16 @@ use mio::{EventLoop, EventLoopBuilder};
 pub mod engine;
 pub mod mvcc;
 pub mod txn;
+pub mod config;
 mod types;
 
+pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Cursor,
                        Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg, SchedCh};
 pub use self::types::{Key, Value, KvPair};
-pub type Callback<T> = Option<Box<FnBox(Result<T>) + Send>>;
+pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
 pub const DEFAULT_CFS: &'static [CfName] = &["default", "lock"];
@@ -64,34 +66,34 @@ pub enum Command {
         ctx: Context,
         key: Key,
         start_ts: u64,
-        callback: Callback<Option<Value>>,
+        callback: Option<Callback<Option<Value>>>,
     },
     BatchGet {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
-        callback: Callback<Vec<Result<KvPair>>>,
+        callback: Option<Callback<Vec<Result<KvPair>>>>,
     },
     Scan {
         ctx: Context,
         start_key: Key,
         limit: usize,
         start_ts: u64,
-        callback: Callback<Vec<Result<KvPair>>>,
+        callback: Option<Callback<Vec<Result<KvPair>>>>,
     },
     Prewrite {
         ctx: Context,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
-        callback: Callback<Vec<Result<()>>>,
+        callback: Option<Callback<Vec<Result<()>>>>,
     },
     Commit {
         ctx: Context,
         keys: Vec<Key>,
         lock_ts: u64,
         commit_ts: u64,
-        callback: Callback<()>,
+        callback: Option<Callback<()>>,
     },
     CommitThenGet {
         ctx: Context,
@@ -99,25 +101,25 @@ pub enum Command {
         lock_ts: u64,
         commit_ts: u64,
         get_ts: u64,
-        callback: Callback<Option<Value>>,
+        callback: Option<Callback<Option<Value>>>,
     },
     Cleanup {
         ctx: Context,
         key: Key,
         start_ts: u64,
-        callback: Callback<()>,
+        callback: Option<Callback<()>>,
     },
     Rollback {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
-        callback: Callback<()>,
+        callback: Option<Callback<()>>,
     },
     RollbackThenGet {
         ctx: Context,
         key: Key,
         lock_ts: u64,
-        callback: Callback<Option<Value>>,
+        callback: Option<Callback<Option<Value>>>,
     },
 }
 
@@ -193,12 +195,10 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn from_engine(engine: Box<Engine>,
-                       notify_cap: usize,
-                       msg_per_tick: usize)
-                       -> Result<Storage> {
+    pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let engine = Arc::new(engine);
-        let event_loop = try!(create_event_loop(notify_cap, msg_per_tick));
+        let event_loop = try!(create_event_loop(config.sched_notify_capacity,
+                                                config.sched_msg_per_tick));
         let schedch = SchedCh::new(event_loop.channel());
 
         info!("storage {:?} started.", engine);
@@ -210,12 +210,12 @@ impl Storage {
         })
     }
 
-    pub fn new(dsn: Dsn, notify_cap: usize, msg_per_tick: usize) -> Result<Storage> {
-        let engine = try!(engine::new_engine(dsn, DEFAULT_CFS));
-        Storage::from_engine(engine, notify_cap, msg_per_tick)
+    pub fn new(config: &Config) -> Result<Storage> {
+        let engine = try!(engine::new_engine(Dsn::RocksDBPath(&config.path), DEFAULT_CFS));
+        Storage::from_engine(engine, config)
     }
 
-    pub fn start(&mut self, concurrency: usize) -> Result<()> {
+    pub fn start(&mut self, config: &Config) -> Result<()> {
         if self.sched_handle.is_some() {
             return Err(box_err!("scheduler is already running"));
         }
@@ -223,13 +223,14 @@ impl Storage {
         let engine = self.engine.clone();
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
         let mut sched_event_loop = self.sched_event_loop.take().unwrap();
+        let sched_concurrency = config.sched_concurrency;
         let h = try!(builder.spawn(move || {
             let ch = SchedCh::new(sched_event_loop.channel());
-            let mut sched = Scheduler::new(engine, ch, concurrency);
+            let mut sched = Scheduler::new(engine, ch, sched_concurrency);
             if let Err(e) = sched_event_loop.run(&mut sched) {
-                error!("scheduler run err {:?}", e);
+                panic!("scheduler run err:{:?}", e);
             }
-            info!("scheduler stopping");
+            info!("scheduler stopped");
         }));
         self.sched_handle = Some(h);
 
@@ -242,13 +243,13 @@ impl Storage {
         }
 
         if let Err(e) = self.schedch.send(Msg::Quit) {
-            error!("send quit cmd to scheduler failed, error = {:?}", e);
+            error!("send quit cmd to scheduler failed, error:{:?}", e);
             return Err(Error::from(e));
         }
 
         let h = self.sched_handle.take().unwrap();
         if let Err(e) = h.join() {
-            return Err(box_err!("failed to join sched_handle, err = {:?}", e));
+            return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
 
         info!("storage {:?} closed.", self.engine);
@@ -278,7 +279,7 @@ impl Storage {
             ctx: ctx,
             key: key,
             start_ts: start_ts,
-            callback: callback,
+            callback: Some(callback),
         };
         try!(self.send(cmd));
         Ok(())
@@ -294,7 +295,7 @@ impl Storage {
             ctx: ctx,
             keys: keys,
             start_ts: start_ts,
-            callback: callback,
+            callback: Some(callback),
         };
         try!(self.send(cmd));
         Ok(())
@@ -312,7 +313,7 @@ impl Storage {
             start_key: start_key,
             limit: limit,
             start_ts: start_ts,
-            callback: callback,
+            callback: Some(callback),
         };
         try!(self.send(cmd));
         Ok(())
@@ -330,7 +331,7 @@ impl Storage {
             mutations: mutations,
             primary: primary,
             start_ts: start_ts,
-            callback: callback,
+            callback: Some(callback),
         };
         try!(self.send(cmd));
         Ok(())
@@ -348,7 +349,7 @@ impl Storage {
             keys: keys,
             lock_ts: lock_ts,
             commit_ts: commit_ts,
-            callback: callback,
+            callback: Some(callback),
         };
         try!(self.send(cmd));
         Ok(())
@@ -368,7 +369,7 @@ impl Storage {
             lock_ts: lock_ts,
             commit_ts: commit_ts,
             get_ts: get_ts,
-            callback: callback,
+            callback: Some(callback),
         };
         try!(self.send(cmd));
         Ok(())
@@ -384,7 +385,7 @@ impl Storage {
             ctx: ctx,
             key: key,
             start_ts: start_ts,
-            callback: callback,
+            callback: Some(callback),
         };
         try!(self.send(cmd));
         Ok(())
@@ -400,7 +401,7 @@ impl Storage {
             ctx: ctx,
             keys: keys,
             start_ts: start_ts,
-            callback: callback,
+            callback: Some(callback),
         };
         try!(self.send(cmd));
         Ok(())
@@ -416,7 +417,7 @@ impl Storage {
             ctx: ctx,
             key: key,
             lock_ts: lock_ts,
-            callback: callback,
+            callback: Some(callback),
         };
         try!(self.send(cmd));
         Ok(())
@@ -471,48 +472,49 @@ mod tests {
     use kvproto::kvrpcpb::Context;
 
     fn expect_get_none(done: Sender<i32>) -> Callback<Option<Value>> {
-        Some(Box::new(move |x: Result<Option<Value>>| {
+        Box::new(move |x: Result<Option<Value>>| {
             assert_eq!(x.unwrap(), None);
             done.send(1).unwrap();
-        }))
+        })
     }
 
     fn expect_get_val(done: Sender<i32>, v: Vec<u8>) -> Callback<Option<Value>> {
-        Some(Box::new(move |x: Result<Option<Value>>| {
+        Box::new(move |x: Result<Option<Value>>| {
             assert_eq!(x.unwrap().unwrap(), v);
             done.send(1).unwrap();
-        }))
+        })
     }
 
     fn expect_ok<T>(done: Sender<i32>) -> Callback<T> {
-        Some(Box::new(move |x: Result<T>| {
+        Box::new(move |x: Result<T>| {
             assert!(x.is_ok());
             done.send(1).unwrap();
-        }))
+        })
     }
 
     fn expect_fail<T>(done: Sender<i32>) -> Callback<T> {
-        Some(Box::new(move |x: Result<T>| {
+        Box::new(move |x: Result<T>| {
             assert!(x.is_err());
             done.send(1).unwrap();
-        }))
+        })
     }
 
     fn expect_scan(done: Sender<i32>, pairs: Vec<Option<KvPair>>) -> Callback<Vec<Result<KvPair>>> {
-        Some(Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
+        Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
             let rlt: Vec<Option<KvPair>> = rlt.unwrap()
                 .into_iter()
                 .map(Result::ok)
                 .collect();
             assert_eq!(rlt, pairs);
             done.send(1).unwrap()
-        }))
+        })
     }
 
     #[test]
     fn test_get_put() {
-        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), 4096, 256).unwrap();
-        if let Err(e) = storage.start(1024) {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        if let Err(e) = storage.start(&config) {
             panic!("storage start failed, err={:?}", e);
         }
         let (tx, rx) = channel();
@@ -548,14 +550,13 @@ mod tests {
                        expect_get_val(tx.clone(), b"100".to_vec()))
             .unwrap();
         rx.recv().unwrap();
-        if let Err(e) = storage.stop() {
-            panic!("storage start failed, err={:?}", e);
-        }
+        storage.stop().unwrap();
     }
     #[test]
     fn test_scan() {
-        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), 4096, 256).unwrap();
-        if let Err(e) = storage.start(1024) {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        if let Err(e) = storage.start(&config) {
             panic!("storage start failed, err={:?}", e);
         }
         let (tx, rx) = channel();
@@ -589,15 +590,14 @@ mod tests {
             ]))
             .unwrap();
         rx.recv().unwrap();
-        if let Err(e) = storage.stop() {
-            panic!("storage start failed, err={:?}", e);
-        }
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_txn() {
-        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), 4096, 256).unwrap();
-        if let Err(e) = storage.start(1024) {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        if let Err(e) = storage.start(&config) {
             panic!("storage start failed, err={:?}", e);
         }
         let (tx, rx) = channel();
@@ -648,8 +648,6 @@ mod tests {
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        if let Err(e) = storage.stop() {
-            panic!("storage start failed, err={:?}", e);
-        }
+        storage.stop().unwrap();
     }
 }

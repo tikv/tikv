@@ -631,14 +631,13 @@ mod tests {
     use super::super::{Msg, ConnData, Result, Config};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
-    use storage::{Storage, Dsn};
+    use storage::Storage;
     use kvproto::msgpb::{Message, MessageType};
     use raftstore::Result as RaftStoreResult;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::{self, Callback};
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use raft::SnapshotStatus;
-    use storage::engine::TEMP_DIR;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -684,8 +683,8 @@ mod tests {
 
         let cfg = Config::new();
         let mut event_loop = create_event_loop(&cfg).unwrap();
-        let mut storage = Storage::new(Dsn::RocksDBPath(TEMP_DIR), 4096, 256).unwrap();
-        if let Err(e) = storage.start(1024) {
+        let mut storage = Storage::new(&cfg.storage_cfg).unwrap();
+        if let Err(e) = storage.start(&cfg.storage_cfg) {
             panic!("storage start failed, err={:?}", e);
         }
         let (tx, rx) = mpsc::channel();
