@@ -79,7 +79,7 @@ function install_gpp {
                     ${SUDO} yum install -y gcc-c++
                 ;;
                 *)
-                    echo "unsupported platform $dist, you may install RocksDB manually"
+                    echo "unsupported platform $dist, you may install g++ manually"
                     exit 1
                 ;;
             esac
