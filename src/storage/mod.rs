@@ -514,9 +514,7 @@ mod tests {
     fn test_get_put() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        if let Err(e) = storage.start(&config) {
-            panic!("storage start failed, err={:?}", e);
-        }
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_get(Context::new(),
                        make_key(b"x"),
@@ -556,9 +554,7 @@ mod tests {
     fn test_scan() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        if let Err(e) = storage.start(&config) {
-            panic!("storage start failed, err={:?}", e);
-        }
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![
@@ -597,9 +593,7 @@ mod tests {
     fn test_txn() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        if let Err(e) = storage.start(&config) {
-            panic!("storage start failed, err={:?}", e);
-        }
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],

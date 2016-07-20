@@ -49,7 +49,7 @@ fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
-    cluster.cfg.raft_store_cfg.pd_store_heartbeat_tick_interval = 20;
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = 20;
     cluster.run();
 
     // wait store reports stats.
@@ -104,7 +104,7 @@ fn test_server_simple_store_stats() {
 #[test]
 fn test_server_store_snap_stats() {
     let mut cluster = new_server_cluster(0, 2);
-    cluster.cfg.raft_store_cfg.pd_store_heartbeat_tick_interval = 600000;
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = 600000;
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.

@@ -60,17 +60,17 @@ pub enum Msg {
     },
 }
 
-type LatchIndices = Vec<usize>;
+type LatchSlots = Vec<usize>;
 
 struct RunningCtx {
     pub cid: u64,
     pub cmd: Command,
-    needed_latches: LatchIndices,
+    needed_latches: LatchSlots,
     pub owned_latches_count: usize,
 }
 
 impl RunningCtx {
-    pub fn new(cid: u64, cmd: Command, needed_latches: LatchIndices) -> RunningCtx {
+    pub fn new(cid: u64, cmd: Command, needed_latches: LatchSlots) -> RunningCtx {
         RunningCtx {
             cid: cid,
             cmd: cmd,
@@ -79,7 +79,7 @@ impl RunningCtx {
         }
     }
 
-    pub fn needed_latches(&self) -> &LatchIndices {
+    pub fn needed_latches(&self) -> &LatchSlots {
         &self.needed_latches
     }
 
@@ -147,16 +147,16 @@ impl Scheduler {
         match *cmd {
             Command::Prewrite { ref mutations, .. } => {
                 let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
-                self.latches.calc_latches_indices(&keys)
+                self.latches.calc_slots(&keys)
             }
             Command::Commit { ref keys, .. } |
             Command::Rollback { ref keys, .. } => {
-                self.latches.calc_latches_indices(keys)
+                self.latches.calc_slots(keys)
             }
             Command::CommitThenGet { ref key, .. } |
             Command::Cleanup { ref key, .. } |
             Command::RollbackThenGet { ref key, .. } => {
-                self.latches.calc_latches_indices(&[key])
+                self.latches.calc_slots(&[key])
             }
             _ => {
                 panic!("unsupported cmd that need latches");
@@ -167,8 +167,8 @@ impl Scheduler {
     fn process_cmd_with_snapshot(&mut self, cid: u64, snapshot: &Snapshot) -> Result<()> {
         debug!("process cmd with snapshot, cid = {}", cid);
 
-        let rctx = self.cmd_ctxs.get_mut(&cid).unwrap();
-        match rctx.cmd {
+        let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
+        match ctx.cmd {
             Command::Get { ref key, start_ts, ref mut callback, .. } => {
                 let snap_store = SnapshotStore::new(snapshot, start_ts);
                 callback.take().unwrap()(snap_store.get(key).map_err(::storage::Error::from));
@@ -267,9 +267,8 @@ impl Scheduler {
     }
 
     fn process_failed_cmd(&mut self, cid: u64, err: Error) {
-        let rctx = self.cmd_ctxs.get_mut(&cid).unwrap();
-
-        match rctx.cmd {
+        let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
+        match ctx.cmd {
             Command::Get { ref mut callback, .. } |
             Command::CommitThenGet { ref mut callback, .. } |
             Command::RollbackThenGet { ref mut callback, .. } => {
@@ -301,9 +300,9 @@ impl Scheduler {
         self.finish_cmd(cid);
     }
 
-    fn extract_cmd_context_by_id(&self, cid: u64) -> &Context {
-        let rctx: &RunningCtx = self.cmd_ctxs.get(&cid).unwrap();
-        match rctx.cmd {
+    fn extract_context(&self, cid: u64) -> &Context {
+        let ctx: &RunningCtx = self.cmd_ctxs.get(&cid).unwrap();
+        match ctx.cmd {
             Command::Get { ref ctx, .. } |
             Command::BatchGet { ref ctx, .. } |
             Command::Scan { ref ctx, .. } |
@@ -334,10 +333,10 @@ impl Scheduler {
         let cid = self.gen_id();
 
         if cmd.readonly() {
-            // readonly command don't need latch
+            // readonly commands don't need latch
             let ctx = RunningCtx::new(cid, cmd, vec![]);
             self.save_cmd_context(cid, ctx);
-            self.get_snapshot_for_cmd(cid);
+            self.get_snapshot(cid);
         } else {
             // write command need acquire latches first, if acquire all latches
             // then can step forward to get snapshot, or this command will be
@@ -346,25 +345,25 @@ impl Scheduler {
             let ctx = RunningCtx::new(cid, cmd, indices);
             self.save_cmd_context(cid, ctx);
 
-            let all_acquired = self.acquire_latches_for_cmd(cid);
+            let all_acquired = self.acquire_latches(cid);
             if all_acquired {
-                self.get_snapshot_for_cmd(cid);
+                self.get_snapshot(cid);
             }
         }
     }
 
-    fn acquire_latches_for_cmd(&mut self, cid: u64) -> bool {
+    fn acquire_latches(&mut self, cid: u64) -> bool {
         let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
         let new_acquired = {
             let needed_latches = ctx.needed_latches();
             let owned_count = ctx.owned_latches_count;
-            self.latches.acquire_by_indices(&needed_latches[owned_count..], cid)
+            self.latches.acquire(&needed_latches[owned_count..], cid)
         };
         ctx.owned_latches_count += new_acquired;
         ctx.all_latches_acquired()
     }
 
-    fn get_snapshot_for_cmd(&mut self, cid: u64) {
+    fn get_snapshot(&mut self, cid: u64) {
         let ch = self.schedch.clone();
         let cb = box move |snapshot: EngineResult<Box<Snapshot>>| {
             if let Err(e) = ch.send(Msg::SnapshotFinish{ cid: cid, snapshot: snapshot, }) {
@@ -372,12 +371,12 @@ impl Scheduler {
             }
         };
 
-        if let Err(e) = self.engine.async_snapshot(self.extract_cmd_context_by_id(cid), cb) {
+        if let Err(e) = self.engine.async_snapshot(self.extract_context(cid), cb) {
             self.finish_with_err(cid, Error::from(e));
         }
     }
 
-    fn snapshot_finished_for_cmd(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
+    fn snapshot_finished(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
         debug!("receive snapshot finish msg for cid = {}", cid);
 
         match snapshot {
@@ -386,8 +385,8 @@ impl Scheduler {
                 let mut finished: bool = false;
                 match res {
                     Ok(()) => {
-                        let rctx = self.cmd_ctxs.get(&cid).unwrap();
-                        if rctx.cmd.readonly() { finished = true; }
+                        let ctx = self.cmd_ctxs.get(&cid).unwrap();
+                        if ctx.cmd.readonly() { finished = true; }
                     }
                     Err(e) => {
                         self.process_failed_cmd(cid, Error::from(e));
@@ -401,11 +400,11 @@ impl Scheduler {
         }
     }
 
-    fn write_finished_for_cmd(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
-        let rctx = self.cmd_ctxs.get_mut(&cid).unwrap();
-        assert_eq!(cid, rctx.cid);
+    fn write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
+        let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
+        assert_eq!(cid, ctx.cid);
 
-        match rctx.cmd {
+        match ctx.cmd {
             Command::Prewrite { ref mut callback, .. } => {
                 callback.take().unwrap()(match result {
                     Ok(()) => {
@@ -455,23 +454,23 @@ impl Scheduler {
     }
 
     fn finish_cmd(&mut self, cid: u64) {
-        let rctx = self.cmd_ctxs.remove(&cid).unwrap();
-        assert_eq!(cid, rctx.cid);
+        let ctx = self.cmd_ctxs.remove(&cid).unwrap();
+        assert_eq!(cid, ctx.cid);
 
-        if rctx.needed_latches().is_empty() {
+        if ctx.needed_latches().is_empty() {
             return;
         }
 
-        let wakeup_list = self.latches.release_by_indices(rctx.needed_latches(), cid);
+        let wakeup_list = self.latches.release(ctx.needed_latches(), cid);
         for wcid in wakeup_list {
             self.wakeup_cmd(wcid);
         }
     }
 
     fn wakeup_cmd(&mut self, cid: u64) {
-        let all_acquired = self.acquire_latches_for_cmd(cid);
+        let all_acquired = self.acquire_latches(cid);
         if all_acquired {
-            self.get_snapshot_for_cmd(cid);
+            self.get_snapshot(cid);
         }
     }
 
@@ -503,9 +502,9 @@ impl mio::Handler for Scheduler {
         match msg {
             Msg::Quit => self.shutdown(event_loop),
             Msg::RawCmd { cmd } => self.received_new_cmd(cmd),
-            Msg::SnapshotFinish { cid, snapshot } => self.snapshot_finished_for_cmd(cid, snapshot),
+            Msg::SnapshotFinish { cid, snapshot } => self.snapshot_finished(cid, snapshot),
             Msg::WriteFinish { cid, pr, result } => {
-                self.write_finished_for_cmd(cid, pr, result);
+                self.write_finished(cid, pr, result);
                 self.finish_cmd(cid);
             }
         }

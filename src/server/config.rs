@@ -37,8 +37,8 @@ pub struct Config {
     pub messages_per_tick: usize,
     pub send_buffer_size: usize,
     pub recv_buffer_size: usize,
-    pub storage_cfg: StorageConfig,
-    pub raft_store_cfg: RaftStoreConfig,
+    pub storage: StorageConfig,
+    pub raft_store: RaftStoreConfig,
 }
 
 impl Default for Config {
@@ -51,8 +51,8 @@ impl Default for Config {
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             send_buffer_size: DEFAULT_SEND_BUFFER_SIZE,
             recv_buffer_size: DEFAULT_RECV_BUFFER_SIZE,
-            storage_cfg: StorageConfig::default(),
-            raft_store_cfg: RaftStoreConfig::default(),
+            storage: StorageConfig::default(),
+            raft_store: RaftStoreConfig::default(),
         }
     }
 }
@@ -63,7 +63,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        try!(self.raft_store_cfg.validate());
+        try!(self.raft_store.validate());
 
         Ok(())
     }

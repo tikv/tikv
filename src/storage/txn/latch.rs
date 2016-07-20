@@ -15,7 +15,6 @@
 use std::collections::{VecDeque, BTreeSet};
 use std::hash::{Hash, SipHasher, Hasher};
 
-// simulate lock of one row
 struct Latch {
     // store waiting commands
     pub waiting: VecDeque<u64>,
@@ -34,34 +33,34 @@ impl Latch {
 }
 
 pub struct Latches {
-    locks: Vec<Latch>,
+    slots: Vec<Latch>,
     size: usize,
 }
 
 impl Latches {
     pub fn new(size: usize) -> Latches {
         Latches {
-            locks: (0..size).map(|_|  Latch::new()).collect(),
+            slots: (0..size).map(|_|  Latch::new()).collect(),
             size: size,
         }
     }
 
-    pub fn calc_latches_indices<H>(&self, keys: &[H]) -> Vec<usize>
+    pub fn calc_slots<H>(&self, keys: &[H]) -> Vec<usize>
         where H: Hash {
         // prevent from deadlock, so we sort and deduplicate the index
-        let mut indices: Vec<usize> = keys.iter().map(|x| self.calc_index(x)).collect();
-        indices.sort();
-        indices.dedup();
-        indices
+        let mut slots: Vec<usize> = keys.iter().map(|x| self.calc_slot(x)).collect();
+        slots.sort();
+        slots.dedup();
+        slots
     }
 
-    pub fn acquire_by_indices(&mut self, indices: &[usize], who: u64) -> usize {
+    pub fn acquire(&mut self, slots: &[usize], who: u64) -> usize {
         let mut acquired_count: usize = 0;
-        for i in indices {
-            let rowlock = &mut self.locks.get_mut(*i).unwrap();
+        for i in slots {
+            let latch = &mut self.slots.get_mut(*i).unwrap();
 
             let mut front: Option<u64> = None;
-            if let Some(cid) = rowlock.waiting.front() {
+            if let Some(cid) = latch.waiting.front() {
                 front = Some(*cid);
             }
 
@@ -70,16 +69,16 @@ impl Latches {
                     if cid == who {
                         acquired_count += 1;
                     } else {
-                        if !rowlock.set.contains(&who) {
-                            rowlock.waiting.push_back(who);
-                            rowlock.set.insert(who);
+                        if !latch.set.contains(&who) {
+                            latch.waiting.push_back(who);
+                            latch.set.insert(who);
                         }
                         return acquired_count;
                     }
                 }
                 None => {
-                    rowlock.waiting.push_back(who);
-                    rowlock.set.insert(who);
+                    latch.waiting.push_back(who);
+                    latch.set.insert(who);
                     acquired_count += 1;
                 }
             }
@@ -88,23 +87,23 @@ impl Latches {
         acquired_count
     }
 
-    // release all locks owned, and return wakeup list
-    pub fn release_by_indices(&mut self, indices: &[usize], who: u64) -> Vec<u64> {
+    // release all latches owned, and return wakeup list
+    pub fn release(&mut self, slots: &[usize], who: u64) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
-        for i in indices {
-            let rowlock = &mut self.locks.get_mut(*i).unwrap();
+        for i in slots {
+            let latch = &mut self.slots.get_mut(*i).unwrap();
+            let front = latch.waiting.pop_front().unwrap();
+            assert_eq!(front, who);
+            latch.set.remove(&who);
 
-            assert_eq!(rowlock.waiting.pop_front().unwrap(), who);
-            rowlock.set.remove(&who);
-
-            if let Some(wakeup) = rowlock.waiting.front() {
+            if let Some(wakeup) = latch.waiting.front() {
                 wakeup_list.push(*wakeup);
             }
         }
         wakeup_list
     }
 
-    fn calc_index<H>(&self, key: &H) -> usize
+    fn calc_slot<H>(&self, key: &H) -> usize
         where H: Hash
     {
         let mut s = SipHasher::new();
@@ -121,18 +120,18 @@ mod tests {
     fn test_wakeup_cmd() {
         let mut latches = Latches::new(256);
 
-        let indices_a: Vec<usize> = vec![1, 3, 5];
-        let indices_b: Vec<usize> = vec![4, 5, 6];
+        let slots_a: Vec<usize> = vec![1, 3, 5];
+        let slots_b: Vec<usize> = vec![4, 5, 6];
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
 
-        let acquired_a: usize = latches.acquire_by_indices(&indices_a, cid_a);
+        let acquired_a: usize = latches.acquire(&slots_a, cid_a);
         assert_eq!(acquired_a, 3);
 
-        let acquired_b: usize = latches.acquire_by_indices(&indices_b, cid_b);
+        let acquired_b: usize = latches.acquire(&slots_b, cid_b);
         assert_eq!(acquired_b, 1);
 
-        let wakeup = latches.release_by_indices(&indices_a, cid_a);
+        let wakeup = latches.release(&slots_a, cid_a);
         assert_eq!(wakeup[0], cid_b);
     }
 }

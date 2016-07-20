@@ -128,7 +128,7 @@ impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
-        let mut event_loop = create_event_loop(&cfg.raft_store_cfg).unwrap();
+        let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let trans = Arc::new(RwLock::new(simulate_trans));
