@@ -24,7 +24,7 @@ use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_cmdpb::{CmdType, StatusCmdType, AdminCmdType};
 use kvproto::pdpb::{ChangePeer, RegionHeartbeatResponse, TransferLeader};
-use kvproto::raftpb::ConfChangeType;
+use kvproto::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;

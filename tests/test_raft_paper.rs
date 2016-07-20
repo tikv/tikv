@@ -26,7 +26,7 @@
 // limitations under the License.
 
 use test_raft::*;
-use kvproto::raftpb::*;
+use kvproto::eraftpb::*;
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
 use protobuf::RepeatedField;

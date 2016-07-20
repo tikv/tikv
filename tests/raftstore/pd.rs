@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kvproto::metapb;
 use kvproto::pdpb;
-use kvproto::raftpb;
+use kvproto::eraftpb;
 use tikv::pd::{PdClient, Result, Error, Key};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
@@ -247,7 +247,7 @@ impl Cluster {
             for store_id in self.stores.keys() {
                 if region.get_peers().iter().all(|x| x.get_store_id() != *store_id) {
                     let peer = new_peer(*store_id, self.alloc_id().unwrap());
-                    change_peer.set_change_type(raftpb::ConfChangeType::AddNode);
+                    change_peer.set_change_type(eraftpb::ConfChangeType::AddNode);
                     change_peer.set_peer(peer.clone());
                     resp.set_change_peer(change_peer);
                     break;
@@ -260,7 +260,7 @@ impl Cluster {
                 .position(|x| x.get_store_id() != leader.get_store_id())
                 .unwrap();
 
-            change_peer.set_change_type(raftpb::ConfChangeType::RemoveNode);
+            change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode);
             change_peer.set_peer(region.get_peers()[pos].clone());
             resp.set_change_peer(change_peer);
 

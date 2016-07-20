@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use tikv::raftstore::store::*;
-use kvproto::raftpb::MessageType;
+use kvproto::eraftpb::MessageType;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};

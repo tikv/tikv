@@ -26,7 +26,7 @@
 // limitations under the License.
 
 use test_raft::*;
-use kvproto::raftpb::*;
+use kvproto::eraftpb::*;
 
 fn testing_snap() -> Snapshot {
     new_snapshot(11, 11, vec![1, 2])
