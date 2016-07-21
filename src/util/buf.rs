@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{Result, Write, Read};
+use std::io::{Result, Write, Read, BufRead};
 use std::fmt::{self, Debug, Formatter};
 use alloc::raw_vec::RawVec;
 use std::{cmp, ptr, slice, mem};
@@ -229,7 +229,11 @@ impl PipeBuffer {
                 }
             }
         }
-        self.end = end;
+        if end == self.buf.cap() {
+            self.end = 0;
+        } else {
+            self.end = end;
+        }
         Ok(readed)
     }
 
@@ -252,7 +256,11 @@ impl PipeBuffer {
                 }
             }
         }
-        self.start = start;
+        if start == self.buf.cap() {
+            self.start = 0;
+        } else {
+            self.start = start;
+        }
         Ok(written)
     }
 }
@@ -260,6 +268,27 @@ impl PipeBuffer {
 impl Read for PipeBuffer {
     fn read(&mut self, mut buf: &mut [u8]) -> Result<usize> {
         self.write_to(&mut buf)
+    }
+}
+
+impl BufRead for PipeBuffer {
+    fn fill_buf(&mut self) -> Result<&[u8]> {
+        let (left, _) = self.slice();
+        Ok(left)
+    }
+
+    fn consume(&mut self, amt: usize) {
+        assert!(amt <= self.len());
+        if self.start <= self.end {
+            self.start += amt;
+        } else {
+            let right_len = self.buf.cap() - self.start;
+            if right_len > amt {
+                self.start += amt;
+            } else {
+                self.start = amt - right_len;
+            }
+        }
     }
 }
 
@@ -324,11 +353,11 @@ mod tests {
 
         let cap = s.capacity();
         let padding = vec![0; cap];
-        for len in 0..cap {
+        for len in 0..cap + 1 {
             let expected = vec![len as u8; len];
 
             for pos in 0..cap + 1 {
-                for l in 0..len {
+                for l in 0..len + 1 {
                     s.start = pos;
                     s.end = pos;
 
@@ -354,11 +383,11 @@ mod tests {
         let mut s = PipeBuffer::new(25);
 
         let cap = s.capacity();
-        for len in 0..cap {
+        for len in 0..cap + 1 {
             let expected = vec![len as u8; len];
 
             for pos in 0..cap + 1 {
-                for l in 0..len {
+                for l in 0..len + 1 {
                     s.start = pos;
                     s.end = pos;
 
@@ -382,9 +411,43 @@ mod tests {
     }
 
     #[test]
+    fn test_buf_read() {
+        let mut s = PipeBuffer::new(25);
+
+        let cap = s.capacity();
+        for len in 0..cap + 1 {
+            let expected = vec![len as u8; len];
+
+            for pos in 0..cap + 1 {
+                for l in 0..len + 1 {
+                    s.start = pos;
+                    s.end = pos;
+
+                    let mut input = expected.as_slice();
+                    assert_eq!(len, s.read_from(&mut input).unwrap());
+
+                    assert_eq!(s.len(), len);
+                    if len == 0 {
+                        assert!(s.fill_buf().unwrap().is_empty());
+                    } else {
+                        assert!(!s.fill_buf().unwrap().is_empty());
+                    }
+                    s.consume(l);
+                    assert_eq!(s.len(), len - l);
+                    if l == len {
+                        assert!(s.fill_buf().unwrap().is_empty());
+                    } else {
+                        assert!(!s.fill_buf().unwrap().is_empty());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_shrink_to() {
         let cap = 25;
-        for l in 0..cap {
+        for l in 0..cap + 1 {
             let expect = vec![l as u8; l];
 
             for pos in 0..cap + 1 {
@@ -411,11 +474,11 @@ mod tests {
     #[test]
     fn test_ensure() {
         let cap = 25;
-        for l in 0..cap {
+        for l in 0..cap + 1 {
             let expect = vec![l as u8; l];
 
             for pos in 0..cap + 1 {
-                for init in 0..cap {
+                for init in 0..cap + 1 {
                     let mut s = PipeBuffer::new(cap);
                     s.start = pos;
                     s.end = pos;

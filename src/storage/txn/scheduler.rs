@@ -385,8 +385,8 @@ impl Scheduler {
                         match pr {
                             ProcessResult::ResultSet { mut result } => {
                                 Ok(result.drain(..)
-                                   .map(|x| x.map_err(::storage::Error::from))
-                                   .collect())
+                                    .map(|x| x.map_err(::storage::Error::from))
+                                    .collect())
                             }
                             _ => {
                                 panic!("prewrite return but process result is not result set.");
