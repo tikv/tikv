@@ -15,6 +15,7 @@
 use std::collections::{VecDeque, BTreeSet};
 use std::hash::{Hash, SipHasher, Hasher};
 
+#[derive(Clone)]
 struct Latch {
     // store waiting commands
     pub waiting: VecDeque<u64>,
@@ -40,7 +41,7 @@ pub struct Latches {
 impl Latches {
     pub fn new(size: usize) -> Latches {
         Latches {
-            slots: (0..size).map(|_|  Latch::new()).collect(),
+            slots: vec![Latch::new(); size],
             size: size,
         }
     }
@@ -78,7 +79,6 @@ impl Latches {
                 }
             }
         }
-
         acquired_count
     }
 
@@ -86,7 +86,7 @@ impl Latches {
     pub fn release(&mut self, slots: &[usize], who: u64) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
         for i in slots {
-            let latch = &mut self.slots.get_mut(*i).unwrap();
+            let latch = &mut self.slots[*i];
             let front = latch.waiting.pop_front().unwrap();
             assert_eq!(front, who);
             latch.set.remove(&who);
