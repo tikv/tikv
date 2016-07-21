@@ -545,12 +545,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
-            Msg::Quit => {
-                if let Err(e) = self.store.stop() {
-                    error!("storage stop failed err={:?}", e);
-                }
-                event_loop.shutdown();
-            }
+            Msg::Quit => event_loop.shutdown(),
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {
