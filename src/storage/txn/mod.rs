@@ -86,6 +86,8 @@ pub fn send_msg<M: Send>(ch: &mio::Sender<M>, mut msg: M) -> Result<()> {
     Err(box_err!("notify channel is full"))
 }
 
+// Todo: provide a generic abstraction of SendCh, remove duplicate code
+
 #[derive(Debug)]
 pub struct SchedCh {
     ch: mio::Sender<Msg>,
