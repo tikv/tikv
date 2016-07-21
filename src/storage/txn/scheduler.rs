@@ -62,8 +62,8 @@ pub enum Msg {
 
 struct RunningCtx {
     cid: u64,
-    pub cmd: Command,
-    pub lock: Lock,
+    cmd: Command,
+    lock: Lock,
 }
 
 impl RunningCtx {

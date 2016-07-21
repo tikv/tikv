@@ -74,7 +74,7 @@ impl Latches {
     pub fn acquire(&mut self, lock: &mut Lock, who: u64) -> bool {
         let mut acquired_count: usize = 0;
         for i in &lock.required_slots[lock.owned_count..] {
-            let latch = &mut self.slots.get_mut(*i).unwrap();
+            let latch = &mut self.slots[*i];
 
             let front = latch.waiting.front().cloned();
             match front {
@@ -100,7 +100,7 @@ impl Latches {
     // release all latches owned, and return wakeup list
     pub fn release(&mut self, lock: &Lock, who: u64) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
-        for i in &lock.required_slots {
+        for i in &lock.required_slots[..lock.owned_count] {
             let latch = &mut self.slots[*i];
             let front = latch.waiting.pop_front().unwrap();
             assert_eq!(front, who);
@@ -126,7 +126,7 @@ mod tests {
     use super::{Latches, Lock};
 
     #[test]
-    fn test_wakeup_cmd() {
+    fn test_wakeup() {
         let mut latches = Latches::new(256);
 
         let slots_a: Vec<usize> = vec![1, 3, 5];
@@ -136,13 +136,68 @@ mod tests {
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
 
+        // a acquire lock success
         let acquired_a = latches.acquire(&mut lock_a, cid_a);
         assert_eq!(acquired_a, true);
 
-        let acquired_b = latches.acquire(&mut lock_b, cid_b);
+        // b acquire lock failed
+        let mut acquired_b = latches.acquire(&mut lock_b, cid_b);
         assert_eq!(acquired_b, false);
 
+        // b retry acquire lock, failed again
+        acquired_b = latches.acquire(&mut lock_b, cid_b);
+        assert_eq!(acquired_b, false);
+
+        // a release lock, and get wakeup list
         let wakeup = latches.release(&lock_a, cid_a);
         assert_eq!(wakeup[0], cid_b);
+
+        // b acquire lock success
+        acquired_b = latches.acquire(&mut lock_b, cid_b);
+        assert_eq!(acquired_b, true);
+    }
+
+    #[test]
+    fn test_wakeup_by_multi_cmds() {
+        let mut latches = Latches::new(256);
+
+        let slots_a: Vec<usize> = vec![1, 2, 3];
+        let slots_b: Vec<usize> = vec![4, 5, 6];
+        let slots_c: Vec<usize> = vec![3, 4];
+        let mut lock_a = Lock::new(slots_a);
+        let mut lock_b = Lock::new(slots_b);
+        let mut lock_c = Lock::new(slots_c);
+        let cid_a: u64 = 1;
+        let cid_b: u64 = 2;
+        let cid_c: u64 = 3;
+
+        // a acquire lock success
+        let acquired_a = latches.acquire(&mut lock_a, cid_a);
+        assert_eq!(acquired_a, true);
+
+        // b acquire lock success
+        let acquired_b = latches.acquire(&mut lock_b, cid_b);
+        assert_eq!(acquired_b, true);
+
+        // c acquire lock failed, cause a occupied slot 3
+        let mut acquired_c = latches.acquire(&mut lock_c, cid_c);
+        assert_eq!(acquired_c, false);
+
+        // a release lock, and get wakeup list
+        let wakeup = latches.release(&lock_a, cid_a);
+        assert_eq!(wakeup[0], cid_c);
+
+        // c acquire lock failed again, cause b occupied slot 4
+        acquired_c = latches.acquire(&mut lock_c, cid_c);
+        assert_eq!(acquired_c, false);
+
+        // b release lock, and get wakeup list
+        let wakeup = latches.release(&lock_b, cid_b);
+        assert_eq!(wakeup[0], cid_c);
+
+        // finally c acquire lock success
+        acquired_c = latches.acquire(&mut lock_c, cid_c);
+        assert_eq!(acquired_c, true);
+
     }
 }
