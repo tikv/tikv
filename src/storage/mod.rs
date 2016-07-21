@@ -262,7 +262,7 @@ impl Storage {
 
     fn send(&self, cmd: Command) -> Result<()> {
         if self.sched_handle.is_some() {
-            try!(self.schedch.send(Msg::RawCmd{ cmd:cmd }));
+            try!(self.schedch.send(Msg::RawCmd { cmd: cmd }));
         } else {
             return Err(Error::Closed);
         }
@@ -455,9 +455,9 @@ quick_error! {
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
-pub fn create_event_loop(notify_capacity: usize, messages_per_tick: usize)
-    -> Result<EventLoop<Scheduler>>
-{
+pub fn create_event_loop(notify_capacity: usize,
+                         messages_per_tick: usize)
+                         -> Result<EventLoop<Scheduler>> {
     let mut builder = EventLoopBuilder::new();
     builder.notify_capacity(notify_capacity);
     builder.messages_per_tick(messages_per_tick);

@@ -27,10 +27,7 @@ use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::ServerRaftStoreRouter;
 
-pub fn create_raft_storage<C>(node: Node<C>,
-                              db: Arc<DB>,
-                              cfg: &Config)
-                              -> Result<Storage>
+pub fn create_raft_storage<C>(node: Node<C>, db: Arc<DB>, cfg: &Config) -> Result<Storage>
     where C: PdClient + 'static
 {
     let engine = box RaftKv::new(node, db);

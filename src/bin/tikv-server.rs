@@ -365,26 +365,26 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           Some(10000),
                           |v| v.as_integer()) as u64;
     cfg.storage.sched_notify_capacity =
-    get_integer_value("",
-                      "storage.scheduler-notify-capacity",
-                      matches,
-                      config,
-                      Some(10240),
-                      |v| v.as_integer()) as usize;
+        get_integer_value("",
+                          "storage.scheduler-notify-capacity",
+                          matches,
+                          config,
+                          Some(10240),
+                          |v| v.as_integer()) as usize;
     cfg.storage.sched_msg_per_tick =
-    get_integer_value("",
-                      "storage.scheduler-messages-per-tick",
-                      matches,
-                      config,
-                      Some(1024),
-                      |v| v.as_integer()) as usize;
+        get_integer_value("",
+                          "storage.scheduler-messages-per-tick",
+                          matches,
+                          config,
+                          Some(1024),
+                          |v| v.as_integer()) as usize;
     cfg.storage.sched_concurrency =
-    get_integer_value("",
-                      "storage.scheduler-concurrency",
-                      matches,
-                      config,
-                      Some(1024),
-                      |v| v.as_integer()) as usize;
+        get_integer_value("",
+                          "storage.scheduler-concurrency",
+                          matches,
+                          config,
+                          Some(1024),
+                          |v| v.as_integer()) as usize;
     cfg
 }
 
@@ -415,8 +415,7 @@ fn build_raftkv(matches: &Matches,
     let raft_router = node.raft_store_router();
     let node_id = node.id();
 
-    (create_raft_storage(node, engine, cfg).unwrap(),
-        raft_router, node_id, snap_mgr)
+    (create_raft_storage(node, engine, cfg).unwrap(), raft_router, node_id, snap_mgr)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {

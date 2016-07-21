@@ -78,8 +78,14 @@ impl RunningCtx {
 
 fn make_write_cb(pr: ProcessResult, cid: u64, ch: SchedCh) -> Callback<()> {
     Box::new(move |result: EngineResult<()>| {
-        if let Err(e) = ch.send(Msg::WriteFinish{ cid: cid, pr: pr, result: result, }) {
-            error!("send write finished to scheduler failed cid = {}, err:{:?}", cid, e);
+        if let Err(e) = ch.send(Msg::WriteFinish {
+            cid: cid,
+            pr: pr,
+            result: result,
+        }) {
+            error!("send write finished to scheduler failed cid = {}, err:{:?}",
+                   cid,
+                   e);
         }
     })
 }
@@ -128,14 +134,10 @@ impl Scheduler {
                 self.latches.gen_lock(&keys)
             }
             Command::Commit { ref keys, .. } |
-            Command::Rollback { ref keys, .. } => {
-                self.latches.gen_lock(keys)
-            }
+            Command::Rollback { ref keys, .. } => self.latches.gen_lock(keys),
             Command::CommitThenGet { ref key, .. } |
             Command::Cleanup { ref key, .. } |
-            Command::RollbackThenGet { ref key, .. } => {
-                self.latches.gen_lock(&[key])
-            }
+            Command::RollbackThenGet { ref key, .. } => self.latches.gen_lock(&[key]),
             _ => Lock::new(vec![]),
         }
     }
@@ -183,7 +185,9 @@ impl Scheduler {
                 for m in mutations {
                     match txn.prewrite(m.clone(), primary) {
                         Ok(_) => results.push(Ok(())),
-                        e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
+                        e @ Err(MvccError::KeyIsLocked { .. }) => {
+                            results.push(e.map_err(Error::from))
+                        }
                         Err(e) => return Err(Error::from(e)),
                     }
                 }
@@ -287,14 +291,14 @@ impl Scheduler {
             Command::CommitThenGet { ref ctx, .. } |
             Command::Cleanup { ref ctx, .. } |
             Command::Rollback { ref ctx, .. } |
-            Command::RollbackThenGet { ref ctx, .. } => {
-                ctx
-            }
+            Command::RollbackThenGet { ref ctx, .. } => ctx,
         }
     }
 
     fn register_report_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(event_loop, Tick::ReportStatistic, REPORT_STATISTIC_INTERVAL) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::ReportStatistic,
+                                       REPORT_STATISTIC_INTERVAL) {
             error!("register report statistic err: {:?}", e);
         };
     }
@@ -311,6 +315,8 @@ impl Scheduler {
         let ctx = RunningCtx::new(cid, cmd, lock);
         self.save_cmd_context(cid, ctx);
 
+        debug!("received new command, cid = {}", cid);
+
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);
         }
@@ -324,7 +330,10 @@ impl Scheduler {
     fn get_snapshot(&mut self, cid: u64) {
         let ch = self.schedch.clone();
         let cb = box move |snapshot: EngineResult<Box<Snapshot>>| {
-            if let Err(e) = ch.send(Msg::SnapshotFinish{ cid: cid, snapshot: snapshot, }) {
+            if let Err(e) = ch.send(Msg::SnapshotFinish {
+                cid: cid,
+                snapshot: snapshot,
+            }) {
                 error!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e);
             }
         };
@@ -355,11 +364,15 @@ impl Scheduler {
                     self.finish_cmd(cid);
                 }
             }
-            Err(e) => { self.finish_with_err(cid, Error::from(e)); }
+            Err(e) => {
+                self.finish_with_err(cid, Error::from(e));
+            }
         }
     }
 
     fn on_write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
+        debug!("write finished for command, cid = {}", cid);
+
         let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
         assert_eq!(cid, ctx.cid);
 
@@ -369,25 +382,29 @@ impl Scheduler {
                     Ok(()) => {
                         match pr {
                             ProcessResult::ResultSet { mut result } => {
-                                Ok(result.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
+                                Ok(result.drain(..)
+                                    .map(|x| x.map_err(::storage::Error::from))
+                                    .collect())
                             }
-                            _ => { panic!("prewrite return but process result is not result set."); }
+                            _ => {
+                                panic!("prewrite return but process result is not result set.");
+                            }
                         }
                     }
-                    Err(e) => Err(e.into())
+                    Err(e) => Err(e.into()),
                 });
             }
             Command::CommitThenGet { ref mut callback, .. } => {
                 callback.take().unwrap()(match result {
                     Ok(()) => {
                         match pr {
-                            ProcessResult::Value { value } => { Ok(value) }
-                            _ => { panic!("commit then get return but process result is not value."); }
+                            ProcessResult::Value { value } => Ok(value),
+                            _ => {
+                                panic!("commit then get return but process result is not value.");
+                            }
                         }
                     }
-                    Err(e) => {
-                        Err(::storage::Error::from(e))
-                    }
+                    Err(e) => Err(::storage::Error::from(e)),
                 });
             }
             Command::Commit { ref mut callback, .. } |
@@ -399,16 +416,18 @@ impl Scheduler {
                 callback.take().unwrap()(match result {
                     Ok(()) => {
                         match pr {
-                            ProcessResult::Value { value } => { Ok(value) }
-                            _ => { panic!("rollback then get return but process result is not value."); }
+                            ProcessResult::Value { value } => Ok(value),
+                            _ => {
+                                panic!("rollback then get return but process result is not value.");
+                            }
                         }
                     }
-                    Err(e) => {
-                        Err(::storage::Error::from(e))
-                    }
+                    Err(e) => Err(::storage::Error::from(e)),
                 });
             }
-            _ => { panic!("unsupported write cmd"); }
+            _ => {
+                panic!("unsupported write cmd");
+            }
         }
     }
 

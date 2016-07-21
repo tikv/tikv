@@ -24,9 +24,7 @@ struct Latch {
 
 impl Latch {
     pub fn new() -> Latch {
-        Latch {
-            waiting: VecDeque::new(),
-        }
+        Latch { waiting: VecDeque::new() }
     }
 }
 
@@ -63,7 +61,8 @@ impl Latches {
     }
 
     pub fn gen_lock<H>(&self, keys: &[H]) -> Lock
-        where H: Hash {
+        where H: Hash
+    {
         // prevent from deadlock, so we sort and deduplicate the index
         let mut slots: Vec<usize> = keys.iter().map(|x| self.calc_slot(x)).collect();
         slots.sort();
