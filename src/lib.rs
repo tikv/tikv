@@ -16,6 +16,7 @@
 #![feature(optin_builtin_traits)]
 #![feature(btree_range, collections_bound)]
 #![feature(fnbox)]
+#![feature(alloc)]
 #![feature(plugin)]
 #![feature(box_syntax)]
 #![feature(const_fn)]
@@ -48,6 +49,7 @@ extern crate rustc_serialize;
 extern crate hyper;
 #[cfg(unix)]
 extern crate nix;
+extern crate alloc;
 
 #[macro_use]
 pub mod util;

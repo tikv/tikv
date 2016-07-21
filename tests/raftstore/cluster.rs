@@ -162,7 +162,13 @@ impl<T: Simulator> Cluster<T> {
                         request: RaftCmdRequest,
                         timeout: Duration)
                         -> Result<RaftCmdResponse> {
-        self.sim.rl().call_command(request, timeout)
+        match self.sim.rl().call_command(request.clone(), timeout) {
+            Err(e) => {
+                warn!("failed to call command {:?}: {:?}", request, e);
+                Err(e)
+            }
+            a => a,
+        }
     }
 
     pub fn call_command_on_leader(&mut self,
