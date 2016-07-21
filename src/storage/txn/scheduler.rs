@@ -148,9 +148,7 @@ impl Scheduler {
             Command::RollbackThenGet { ref key, .. } => {
                 self.latches.calc_slots(&[key])
             }
-            _ => {
-                panic!("unsupported cmd that need latches");
-            }
+            _ => vec![],
         }
     }
 
@@ -319,25 +317,15 @@ impl Scheduler {
         self.register_report_tick(event_loop);
     }
 
-    fn received_new_cmd(&mut self, cmd: Command) {
+    fn on_received_new_cmd(&mut self, cmd: Command) {
         let cid = self.gen_id();
+        let slots = self.calc_latches_slots(&cmd);
+        let ctx = RunningCtx::new(cid, cmd, slots);
+        self.save_cmd_context(cid, ctx);
 
-        if cmd.readonly() {
-            // readonly commands don't need latch
-            let ctx = RunningCtx::new(cid, cmd, vec![]);
-            self.save_cmd_context(cid, ctx);
+        let all_acquired = self.acquire_latches(cid);
+        if all_acquired {
             self.get_snapshot(cid);
-        } else {
-            // write command needs acquire latches first, or this command will not
-            // be handled currently, it will be woken up by other command
-            let slots = self.calc_latches_slots(&cmd);
-            let ctx = RunningCtx::new(cid, cmd, slots);
-            self.save_cmd_context(cid, ctx);
-
-            let all_acquired = self.acquire_latches(cid);
-            if all_acquired {
-                self.get_snapshot(cid);
-            }
         }
     }
 
@@ -365,31 +353,32 @@ impl Scheduler {
         }
     }
 
-    fn snapshot_finished(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
+    fn on_snapshot_finished(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
         debug!("receive snapshot finish msg for cid = {}", cid);
 
         match snapshot {
             Ok(snapshot) => {
                 let res = self.process_cmd_with_snapshot(cid, snapshot.as_ref());
-                let mut finished: bool = false;
-                match res {
+
+                let finished = match res {
                     Ok(()) => {
                         let ctx = self.cmd_ctxs.get(&cid).unwrap();
-                        if ctx.cmd.readonly() { finished = true; }
+                        ctx.cmd.readonly()
                     }
                     Err(e) => {
                         self.process_failed_cmd(cid, Error::from(e));
-                        finished = true;
+                        true
                     }
+                };
+                if finished {
+                    self.finish_cmd(cid);
                 }
-
-                if finished { self.finish_cmd(cid); }
             }
             Err(e) => { self.finish_with_err(cid, Error::from(e)); }
         }
     }
 
-    fn write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
+    fn on_write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
         let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
         assert_eq!(cid, ctx.cid);
 
@@ -490,10 +479,10 @@ impl mio::Handler for Scheduler {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => self.shutdown(event_loop),
-            Msg::RawCmd { cmd } => self.received_new_cmd(cmd),
-            Msg::SnapshotFinish { cid, snapshot } => self.snapshot_finished(cid, snapshot),
+            Msg::RawCmd { cmd } => self.on_received_new_cmd(cmd),
+            Msg::SnapshotFinish { cid, snapshot } => self.on_snapshot_finished(cid, snapshot),
             Msg::WriteFinish { cid, pr, result } => {
-                self.write_finished(cid, pr, result);
+                self.on_write_finished(cid, pr, result);
                 self.finish_cmd(cid);
             }
         }

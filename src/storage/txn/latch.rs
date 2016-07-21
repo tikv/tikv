@@ -59,19 +59,14 @@ impl Latches {
         for i in slots {
             let latch = &mut self.slots.get_mut(*i).unwrap();
 
-            let mut front: Option<u64> = None;
-            if let Some(cid) = latch.waiting.front() {
-                front = Some(*cid);
-            }
-
+            let front = latch.waiting.front().cloned();
             match front {
                 Some(cid) => {
                     if cid == who {
                         acquired_count += 1;
                     } else {
-                        if !latch.set.contains(&who) {
+                        if latch.set.insert(who) {
                             latch.waiting.push_back(who);
-                            latch.set.insert(who);
                         }
                         return acquired_count;
                     }
