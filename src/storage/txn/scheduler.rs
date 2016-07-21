@@ -26,7 +26,7 @@ use super::Result;
 use super::Error;
 use super::SchedCh;
 use super::store::SnapshotStore;
-use super::latch::Latches;
+use super::latch::{Latches, Lock};
 
 const REPORT_STATISTIC_INTERVAL: u64 = 60000; // 60 seconds
 
@@ -60,31 +60,19 @@ pub enum Msg {
     },
 }
 
-type LatchSlots = Vec<usize>;
-
 struct RunningCtx {
-    pub cid: u64,
+    cid: u64,
     pub cmd: Command,
-    required_latches: LatchSlots,
-    pub owned_latches_count: usize,
+    pub lock: Lock,
 }
 
 impl RunningCtx {
-    pub fn new(cid: u64, cmd: Command, required_latches: LatchSlots) -> RunningCtx {
+    pub fn new(cid: u64, cmd: Command, lock: Lock) -> RunningCtx {
         RunningCtx {
             cid: cid,
             cmd: cmd,
-            required_latches: required_latches,
-            owned_latches_count: 0,
+            lock: lock,
         }
-    }
-
-    pub fn required_latches(&self) -> &LatchSlots {
-        &self.required_latches
-    }
-
-    pub fn all_latches_acquired(&self) -> bool {
-        self.required_latches.len() == self.owned_latches_count
     }
 }
 
@@ -133,22 +121,22 @@ impl Scheduler {
         }
     }
 
-    fn calc_latches_slots(&self, cmd: &Command) -> Vec<usize> {
+    fn gen_lock(&self, cmd: &Command) -> Lock {
         match *cmd {
             Command::Prewrite { ref mutations, .. } => {
                 let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
-                self.latches.calc_slots(&keys)
+                self.latches.gen_lock(&keys)
             }
             Command::Commit { ref keys, .. } |
             Command::Rollback { ref keys, .. } => {
-                self.latches.calc_slots(keys)
+                self.latches.gen_lock(keys)
             }
             Command::CommitThenGet { ref key, .. } |
             Command::Cleanup { ref key, .. } |
             Command::RollbackThenGet { ref key, .. } => {
-                self.latches.calc_slots(&[key])
+                self.latches.gen_lock(&[key])
             }
-            _ => vec![],
+            _ => Lock::new(vec![]),
         }
     }
 
@@ -319,25 +307,18 @@ impl Scheduler {
 
     fn on_received_new_cmd(&mut self, cmd: Command) {
         let cid = self.gen_id();
-        let slots = self.calc_latches_slots(&cmd);
-        let ctx = RunningCtx::new(cid, cmd, slots);
+        let lock = self.gen_lock(&cmd);
+        let ctx = RunningCtx::new(cid, cmd, lock);
         self.save_cmd_context(cid, ctx);
 
-        let all_acquired = self.acquire_latches(cid);
-        if all_acquired {
+        if self.acquire_lock(cid) {
             self.get_snapshot(cid);
         }
     }
 
-    fn acquire_latches(&mut self, cid: u64) -> bool {
+    fn acquire_lock(&mut self, cid: u64) -> bool {
         let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
-        let new_acquired = {
-            let required_latches = ctx.required_latches();
-            let owned_count = ctx.owned_latches_count;
-            self.latches.acquire(&required_latches[owned_count..], cid)
-        };
-        ctx.owned_latches_count += new_acquired;
-        ctx.all_latches_acquired()
+        self.latches.acquire(&mut ctx.lock, cid)
     }
 
     fn get_snapshot(&mut self, cid: u64) {
@@ -435,19 +416,14 @@ impl Scheduler {
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(cid, ctx.cid);
 
-        if ctx.required_latches().is_empty() {
-            return;
-        }
-
-        let wakeup_list = self.latches.release(ctx.required_latches(), cid);
+        let wakeup_list = self.latches.release(&ctx.lock, cid);
         for wcid in wakeup_list {
             self.wakeup_cmd(wcid);
         }
     }
 
     fn wakeup_cmd(&mut self, cid: u64) {
-        let all_acquired = self.acquire_latches(cid);
-        if all_acquired {
+        if self.acquire_lock(cid) {
             self.get_snapshot(cid);
         }
     }
