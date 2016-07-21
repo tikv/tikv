@@ -63,8 +63,8 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.store_cfg.raft_log_gc_limit = 1000;
-    cluster.cfg.store_cfg.raft_log_gc_threshold = 2000;
+    cluster.cfg.raft_store.raft_log_gc_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 2000;
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");

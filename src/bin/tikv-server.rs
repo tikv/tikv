@@ -39,7 +39,7 @@ use mio::tcp::TcpListener;
 use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
 
-use tikv::storage::{Storage, Dsn, TEMP_DIR, DEFAULT_CFS};
+use tikv::storage::{Storage, TEMP_DIR, DEFAULT_CFS};
 use tikv::util::{self, logger, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::metric::{self, BufferedUdpMetricSink};
 use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
@@ -294,7 +294,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                                      |v| v.as_integer());
     assert!(capacity >= 0);
     if capacity > 0 {
-        cfg.store_cfg.capacity = capacity as u64;
+        cfg.raft_store.capacity = capacity as u64;
     }
 
     // Set advertise address for outer node and client use.
@@ -320,35 +320,35 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           Some(128 * 1024),
                           |v| v.as_integer()) as usize;
 
-    cfg.store_cfg.notify_capacity =
+    cfg.raft_store.notify_capacity =
         get_integer_value("",
                           "raftstore.notify-capacity",
                           matches,
                           config,
                           Some(40960),
                           |v| v.as_integer()) as usize;
-    cfg.store_cfg.messages_per_tick =
+    cfg.raft_store.messages_per_tick =
         get_integer_value("",
                           "raftstore.messages-per-tick",
                           matches,
                           config,
                           Some(4096),
                           |v| v.as_integer()) as usize;
-    cfg.store_cfg.region_split_size =
+    cfg.raft_store.region_split_size =
         get_integer_value("region-split-size",
                           "raftstore.region-split-size",
                           matches,
                           config,
                           Some(64 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
-    cfg.store_cfg.region_max_size =
+    cfg.raft_store.region_max_size =
         get_integer_value("region-max-size",
                           "raftstore.region-max-size",
                           matches,
                           config,
                           Some(80 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
-    cfg.store_cfg.region_check_size_diff =
+    cfg.raft_store.region_check_size_diff =
         get_integer_value("region-split-check-diff",
                           "raftstore.region-split-check-diff",
                           matches,
@@ -356,7 +356,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           Some(8 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
 
-    cfg.store_cfg.pd_heartbeat_tick_interval =
+    cfg.raft_store.pd_heartbeat_tick_interval =
         get_integer_value("pd-heartbeat-tick-interval",
                           "raftstore.pd-heartbeat-tick-interval",
                           matches,
@@ -364,14 +364,34 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           Some(5000),
                           |v| v.as_integer()) as u64;
 
-    cfg.store_cfg.pd_store_heartbeat_tick_interval =
+    cfg.raft_store.pd_store_heartbeat_tick_interval =
         get_integer_value("pd-store-heartbeat-tick-interval",
                           "raftstore.pd-store-heartbeat-tick-interval",
                           matches,
                           config,
                           Some(10000),
                           |v| v.as_integer()) as u64;
-
+    cfg.storage.sched_notify_capacity =
+        get_integer_value("",
+                          "storage.scheduler-notify-capacity",
+                          matches,
+                          config,
+                          Some(10240),
+                          |v| v.as_integer()) as usize;
+    cfg.storage.sched_msg_per_tick =
+        get_integer_value("",
+                          "storage.scheduler-messages-per-tick",
+                          matches,
+                          config,
+                          Some(1024),
+                          |v| v.as_integer()) as usize;
+    cfg.storage.sched_concurrency =
+        get_integer_value("",
+                          "storage.scheduler-concurrency",
+                          matches,
+                          config,
+                          Some(1024),
+                          |v| v.as_integer()) as usize;
     cfg
 }
 
@@ -382,7 +402,7 @@ fn build_raftkv(matches: &Matches,
                 cfg: &Config)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, SnapManager) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
-    let path = Path::new(&get_store_path(matches, config)).to_path_buf();
+    let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
     let mut db_path = path.clone();
     db_path.push("db");
@@ -390,7 +410,7 @@ fn build_raftkv(matches: &Matches,
         Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), DEFAULT_CFS)
             .unwrap());
 
-    let mut event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+    let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
     let mut node = Node::new(&mut event_loop, cfg, pd_client);
 
     let mut snap_path = path.clone();
@@ -402,7 +422,7 @@ fn build_raftkv(matches: &Matches,
     let raft_router = node.raft_store_router();
     let node_id = node.id();
 
-    (create_raft_storage(node, engine).unwrap(), raft_router, node_id, snap_mgr)
+    (create_raft_storage(node, engine, cfg).unwrap(), raft_router, node_id, snap_mgr)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -427,10 +447,16 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
-fn run_local_server(listener: TcpListener, store: Storage, config: &Config) {
+fn run_local_server(listener: TcpListener, config: &Config) {
     let mut event_loop = create_event_loop(config).unwrap();
     let router = Arc::new(RwLock::new(MockRaftStoreRouter));
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
+
+    let mut store = Storage::new(&config.storage).unwrap();
+    if let Err(e) = store.start(&config.storage) {
+        panic!("failed to start storage, error = {:?}", e);
+    }
+
     let mut svr = Server::new(&mut event_loop,
                               config,
                               listener,
@@ -470,10 +496,16 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                store_path);
     }
 
-    let (store, raft_router, node_id, snap_mgr) =
+    let (mut store, raft_router, node_id, snap_mgr) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
     initial_metric(matches, config, Some(node_id));
+
+    info!("start storage");
+    if let Err(e) = store.start(&cfg.storage) {
+        panic!("failed to start storage, error = {:?}", e);
+    }
+
     let mut svr = Server::new(&mut event_loop,
                               cfg,
                               listener,
@@ -595,16 +627,15 @@ fn main() {
                               None,
                               |v| v.as_integer().map(|i| i.to_string()));
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
-    let cfg = build_cfg(&matches,
-                        &config,
-                        cluster_id,
-                        &format!("{}", listener.local_addr().unwrap()));
+    let mut cfg = build_cfg(&matches,
+                            &config,
+                            cluster_id,
+                            &format!("{}", listener.local_addr().unwrap()));
+    cfg.storage.path = get_store_path(&matches, &config);
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
             initial_metric(&matches, &config, None);
-            let path = get_store_path(&matches, &config);
-            let store = Storage::new(Dsn::RocksDBPath(&path)).unwrap();
-            run_local_server(listener, store, &cfg);
+            run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {
             run_raft_server(listener, &matches, &config, &cfg);

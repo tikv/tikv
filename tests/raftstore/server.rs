@@ -147,7 +147,7 @@ impl Simulator for ServerCluster {
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
         let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
 
-        let mut store_event_loop = store::create_event_loop(&cfg.store_cfg).unwrap();
+        let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
         let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
         let snap_mgr = store::new_snap_mgr(tmp_str, Some(node.get_sendch()));
@@ -167,7 +167,9 @@ impl Simulator for ServerCluster {
 
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
-        let store = create_raft_storage(node, engine).unwrap();
+
+        let mut store = create_raft_storage(node, engine, &cfg).unwrap();
+        store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
         let mut server = Server::new(&mut event_loop,

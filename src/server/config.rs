@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use raftstore::store::Config as StoreConfig;
+pub use raftstore::store::Config as RaftStoreConfig;
+pub use storage::Config as StorageConfig;
 use super::Result;
 
 const DEFAULT_CLUSTER_ID: u64 = 0;
@@ -36,7 +37,8 @@ pub struct Config {
     pub messages_per_tick: usize,
     pub send_buffer_size: usize,
     pub recv_buffer_size: usize,
-    pub store_cfg: StoreConfig,
+    pub storage: StorageConfig,
+    pub raft_store: RaftStoreConfig,
 }
 
 impl Default for Config {
@@ -49,7 +51,8 @@ impl Default for Config {
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             send_buffer_size: DEFAULT_SEND_BUFFER_SIZE,
             recv_buffer_size: DEFAULT_RECV_BUFFER_SIZE,
-            store_cfg: StoreConfig::default(),
+            storage: StorageConfig::default(),
+            raft_store: RaftStoreConfig::default(),
         }
     }
 }
@@ -60,7 +63,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        try!(self.store_cfg.validate());
+        try!(self.raft_store.validate());
 
         Ok(())
     }
