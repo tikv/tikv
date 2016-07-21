@@ -263,6 +263,16 @@ impl PipeBuffer {
         }
         Ok(written)
     }
+
+    pub fn write_all_to<W: Write>(&mut self, w: &mut W) -> Result<()> {
+        {
+            let (left, right) = self.slice();
+            try!(w.write_all(left));
+            try!(w.write_all(right));
+        }
+        self.end = self.start;
+        Ok(())
+    }
 }
 
 impl Read for PipeBuffer {
@@ -498,5 +508,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_write_all() {
+        let mut s = PipeBuffer::new(25);
+        let example = vec![1; 25];
+        s.write_all(&example).unwrap();
+        let mut buf: Vec<u8> = vec![0; 20];
+        {
+            let mut buf_w = buf.as_mut_slice();
+            assert!(s.write_all_to(&mut buf_w).is_err());
+        }
+        {
+            // write all failed should not change buffer content.
+            let mut buf_w = buf.as_mut_slice();
+            assert!(s.write_all_to(&mut buf_w).is_err());
+        }
+        buf = vec![0; 25];
+        let mut buf_w = buf.as_mut_slice();
+        assert!(s.write_all_to(&mut buf_w).is_ok());
+        assert!(s.is_empty());
     }
 }
