@@ -270,9 +270,9 @@ fn test_multi_server_random_restart() {
 }
 
 fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.store_cfg.raft_election_timeout_ticks = 50;
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
     // disable compact log to make test more stable.
-    cluster.cfg.store_cfg.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
     // We use three peers([1, 2, 3]) for this test.
     cluster.run();
 
@@ -355,9 +355,9 @@ fn test_server_leader_change_with_uncommitted_log() {
 }
 
 fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.store_cfg.raft_election_timeout_ticks = 50;
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
     // disable compact log to make test more stable.
-    cluster.cfg.store_cfg.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
     // We use three peers([1, 2, 3]) for this test.
     cluster.run();
 

@@ -325,7 +325,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_rule();
 
     // disable auto compact log.
-    cluster.cfg.store_cfg.raft_log_gc_threshold = 10000;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 10000;
 
     let r1 = cluster.run_conf_change();
 

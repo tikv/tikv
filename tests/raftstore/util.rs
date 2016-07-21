@@ -28,6 +28,7 @@ use kvproto::eraftpb::ConfChangeType;
 
 use tikv::raftstore::store::*;
 use tikv::server::Config as ServerConfig;
+use tikv::storage::Config as StorageConfig;
 use tikv::util::escape;
 
 pub use tikv::raftstore::store::util::find_peer;
@@ -83,7 +84,8 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
     ServerConfig {
         cluster_id: cluster_id,
         addr: "127.0.0.1:0".to_owned(),
-        store_cfg: store_cfg,
+        raft_store: store_cfg,
+        storage: StorageConfig::default(),
         send_buffer_size: 64 * 1024,
         recv_buffer_size: 64 * 1024,
         ..ServerConfig::default()

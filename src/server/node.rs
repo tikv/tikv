@@ -27,11 +27,11 @@ use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::ServerRaftStoreRouter;
 
-pub fn create_raft_storage<C>(node: Node<C>, db: Arc<DB>) -> Result<Storage>
+pub fn create_raft_storage<C>(node: Node<C>, db: Arc<DB>, cfg: &Config) -> Result<Storage>
     where C: PdClient + 'static
 {
     let engine = box RaftKv::new(node, db);
-    let store = try!(Storage::from_engine(engine));
+    let store = try!(Storage::from_engine(engine, &cfg.storage));
     Ok(store)
 }
 
@@ -71,7 +71,7 @@ impl<C> Node<C>
         Node {
             cluster_id: cfg.cluster_id,
             store: store,
-            store_cfg: cfg.store_cfg.clone(),
+            store_cfg: cfg.raft_store.clone(),
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
