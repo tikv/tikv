@@ -153,35 +153,33 @@ impl Scheduler {
             }
             Command::BatchGet { ref keys, start_ts, ref mut callback, .. } => {
                 let snap_store = SnapshotStore::new(snapshot, start_ts);
-                callback.take().unwrap()(
-                    match snap_store.batch_get(keys) {
-                        Ok(results) => {
-                            let mut res = vec![];
-                            for (k, v) in keys.into_iter().zip(results.into_iter()) {
-                                match v {
-                                    Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
-                                    Ok(None) => {}
-                                    Err(e) => res.push(Err(::storage::Error::from(e))),
-                                }
+                let res = match snap_store.batch_get(keys) {
+                    Ok(results) => {
+                        let mut res = vec![];
+                        for (k, v) in keys.into_iter().zip(results.into_iter()) {
+                            match v {
+                                Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
+                                Ok(None) => {}
+                                Err(e) => res.push(Err(::storage::Error::from(e))),
                             }
-                            Ok(res)
                         }
-                        Err(e) => Err(e.into()),
+                        Ok(res)
                     }
-                );
+                    Err(e) => Err(e.into()),
+                };
+                callback.take().unwrap()(res);
             }
             Command::Scan { ref start_key, limit, start_ts, ref mut callback, .. } => {
                 let snap_store = SnapshotStore::new(snapshot, start_ts);
                 let mut scanner = try!(snap_store.scanner());
                 let key = start_key.clone();
-                callback.take().unwrap()(
-                    match scanner.scan(key, limit) {
-                        Ok(mut results) => {
-                            Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
-                        }
-                        Err(e) => Err(e.into()),
+                let res = match scanner.scan(key, limit) {
+                    Ok(mut results) => {
+                        Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
                     }
-                );
+                    Err(e) => Err(e.into()),
+                };
+                callback.take().unwrap()(res);
             }
             Command::Prewrite { ref ctx, ref mutations, ref primary, start_ts, .. } => {
                 let mut txn = MvccTxn::new(snapshot, start_ts);
@@ -382,38 +380,36 @@ impl Scheduler {
 
         match ctx.cmd {
             Command::Prewrite { ref mut callback, .. } => {
-                callback.take().unwrap()(
-                    match result {
-                        Ok(()) => {
-                            match pr {
-                                ProcessResult::ResultSet { mut result } => {
-                                    Ok(result.drain(..)
-                                        .map(|x| x.map_err(::storage::Error::from))
-                                        .collect())
-                                }
-                                _ => {
-                                    panic!("prewrite return but process result is not result set.");
-                                }
+                let res = match result {
+                    Ok(()) => {
+                        match pr {
+                            ProcessResult::ResultSet { mut result } => {
+                                Ok(result.drain(..)
+                                   .map(|x| x.map_err(::storage::Error::from))
+                                   .collect())
+                            }
+                            _ => {
+                                panic!("prewrite return but process result is not result set.");
                             }
                         }
-                        Err(e) => Err(e.into()),
                     }
-                );
+                    Err(e) => Err(e.into()),
+                };
+                callback.take().unwrap()(res);
             }
             Command::CommitThenGet { ref mut callback, .. } => {
-                callback.take().unwrap()(
-                    match result {
-                        Ok(()) => {
-                            match pr {
-                                ProcessResult::Value { value } => Ok(value),
-                                _ => {
-                                    panic!("commit then get return but process result is not value.");
-                                }
+                let res = match result {
+                    Ok(()) => {
+                        match pr {
+                            ProcessResult::Value { value } => Ok(value),
+                            _ => {
+                                panic!("commit then get return but process result is not value.");
                             }
                         }
-                        Err(e) => Err(::storage::Error::from(e)),
                     }
-                );
+                    Err(e) => Err(::storage::Error::from(e)),
+                };
+                callback.take().unwrap()(res);
             }
             Command::Commit { ref mut callback, .. } |
             Command::Cleanup { ref mut callback, .. } |
@@ -421,19 +417,18 @@ impl Scheduler {
                 callback.take().unwrap()(result.map_err(::storage::Error::from));
             }
             Command::RollbackThenGet { ref mut callback, .. } => {
-                callback.take().unwrap()(
-                    match result {
-                        Ok(()) => {
-                            match pr {
-                                ProcessResult::Value { value } => Ok(value),
-                                _ => {
-                                    panic!("rollback then get return but process result is not value.");
-                                }
+                let res = match result {
+                    Ok(()) => {
+                        match pr {
+                            ProcessResult::Value { value } => Ok(value),
+                            _ => {
+                                panic!("rollback then get return but process result is not value.");
                             }
                         }
-                        Err(e) => Err(::storage::Error::from(e)),
                     }
-                );
+                    Err(e) => Err(::storage::Error::from(e)),
+                };
+                callback.take().unwrap()(res);
             }
             _ => {
                 panic!("unsupported write cmd");
