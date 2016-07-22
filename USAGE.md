@@ -39,19 +39,19 @@ install RocksDB manually first.
               --etcd-initial-cluster-state="new"
     ```
     
-
-    + `cluster-id`: Unique ID to distinguish different PD clusters. It can't be changed after bootstrapping.  
-    + `addr`: Listening address for client traffic. The default official address is `127.0.0.1:1234`.
-    + `advertise-addr`: Advertise address for external client communication. It must be accessible to the PD node.
-    + `http-addr`: HTTP listening address for client requests. 
-    + `etcd-name`: etcd human readable name for this node. 
-    + `etcd-data-dir`: etcd path to the data directory.
-    + `etcd-listen-peer-url`: etcd listening address for peer traffic.
-    + `etcd-advertise-peer-url`: etcd advertise peer url to the rest of the cluster.
-    + `etcd-listen-client-url`: etcd listening address for client traffic.
-    + `etcd-advertise-client-url`: etcd advertise url to the public, it must be accessible to PD machine.
-    + `etcd-initial-cluster-state`: etcd initial cluster state. The value is either`new` or `existing`.
-    + `etcd-initial-cluster`: etcd initail cluster configuration for bootstrapping. 
+    
+    + `cluster-id`: The unique ID to distinguish different PD clusters. It can't be changed after bootstrapping.  
+    + `addr`: The listening address for client traffic. 
+    + `advertise-addr`: The advertise address for external client communication. It must be accessible to the PD node.
+    + `http-addr`: The HTTP listening address for client requests. 
+    + `etcd-name`: The etcd human readable name for this node. 
+    + `etcd-data-dir`: The etcd path to the data directory.
+    + `etcd-listen-peer-url`: The etcd listening address for peer traffic.
+    + `etcd-advertise-peer-url`: The etcd advertise peer url to the rest of the cluster.
+    + `etcd-listen-client-url`: The etcd listening address for client traffic.
+    + `etcd-advertise-client-url`: The etcd advertise url to the public. It must be accessible to the PD node.
+    + `etcd-initial-cluster-state`: The etcd initial cluster state. The value is either`new` or `existing`.
+    + `etcd-initial-cluster`: The etcd initail cluster configuration for bootstrapping.  
     
 
 2. Start TiKV on listening port 5551. The data is stored in directory `data1` and cluster ID is 1.
