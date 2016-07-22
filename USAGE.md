@@ -142,3 +142,235 @@ In production environment, it is strongly recommended to run TiKV in the cluster
     ```
     mysql -h 127.0.0.1 -P 5001 -u root -D test
     ```
+
+### Running in the local cluster mode with `docker-compose`
+
+A simple `docker-compose.yml`:
+
+```bash
+version: '2'
+
+services:
+  pd1:
+    image: pingcap/pd
+    ports:
+      - "1234"
+      - "9090"
+      - "2379"
+      - "2380"
+
+    command:
+      - --addr=0.0.0.0:1234
+      - --advertise-addr=pd1:1234
+      - --http-addr=0.0.0.0:9090
+      - --cluster-id=1
+      - --etcd-name=pd1 
+      - --etcd-advertise-client-url=http://pd1:2379 
+      - --etcd-advertise-peer-url=http://pd1:2380
+      - --etcd-initial-cluster=pd1=http://pd1:2380,pd2=http://pd2:2380,pd3=http://pd3:2380
+      - --etcd-listen-peer-url=http://0.0.0.0:2380
+      - --etcd-listen-client-url=http://0.0.0.0:2379 
+
+    privileged: true
+
+  pd2:
+    image: pingcap/pd
+    ports:
+      - "1234"
+      - "9090"
+      - "2379"
+      - "2380"
+
+    command:
+      - --addr=0.0.0.0:1234
+      - --advertise-addr=pd2:1234
+      - --http-addr=0.0.0.0:9090
+      - --cluster-id=1
+      - --etcd-name=pd2
+      - --etcd-advertise-client-url=http://pd2:2379
+      - --etcd-advertise-peer-url=http://pd2:2380
+      - --etcd-initial-cluster=pd1=http://pd1:2380,pd2=http://pd2:2380,pd3=http://pd3:2380
+      - --etcd-listen-peer-url=http://0.0.0.0:2380 
+      - --etcd-listen-client-url=http://0.0.0.0:2379 
+
+    privileged: true
+
+  pd3:
+    image: pingcap/pd
+    ports:
+      - "1234"
+      - "9090"
+      - "2379"
+      - "2380"
+
+    command:
+      - --addr=0.0.0.0:1234
+      - --advertise-addr=pd3:1234
+      - --http-addr=0.0.0.0:9090
+      - --cluster-id=1
+      - --etcd-name=pd3
+      - --etcd-advertise-client-url=http://pd3:2379 
+      - --etcd-advertise-peer-url=http://pd3:2380 
+      - --etcd-initial-cluster=pd1=http://pd1:2380,pd2=http://pd2:2380,pd3=http://pd3:2380 
+      - --etcd-listen-peer-url=http://0.0.0.0:2380 
+      - --etcd-listen-client-url=http://0.0.0.0:2379 
+
+    privileged: true
+
+  tikv1:
+    image: pingcap/tikv
+    ports:
+      - "20160"
+
+    command:
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv1:20160
+      - --cluster-id=1
+      - --dsn=raftkv
+      - --store=/var/tikv
+      - --etcd=pd1:2379,pd2:2379,pd3:2379
+
+    depends_on:
+      - "pd1"
+      - "pd2"
+      - "pd3"
+
+    entrypoint: /tikv-server
+
+    privileged: true
+
+  tikv2:
+    image: pingcap/tikv
+    ports:
+      - "20160"
+
+    command:
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv2:20160
+      - --cluster-id=1
+      - --dsn=raftkv
+      - --store=/var/tikv
+      - --etcd=pd1:2379,pd2:2379,pd3:2379
+
+    depends_on:
+      - "pd1"
+      - "pd2"
+      - "pd3"
+
+    entrypoint: /tikv-server
+
+    privileged: true
+
+  tikv3:
+    image: pingcap/tikv
+    ports:
+      - "20160"
+
+    command:
+      - --addr=0.0.0.0:20160
+      - --advertise-addr=tikv3:20160
+      - --cluster-id=1
+      - --dsn=raftkv
+      - --store=/var/tikv
+      - --etcd=pd1:2379,pd2:2379,pd3:2379
+
+    depends_on:
+      - "pd1"
+      - "pd2"
+      - "pd3"
+
+    entrypoint: /tikv-server
+
+    privileged: true
+
+  tidb:
+    image: pingcap/tidb
+    ports:
+      - "4000"
+
+    command:
+      - --store=tikv 
+      - --path=pd1:2379,pd2:2379,pd3:2379/pd?cluster=1
+      - -L=info
+
+    depends_on:
+      - "tikv1"
+      - "tikv2"
+      - "tikv3"
+
+    privileged: true
+    
+```
+
++ Use `docker-compose up -d` to create and start the cluster. 
++ Use `docker-compose port tidb 4000`, output may be `0.0.0.0:32966`, so the real TiDB host port is `32966`.
++ Use `mysql -h 127.0.0.1 -P 32966 -u root -D test` to connect TiDB and enjoy it. 
++ Use `docker-compose down` to stop and remove the cluster.
+
+You can define multiple TiDBs and put a haproxy before them, like:
+
+```bash
+  tidb1:
+    image: pingcap/tidb
+    ports:
+      - "4000"
+
+    command:
+      - --store=tikv 
+      - --path=pd1:2379,pd2:2379,pd3:2379/pd?cluster=1
+      - -L=info
+
+    depends_on:
+      - "tikv1"
+      - "tikv2"
+      - "tikv3"
+
+    privileged: true
+
+  tidb2:
+    image: pingcap/tidb
+    ports:
+      - "4000"
+
+    command:
+      - --store=tikv 
+      - --path=pd1:2379,pd2:2379,pd3:2379/pd?cluster=1
+      - -L=info
+
+    depends_on:
+      - "tikv1"
+      - "tikv2"
+      - "tikv3"
+
+    privileged: true
+
+  tidb3:
+    image: pingcap/tidb
+    ports:
+      - "4000"
+
+    command:
+      - --store=tikv 
+      - --path=pd1:2379,pd2:2379,pd3:2379/pd?cluster=1
+      - -L=info
+
+    depends_on:
+      - "tikv1"
+      - "tikv2"
+      - "tikv3"
+
+    privileged: true
+
+  haproxy:
+    image: pingcap/haproxy
+
+    ports:
+      - "4000"
+
+    depends_on:
+      - "tidb1"
+      - "tidb2"
+      - "tidb3"
+```
+
+You can use `docker-compose port haproxy 4000` to get haproxy host port and use `mysql` to connect it. 
