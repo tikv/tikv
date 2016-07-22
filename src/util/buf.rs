@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{Result, Write, Read};
+use std::io::{Result, Write, Read, BufRead};
 use std::fmt::{self, Debug, Formatter};
 use alloc::raw_vec::RawVec;
 use std::{cmp, ptr, slice, mem};
@@ -177,6 +177,9 @@ impl PipeBuffer {
                     if right_len >= to_keep {
                         // [.rr|...] -> [.rr] or [rrr|r] -> [rr.]
                         self.end = self.start + to_keep;
+                        if self.end == new_cap {
+                            self.end = 0;
+                        }
                     } else {
                         // [..r|l.] -> [l.r]
                         self.end = to_keep - right_len;
@@ -229,7 +232,11 @@ impl PipeBuffer {
                 }
             }
         }
-        self.end = end;
+        if end == self.buf.cap() {
+            self.end = 0;
+        } else {
+            self.end = end;
+        }
         Ok(readed)
     }
 
@@ -252,14 +259,49 @@ impl PipeBuffer {
                 }
             }
         }
-        self.start = start;
+        if start == self.buf.cap() {
+            self.start = 0;
+        } else {
+            self.start = start;
+        }
         Ok(written)
+    }
+
+    pub fn write_all_to<W: Write>(&mut self, w: &mut W) -> Result<()> {
+        {
+            let (left, right) = self.slice();
+            try!(w.write_all(left));
+            try!(w.write_all(right));
+        }
+        self.end = self.start;
+        Ok(())
     }
 }
 
 impl Read for PipeBuffer {
     fn read(&mut self, mut buf: &mut [u8]) -> Result<usize> {
         self.write_to(&mut buf)
+    }
+}
+
+impl BufRead for PipeBuffer {
+    fn fill_buf(&mut self) -> Result<&[u8]> {
+        let (left, _) = self.slice();
+        Ok(left)
+    }
+
+    fn consume(&mut self, amt: usize) {
+        assert!(amt <= self.len());
+        if self.start <= self.end {
+            self.start += amt;
+        } else {
+            let right_len = self.buf.cap() - self.start;
+            if right_len > amt {
+                self.start += amt;
+            } else {
+                self.start = amt - right_len;
+            }
+        }
     }
 }
 
@@ -324,11 +366,11 @@ mod tests {
 
         let cap = s.capacity();
         let padding = vec![0; cap];
-        for len in 0..cap {
+        for len in 0..cap + 1 {
             let expected = vec![len as u8; len];
 
             for pos in 0..cap + 1 {
-                for l in 0..len {
+                for l in 0..len + 1 {
                     s.start = pos;
                     s.end = pos;
 
@@ -337,10 +379,14 @@ mod tests {
                     assert_eq!(s, &expected[0..l]);
                     input = &expected[l..];
                     assert_eq!(len - l, s.read_from(&mut input).unwrap());
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
                     assert_eq!(s, expected.as_slice());
 
                     input = padding.as_slice();
                     assert_eq!(cap - len, s.read_from(&mut input).unwrap());
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
                     let mut exp = expected.clone();
                     exp.extend_from_slice(&padding[..cap - len]);
                     assert_eq!(s, exp.as_slice());
@@ -354,11 +400,11 @@ mod tests {
         let mut s = PipeBuffer::new(25);
 
         let cap = s.capacity();
-        for len in 0..cap {
+        for len in 0..cap + 1 {
             let expected = vec![len as u8; len];
 
             for pos in 0..cap + 1 {
-                for l in 0..len {
+                for l in 0..len + 1 {
                     s.start = pos;
                     s.end = pos;
 
@@ -369,13 +415,51 @@ mod tests {
                     {
                         let mut buf = w.as_mut_slice();
                         assert_eq!(l, s.write_to(&mut buf).unwrap());
+                        assert!(s.start != s.buf.cap());
+                        assert!(s.end != s.buf.cap());
                     }
                     assert_eq!(w, &expected[..l]);
                     assert_eq!(s, &expected[l..]);
 
                     let mut w = vec![0; cap];
                     assert_eq!(len - l, s.read(&mut w).unwrap());
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
                     assert_eq!(&w[..len - l], &expected[l..]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_buf_read() {
+        let mut s = PipeBuffer::new(25);
+
+        let cap = s.capacity();
+        for len in 0..cap + 1 {
+            let expected = vec![len as u8; len];
+
+            for pos in 0..cap + 1 {
+                for l in 0..len + 1 {
+                    s.start = pos;
+                    s.end = pos;
+
+                    let mut input = expected.as_slice();
+                    assert_eq!(len, s.read_from(&mut input).unwrap());
+
+                    assert_eq!(s.len(), len);
+                    if len == 0 {
+                        assert!(s.fill_buf().unwrap().is_empty());
+                    } else {
+                        assert!(!s.fill_buf().unwrap().is_empty());
+                    }
+                    s.consume(l);
+                    assert_eq!(s.len(), len - l);
+                    if l == len {
+                        assert!(s.fill_buf().unwrap().is_empty());
+                    } else {
+                        assert!(!s.fill_buf().unwrap().is_empty());
+                    }
                 }
             }
         }
@@ -384,7 +468,7 @@ mod tests {
     #[test]
     fn test_shrink_to() {
         let cap = 25;
-        for l in 0..cap {
+        for l in 0..cap + 1 {
             let expect = vec![l as u8; l];
 
             for pos in 0..cap + 1 {
@@ -396,6 +480,8 @@ mod tests {
                     let mut input = expect.as_slice();
                     assert_eq!(l, s.read_from(&mut input).unwrap());
                     s.shrink_to(shrink);
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
 
                     assert_eq!(shrink, s.capacity());
                     if shrink > l {
@@ -411,11 +497,11 @@ mod tests {
     #[test]
     fn test_ensure() {
         let cap = 25;
-        for l in 0..cap {
+        for l in 0..cap + 1 {
             let expect = vec![l as u8; l];
 
             for pos in 0..cap + 1 {
-                for init in 0..cap {
+                for init in 0..cap + 1 {
                     let mut s = PipeBuffer::new(cap);
                     s.start = pos;
                     s.end = pos;
@@ -425,6 +511,8 @@ mod tests {
                     assert_eq!(init, s.read_from(&mut input).unwrap());
                     assert_eq!(s, example.as_slice());
                     s.ensure(init + l);
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
                     assert_eq!(s, example.as_slice());
                     input = expect.as_slice();
 
@@ -435,5 +523,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_write_all() {
+        let mut s = PipeBuffer::new(25);
+        let example = vec![1; 25];
+        s.write_all(&example).unwrap();
+        let mut buf: Vec<u8> = vec![0; 20];
+        {
+            let mut buf_w = buf.as_mut_slice();
+            assert!(s.write_all_to(&mut buf_w).is_err());
+        }
+        {
+            // write all failed should not change buffer content.
+            let mut buf_w = buf.as_mut_slice();
+            assert!(s.write_all_to(&mut buf_w).is_err());
+        }
+        buf = vec![0; 25];
+        let mut buf_w = buf.as_mut_slice();
+        assert!(s.write_all_to(&mut buf_w).is_ok());
+        assert!(s.is_empty());
     }
 }
