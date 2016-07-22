@@ -40,7 +40,7 @@ Now `make install` only supports Linux Ubuntu, CentOS and Mac OS X. If you use o
     
     + `cluster-id`: The unique ID to distinguish different PD clusters. It can't be changed after bootstrapping.  
     + `addr`: The listening address for client traffic. 
-    + `advertise-addr`: The advertise address for external client communication. It must be accessible to the PD node.
+    + `advertise-addr`: The advertise address for external client communication.   
     + `http-addr`: The HTTP listening address for client requests. 
     + `etcd-name`: The etcd human readable name for this node. 
     + `etcd-data-dir`: The etcd path to the data directory.
