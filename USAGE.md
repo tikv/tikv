@@ -13,11 +13,10 @@
 
 You can use `make install` to install all binary executions in `bin` directory.
 
-Notice:
+Note:
 
 Now `make install` only supports Linux Ubuntu, CentOS and Mac OS X. If you use other Linux platforms, 
-you should follow [INSTALL.md](https://github.com/facebook/rocksdb/blob/master/INSTALL.md) to
-install RocksDB manually first. 
+you should install RocksDB manually according to [INSTALL.md](https://github.com/facebook/rocksdb/blob/master/INSTALL.md). 
 
 ### Running in the local standalone mode
 
@@ -54,7 +53,7 @@ install RocksDB manually first.
     + `etcd-initial-cluster`: The etcd initail cluster configuration for bootstrapping.  
     
 
-2. Start TiKV on listening port 5551. The data is stored in directory `data1` and cluster ID is 1.
+2. Start TiKV on listening port 5551. The data is stored in the `data1` directory and the cluster ID is 1.
 
     ```sh
     tikv-server -S raftkv --addr 127.0.0.1:5551 --etcd 127.0.0.1:2379 -s data1 --cluster-id 1
@@ -74,11 +73,11 @@ install RocksDB manually first.
 
 ### Running in the local cluster mode
 
-In production environment, it is strongly recommended to run TiKV in the cluster mode. 
+In the production environment, it is strongly recommended to run TiKV in the cluster mode. 
 
 1. Start PD cluster.
 
-    Start three pd-server instances listening on different ports with the same cluster id. They will form a PD cluster.
+    Start three pd-server instances listening on different ports with the same cluster ID. They will form a PD cluster.
     
     ```sh
     pd-server --cluster-id=1 \
@@ -303,11 +302,11 @@ services:
 ```
 
 + Use `docker-compose up -d` to create and start the cluster. 
-+ Use `docker-compose port tidb 4000`, output may be `0.0.0.0:32966`, so the real TiDB host port is `32966`.
-+ Use `mysql -h 127.0.0.1 -P 32966 -u root -D test` to connect TiDB and enjoy it. 
++ Use `docker-compose port tidb 4000` to print the TiDB host port. For example, if the output is `0.0.0.0:32966`, the TiDB host port is `32966`.
++ Use `mysql -h 127.0.0.1 -P 32966 -u root -D test` to connect to TiDB and enjoy it. 
 + Use `docker-compose down` to stop and remove the cluster.
 
-You can define multiple TiDBs and put a haproxy before them, like:
+You can define multiple TiDBs and put a haproxy before them, for example:
 
 ```bash
   tidb1:
@@ -373,4 +372,4 @@ You can define multiple TiDBs and put a haproxy before them, like:
       - "tidb3"
 ```
 
-You can use `docker-compose port haproxy 4000` to get haproxy host port and use `mysql` to connect it. 
+You can use `docker-compose port haproxy 4000` to get haproxy host port and use `mysql` to connect to it. 
