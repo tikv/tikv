@@ -15,8 +15,7 @@ You can use `make install` to install all binary executions in `bin` directory.
 
 Note:
 
-Now `make install` only supports Linux Ubuntu, CentOS and Mac OS X. If you use other Linux platforms, 
-you should install RocksDB manually according to [INSTALL.md](https://github.com/facebook/rocksdb/blob/master/INSTALL.md). 
+Now `make install` only supports Linux Ubuntu, CentOS and Mac OS X. If you use other Linux platforms, install RocksDB manually according to [INSTALL.md](https://github.com/facebook/rocksdb/blob/master/INSTALL.md). 
 
 ### Running in the local standalone mode
 
