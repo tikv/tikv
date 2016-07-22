@@ -80,6 +80,8 @@ pub trait Snapshot: Send {
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
     fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
+    #[allow(needless_lifetimes)]
+    fn iter_cf<'a>(&'a self, cf: CfName) -> Result<Box<Cursor + 'a>>;
 }
 
 pub trait Cursor {

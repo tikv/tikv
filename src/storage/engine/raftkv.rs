@@ -260,6 +260,11 @@ impl Snapshot for RegionSnapshot {
     fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
         Ok(box RegionSnapshot::iter(self))
     }
+
+    #[allow(needless_lifetimes)]
+    fn iter_cf<'b>(&'b self, cf: CfName) -> engine::Result<Box<Cursor + 'b>> {
+        Ok(box try!(RegionSnapshot::iter_cf(self, cf)))
+    }
 }
 
 impl<'a> Cursor for RegionIterator<'a> {
