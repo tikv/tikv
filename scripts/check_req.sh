@@ -9,7 +9,7 @@ cd $DEPS_PATH
 export PATH=$PATH:$GOROOT/bin
 
 SUDO=
-if which sudo > /dev/null; then 
+if which sudo &>/dev/null; then 
     SUDO=sudo
 fi
 
@@ -101,8 +101,8 @@ function install_gpp {
 }
 
 # Check rust
-if which cargo > /dev/null; then
-    if ! cargo --version | grep nightly > /dev/null; then
+if which cargo &>/dev/null; then
+    if ! cargo --version | grep nightly &>/dev/null; then
         echo "Please upgrade Rust to nightly."
         exit 1
     fi
@@ -112,10 +112,10 @@ else
 fi
 
 # Check go
-if which go > /dev/null; then
+if which go &>/dev/null; then
     # requires go >= 1.5
-    GO_VER_1=`go version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[1]}'`
-    GO_VER_2=`go version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[2]}'`
+    GO_VER_1=`go version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH); split(ver, n, "."); print n[1];}'`
+    GO_VER_2=`go version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH); split(ver, n, "."); print n[2];}'`
     if [[ (($GO_VER_1 -eq 1 && $GO_VER_2 -lt 5)) || (($GO_VER_1 -lt 1)) ]]; then
         echo "Please upgrade Go to 1.5 or later."
         exit 1
@@ -125,10 +125,10 @@ else
 fi
 
 # Check g++
-if which g++ > /dev/null; then
+if which g++ &>/dev/null; then
     # Check g++ version, RocksDB requires >= 4.7
-    G_VER_1=`g++ --version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[1]}'`
-    G_VER_2=`g++ --version | awk 'match($0, /([0-9])+(\.[0-9])+/) { ver = substr($0, RSTART, RLENGTH) ; ver = split(ver, n, ".") ; print n[2]}'`
+    G_VER_1=`g++ -dumpversion | awk '{split($0, n, "."); print n[1];}'`
+    G_VER_2=`g++ -dumpversion | awk '{split($0, n, "."); print n[2];}'`
     if [[ (($G_VER_1 -eq 4 && $G_VER_2 -lt 7)) || (($G_VER_1 -lt 4)) ]]; then
         echo "Please upgrade g++ to 4.7 or later."
         exit 1

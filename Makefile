@@ -3,6 +3,7 @@ ENABLE_FEATURES ?= default
 DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
+export GOROOT
 
 .PHONY: all
 
