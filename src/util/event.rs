@@ -154,6 +154,40 @@ impl<T> Drop for Event<T> {
     }
 }
 
+#[macro_export]
+macro_rules! async {
+    ($cb:ident, $expr:expr) => {
+        {
+            let e1 = $crate::util::event::Event::new();
+            let e2 = e1.clone();
+            let $cb = box move |res| e2.set(res);
+            $expr;
+            e1
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! await{
+    ($event:ident) => {
+        {
+            if $event.wait_timeout(None) {
+                Some($event.take().unwrap())
+            } else {
+                None
+            }
+        }
+    };
+    ($event:ident, $timeout:expr) => {
+        {
+            if $event.wait_timeout(Some($timeout)) {
+                Some($event.take().unwrap())
+            } else {
+                None
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
