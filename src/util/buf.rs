@@ -177,6 +177,9 @@ impl PipeBuffer {
                     if right_len >= to_keep {
                         // [.rr|...] -> [.rr] or [rrr|r] -> [rr.]
                         self.end = self.start + to_keep;
+                        if self.end == new_cap {
+                            self.end = 0;
+                        }
                     } else {
                         // [..r|l.] -> [l.r]
                         self.end = to_keep - right_len;
@@ -376,10 +379,14 @@ mod tests {
                     assert_eq!(s, &expected[0..l]);
                     input = &expected[l..];
                     assert_eq!(len - l, s.read_from(&mut input).unwrap());
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
                     assert_eq!(s, expected.as_slice());
 
                     input = padding.as_slice();
                     assert_eq!(cap - len, s.read_from(&mut input).unwrap());
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
                     let mut exp = expected.clone();
                     exp.extend_from_slice(&padding[..cap - len]);
                     assert_eq!(s, exp.as_slice());
@@ -408,12 +415,16 @@ mod tests {
                     {
                         let mut buf = w.as_mut_slice();
                         assert_eq!(l, s.write_to(&mut buf).unwrap());
+                        assert!(s.start != s.buf.cap());
+                        assert!(s.end != s.buf.cap());
                     }
                     assert_eq!(w, &expected[..l]);
                     assert_eq!(s, &expected[l..]);
 
                     let mut w = vec![0; cap];
                     assert_eq!(len - l, s.read(&mut w).unwrap());
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
                     assert_eq!(&w[..len - l], &expected[l..]);
                 }
             }
@@ -469,6 +480,8 @@ mod tests {
                     let mut input = expect.as_slice();
                     assert_eq!(l, s.read_from(&mut input).unwrap());
                     s.shrink_to(shrink);
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
 
                     assert_eq!(shrink, s.capacity());
                     if shrink > l {
@@ -498,6 +511,8 @@ mod tests {
                     assert_eq!(init, s.read_from(&mut input).unwrap());
                     assert_eq!(s, example.as_slice());
                     s.ensure(init + l);
+                    assert!(s.start != s.buf.cap());
+                    assert!(s.end != s.buf.cap());
                     assert_eq!(s, example.as_slice());
                     input = expect.as_slice();
 
