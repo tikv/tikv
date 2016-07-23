@@ -25,6 +25,7 @@ pub mod mvcc;
 pub mod txn;
 pub mod config;
 mod types;
+mod sync_storage;
 
 pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Cursor,
@@ -32,6 +33,7 @@ pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Curs
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg, SchedCh};
 pub use self::types::{Key, Value, KvPair};
+pub use self::sync_storage::SyncStorage;
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
