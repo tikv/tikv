@@ -11,13 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use test::BenchSamples;
-use tempdir::TempDir;
 
 use test_util::*;
-use tikv::storage::{self, Dsn, Mutation, Key, DEFAULT_CFS};
-use tikv::storage::txn::TxnStore;
+use tikv::storage::{Mutation, Key};
+use tikv::storage::SyncStorage;
 use tikv::storage::mvcc::TEST_TS_BASE;
 use kvproto::kvrpcpb::Context;
 
@@ -25,10 +23,8 @@ use super::print_result;
 
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.
-fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
-    let engine = storage::new_engine(dsn, DEFAULT_CFS).unwrap();
-
-    let store = TxnStore::new(Arc::new(engine));
+fn bench_tombstone_scan() -> BenchSamples {
+    let store = SyncStorage::new(&Default::default());
     let mut ts_generator = TEST_TS_BASE..;
 
     let mut kvs = KvGenerator::new(100, 1000);
@@ -72,8 +68,6 @@ fn bench_tombstone_scan(dsn: Dsn) -> BenchSamples {
 }
 
 pub fn bench_engine() {
-    let path = TempDir::new("bench-mvcc").unwrap();
-    let dsn = Dsn::RocksDBPath(path.path().to_str().unwrap());
     printf!("benching tombstone scan with rocksdb\t...\t");
-    print_result(bench_tombstone_scan(dsn));
+    print_result(bench_tombstone_scan());
 }

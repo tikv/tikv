@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::{Storage, Key, Value, KvPair, Mutation, Result};
+use std::sync::Arc;
+use storage::{Storage, Engine, Key, Value, KvPair, Mutation, Result};
 use storage::config::Config;
 use kvproto::kvrpcpb::Context;
 
@@ -23,6 +24,16 @@ impl SyncStorage {
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         SyncStorage(storage)
+    }
+
+    pub fn from_engine(engine: Box<Engine>, config: &Config) -> SyncStorage {
+        let mut storage = Storage::from_engine(engine, config).unwrap();
+        storage.start(&config).unwrap();
+        SyncStorage(storage)
+    }
+
+    pub fn get_engine(&self) -> Arc<Box<Engine>> {
+        self.0.get_engine()
     }
 
     pub fn get(&self, ctx: Context, key: &Key, start_ts: u64) -> Result<Option<Value>> {

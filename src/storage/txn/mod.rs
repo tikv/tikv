@@ -14,7 +14,6 @@
 mod store;
 mod scheduler;
 mod latch;
-mod shard_mutex;
 
 use std::error;
 use std::thread;
@@ -23,7 +22,7 @@ use mio::{self, NotifyError};
 use std::io::Error as IoError;
 
 pub use self::scheduler::{Scheduler, Msg};
-pub use self::store::{SnapshotStore, TxnStore};
+pub use self::store::SnapshotStore;
 
 const MAX_SEND_RETRY_CNT: i32 = 20;
 
