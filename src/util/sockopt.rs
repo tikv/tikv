@@ -27,31 +27,11 @@ mod unix {
     use std::io::{Result, Error};
     use std::os::unix::io::AsRawFd;
 
-    use std::net::TcpStream as MioTcpStream;
-    use mio::tcp::TcpStream as StdTcpStream;
     use nix::Error as NixError;
     use nix::sys::socket;
     use nix::sys::socket::sockopt;
 
-    impl SocketOpt for MioTcpStream {
-        fn set_send_buffer_size(&self, size: usize) -> Result<()> {
-            socket::setsockopt(self.as_raw_fd(), sockopt::SndBuf, &size).map_err(from_nix_error)
-        }
-
-        fn send_buffer_size(&self) -> Result<usize> {
-            socket::getsockopt(self.as_raw_fd(), sockopt::SndBuf).map_err(from_nix_error)
-        }
-
-        fn set_recv_buffer_size(&self, size: usize) -> Result<()> {
-            socket::setsockopt(self.as_raw_fd(), sockopt::RcvBuf, &size).map_err(from_nix_error)
-        }
-
-        fn recv_buffer_size(&self) -> Result<usize> {
-            socket::getsockopt(self.as_raw_fd(), sockopt::RcvBuf).map_err(from_nix_error)
-        }
-    }
-
-    impl SocketOpt for StdTcpStream {
+    impl<T: AsRawFd> SocketOpt for T {
         fn set_send_buffer_size(&self, size: usize) -> Result<()> {
             socket::setsockopt(self.as_raw_fd(), sockopt::SndBuf, &size).map_err(from_nix_error)
         }
@@ -77,33 +57,9 @@ mod unix {
 
 #[cfg(windows)]
 mod windows {
-    use std::net::TcpStream as MioTcpStream;
-    use mio::tcp::TcpStream as StdTcpStream;
     use std::io::Result;
 
-    impl SocketOpt for MioTcpStream {
-        fn set_send_buffer_size(&self, _size: usize) -> Result<()> {
-            error!("set_send_buffer_size is not supported in windows now");
-            Ok(())
-        }
-
-        fn send_buffer_size(&self) -> Result<usize> {
-            error!("send_buffer_size is not supported in windows now");
-            Ok(0)
-        }
-
-        fn set_recv_buffer_size(&self, _size: usize) -> Result<()> {
-            error!("set_recv_buffer_size is not supported in windows now");
-            Ok(())
-        }
-
-        fn recv_buffer_size(&self) -> Result<usize> {
-            error!("recv_buffer_size is not supported in windows now");
-            Ok(0)
-        }
-    }
-
-    impl SocketOpt for StdTcpStream {
+    impl<T: AsRawFd> SocketOpt for T {
         fn set_send_buffer_size(&self, _size: usize) -> Result<()> {
             error!("set_send_buffer_size is not supported in windows now");
             Ok(())
