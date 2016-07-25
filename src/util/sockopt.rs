@@ -27,13 +27,13 @@ mod unix {
     use std::io::{Result, Error};
     use std::os::unix::io::AsRawFd;
 
-    use std::net;
-    use mio::tcp;
+    use std::net::TcpStream as MioTcpStream;
+    use mio::tcp::TcpStream as StdTcpStream;
     use nix::Error as NixError;
     use nix::sys::socket;
     use nix::sys::socket::sockopt;
 
-    impl SocketOpt for tcp::TcpStream {
+    impl SocketOpt for MioTcpStream {
         fn set_send_buffer_size(&self, size: usize) -> Result<()> {
             socket::setsockopt(self.as_raw_fd(), sockopt::SndBuf, &size).map_err(from_nix_error)
         }
@@ -51,7 +51,7 @@ mod unix {
         }
     }
 
-    impl SocketOpt for net::TcpStream {
+    impl SocketOpt for StdTcpStream {
         fn set_send_buffer_size(&self, size: usize) -> Result<()> {
             socket::setsockopt(self.as_raw_fd(), sockopt::SndBuf, &size).map_err(from_nix_error)
         }
@@ -77,11 +77,11 @@ mod unix {
 
 #[cfg(windows)]
 mod windows {
-    use mio::tcp;
-    use std::net;
+    use std::net::TcpStream as MioTcpStream;
+    use mio::tcp::TcpStream as StdTcpStream;
     use std::io::Result;
 
-    impl SocketOpt for tcp::TcpStream {
+    impl SocketOpt for MioTcpStream {
         fn set_send_buffer_size(&self, _size: usize) -> Result<()> {
             error!("set_send_buffer_size is not supported in windows now");
             Ok(())
@@ -103,7 +103,7 @@ mod windows {
         }
     }
 
-    impl SocketOpt for net::TcpStream {
+    impl SocketOpt for StdTcpStream {
         fn set_send_buffer_size(&self, _size: usize) -> Result<()> {
             error!("set_send_buffer_size is not supported in windows now");
             Ok(())
@@ -169,9 +169,9 @@ mod tests {
     #[test]
     fn test_std_sock_opt() {
         let server = StdTcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = &format!("{}", server.local_addr().unwrap());
+        let addr: SocketAddr = format!("{}", server.local_addr().unwrap()).parse().unwrap();
 
-        let sock = StdTcpStream::connect(&addr.parse().unwrap()).unwrap();
+        let sock = StdTcpStream::connect(addr).unwrap();
 
         sock.set_send_buffer_size(4096).unwrap();
         let s1 = sock.send_buffer_size().unwrap();
