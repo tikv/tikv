@@ -1,0 +1,18 @@
+FROM centos:6.6
+
+MAINTAINER Jay Lee [jay@pingcap.com]
+
+RUN yum update -y && \
+    yum install -y tar wget git which cmake file centos-release-scl && \
+    yum install -y devtoolset-4-gcc-c++ python27 && \
+    yum clean all
+
+RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s  -- --disable-sudo -y --channel=nightly
+
+COPY release.sh ./release.sh
+
+RUN chmod a+x ./release.sh
+
+VOLUME ["/tikv"]
+
+ENTRYPOINT ["./release.sh"]
