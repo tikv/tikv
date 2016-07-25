@@ -13,6 +13,6 @@ COPY release.sh ./release.sh
 
 RUN chmod a+x ./release.sh
 
-VOLUME ["/tikv"]
+WORKDIR /tikv
 
-ENTRYPOINT ["./release.sh"]
+ENTRYPOINT ["/release.sh"]
