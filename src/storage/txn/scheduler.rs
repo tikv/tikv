@@ -243,6 +243,8 @@ impl Scheduler {
                 let cb = make_write_cb(pr, cid, self.schedch.clone());
                 try!(self.engine.async_write(ctx, txn.modifies(), cb));
             }
+            Command::ScanLock { max_ts } => {}
+            Command::ResolveLock { start_ts, commit_ts } => {}
         }
 
         Ok(())

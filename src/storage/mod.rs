@@ -118,6 +118,17 @@ pub enum Command {
         lock_ts: u64,
         callback: Option<Callback<Option<Value>>>,
     },
+    ScanLock {
+        ctx: Context,
+        max_ts: u64,
+        callback: Option<Callback<Vec<LockInfo>>>,
+    },
+    ResolveLock {
+        ctx: Context,
+        start_ts: u64,
+        commit_ts: Option<u64>,
+        callback: Option<Callback<()>>,
+    },
 }
 
 impl fmt::Display for Command {
@@ -169,6 +180,10 @@ impl fmt::Display for Command {
             Command::RollbackThenGet { ref key, lock_ts, .. } => {
                 write!(f, "kv::rollback_then_get {} @ {}", key, lock_ts)
             }
+            Command::ScanLock { max_ts, .. } => write!(f, "kv::scan_lock {}", max_ts),
+            Command::ResolveLock { start_ts, commit_ts } => {
+                write!(f, "kv::resolve_txn {} -> {}", start_ts, commit_ts)
+            }
         }
     }
 }
@@ -178,7 +193,8 @@ impl Command {
         match *self {
             Command::Get { .. } |
             Command::BatchGet { .. } |
-            Command::Scan { .. } => true,
+            Command::Scan { .. } |
+            Command::ScanLock { .. } => true,
             _ => false,
         }
     }
