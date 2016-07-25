@@ -27,6 +27,7 @@
 
 
 use std::cmp;
+use std::time::Instant;
 use raft::storage::Storage;
 use rand::{self, Rng};
 use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
@@ -193,6 +194,9 @@ pub struct Raft<T: Storage> {
 
     /// tag is only used for logging
     tag: String,
+
+    /// Record the last instant of each peer's heartbeat response.
+    pub last_heartbeats: HashMap<u64, Instant>,
 }
 
 fn new_progress(next_idx: u64, ins_size: usize) -> Progress {
@@ -250,6 +254,7 @@ impl<T: Storage> Raft<T> {
             heartbeat_elapsed: Default::default(),
             randomized_election_timeout: 0,
             tag: c.tag.to_owned(),
+            last_heartbeats: HashMap::with_capacity(peers.len()),
         };
         for p in peers {
             r.prs.insert(*p, new_progress(1, r.max_inflight));
@@ -898,9 +903,11 @@ impl<T: Storage> Raft<T> {
         }
         match m.get_msg_type() {
             MessageType::MsgAppendResponse => {
+                self.last_heartbeats.insert(m.get_from(), Instant::now());
                 self.handle_append_response(m, old_paused, send_append, maybe_commit);
             }
             MessageType::MsgHeartbeatResponse => {
+                self.last_heartbeats.insert(m.get_from(), Instant::now());
                 let pr = self.prs.get_mut(&m.get_from()).unwrap();
                 pr.recent_active = true;
 
@@ -1296,6 +1303,7 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn remove_node(&mut self, id: u64) {
+        self.last_heartbeats.remove(&id);
         self.del_progress(id);
         self.pending_conf = false;
 

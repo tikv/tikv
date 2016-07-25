@@ -936,6 +936,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn heartbeat_pd(&self, peer: &Peer) {
+        // Collect down peers.
+        let mut down_peers = Vec::new();
+        for (&id, instant) in &peer.raft_group.raft.last_heartbeats {
+            if id == peer.peer.get_id() {
+                continue;
+            }
+            if instant.elapsed() < self.cfg.max_peer_down_duration {
+                continue;
+            }
+            if let Some(p) = peer.get_peer_from_cache(id) {
+                down_peers.push(p);
+            }
+        }
         let task = PdTask::Heartbeat {
             region: peer.region().clone(),
             peer: peer.peer.clone(),

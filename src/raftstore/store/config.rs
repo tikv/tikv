@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::u64;
+use std::time::Duration;
 
 use raftstore::Result;
 
@@ -34,6 +35,7 @@ const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
 const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
 const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
+const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -73,6 +75,10 @@ pub struct Config {
 
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
+
+    /// The max duration at which a peer will be considered to be down
+    /// if it hasn't responsed heartbeats.
+    pub max_peer_down_duration: Duration,
 }
 
 impl Default for Config {
@@ -97,6 +103,7 @@ impl Default for Config {
             snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL_MS,
             snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
+            max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
         }
     }
 }
