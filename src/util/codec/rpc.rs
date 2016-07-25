@@ -18,11 +18,11 @@
 // all use bigendian.
 // Now the version is always 1.
 // Payload can be any arbitrary data, but we use Protobuf in our program default.
-use std::io;
+use std::io::{self, BufRead};
 use std::vec::Vec;
 
-use byteorder::{ByteOrder, BigEndian};
-use protobuf;
+use byteorder::{ByteOrder, BigEndian, ReadBytesExt};
+use protobuf::{self, CodedInputStream};
 
 use super::{Result, Error};
 
@@ -52,7 +52,8 @@ pub fn encode_msg<T: io::Write, M: protobuf::Message + ?Sized>(w: &mut T,
 // Decodes encoded message, returns message ID.
 pub fn decode_msg<T: io::Read, M: protobuf::Message>(r: &mut T, m: &mut M) -> Result<u64> {
     let (message_id, payload) = try!(decode_data(r));
-    try!(decode_body(&payload, m));
+    let mut reader = payload.as_slice();
+    try!(decode_body(&mut reader, m));
 
     Ok(message_id)
 }
@@ -83,7 +84,8 @@ pub fn encode_msg_header(msg_id: u64, payload_len: usize) -> Vec<u8> {
 pub fn decode_data<T: io::Read>(r: &mut T) -> Result<(u64, Vec<u8>)> {
     let mut header = vec![0;MSG_HEADER_LEN];
     try!(r.read_exact(&mut header));
-    let (msg_id, payload_len) = try!(decode_msg_header(&header));
+    let mut reader = header.as_slice();
+    let (msg_id, payload_len) = try!(decode_msg_header(&mut reader));
     let mut payload = vec![0;payload_len];
     try!(r.read_exact(&mut payload));
 
@@ -91,30 +93,31 @@ pub fn decode_data<T: io::Read>(r: &mut T) -> Result<(u64, Vec<u8>)> {
 }
 
 // Decodes msg header in header buffer, the buffer length size must be equal MSG_HEADER_LEN;
-pub fn decode_msg_header(header: &[u8]) -> Result<(u64, usize)> {
-    let magic = BigEndian::read_u16(&header[0..2]);
+pub fn decode_msg_header<R: io::Read>(header: &mut R) -> Result<(u64, usize)> {
+    let magic = try!(header.read_u16::<BigEndian>());
     if MSG_MAGIC != magic {
         return Err(other_err(format!("invalid magic {}, not {}", magic, MSG_MAGIC)));
     }
 
-    let version = BigEndian::read_u16(&header[2..4]);
+    let version = try!(header.read_u16::<BigEndian>());
     if MSG_VERSION_V1 != version {
         return Err(other_err(format!("unsupported version {}, we need {} now",
                                      version,
                                      MSG_VERSION_V1)));
     }
 
-    let payload_len = BigEndian::read_u32(&header[4..8]) as usize;
+    let payload_len = try!(header.read_u32::<BigEndian>()) as usize;
     // TODO: check max payload
 
-    let message_id = BigEndian::read_u64(&header[8..16]);
+    let message_id = try!(header.read_u64::<BigEndian>());
 
     Ok((message_id, payload_len))
 }
 
 // Decodes only body.
-pub fn decode_body<M: protobuf::Message>(payload: &[u8], m: &mut M) -> Result<()> {
-    try!(m.merge_from_bytes(&payload));
+pub fn decode_body<R: BufRead, M: protobuf::Message>(payload: &mut R, m: &mut M) -> Result<()> {
+    let mut is = CodedInputStream::from_buffered_reader(payload);
+    try!(m.merge_from(&mut is));
     Ok(())
 }
 
@@ -154,7 +157,8 @@ mod tests {
     #[test]
     fn test_header_codec() {
         let m1 = encode_msg_header(1, 1);
-        let (msg_id, payload_len) = decode_msg_header(&m1).unwrap();
+        let mut m1_r = m1.as_slice();
+        let (msg_id, payload_len) = decode_msg_header(&mut m1_r).unwrap();
         assert_eq!(msg_id, 1);
         assert_eq!(payload_len, 1);
     }
