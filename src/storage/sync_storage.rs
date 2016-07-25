@@ -193,6 +193,7 @@ mod tests {
                            limit: usize,
                            ts: u64,
                            expect: Vec<Option<(&[u8], &[u8])>>) {
+            // TODO: uncomment it after Storage support reverse_scan.
             // let key_address = make_key(start_key);
             // let result = self.0.reverse_scan(Context::new(), key_address, limit, ts).unwrap();
             // let result: Vec<Option<KvPair>> = result.into_iter()

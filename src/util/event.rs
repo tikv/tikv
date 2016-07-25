@@ -154,6 +154,9 @@ impl<T> Drop for Event<T> {
     }
 }
 
+/// `async!` creates an Event that will be notified after the expression
+/// get executed. `$cb` is a callback placeholder that may be used in
+/// `$expr`.
 #[macro_export]
 macro_rules! async {
     ($cb:ident, $expr:expr) => {
@@ -167,6 +170,8 @@ macro_rules! async {
     }
 }
 
+/// `await!` waits on an Event (usually created by `async!`) and returns
+/// Option<Res>.
 #[macro_export]
 macro_rules! await{
     ($event:ident) => {
