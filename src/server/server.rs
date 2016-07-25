@@ -31,7 +31,7 @@ use util::worker::Worker;
 use storage::Storage;
 use raftstore::store::SnapManager;
 use super::kv::StoreHandler;
-use super::coprocessor::{RequestTask, EndPointHost};
+use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
@@ -81,7 +81,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     raft_router: Arc<RwLock<T>>,
 
     store: StoreHandler,
-    end_point_worker: Worker<RequestTask>,
+    end_point_worker: Worker<EndPointTask>,
 
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
@@ -135,7 +135,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        let end_point = EndPointHost::new(self.store.engine());
+        let end_point = EndPointHost::new(self.store.engine(), self.end_point_worker.scheduler());
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
         let ch = self.get_sendch();
@@ -252,8 +252,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
             MessageType::CopReq => {
                 let on_resp = self.make_response_cb(token, msg_id);
-                box_try!(self.end_point_worker
-                    .schedule(RequestTask::new(msg.take_cop_req(), on_resp)));
+                let req = RequestTask::new(msg.take_cop_req(), on_resp);
+                box_try!(self.end_point_worker.schedule(EndPointTask::Request(req)));
                 Ok(())
             }
             _ => {
