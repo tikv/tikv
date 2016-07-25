@@ -18,8 +18,9 @@ use protobuf::RepeatedField;
 
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
                        CmdBatchRollbackResponse, CmdCleanupResponse, CmdRollbackThenGetResponse,
-                       CmdCommitThenGetResponse, CmdBatchGetResponse, Request, Response,
-                       MessageType, KvPair as RpcKvPair, KeyError, LockInfo, Op};
+                       CmdCommitThenGetResponse, CmdBatchGetResponse, CmdScanLockResponse,
+                       CmdResolveLockResponse, Request, Response, MessageType,
+                       KvPair as RpcKvPair, KeyError, LockInfo, Op};
 use kvproto::msgpb;
 use kvproto::errorpb::Error as RegionError;
 use storage::{Engine, Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
@@ -183,6 +184,33 @@ impl StoreHandler {
             .map_err(Error::Storage)
     }
 
+    fn on_scan_lock(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
+        if !msg.has_cmd_scan_lock_req() {
+            return Err(box_err!("msg doesn't contain a CmdScanLockRequest"));
+        }
+        let req = msg.take_cmd_scan_lock_req();
+        let cb = self.make_cb(StoreHandler::cmd_scan_lock_done, on_resp);
+        self.store
+            .async_scan_lock(msg.take_context(), req.get_max_version(), cb)
+            .map_err(Error::Storage)
+    }
+
+    fn on_resolve_lock(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
+        if !msg.has_cmd_resolve_lock_req() {
+            return Err(box_err!("msg doesn't contain a CmdResolveLockRequest"));
+        }
+        let req = msg.take_cmd_resolve_lock_req();
+        let cb = self.make_cb(StoreHandler::cmd_resolve_lock_done, on_resp);
+        let commit_ts = if req.has_commit_version() {
+            Some(req.get_commit_version())
+        } else {
+            None
+        };
+        self.store
+            .async_resolve_lock(msg.take_context(), req.get_start_version(), commit_ts, cb)
+            .map_err(Error::Storage)
+    }
+
     fn make_cb<T: 'static>(&self,
                            f: fn(StorageResult<T>, &mut Response),
                            on_resp: OnResponse)
@@ -285,6 +313,25 @@ impl StoreHandler {
         resp.set_cmd_rb_get_resp(rollback_get);
     }
 
+    fn cmd_scan_lock_done(r: StorageResult<Vec<LockInfo>>, resp: &mut Response) {
+        resp.set_field_type(MessageType::CmdScanLock);
+        let mut scan_lock = CmdScanLockResponse::new();
+        match r {
+            Ok(locks) => scan_lock.set_locks(RepeatedField::from_vec(locks)),
+            Err(e) => scan_lock.set_error(extract_key_error(&e)),
+        }
+        resp.set_cmd_scan_lock_resp(scan_lock);
+    }
+
+    fn cmd_resolve_lock_done(r: StorageResult<()>, resp: &mut Response) {
+        resp.set_field_type(MessageType::CmdResolveLock);
+        let mut resolve_lock = CmdResolveLockResponse::new();
+        if let Err(e) = r {
+            resolve_lock.set_error(extract_key_error(&e));
+        }
+        resp.set_cmd_resolve_lock_resp(resolve_lock);
+    }
+
     pub fn on_request(&self, req: Request, on_resp: OnResponse) -> Result<()> {
         if let Err(e) = match req.get_field_type() {
             MessageType::CmdGet => self.on_get(req, on_resp),
@@ -296,6 +343,8 @@ impl StoreHandler {
             MessageType::CmdRollbackThenGet => self.on_rollback_then_get(req, on_resp),
             MessageType::CmdBatchGet => self.on_batch_get(req, on_resp),
             MessageType::CmdBatchRollback => self.on_batch_rollback(req, on_resp),
+            MessageType::CmdScanLock => self.on_scan_lock(req, on_resp),
+            MessageType::CmdResolveLock => self.on_resolve_lock(req, on_resp),
         } {
             // TODO: should we return an error and tell the client later?
             error!("Some error occur err[{:?}]", e);
