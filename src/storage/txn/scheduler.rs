@@ -15,7 +15,9 @@ use std::time::Duration;
 use std::boxed::Box;
 use std::sync::Arc;
 use storage::{Engine, Command, Snapshot};
-use kvproto::kvrpcpb::Context;
+use protobuf::core::Message;
+use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::mvccpb::MetaLock;
 use storage::mvcc::{MvccTxn, Error as MvccError};
 use storage::{Key, Value};
 use std::collections::HashMap;
@@ -144,109 +146,164 @@ impl Scheduler {
 
     fn process_cmd_with_snapshot(&mut self, cid: u64, snapshot: &Snapshot) -> Result<()> {
         debug!("process cmd with snapshot, cid = {}", cid);
+        let mut next_cmd = None;
+        {
+            let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
+            match ctx.cmd {
+                Command::Get { ref key, start_ts, ref mut callback, .. } => {
+                    let snap_store = SnapshotStore::new(snapshot, start_ts);
+                    callback.take().unwrap()(snap_store.get(key).map_err(::storage::Error::from));
+                }
+                Command::BatchGet { ref keys, start_ts, ref mut callback, .. } => {
+                    let snap_store = SnapshotStore::new(snapshot, start_ts);
+                    let res = match snap_store.batch_get(keys) {
+                        Ok(results) => {
+                            let mut res = vec![];
+                            for (k, v) in keys.into_iter().zip(results.into_iter()) {
+                                match v {
+                                    Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
+                                    Ok(None) => {}
+                                    Err(e) => res.push(Err(::storage::Error::from(e))),
+                                }
+                            }
+                            Ok(res)
+                        }
+                        Err(e) => Err(e.into()),
+                    };
+                    callback.take().unwrap()(res);
+                }
+                Command::Scan { ref start_key, limit, start_ts, ref mut callback, .. } => {
+                    let snap_store = SnapshotStore::new(snapshot, start_ts);
+                    let mut scanner = try!(snap_store.scanner());
+                    let key = start_key.clone();
+                    let res = match scanner.scan(key, limit) {
+                        Ok(mut results) => {
+                            Ok(results.drain(..)
+                                .map(|x| x.map_err(::storage::Error::from))
+                                .collect())
+                        }
+                        Err(e) => Err(e.into()),
+                    };
+                    callback.take().unwrap()(res);
+                }
+                Command::Prewrite { ref ctx, ref mutations, ref primary, start_ts, .. } => {
+                    let mut txn = MvccTxn::new(snapshot, start_ts);
+                    let mut results = vec![];
+                    for m in mutations {
+                        match txn.prewrite(m.clone(), primary) {
+                            Ok(_) => results.push(Ok(())),
+                            e @ Err(MvccError::KeyIsLocked { .. }) => {
+                                results.push(e.map_err(Error::from))
+                            }
+                            Err(e) => return Err(Error::from(e)),
+                        }
+                    }
 
-        let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
-        match ctx.cmd {
-            Command::Get { ref key, start_ts, ref mut callback, .. } => {
-                let snap_store = SnapshotStore::new(snapshot, start_ts);
-                callback.take().unwrap()(snap_store.get(key).map_err(::storage::Error::from));
-            }
-            Command::BatchGet { ref keys, start_ts, ref mut callback, .. } => {
-                let snap_store = SnapshotStore::new(snapshot, start_ts);
-                let res = match snap_store.batch_get(keys) {
-                    Ok(results) => {
-                        let mut res = vec![];
-                        for (k, v) in keys.into_iter().zip(results.into_iter()) {
-                            match v {
-                                Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
-                                Ok(None) => {}
-                                Err(e) => res.push(Err(::storage::Error::from(e))),
+                    let pr: ProcessResult = ProcessResult::ResultSet { result: results };
+                    let cb = make_write_cb(pr, cid, self.schedch.clone());
+
+                    try!(self.engine.async_write(ctx, txn.modifies(), cb));
+                }
+                Command::Commit { ref ctx, ref keys, lock_ts, commit_ts, .. } => {
+                    let mut txn = MvccTxn::new(snapshot, lock_ts);
+                    for k in keys {
+                        try!(txn.commit(&k, commit_ts));
+                    }
+
+                    let pr: ProcessResult = ProcessResult::Nothing;
+                    let cb = make_write_cb(pr, cid, self.schedch.clone());
+                    try!(self.engine.async_write(ctx, txn.modifies(), cb));
+                }
+                Command::CommitThenGet { ref ctx, ref key, lock_ts, commit_ts, get_ts, .. } => {
+                    let mut txn = MvccTxn::new(snapshot, lock_ts);
+                    let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
+
+                    let pr: ProcessResult = ProcessResult::Value { value: val };
+                    let cb = make_write_cb(pr, cid, self.schedch.clone());
+                    try!(self.engine.async_write(ctx, txn.modifies(), cb));
+                }
+                Command::Cleanup { ref ctx, ref key, start_ts, .. } => {
+                    let mut txn = MvccTxn::new(snapshot, start_ts);
+                    try!(txn.rollback(&key));
+
+                    let pr: ProcessResult = ProcessResult::Nothing;
+                    let cb = make_write_cb(pr, cid, self.schedch.clone());
+                    try!(self.engine.async_write(&ctx, txn.modifies(), cb));
+                }
+                Command::Rollback { ref ctx, ref keys, start_ts, .. } => {
+                    let mut txn = MvccTxn::new(snapshot, start_ts);
+                    for k in keys {
+                        try!(txn.rollback(&k));
+                    }
+
+                    let pr: ProcessResult = ProcessResult::Nothing;
+                    let cb = make_write_cb(pr, cid, self.schedch.clone());
+                    try!(self.engine.async_write(ctx, txn.modifies(), cb));
+                }
+                Command::RollbackThenGet { ref ctx, ref key, lock_ts, .. } => {
+                    let mut txn = MvccTxn::new(snapshot, lock_ts);
+                    let val = try!(txn.rollback_then_get(&key));
+
+                    let pr: ProcessResult = ProcessResult::Value { value: val };
+                    let cb = make_write_cb(pr, cid, self.schedch.clone());
+                    try!(self.engine.async_write(ctx, txn.modifies(), cb));
+                }
+                Command::ScanLock { max_ts, ref mut callback, .. } => {
+                    let mut locks = vec![];
+                    let mut cursor = try!(snapshot.iter_cf("lock"));
+                    cursor.seek_to_first(); // ignore result, valid() is checked below.
+                    while cursor.valid() {
+                        let mut pb = MetaLock::new();
+                        try!(pb.merge_from_bytes(cursor.value()));
+                        if pb.get_start_ts() <= max_ts {
+                            let key = Key::from_encoded(cursor.key().to_vec());
+                            let mut lock = LockInfo::new();
+                            lock.set_primary_lock(pb.take_primary_key());
+                            lock.set_lock_version(pb.get_start_ts());
+                            lock.set_key(try!(key.raw()));
+                            locks.push(lock);
+                        }
+                        cursor.next();
+                    }
+                    callback.take().unwrap()(Ok(locks));
+                }
+                Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut callback } => {
+                    let mut keys = vec![];
+                    let mut cursor = try!(snapshot.iter_cf("lock"));
+                    cursor.seek_to_first(); // ignore result, valid() is checked below.
+                    while cursor.valid() {
+                        let mut pb = MetaLock::new();
+                        try!(pb.merge_from_bytes(cursor.value()));
+                        if pb.get_start_ts() == start_ts {
+                            keys.push(Key::from_encoded(cursor.key().to_vec()));
+                        }
+                        cursor.next();
+                    }
+                    next_cmd = Some(match commit_ts {
+                        Some(ts) => {
+                            Command::Commit {
+                                ctx: ctx.clone(),
+                                keys: keys,
+                                lock_ts: start_ts,
+                                commit_ts: ts,
+                                callback: callback.take(),
                             }
                         }
-                        Ok(res)
-                    }
-                    Err(e) => Err(e.into()),
-                };
-                callback.take().unwrap()(res);
-            }
-            Command::Scan { ref start_key, limit, start_ts, ref mut callback, .. } => {
-                let snap_store = SnapshotStore::new(snapshot, start_ts);
-                let mut scanner = try!(snap_store.scanner());
-                let key = start_key.clone();
-                let res = match scanner.scan(key, limit) {
-                    Ok(mut results) => {
-                        Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
-                    }
-                    Err(e) => Err(e.into()),
-                };
-                callback.take().unwrap()(res);
-            }
-            Command::Prewrite { ref ctx, ref mutations, ref primary, start_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, start_ts);
-                let mut results = vec![];
-                for m in mutations {
-                    match txn.prewrite(m.clone(), primary) {
-                        Ok(_) => results.push(Ok(())),
-                        e @ Err(MvccError::KeyIsLocked { .. }) => {
-                            results.push(e.map_err(Error::from))
+                        None => {
+                            Command::Rollback {
+                                ctx: ctx.clone(),
+                                keys: keys,
+                                start_ts: start_ts,
+                                callback: callback.take(),
+                            }
                         }
-                        Err(e) => return Err(Error::from(e)),
-                    }
+                    });
                 }
-
-                let pr: ProcessResult = ProcessResult::ResultSet { result: results };
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
             }
-            Command::Commit { ref ctx, ref keys, lock_ts, commit_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, lock_ts);
-                for k in keys {
-                    try!(txn.commit(&k, commit_ts));
-                }
-
-                let pr: ProcessResult = ProcessResult::Nothing;
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
-            }
-            Command::CommitThenGet { ref ctx, ref key, lock_ts, commit_ts, get_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, lock_ts);
-                let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
-
-                let pr: ProcessResult = ProcessResult::Value { value: val };
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
-            }
-            Command::Cleanup { ref ctx, ref key, start_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, start_ts);
-                try!(txn.rollback(&key));
-
-                let pr: ProcessResult = ProcessResult::Nothing;
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(&ctx, txn.modifies(), cb));
-            }
-            Command::Rollback { ref ctx, ref keys, start_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, start_ts);
-                for k in keys {
-                    try!(txn.rollback(&k));
-                }
-
-                let pr: ProcessResult = ProcessResult::Nothing;
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
-            }
-            Command::RollbackThenGet { ref ctx, ref key, lock_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, lock_ts);
-                let val = try!(txn.rollback_then_get(&key));
-
-                let pr: ProcessResult = ProcessResult::Value { value: val };
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
-            }
-            Command::ScanLock { max_ts } => {}
-            Command::ResolveLock { start_ts, commit_ts } => {}
         }
-
+        if let Some(cmd) = next_cmd {
+            self.on_received_new_cmd(cmd);
+        }
         Ok(())
     }
 
@@ -276,6 +333,12 @@ impl Scheduler {
             Command::Rollback { ref mut callback, .. } => {
                 callback.take().unwrap()(Err(err.into()));
             }
+            Command::ScanLock { ref mut callback, .. } => {
+                callback.take().unwrap()(Err(err.into()));
+            }
+            Command::ResolveLock { ref mut callback, .. } => {
+                callback.take().unwrap()(Err(err.into()));
+            }
         }
     }
 
@@ -296,6 +359,8 @@ impl Scheduler {
             Command::Cleanup { ref ctx, .. } |
             Command::Rollback { ref ctx, .. } |
             Command::RollbackThenGet { ref ctx, .. } => ctx,
+            Command::ScanLock { ref ctx, .. } => ctx,
+            Command::ResolveLock { ref ctx, .. } => ctx,
         }
     }
 

@@ -17,7 +17,7 @@ use std::fmt;
 use std::error;
 use std::sync::Arc;
 use std::io::Error as IoError;
-
+use kvproto::kvrpcpb::LockInfo;
 use mio::{EventLoop, EventLoopBuilder};
 
 pub mod engine;
@@ -181,8 +181,8 @@ impl fmt::Display for Command {
                 write!(f, "kv::rollback_then_get {} @ {}", key, lock_ts)
             }
             Command::ScanLock { max_ts, .. } => write!(f, "kv::scan_lock {}", max_ts),
-            Command::ResolveLock { start_ts, commit_ts } => {
-                write!(f, "kv::resolve_txn {} -> {}", start_ts, commit_ts)
+            Command::ResolveLock { start_ts, commit_ts, .. } => {
+                write!(f, "kv::resolve_txn {} -> {:?}", start_ts, commit_ts)
             }
         }
     }
@@ -432,6 +432,36 @@ impl Storage {
             ctx: ctx,
             key: key,
             lock_ts: lock_ts,
+            callback: Some(callback),
+        };
+        try!(self.send(cmd));
+        Ok(())
+    }
+
+    pub fn async_scan_lock(&self,
+                           ctx: Context,
+                           max_ts: u64,
+                           callback: Callback<Vec<LockInfo>>)
+                           -> Result<()> {
+        let cmd = Command::ScanLock {
+            ctx: ctx,
+            max_ts: max_ts,
+            callback: Some(callback),
+        };
+        try!(self.send(cmd));
+        Ok(())
+    }
+
+    pub fn async_resolve_lock(&self,
+                              ctx: Context,
+                              start_ts: u64,
+                              commit_ts: Option<u64>,
+                              callback: Callback<()>)
+                              -> Result<()> {
+        let cmd = Command::ResolveLock {
+            ctx: ctx,
+            start_ts: start_ts,
+            commit_ts: commit_ts,
             callback: Some(callback),
         };
         try!(self.send(cmd));
