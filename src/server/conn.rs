@@ -12,10 +12,10 @@
 // limitations under the License.
 
 use std::cmp;
+use std::io::Read;
 
 use mio::{Token, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpStream;
-use bytes::{MutBuf, MutByteBuf};
 use protobuf::Message as PbMessage;
 
 use kvproto::msgpb::Message;
@@ -27,7 +27,7 @@ use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use util::worker::Scheduler;
-use util::buf::{TryRead, create_mem_buf, PipeBuffer};
+use util::buf::PipeBuffer;
 
 
 #[derive(PartialEq)]
@@ -39,6 +39,7 @@ enum ConnType {
 
 const SNAPSHOT_PAYLOAD_BUF: usize = 4 * 1024 * 1024;
 const DEFAULT_SEND_BUFFER_SIZE: usize = 8 * 1024;
+const DEFAULT_RECV_BUFFER_SIZE: usize = 8 * 1024;
 
 pub struct Conn {
     pub sock: TcpStream,
@@ -52,31 +53,14 @@ pub struct Conn {
     pub store_id: Option<u64>,
 
     // message header
-    last_msg_id: u64,
-    header: MutByteBuf,
-    // message
-    payload: Option<MutByteBuf>,
+    last_msg_id: Option<u64>,
 
-    file_size: usize,
-    read_size: usize,
+    expect_size: usize,
+
     snap_scheduler: Scheduler<SnapTask>,
 
     send_buffer: PipeBuffer,
-}
-
-fn try_read_data<T: TryRead, B: MutBuf>(r: &mut T, buf: &mut B) -> Result<()> {
-    if buf.remaining() == 0 {
-        return Ok(());
-    }
-
-    if let Some(n) = try!(r.try_read_buf(buf)) {
-        if n == 0 {
-            // 0 means remote has closed the socket.
-            return Err(box_err!("remote has closed the connection"));
-        }
-    }
-
-    Ok(())
+    recv_buffer: Option<PipeBuffer>,
 }
 
 impl Conn {
@@ -90,15 +74,13 @@ impl Conn {
             token: token,
             interest: EventSet::readable() | EventSet::hup(),
             conn_type: ConnType::Handshake,
-            header: create_mem_buf(rpc::MSG_HEADER_LEN),
-            read_size: 0,
-            file_size: 0,
-            payload: None,
-            last_msg_id: 0,
+            expect_size: 0,
+            last_msg_id: None,
             snap_scheduler: snap_scheduler,
             store_id: store_id,
             // TODO: Maybe we should need max size to shrink later.
             send_buffer: PipeBuffer::new(DEFAULT_SEND_BUFFER_SIZE),
+            recv_buffer: Some(PipeBuffer::new(DEFAULT_RECV_BUFFER_SIZE)),
         }
     }
 
@@ -150,8 +132,10 @@ impl Conn {
             let mut snap_data = RaftSnapshotData::new();
             try!(snap_data.merge_from_bytes(
                 data.msg.get_raft().get_message().get_snapshot().get_data()));
-            self.file_size = snap_data.get_file_size() as usize;
-            self.payload = Some(create_mem_buf(cmp::min(SNAPSHOT_PAYLOAD_BUF, self.file_size)));
+            self.expect_size = snap_data.get_file_size() as usize;
+            let expect_cap = cmp::min(SNAPSHOT_PAYLOAD_BUF, self.expect_size);
+            // no need to shrink, the connection will be closed soon.
+            self.recv_buffer.as_mut().unwrap().ensure(expect_cap);
 
             let register_task = SnapTask::Register(self.token, data.msg.take_raft());
             box_try!(self.snap_scheduler.schedule(register_task));
@@ -168,68 +152,70 @@ impl Conn {
               S: StoreAddrResolver
     {
         // all content should be read, ignore any read operation.
-        if self.payload.is_none() {
+        if self.recv_buffer.is_none() {
             return Ok(());
         }
         // TODO: limit rate
-        while try!(self.read_payload()) {
-            let payload = self.payload.take().unwrap();
-            let cap = payload.capacity();
-            self.read_size += cap;
+        loop {
+            {
+                let recv_buffer = self.recv_buffer.as_mut().unwrap();
+                try!(recv_buffer.read_from(&mut self.sock));
+                // if the snapshot is too small, the default buffer may be not filled.
+                if !recv_buffer.is_full() && recv_buffer.len() < self.expect_size {
+                    break;
+                }
+                if recv_buffer.len() > self.expect_size {
+                    return Err(box_err!("recv too much data!"));
+                }
+            }
+            let recv_buffer = self.recv_buffer.take().unwrap();
+            self.expect_size -= recv_buffer.len();
 
-            let task = SnapTask::Write(self.token, payload.flip());
+            let task = SnapTask::Write(self.token, recv_buffer);
             box_try!(self.snap_scheduler.schedule(task));
 
-            if self.read_size == self.file_size {
+            if self.expect_size == 0 {
                 // last chunk
                 box_try!(self.snap_scheduler.schedule(SnapTask::Close(self.token)));
                 // let snap_scheduler to close the connection.
                 break;
-            } else if self.read_size + cap >= self.file_size {
-                self.payload = Some(create_mem_buf(self.file_size - self.read_size))
+            } else if SNAPSHOT_PAYLOAD_BUF >= self.expect_size {
+                self.recv_buffer = Some(PipeBuffer::new(self.expect_size));
             } else {
-                self.payload = Some(create_mem_buf(cap))
-            };
+                self.recv_buffer = Some(PipeBuffer::new(SNAPSHOT_PAYLOAD_BUF));
+            }
         }
         Ok(())
     }
 
-    fn read_payload(&mut self) -> Result<bool> {
-        let payload = self.payload.as_mut().unwrap();
-        try!(try_read_data(&mut self.sock, payload));
-        let ret = payload.remaining() == 0;
-        Ok(ret)
-    }
-
     fn read_one_message(&mut self) -> Result<Option<ConnData>> {
-        if self.payload.is_none() {
-            try!(try_read_data(&mut self.sock, &mut self.header));
-            if self.header.remaining() > 0 {
+        let recv_buffer = self.recv_buffer.as_mut().unwrap();
+        if self.last_msg_id.is_none() {
+            recv_buffer.ensure(rpc::MSG_HEADER_LEN);
+            if recv_buffer.len() < rpc::MSG_HEADER_LEN {
+                try!(recv_buffer.read_from(&mut self.sock));
+            }
+            if recv_buffer.len() < rpc::MSG_HEADER_LEN {
                 // we need to read more data for header
                 return Ok(None);
             }
-
             // we have already read whole header, parse it and begin to read payload.
-            let (msg_id, payload_len) = try!(rpc::decode_msg_header(self.header
-                .bytes()));
-            self.last_msg_id = msg_id;
-            self.payload = Some(create_mem_buf(payload_len));
+            let (msg_id, payload_len) = try!(rpc::decode_msg_header(recv_buffer));
+            self.last_msg_id = Some(msg_id);
+            self.expect_size = payload_len;
         }
-
-        // payload here can't be None.
-        let mut payload = self.payload.take().unwrap();
-        try!(try_read_data(&mut self.sock, &mut payload));
-        if payload.remaining() > 0 {
+        recv_buffer.ensure(self.expect_size);
+        try!(recv_buffer.read_from(&mut self.sock));
+        if recv_buffer.len() < self.expect_size {
             // we need to read more data for payload
-            self.payload = Some(payload);
             return Ok(None);
         }
-
         let mut msg = Message::new();
-        try!(rpc::decode_body(payload.bytes(), &mut msg));
-        self.header.clear();
+        try!(rpc::decode_body(&mut recv_buffer.take(self.expect_size as u64), &mut msg));
+        let msg_id = self.last_msg_id.unwrap();
+        self.last_msg_id = None;
         Ok(Some(ConnData {
-            msg_id: self.last_msg_id,
+            msg_id: msg_id,
             msg: msg,
         }))
     }
