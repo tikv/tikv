@@ -159,7 +159,7 @@ impl<T> Drop for Event<T> {
 /// `$expr`.
 #[macro_export]
 macro_rules! async {
-    ($cb:ident, $expr:expr) => {
+    (|$cb:ident| $expr:expr) => {
         {
             let e1 = $crate::util::event::Event::new();
             let e2 = e1.clone();

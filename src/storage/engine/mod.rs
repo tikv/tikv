@@ -48,7 +48,7 @@ pub trait Engine: Send + Sync + Debug {
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        let event = async!(_cb, try!(self.async_write(ctx, batch, _cb)));
+        let event = async!(|cb| try!(self.async_write(ctx, batch, cb)));
         match await!(event, timeout) {
             Some(x) => x.into(),
             None => Err(Error::Timeout(timeout)),
@@ -57,7 +57,7 @@ pub trait Engine: Send + Sync + Debug {
 
     fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        let event = async!(_cb, try!(self.async_snapshot(ctx, _cb)));
+        let event = async!(|cb| try!(self.async_snapshot(ctx, cb)));
         match await!(event, timeout) {
             Some(x) => x.into(),
             None => Err(Error::Timeout(timeout)),
