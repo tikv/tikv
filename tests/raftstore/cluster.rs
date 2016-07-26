@@ -27,6 +27,7 @@ use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
 use tikv::pd::PdClient;
 use tikv::util::{HandyRwLock, escape, rocksdb};
+use tikv::util::transport::SendCh;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use tikv::raftstore::store::keys::data_key;
@@ -50,7 +51,7 @@ pub trait Simulator {
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
     fn add_filter(&self, node_id: u64, filter: Box<Filter>);
     fn clear_filters(&self, node_id: u64);
 }
