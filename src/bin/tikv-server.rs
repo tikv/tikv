@@ -362,7 +362,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           "raftstore.max-peer-down-duration",
                           matches,
                           config,
-                          Some(60),
+                          Some(300),
                           |v| v.as_integer()) as u64;
     cfg.raft_store.max_peer_down_duration = Duration::from_secs(max_peer_down_secs);
 

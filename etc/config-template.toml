@@ -55,6 +55,10 @@ region-split-size = "64MB"
 # whether the region should be split or not. 
 region-split-check-diff = "8MB"
 
+# When a peer hasn't responsed heartbeats for max-peer-down-duration,
+# we will consider this peer to be down and report to pd.
+max-peer-down-duration = "5m"
+
 [raft]
 # set cluster id, must greater than 0.
 cluster-id = 1
