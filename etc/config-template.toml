@@ -62,8 +62,6 @@ cluster-id = 1
 [etcd]
 # etcd endpoints 
 endpoints = ""
-# pd root path in etcd 
-pd-root = "/pd"
 
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/options.h
 [rocksdb]
