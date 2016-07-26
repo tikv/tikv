@@ -504,7 +504,8 @@ impl PdClient for TestPdClient {
 
     fn region_heartbeat(&self,
                         region: metapb::Region,
-                        leader: metapb::Peer)
+                        leader: metapb::Peer,
+                        _: Vec<pdpb::PeerStats>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         try!(self.check_bootstrap());
         self.cluster.wl().region_heartbeat(region, leader)

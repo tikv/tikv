@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
+use std::time::Instant;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
@@ -148,6 +149,8 @@ pub struct Peer {
     pub raft_group: RawNode<PeerStorage>,
     pending_cmds: PendingCmdQueue,
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
+    // Record the last instant of each peer's heartbeat response.
+    pub peer_heartbeats: HashMap<u64, Instant>,
     coprocessor_host: CoprocessorHost,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
@@ -233,6 +236,7 @@ impl Peer {
             raft_group: raft_group,
             pending_cmds: Default::default(),
             peer_cache: store.peer_cache(),
+            peer_heartbeats: HashMap::new(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             pending_remove: false,
@@ -350,6 +354,20 @@ impl Peer {
         for msg in msgs {
             try!(self.send_raft_message(msg, trans));
         }
+        Ok(())
+    }
+
+    pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
+        if match m.get_msg_type() {
+            eraftpb::MessageType::MsgAppendResponse |
+            eraftpb::MessageType::MsgHeartbeatResponse => true,
+            _ => false,
+        } {
+            if let Some(peer) = self.get_peer_from_cache(m.get_from()) {
+                self.peer_heartbeats.insert(peer.get_id(), Instant::now());
+            }
+        }
+        try!(self.raft_group.step(m));
         Ok(())
     }
 
@@ -1010,6 +1028,7 @@ impl Peer {
 
                 // Remove this peer from cache.
                 self.peer_cache.wl().remove(&peer.get_id());
+                self.peer_heartbeats.remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
                 metric_incr!("raftstore.remove_peer.success");

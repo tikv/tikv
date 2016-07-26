@@ -35,7 +35,7 @@ const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
 const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
 const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
-const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 60;
+const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct Config {

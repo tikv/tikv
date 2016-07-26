@@ -13,6 +13,7 @@
 
 use uuid::Uuid;
 use kvproto::{metapb, pdpb};
+use protobuf::RepeatedField;
 use super::{Error, Result, RpcClient};
 
 impl super::PdClient for RpcClient {
@@ -92,11 +93,13 @@ impl super::PdClient for RpcClient {
 
     fn region_heartbeat(&self,
                         region: metapb::Region,
-                        leader: metapb::Peer)
+                        leader: metapb::Peer,
+                        down_peers: Vec<pdpb::PeerStats>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         let mut heartbeat = pdpb::RegionHeartbeatRequest::new();
         heartbeat.set_region(region);
         heartbeat.set_leader(leader);
+        heartbeat.set_down_peers(RepeatedField::from_vec(down_peers));
 
         let mut req = self.new_request(pdpb::CommandType::RegionHeartbeat);
         req.set_region_heartbeat(heartbeat);
