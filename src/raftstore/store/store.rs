@@ -37,10 +37,11 @@ use raft::SnapshotStatus;
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
+use util::transport::SendCh;
 use util::get_disk_stat;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
-use super::{util, SendCh, Msg, Tick, SnapManager};
+use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Iterable, Peekable};
 use super::config::Config;
@@ -58,7 +59,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
-    sendch: SendCh,
+    sendch: SendCh<Msg>,
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
@@ -200,7 +201,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    pub fn get_sendch(&self) -> SendCh {
+    pub fn get_sendch(&self) -> SendCh<Msg> {
         self.sendch.clone()
     }
 

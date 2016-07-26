@@ -15,14 +15,13 @@ use std::boxed::{Box, FnBox};
 use std::fmt;
 use std::time::Duration;
 
-use mio;
-
-use raftstore::{Result, send_msg, Error};
+use raftstore::{Result, Error};
 use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
+use util::transport::SendCh;
 use util::event::Event;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) -> Result<()> + Send>;
@@ -117,14 +116,14 @@ impl fmt::Debug for Msg {
 // Send the request and wait the response until timeout.
 // We should know that even timeout happens, the command may still
 // be handled in store later.
-pub fn call_command(sendch: &SendCh,
+pub fn call_command(sendch: &SendCh<Msg>,
                     request: RaftCmdRequest,
                     timeout: Duration)
                     -> Result<RaftCmdResponse> {
     let finished = Event::new();
     let finished2 = finished.clone();
 
-    try!(sendch.send(Msg::RaftCmd {
+    box_try!(sendch.send(Msg::RaftCmd {
         request: request,
         callback: box move |resp| {
             finished2.set(resp);
@@ -139,33 +138,9 @@ pub fn call_command(sendch: &SendCh,
     Err(Error::Timeout(format!("request timeout for {:?}", timeout)))
 }
 
-
-#[derive(Debug)]
-pub struct SendCh {
-    ch: mio::Sender<Msg>,
-}
-
-impl Clone for SendCh {
-    fn clone(&self) -> SendCh {
-        SendCh { ch: self.ch.clone() }
-    }
-}
-
-impl SendCh {
-    pub fn new(ch: mio::Sender<Msg>) -> SendCh {
-        SendCh { ch: ch }
-    }
-
-    pub fn send(&self, msg: Msg) -> Result<()> {
-        try!(send_msg(&self.ch, msg));
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::sync::mpsc::channel;
     use std::time::Duration;
 
     use mio::{EventLoop, Handler};
@@ -173,6 +148,7 @@ mod tests {
     use super::*;
     use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
     use raftstore::Error;
+    use util::transport::SendCh;
 
     struct TestHandler;
 
@@ -205,22 +181,10 @@ mod tests {
             event_loop.run(&mut TestHandler).unwrap();
         });
 
-        let (tx, rx) = channel();
-        let cmd = Msg::RaftCmd {
-            request: RaftCmdRequest::new(),
-            callback: box move |_| {
-                tx.send(1).unwrap();
-                Ok(())
-            },
-        };
-        sendch.send(cmd).unwrap();
-
-        rx.recv().unwrap();
-
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());
         assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
-        match call_command(sendch, request.clone(), Duration::from_millis(10)) {
+        match call_command(sendch, request, Duration::from_millis(10)) {
             Err(Error::Timeout(_)) => {}
             _ => panic!("should failed with timeout"),
         }

@@ -24,13 +24,14 @@ use std::time::{Instant, Duration};
 use threadpool::ThreadPool;
 use mio::Token;
 
-use super::{Result, ConnData, SendCh, Msg};
+use super::{Result, ConnData, Msg};
 use super::transport::RaftStoreRouter;
 use raftstore::store::{SnapFile, SnapManager, SnapKey, SnapEntry};
 use util::worker::Runnable;
 use util::codec::rpc;
 use util::buf::PipeBuffer;
 use util::HandyRwLock;
+use util::transport::SendCh;
 
 use kvproto::raft_serverpb::RaftMessage;
 
@@ -117,12 +118,12 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
     files: HashMap<Token, (SnapFile, RaftMessage)>,
     pool: ThreadPool,
-    ch: SendCh,
+    ch: SendCh<Msg>,
     raft_router: Arc<RwLock<R>>,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(snap_mgr: SnapManager, r: Arc<RwLock<R>>, ch: SendCh) -> Runner<R> {
+    pub fn new(snap_mgr: SnapManager, r: Arc<RwLock<R>>, ch: SendCh<Msg>) -> Runner<R> {
         Runner {
             snap_mgr: snap_mgr,
             files: map![],

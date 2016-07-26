@@ -12,7 +12,8 @@ use protobuf::Message;
 
 use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftSnapshotData;
-use raftstore::store::{SendCh, Msg};
+use raftstore::store::Msg;
+use util::transport::SendCh;
 
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SnapKey {
@@ -220,11 +221,11 @@ pub struct SnapManagerCore {
     // directory to store snapfile.
     base: String,
     registry: HashMap<SnapKey, Vec<SnapEntry>>,
-    ch: Option<SendCh>,
+    ch: Option<SendCh<Msg>>,
 }
 
 impl SnapManagerCore {
-    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh>) -> SnapManagerCore {
+    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManagerCore {
         SnapManagerCore {
             base: path.into(),
             registry: map![],
@@ -367,6 +368,6 @@ impl SnapManagerCore {
 
 pub type SnapManager = Arc<RwLock<SnapManagerCore>>;
 
-pub fn new_snap_mgr<T: Into<String>>(path: T, ch: Option<SendCh>) -> SnapManager {
+pub fn new_snap_mgr<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
     Arc::new(RwLock::new(SnapManagerCore::new(path, ch)))
 }
