@@ -23,11 +23,12 @@ use mio::tcp::{TcpListener, TcpStream};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
-use super::{Msg, SendCh, ConnData};
+use super::{Msg, ConnData};
 use super::conn::Conn;
 use super::{Result, OnResponse, Config};
 use util::HandyRwLock;
 use util::worker::Worker;
+use util::transport::SendCh;
 use storage::Storage;
 use raftstore::store::SnapManager;
 use super::kv::StoreHandler;
@@ -71,7 +72,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     // unique and can't be reused.
     conns: HashMap<Token, Conn>,
     conn_token_counter: usize,
-    sendch: SendCh,
+    sendch: SendCh<Msg>,
 
     // store id -> Token
     // This is for communicating with other raft stores.
@@ -146,7 +147,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         Ok(())
     }
 
-    pub fn get_sendch(&self) -> SendCh {
+    pub fn get_sendch(&self) -> SendCh<Msg> {
         self.sendch.clone()
     }
 

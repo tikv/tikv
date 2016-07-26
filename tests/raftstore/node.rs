@@ -28,6 +28,7 @@ use kvproto::raft_serverpb;
 use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{store, Result};
 use tikv::util::HandyRwLock;
+use tikv::util::transport::SendCh;
 use tikv::server::Config as ServerConfig;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use tikv::raft::SnapshotStatus;
@@ -201,7 +202,7 @@ impl Simulator for NodeCluster {
         trans.wl().clear_filters();
     }
 
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh> {
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>> {
         self.nodes.get(&node_id).map(|node| node.get_sendch())
     }
 }

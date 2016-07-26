@@ -22,9 +22,9 @@ use std::collections::HashMap;
 use mio::{self, EventLoop};
 
 use storage::engine::{Result as EngineResult, Callback};
+use util::transport::SendCh;
 use super::Result;
 use super::Error;
-use super::SchedCh;
 use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 
@@ -76,7 +76,7 @@ impl RunningCtx {
     }
 }
 
-fn make_write_cb(pr: ProcessResult, cid: u64, ch: SchedCh) -> Callback<()> {
+fn make_write_cb(pr: ProcessResult, cid: u64, ch: SendCh<Msg>) -> Callback<()> {
     Box::new(move |result: EngineResult<()>| {
         if let Err(e) = ch.send(Msg::WriteFinish {
             cid: cid,
@@ -96,7 +96,7 @@ pub struct Scheduler {
     // cid -> context
     cmd_ctxs: HashMap<u64, RunningCtx>,
 
-    schedch: SchedCh,
+    schedch: SendCh<Msg>,
 
     // cmd id generator
     id_alloc: u64,
@@ -106,7 +106,7 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(engine: Arc<Box<Engine>>, schedch: SchedCh, concurrency: usize) -> Scheduler {
+    pub fn new(engine: Arc<Box<Engine>>, schedch: SendCh<Msg>, concurrency: usize) -> Scheduler {
         Scheduler {
             engine: engine,
             cmd_ctxs: HashMap::new(),

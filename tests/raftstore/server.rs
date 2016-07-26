@@ -23,11 +23,12 @@ use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{self, Server, ServerTransport, SendCh, create_event_loop, Msg, bind};
+use tikv::server::{self, Server, ServerTransport, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
-use tikv::raftstore::{Error, Result};
-use tikv::raftstore::store::{self, SendCh as StoreSendCh};
+use tikv::raftstore::{Error, Result, store};
+use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::util::codec::{Error as CodecError, rpc};
+use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, DEFAULT_CFS};
 use tikv::util::{make_std_tcp_conn, HandyRwLock};
 use kvproto::raft_serverpb;
@@ -41,12 +42,12 @@ use super::transport_simulate::{SimulateTransport, Filter};
 type SimulateServerTransport = SimulateTransport<ServerTransport>;
 
 pub struct ServerCluster {
-    senders: HashMap<u64, SendCh>,
+    senders: HashMap<u64, SendCh<Msg>>,
     handles: HashMap<u64, thread::JoinHandle<()>>,
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
-    store_chs: HashMap<u64, StoreSendCh>,
+    store_chs: HashMap<u64, SendCh<StoreMsg>>,
     pub storages: HashMap<u64, Arc<Box<Engine>>>,
     snap_paths: HashMap<u64, TempDir>,
 
@@ -281,7 +282,7 @@ impl Simulator for ServerCluster {
         trans.wl().clear_filters();
     }
 
-    fn get_store_sendch(&self, node_id: u64) -> Option<StoreSendCh> {
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<StoreMsg>> {
         self.store_chs.get(&node_id).cloned()
     }
 }

@@ -25,9 +25,10 @@ use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 use util::worker::Runnable;
 use util::codec::bytes::CompactBytesDecoder;
 use util::{escape, HandyRwLock, rocksdb};
+use util::transport::SendCh;
 use raftstore;
 use raftstore::store::engine::Mutable;
-use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, SendCh, Msg, keys, Peekable};
+use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
 use raftstore::store::engine::Snapshot;
 
 const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
@@ -67,9 +68,9 @@ pub trait MsgSender {
     fn send(&self, msg: Msg) -> raftstore::Result<()>;
 }
 
-impl MsgSender for SendCh {
+impl MsgSender for SendCh<Msg> {
     fn send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::send(self, msg)
+        SendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
     }
 }
 
