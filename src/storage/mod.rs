@@ -60,40 +60,43 @@ impl Mutation {
 
 use kvproto::kvrpcpb::Context;
 
+pub enum CallbackType {
+    Result(Callback<()>),
+    Value(Callback<Option<Value>>),
+    KvPairs(Callback<Vec<Result<KvPair>>>),
+    MultiResults(Callback<Vec<Result<()>>>),
+}
+
 #[allow(type_complexity)]
+#[derive(Clone)]
 pub enum Command {
     Get {
         ctx: Context,
         key: Key,
         start_ts: u64,
-        callback: Option<Callback<Option<Value>>>,
     },
     BatchGet {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
-        callback: Option<Callback<Vec<Result<KvPair>>>>,
     },
     Scan {
         ctx: Context,
         start_key: Key,
         limit: usize,
         start_ts: u64,
-        callback: Option<Callback<Vec<Result<KvPair>>>>,
     },
     Prewrite {
         ctx: Context,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
-        callback: Option<Callback<Vec<Result<()>>>>,
     },
     Commit {
         ctx: Context,
         keys: Vec<Key>,
         lock_ts: u64,
         commit_ts: u64,
-        callback: Option<Callback<()>>,
     },
     CommitThenGet {
         ctx: Context,
@@ -101,25 +104,21 @@ pub enum Command {
         lock_ts: u64,
         commit_ts: u64,
         get_ts: u64,
-        callback: Option<Callback<Option<Value>>>,
     },
     Cleanup {
         ctx: Context,
         key: Key,
         start_ts: u64,
-        callback: Option<Callback<()>>,
     },
     Rollback {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
-        callback: Option<Callback<()>>,
     },
     RollbackThenGet {
         ctx: Context,
         key: Key,
         lock_ts: u64,
-        callback: Option<Callback<Option<Value>>>,
     },
 }
 
@@ -260,9 +259,9 @@ impl Storage {
         self.engine.clone()
     }
 
-    fn send(&self, cmd: Command) -> Result<()> {
+    fn send(&self, cmd: Command, cb: CallbackType) -> Result<()> {
         if self.sched_handle.is_some() {
-            try!(self.schedch.send(Msg::RawCmd { cmd: cmd }));
+            try!(self.schedch.send(Msg::RawCmd { cmd: cmd, cb: cb }));
         } else {
             return Err(Error::Closed);
         }
@@ -279,9 +278,8 @@ impl Storage {
             ctx: ctx,
             key: key,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, CallbackType::Value(callback)));
         Ok(())
     }
 
@@ -295,9 +293,8 @@ impl Storage {
             ctx: ctx,
             keys: keys,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, CallbackType::KvPairs(callback)));
         Ok(())
     }
 
@@ -313,9 +310,8 @@ impl Storage {
             start_key: start_key,
             limit: limit,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, CallbackType::KvPairs(callback)));
         Ok(())
     }
 
@@ -331,9 +327,8 @@ impl Storage {
             mutations: mutations,
             primary: primary,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, CallbackType::MultiResults(callback)));
         Ok(())
     }
 
@@ -349,9 +344,8 @@ impl Storage {
             keys: keys,
             lock_ts: lock_ts,
             commit_ts: commit_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, CallbackType::Result(callback)));
         Ok(())
     }
 
@@ -369,9 +363,8 @@ impl Storage {
             lock_ts: lock_ts,
             commit_ts: commit_ts,
             get_ts: get_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, CallbackType::Value(callback)));
         Ok(())
     }
 
@@ -385,9 +378,8 @@ impl Storage {
             ctx: ctx,
             key: key,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, CallbackType::Result(callback)));
         Ok(())
     }
 
@@ -401,9 +393,8 @@ impl Storage {
             ctx: ctx,
             keys: keys,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, CallbackType::Result(callback)));
         Ok(())
     }
 
@@ -417,9 +408,8 @@ impl Storage {
             ctx: ctx,
             key: key,
             lock_ts: lock_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, CallbackType::Value(callback)));
         Ok(())
     }
 }
