@@ -30,7 +30,7 @@ use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 
 const REPORT_STATISTIC_INTERVAL: u64 = 60000; // 60 seconds
-const DEFAULT_WOKER_POOL_SIZES: usize = 8;
+const DEFAULT_WOKER_POOL_SIZES: usize = 4;
 
 pub enum Tick {
     ReportStatistic,
