@@ -12,6 +12,7 @@
 // limitations under the License.
 
 #![feature(plugin)]
+#![feature(test)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
@@ -33,6 +34,7 @@ extern crate kvproto;
 extern crate tipb;
 extern crate time;
 extern crate rustc_serialize;
+extern crate test;
 
 use std::env;
 

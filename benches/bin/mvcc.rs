@@ -13,11 +13,15 @@
 
 use test::BenchSamples;
 
+#[allow(dead_code)]
+#[path="../../tests/storage/sync_storage.rs"]
+mod sync_storage;
+
 use test_util::*;
 use tikv::storage::{Mutation, Key};
-use tikv::storage::SyncStorage;
 use tikv::storage::mvcc::TEST_TS_BASE;
 use kvproto::kvrpcpb::Context;
+use self::sync_storage::SyncStorage;
 
 use super::print_result;
 
