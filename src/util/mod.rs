@@ -41,6 +41,7 @@ pub mod config;
 pub mod fs;
 pub mod buf;
 pub mod sockopt;
+pub mod transport;
 
 pub use self::fs::{DiskStat, get_disk_stat};
 

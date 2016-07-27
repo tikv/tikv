@@ -23,8 +23,9 @@ use kvproto::pdpb;
 
 use util::worker::Runnable;
 use util::escape;
+use util::transport::SendCh;
 use pd::PdClient;
-use raftstore::store::{SendCh, Msg};
+use raftstore::store::Msg;
 use raftstore::Result;
 
 // Use an asynchronous thread to tell pd something.
@@ -73,11 +74,11 @@ impl Display for Task {
 
 pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
-    ch: SendCh,
+    ch: SendCh<Msg>,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(pd_client: Arc<T>, ch: SendCh) -> Runner<T> {
+    pub fn new(pd_client: Arc<T>, ch: SendCh<Msg>) -> Runner<T> {
         Runner {
             pd_client: pd_client,
             ch: ch,

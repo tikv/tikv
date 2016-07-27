@@ -42,8 +42,9 @@ use cadence::{StatsdClient, NopMetricSink};
 use tikv::storage::{Storage, TEMP_DIR, DEFAULT_CFS};
 use tikv::util::{self, logger, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::metric::{self, BufferedUdpMetricSink};
-use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
-                   create_raft_storage};
+use tikv::util::transport::SendCh;
+use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_event_loop,
+                   create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
@@ -397,7 +398,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
 
 fn build_raftkv(matches: &Matches,
                 config: &toml::Value,
-                ch: SendCh,
+                ch: SendCh<Msg>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config)
                 -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, SnapManager) {
@@ -477,14 +478,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                           config,
                                           None,
                                           |v| v.as_str().map(|s| s.to_owned()));
-    let etcd_pd_root = get_string_value("pd-root",
-                                        "etcd.pd-root",
-                                        matches,
-                                        config,
-                                        Some("/pd".to_owned()),
-                                        |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(new_rpc_client(&etcd_endpoints, &etcd_pd_root, cfg.cluster_id)
-        .unwrap());
+    let pd_client = Arc::new(new_rpc_client(&etcd_endpoints, cfg.cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let store_path = get_store_path(matches, config);
@@ -553,8 +547,6 @@ fn main() {
                 "set region split check diff",
                 "default: 8 MB");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
-    opts.optopt("", "pd-root", "pd root path in etcd", "/pd");
-
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
