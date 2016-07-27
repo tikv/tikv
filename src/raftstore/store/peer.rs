@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
@@ -28,6 +28,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
                              RegionLocalState};
+use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
@@ -358,17 +359,52 @@ impl Peer {
     }
 
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
-        if match m.get_msg_type() {
+        match m.get_msg_type() {
+            eraftpb::MessageType::MsgAppend |
             eraftpb::MessageType::MsgAppendResponse |
-            eraftpb::MessageType::MsgHeartbeatResponse => true,
-            _ => false,
-        } {
-            if let Some(peer) = self.get_peer_from_cache(m.get_from()) {
-                self.peer_heartbeats.insert(peer.get_id(), Instant::now());
+            eraftpb::MessageType::MsgHeartbeat |
+            eraftpb::MessageType::MsgHeartbeatResponse |
+            eraftpb::MessageType::MsgRequestVote |
+            eraftpb::MessageType::MsgRequestVoteResponse => {
+                self.peer_heartbeats.insert(m.get_from(), Instant::now());
             }
+            _ => {}
         }
         try!(self.raft_group.step(m));
         Ok(())
+    }
+
+    pub fn check_peers(&mut self) {
+        let peers = self.get_store().get_region().get_peers().to_owned();
+        for peer in &peers {
+            self.peer_heartbeats.entry(peer.get_id()).or_insert_with(Instant::now);
+        }
+        let removed_ids: Vec<_> = self.peer_heartbeats
+            .keys()
+            .filter(|&&id| !peers.iter().any(|p| p.get_id() == id))
+            .cloned()
+            .collect();
+        for id in removed_ids {
+            self.peer_heartbeats.remove(&id);
+        }
+    }
+
+    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
+        let mut down_peers = Vec::new();
+        for p in self.get_store().get_region().get_peers() {
+            if p.get_id() == self.peer.get_id() {
+                continue;
+            }
+            if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
+                if instant.elapsed() >= max_duration {
+                    let mut stats = PeerStats::new();
+                    stats.set_peer(p.clone());
+                    stats.set_down_seconds(instant.elapsed().as_secs());
+                    down_peers.push(stats);
+                }
+            }
+        }
+        down_peers
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self, trans: &T) -> Result<Option<ReadyResult>> {
@@ -1028,7 +1064,6 @@ impl Peer {
 
                 // Remove this peer from cache.
                 self.peer_cache.wl().remove(&peer.get_id());
-                self.peer_heartbeats.remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
                 metric_incr!("raftstore.remove_peer.success");

@@ -27,7 +27,7 @@ use uuid::Uuid;
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
-use kvproto::pdpb::{PeerStats, StoreStats};
+use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
@@ -936,26 +936,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn heartbeat_pd(&self, peer: &Peer) {
-        // Collect down peers.
-        let mut down_peers = Vec::new();
-        for (&id, instant) in &peer.peer_heartbeats {
-            if id == peer.peer.get_id() {
-                continue;
-            }
-            if instant.elapsed() < self.cfg.max_peer_down_duration {
-                continue;
-            }
-            if let Some(p) = peer.get_peer_from_cache(id) {
-                let mut stats = PeerStats::new();
-                stats.set_peer(p);
-                stats.set_down_seconds(instant.elapsed().as_secs());
-                down_peers.push(stats);
-            }
-        }
         let task = PdTask::Heartbeat {
             region: peer.region().clone(),
             peer: peer.peer.clone(),
-            down_peers: down_peers,
+            down_peers: peer.collect_down_peers(self.cfg.max_peer_down_duration),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", peer.tag, e);
@@ -963,6 +947,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        for peer in self.region_peers.values_mut() {
+            peer.check_peers();
+        }
+
         let mut leader_count = 0;
         for peer in self.region_peers.values() {
             if peer.is_leader() {
