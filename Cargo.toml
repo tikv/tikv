@@ -61,7 +61,6 @@ branch = "busyjay/update-proto"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
-branch = "busyjay/update-proto"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio.git"
