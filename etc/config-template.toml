@@ -21,8 +21,8 @@ notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
 messages-per-tick = 4096
 # socket send/recv buffer size.
-send-buffer-size = 131072
-recv-buffer-size = 131072
+send-buffer-size = "128KB"
+recv-buffer-size = "128KB"
 
 # set store capacity, if no set, use unlimited or disk size later.
 # capacity = 0 # 0 is unlimited.
@@ -59,8 +59,8 @@ region-split-check-diff = "8MB"
 # set cluster id, must greater than 0.
 cluster-id = 1
 
-[etcd]
-# etcd endpoints 
+[pd]
+# pd endpoints 
 endpoints = ""
 
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/options.h
