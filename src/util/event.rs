@@ -154,39 +154,31 @@ impl<T> Drop for Event<T> {
     }
 }
 
-/// `async!` creates an Event that will be notified after the expression
-/// get executed. `$cb` is a callback placeholder that may be used in
-/// `$expr`.
+/// `wait_event!` waits for async expression. It returns `Option<Res>`
+/// after the expression get executed.
 #[macro_export]
-macro_rules! async {
-    (|$cb:ident| $expr:expr) => {
+macro_rules! wait_event {
+    ($expr:expr) => {
         {
             let e1 = $crate::util::event::Event::new();
             let e2 = e1.clone();
-            let $cb = box move |res| e2.set(res);
-            $expr;
-            e1
-        }
-    }
-}
-
-/// `await!` waits on an Event (usually created by `async!`) and returns
-/// Option<Res>.
-#[macro_export]
-macro_rules! await{
-    ($event:ident) => {
-        {
-            if $event.wait_timeout(None) {
-                Some($event.take().unwrap())
+            let cb = box move |res| e2.set(res);
+            $expr(cb);
+            if e1.wait_timeout(None) {
+                Some(e1.take().unwrap())
             } else {
                 None
             }
         }
     };
-    ($event:ident, $timeout:expr) => {
+    ($expr:expr, $timeout:expr) => {
         {
-            if $event.wait_timeout(Some($timeout)) {
-                Some($event.take().unwrap())
+            let e1 = $crate::util::event::Event::new();
+            let e2 = e1.clone();
+            let cb = box move |res| e2.set(res);
+            $expr(cb);
+            if e1.wait_timeout(Some($timeout)) {
+                Some(e1.take().unwrap())
             } else {
                 None
             }

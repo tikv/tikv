@@ -37,8 +37,7 @@ impl SyncStorage {
     }
 
     pub fn get(&self, ctx: Context, key: &Key, start_ts: u64) -> Result<Option<Value>> {
-        let e = async!(|cb| try!(self.0.async_get(ctx, key.to_owned(), start_ts, cb)));
-        await!(e).unwrap().into()
+        wait_event!(|cb| self.0.async_get(ctx, key.to_owned(), start_ts, cb).unwrap()).unwrap()
     }
 
     #[allow(dead_code)]
@@ -47,8 +46,8 @@ impl SyncStorage {
                      keys: &[Key],
                      start_ts: u64)
                      -> Result<Vec<Result<KvPair>>> {
-        let e = async!(|cb| try!(self.0.async_batch_get(ctx, keys.to_owned(), start_ts, cb)));
-        await!(e).unwrap().into()
+        wait_event!(|cb| self.0.async_batch_get(ctx, keys.to_owned(), start_ts, cb).unwrap())
+            .unwrap()
     }
 
     pub fn scan(&self,
@@ -57,8 +56,7 @@ impl SyncStorage {
                 limit: usize,
                 start_ts: u64)
                 -> Result<Vec<Result<KvPair>>> {
-        let e = async!(|cb| try!(self.0.async_scan(ctx, key, limit, start_ts, cb)));
-        await!(e).unwrap().into()
+        wait_event!(|cb| self.0.async_scan(ctx, key, limit, start_ts, cb).unwrap()).unwrap()
     }
 
     pub fn prewrite(&self,
@@ -67,8 +65,8 @@ impl SyncStorage {
                     primary: Vec<u8>,
                     start_ts: u64)
                     -> Result<Vec<Result<()>>> {
-        let e = async!(|cb| try!(self.0.async_prewrite(ctx, mutations, primary, start_ts, cb)));
-        await!(e).unwrap().into()
+        wait_event!(|cb| self.0.async_prewrite(ctx, mutations, primary, start_ts, cb).unwrap())
+            .unwrap()
     }
 
     pub fn commit(&self,
@@ -77,8 +75,7 @@ impl SyncStorage {
                   start_ts: u64,
                   commit_ts: u64)
                   -> Result<()> {
-        let e = async!(|cb| try!(self.0.async_commit(ctx, keys, start_ts, commit_ts, cb)));
-        await!(e).unwrap().into()
+        wait_event!(|cb| self.0.async_commit(ctx, keys, start_ts, commit_ts, cb).unwrap()).unwrap()
     }
 
     pub fn commit_then_get(&self,
@@ -88,27 +85,25 @@ impl SyncStorage {
                            commit_ts: u64,
                            get_ts: u64)
                            -> Result<Option<Value>> {
-        let e = async!(|cb| {
-            try!(self.0
-                .async_commit_then_get(ctx, key, lock_ts, commit_ts, get_ts, cb))
-        });
-        await!(e).unwrap().into()
+        wait_event!(|cb| {
+                self.0
+                    .async_commit_then_get(ctx, key, lock_ts, commit_ts, get_ts, cb)
+                    .unwrap();
+            })
+            .unwrap()
     }
 
     #[allow(dead_code)]
     pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64) -> Result<()> {
-        let e = async!(|cb| try!(self.0.async_cleanup(ctx, key, start_ts, cb)));
-        await!(e).unwrap().into()
+        wait_event!(|cb| self.0.async_cleanup(ctx, key, start_ts, cb).unwrap()).unwrap()
     }
 
     pub fn rollback(&self, ctx: Context, keys: Vec<Key>, start_ts: u64) -> Result<()> {
-        let e = async!(|cb| try!(self.0.async_rollback(ctx, keys, start_ts, cb)));
-        await!(e).unwrap().into()
+        wait_event!(|cb| self.0.async_rollback(ctx, keys, start_ts, cb).unwrap()).unwrap()
     }
 
     pub fn rollback_then_get(&self, ctx: Context, key: Key, lock_ts: u64) -> Result<Option<Value>> {
-        let e = async!(|cb| try!(self.0.async_rollback_then_get(ctx, key, lock_ts, cb)));
-        await!(e).unwrap().into()
+        wait_event!(|cb| self.0.async_rollback_then_get(ctx, key, lock_ts, cb).unwrap()).unwrap()
     }
 }
 
