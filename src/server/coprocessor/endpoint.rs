@@ -18,7 +18,7 @@ use std::collections::hash_map::Entry;
 use std::time::Instant;
 use std::boxed::FnBox;
 use std::rc::Rc;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Display, Formatter, Debug};
 
 use tipb::select::{self, SelectRequest, SelectResponse, Row};
 use tipb::schema::ColumnInfo;
@@ -30,13 +30,13 @@ use threadpool::ThreadPool;
 use storage::{Engine, SnapshotStore};
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
-use storage::{Snapshot, Key};
+use storage::{engine, Snapshot, Key};
 use util::codec::table::TableDecoder;
 use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
 use util::{escape, duration_to_ms};
-use util::worker::BatchRunnable;
+use util::worker::{BatchRunnable, Scheduler};
 use util::SlowTimer;
 use server::OnResponse;
 
@@ -54,15 +54,35 @@ const DEFAULT_POOL_SIZE: usize = 8;
 pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
 
 pub struct Host {
-    snap_endpoint: Arc<TiDbEndPoint>,
+    engine: Arc<Box<Engine>>,
+    sched: Scheduler<Task>,
+    reqs: HashMap<u64, Vec<RequestTask>>,
+    last_req_id: u64,
     pool: ThreadPool,
 }
 
 impl Host {
-    pub fn new(engine: Arc<Box<Engine>>) -> Host {
+    pub fn new(engine: Arc<Box<Engine>>, scheduler: Scheduler<Task>) -> Host {
         Host {
-            snap_endpoint: Arc::new(TiDbEndPoint::new(engine)),
+            engine: engine,
+            sched: scheduler,
+            reqs: HashMap::new(),
+            last_req_id: 0,
             pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), DEFAULT_POOL_SIZE),
+        }
+    }
+}
+
+pub enum Task {
+    Request(RequestTask),
+    SnapRes(u64, engine::Result<Box<Snapshot>>),
+}
+
+impl Display for Task {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match *self {
+            Task::Request(ref req) => write!(f, "{}", req),
+            Task::SnapRes(req_id, _) => write!(f, "snapres [{}]", req_id),
         }
     }
 }
@@ -91,25 +111,52 @@ impl Display for RequestTask {
     }
 }
 
-impl BatchRunnable<RequestTask> for Host {
+impl BatchRunnable<Task> for Host {
+    // TODO: limit pending reqs
     #[allow(for_kv_map)]
-    fn run_batch(&mut self, reqs: &mut Vec<RequestTask>) {
+    fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
-        for req in reqs.drain(..) {
-            let key = {
-                let ctx = req.req.get_context();
-                (ctx.get_region_id(),
-                 ctx.get_region_epoch().get_conf_ver(),
-                 ctx.get_region_epoch().get_version(),
-                 ctx.get_peer().get_id(),
-                 ctx.get_peer().get_store_id())
-            };
-            let mut group = grouped_reqs.entry(key).or_insert_with(|| vec![]);
-            group.push(req);
+        for task in tasks.drain(..) {
+            match task {
+                Task::Request(req) => {
+                    let key = {
+                        let ctx = req.req.get_context();
+                        (ctx.get_region_id(),
+                         ctx.get_region_epoch().get_conf_ver(),
+                         ctx.get_region_epoch().get_version(),
+                         ctx.get_peer().get_id(),
+                         ctx.get_peer().get_store_id())
+                    };
+                    let mut group = grouped_reqs.entry(key).or_insert_with(Vec::new);
+                    group.push(req);
+                }
+                Task::SnapRes(q_id, snap_res) => {
+                    let reqs = self.reqs.remove(&q_id).unwrap();
+                    let snap = match snap_res {
+                        Ok(s) => s,
+                        Err(e) => {
+                            on_snap_failed(e, reqs);
+                            continue;
+                        }
+                    };
+                    let end_point = TiDbEndPoint::new(snap);
+                    self.pool.execute(move || end_point.handle_requests(reqs));
+                }
+            }
         }
         for (_, reqs) in grouped_reqs {
-            let end_point = self.snap_endpoint.clone();
-            self.pool.execute(move || end_point.handle_requests(reqs));
+            self.last_req_id += 1;
+            let id = self.last_req_id;
+            let sched = self.sched.clone();
+            if let Err(e) = self.engine.async_snapshot(reqs[0].req.get_context(),
+                                                       box move |res| {
+                                                           sched.schedule(Task::SnapRes(id, res))
+                                                               .unwrap()
+                                                       }) {
+                on_snap_failed(e, reqs);
+                continue;
+            }
+            self.reqs.insert(id, reqs);
         }
     }
 }
@@ -126,45 +173,40 @@ fn on_error(e: Error, cb: ResponseHandler) {
     cb(resp)
 }
 
+fn on_snap_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
+    error!("failed to get snapshot: {:?}", e);
+    on_error(e.into(),
+             box move |r| {
+        let mut resp_msg = Message::new();
+        resp_msg.set_msg_type(MessageType::CopResp);
+        resp_msg.set_cop_resp(r);
+        for t in reqs {
+            t.on_resp.call_box((resp_msg.clone(),));
+        }
+    });
+}
+
 pub struct TiDbEndPoint {
-    engine: Arc<Box<Engine>>,
+    snap: Box<Snapshot>,
 }
 
 impl TiDbEndPoint {
-    pub fn new(engine: Arc<Box<Engine>>) -> TiDbEndPoint {
-        TiDbEndPoint { engine: engine }
+    pub fn new(snap: Box<Snapshot>) -> TiDbEndPoint {
+        TiDbEndPoint { snap: snap }
     }
 }
 
 impl TiDbEndPoint {
     fn handle_requests(&self, reqs: Vec<RequestTask>) {
-        let ts = Instant::now();
-        let snap = match self.engine.snapshot(reqs[0].req.get_context()) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("failed to get snapshot: {:?}", e);
-                on_error(e.into(),
-                         box move |r| {
-                    let mut resp_msg = Message::new();
-                    resp_msg.set_msg_type(MessageType::CopResp);
-                    resp_msg.set_cop_resp(r);
-                    for t in reqs {
-                        t.on_resp.call_box((resp_msg.clone(),));
-                    }
-                });
-                return;
-            }
-        };
-        metric_time!("copr.snapshot", ts.elapsed());
         for t in reqs {
             let timer = SlowTimer::new();
             let tp = t.req.get_tp();
-            self.handle_request(snap.as_ref(), t.req, t.on_resp);
+            self.handle_request(t.req, t.on_resp);
             metric_time!(&format!("copr.request.{}", tp), timer.elapsed());
         }
     }
 
-    fn handle_request(&self, snap: &Snapshot, req: Request, on_resp: OnResponse) {
+    fn handle_request(&self, req: Request, on_resp: OnResponse) {
         let cb = box move |r| {
             let mut resp_msg = Message::new();
             resp_msg.set_msg_type(MessageType::CopResp);
@@ -178,7 +220,7 @@ impl TiDbEndPoint {
                     on_error(box_err!(e), cb);
                     return;
                 }
-                match self.handle_select(snap, req, sel) {
+                match self.handle_select(req, sel) {
                     Ok(r) => cb(r),
                     Err(e) => on_error(e, cb),
                 }
@@ -187,12 +229,8 @@ impl TiDbEndPoint {
         }
     }
 
-    pub fn handle_select(&self,
-                         snap: &Snapshot,
-                         mut req: Request,
-                         sel: SelectRequest)
-                         -> Result<Response> {
-        let snap = SnapshotStore::new(snap, sel.get_start_ts());
+    pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
+        let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap));
         let mut range = req.take_ranges().into_vec();
         let desc = ctx.core.sel.get_order_by().first().map_or(false, |o| o.get_desc());

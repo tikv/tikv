@@ -22,6 +22,7 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 
 use util::escape;
 use super::{number, Result, bytes, convert};
+use super::number::NumberDecoder;
 use super::mysql::{self, Duration, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder};
 
 pub const NIL_FLAG: u8 = 0;
@@ -32,6 +33,8 @@ const UINT_FLAG: u8 = 4;
 const FLOAT_FLAG: u8 = 5;
 const DECIMAL_FLAG: u8 = 6;
 const DURATION_FLAG: u8 = 7;
+const VAR_INT_FLAG: u8 = 8;
+const VAR_UINT_FLAG: u8 = 9;
 const MAX_FLAG: u8 = 250;
 // TODO: support more flags
 
@@ -442,6 +445,8 @@ pub trait DatumDecoder: DecimalDecoder {
                 Ok(Datum::Dur(dur))
             }
             DECIMAL_FLAG => self.decode_decimal().map(Datum::Dec),
+            VAR_INT_FLAG => self.decode_var_i64().map(Datum::I64),
+            VAR_UINT_FLAG => self.decode_var_u64().map(Datum::U64),
             f => Err(invalid_type!("unsupported data type `{}`", f)),
         }
     }
@@ -471,12 +476,22 @@ pub trait DatumEncoder: DecimalEncoder {
             }
             match *v {
                 Datum::I64(i) => {
-                    try!(self.write_u8(INT_FLAG));
-                    try!(self.encode_i64(i));
+                    if comparable {
+                        try!(self.write_u8(INT_FLAG));
+                        try!(self.encode_i64(i));
+                    } else {
+                        try!(self.write_u8(VAR_INT_FLAG));
+                        try!(self.encode_var_i64(i));
+                    }
                 }
                 Datum::U64(u) => {
-                    try!(self.write_u8(UINT_FLAG));
-                    try!(self.encode_u64(u));
+                    if comparable {
+                        try!(self.write_u8(UINT_FLAG));
+                        try!(self.encode_u64(u));
+                    } else {
+                        try!(self.write_u8(VAR_UINT_FLAG));
+                        try!(self.encode_var_u64(u));
+                    }
                 }
                 Datum::Bytes(ref bs) => {
                     if comparable {
@@ -522,8 +537,20 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
         .map(|v| {
             1 +
             match *v {
-                Datum::I64(_) => number::I64_SIZE,
-                Datum::U64(_) => number::U64_SIZE,
+                Datum::I64(_) => {
+                    if comparable {
+                        number::I64_SIZE
+                    } else {
+                        number::MAX_VAR_I64_LEN
+                    }
+                }
+                Datum::U64(_) => {
+                    if comparable {
+                        number::U64_SIZE
+                    } else {
+                        number::MAX_VAR_U64_LEN
+                    }
+                }
                 Datum::F64(_) => number::F64_SIZE,
                 Datum::Dur(_) => number::I64_SIZE,
                 Datum::Bytes(ref bs) => {
@@ -577,6 +604,18 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         FLOAT_FLAG => number::F64_SIZE,
         DURATION_FLAG => number::I64_SIZE,
         DECIMAL_FLAG => mysql::encoded_len(&buf[1..]),
+        VAR_INT_FLAG => {
+            let mut v = &buf[1..];
+            let l = v.len();
+            try!(v.decode_var_i64());
+            l - v.len()
+        }
+        VAR_UINT_FLAG => {
+            let mut v = &buf[1..];
+            let l = v.len();
+            try!(v.decode_var_u64());
+            l - v.len()
+        }
         f => return Err(invalid_type!("unsupported data type `{}`", f)),
     };
     if buf.len() < pos + 1 {

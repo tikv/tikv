@@ -13,13 +13,14 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use raftstore::store::{Msg as StoreMsg, Transport, Callback, SendCh};
+use raftstore::store::{Msg as StoreMsg, Transport, Callback};
 use raftstore::Result as RaftStoreResult;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use raft::SnapshotStatus;
-use super::{SendCh as ServerSendCh, Msg, ConnData};
+use super::{Msg, ConnData};
+use util::transport::SendCh;
 
 
 pub trait RaftStoreRouter: Send + Sync {
@@ -40,24 +41,24 @@ pub trait RaftStoreRouter: Send + Sync {
 }
 
 pub struct ServerRaftStoreRouter {
-    pub ch: SendCh,
+    pub ch: SendCh<StoreMsg>,
 }
 
 impl ServerRaftStoreRouter {
-    pub fn new(ch: SendCh) -> ServerRaftStoreRouter {
+    pub fn new(ch: SendCh<StoreMsg>) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter { ch: ch }
     }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::RaftMessage(msg)));
+        box_try!(self.ch.send(StoreMsg::RaftMessage(msg)));
 
         Ok(())
     }
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::RaftCmd {
+        box_try!(self.ch.send(StoreMsg::RaftCmd {
             request: req,
             callback: cb,
         }));
@@ -70,7 +71,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
                        to_peer_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::ReportSnapshot {
+        box_try!(self.ch.send(StoreMsg::ReportSnapshot {
             region_id: region_id,
             to_peer_id: to_peer_id,
             status: status,
@@ -80,7 +81,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::ReportUnreachable {
+        box_try!(self.ch.send(StoreMsg::ReportUnreachable {
             region_id: region_id,
             to_peer_id: to_peer_id,
         }));
@@ -90,12 +91,12 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 }
 
 pub struct ServerTransport {
-    ch: ServerSendCh,
+    ch: SendCh<Msg>,
     msg_id: AtomicUsize,
 }
 
 impl ServerTransport {
-    pub fn new(ch: ServerSendCh) -> ServerTransport {
+    pub fn new(ch: SendCh<Msg>) -> ServerTransport {
         ServerTransport {
             ch: ch,
             msg_id: AtomicUsize::new(1),

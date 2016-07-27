@@ -30,7 +30,7 @@ pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Cursor,
                        Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
-pub use self::txn::{SnapshotStore, Scheduler, Msg, SchedCh};
+pub use self::txn::{SnapshotStore, Scheduler, Msg};
 pub use self::types::{Key, Value, KvPair, make_key};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
@@ -184,9 +184,11 @@ impl Command {
     }
 }
 
+use util::transport::SendCh;
+
 pub struct Storage {
     engine: Arc<Box<Engine>>,
-    schedch: SchedCh,
+    schedch: SendCh<Msg>,
     sched_handle: Option<thread::JoinHandle<()>>,
     sched_event_loop: Option<EventLoop<Scheduler>>,
 }
@@ -196,7 +198,7 @@ impl Storage {
         let engine = Arc::new(engine);
         let event_loop = try!(create_event_loop(config.sched_notify_capacity,
                                                 config.sched_msg_per_tick));
-        let schedch = SchedCh::new(event_loop.channel());
+        let schedch = SendCh::new(event_loop.channel());
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
@@ -221,8 +223,8 @@ impl Storage {
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
         let mut sched_event_loop = self.sched_event_loop.take().unwrap();
         let sched_concurrency = config.sched_concurrency;
+        let ch = self.schedch.clone();
         let h = try!(builder.spawn(move || {
-            let ch = SchedCh::new(sched_event_loop.channel());
             let mut sched = Scheduler::new(engine, ch, sched_concurrency);
             if let Err(e) = sched_event_loop.run(&mut sched) {
                 panic!("scheduler run err:{:?}", e);
@@ -241,7 +243,7 @@ impl Storage {
 
         if let Err(e) = self.schedch.send(Msg::Quit) {
             error!("send quit cmd to scheduler failed, error:{:?}", e);
-            return Err(Error::from(e));
+            return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }
 
         let h = self.sched_handle.take().unwrap();
@@ -259,7 +261,7 @@ impl Storage {
 
     fn send(&self, cmd: Command) -> Result<()> {
         if self.sched_handle.is_some() {
-            try!(self.schedch.send(Msg::RawCmd { cmd: cmd }));
+            box_try!(self.schedch.send(Msg::RawCmd { cmd: cmd }));
         } else {
             return Err(Error::Closed);
         }

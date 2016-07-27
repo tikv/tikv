@@ -15,27 +15,31 @@ use std::fmt::{self, Formatter, Display};
 use std::io;
 use std::fs::File;
 use std::net::{SocketAddr, TcpStream};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Instant, Duration};
 use threadpool::ThreadPool;
 use mio::Token;
-use bytes::{Buf, ByteBuf};
 
-use super::{Result, ConnData, SendCh, Msg};
+use super::{Result, ConnData, Msg};
 use super::transport::RaftStoreRouter;
 use raftstore::store::{SnapFile, SnapManager, SnapKey, SnapEntry};
 use util::worker::Runnable;
 use util::codec::rpc;
+use util::buf::PipeBuffer;
 use util::HandyRwLock;
+use util::transport::SendCh;
 
 use kvproto::raft_serverpb::RaftMessage;
 
 pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_SENDER_POOL_SIZE: usize = 3;
+const DEFAULT_READ_TIMEOUT: u64 = 30;
+const DEFAULT_WRITE_TIMEOUT: u64 = 30;
 
 /// `Task` that `Runner` can handle.
 ///
@@ -46,7 +50,7 @@ const DEFAULT_SENDER_POOL_SIZE: usize = 3;
 /// `SendTo` send the snapshot file to specified address.
 pub enum Task {
     Register(Token, RaftMessage),
-    Write(Token, ByteBuf),
+    Write(Token, PipeBuffer),
     Close(Token),
     Discard(Token),
     SendTo {
@@ -92,6 +96,8 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     let mut f = try!(File::open(snap_file.path()));
     let mut conn = try!(TcpStream::connect(&addr));
     try!(conn.set_nodelay(true));
+    try!(conn.set_read_timeout(Some(Duration::from_secs(DEFAULT_READ_TIMEOUT))));
+    try!(conn.set_write_timeout(Some(Duration::from_secs(DEFAULT_WRITE_TIMEOUT))));
 
     let res = rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
         .and_then(|_| io::copy(&mut f, &mut conn).map_err(From::from))
@@ -112,12 +118,12 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
     files: HashMap<Token, (SnapFile, RaftMessage)>,
     pool: ThreadPool,
-    ch: SendCh,
+    ch: SendCh<Msg>,
     raft_router: Arc<RwLock<R>>,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(snap_mgr: SnapManager, r: Arc<RwLock<R>>, ch: SendCh) -> Runner<R> {
+    pub fn new(snap_mgr: SnapManager, r: Arc<RwLock<R>>, ch: SendCh<Msg>) -> Runner<R> {
         Runner {
             snap_mgr: snap_mgr,
             files: map![],
@@ -158,14 +164,22 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     Err(e) => error!("failed to create snap file for {:?}: {:?}", token, e),
                 }
             }
-            Task::Write(token, data) => {
-                match self.files.get_mut(&token) {
-                    Some(&mut (ref mut writer, _)) => {
-                        if let Err(e) = writer.write_all(Buf::bytes(&data)) {
-                            error!("failed to write data to {:?}: {:?}", token, e);
+            Task::Write(token, mut data) => {
+                let mut should_close = false;
+                match self.files.entry(token) {
+                    Entry::Occupied(mut e) => {
+                        if let Err(err) = data.write_all_to(&mut e.get_mut().0) {
+                            error!("failed to write data to {:?}: {:?}", token, err);
+                            let (_, msg) = e.remove();
+                            let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
+                            self.snap_mgr.wl().deregister(&key, &SnapEntry::Receiving);
+                            should_close = true;
                         }
                     }
-                    None => error!("invalid snap token {:?}", token),
+                    Entry::Vacant(_) => error!("invalid snap token {:?}", token),
+                }
+                if should_close {
+                    self.close(token);
                 }
             }
             Task::Close(token) => {

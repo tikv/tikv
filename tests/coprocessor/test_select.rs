@@ -453,7 +453,7 @@ impl ProductTable {
 // This function will create a Product table and initialize with the specified data.
 fn init_with_data(tbl: &ProductTable,
                   vals: &[(i64, Option<&str>, i64)])
-                  -> (Store, Worker<RequestTask>) {
+                  -> (Store, Worker<EndPointTask>) {
     let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
     let mut store = Store::new(engine);
 
@@ -467,8 +467,8 @@ fn init_with_data(tbl: &ProductTable,
     }
     store.commit();
 
-    let runner = EndPointHost::new(store.get_engine());
     let mut end_point = Worker::new("test select worker");
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler());
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)
@@ -784,14 +784,11 @@ fn test_reverse() {
     end_point.stop().unwrap().join().unwrap();
 }
 
-fn handle_select(end_point: &Worker<RequestTask>, req: Request) -> SelectResponse {
+fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
     let finish = Event::new();
     let finish_clone = finish.clone();
-    end_point.schedule(RequestTask::new(req,
-                                   box move |r| {
-                                       finish_clone.set(r);
-                                   }))
-        .unwrap();
+    let req = RequestTask::new(req, box move |r| finish_clone.set(r));
+    end_point.schedule(EndPointTask::Request(req)).unwrap();
     finish.wait_timeout(None);
     let resp = finish.take().unwrap().take_cop_resp();
     assert!(resp.has_data(), format!("{:?}", resp));

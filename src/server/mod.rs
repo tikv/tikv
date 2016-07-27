@@ -11,14 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::thread;
-use std::time::Duration;
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
 use std::boxed::{Box, FnBox};
 use std::io::Write;
 
-use mio::{self, Token, NotifyError};
+use mio::Token;
 
 use kvproto::msgpb::{self, MessageType};
 use util::codec::rpc;
@@ -43,34 +41,6 @@ pub use self::node::{Node, create_raft_storage};
 pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver, MockStoreAddrResolver};
 
 pub type OnResponse = Box<FnBox(msgpb::Message) + Send>;
-
-const MAX_SEND_RETRY_CNT: i32 = 20;
-
-// send_msg wraps Sender and retries some times if queue is full.
-pub fn send_msg<M: Send>(ch: &mio::Sender<M>, mut msg: M) -> Result<()> {
-    for _ in 0..MAX_SEND_RETRY_CNT {
-        let r = ch.send(msg);
-        if r.is_ok() {
-            return Ok(());
-        }
-
-        match r.unwrap_err() {
-            NotifyError::Full(m) => {
-                warn!("notify queue is full, sleep and retry");
-                thread::sleep(Duration::from_millis(100));
-                msg = m;
-                continue;
-            }
-            e => {
-                return Err(box_err!("{:?}", e));
-            }
-        }
-    }
-
-    // TODO: if we refactor with quick_error, we can use NotifyError instead later.
-    Err(box_err!("notify channel is full"))
-}
-
 
 pub struct ConnData {
     msg_id: u64,
@@ -158,61 +128,4 @@ pub enum Msg {
     CloseConn {
         token: Token,
     },
-}
-
-#[derive(Debug)]
-pub struct SendCh {
-    ch: mio::Sender<Msg>,
-}
-
-impl Clone for SendCh {
-    fn clone(&self) -> SendCh {
-        SendCh { ch: self.ch.clone() }
-    }
-}
-
-impl SendCh {
-    pub fn new(ch: mio::Sender<Msg>) -> SendCh {
-        SendCh { ch: ch }
-    }
-
-    pub fn send(&self, msg: Msg) -> Result<()> {
-        try!(send_msg(&self.ch, msg));
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::thread;
-
-    use mio::{EventLoop, Handler};
-
-    use super::*;
-
-    struct SenderHandler;
-
-    impl Handler for SenderHandler {
-        type Timeout = ();
-        type Message = Msg;
-
-        fn notify(&mut self, event_loop: &mut EventLoop<SenderHandler>, msg: Msg) {
-            if let Msg::Quit = msg {
-                event_loop.shutdown()
-            }
-        }
-    }
-
-    #[test]
-    fn test_sender() {
-        let mut event_loop = EventLoop::new().unwrap();
-        let ch = SendCh::new(event_loop.channel());
-        let h = thread::spawn(move || {
-            event_loop.run(&mut SenderHandler).unwrap();
-        });
-
-        ch.send(Msg::Quit).unwrap();
-
-        h.join().unwrap();
-    }
 }
