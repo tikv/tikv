@@ -6,10 +6,12 @@
 #    e.g.: 78_000 = "1.3m"
 
 [server]
-# set listening address.
-addr = "127.0.0.1:20160"
-# if not set, use addr instead. set advertise listening address for client communication.
-advertise-addr = ""
+# server host.
+host = "127.0.0.1"
+# server listening port.
+port = 20160
+# if not set, use port instead. set advertise port for client communication.
+advertise-port = ""
 # set which dsn to use, warning: default is rocksdb without persistent.
 dsn = "rocksdb"
 # set the path to rocksdb directory.

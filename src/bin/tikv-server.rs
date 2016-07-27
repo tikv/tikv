@@ -43,8 +43,7 @@ use tikv::storage::{Storage, TEMP_DIR, DEFAULT_CFS};
 use tikv::util::{self, logger, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::metric::{self, BufferedUdpMetricSink};
 use tikv::util::transport::SendCh;
-use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_event_loop,
-                   create_raft_storage, Msg};
+use tikv::server::{Server, Node, Config, bind, create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
@@ -52,6 +51,7 @@ use tikv::pd::{new_rpc_client, RpcClient};
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
 const RAFTKV_DSN: &'static str = "raftkv";
+const DEFAULT_LISTENING_PORT: i64 = 20160;
 
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -270,10 +270,10 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
     opts
 }
 
-fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &str) -> Config {
+fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, port: i64) -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
-    cfg.addr = addr.to_owned();
+    cfg.addr = format!("0.0.0.0:{}", port);
     cfg.notify_capacity = get_integer_value("",
                                             "server.notify-capacity",
                                             matches,
@@ -299,13 +299,21 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
     }
 
     // Set advertise address for outer node and client use.
-    // If no advertise listening address set, use the associated listening address.
-    cfg.advertise_addr = get_string_value("advertise-addr",
-                                          "server.advertise-addr",
-                                          matches,
-                                          config,
-                                          Some(addr.to_owned()),
-                                          |v| v.as_str().map(|s| s.to_owned()));
+    // If no advertise port set, use the associated listening port.
+    let host = get_string_value("H",
+                                "server.host",
+                                matches,
+                                config,
+                                Some("127.0.0.1".to_owned()),
+                                |v| v.as_str().map(|s| s.to_owned()));
+    let advertise_port = get_integer_value("advertise-port",
+                                           "server.advertise-port",
+                                           matches,
+                                           config,
+                                           Some(port),
+                                           |v| v.as_integer());
+    cfg.advertise_addr = format!("{}:{}", host, advertise_port);
+
     cfg.send_buffer_size =
         get_integer_value("",
                           "server.send-buffer-size",
@@ -515,14 +523,12 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
     let mut opts = Options::new();
-    opts.optopt("A",
-                "addr",
-                "set listening address",
-                "default is 127.0.0.1:20160");
+    opts.optopt("P", "port", "server listening port", "default is 20160");
     opts.optopt("",
-                "advertise-addr",
-                "set advertise listening address for client communication",
-                "127.0.0.1:20160, if not set, use addr instead.");
+                "advertise-port",
+                "advertise port for outer traffic",
+                "default is {port}");
+    opts.optopt("H", "host", "server host IP", "default is 127.0.0.1");
     opts.optopt("L",
                 "log",
                 "set log level",
@@ -542,10 +548,6 @@ fn main() {
                 "set which dsn to use, warning: default is rocksdb without persistent",
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
-    opts.optopt("",
-                "region-split-check-diff",
-                "set region split check diff",
-                "default: 8 MB");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
@@ -566,13 +568,15 @@ fn main() {
     };
 
     initial_log(&matches, &config);
-    let addr = get_string_value("A",
-                                "server.addr",
-                                &matches,
-                                &config,
-                                Some(DEFAULT_LISTENING_ADDR.to_owned()),
-                                |v| v.as_str().map(|s| s.to_owned()));
+    let port = get_integer_value("P",
+                                 "server.port",
+                                 &matches,
+                                 &config,
+                                 Some(DEFAULT_LISTENING_PORT),
+                                 |v| v.as_integer());
+    let addr = format!("0.0.0.0:{}", port);
     info!("Start listening on {}...", addr);
+
     let listener = bind(&addr).unwrap();
     let dsn_name = get_string_value("S",
                                     "server.dsn",
@@ -588,10 +592,7 @@ fn main() {
                               None,
                               |v| v.as_integer().map(|i| i.to_string()));
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
-    let mut cfg = build_cfg(&matches,
-                            &config,
-                            cluster_id,
-                            &format!("{}", listener.local_addr().unwrap()));
+    let mut cfg = build_cfg(&matches, &config, cluster_id, port);
     cfg.storage.path = get_store_path(&matches, &config);
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
