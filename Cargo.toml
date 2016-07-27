@@ -57,7 +57,6 @@ git = "https://github.com/ngaut/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
-branch = "busyjay/update-proto"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

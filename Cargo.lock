@@ -10,7 +10,7 @@ dependencies = [
  "fs2 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (git+https://github.com/rust-lang-nursery/getopts)",
  "hyper 0.9.4 (git+https://github.com/hyperium/hyper.git)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto?branch=busyjay/update-proto)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto)",
  "libc 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio 0.5.0 (git+https://github.com/carllerche/mio.git)",
@@ -164,7 +164,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto?branch=busyjay/update-proto#4aedf91b10ec7257397a183db618f824c4784cee"
+source = "git+https://github.com/pingcap/kvproto#505014d99a69d8ff4de1490c59dbe3a2f687f058"
 dependencies = [
  "protobuf 1.0.23 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
