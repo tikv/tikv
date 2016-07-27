@@ -16,7 +16,7 @@ dependencies = [
  "mio 0.5.0 (git+https://github.com/carllerche/mio.git)",
  "nix 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "num 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
+ "protobuf 1.0.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
@@ -164,9 +164,9 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#b0a13cee9cb84646ecd2c3d943e33440f073beaa"
+source = "git+https://github.com/pingcap/kvproto#505014d99a69d8ff4de1490c59dbe3a2f687f058"
 dependencies = [
- "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
+ "protobuf 1.0.23 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -375,8 +375,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "protobuf"
-version = "1.0.20"
-source = "git+https://github.com/stepancheg/rust-protobuf.git#668cbcd4a4eaf8c3c2d3c1c5c43879aacbc815a6"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "quick-error"
@@ -485,9 +485,9 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#4140a6e68c29009b7477e224f1cc88fdac323332"
+source = "git+https://github.com/pingcap/tipb.git#dd28a39ad25a0fb293ffdfc8548bf926a90fe70e"
 dependencies = [
- "protobuf 1.0.20 (git+https://github.com/stepancheg/rust-protobuf.git)",
+ "protobuf 1.0.23 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]

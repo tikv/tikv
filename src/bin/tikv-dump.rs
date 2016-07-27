@@ -72,7 +72,7 @@ fn main() {
     }
 
     let db_str = matches.opt_str("db").unwrap();
-    let db = util::rocksdb::new_engine(&db_str, DEFAULT_CFS).unwrap();
+    let db = util::rocksdb::open(&db_str, DEFAULT_CFS).unwrap();
     let key = matches.opt_str("k");
     let from = matches.opt_str("f");
     let to = matches.opt_str("t");
@@ -82,7 +82,7 @@ fn main() {
     let cf = matches.opt_str("c");
     let cf_name = cf.as_ref().map_or("default", |s| s.as_str());
     if let Some(key) = key {
-        dump_raw_value(db, key);
+        dump_raw_value(db, cf_name, key);
     } else if let Some(idx) = idx {
         dump_raft_log_entry(db, region.unwrap(), idx);
     } else if matches.opt_present("info") {
@@ -94,9 +94,9 @@ fn main() {
     }
 }
 
-fn dump_raw_value(db: DB, key: String) {
+fn dump_raw_value(db: DB, cf: &str, key: String) {
     let key = unescape(&key);
-    let value = db.get_value(&key).unwrap();
+    let value = db.get_value_cf(cf, &key).unwrap();
     println!("value: {}", value.map_or("None".to_owned(), |v| escape(&v)));
 }
 
@@ -140,5 +140,5 @@ fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: 
                      cnt += 1;
                      Ok(cnt < limit)
                  })
-        .unwrap();
+        .unwrap()
 }

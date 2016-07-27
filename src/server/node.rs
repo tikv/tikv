@@ -20,7 +20,8 @@ use rocksdb::DB;
 use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
-use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport, SendCh,
+use util::transport::SendCh;
+use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
                        SnapManager};
 use super::Result;
 use super::config::Config;
@@ -42,7 +43,7 @@ pub struct Node<C: PdClient + 'static> {
     store: metapb::Store,
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
-    ch: SendCh,
+    ch: SendCh<Msg>,
 
     pd_client: Arc<C>,
 
@@ -119,7 +120,7 @@ impl<C> Node<C>
         self.store.get_id()
     }
 
-    pub fn get_sendch(&self) -> SendCh {
+    pub fn get_sendch(&self) -> SendCh<Msg> {
         self.ch.clone()
     }
 
@@ -235,7 +236,7 @@ impl<C> Node<C>
             Some(h) => h,
         };
 
-        try!(self.ch.send(Msg::Quit));
+        box_try!(self.ch.send(Msg::Quit));
         if let Err(e) = h.join() {
             return Err(box_err!("join store {} thread err {:?}", store_id, e));
         }

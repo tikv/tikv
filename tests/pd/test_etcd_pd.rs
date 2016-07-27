@@ -53,7 +53,7 @@ fn test_get_leader() {
         Ok(v) => v,
     };
 
-    let mut client = EtcdPdClient::new(&endpoints, "/pd_test_get_leader", 0).unwrap();
+    let mut client = EtcdPdClient::new(&endpoints, 0).unwrap();
 
     put_leader_addr(&mut client, "127.0.0.1:1234");
     let addr = client.get_leader_addr().unwrap();
@@ -99,7 +99,7 @@ fn test_rpc_client() {
 
     let quit = Arc::new(AtomicBool::new(false));
 
-    let mut etcd_client = EtcdPdClient::new(&endpoints, "/pd_test_rpc_client", 0).unwrap();
+    let mut etcd_client = EtcdPdClient::new(&endpoints, 0).unwrap();
     let (h, addr) = start_pd_server(&mut etcd_client, quit.clone());
 
     let client = RpcClient::new(etcd_client, 0).unwrap();

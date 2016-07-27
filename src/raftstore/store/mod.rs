@@ -26,7 +26,7 @@ mod snap;
 pub mod util;
 mod worker;
 
-pub use self::msg::{Msg, SendCh, Callback, call_command, Tick};
+pub use self::msg::{Msg, Callback, Tick};
 pub use self::store::{Store, create_event_loop};
 pub use self::config::Config;
 pub use self::transport::Transport;
