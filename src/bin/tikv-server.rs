@@ -358,7 +358,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           |v| v.as_integer()) as u64;
 
     let max_peer_down_millis =
-        get_integer_value("max-peer-down-duration",
+        get_integer_value("",
                           "raftstore.max-peer-down-duration",
                           matches,
                           config,

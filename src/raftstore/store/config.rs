@@ -76,8 +76,8 @@ pub struct Config {
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
 
-    /// The max duration at which a peer will be considered to be down
-    /// if it hasn't responsed heartbeats.
+    /// When a peer hasn't been active for max_peer_down_duration,
+    /// we will consider this peer to be down and report it to pd.
     pub max_peer_down_duration: Duration,
 }
 

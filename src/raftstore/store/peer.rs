@@ -34,7 +34,7 @@ use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer, rocksdb};
-use pd::PdClient;
+use pd::{PdClient, INVALID_ID};
 use super::store::Store;
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state};
 use super::util;
@@ -359,16 +359,8 @@ impl Peer {
     }
 
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
-        match m.get_msg_type() {
-            eraftpb::MessageType::MsgAppend |
-            eraftpb::MessageType::MsgAppendResponse |
-            eraftpb::MessageType::MsgHeartbeat |
-            eraftpb::MessageType::MsgHeartbeatResponse |
-            eraftpb::MessageType::MsgRequestVote |
-            eraftpb::MessageType::MsgRequestVoteResponse => {
-                self.peer_heartbeats.insert(m.get_from(), Instant::now());
-            }
-            _ => {}
+        if m.get_from() != INVALID_ID {
+            self.peer_heartbeats.insert(m.get_from(), Instant::now());
         }
         try!(self.raft_group.step(m));
         Ok(())
