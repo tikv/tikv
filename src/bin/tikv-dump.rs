@@ -72,7 +72,7 @@ fn main() {
     }
 
     let db_str = matches.opt_str("db").unwrap();
-    let db = util::rocksdb::open_engine(&db_str, DEFAULT_CFS).unwrap();
+    let db = util::rocksdb::open(&db_str, DEFAULT_CFS).unwrap();
     let key = matches.opt_str("k");
     let from = matches.opt_str("f");
     let to = matches.opt_str("t");
