@@ -44,6 +44,7 @@ crc = "1.2"
 fs2 = "0.2"
 clippy = {version = "*", optional = true}
 rustc-serialize = "0.3"
+protobuf = "1.0"
 bytes  = "0.3.0"
 nix = "0.6.0"
 
@@ -54,14 +55,13 @@ git = "https://github.com/rust-lang-nursery/getopts"
 [dependencies.rocksdb]
 git = "https://github.com/ngaut/rust-rocksdb.git"
 
-[dependencies.protobuf]
-git = "https://github.com/stepancheg/rust-protobuf.git"
-
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
+branch = "busyjay/update-proto"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
+branch = "busyjay/update-proto"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio.git"
