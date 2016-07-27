@@ -19,6 +19,18 @@ pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a DBCFHandle, String>
         .ok_or_else(|| format!("cf {} not found.", cf))
 }
 
+pub fn open_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
+    let mut opts = Options::new();
+    opts.create_if_missing(false);
+    open_engine_opt(&opts, path, cfs)
+}
+
+pub fn open_engine_opt(opts: &Options, path: &str, cfs: &[&str]) -> Result<DB, String> {
+    let cf_opts: Vec<Options> = cfs.iter().map(|_| Options::new()).collect();
+    let cf_ref_opts: Vec<&Options> = cf_opts.iter().collect();
+    DB::open_cf(opts, path, cfs, &cf_ref_opts)
+}
+
 pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     let opts = Options::new();
     new_engine_opt(opts, path, cfs)
@@ -30,9 +42,7 @@ pub fn new_engine_opt(mut opts: Options, path: &str, cfs: &[&str]) -> Result<DB,
     // CF.
     // TODO: Support open db with incomplete CFs.
     opts.create_if_missing(false);
-    let cf_opts: Vec<Options> = cfs.iter().map(|_| Options::new()).collect();
-    let cf_ref_opts: Vec<&Options> = cf_opts.iter().collect();
-    match DB::open_cf(&opts, path, cfs, &cf_ref_opts) {
+    match open_engine_opt(&opts, path, cfs) {
         Ok(db) => return Ok(db),
         Err(e) => warn!("open rocksdb fail: {}", e),
     }
