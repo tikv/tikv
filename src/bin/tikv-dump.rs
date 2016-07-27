@@ -24,7 +24,7 @@ use std::{env, str, u64};
 use getopts::Options;
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::metapb::Region;
+use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState};
 use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
@@ -116,10 +116,21 @@ fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
 
 fn dump_region_info(db: DB, region_id_str: String) {
     let region_id = u64::from_str_radix(&region_id_str, 10).unwrap();
+
     let region_state_key = keys::region_state_key(region_id);
-    println!("info_key: {}", escape(&region_state_key));
-    let region: Option<Region> = db.get_msg(&region_state_key).unwrap();
-    println!("info: {:?}", region);
+    println!("region state key: {}", escape(&region_state_key));
+    let region_state: Option<RegionLocalState> = db.get_msg(&region_state_key).unwrap();
+    println!("region state: {:?}", region_state);
+
+    let raft_state_key = keys::raft_state_key(region_id);
+    println!("raft state key: {}", escape(&raft_state_key));
+    let raft_state: Option<RaftLocalState> = db.get_msg(&raft_state_key).unwrap();
+    println!("raft state: {:?}", raft_state);
+
+    let apply_state_key = keys::apply_state_key(region_id);
+    println!("apply state key: {}", escape(&apply_state_key));
+    let apply_state: Option<RaftApplyState> = db.get_msg(&apply_state_key).unwrap();
+    println!("apply state: {:?}", apply_state);
 }
 
 fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: &str) {
