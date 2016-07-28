@@ -614,7 +614,7 @@ impl<T: Storage> Raft<T> {
         info!("{} became leader at term {}", self.tag, self.term);
     }
 
-    fn campaign(&mut self, campaign_type: Vec<u8>) {
+    fn campaign(&mut self, campaign_type: &[u8]) {
         self.become_candidate();
         let id = self.id;
         let poll_res = self.poll(id, true);
@@ -637,7 +637,7 @@ impl<T: Storage> Raft<T> {
             m.set_index(self.raft_log.last_index());
             m.set_log_term(self.raft_log.last_term());
             if campaign_type == CAMPAIGN_TRANSFER {
-                m.set_context(campaign_type.clone());
+                m.set_context(Vec::from(campaign_type));
             }
             self.send(m);
         }
@@ -667,7 +667,7 @@ impl<T: Storage> Raft<T> {
                 info!("{} is starting a new election at term {}",
                       self.tag,
                       self.term);
-                self.campaign(Vec::from(CAMPAIGN_ELECTION));
+                self.campaign(CAMPAIGN_ELECTION);
             }
             return Ok(());
         }
@@ -1144,7 +1144,7 @@ impl<T: Storage> Raft<T> {
                       self.tag,
                       self.term,
                       m.get_from());
-                self.campaign(Vec::from(CAMPAIGN_TRANSFER));
+                self.campaign(CAMPAIGN_TRANSFER);
             }
             _ => {}
         }
