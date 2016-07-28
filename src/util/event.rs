@@ -159,25 +159,18 @@ impl<T> Drop for Event<T> {
 #[macro_export]
 macro_rules! wait_event {
     ($expr:expr) => {
-        {
-            let e1 = $crate::util::event::Event::new();
-            let e2 = e1.clone();
-            let cb = box move |res| e2.set(res);
-            $expr(cb);
-            if e1.wait_timeout(None) {
-                Some(e1.take().unwrap())
-            } else {
-                None
-            }
-        }
+        wait_event!(IMPL $expr, None)
     };
     ($expr:expr, $timeout:expr) => {
+        wait_event!(IMPL $expr, Some($timeout))
+    };
+    (IMPL $expr:expr, $timeout:expr) => {
         {
             let e1 = $crate::util::event::Event::new();
             let e2 = e1.clone();
             let cb = box move |res| e2.set(res);
             $expr(cb);
-            if e1.wait_timeout(Some($timeout)) {
+            if e1.wait_timeout($timeout) {
                 Some(e1.take().unwrap())
             } else {
                 None
@@ -185,6 +178,8 @@ macro_rules! wait_event {
         }
     }
 }
+
+
 
 #[cfg(test)]
 mod test {
