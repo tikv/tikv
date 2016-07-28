@@ -38,7 +38,7 @@ use super::transport_simulate::{SimulateTransport, Filter};
 
 pub struct ChannelTransport {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, Arc<RwLock<ServerRaftStoreRouter>>>,
+    routers: HashMap<u64, ServerRaftStoreRouter>,
 }
 
 impl ChannelTransport {
@@ -88,13 +88,12 @@ impl Transport for ChannelTransport {
 
         match self.routers.get(&to_store) {
             Some(h) => {
-                try!(h.rl().send_raft_msg(msg));
+                try!(h.send_raft_msg(msg));
                 if is_snapshot {
                     // should report snapshot finish.
                     self.routers
                         .get(&from_store)
                         .unwrap()
-                        .rl()
                         .report_snapshot(region_id, to_peer_id, SnapshotStatus::Finish)
                         .unwrap();
                 }
@@ -184,7 +183,7 @@ impl Simulator for NodeCluster {
         }
 
         let router = self.trans.rl().routers.get(&store_id).cloned().unwrap();
-        let ch = router.rl().ch.clone();
+        let ch = router.ch.clone();
         msg::call_command(&ch, request, timeout)
     }
 

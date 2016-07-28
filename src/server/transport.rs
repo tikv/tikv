@@ -23,7 +23,7 @@ use super::{Msg, ConnData};
 use util::transport::SendCh;
 
 
-pub trait RaftStoreRouter: Send + Sync {
+pub trait RaftStoreRouter: Send + Clone {
     // Send RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
@@ -40,6 +40,7 @@ pub trait RaftStoreRouter: Send + Sync {
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()>;
 }
 
+#[derive(Clone)]
 pub struct ServerRaftStoreRouter {
     pub ch: SendCh<StoreMsg>,
 }
@@ -128,6 +129,7 @@ impl Transport for ServerTransport {
 
 
 // MockRaftStoreRouter is used for passing compile.
+#[derive(Clone)]
 pub struct MockRaftStoreRouter;
 
 impl RaftStoreRouter for MockRaftStoreRouter {
