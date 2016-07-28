@@ -24,7 +24,7 @@ use std::{env, str, u64};
 use getopts::Options;
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::metapb::Region;
+use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState};
 use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
@@ -72,7 +72,7 @@ fn main() {
     }
 
     let db_str = matches.opt_str("db").unwrap();
-    let db = util::rocksdb::new_engine(&db_str, DEFAULT_CFS).unwrap();
+    let db = util::rocksdb::open(&db_str, DEFAULT_CFS).unwrap();
     let key = matches.opt_str("k");
     let from = matches.opt_str("f");
     let to = matches.opt_str("t");
@@ -82,7 +82,7 @@ fn main() {
     let cf = matches.opt_str("c");
     let cf_name = cf.as_ref().map_or("default", |s| s.as_str());
     if let Some(key) = key {
-        dump_raw_value(db, key);
+        dump_raw_value(db, cf_name, key);
     } else if let Some(idx) = idx {
         dump_raft_log_entry(db, region.unwrap(), idx);
     } else if matches.opt_present("info") {
@@ -94,9 +94,9 @@ fn main() {
     }
 }
 
-fn dump_raw_value(db: DB, key: String) {
+fn dump_raw_value(db: DB, cf: &str, key: String) {
     let key = unescape(&key);
-    let value = db.get_value(&key).unwrap();
+    let value = db.get_value_cf(cf, &key).unwrap();
     println!("value: {}", value.map_or("None".to_owned(), |v| escape(&v)));
 }
 
@@ -116,10 +116,21 @@ fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
 
 fn dump_region_info(db: DB, region_id_str: String) {
     let region_id = u64::from_str_radix(&region_id_str, 10).unwrap();
+
     let region_state_key = keys::region_state_key(region_id);
-    println!("info_key: {}", escape(&region_state_key));
-    let region: Option<Region> = db.get_msg(&region_state_key).unwrap();
-    println!("info: {:?}", region);
+    println!("region state key: {}", escape(&region_state_key));
+    let region_state: Option<RegionLocalState> = db.get_msg(&region_state_key).unwrap();
+    println!("region state: {:?}", region_state);
+
+    let raft_state_key = keys::raft_state_key(region_id);
+    println!("raft state key: {}", escape(&raft_state_key));
+    let raft_state: Option<RaftLocalState> = db.get_msg(&raft_state_key).unwrap();
+    println!("raft state: {:?}", raft_state);
+
+    let apply_state_key = keys::apply_state_key(region_id);
+    println!("apply state key: {}", escape(&apply_state_key));
+    let apply_state: Option<RaftApplyState> = db.get_msg(&apply_state_key).unwrap();
+    println!("apply state: {:?}", apply_state);
 }
 
 fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: &str) {
@@ -140,5 +151,5 @@ fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: 
                      cnt += 1;
                      Ok(cnt < limit)
                  })
-        .unwrap();
+        .unwrap()
 }
