@@ -522,7 +522,7 @@ fn main() {
     opts.optopt("",
                 "advertise-addr",
                 "set advertise listening address for client communication",
-                "127.0.0.1:20160, if not set, use addr instead.");
+                "if not set, use ${addr} instead.");
     opts.optopt("L",
                 "log",
                 "set log level",
@@ -542,10 +542,6 @@ fn main() {
                 "set which dsn to use, warning: default is rocksdb without persistent",
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
-    opts.optopt("",
-                "region-split-check-diff",
-                "set region split check diff",
-                "default: 8 MB");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
