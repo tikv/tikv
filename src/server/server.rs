@@ -13,7 +13,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::option::Option;
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::boxed::Box;
 use std::net::SocketAddr;
@@ -26,8 +25,7 @@ use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, ConnData};
 use super::conn::Conn;
 use super::{Result, OnResponse, Config};
-use util::HandyRwLock;
-use util::worker::Worker;
+use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
 use raftstore::store::SnapManager;
@@ -79,7 +77,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     store_tokens: HashMap<u64, Token>,
     store_resolving: HashSet<u64>,
 
-    raft_router: Arc<RwLock<T>>,
+    raft_router: T,
 
     store: StoreHandler,
     end_point_worker: Worker<EndPointTask>,
@@ -102,7 +100,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                cfg: &Config,
                listener: TcpListener,
                storage: Storage,
-               raft_router: Arc<RwLock<T>>,
+               raft_router: T,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
@@ -238,7 +236,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let msg_type = msg.get_msg_type();
         match msg_type {
             MessageType::Raft => {
-                try!(self.raft_router.rl().send_raft_msg(msg.take_raft()));
+                try!(self.raft_router.send_raft_msg(msg.take_raft()));
                 Ok(())
             }
             MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
@@ -278,7 +276,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             Ok(())
         };
 
-        try!(self.raft_router.rl().send_command(msg, cb));
+        try!(self.raft_router.send_command(msg, cb));
 
         Ok(())
     }
@@ -398,7 +396,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let region_id = data.msg.get_raft().get_region_id();
         let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
 
-        if let Err(e) = self.raft_router.rl().report_unreachable(region_id, to_peer_id) {
+        if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id) {
             error!("report peer {} unreachable for region {} failed {:?}",
                    to_peer_id,
                    region_id,
@@ -484,8 +482,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn send_snapshot_sock(&mut self, sock_addr: SocketAddr, data: ConnData) {
-        let reporter = Arc::new(self.new_snapshot_reporter(&data));
-        let rep = reporter.clone();
+        let rep = self.new_snapshot_reporter(&data);
         let cb = box move |res: Result<()>| {
             if let Err(_) = res {
                 rep.report(SnapshotStatus::Failure);
@@ -493,13 +490,15 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 rep.report(SnapshotStatus::Finish);
             }
         };
-        if let Err(e) = self.snap_worker.schedule(SnapTask::SendTo {
-            addr: sock_addr,
-            data: data,
-            cb: cb,
-        }) {
-            error!("failed to schedule snapshot: {:?}", e);
-            reporter.report(SnapshotStatus::Failure);
+        if let Err(Stopped(SnapTask::SendTo { cb, .. })) = self.snap_worker
+            .schedule(SnapTask::SendTo {
+                addr: sock_addr,
+                data: data,
+                cb: cb,
+            }) {
+            error!("channel is closed, failed to schedule snapshot to {}",
+                   sock_addr);
+            cb(Err(box_err!("failed to schedule snapshot")));
         }
     }
 
@@ -583,7 +582,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 }
 
 struct SnapshotReporter<T: RaftStoreRouter + 'static> {
-    router: Arc<RwLock<T>>,
+    router: T,
     region_id: u64,
     to_peer_id: u64,
 
@@ -604,7 +603,6 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
 
 
         if let Err(e) = self.router
-            .rl()
             .report_snapshot(self.region_id, self.to_peer_id, status) {
             error!("report snapshot to peer {} with region {} err {:?}",
                    self.to_peer_id,
@@ -646,18 +644,19 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct TestRaftStoreRouter {
-        tx: Mutex<Sender<usize>>,
+        tx: Sender<usize>,
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            self.tx.lock().unwrap().send(1).unwrap();
+            self.tx.send(1).unwrap();
             Ok(())
         }
 
         fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
-            self.tx.lock().unwrap().send(1).unwrap();
+            self.tx.send(1).unwrap();
             Ok(())
         }
 
@@ -682,15 +681,14 @@ mod tests {
         let mut storage = Storage::new(&cfg.storage).unwrap();
         storage.start(&cfg.storage).unwrap();
         let (tx, rx) = mpsc::channel();
-        let mut server =
-            Server::new(&mut event_loop,
-                        &cfg,
-                        listener,
-                        storage,
-                        Arc::new(RwLock::new(TestRaftStoreRouter { tx: Mutex::new(tx) })),
-                        resolver,
-                        store::new_snap_mgr("", None))
-                .unwrap();
+        let mut server = Server::new(&mut event_loop,
+                                     &cfg,
+                                     listener,
+                                     storage,
+                                     TestRaftStoreRouter { tx: tx },
+                                     resolver,
+                                     store::new_snap_mgr("", None))
+            .unwrap();
 
         let ch = server.get_sendch();
         let h = thread::spawn(move || {
