@@ -51,6 +51,8 @@ struct Cluster {
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
     split_count: usize,
+
+    down_peers: HashMap<u64, pdpb::PeerStats>,
 }
 
 impl Cluster {
@@ -68,6 +70,7 @@ impl Cluster {
             rule: None,
             store_stats: HashMap::new(),
             split_count: 0,
+            down_peers: HashMap::new(),
         }
     }
 
@@ -271,8 +274,21 @@ impl Cluster {
 
     fn region_heartbeat(&mut self,
                         region: metapb::Region,
-                        leader: metapb::Peer)
+                        leader: metapb::Peer,
+                        down_peers: Vec<pdpb::PeerStats>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
+        for peer in &down_peers {
+            self.down_peers.insert(peer.get_peer().get_id(), peer.clone());
+        }
+        let active_peers: Vec<_> = region.get_peers()
+            .iter()
+            .filter(|p| !down_peers.iter().any(|d| p.get_id() == d.get_peer().get_id()))
+            .cloned()
+            .collect();
+        for peer in &active_peers {
+            self.down_peers.remove(&peer.get_id());
+        }
+
         try!(self.handle_heartbeat_version(region.clone()));
         self.handle_heartbeat_conf_ver(region, leader)
     }
@@ -453,6 +469,10 @@ impl TestPdClient {
     pub fn get_split_count(&self) -> usize {
         self.cluster.rl().split_count
     }
+
+    pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
+        self.cluster.rl().down_peers.clone()
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -505,10 +525,10 @@ impl PdClient for TestPdClient {
     fn region_heartbeat(&self,
                         region: metapb::Region,
                         leader: metapb::Peer,
-                        _: Vec<pdpb::PeerStats>)
+                        down_peers: Vec<pdpb::PeerStats>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         try!(self.check_bootstrap());
-        self.cluster.wl().region_heartbeat(region, leader)
+        self.cluster.wl().region_heartbeat(region, leader, down_peers)
     }
 
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
