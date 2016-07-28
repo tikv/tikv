@@ -26,12 +26,12 @@ use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, 
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
-use super::transport::ServerRaftStoreRouter;
+use super::transport::RaftStoreRouter;
 
-pub fn create_raft_storage<C>(node: Node<C>, db: Arc<DB>, cfg: &Config) -> Result<Storage>
-    where C: PdClient + 'static
+pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
+    where S: RaftStoreRouter + 'static
 {
-    let engine = box RaftKv::new(node, db);
+    let engine = box RaftKv::new(db, router);
     let store = try!(Storage::from_engine(engine, &cfg.storage));
     Ok(store)
 }
@@ -46,8 +46,6 @@ pub struct Node<C: PdClient + 'static> {
     ch: SendCh<Msg>,
 
     pd_client: Arc<C>,
-
-    raft_router: ServerRaftStoreRouter,
 }
 
 impl<C> Node<C>
@@ -68,7 +66,6 @@ impl<C> Node<C>
         }
 
         let ch = SendCh::new(event_loop.channel());
-        let router = ServerRaftStoreRouter::new(ch.clone());
         Node {
             cluster_id: cfg.cluster_id,
             store: store,
@@ -76,7 +73,6 @@ impl<C> Node<C>
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
-            raft_router: router,
         }
     }
 
@@ -122,10 +118,6 @@ impl<C> Node<C>
 
     pub fn get_sendch(&self) -> SendCh<Msg> {
         self.ch.clone()
-    }
-
-    pub fn raft_store_router(&self) -> ServerRaftStoreRouter {
-        self.raft_router.clone()
     }
 
     // check store, return store id for the engine.

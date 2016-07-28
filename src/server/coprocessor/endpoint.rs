@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use std::usize;
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
@@ -54,7 +53,7 @@ const DEFAULT_POOL_SIZE: usize = 8;
 pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
 
 pub struct Host {
-    engine: Arc<Box<Engine>>,
+    engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
@@ -62,7 +61,7 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(engine: Arc<Box<Engine>>, scheduler: Scheduler<Task>) -> Host {
+    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>) -> Host {
         Host {
             engine: engine,
             sched: scheduler,

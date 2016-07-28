@@ -42,7 +42,7 @@ pub enum Modify {
     Put(CfName, Key, Value),
 }
 
-pub trait Engine: Send + Sync + Debug {
+pub trait Engine: Send + Debug {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
 
@@ -73,6 +73,9 @@ pub trait Engine: Send + Sync + Debug {
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
+
+    /// Create a share Engine pointer.
+    fn clone(&self) -> Box<Engine + 'static>;
 }
 
 pub trait Snapshot: Send {

@@ -615,7 +615,6 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::sync::{Arc, RwLock, Mutex};
     use std::sync::mpsc::{self, Sender};
     use std::net::SocketAddr;
 

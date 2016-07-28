@@ -14,7 +14,6 @@ use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{Expr, ExprType};
 use storage::sync_storage::SyncStorage;
 
-use std::sync::Arc;
 use std::collections::{HashMap, BTreeMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
@@ -380,7 +379,7 @@ impl Store {
         }
     }
 
-    fn get_engine(&self) -> Arc<Box<Engine>> {
+    fn get_engine(&self) -> Box<Engine> {
         self.store.get_engine()
     }
 
