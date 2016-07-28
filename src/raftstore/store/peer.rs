@@ -359,7 +359,7 @@ impl Peer {
     }
 
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
-        if m.get_from() != INVALID_ID {
+        if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());
         }
         try!(self.raft_group.step(m));

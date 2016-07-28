@@ -948,7 +948,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
-            peer.check_peers();
+            if peer.is_leader() {
+                peer.check_peers();
+            }
         }
 
         let mut leader_count = 0;
