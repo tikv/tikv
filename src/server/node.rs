@@ -47,7 +47,7 @@ pub struct Node<C: PdClient + 'static> {
 
     pd_client: Arc<C>,
 
-    raft_router: Arc<RwLock<ServerRaftStoreRouter>>,
+    raft_router: ServerRaftStoreRouter,
 }
 
 impl<C> Node<C>
@@ -68,7 +68,7 @@ impl<C> Node<C>
         }
 
         let ch = SendCh::new(event_loop.channel());
-        let router = Arc::new(RwLock::new(ServerRaftStoreRouter::new(ch.clone())));
+        let router = ServerRaftStoreRouter::new(ch.clone());
         Node {
             cluster_id: cfg.cluster_id,
             store: store,
@@ -124,7 +124,7 @@ impl<C> Node<C>
         self.ch.clone()
     }
 
-    pub fn raft_store_router(&self) -> Arc<RwLock<ServerRaftStoreRouter>> {
+    pub fn raft_store_router(&self) -> ServerRaftStoreRouter {
         self.raft_router.clone()
     }
 

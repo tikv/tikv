@@ -401,7 +401,7 @@ fn build_raftkv(matches: &Matches,
                 ch: SendCh<Msg>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config)
-                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, SnapManager) {
+                -> (Storage, ServerRaftStoreRouter, u64, SnapManager) {
     let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
@@ -450,7 +450,6 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
 
 fn run_local_server(listener: TcpListener, config: &Config) {
     let mut event_loop = create_event_loop(config).unwrap();
-    let router = Arc::new(RwLock::new(MockRaftStoreRouter));
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
 
     let mut store = Storage::new(&config.storage).unwrap();
@@ -462,7 +461,7 @@ fn run_local_server(listener: TcpListener, config: &Config) {
                               config,
                               listener,
                               store,
-                              router,
+                              MockRaftStoreRouter,
                               MockStoreAddrResolver,
                               snap_mgr)
         .unwrap();

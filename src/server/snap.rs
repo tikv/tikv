@@ -19,7 +19,6 @@ use std::io::Read;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::boxed::FnBox;
-use std::sync::{Arc, RwLock};
 use std::time::{Instant, Duration};
 use threadpool::ThreadPool;
 use mio::Token;
@@ -119,11 +118,11 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     files: HashMap<Token, (SnapFile, RaftMessage)>,
     pool: ThreadPool,
     ch: SendCh<Msg>,
-    raft_router: Arc<RwLock<R>>,
+    raft_router: R,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(snap_mgr: SnapManager, r: Arc<RwLock<R>>, ch: SendCh<Msg>) -> Runner<R> {
+    pub fn new(snap_mgr: SnapManager, r: R, ch: SendCh<Msg>) -> Runner<R> {
         Runner {
             snap_mgr: snap_mgr,
             files: map![],
@@ -151,7 +150,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         if f.exists() {
                             info!("file {} already exists, skip receiving.",
                                   f.path().display());
-                            if let Err(e) = self.raft_router.rl().send_raft_msg(meta) {
+                            if let Err(e) = self.raft_router.send_raft_msg(meta) {
                                 error!("send snapshot for token {:?} err {:?}", token, e);
                             }
                             self.close(token);
@@ -195,7 +194,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             error!("failed to save file {:?}: {:?}", token, e);
                             return;
                         }
-                        if let Err(e) = self.raft_router.rl().send_raft_msg(msg) {
+                        if let Err(e) = self.raft_router.send_raft_msg(msg) {
                             error!("send snapshot for token {:?} err {:?}", token, e);
                         }
                     }

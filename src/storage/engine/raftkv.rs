@@ -17,7 +17,6 @@ use server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
-use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
@@ -25,7 +24,7 @@ use kvproto::kvrpcpb::Context;
 
 use pd::PdClient;
 use uuid::Uuid;
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
 use std::time::Duration;
@@ -92,7 +91,7 @@ impl From<RaftServerError> for engine::Error {
 pub struct RaftKv<C: PdClient + 'static> {
     node: Mutex<Node<C>>,
     db: Arc<DB>,
-    router: Arc<RwLock<ServerRaftStoreRouter>>,
+    router: ServerRaftStoreRouter,
 }
 
 enum CmdRes {
@@ -139,12 +138,11 @@ impl<C: PdClient> RaftKv<C> {
         let uuid = req.get_header().get_uuid().to_vec();
         let l = req.get_requests().len();
         let db = self.db.clone();
-        try!(self.router.rl().send_command(req,
-                                           box move |resp| {
-                                               cb(on_result(resp, l, &uuid, db)
-                                                   .map_err(Error::into));
-                                               Ok(())
-                                           }));
+        try!(self.router.send_command(req,
+                                      box move |resp| {
+                                          cb(on_result(resp, l, &uuid, db).map_err(Error::into));
+                                          Ok(())
+                                      }));
         Ok(())
     }
 
