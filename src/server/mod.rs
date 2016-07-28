@@ -33,7 +33,7 @@ pub mod node;
 pub mod resolve;
 pub mod snap;
 
-pub use self::config::{Config, DEFAULT_LISTENING_ADDR};
+pub use self::config::Config;
 pub use self::errors::{Result, Error};
 pub use self::server::{Server, create_event_loop, bind};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
