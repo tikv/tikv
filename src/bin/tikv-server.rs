@@ -523,12 +523,15 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
     let mut opts = Options::new();
-    opts.optopt("P", "port", "server listening port", "default is 20160");
+    opts.optopt("P",
+                "port",
+                "server listening port, we will listen '0.0.0.0:${port}'",
+                "default is 20160");
     opts.optopt("",
                 "advertise-port",
                 "advertise port for outer traffic",
-                "default is {port}");
-    opts.optopt("H", "host", "server host IP", "default is 127.0.0.1");
+                "default is ${port}");
+    opts.optopt("H", "host", "server host", "default is 127.0.0.1");
     opts.optopt("L",
                 "log",
                 "set log level",
