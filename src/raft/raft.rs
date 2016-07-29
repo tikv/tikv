@@ -683,7 +683,6 @@ impl<T: Storage> Raft<T> {
             // local message
         } else if m.get_term() > self.term {
             let leader_id = if m.get_msg_type() == MessageType::MsgRequestVote {
-
                 let force = m.get_context() == CAMPAIGN_TRANSFER;
                 let in_lease = self.check_quorum && self.state != StateRole::Candidate &&
                                self.election_elapsed < self.election_timeout;
@@ -691,12 +690,14 @@ impl<T: Storage> Raft<T> {
                     // if a server receives ReqeustVote request within the minimum election
                     // timeout of hearing from a current leader, it does not update its term
                     // or grant its vote
-                    info!("{} [logterm: {}, index: {}, vote: {}] ignored vote from {} [logterm: \
-                           {}, index: {}] at term {}: lease is not expired (remaining ticks: {})",
+                    info!("{} [logterm: {}, index: {}, vote: {}, tag: {}] ignored vote from {} \
+                           [logterm: {}, index: {}] at term {}: lease is not expired (remaining \
+                           ticks: {})",
                           self.id,
                           self.raft_log.last_term(),
                           self.raft_log.last_index(),
                           self.vote,
+                          self.tag,
                           m.get_from(),
                           m.get_log_term(),
                           m.get_index(),
