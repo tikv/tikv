@@ -6,13 +6,13 @@ use tikv::util::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
 use tikv::storage::{Dsn, Mutation, Key, DEFAULT_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::storage::txn::TxnStore;
 use tikv::util::event::Event;
 use tikv::util::worker::Worker;
 use kvproto::coprocessor::{Request, KeyRange};
 use tipb::select::{ByItem, SelectRequest, SelectResponse};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{Expr, ExprType};
+use storage::sync_storage::SyncStorage;
 
 use std::sync::Arc;
 use std::collections::{HashMap, BTreeMap};
@@ -366,18 +366,22 @@ impl<'a> Delete<'a> {
 }
 
 struct Store {
-    store: TxnStore,
+    store: SyncStorage,
     current_ts: u64,
     handles: Vec<Vec<u8>>,
 }
 
 impl Store {
-    fn new(engine: Arc<Box<Engine>>) -> Store {
+    fn new(engine: Box<Engine>) -> Store {
         Store {
-            store: TxnStore::new(engine),
+            store: SyncStorage::from_engine(engine, &Default::default()),
             current_ts: 1,
             handles: vec![],
         }
+    }
+
+    fn get_engine(&self) -> Arc<Box<Engine>> {
+        self.store.get_engine()
     }
 
     fn begin(&mut self) {
@@ -450,8 +454,8 @@ impl ProductTable {
 fn init_with_data(tbl: &ProductTable,
                   vals: &[(i64, Option<&str>, i64)])
                   -> (Store, Worker<EndPointTask>) {
-    let engine = Arc::new(engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap());
-    let mut store = Store::new(engine.clone());
+    let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+    let mut store = Store::new(engine);
 
     store.begin();
     for &(id, name, count) in vals {
@@ -464,7 +468,7 @@ fn init_with_data(tbl: &ProductTable,
     store.commit();
 
     let mut end_point = Worker::new("test select worker");
-    let runner = EndPointHost::new(engine, end_point.scheduler());
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler());
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)

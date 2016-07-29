@@ -14,13 +14,12 @@
 mod store;
 mod scheduler;
 mod latch;
-mod shard_mutex;
 
 use std::error;
 use std::io::Error as IoError;
 
 pub use self::scheduler::{Scheduler, Msg};
-pub use self::store::{SnapshotStore, TxnStore};
+pub use self::store::SnapshotStore;
 
 quick_error! {
     #[derive(Debug)]
