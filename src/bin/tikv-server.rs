@@ -28,7 +28,7 @@ extern crate fs2;
 use std::env;
 use std::fs::{self, File};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::io::Read;
 use std::net::UdpSocket;
 use std::time::Duration;
@@ -402,7 +402,7 @@ fn build_raftkv(matches: &Matches,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config)
                 -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager) {
-    let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
+    let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
     let mut db_path = path.clone();

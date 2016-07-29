@@ -52,8 +52,8 @@ pub trait Simulator {
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
-    fn add_filter(&self, node_id: u64, filter: Box<Filter>);
-    fn clear_filters(&self, node_id: u64);
+    fn add_filter(&mut self, node_id: u64, filter: Box<Filter>);
+    fn clear_filters(&mut self, node_id: u64);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -496,7 +496,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn add_filter<F: FilterFactory>(&self, factory: F) {
-        let sim = self.sim.wl();
+        let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
             for filter in factory.generate(node_id) {
                 sim.add_filter(node_id, filter);
@@ -535,7 +535,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn clear_filters(&mut self) {
-        let sim = self.sim.wl();
+        let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
             sim.clear_filters(node_id);
         }

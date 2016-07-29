@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use mio::EventLoop;
 use rocksdb::DB;
@@ -79,7 +79,7 @@ impl<C> Node<C>
     pub fn start<T>(&mut self,
                     event_loop: EventLoop<Store<T, C>>,
                     engine: Arc<DB>,
-                    trans: Arc<RwLock<T>>,
+                    trans: T,
                     snap_mgr: SnapManager)
                     -> Result<()>
         where T: Transport + 'static
@@ -193,7 +193,7 @@ impl<C> Node<C>
                       mut event_loop: EventLoop<Store<T, C>>,
                       store_id: u64,
                       db: Arc<DB>,
-                      trans: Arc<RwLock<T>>,
+                      trans: T,
                       snap_mgr: SnapManager)
                       -> Result<()>
         where T: Transport + 'static

@@ -341,7 +341,7 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T>(&mut self, trans: &Arc<RwLock<T>>, msgs: &[eraftpb::Message]) -> Result<()>
+    fn send<T>(&mut self, trans: &T, msgs: &[eraftpb::Message]) -> Result<()>
         where T: Transport
     {
         for msg in msgs {
@@ -350,9 +350,7 @@ impl Peer {
         Ok(())
     }
 
-    pub fn handle_raft_ready<T: Transport>(&mut self,
-                                           trans: &Arc<RwLock<T>>)
-                                           -> Result<Option<ReadyResult>> {
+    pub fn handle_raft_ready<T: Transport>(&mut self, trans: &T) -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
             return Ok(None);
         }
@@ -601,10 +599,7 @@ impl Peer {
         None
     }
 
-    fn send_raft_message<T: Transport>(&mut self,
-                                       msg: &eraftpb::Message,
-                                       trans: &Arc<RwLock<T>>)
-                                       -> Result<()> {
+    fn send_raft_message<T: Transport>(&mut self, msg: &eraftpb::Message, trans: &T) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // TODO: can we use move instead?
@@ -644,7 +639,7 @@ impl Peer {
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
 
-        if let Err(e) = trans.rl().send(send_msg) {
+        if let Err(e) = trans.send(send_msg) {
             warn!("{} failed to send msg to {} in store {}, err: {:?}",
                   self.tag,
                   to_peer_id,

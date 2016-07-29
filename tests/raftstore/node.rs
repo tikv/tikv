@@ -15,6 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use std::ops::Deref;
 use std::fs;
 
 use rocksdb::DB;
@@ -36,17 +37,32 @@ use tikv::storage::DEFAULT_CFS;
 use super::pd::TestPdClient;
 use super::transport_simulate::{SimulateTransport, Filter};
 
-pub struct ChannelTransport {
+pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, ServerRaftStoreRouter>,
 }
 
+#[derive(Clone)]
+pub struct ChannelTransport {
+    core: Arc<RwLock<ChannelTransportCore>>,
+}
+
 impl ChannelTransport {
-    pub fn new() -> Arc<RwLock<ChannelTransport>> {
-        Arc::new(RwLock::new(ChannelTransport {
-            snap_paths: HashMap::new(),
-            routers: HashMap::new(),
-        }))
+    pub fn new() -> ChannelTransport {
+        ChannelTransport {
+            core: Arc::new(RwLock::new(ChannelTransportCore {
+                snap_paths: HashMap::new(),
+                routers: HashMap::new(),
+            })),
+        }
+    }
+}
+
+impl Deref for ChannelTransport {
+    type Target = Arc<RwLock<ChannelTransportCore>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
     }
 }
 
@@ -61,14 +77,14 @@ impl Transport for ChannelTransport {
         if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
-            let source_file = match self.snap_paths.get(&from_store) {
+            let source_file = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
                     p.0.rl().get_snap_file(&key, true).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
-            let dst_file = match self.snap_paths.get(&to_store) {
+            let dst_file = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
                     p.0.rl().get_snap_file(&key, false).unwrap()
@@ -77,8 +93,9 @@ impl Transport for ChannelTransport {
             };
 
             defer!({
-                self.snap_paths[&from_store].0.wl().deregister(&key, &SnapEntry::Sending);
-                self.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
+                let core = self.rl();
+                core.snap_paths[&from_store].0.wl().deregister(&key, &SnapEntry::Sending);
+                core.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
             });
 
             if !dst_file.exists() {
@@ -86,12 +103,13 @@ impl Transport for ChannelTransport {
             }
         }
 
-        match self.routers.get(&to_store) {
+        match self.core.rl().routers.get(&to_store) {
             Some(h) => {
                 try!(h.send_raft_msg(msg));
                 if is_snapshot {
                     // should report snapshot finish.
-                    self.routers
+                    self.rl()
+                        .routers
                         .get(&from_store)
                         .unwrap()
                         .report_snapshot(region_id, to_peer_id, SnapshotStatus::Finish)
@@ -107,10 +125,10 @@ impl Transport for ChannelTransport {
 type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 
 pub struct NodeCluster {
-    trans: Arc<RwLock<ChannelTransport>>,
+    trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
-    simulate_trans: HashMap<u64, Arc<RwLock<SimulateChannelTransport>>>,
+    simulate_trans: HashMap<u64, SimulateChannelTransport>,
 }
 
 impl NodeCluster {
@@ -131,7 +149,6 @@ impl Simulator for NodeCluster {
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
-        let trans = Arc::new(RwLock::new(simulate_trans));
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
 
         let (snap_mgr, tmp) = if node_id == 0 ||
@@ -146,7 +163,7 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        node.start(event_loop, engine, trans.clone(), snap_mgr.clone()).unwrap();
+        node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone()).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         debug!("node_id: {} tmp: {:?}",
                node_id,
@@ -158,7 +175,7 @@ impl Simulator for NodeCluster {
         let node_id = node.id();
         self.trans.wl().routers.insert(node_id, ServerRaftStoreRouter::new(node.get_sendch()));
         self.nodes.insert(node_id, node);
-        self.simulate_trans.insert(node_id, trans);
+        self.simulate_trans.insert(node_id, simulate_trans);
 
         node_id
     }
@@ -188,17 +205,15 @@ impl Simulator for NodeCluster {
     }
 
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        self.trans.rl().send(msg)
+        self.trans.send(msg)
     }
 
-    fn add_filter(&self, node_id: u64, filter: Box<Filter>) {
-        let trans = self.simulate_trans.get(&node_id).unwrap();
-        trans.wl().add_filter(filter);
+    fn add_filter(&mut self, node_id: u64, filter: Box<Filter>) {
+        self.simulate_trans.get_mut(&node_id).unwrap().add_filter(filter);
     }
 
-    fn clear_filters(&self, node_id: u64) {
-        let trans = self.simulate_trans.get(&node_id).unwrap();
-        trans.wl().clear_filters();
+    fn clear_filters(&mut self, node_id: u64) {
+        self.simulate_trans.get_mut(&node_id).unwrap().clear_filters();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>> {

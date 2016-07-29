@@ -66,44 +66,45 @@ impl Filter for FilterDelay {
     }
 }
 
+#[derive(Clone)]
 pub struct SimulateTransport<T: Transport> {
-    filters: Vec<Box<Filter>>,
-    trans: Arc<RwLock<T>>,
+    filters: Arc<RwLock<Vec<Box<Filter>>>>,
+    trans: T,
 }
 
 impl<T: Transport> SimulateTransport<T> {
-    pub fn new(trans: Arc<RwLock<T>>) -> SimulateTransport<T> {
+    pub fn new(trans: T) -> SimulateTransport<T> {
         SimulateTransport {
-            filters: vec![],
+            filters: Arc::new(RwLock::new(vec![])),
             trans: trans,
         }
     }
 
     pub fn clear_filters(&mut self) {
-        self.filters.clear();
+        self.filters.wl().clear();
     }
 
     pub fn add_filter(&mut self, filter: Box<Filter>) {
-        self.filters.push(filter);
+        self.filters.wl().push(filter);
     }
 }
 
 impl<T: Transport> Transport for SimulateTransport<T> {
     fn send(&self, msg: RaftMessage) -> Result<()> {
         let mut discard = false;
-        for filter in &self.filters {
+        for filter in self.filters.rl().iter() {
             if filter.before(&msg) {
                 discard = true;
             }
         }
 
         let mut res = if !discard {
-            self.trans.rl().send(msg)
+            self.trans.send(msg)
         } else {
             Ok(())
         };
 
-        for filter in self.filters.iter().rev() {
+        for filter in self.filters.rl().iter().rev() {
             res = filter.after(res);
         }
 

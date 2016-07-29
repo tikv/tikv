@@ -31,7 +31,7 @@ use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, DEFAULT_CFS};
-use tikv::util::{make_std_tcp_conn, HandyRwLock};
+use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
@@ -47,7 +47,7 @@ pub struct ServerCluster {
     handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
-    sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
+    sim_trans: HashMap<u64, SimulateServerTransport>,
     store_chs: HashMap<u64, SendCh<StoreMsg>>,
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
@@ -147,10 +147,10 @@ impl Simulator for ServerCluster {
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let sendch = SendCh::new(event_loop.channel());
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
-        let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
+        let trans = ServerTransport::new(sendch.clone());
 
         let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
-        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
+        let simulate_trans = SimulateTransport::new(trans.clone());
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
         let snap_mgr = store::new_snap_mgr(tmp_str, Some(node.get_sendch()));
 
@@ -274,14 +274,12 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn add_filter(&self, node_id: u64, filter: Box<Filter>) {
-        let trans = self.sim_trans.get(&node_id).unwrap();
-        trans.wl().add_filter(filter);
+    fn add_filter(&mut self, node_id: u64, filter: Box<Filter>) {
+        self.sim_trans.get_mut(&node_id).unwrap().add_filter(filter);
     }
 
-    fn clear_filters(&self, node_id: u64) {
-        let trans = self.sim_trans.get(&node_id).unwrap();
-        trans.wl().clear_filters();
+    fn clear_filters(&mut self, node_id: u64) {
+        self.sim_trans.get_mut(&node_id).unwrap().clear_filters();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<StoreMsg>> {
