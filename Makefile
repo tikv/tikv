@@ -4,14 +4,14 @@ DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
 
+default: release
+
 .PHONY: all
 
-all: release
+all: format build test
 
 dev:
-	@export ENABLE_FEATURES=dev && make _dev
-
-_dev: format build test
+	@export ENABLE_FEATURES=dev && make all
 
 build:
 	cargo build --features ${ENABLE_FEATURES}
