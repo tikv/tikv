@@ -31,14 +31,11 @@ pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Curs
                        Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg};
-pub use self::types::{Key, Value, KvPair};
+pub use self::types::{Key, Value, KvPair, make_key};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
 pub const DEFAULT_CFS: &'static [CfName] = &["default", "lock"];
-
-#[cfg(test)]
-pub use self::types::make_key;
 
 #[derive(Debug, Clone)]
 pub enum Mutation {

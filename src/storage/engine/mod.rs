@@ -21,7 +21,6 @@ use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value, CfName};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
-use util::event::Event;
 
 mod rocksdb;
 pub mod raftkv;
@@ -48,27 +47,15 @@ pub trait Engine: Send + Sync + Debug {
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
-        let finished = Event::new();
-        let finished2 = finished.clone();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-
-        try!(self.async_write(ctx, batch, box move |res| finished2.set(res)));
-        if finished.wait_timeout(Some(timeout)) {
-            return finished.take().unwrap();
-        }
-        Err(Error::Timeout(timeout))
+        wait_event!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout)
+            .unwrap_or_else(|| Err(Error::Timeout(timeout)))
     }
 
     fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
-        let finished = Event::new();
-        let finished2 = finished.clone();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-
-        try!(self.async_snapshot(ctx, box move |res| finished2.set(res)));
-        if finished.wait_timeout(Some(timeout)) {
-            return finished.take().unwrap();
-        }
-        Err(Error::Timeout(timeout))
+        wait_event!(|cb| self.async_snapshot(ctx, cb).unwrap(), timeout)
+            .unwrap_or_else(|| Err(Error::Timeout(timeout)))
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
