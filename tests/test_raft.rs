@@ -1379,7 +1379,6 @@ fn test_leader_superseding_with_check_quorum() {
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
     assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
-
     assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Follower);
 
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
@@ -1417,7 +1416,6 @@ fn test_leader_election_with_check_quorum() {
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
     assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
-
     assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Follower);
 
     for _ in 0..a_election_timeout {
@@ -1429,7 +1427,6 @@ fn test_leader_election_with_check_quorum() {
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
     assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Follower);
-
     assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Leader);
 }
 
@@ -1453,14 +1450,11 @@ fn test_free_stuck_candidate_with_check_quorum() {
         nt.peers.get_mut(&2).unwrap().tick();
     }
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
-
     nt.isolate(1);
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
     assert_eq!(nt.peers.get(&2).unwrap().state, StateRole::Follower);
-
     assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Candidate);
-
     assert_eq!(nt.peers.get(&3).unwrap().term,
                nt.peers.get(&2).unwrap().term + 1);
 
@@ -1468,9 +1462,7 @@ fn test_free_stuck_candidate_with_check_quorum() {
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
     assert_eq!(nt.peers.get(&2).unwrap().state, StateRole::Follower);
-
     assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Candidate);
-
     assert_eq!(nt.peers.get(&3).unwrap().term,
                nt.peers.get(&2).unwrap().term + 2);
 
@@ -1481,7 +1473,6 @@ fn test_free_stuck_candidate_with_check_quorum() {
 
     // Disrupt the leader so that the stuck peer is freed
     assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Follower);
-
     assert_eq!(nt.peers.get(&3).unwrap().term,
                nt.peers.get(&1).unwrap().term);
 }
@@ -1509,9 +1500,7 @@ fn test_non_promotable_voter_wich_check_quorum() {
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
     assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
-
     assert_eq!(nt.peers.get(&2).unwrap().state, StateRole::Follower);
-
     assert_eq!(nt.peers.get(&2).unwrap().leader_id, 1);
 }
 
@@ -2140,9 +2129,8 @@ fn test_leader_transfer_with_check_quorum() {
     // Letting peer 2 electionElapsed reach to timeout so that it can vote for peer 1
     let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
     for _ in 0..b_election_timeout {
-        nt.peers.get_mut(&2).unwrap().tick()
+        nt.peers.get_mut(&2).unwrap().tick();
     }
-
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
     assert_eq!(nt.peers.get(&1).unwrap().leader_id, 1);
@@ -2153,9 +2141,7 @@ fn test_leader_transfer_with_check_quorum() {
 
     // After some log replication, transfer leadership back to 1.
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
-
     nt.send(vec![new_message(1, 2, MessageType::MsgTransferLeader, 0)]);
-
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
