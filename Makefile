@@ -4,12 +4,14 @@ DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
 
+default: release
+
 .PHONY: all
 
 all: format build test
 
 dev:
-	@export ENABLE_FEATURES=dev && make
+	@export ENABLE_FEATURES=dev && make all
 
 build:
 	cargo build --features ${ENABLE_FEATURES}
@@ -19,6 +21,8 @@ run:
 
 release:
 	cargo build --release --bin tikv-server
+	@mkdir -p bin 
+	cp -f ./target/release/tikv-server ./bin
 
 test:
 	# Default Mac OSX `ulimit -n` is 256, too small. 
