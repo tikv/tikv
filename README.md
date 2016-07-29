@@ -35,20 +35,21 @@ This figure represents tikv-server software stack.
 - Region: Region is the basic unit of Key-Value data movement. Each Region is replicated to multiple Nodes. These multiple replicas form a Raft group.
 - Node: A physical node in the cluster. Within each node, there are one or more Stores. Within each Store, there are many Regions.
 
-When a node starts, the metadata of node, store and region are registered into PD. The status of each Region and Store is reported to PD regularly.
+When a node starts, the metadata of the Node, Store and Region are registered into PD. The status of each Region and Store is reported to PD regularly.
 
 ### Build
 
-TiKV is a component in TiDB project, you must build and run it with TiDB and PD together.
+TiKV is a component in the TiDB project, you must build and run it with TiDB and PD together.
 
-The easily way to build TiDB project is to follow [user build guide](https://github.com/pingcap/docs/blob/master/op-guide/build.md).
-If you are a developer, you can also follow [dev build guide](https://github.com/pingcap/docs/blob/master/dev-guide/build.md).
+If you want to use TiDB in your project, see [user build guide](https://github.com/pingcap/docs/blob/master/op-guide/build.md) to build the TiDB project first.
+
+If you want to dive into TiDB, see [dev build guide](https://github.com/pingcap/docs/blob/master/dev-guide/build.md) on how to build the TiDB project.
 
 ### Next steps
 
-+ Read the [clustering doc](https://github.com/pingcap/docs/blob/master/op-guide/clustering.md) on how to run TiDB project.
-+ Learn the [configuration explanation](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
-+ Use [docker](https://github.com/pingcap/docs/blob/master/op-guide/docker.md) to run TiDB project.
++ Read the [clustering doc](https://github.com/pingcap/docs/blob/master/op-guide/clustering.md) on how to run the TiDB project.
++ Learn the [configuration explanations](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
++ Use [Docker](https://github.com/pingcap/docs/blob/master/op-guide/docker.md) to run the TiDB project.
 
 ### Contributing
 
