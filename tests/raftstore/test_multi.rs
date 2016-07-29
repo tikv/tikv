@@ -163,7 +163,7 @@ fn test_multi_node_base() {
 
 fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.add_filter(DropPacket::new(30));
+    cluster.add_send_filter(DropPacket::new(30));
     test_multi_base_after_bootstrap(cluster);
 }
 
@@ -191,7 +191,7 @@ fn test_multi_server_base() {
 
 fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.add_filter(Delay::new(Duration::from_millis(30)));
+    cluster.add_send_filter(Delay::new(Duration::from_millis(30)));
     test_multi_base_after_bootstrap(cluster);
 }
 
@@ -282,7 +282,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // So peer 3 won't replicate any message of the region but still can vote.
-    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
+    cluster.add_send_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
     cluster.must_put(b"k1", b"v1");
 
     // peer 1 and peer 2 must have k2, but peer 3 must not.
@@ -298,23 +298,23 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
     // hack: first MsgAppend will append log, second MsgAppend will set commit index,
     // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
-    cluster.add_filter(IsolateRegionStore::new(1, 2)
+    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv)
         .allow(1));
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it becomes leader.
-    cluster.add_filter(IsolateRegionStore::new(1, 1)
+    cluster.add_send_filter(IsolateRegionStore::new(1, 1)
         .msg_type(MessageType::MsgHeartbeatResponse)
         .direction(Direction::Send));
     // Make peer 2's msg won't be replicated when it becomes leader,
     // so the uncommitted entries won't be applied immediatly.
-    cluster.add_filter(IsolateRegionStore::new(1, 1)
+    cluster.add_send_filter(IsolateRegionStore::new(1, 1)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv));
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
-    cluster.add_filter(IsolateRegionStore::new(1, 2)
+    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgHeartbeat)
         .direction(Direction::Recv));
     debug!("putting k2");
@@ -332,7 +332,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     let mut put = new_request(region.get_id(), region.get_region_epoch().clone(), reqs);
     debug!("requesting: {:?}", put);
     put.mut_header().set_peer(new_peer(2, 2));
-    cluster.clear_filters();
+    cluster.clear_send_filters();
     let resp = cluster.call_command(put, Duration::from_secs(5)).unwrap();
     assert!(!resp.get_header().has_error(), format!("{:?}", resp));
 
@@ -367,11 +367,11 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // stop peer 2 replicate messages.
-    cluster.add_filter(IsolateRegionStore::new(1, 2)
+    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv));
     // peer 2 can't step to leader.
-    cluster.add_filter(IsolateRegionStore::new(1, 2)
+    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgRequestVote)
         .direction(Direction::Send));
 
@@ -386,7 +386,7 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     let mut put = new_request(region.get_id(), region.get_region_epoch().clone(), reqs);
     debug!("requesting: {:?}", put);
     put.mut_header().set_peer(new_peer(1, 1));
-    cluster.clear_filters();
+    cluster.clear_send_filters();
     let resp = cluster.call_command(put, Duration::from_secs(5)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_region_not_found(),
