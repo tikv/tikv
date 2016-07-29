@@ -308,7 +308,7 @@ impl<T: Storage> Raft<T> {
         self.prs.len() / 2 + 1
     }
 
-    // for leader lease test
+    // for testing leader lease
     pub fn set_randomized_election_timeout(&mut self, t: usize) {
         self.randomized_election_timeout = t;
     }
