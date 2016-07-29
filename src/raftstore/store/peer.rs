@@ -367,6 +367,13 @@ impl Peer {
     }
 
     pub fn check_peers(&mut self) {
+        if !self.is_leader() {
+            if !self.peer_heartbeats.is_empty() {
+                self.peer_heartbeats.clear();
+            }
+            return;
+        }
+
         let peers = self.get_store().get_region().get_peers().to_owned();
         for peer in &peers {
             self.peer_heartbeats.entry(peer.get_id()).or_insert_with(Instant::now);

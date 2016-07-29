@@ -7,6 +7,7 @@ use kvproto::pdpb;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::cluster::{Cluster, Simulator};
+use super::transport_simulate::Isolate;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
     let begin = Instant::now();
@@ -22,6 +23,54 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
 
 fn check_down_seconds(peer: &pdpb::PeerStats, secs: u64) {
     assert!(peer.get_down_seconds() == secs || secs > 0 && peer.get_down_seconds() == secs - 1);
+}
+
+fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
+    // Isolate node.
+    let node = cluster.leader_of_region(1).unwrap();
+    let node_id = node.get_id();
+    cluster.add_filter(Isolate::new(node_id));
+    // Kill another node.
+    let next_id = if node_id < count {
+        node_id + 1
+    } else {
+        1
+    };
+    cluster.stop_node(next_id);
+    let secs = wait_down_peers(&cluster, 2);
+
+    // Check node and another are down.
+    let down_peers = cluster.get_down_peers();
+    check_down_seconds(down_peers.get(&node_id).unwrap(), secs);
+    check_down_seconds(down_peers.get(&next_id).unwrap(), secs);
+
+    // Restart node and sleep a few seconds.
+    let sleep_secs = 3;
+    cluster.clear_filters();
+    wait_down_peers(&cluster, 1);
+    sleep(Duration::from_secs(sleep_secs));
+
+    // Wait node to become leader again.
+    loop {
+        cluster.transfer_leader(1, node.clone());
+        if let Some(peer) = cluster.leader_of_region(1) {
+            if peer.get_id() == node_id {
+                break;
+            }
+        }
+        sleep(Duration::from_millis(100));
+    }
+    wait_down_peers(&cluster, 1);
+
+    // Ensure that node will not reuse the previous peer heartbeats.
+    let prev_secs = cluster.get_down_peers().get(&next_id).unwrap().get_down_seconds();
+    loop {
+        let down_secs = cluster.get_down_peers().get(&next_id).unwrap().get_down_seconds();
+        if down_secs != prev_secs {
+            assert!(down_secs < sleep_secs);
+            break;
+        }
+    }
 }
 
 fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
@@ -65,6 +114,8 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
         cluster.run_node(n);
         wait_down_peers(&cluster, 0);
     }
+
+    test_leader_down_and_become_leader_again(cluster, count);
 }
 
 #[test]
