@@ -37,9 +37,18 @@ This figure represents tikv-server software stack.
 
 When a node starts, the metadata of node, store and region are registered into PD. The status of each Region and Store is reported to PD regularly.
 
-### Usage
+### Build
 
-See [Usage](./USAGE.md) for how to install and run TiKV.
+TiKV is a component in TiDB project, you must build and run it with TiDB and PD together.
+
+The easily way to build TiDB project is to follow [user build guide](https://github.com/pingcap/docs/blob/master/op-guide/build.md).
+If you are a developer, you can also follow [dev build guide](https://github.com/pingcap/docs/blob/master/dev-guide/build.md).
+
+### Next steps
+
++ Read the [clustering doc](https://github.com/pingcap/docs/blob/master/op-guide/clustering.md) on how to run TiDB project.
++ Learn the [configuration explanation](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
++ Use [docker](https://github.com/pingcap/docs/blob/master/op-guide/docker.md) to run TiDB project.
 
 ### Contributing
 
