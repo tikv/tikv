@@ -6,10 +6,12 @@ GOROOT ?= $(DEPS_PATH)/go
 
 .PHONY: all
 
-all: format build test
+all: release
 
 dev:
-	@export ENABLE_FEATURES=dev && make
+	@export ENABLE_FEATURES=dev && make _dev
+
+_dev: format build test
 
 build:
 	cargo build --features ${ENABLE_FEATURES}
@@ -19,6 +21,8 @@ run:
 
 release:
 	cargo build --release --bin tikv-server
+	@mkdir -p bin 
+	cp -f ./target/release/tikv-server ./bin
 
 test:
 	# Default Mac OSX `ulimit -n` is 256, too small. 
