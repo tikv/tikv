@@ -155,7 +155,7 @@ fn unflatten(datum: Datum, col: &ColumnInfo) -> Result<Datum> {
         types::VARCHAR |
         types::STRING => Ok(datum),
         types::DATE | types::DATETIME | types::TIMESTAMP | types::ENUM | types::SET |
-        types::BIT => unimplemented!(),
+        types::BIT => Err(box_err!("unflatten column {:?} is not supported yet.", col)),
         types::DURATION => Duration::from_nanos(datum.i64(), mysql::MAX_FSP).map(Datum::Dur),
         types::NEW_DECIMAL => {
             if let Datum::Dec(_) = datum {
