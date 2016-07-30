@@ -368,9 +368,7 @@ impl Peer {
 
     pub fn check_peers(&mut self) {
         if !self.is_leader() {
-            if !self.peer_heartbeats.is_empty() {
-                self.peer_heartbeats.clear();
-            }
+            self.peer_heartbeats.clear();
             return;
         }
 
