@@ -173,6 +173,9 @@ impl Peer {
             Some(peer) => peer.get_id(),
         };
 
+        info!("[region {}] create peer with id {}",
+              region.get_id(),
+              peer_id);
         Peer::new(store, region, peer_id)
     }
 
