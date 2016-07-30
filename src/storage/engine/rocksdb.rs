@@ -19,7 +19,7 @@ use storage::{Key, Value, CfName};
 use raftstore::store::engine::{Snapshot as RocksSnapshot, Peekable, Iterable};
 use util::escape;
 use util::rocksdb;
-use util::worker::{Runnable, Worker};
+use util::worker::{Runnable, Worker, Scheduler};
 use super::{Engine, Snapshot, Modify, Cursor, Callback, TEMP_DIR, Result, Error, DEFAULT_CFNAME};
 use tempdir::TempDir;
 
@@ -48,10 +48,23 @@ impl Runnable<Task> for Runner {
     }
 }
 
-pub struct EngineRocksdb {
+struct EngineRocksdbCore {
     // only use for memory mode
     temp_dir: Option<TempDir>,
-    worker: Mutex<Worker<Task>>,
+    worker: Worker<Task>,
+}
+
+impl Drop for EngineRocksdbCore {
+    fn drop(&mut self) {
+        if let Some(h) = self.worker.stop() {
+            h.join().unwrap();
+        }
+    }
+}
+
+pub struct EngineRocksdb {
+    core: Arc<Mutex<EngineRocksdbCore>>,
+    sched: Scheduler<Task>,
 }
 
 impl EngineRocksdb {
@@ -68,15 +81,20 @@ impl EngineRocksdb {
         let db = try!(rocksdb::new_engine(&path, cfs));
         box_try!(worker.start(Runner(Arc::new(db))));
         Ok(EngineRocksdb {
-            temp_dir: temp_dir,
-            worker: Mutex::new(worker),
+            sched: worker.scheduler(),
+            core: Arc::new(Mutex::new(EngineRocksdbCore {
+                temp_dir: temp_dir,
+                worker: worker,
+            })),
         })
     }
 }
 
 impl Debug for EngineRocksdb {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Rocksdb [is_temp: {}]", self.temp_dir.is_some()) // TODO(disksing): print DSN
+        write!(f,
+               "Rocksdb [is_temp: {}]",
+               self.core.lock().unwrap().temp_dir.is_some())
     }
 }
 
@@ -117,20 +135,19 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
 
 impl Engine for EngineRocksdb {
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
-        box_try!(self.worker.lock().unwrap().schedule(Task::Write(modifies, cb)));
+        box_try!(self.sched.schedule(Task::Write(modifies, cb)));
         Ok(())
     }
 
     fn async_snapshot(&self, _: &Context, cb: Callback<Box<Snapshot>>) -> Result<()> {
-        box_try!(self.worker.lock().unwrap().schedule(Task::Snapshot(cb)));
+        box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }
-}
 
-impl Drop for EngineRocksdb {
-    fn drop(&mut self) {
-        if let Some(h) = self.worker.lock().unwrap().stop() {
-            h.join().unwrap();
+    fn clone(&self) -> Box<Engine> {
+        box EngineRocksdb {
+            core: self.core.clone(),
+            sched: self.sched.clone(),
         }
     }
 }

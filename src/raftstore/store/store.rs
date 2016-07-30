@@ -72,7 +72,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
 
-    trans: Arc<RwLock<T>>,
+    trans: T,
     pd_client: Arc<C>,
 
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
@@ -98,7 +98,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
-               trans: Arc<RwLock<T>>,
+               trans: T,
                pd_client: Arc<C>,
                mgr: SnapManager)
                -> Result<Store<T, C>> {
@@ -430,7 +430,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         gc_msg.set_to_peer(from_peer.clone());
         gc_msg.set_region_epoch(cur_epoch.clone());
         gc_msg.set_is_tombstone(true);
-        if let Err(e) = self.trans.rl().send(gc_msg) {
+        if let Err(e) = self.trans.send(gc_msg) {
             error!("[region {}] send gc message failed {:?}", region_id, e);
         }
     }

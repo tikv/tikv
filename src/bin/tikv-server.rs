@@ -28,7 +28,7 @@ extern crate fs2;
 use std::env;
 use std::fs::{self, File};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::io::Read;
 use std::net::UdpSocket;
 use std::time::Duration;
@@ -401,8 +401,8 @@ fn build_raftkv(matches: &Matches,
                 ch: SendCh<Msg>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config)
-                -> (Storage, ServerRaftStoreRouter, u64, SnapManager) {
-    let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
+                -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager) {
+    let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
     let mut db_path = path.clone();
@@ -420,10 +420,9 @@ fn build_raftkv(matches: &Matches,
     let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
 
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
-    let raft_router = node.raft_store_router();
-    let node_id = node.id();
+    let router = ServerRaftStoreRouter::new(node.get_sendch());
 
-    (create_raft_storage(node, engine, cfg).unwrap(), raft_router, node_id, snap_mgr)
+    (node, create_raft_storage(router.clone(), engine, cfg).unwrap(), router, snap_mgr)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -489,10 +488,10 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                store_path);
     }
 
-    let (mut store, raft_router, node_id, snap_mgr) =
+    let (mut node, mut store, raft_router, snap_mgr) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
-    initial_metric(matches, config, Some(node_id));
+    initial_metric(matches, config, Some(node.id()));
 
     info!("start storage");
     if let Err(e) = store.start(&cfg.storage) {
@@ -508,6 +507,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                               snap_mgr)
         .unwrap();
     svr.run(&mut event_loop).unwrap();
+    node.stop();
 }
 
 fn main() {
