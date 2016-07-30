@@ -13,7 +13,6 @@
 
 use std::time::Duration;
 use std::boxed::Box;
-use std::sync::Arc;
 use storage::{Engine, Command, Snapshot};
 use kvproto::kvrpcpb::Context;
 use storage::mvcc::{MvccTxn, Error as MvccError};
@@ -91,7 +90,7 @@ fn make_write_cb(pr: ProcessResult, cid: u64, ch: SendCh<Msg>) -> Callback<()> {
 }
 
 pub struct Scheduler {
-    engine: Arc<Box<Engine>>,
+    engine: Box<Engine>,
 
     // cid -> context
     cmd_ctxs: HashMap<u64, RunningCtx>,
@@ -106,7 +105,7 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(engine: Arc<Box<Engine>>, schedch: SendCh<Msg>, concurrency: usize) -> Scheduler {
+    pub fn new(engine: Box<Engine>, schedch: SendCh<Msg>, concurrency: usize) -> Scheduler {
         Scheduler {
             engine: engine,
             cmd_ctxs: HashMap::new(),

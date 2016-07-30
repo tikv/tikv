@@ -1,7 +1,7 @@
 /// Worker contains all workers that do the expensive job in background.
 
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle, Builder};
 use std::io;
 use std::fmt::{self, Formatter, Display, Debug};
@@ -107,7 +107,7 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 pub struct Worker<T: Display> {
     name: String,
     scheduler: Scheduler<T>,
-    receiver: Option<Receiver<Option<T>>>,
+    receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -146,7 +146,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         Worker {
             name: name.into(),
             scheduler: Scheduler::new(AtomicUsize::new(0), tx),
-            receiver: Some(rx),
+            receiver: Mutex::new(Some(rx)),
             handle: None,
         }
     }
@@ -159,13 +159,14 @@ impl<T: Display + Send + 'static> Worker<T> {
     pub fn start_batch<R>(&mut self, runner: R, batch_size: usize) -> Result<(), io::Error>
         where R: BatchRunnable<T> + Send + 'static
     {
+        let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.name);
-        if self.receiver.is_none() {
+        if receiver.is_none() {
             warn!("worker {} has been started.", self.name);
             return Ok(());
         }
 
-        let rx = self.receiver.take().unwrap();
+        let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
         let h = try!(Builder::new()
             .name(thd_name!(self.name.clone()))
