@@ -21,14 +21,14 @@ pub struct SyncStorage(Storage);
 
 impl SyncStorage {
     pub fn new(config: &Config) -> SyncStorage {
-        let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = Storage::new(config).unwrap();
+        storage.start(config).unwrap();
         SyncStorage(storage)
     }
 
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> SyncStorage {
         let mut storage = Storage::from_engine(engine, config).unwrap();
-        storage.start(&config).unwrap();
+        storage.start(config).unwrap();
         SyncStorage(storage)
     }
 
