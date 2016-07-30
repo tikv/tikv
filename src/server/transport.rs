@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use raftstore::store::{Msg as StoreMsg, Transport, Callback};
 use raftstore::Result as RaftStoreResult;
@@ -91,16 +92,17 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 }
 
+#[derive(Clone)]
 pub struct ServerTransport {
     ch: SendCh<Msg>,
-    msg_id: AtomicUsize,
+    msg_id: Arc<AtomicUsize>,
 }
 
 impl ServerTransport {
     pub fn new(ch: SendCh<Msg>) -> ServerTransport {
         ServerTransport {
             ch: ch,
-            msg_id: AtomicUsize::new(1),
+            msg_id: Arc::new(AtomicUsize::new(1)),
         }
     }
 
