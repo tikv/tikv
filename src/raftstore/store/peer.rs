@@ -372,23 +372,19 @@ impl Peer {
             return;
         }
 
-        let peers = self.get_store().get_region().get_peers().to_owned();
-        for peer in &peers {
-            self.peer_heartbeats.entry(peer.get_id()).or_insert_with(Instant::now);
+        if self.peer_heartbeats.len() == self.region().get_peers().len() {
+            return;
         }
-        let removed_ids: Vec<_> = self.peer_heartbeats
-            .keys()
-            .filter(|&&id| !peers.iter().any(|p| p.get_id() == id))
-            .cloned()
-            .collect();
-        for id in removed_ids {
-            self.peer_heartbeats.remove(&id);
+
+        // Insert heartbeats in case that some peers never reponse heartbeats.
+        for peer in self.region().get_peers().to_owned() {
+            self.peer_heartbeats.entry(peer.get_id()).or_insert_with(Instant::now);
         }
     }
 
     pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
-        for p in self.get_store().get_region().get_peers() {
+        for p in self.region().get_peers() {
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
@@ -1034,6 +1030,7 @@ impl Peer {
 
                 // Add this peer to cache.
                 self.peer_cache.wl().insert(peer.get_id(), peer.clone());
+                self.peer_heartbeats.insert(peer.get_id(), Instant::now());
                 region.mut_peers().push(peer.clone());
 
                 metric_incr!("raftstore.add_peer.success");
@@ -1061,6 +1058,7 @@ impl Peer {
 
                 // Remove this peer from cache.
                 self.peer_cache.wl().remove(&peer.get_id());
+                self.peer_heartbeats.remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
                 metric_incr!("raftstore.remove_peer.success");
