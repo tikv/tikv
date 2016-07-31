@@ -218,7 +218,7 @@ impl Simulator for ServerCluster {
             .remove(addr);
 
         ch.send(Msg::Quit).unwrap();
-        node.stop();
+        node.stop().unwrap();
         h.join().unwrap();
     }
 
