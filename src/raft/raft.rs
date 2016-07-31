@@ -690,14 +690,13 @@ impl<T: Storage> Raft<T> {
                     // if a server receives ReqeustVote request within the minimum election
                     // timeout of hearing from a current leader, it does not update its term
                     // or grant its vote
-                    info!("{} [logterm: {}, index: {}, vote: {}, tag: {}] ignored vote from {} \
-                           [logterm: {}, index: {}] at term {}: lease is not expired (remaining \
-                           ticks: {})",
-                          self.id,
+                    info!("{} [logterm: {}, index: {}, vote: {}] ignored vote from \
+                           {} [logterm: {}, index: {}] at term {}: lease is not expired \
+                           (remaining ticks: {})",
+                          self.tag,
                           self.raft_log.last_term(),
                           self.raft_log.last_index(),
                           self.vote,
-                          self.tag,
                           m.get_from(),
                           m.get_log_term(),
                           m.get_index(),
