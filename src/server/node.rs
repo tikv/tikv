@@ -236,11 +236,9 @@ impl<C> Node<C>
         Ok(())
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&mut self) -> Result<()> {
         let store_id = self.store.get_id();
-        if let Err(e) = self.stop_store(store_id) {
-            error!("stop store {} err {:?}", store_id, e);
-        }
+        self.stop_store(store_id)
     }
 }
 
@@ -248,6 +246,6 @@ impl<C> Drop for Node<C>
     where C: PdClient
 {
     fn drop(&mut self) {
-        self.stop();
+        self.stop().unwrap();
     }
 }

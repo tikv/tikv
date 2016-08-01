@@ -507,7 +507,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                               snap_mgr)
         .unwrap();
     svr.run(&mut event_loop).unwrap();
-    node.stop();
+    node.stop().unwrap();
 }
 
 fn main() {

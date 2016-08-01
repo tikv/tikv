@@ -16,10 +16,11 @@ use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::{Msg as StoreMsg, Transport};
 use tikv::server::transport::*;
+use tikv::raft::SnapshotStatus;
 use tikv::util::HandyRwLock;
 
 use rand;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
 use std::time;
 use std::usize;
 use std::thread;
@@ -359,5 +360,55 @@ pub struct DropSnapshot;
 impl FilterFactory for DropSnapshot {
     fn generate(&self, _: u64) -> Vec<SendFilter> {
         vec![box SnapshotFilter { drop: AtomicBool::new(false) }]
+    }
+}
+
+/// Pause Snap
+pub struct PauseFirstSnap {
+    dropped: AtomicBool,
+    pending_msg: Mutex<Vec<StoreMsg>>,
+}
+
+impl PauseFirstSnap {
+    pub fn new() -> PauseFirstSnap {
+        PauseFirstSnap {
+            dropped: AtomicBool::new(false),
+            pending_msg: Mutex::new(vec![]),
+        }
+    }
+}
+
+impl Filter<StoreMsg> for PauseFirstSnap {
+    fn before(&self, msgs: &mut Vec<StoreMsg>) {
+        let mut to_send = vec![];
+        let mut pending_msg = self.pending_msg.lock().unwrap();
+        for m in msgs.drain(..) {
+            let paused = match m {
+                StoreMsg::ReportSnapshot { ref status, .. } => *status == SnapshotStatus::Finish,
+                StoreMsg::RaftMessage(ref msg) => {
+                    msg.get_message().get_msg_type() == MessageType::MsgSnapshot
+                }
+                _ => false,
+            };
+            if paused {
+                self.dropped.compare_and_swap(false, true, Ordering::Relaxed);
+                pending_msg.push(m);
+            } else {
+                to_send.push(m);
+            }
+        }
+        if pending_msg.len() > 1 {
+            self.dropped.compare_and_swap(true, false, Ordering::Relaxed);
+            msgs.extend(pending_msg.drain(..));
+        }
+        msgs.extend(to_send);
+    }
+
+    fn after(&self, res: Result<()>) -> Result<()> {
+        if res.is_err() && self.dropped.load(Ordering::Relaxed) {
+            Ok(())
+        } else {
+            res
+        }
     }
 }

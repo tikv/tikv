@@ -66,6 +66,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
+    pending_regions: Vec<metapb::Region>,
 
     split_check_worker: Worker<SplitCheckTask>,
     snap_worker: Worker<SnapTask>,
@@ -121,6 +122,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
+            pending_regions: vec![],
             trans: trans,
             pd_client: pd_client,
             peer_cache: Arc::new(RwLock::new(peer_cache)),
@@ -456,26 +458,36 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn is_snapshot_overlapped(&self, msg: &RaftMessage) -> Result<bool> {
+    fn is_snapshot_overlapped(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
-        if !self.region_peers[&region_id].get_store().is_initialized() &&
-           msg.get_message().has_snapshot() {
-            let snap = msg.get_message().get_snapshot();
-            let mut snap_data = RaftSnapshotData::new();
-            try!(snap_data.merge_from_bytes(snap.get_data()));
-            let snap_region = snap_data.get_region();
-            if let Some((_, &exist_region_id)) = self.region_ranges
-                .range(Excluded(&enc_start_key(snap_region)), Unbounded::<&Key>)
-                .next() {
-                let exist_region = self.region_peers[&exist_region_id].region();
-                if enc_start_key(exist_region) < enc_end_key(snap_region) {
-                    warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
-                    return Ok(true);
-                }
+        if self.region_peers[&region_id].get_store().is_initialized() ||
+           !msg.get_message().has_snapshot() {
+            return Ok(false);
+        }
+
+        let snap = msg.get_message().get_snapshot();
+        let mut snap_data = RaftSnapshotData::new();
+        try!(snap_data.merge_from_bytes(snap.get_data()));
+        let snap_region = snap_data.take_region();
+        if let Some((_, &exist_region_id)) = self.region_ranges
+            .range(Excluded(&enc_start_key(&snap_region)), Unbounded::<&Key>)
+            .next() {
+            let exist_region = self.region_peers[&exist_region_id].region();
+            if enc_start_key(exist_region) < enc_end_key(&snap_region) {
+                warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
+                return Ok(true);
             }
         }
+        for region in &self.pending_regions {
+            if enc_start_key(region) < enc_end_key(&snap_region) &&
+               enc_end_key(region) > enc_start_key(&snap_region) {
+                warn!("pending region overlapped {:?}, {:?}", region, snap_region);
+                return Ok(true);
+            }
+        }
+        self.pending_regions.push(snap_region);
 
         Ok(false)
     }
@@ -1236,7 +1248,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         slow_log!(t, "handle timeout {:?}", timeout);
     }
 
-    #[allow(useless_vec)]
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
             for (handle, name) in vec![(self.split_check_worker.stop(),
@@ -1257,6 +1268,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             // TODO: should we panic here or shutdown the store?
             error!("handle raft ready err: {:?}", e);
         }
+        self.pending_regions.clear();
     }
 }
 
