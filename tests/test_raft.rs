@@ -2141,8 +2141,10 @@ fn test_leader_transfer_with_check_quorum() {
         r.check_quorum = true;
     }
 
-    // Letting peer 2 electionElapsed reach to timeout so that it can vote for peer 1
     let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
+
+    // Letting peer 2 electionElapsed reach to timeout so that it can vote for peer 1
     for _ in 0..b_election_timeout {
         nt.peers.get_mut(&2).unwrap().tick();
     }
