@@ -1404,15 +1404,15 @@ fn test_leader_election_with_check_quorum() {
     b.check_quorum = true;
     c.check_quorum = true;
 
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+
     // we can not let system choosing the value of randomizedElectionTimeout
     // otherwise it will introduce some uncertainty into this test case
     // we need to ensure randomizedElectionTimeout > electionTimeout here
-    let a_election_timeout = a.get_election_timeout();
-    a.set_randomized_election_timeout(a_election_timeout + 1);
-    let b_election_timeout = b.get_election_timeout();
-    b.set_randomized_election_timeout(b_election_timeout + 1);
-
-    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+    let a_election_timeout = nt.peers.get(&1).unwrap().get_election_timeout();
+    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    nt.peers.get_mut(&1).unwrap().set_randomized_election_timeout(a_election_timeout + 1);
+    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
 
     // Letting b's electionElapsed reach to timeout so that it can vote for a
     for _ in 0..b_election_timeout {
@@ -1448,13 +1448,13 @@ fn test_free_stuck_candidate_with_check_quorum() {
     b.check_quorum = true;
     c.check_quorum = true;
 
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+
     // we can not let system choosing the value of randomizedElectionTimeout
     // otherwise it will introduce some uncertainty into this test case
     // we need to ensure randomizedElectionTimeout > electionTimeout here
-    let b_election_timeout = b.get_election_timeout();
-    b.set_randomized_election_timeout(b_election_timeout + 1);
-
-    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
 
     for _ in 0..b_election_timeout {
         nt.peers.get_mut(&2).unwrap().tick();
@@ -1495,13 +1495,13 @@ fn test_non_promotable_voter_wich_check_quorum() {
     a.check_quorum = true;
     b.check_quorum = true;
 
+    let mut nt = Network::new(vec![Some(a), Some(b)]);
+
     // we can not let system choosing the value of randomizedElectionTimeout
     // otherwise it will introduce some uncertainty into this test case
     // we need to ensure randomizedElectionTimeout > electionTimeout here
-    let b_election_timeout = b.get_election_timeout();
-    b.set_randomized_election_timeout(b_election_timeout + 1);
-
-    let mut nt = Network::new(vec![Some(a), Some(b)]);
+    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
 
     // Need to remove 2 again to make it a non-promotable node since newNetwork
     // overwritten some internal states
