@@ -21,6 +21,7 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::{Mutation, Key, KvPair, make_key};
 use tikv::storage::mvcc::TEST_TS_BASE;
 
+#[derive(Clone)]
 struct AssertionStorage(SyncStorage);
 
 impl AssertionStorage {
@@ -479,7 +480,7 @@ fn test_isolation_inc() {
     const THREAD_NUM: usize = 4;
     const INC_PER_THREAD: usize = 100;
 
-    let store = Arc::new(new_assertion_storage());
+    let store = new_assertion_storage();
     let oracle = Arc::new(Oracle::new());
     let punch_card = Arc::new(Mutex::new(vec![false; THREAD_NUM * INC_PER_THREAD]));
 
@@ -555,7 +556,7 @@ fn test_isolation_multi_inc() {
     const KEY_NUM: usize = 4;
     const INC_PER_THREAD: usize = 100;
 
-    let store = Arc::new(new_assertion_storage());
+    let store = new_assertion_storage();
     let oracle = Arc::new(Oracle::new());
     let mut threads = vec![];
     for _ in 0..THREAD_NUM {

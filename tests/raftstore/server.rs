@@ -25,30 +25,32 @@ use tempdir::TempDir;
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{self, Server, ServerTransport, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
+use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, DEFAULT_CFS};
-use tikv::util::{make_std_tcp_conn, HandyRwLock};
-use kvproto::raft_serverpb;
+use tikv::util::make_std_tcp_conn;
+use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
 use super::util::sleep_ms;
-use super::transport_simulate::{SimulateTransport, Filter};
+use super::transport_simulate::*;
 
-type SimulateServerTransport = SimulateTransport<ServerTransport>;
+type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
 
 pub struct ServerCluster {
+    routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
     senders: HashMap<u64, SendCh<Msg>>,
-    handles: HashMap<u64, thread::JoinHandle<()>>,
+    handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
-    sim_trans: HashMap<u64, Arc<RwLock<SimulateServerTransport>>>,
+    sim_trans: HashMap<u64, SimulateServerTransport>,
     store_chs: HashMap<u64, SendCh<StoreMsg>>,
-    pub storages: HashMap<u64, Arc<Box<Engine>>>,
+    pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
 
     msg_id: AtomicUsize,
@@ -58,6 +60,7 @@ pub struct ServerCluster {
 impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
         ServerCluster {
+            routers: HashMap::new(),
             senders: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
@@ -146,10 +149,10 @@ impl Simulator for ServerCluster {
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let sendch = SendCh::new(event_loop.channel());
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
-        let trans = Arc::new(RwLock::new(ServerTransport::new(sendch.clone())));
+        let trans = ServerTransport::new(sendch.clone());
 
         let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
-        let simulate_trans = Arc::new(RwLock::new(SimulateTransport::new(trans.clone())));
+        let simulate_trans = SimulateTransport::new(trans.clone());
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
         let snap_mgr = store::new_snap_mgr(tmp_str, Some(node.get_sendch()));
 
@@ -158,7 +161,8 @@ impl Simulator for ServerCluster {
                    simulate_trans.clone(),
                    snap_mgr.clone())
             .unwrap();
-        let router = node.raft_store_router();
+        let router = ServerRaftStoreRouter::new(node.get_sendch());
+        let sim_router = SimulateTransport::new(router);
 
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -169,7 +173,7 @@ impl Simulator for ServerCluster {
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
 
-        let mut store = create_raft_storage(node, engine, &cfg).unwrap();
+        let mut store = create_raft_storage(sim_router.clone(), engine, &cfg).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
@@ -177,7 +181,7 @@ impl Simulator for ServerCluster {
                                      &cfg,
                                      listener,
                                      store,
-                                     router,
+                                     sim_router.clone(),
                                      resolver,
                                      snap_mgr)
             .unwrap();
@@ -191,8 +195,9 @@ impl Simulator for ServerCluster {
             })
             .unwrap();
 
-        self.handles.insert(node_id, t);
+        self.handles.insert(node_id, (node, t));
         self.senders.insert(node_id, ch);
+        self.routers.insert(node_id, sim_router);
         self.addrs.insert(node_id, addr);
 
         node_id
@@ -203,7 +208,7 @@ impl Simulator for ServerCluster {
     }
 
     fn stop_node(&mut self, node_id: u64) {
-        let h = self.handles.remove(&node_id).unwrap();
+        let (mut node, h) = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
         let addr = self.addrs.get(&node_id).unwrap();
         let _ = self.store_chs.remove(&node_id).unwrap();
@@ -213,6 +218,7 @@ impl Simulator for ServerCluster {
             .remove(addr);
 
         ch.send(Msg::Quit).unwrap();
+        node.stop().unwrap();
         h.join().unwrap();
     }
 
@@ -272,14 +278,20 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn add_filter(&self, node_id: u64, filter: Box<Filter>) {
-        let trans = self.sim_trans.get(&node_id).unwrap();
-        trans.wl().add_filter(filter);
+    fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {
+        self.sim_trans.get_mut(&node_id).unwrap().add_filter(filter);
     }
 
-    fn clear_filters(&self, node_id: u64) {
-        let trans = self.sim_trans.get(&node_id).unwrap();
-        trans.wl().clear_filters();
+    fn clear_send_filters(&mut self, node_id: u64) {
+        self.sim_trans.get_mut(&node_id).unwrap().clear_filters();
+    }
+
+    fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter) {
+        self.routers.get_mut(&node_id).unwrap().add_filter(filter);
+    }
+
+    fn clear_recv_filters(&mut self, node_id: u64) {
+        self.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<StoreMsg>> {

@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::boxed::Box;
-use std::sync::Arc;
 
 use protobuf::RepeatedField;
 
@@ -353,7 +352,7 @@ impl StoreHandler {
         Ok(())
     }
 
-    pub fn engine(&self) -> Arc<Box<Engine>> {
+    pub fn engine(&self) -> Box<Engine> {
         self.store.get_engine()
     }
 
