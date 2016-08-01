@@ -637,7 +637,7 @@ impl<T: Storage> Raft<T> {
             m.set_index(self.raft_log.last_index());
             m.set_log_term(self.raft_log.last_term());
             if campaign_type == CAMPAIGN_TRANSFER {
-                m.set_context(Vec::from(campaign_type));
+                m.set_context(campaign_type.to_vec());
             }
             self.send(m);
         }
