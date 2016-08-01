@@ -194,7 +194,8 @@ impl Command {
             Command::Get { .. } |
             Command::BatchGet { .. } |
             Command::Scan { .. } |
-            Command::ScanLock { .. } => true,
+            Command::ScanLock { .. } |
+            Command::ResolveLock { .. } => true,
             _ => false,
         }
     }
