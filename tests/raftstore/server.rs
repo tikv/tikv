@@ -32,17 +32,18 @@ use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, DEFAULT_CFS};
 use tikv::util::make_std_tcp_conn;
-use kvproto::raft_serverpb;
+use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
 use super::util::sleep_ms;
-use super::transport_simulate::{SimulateTransport, Filter};
+use super::transport_simulate::*;
 
-type SimulateServerTransport = SimulateTransport<ServerTransport>;
+type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
 
 pub struct ServerCluster {
+    routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
     senders: HashMap<u64, SendCh<Msg>>,
     handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
@@ -59,6 +60,7 @@ pub struct ServerCluster {
 impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
         ServerCluster {
+            routers: HashMap::new(),
             senders: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
@@ -160,6 +162,7 @@ impl Simulator for ServerCluster {
                    snap_mgr.clone())
             .unwrap();
         let router = ServerRaftStoreRouter::new(node.get_sendch());
+        let sim_router = SimulateTransport::new(router);
 
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -170,7 +173,7 @@ impl Simulator for ServerCluster {
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
 
-        let mut store = create_raft_storage(router.clone(), engine, &cfg).unwrap();
+        let mut store = create_raft_storage(sim_router.clone(), engine, &cfg).unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
@@ -178,7 +181,7 @@ impl Simulator for ServerCluster {
                                      &cfg,
                                      listener,
                                      store,
-                                     router,
+                                     sim_router.clone(),
                                      resolver,
                                      snap_mgr)
             .unwrap();
@@ -194,6 +197,7 @@ impl Simulator for ServerCluster {
 
         self.handles.insert(node_id, (node, t));
         self.senders.insert(node_id, ch);
+        self.routers.insert(node_id, sim_router);
         self.addrs.insert(node_id, addr);
 
         node_id
@@ -274,12 +278,20 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn add_filter(&mut self, node_id: u64, filter: Box<Filter>) {
+    fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {
         self.sim_trans.get_mut(&node_id).unwrap().add_filter(filter);
     }
 
-    fn clear_filters(&mut self, node_id: u64) {
+    fn clear_send_filters(&mut self, node_id: u64) {
         self.sim_trans.get_mut(&node_id).unwrap().clear_filters();
+    }
+
+    fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter) {
+        self.routers.get_mut(&node_id).unwrap().add_filter(filter);
+    }
+
+    fn clear_recv_filters(&mut self, node_id: u64) {
+        self.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<StoreMsg>> {

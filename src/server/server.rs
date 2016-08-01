@@ -627,9 +627,7 @@ mod tests {
     use storage::Storage;
     use kvproto::msgpb::{Message, MessageType};
     use raftstore::Result as RaftStoreResult;
-    use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::store::{self, Callback};
-    use kvproto::raft_cmdpb::RaftCmdRequest;
+    use raftstore::store::{self, Msg as StoreMsg};
     use raft::SnapshotStatus;
 
     struct MockResolver {
@@ -649,12 +647,7 @@ mod tests {
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
-        }
-
-        fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
+        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }

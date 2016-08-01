@@ -25,9 +25,9 @@ use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
 use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb;
+use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::eraftpb::MessageType;
-use tikv::raftstore::{store, Result};
+use tikv::raftstore::{store, Result, Error};
 use tikv::util::HandyRwLock;
 use tikv::util::transport::SendCh;
 use tikv::server::Config as ServerConfig;
@@ -35,11 +35,11 @@ use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use tikv::raft::SnapshotStatus;
 use tikv::storage::DEFAULT_CFS;
 use super::pd::TestPdClient;
-use super::transport_simulate::{SimulateTransport, Filter};
+use super::transport_simulate::*;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, ServerRaftStoreRouter>,
+    routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
 }
 
 #[derive(Clone)]
@@ -66,8 +66,8 @@ impl Deref for ChannelTransport {
     }
 }
 
-impl Transport for ChannelTransport {
-    fn send(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+impl Channel<RaftMessage> for ChannelTransport {
+    fn send(&self, msg: RaftMessage) -> Result<()> {
         let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
         let to_peer_id = msg.get_to_peer().get_id();
@@ -122,7 +122,7 @@ impl Transport for ChannelTransport {
     }
 }
 
-type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
+type SimulateChannelTransport = SimulateTransport<RaftMessage, ChannelTransport>;
 
 pub struct NodeCluster {
     trans: ChannelTransport,
@@ -173,7 +173,8 @@ impl Simulator for NodeCluster {
         }
 
         let node_id = node.id();
-        self.trans.wl().routers.insert(node_id, ServerRaftStoreRouter::new(node.get_sendch()));
+        let router = ServerRaftStoreRouter::new(node.get_sendch());
+        self.trans.wl().routers.insert(node_id, SimulateTransport::new(router));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 
@@ -200,20 +201,38 @@ impl Simulator for NodeCluster {
         }
 
         let router = self.trans.rl().routers.get(&store_id).cloned().unwrap();
-        let ch = router.ch.clone();
-        msg::call_command(&ch, request, timeout)
+        wait_event!(|cb: Box<Fn(RaftCmdResponse) + 'static + Send>| {
+            router.send_command(request,
+                              box move |resp| {
+                                  cb(resp);
+                                  Ok(())
+                              })
+                .unwrap()
+        },
+                    timeout)
+            .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         self.trans.send(msg)
     }
 
-    fn add_filter(&mut self, node_id: u64, filter: Box<Filter>) {
+    fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {
         self.simulate_trans.get_mut(&node_id).unwrap().add_filter(filter);
     }
 
-    fn clear_filters(&mut self, node_id: u64) {
+    fn clear_send_filters(&mut self, node_id: u64) {
         self.simulate_trans.get_mut(&node_id).unwrap().clear_filters();
+    }
+
+    fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter) {
+        let mut trans = self.trans.wl();
+        trans.routers.get_mut(&node_id).unwrap().add_filter(filter);
+    }
+
+    fn clear_recv_filters(&mut self, node_id: u64) {
+        let mut trans = self.trans.wl();
+        trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>> {

@@ -13,16 +13,13 @@
 
 use std::boxed::{Box, FnBox};
 use std::fmt;
-use std::time::Duration;
 
-use raftstore::{Result, Error};
+use raftstore::Result;
 use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
-use util::transport::SendCh;
-use util::event::Event;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) -> Result<()> + Send>;
 
@@ -113,31 +110,6 @@ impl fmt::Debug for Msg {
     }
 }
 
-// Send the request and wait the response until timeout.
-// We should know that even timeout happens, the command may still
-// be handled in store later.
-pub fn call_command(sendch: &SendCh<Msg>,
-                    request: RaftCmdRequest,
-                    timeout: Duration)
-                    -> Result<RaftCmdResponse> {
-    let finished = Event::new();
-    let finished2 = finished.clone();
-
-    box_try!(sendch.send(Msg::RaftCmd {
-        request: request,
-        callback: box move |resp| {
-            finished2.set(resp);
-            Ok(())
-        },
-    }));
-
-    if finished.wait_timeout(Some(timeout)) {
-        return Ok(finished.take().unwrap());
-    }
-
-    Err(Error::Timeout(format!("request timeout for {:?}", timeout)))
-}
-
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -149,6 +121,24 @@ mod tests {
     use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
     use raftstore::Error;
     use util::transport::SendCh;
+
+    fn call_command(sendch: &SendCh<Msg>,
+                    request: RaftCmdRequest,
+                    timeout: Duration)
+                    -> Result<RaftCmdResponse, Error> {
+        wait_event!(|cb: Box<Fn(RaftCmdResponse) + 'static + Send>| {
+            sendch.send(Msg::RaftCmd {
+                    request: request,
+                    callback: box move |resp| {
+                        cb(resp);
+                        Ok(())
+                    },
+                })
+                .unwrap()
+        },
+                    timeout)
+            .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
+    }
 
     struct TestHandler;
 

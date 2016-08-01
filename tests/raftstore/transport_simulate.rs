@@ -14,7 +14,8 @@
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{Result, Error};
-use tikv::raftstore::store::Transport;
+use tikv::raftstore::store::{Msg as StoreMsg, Transport};
+use tikv::server::transport::*;
 use tikv::util::HandyRwLock;
 
 use rand;
@@ -25,58 +26,64 @@ use std::thread;
 use std::vec::Vec;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-pub trait Filter: Send + Sync {
-    // in a SimulateTransport, if any filter's before return true, msg will be discard
-    fn before(&self, msg: &RaftMessage) -> bool;
-    // with after provided, one can change the return value arbitrarily
-    fn after(&self, Result<()>) -> Result<()>;
+pub trait Channel<M>: Send + Clone {
+    fn send(&self, m: M) -> Result<()>;
 }
+
+impl Channel<RaftMessage> for ServerTransport {
+    fn send(&self, m: RaftMessage) -> Result<()> {
+        Transport::send(self, m)
+    }
+}
+
+impl Channel<StoreMsg> for ServerRaftStoreRouter {
+    fn send(&self, m: StoreMsg) -> Result<()> {
+        RaftStoreRouter::send(self, m)
+    }
+}
+
+pub trait Filter<M>: Send + Sync {
+    // in a SimulateTransport, if any filter's before return true, msg will be discard
+    fn before(&self, _: &mut Vec<M>);
+    // with after provided, one can change the return value arbitrarily
+    fn after(&self, res: Result<()>) -> Result<()> {
+        res
+    }
+}
+
+pub type SendFilter = Box<Filter<RaftMessage>>;
+pub type RecvFilter = Box<Filter<StoreMsg>>;
 
 struct FilterDropPacket {
     rate: u32,
-    drop: AtomicBool,
 }
 
 struct FilterDelay {
     duration: time::Duration,
 }
 
-impl Filter for FilterDropPacket {
-    fn before(&self, _: &RaftMessage) -> bool {
-        let drop = rand::random::<u32>() % 100u32 < self.rate;
-        self.drop.store(drop, Ordering::Relaxed);
-        drop
-    }
-
-    fn after(&self, x: Result<()>) -> Result<()> {
-        if self.drop.load(Ordering::Relaxed) {
-            return Err(Error::Timeout("drop by FilterDropPacket in SimulateTransport".to_string()));
-        }
-        x
+impl<M> Filter<M> for FilterDropPacket {
+    fn before(&self, msgs: &mut Vec<M>) {
+        msgs.retain(|_| rand::random::<u32>() % 100u32 >= self.rate)
     }
 }
 
-impl Filter for FilterDelay {
-    fn before(&self, _: &RaftMessage) -> bool {
+impl<M> Filter<M> for FilterDelay {
+    fn before(&self, _: &mut Vec<M>) {
         thread::sleep(self.duration);
-        false
-    }
-    fn after(&self, x: Result<()>) -> Result<()> {
-        x
     }
 }
 
-#[derive(Clone)]
-pub struct SimulateTransport<T: Transport> {
-    filters: Arc<RwLock<Vec<Box<Filter>>>>,
-    trans: T,
+pub struct SimulateTransport<M, C: Channel<M>> {
+    filters: Arc<RwLock<Vec<Box<Filter<M>>>>>,
+    ch: C,
 }
 
-impl<T: Transport> SimulateTransport<T> {
-    pub fn new(trans: T) -> SimulateTransport<T> {
+impl<M, C: Channel<M>> SimulateTransport<M, C> {
+    pub fn new(ch: C) -> SimulateTransport<M, C> {
         SimulateTransport {
             filters: Arc::new(RwLock::new(vec![])),
-            trans: trans,
+            ch: ch,
         }
     }
 
@@ -84,36 +91,64 @@ impl<T: Transport> SimulateTransport<T> {
         self.filters.wl().clear();
     }
 
-    pub fn add_filter(&mut self, filter: Box<Filter>) {
+    pub fn add_filter(&mut self, filter: Box<Filter<M>>) {
         self.filters.wl().push(filter);
     }
 }
 
-impl<T: Transport> Transport for SimulateTransport<T> {
-    fn send(&self, msg: RaftMessage) -> Result<()> {
-        let mut discard = false;
-        for filter in self.filters.rl().iter() {
-            if filter.before(&msg) {
-                discard = true;
+impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
+    fn send(&self, msg: M) -> Result<()> {
+        let mut taken = 0;
+        let mut msgs = vec![msg];
+        let filters = self.filters.rl();
+        for filter in filters.iter() {
+            filter.before(&mut msgs);
+            taken += 1;
+            if msgs.is_empty() {
+                break;
             }
         }
-
-        let mut res = if !discard {
-            self.trans.send(msg)
+        let mut res = Ok(());
+        if msgs.is_empty() {
+            res = Err(Error::Timeout("drop by in SimulateTransport".to_owned()))
         } else {
-            Ok(())
-        };
-
-        for filter in self.filters.rl().iter().rev() {
+            for msg in msgs {
+                res = self.ch.send(msg);
+                if res.is_err() {
+                    break;
+                }
+            }
+        }
+        for filter in filters[..taken].iter().rev() {
             res = filter.after(res);
         }
-
         res
     }
 }
 
+impl<M, C: Channel<M>> Clone for SimulateTransport<M, C> {
+    fn clone(&self) -> SimulateTransport<M, C> {
+        SimulateTransport {
+            filters: self.filters.clone(),
+            ch: self.ch.clone(),
+        }
+    }
+}
+
+impl<C: Channel<RaftMessage>> Transport for SimulateTransport<RaftMessage, C> {
+    fn send(&self, m: RaftMessage) -> Result<()> {
+        Channel::send(self, m)
+    }
+}
+
+impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {
+    fn send(&self, m: StoreMsg) -> Result<()> {
+        Channel::send(self, m)
+    }
+}
+
 pub trait FilterFactory {
-    fn generate(&self, node_id: u64) -> Vec<Box<Filter>>;
+    fn generate(&self, node_id: u64) -> Vec<SendFilter>;
 }
 
 pub struct DropPacket {
@@ -127,11 +162,8 @@ impl DropPacket {
 }
 
 impl FilterFactory for DropPacket {
-    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
-        vec![box FilterDropPacket {
-                 rate: self.rate,
-                 drop: AtomicBool::new(false),
-             }]
+    fn generate(&self, _: u64) -> Vec<SendFilter> {
+        vec![box FilterDropPacket { rate: self.rate }]
     }
 }
 
@@ -146,27 +178,18 @@ impl Delay {
 }
 
 impl FilterFactory for Delay {
-    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+    fn generate(&self, _: u64) -> Vec<SendFilter> {
         vec![box FilterDelay { duration: self.duration }]
     }
 }
 
 struct PartitionFilter {
     node_ids: Vec<u64>,
-    drop: AtomicBool,
 }
 
-impl Filter for PartitionFilter {
-    fn before(&self, msg: &RaftMessage) -> bool {
-        let drop = self.node_ids.contains(&msg.get_to_peer().get_store_id());
-        self.drop.store(drop, Ordering::Relaxed);
-        drop
-    }
-    fn after(&self, r: Result<()>) -> Result<()> {
-        if self.drop.load(Ordering::Relaxed) {
-            return Err(Error::Timeout("drop by PartitionPacket in SimulateTransport".to_string()));
-        }
-        r
+impl Filter<RaftMessage> for PartitionFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+        msgs.retain(|m| !self.node_ids.contains(&m.get_to_peer().get_store_id()));
     }
 }
 
@@ -182,17 +205,11 @@ impl Partition {
 }
 
 impl FilterFactory for Partition {
-    fn generate(&self, node_id: u64) -> Vec<Box<Filter>> {
+    fn generate(&self, node_id: u64) -> Vec<SendFilter> {
         if self.s1.contains(&node_id) {
-            return vec![box PartitionFilter {
-                            node_ids: self.s2.clone(),
-                            drop: AtomicBool::new(false),
-                        }];
+            return vec![box PartitionFilter { node_ids: self.s2.clone() }];
         }
-        return vec![box PartitionFilter {
-                        node_ids: self.s1.clone(),
-                        drop: AtomicBool::new(false),
-                    }];
+        return vec![box PartitionFilter { node_ids: self.s1.clone() }];
     }
 }
 
@@ -207,17 +224,11 @@ impl Isolate {
 }
 
 impl FilterFactory for Isolate {
-    fn generate(&self, node_id: u64) -> Vec<Box<Filter>> {
+    fn generate(&self, node_id: u64) -> Vec<SendFilter> {
         if node_id == self.node_id {
-            return vec![box FilterDropPacket {
-                            rate: 100,
-                            drop: AtomicBool::new(false),
-                        }];
+            return vec![box FilterDropPacket { rate: 100 }];
         }
-        vec![box PartitionFilter {
-                 node_ids: vec![self.node_id],
-                 drop: AtomicBool::new(false),
-             }]
+        vec![box PartitionFilter { node_ids: vec![self.node_id] }]
     }
 }
 
@@ -250,37 +261,30 @@ impl Direction {
 pub struct FilterRegionPacket {
     region_id: u64,
     store_id: u64,
-    drop: AtomicBool,
     direction: Direction,
     allow: AtomicUsize,
     msg_type: Option<MessageType>,
 }
 
-impl Filter for FilterRegionPacket {
-    fn before(&self, m: &RaftMessage) -> bool {
-        let region_id = m.get_region_id();
-        let from_store_id = m.get_from_peer().get_store_id();
-        let to_store_id = m.get_to_peer().get_store_id();
+impl Filter<RaftMessage> for FilterRegionPacket {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+        msgs.retain(|m| {
+            let region_id = m.get_region_id();
+            let from_store_id = m.get_from_peer().get_store_id();
+            let to_store_id = m.get_to_peer().get_store_id();
 
-        let mut drop =
-            self.region_id == region_id &&
-            (self.direction.is_send() && self.store_id == from_store_id ||
-             self.direction.is_recv() && self.store_id == to_store_id) &&
-            self.msg_type.as_ref().map_or(true, |t| t == &m.get_message().get_msg_type());
-        if drop && self.allow.load(Ordering::SeqCst) > 0 {
-            drop = false;
-            self.allow.fetch_sub(1, Ordering::SeqCst);
-        }
-        self.drop.store(drop, Ordering::Relaxed);
-        drop
-    }
-
-    fn after(&self, r: Result<()>) -> Result<()> {
-        if self.drop.load(Ordering::Relaxed) {
-            return Err(Error::Timeout("drop by FilterRegionPacket in SimulateTransport"
-                .to_string()));
-        }
-        r
+            if self.region_id == region_id &&
+               (self.direction.is_send() && self.store_id == from_store_id ||
+                self.direction.is_recv() && self.store_id == to_store_id) &&
+               self.msg_type.as_ref().map_or(true, |t| t == &m.get_message().get_msg_type()) {
+                if self.allow.load(Ordering::Relaxed) > 0 {
+                    self.allow.fetch_sub(1, Ordering::Relaxed);
+                    return true;
+                }
+                return false;
+            }
+            true
+        });
     }
 }
 
@@ -320,14 +324,13 @@ impl IsolateRegionStore {
 }
 
 impl FilterFactory for IsolateRegionStore {
-    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+    fn generate(&self, _: u64) -> Vec<Box<Filter<RaftMessage>>> {
         vec![box FilterRegionPacket {
                  region_id: self.region_id,
                  store_id: self.store_id,
                  direction: self.direction,
                  msg_type: self.msg_type.clone(),
                  allow: AtomicUsize::new(self.allow),
-                 drop: AtomicBool::new(false),
              }]
     }
 }
@@ -336,22 +339,25 @@ struct SnapshotFilter {
     drop: AtomicBool,
 }
 
-impl Filter for SnapshotFilter {
-    fn before(&self, msg: &RaftMessage) -> bool {
-        let drop = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
-        self.drop.store(drop, Ordering::Relaxed);
-        drop
+impl Filter<RaftMessage> for SnapshotFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+        msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
+        self.drop.store(msgs.is_empty(), Ordering::Relaxed);
     }
 
     fn after(&self, x: Result<()>) -> Result<()> {
-        x
+        if self.drop.load(Ordering::Relaxed) {
+            Ok(())
+        } else {
+            x
+        }
     }
 }
 
 pub struct DropSnapshot;
 
 impl FilterFactory for DropSnapshot {
-    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+    fn generate(&self, _: u64) -> Vec<SendFilter> {
         vec![box SnapshotFilter { drop: AtomicBool::new(false) }]
     }
 }

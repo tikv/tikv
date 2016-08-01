@@ -17,7 +17,7 @@ use std::fs;
 use tikv::pd::PdClient;
 use kvproto::eraftpb::MessageType;
 
-use super::transport_simulate::IsolateRegionStore;
+use super::transport_simulate::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
@@ -90,8 +90,8 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // isolate node 3 for region 1, but keep the heartbeat to make
     // 3 not vote after filters are cleared.
-    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgSnapshot));
-    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
+    cluster.add_send_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgSnapshot));
+    cluster.add_send_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
@@ -121,7 +121,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     let snapfiles: Vec<_> = fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
     assert!(snapfiles.len() > 2);
 
-    cluster.clear_filters();
+    cluster.clear_send_filters();
     debug!("filters cleared.");
 
     // node 3 must have k1, k2.
