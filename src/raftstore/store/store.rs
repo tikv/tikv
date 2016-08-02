@@ -67,7 +67,6 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
-
     split_check_worker: Worker<SplitCheckTask>,
     snap_worker: Worker<SnapTask>,
     compact_worker: Worker<CompactTask>,
