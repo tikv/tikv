@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io::Write;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use std::sync::Mutex;
@@ -18,6 +19,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use util::codec::rpc;
 use util::make_std_tcp_conn;
+
+use hyper::Url;
 
 use kvproto::pdpb::{Request, Response};
 use kvproto::msgpb::{Message, MessageType};
@@ -55,6 +58,51 @@ fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u
     Ok((id, resp.take_pd_resp()))
 }
 
+fn parse_urls(addr: &str) -> Result<Vec<String>> {
+    let mut hosts = Vec::new();
+    for a in addr.split(',') {
+        let url = match Url::parse(a) {
+            Ok(url) => url,
+            Err(e) => return Err(box_err!("parse url failed: {:?}", e)),
+        };
+        if url.host_str().is_none() || url.port().is_none() {
+            return Err(box_err!("invalid url {:?}", url));
+        }
+        hosts.push(format!("{}:{}", url.host_str().unwrap(), url.port().unwrap()));
+    }
+    Ok(hosts)
+}
+
+fn rpc_connect(addr: &str) -> Result<TcpStream> {
+    let hosts = try!(parse_urls(addr));
+
+    for host in &hosts {
+        let mut stream = match make_std_tcp_conn(host.as_str()) {
+            Ok(stream) => stream,
+            Err(_) => continue,
+        };
+
+        // Send a HTTP header to tell PD to hijack this connection for RPC.
+        let header = b"GET /pd/rpc HTTP/1.0\r\n\r\n";
+        try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
+        match stream.write(header) {
+            Ok(n) if n == header.len() => {
+                return Ok(stream);
+            }
+            Ok(n) => {
+                return Err(box_err!("write header failed: header len {} written len {}",
+                                    header.len(),
+                                    n));
+            }
+            Err(e) => {
+                return Err(box_err!("write header failed: {:?}", e));
+            }
+        }
+    }
+
+    Err(box_err!("connect to {} failed", addr))
+}
+
 impl RpcClientCore {
     fn new(client: EtcdPdClient) -> RpcClientCore {
         RpcClientCore {
@@ -67,7 +115,7 @@ impl RpcClientCore {
         let addr = box_try!(self.client.get_leader_addr());
         info!("get pd leader {}", addr);
 
-        let stream = try!(make_std_tcp_conn(&*addr));
+        let stream = try!(rpc_connect(&addr));
         self.stream = Some(stream);
         Ok(())
     }
