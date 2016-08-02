@@ -291,7 +291,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
         }
 
-        if try!(self.is_snapshot_overlapped(&msg)) {
+        if try!(self.check_snapshot_overlapped(&msg)) {
             return Ok(());
         }
 
@@ -458,7 +458,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn is_snapshot_overlapped(&mut self, msg: &RaftMessage) -> Result<bool> {
+    fn check_snapshot_overlapped(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
