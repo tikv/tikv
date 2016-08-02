@@ -25,6 +25,7 @@ use kvproto::metapb;
 use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
+use util::rocksdb;
 use util::HandyRwLock;
 use util::codec::bytes::BytesEncoder;
 use util::worker::Scheduler;
@@ -376,11 +377,15 @@ impl PeerStorage {
             // we can only delete the old data when the peer is initialized.
             let timer = Instant::now();
             // Delete everything in the region for this peer.
-            try!(self.scan_region(self.engine.as_ref(),
-                                  &mut |key, _| {
-                                      try!(ctx.wb.delete(key));
-                                      Ok(true)
-                                  }));
+            for cf in self.engine.as_ref().cf_names() {
+                let handle = box_try!(rocksdb::get_cf_handle(self.engine.as_ref(), cf));
+                try!(self.scan_region_cf(self.engine.as_ref(),
+                                         cf,
+                                         &mut |key, _| {
+                                             try!(ctx.wb.delete_cf(*handle, key));
+                                             Ok(true)
+                                         }));
+            }
             info!("{} clean old region takes {:?}", self.tag, timer.elapsed());
         }
 
@@ -475,6 +480,18 @@ impl PeerStorage {
         let ranges = self.region_key_ranges();
         for r in ranges {
             try!(db.scan(&r.0, &r.1, f));
+        }
+
+        Ok(())
+    }
+
+    pub fn scan_region_cf<T, F>(&self, db: &T, cf: &str, f: &mut F) -> Result<()>
+        where T: Iterable,
+              F: FnMut(&[u8], &[u8]) -> Result<bool>
+    {
+        let ranges = self.region_key_ranges();
+        for r in ranges {
+            try!(db.scan_cf(cf, &r.0, &r.1, f));
         }
 
         Ok(())
