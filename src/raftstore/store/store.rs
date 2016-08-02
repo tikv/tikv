@@ -18,6 +18,7 @@ use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::Duration;
 use std::{cmp, u64};
+use std::time::SystemTime;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
@@ -78,6 +79,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
 
     snap_mgr: SnapManager,
+
+    last_monit_time: SystemTime,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -126,6 +129,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_client: pd_client,
             peer_cache: Arc::new(RwLock::new(peer_cache)),
             snap_mgr: mgr,
+            last_monit_time: SystemTime::now(),
         })
     }
 
@@ -1268,6 +1272,14 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             error!("handle raft ready err: {:?}", e);
         }
         self.pending_regions.clear();
+
+        let now = SystemTime::now();
+        if let Err(e) = now.duration_since(self.last_monit_time) {
+            error!("system time jump back, last {:?}, err {:?}",
+                   self.last_monit_time,
+                   e);
+        }
+        self.last_monit_time = now;
     }
 }
 
