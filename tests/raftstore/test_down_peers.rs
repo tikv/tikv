@@ -29,7 +29,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     // Isolate node.
     let node = cluster.leader_of_region(1).unwrap();
     let node_id = node.get_id();
-    cluster.add_filter(Isolate::new(node_id));
+    cluster.add_send_filter(Isolate::new(node_id));
     // Kill another node.
     let next_id = if node_id < count {
         node_id + 1
@@ -46,7 +46,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
 
     // Restart node and sleep a few seconds.
     let sleep_secs = 3;
-    cluster.clear_filters();
+    cluster.clear_send_filters();
     wait_down_peers(cluster, 1);
     sleep(Duration::from_secs(sleep_secs));
 
