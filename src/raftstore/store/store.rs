@@ -67,7 +67,6 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
-
     split_check_worker: Worker<SplitCheckTask>,
     snap_worker: Worker<SnapTask>,
     compact_worker: Worker<CompactTask>,
@@ -291,7 +290,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
         }
 
-        if try!(self.is_snapshot_overlapped(&msg)) {
+        if try!(self.check_snapshot_overlapped(&msg)) {
             return Ok(());
         }
 
@@ -458,7 +457,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn is_snapshot_overlapped(&mut self, msg: &RaftMessage) -> Result<bool> {
+    fn check_snapshot_overlapped(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
