@@ -111,3 +111,7 @@ level0-stop-writes-trigger = 16
 # Approximate size of user data packed per block.  Note that the 
 # block size specified here corresponds to uncompressed data.
 block-size = "64KB"
+
+# block-cache used to cache uncompressed blocks, big block-cache can speed up read
+block-cache-size = "1GB"
+
