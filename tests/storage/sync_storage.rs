@@ -118,6 +118,15 @@ impl SyncStorage {
         wait_event!(|cb| self.store.async_rollback_then_get(ctx, key, lock_ts, cb).unwrap())
             .unwrap()
     }
+
+    pub fn scan_lock(&self, ctx: Context, max_ts: u64) -> Result<Vec<LockInfo>> {
+        wait_event!(|cb| self.store.async_scan_lock(ctx, max_ts, cb).unwrap()).unwrap()
+    }
+
+    pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {
+        wait_event!(|cb| self.store.async_resolve_lock(ctx, start_ts, commit_ts, cb).unwrap())
+            .unwrap()
+    }
 }
 
 impl Clone for SyncStorage {
@@ -127,14 +136,6 @@ impl Clone for SyncStorage {
             store: self.store.clone(),
             cnt: self.cnt.clone(),
         }
-    }
-
-    pub fn scan_lock(&self, ctx: Context, max_ts: u64) -> Result<Vec<LockInfo>> {
-        wait_event!(|cb| self.0.async_scan_lock(ctx, max_ts, cb).unwrap()).unwrap()
-    }
-
-    pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {
-        wait_event!(|cb| self.0.async_resolve_lock(ctx, start_ts, commit_ts, cb).unwrap()).unwrap()
     }
 }
 
