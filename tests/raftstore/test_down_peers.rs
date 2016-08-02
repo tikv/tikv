@@ -11,7 +11,7 @@ use super::transport_simulate::Isolate;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
     let begin = Instant::now();
-    loop {
+    for _ in 1..100 {
         if cluster.get_down_peers().len() != count as usize {
             sleep(Duration::from_millis(100));
         } else {
@@ -37,7 +37,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
         1
     };
     cluster.stop_node(next_id);
-    let secs = wait_down_peers(&cluster, 2);
+    let secs = wait_down_peers(cluster, 2);
 
     // Check node and another are down.
     let down_peers = cluster.get_down_peers();
@@ -47,7 +47,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     // Restart node and sleep a few seconds.
     let sleep_secs = 3;
     cluster.clear_filters();
-    wait_down_peers(&cluster, 1);
+    wait_down_peers(cluster, 1);
     sleep(Duration::from_secs(sleep_secs));
 
     // Wait node to become leader again.
@@ -60,16 +60,17 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
         }
         sleep(Duration::from_millis(100));
     }
-    wait_down_peers(&cluster, 1);
+    wait_down_peers(cluster, 1);
 
     // Ensure that node will not reuse the previous peer heartbeats.
     let prev_secs = cluster.get_down_peers().get(&next_id).unwrap().get_down_seconds();
-    loop {
+    for _ in 1..100 {
         let down_secs = cluster.get_down_peers().get(&next_id).unwrap().get_down_seconds();
         if down_secs != prev_secs {
             assert!(down_secs < sleep_secs);
             break;
         }
+        sleep(Duration::from_millis(100));
     }
 }
 
@@ -80,7 +81,7 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
     // Kill 1, 3
     cluster.stop_node(1);
     cluster.stop_node(3);
-    let secs = wait_down_peers(&cluster, 2);
+    let secs = wait_down_peers(cluster, 2);
 
     // Check 1, 3 are down.
     let down_peers = cluster.get_down_peers();
@@ -90,14 +91,14 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
     // Restart 1, 3
     cluster.run_node(1);
     cluster.run_node(3);
-    wait_down_peers(&cluster, 0);
+    wait_down_peers(cluster, 0);
 
     for _ in 0..3 {
         let n = random::<u64>() % count + 1;
 
         // kill n.
         cluster.stop_node(n);
-        let secs = wait_down_peers(&cluster, 1);
+        let secs = wait_down_peers(cluster, 1);
 
         // Check i is down and others are not down.
         for i in 1..(count + 1) {
@@ -112,7 +113,7 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
 
         // Restart n.
         cluster.run_node(n);
-        wait_down_peers(&cluster, 0);
+        wait_down_peers(cluster, 0);
     }
 
     test_leader_down_and_become_leader_again(cluster, count);
