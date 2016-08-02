@@ -366,6 +366,7 @@ impl FilterFactory for DropSnapshot {
 /// Pause Snap
 pub struct PauseFirstSnap {
     dropped: AtomicBool,
+    stale: AtomicBool,
     pending_msg: Mutex<Vec<StoreMsg>>,
 }
 
@@ -373,6 +374,7 @@ impl PauseFirstSnap {
     pub fn new() -> PauseFirstSnap {
         PauseFirstSnap {
             dropped: AtomicBool::new(false),
+            stale: AtomicBool::new(false),
             pending_msg: Mutex::new(vec![]),
         }
     }
@@ -380,6 +382,9 @@ impl PauseFirstSnap {
 
 impl Filter<StoreMsg> for PauseFirstSnap {
     fn before(&self, msgs: &mut Vec<StoreMsg>) {
+        if self.stale.load(Ordering::Relaxed) {
+            return;
+        }
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
         for m in msgs.drain(..) {
@@ -400,12 +405,14 @@ impl Filter<StoreMsg> for PauseFirstSnap {
         if pending_msg.len() > 1 {
             self.dropped.compare_and_swap(true, false, Ordering::Relaxed);
             msgs.extend(pending_msg.drain(..));
+            self.stale.compare_and_swap(false, true, Ordering::Relaxed);
         }
         msgs.extend(to_send);
     }
 
     fn after(&self, res: Result<()>) -> Result<()> {
         if res.is_err() && self.dropped.load(Ordering::Relaxed) {
+            self.dropped.compare_and_swap(true, false, Ordering::Relaxed);
             Ok(())
         } else {
             res
