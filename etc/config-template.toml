@@ -128,3 +128,14 @@ bloom-filter-bits-per-key = 10
 # false means one sst file one bloom filter, true means evry block has a corresponding bloom filter
 block-based-bloom-filter = false
 
+[storage]
+# notify capacity of scheduler's channel
+scheduler-notify-capacity = 10240
+
+# maximum number of messages can be processed in one tick
+scheduler-messages-per-tick = 1024
+
+scheduler-concurrency = 1024
+
+# scheduler's worker pool size
+scheduler-worker-pool-size = 4

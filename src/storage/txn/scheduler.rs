@@ -14,8 +14,7 @@
 use std::time::Duration;
 use std::boxed::Box;
 use threadpool::ThreadPool;
-use storage::{Engine, Command, Snapshot, CallbackType, Result as StorageResult,
-              Error as StorageError};
+use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult, Error as StorageError};
 use kvproto::kvrpcpb::Context;
 use storage::mvcc::{MvccTxn, Error as MvccError};
 use storage::{Key, Value, KvPair};
@@ -29,7 +28,6 @@ use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 
 const REPORT_STATISTIC_INTERVAL: u64 = 60000; // 60 seconds
-const DEFAULT_WOKER_POOL_SIZES: usize = 4;
 
 pub enum Tick {
     ReportStatistic,
@@ -55,7 +53,7 @@ pub enum Msg {
     Quit,
     RawCmd {
         cmd: Command,
-        cb: CallbackType,
+        cb: StorageCb,
     },
     SnapshotFinished {
         cid: u64,
@@ -81,30 +79,30 @@ pub enum Msg {
     },
 }
 
-fn execute_callback(callback: CallbackType, pr: ProcessResult) {
+fn execute_callback(callback: StorageCb, pr: ProcessResult) {
     match callback {
-        CallbackType::Result(cb) => {
+        StorageCb::Result(cb) => {
             match pr {
                 ProcessResult::Res => cb(Ok(())),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
         }
-        CallbackType::MultiResults(cb) => {
+        StorageCb::MultiResults(cb) => {
             match pr {
                 ProcessResult::MultiRes { results } => cb(Ok(results)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
         }
-        CallbackType::Value(cb) => {
+        StorageCb::Value(cb) => {
             match pr {
                 ProcessResult::Value { value } => cb(Ok(value)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
         }
-        CallbackType::KvPairs(cb) => {
+        StorageCb::KvPairs(cb) => {
             match pr {
                 ProcessResult::MultiKvpairs { pairs } => cb(Ok(pairs)),
                 ProcessResult::Failed { err } => cb(Err(err)),
@@ -118,11 +116,11 @@ pub struct RunningCtx {
     cid: u64,
     cmd: Command,
     lock: Lock,
-    callback: Option<CallbackType>,
+    callback: Option<StorageCb>,
 }
 
 impl RunningCtx {
-    pub fn new(cid: u64, cmd: Command, lock: Lock, cb: CallbackType) -> RunningCtx {
+    pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> RunningCtx {
         RunningCtx {
             cid: cid,
             cmd: cmd,
@@ -165,7 +163,11 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(engine: Box<Engine>, schedch: SendCh<Msg>, concurrency: usize) -> Scheduler {
+    pub fn new(engine: Box<Engine>,
+               schedch: SendCh<Msg>,
+               concurrency: usize,
+               worker_pool_size: usize)
+               -> Scheduler {
         Scheduler {
             engine: engine,
             cmd_ctxs: HashMap::new(),
@@ -173,7 +175,7 @@ impl Scheduler {
             id_alloc: 0,
             latches: Latches::new(concurrency),
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
-                                                   DEFAULT_WOKER_POOL_SIZES),
+                                                   worker_pool_size),
         }
     }
 }
@@ -194,7 +196,7 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
             match snap_store.batch_get(keys) {
                 Ok(results) => {
                     let mut res = vec![];
-                    for (k, v) in keys.into_iter().zip(results.into_iter()) {
+                    for (k, v) in keys.into_iter().zip(results) {
                         match v {
                             Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
                             Ok(None) => {}
@@ -245,11 +247,11 @@ fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot
 
 fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapshot) -> Result<()> {
     box_try!(match cmd {
-        Command::Prewrite { ref mutations, ref primary, start_ts, .. } => {
+        Command::Prewrite { mutations, primary, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts);
             let mut results = vec![];
             for m in mutations {
-                match txn.prewrite(m.clone(), primary) {
+                match txn.prewrite(m.clone(), &primary) {
                     Ok(_) => results.push(Ok(())),
                     e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
                     Err(e) => return Err(Error::from(e)),
@@ -407,7 +409,7 @@ impl Scheduler {
         self.register_report_tick(event_loop);
     }
 
-    fn on_received_new_cmd(&mut self, cmd: Command, callback: CallbackType) {
+    fn on_received_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         let cid = self.gen_id();
         let lock = self.gen_lock(&cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
