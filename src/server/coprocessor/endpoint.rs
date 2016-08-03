@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use std::usize;
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
@@ -54,7 +53,7 @@ const DEFAULT_POOL_SIZE: usize = 8;
 pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
 
 pub struct Host {
-    engine: Arc<Box<Engine>>,
+    engine: Box<Engine>,
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
@@ -62,7 +61,7 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(engine: Arc<Box<Engine>>, scheduler: Scheduler<Task>) -> Host {
+    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>) -> Host {
         Host {
             engine: engine,
             sched: scheduler,
@@ -352,8 +351,9 @@ pub struct SelectContextCore {
     sel: SelectRequest,
     eval: Evaluator,
     cols: HashSet<i64>,
-    cond_cols: HashMap<i64, ColumnInfo>,
+    cond_cols: Vec<ColumnInfo>,
     aggr: bool,
+    aggr_cols: Vec<ColumnInfo>,
     gks: Vec<Rc<Vec<u8>>>,
     gk_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
 }
@@ -361,7 +361,8 @@ pub struct SelectContextCore {
 impl SelectContextCore {
     fn new(sel: SelectRequest) -> Result<SelectContextCore> {
         let cols;
-        let mut cond_cols;
+        let cond_cols;
+        let mut aggr_cols = vec![];
 
         {
             let select_cols = if sel.has_table_info() {
@@ -373,13 +374,27 @@ impl SelectContextCore {
                 .filter(|c| !c.get_pk_handle())
                 .map(|c| c.get_column_id())
                 .collect();
-            cond_cols = HashMap::new();
-            try!(collect_col_in_expr(&mut cond_cols, select_cols, sel.get_field_where()));
+            let mut cond_col_map = HashMap::new();
+            try!(collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
+            let mut aggr_cols_map = HashMap::new();
+            for aggr in sel.get_aggregates() {
+                try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, aggr));
+            }
+            for item in sel.get_group_by() {
+                try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, item.get_expr()));
+            }
+            if !aggr_cols_map.is_empty() {
+                for cond_col in cond_col_map.keys() {
+                    aggr_cols_map.remove(cond_col);
+                }
+                aggr_cols = aggr_cols_map.drain().map(|(_, v)| v).collect();
+            }
+            cond_cols = cond_col_map.drain().map(|(_, v)| v).collect();
         }
-
 
         Ok(SelectContextCore {
             aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
+            aggr_cols: aggr_cols,
             sel: sel,
             eval: Default::default(),
             cols: cols,
@@ -412,7 +427,7 @@ impl SelectContextCore {
         if !self.sel.has_field_where() {
             return Ok(false);
         }
-        try!(inflate_with_col(&mut self.eval, values, self.cond_cols.values(), h));
+        try!(inflate_with_col(&mut self.eval, values, &self.cond_cols, h));
         let res = box_try!(self.eval.eval(self.sel.get_field_where()));
         let b = box_try!(res.into_bool());
         Ok(b.map_or(true, |v| !v))
@@ -454,10 +469,7 @@ impl SelectContextCore {
     }
 
     fn aggregate(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<()> {
-        try!(inflate_with_col(&mut self.eval,
-                              values,
-                              self.sel.get_table_info().get_columns(),
-                              h));
+        try!(inflate_with_col(&mut self.eval, values, &self.aggr_cols, h));
         let gk = Rc::new(try!(self.get_group_key()));
         let aggr_exprs = self.sel.get_aggregates();
         match self.gk_aggrs.entry(gk.clone()) {

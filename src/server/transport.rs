@@ -12,93 +12,84 @@
 // limitations under the License.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-use raftstore::store::{Msg as StoreMsg, Transport, Callback, SendCh};
+use raftstore::store::{Msg as StoreMsg, Transport, Callback};
 use raftstore::Result as RaftStoreResult;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use raft::SnapshotStatus;
-use super::{SendCh as ServerSendCh, Msg, ConnData};
+use super::{Msg, ConnData};
+use util::transport::SendCh;
 
 
-pub trait RaftStoreRouter: Send + Sync {
+pub trait RaftStoreRouter: Send + Clone {
+    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
+
     // Send RaftMessage to local store.
-    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
+    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+        self.send(StoreMsg::RaftMessage(msg))
+    }
 
     // Send RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()>;
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
+        self.send(StoreMsg::RaftCmd {
+            request: req,
+            callback: cb,
+        })
+    }
 
     // Report sending snapshot status.
     fn report_snapshot(&self,
                        region_id: u64,
                        to_peer_id: u64,
                        status: SnapshotStatus)
-                       -> RaftStoreResult<()>;
+                       -> RaftStoreResult<()> {
+        self.send(StoreMsg::ReportSnapshot {
+            region_id: region_id,
+            to_peer_id: to_peer_id,
+            status: status,
+        })
+    }
 
-    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()>;
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
+        self.send(StoreMsg::ReportUnreachable {
+            region_id: region_id,
+            to_peer_id: to_peer_id,
+        })
+    }
 }
 
+#[derive(Clone)]
 pub struct ServerRaftStoreRouter {
-    pub ch: SendCh,
+    pub ch: SendCh<StoreMsg>,
 }
 
 impl ServerRaftStoreRouter {
-    pub fn new(ch: SendCh) -> ServerRaftStoreRouter {
+    pub fn new(ch: SendCh<StoreMsg>) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter { ch: ch }
     }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
-    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::RaftMessage(msg)));
-
-        Ok(())
-    }
-
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::RaftCmd {
-            request: req,
-            callback: cb,
-        }));
-
-        Ok(())
-    }
-
-    fn report_snapshot(&self,
-                       region_id: u64,
-                       to_peer_id: u64,
-                       status: SnapshotStatus)
-                       -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::ReportSnapshot {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-            status: status,
-        }));
-
-        Ok(())
-    }
-
-    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        try!(self.ch.send(StoreMsg::ReportUnreachable {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-        }));
-
+    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        box_try!(self.ch.send(msg));
         Ok(())
     }
 }
 
+#[derive(Clone)]
 pub struct ServerTransport {
-    ch: ServerSendCh,
-    msg_id: AtomicUsize,
+    ch: SendCh<Msg>,
+    msg_id: Arc<AtomicUsize>,
 }
 
 impl ServerTransport {
-    pub fn new(ch: ServerSendCh) -> ServerTransport {
+    pub fn new(ch: SendCh<Msg>) -> ServerTransport {
         ServerTransport {
             ch: ch,
-            msg_id: AtomicUsize::new(1),
+            msg_id: Arc::new(AtomicUsize::new(1)),
         }
     }
 
@@ -127,22 +118,11 @@ impl Transport for ServerTransport {
 
 
 // MockRaftStoreRouter is used for passing compile.
+#[derive(Clone)]
 pub struct MockRaftStoreRouter;
 
 impl RaftStoreRouter for MockRaftStoreRouter {
-    fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-        unimplemented!();
-    }
-
-    fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
-        unimplemented!();
-    }
-
-    fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) -> RaftStoreResult<()> {
-        unimplemented!();
-    }
-
-    fn report_unreachable(&self, _: u64, _: u64) -> RaftStoreResult<()> {
+    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }

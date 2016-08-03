@@ -22,11 +22,13 @@ use tempdir::TempDir;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
 use super::util::*;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
 use tikv::pd::PdClient;
 use tikv::util::{HandyRwLock, escape, rocksdb};
+use tikv::util::transport::SendCh;
 use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use tikv::raftstore::store::keys::data_key;
@@ -50,9 +52,11 @@ pub trait Simulator {
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
-    fn add_filter(&self, node_id: u64, filter: Box<Filter>);
-    fn clear_filters(&self, node_id: u64);
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
+    fn add_send_filter(&mut self, node_id: u64, filter: SendFilter);
+    fn clear_send_filters(&mut self, node_id: u64);
+    fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter);
+    fn clear_recv_filters(&mut self, node_id: u64);
 }
 
 pub struct Cluster<T: Simulator> {
@@ -423,6 +427,10 @@ impl<T: Simulator> Cluster<T> {
         self.get_region(key).get_id()
     }
 
+    pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
+        self.pd_client.get_down_peers()
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let mut resp = self.request(key, vec![new_get_cmd(key)], Duration::from_secs(5));
         if resp.get_header().has_error() {
@@ -494,11 +502,11 @@ impl<T: Simulator> Cluster<T> {
         status_resp.take_region_detail()
     }
 
-    pub fn add_filter<F: FilterFactory>(&self, factory: F) {
-        let sim = self.sim.wl();
+    pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
+        let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
             for filter in factory.generate(node_id) {
-                sim.add_filter(node_id, filter);
+                sim.add_send_filter(node_id, filter);
             }
         }
     }
@@ -533,10 +541,10 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().get_snap_dir(node_id)
     }
 
-    pub fn clear_filters(&mut self) {
-        let sim = self.sim.wl();
+    pub fn clear_send_filters(&mut self) {
+        let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
-            sim.clear_filters(node_id);
+            sim.clear_send_filters(node_id);
         }
     }
 
@@ -580,7 +588,7 @@ impl<T: Simulator> Cluster<T> {
 
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
-        self.add_filter(Partition::new(s1, s2));
+        self.add_send_filter(Partition::new(s1, s2));
     }
 }
 

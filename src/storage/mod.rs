@@ -15,7 +15,7 @@ use std::thread;
 use std::boxed::FnBox;
 use std::fmt;
 use std::error;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
 
 use mio::{EventLoop, EventLoopBuilder};
@@ -30,15 +30,12 @@ pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Cursor,
                        Error as EngineError};
 pub use self::engine::raftkv::RaftKv;
-pub use self::txn::{SnapshotStore, Scheduler, Msg, SchedCh};
-pub use self::types::{Key, Value, KvPair};
+pub use self::txn::{SnapshotStore, Scheduler, Msg};
+pub use self::types::{Key, Value, KvPair, make_key};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
 pub const DEFAULT_CFS: &'static [CfName] = &["default", "lock"];
-
-#[cfg(test)]
-pub use self::types::make_key;
 
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -186,26 +183,33 @@ impl Command {
     }
 }
 
+use util::transport::SendCh;
+
+struct StorageHandle {
+    handle: Option<thread::JoinHandle<()>>,
+    event_loop: Option<EventLoop<Scheduler>>,
+}
+
 pub struct Storage {
-    engine: Arc<Box<Engine>>,
-    schedch: SchedCh,
-    sched_handle: Option<thread::JoinHandle<()>>,
-    sched_event_loop: Option<EventLoop<Scheduler>>,
+    engine: Box<Engine>,
+    schedch: SendCh<Msg>,
+    handle: Arc<Mutex<StorageHandle>>,
 }
 
 impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
-        let engine = Arc::new(engine);
         let event_loop = try!(create_event_loop(config.sched_notify_capacity,
                                                 config.sched_msg_per_tick));
-        let schedch = SchedCh::new(event_loop.channel());
+        let schedch = SendCh::new(event_loop.channel());
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
             engine: engine,
             schedch: schedch,
-            sched_handle: None,
-            sched_event_loop: Some(event_loop),
+            handle: Arc::new(Mutex::new(StorageHandle {
+                handle: None,
+                event_loop: Some(event_loop),
+            })),
         })
     }
 
@@ -215,38 +219,40 @@ impl Storage {
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
-        if self.sched_handle.is_some() {
+        let mut handle = self.handle.lock().unwrap();
+        if handle.handle.is_some() {
             return Err(box_err!("scheduler is already running"));
         }
 
         let engine = self.engine.clone();
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
-        let mut sched_event_loop = self.sched_event_loop.take().unwrap();
+        let mut el = handle.event_loop.take().unwrap();
         let sched_concurrency = config.sched_concurrency;
+        let ch = self.schedch.clone();
         let h = try!(builder.spawn(move || {
-            let ch = SchedCh::new(sched_event_loop.channel());
             let mut sched = Scheduler::new(engine, ch, sched_concurrency);
-            if let Err(e) = sched_event_loop.run(&mut sched) {
+            if let Err(e) = el.run(&mut sched) {
                 panic!("scheduler run err:{:?}", e);
             }
             info!("scheduler stopped");
         }));
-        self.sched_handle = Some(h);
+        handle.handle = Some(h);
 
         Ok(())
     }
 
     pub fn stop(&mut self) -> Result<()> {
-        if self.sched_handle.is_none() {
+        let mut handle = self.handle.lock().unwrap();
+        if handle.handle.is_none() {
             return Ok(());
         }
 
         if let Err(e) = self.schedch.send(Msg::Quit) {
             error!("send quit cmd to scheduler failed, error:{:?}", e);
-            return Err(Error::from(e));
+            return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }
 
-        let h = self.sched_handle.take().unwrap();
+        let h = handle.handle.take().unwrap();
         if let Err(e) = h.join() {
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
@@ -255,16 +261,12 @@ impl Storage {
         Ok(())
     }
 
-    pub fn get_engine(&self) -> Arc<Box<Engine>> {
+    pub fn get_engine(&self) -> Box<Engine> {
         self.engine.clone()
     }
 
     fn send(&self, cmd: Command, cb: CallbackType) -> Result<()> {
-        if self.sched_handle.is_some() {
-            try!(self.schedch.send(Msg::RawCmd { cmd: cmd, cb: cb }));
-        } else {
-            return Err(Error::Closed);
-        }
+        box_try!(self.schedch.send(Msg::RawCmd { cmd: cmd, cb: cb }));
         Ok(())
     }
 
@@ -411,6 +413,16 @@ impl Storage {
         };
         try!(self.send(cmd, CallbackType::Value(callback)));
         Ok(())
+    }
+}
+
+impl Clone for Storage {
+    fn clone(&self) -> Storage {
+        Storage {
+            engine: self.engine.clone(),
+            schedch: self.schedch.clone(),
+            handle: self.handle.clone(),
+        }
     }
 }
 

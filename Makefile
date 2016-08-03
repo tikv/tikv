@@ -4,12 +4,14 @@ DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
 
+default: release
+
 .PHONY: all
 
 all: format build test
 
 dev:
-	@export ENABLE_FEATURES=dev && make
+	@export ENABLE_FEATURES=dev && make all
 
 build:
 	cargo build --features ${ENABLE_FEATURES}
@@ -19,6 +21,8 @@ run:
 
 release:
 	cargo build --release --bin tikv-server
+	@mkdir -p bin 
+	cp -f ./target/release/tikv-server ./bin
 
 test:
 	# Default Mac OSX `ulimit -n` is 256, too small. 
@@ -33,33 +37,5 @@ format:
 	@cargo fmt -- --write-mode diff | grep "Diff at line" > /dev/null && cargo fmt -- --write-mode overwrite | grep -v "found TODO" || exit 0
 	@rustfmt --write-mode diff tests/tests.rs benches/benches.rs | grep "Diff at line" > /dev/null && rustfmt --write-mode overwrite tests/tests.rs benches/benches.rs | grep -v "found TODO" || exit 0
 
-check_req:
-	DEPS_PATH=$(DEPS_PATH) GOROOT=$(GOROOT) ./scripts/check_req.sh
-
-rocksdb: 
-	DEPS_PATH=$(DEPS_PATH) ./scripts/build_rocksdb.sh
-
-$(BIN_PATH)/pd-server: 
-	@DEPS_PATH=$(DEPS_PATH) BIN_PATH=$(BIN_PATH) PATH=$(PATH):$(GOROOT)/bin GOROOT=$(GOROOT) ./scripts/build_pd.sh
-
-pd: $(BIN_PATH)/pd-server
-
-$(BIN_PATH)/tidb-server: 
-	@DEPS_PATH=$(DEPS_PATH) BIN_PATH=$(BIN_PATH) PATH=$(PATH):$(GOROOT)/bin GOROOT=$(GOROOT) ./scripts/build_tidb.sh
-
-tidb: $(BIN_PATH)/tidb-server
-
-deps: rocksdb pd tidb
-
-install: check_req deps release
-	@cp -f ./target/release/tikv-server $(BIN_PATH)
-
-clean_pd:
-	@rm -f $(BIN_PATH)/pd-server
-
-clean_tidb:
-	@rm -f $(BIN_PATH)/tidb-server
-
 clean:
 	cargo clean
-	@rm -rf $(DEPS_PATH) $(BIN_PATH)

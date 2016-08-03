@@ -19,18 +19,18 @@ use std::io::Read;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::boxed::FnBox;
-use std::sync::{Arc, RwLock};
 use std::time::{Instant, Duration};
 use threadpool::ThreadPool;
 use mio::Token;
 
-use super::{Result, ConnData, SendCh, Msg};
+use super::{Result, ConnData, Msg};
 use super::transport::RaftStoreRouter;
 use raftstore::store::{SnapFile, SnapManager, SnapKey, SnapEntry};
 use util::worker::Runnable;
 use util::codec::rpc;
 use util::buf::PipeBuffer;
 use util::HandyRwLock;
+use util::transport::SendCh;
 
 use kvproto::raft_serverpb::RaftMessage;
 
@@ -117,12 +117,12 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
     files: HashMap<Token, (SnapFile, RaftMessage)>,
     pool: ThreadPool,
-    ch: SendCh,
-    raft_router: Arc<RwLock<R>>,
+    ch: SendCh<Msg>,
+    raft_router: R,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(snap_mgr: SnapManager, r: Arc<RwLock<R>>, ch: SendCh) -> Runner<R> {
+    pub fn new(snap_mgr: SnapManager, r: R, ch: SendCh<Msg>) -> Runner<R> {
         Runner {
             snap_mgr: snap_mgr,
             files: map![],
@@ -150,7 +150,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         if f.exists() {
                             info!("file {} already exists, skip receiving.",
                                   f.path().display());
-                            if let Err(e) = self.raft_router.rl().send_raft_msg(meta) {
+                            if let Err(e) = self.raft_router.send_raft_msg(meta) {
                                 error!("send snapshot for token {:?} err {:?}", token, e);
                             }
                             self.close(token);
@@ -194,7 +194,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             error!("failed to save file {:?}: {:?}", token, e);
                             return;
                         }
-                        if let Err(e) = self.raft_router.rl().send_raft_msg(msg) {
+                        if let Err(e) = self.raft_router.send_raft_msg(msg) {
                             error!("send snapshot for token {:?} err {:?}", token, e);
                         }
                     }

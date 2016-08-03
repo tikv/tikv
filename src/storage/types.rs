@@ -74,7 +74,6 @@ impl Display for Key {
     }
 }
 
-#[cfg(test)]
 pub fn make_key(k: &[u8]) -> Key {
     Key::from_raw(k)
 }

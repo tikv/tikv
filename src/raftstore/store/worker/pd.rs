@@ -23,8 +23,9 @@ use kvproto::pdpb;
 
 use util::worker::Runnable;
 use util::escape;
+use util::transport::SendCh;
 use pd::PdClient;
-use raftstore::store::{SendCh, Msg};
+use raftstore::store::Msg;
 use raftstore::Result;
 
 // Use an asynchronous thread to tell pd something.
@@ -37,6 +38,7 @@ pub enum Task {
     Heartbeat {
         region: metapb::Region,
         peer: metapb::Peer,
+        down_peers: Vec<pdpb::PeerStats>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -57,7 +59,7 @@ impl Display for Task {
                        region.get_id(),
                        escape(&split_key))
             }
-            Task::Heartbeat { ref region, ref peer } => {
+            Task::Heartbeat { ref region, ref peer, .. } => {
                 write!(f,
                        "heartbeat for region {:?}, leader {}",
                        region,
@@ -73,11 +75,11 @@ impl Display for Task {
 
 pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
-    ch: SendCh,
+    ch: SendCh<Msg>,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(pd_client: Arc<T>, ch: SendCh) -> Runner<T> {
+    pub fn new(pd_client: Arc<T>, ch: SendCh<Msg>) -> Runner<T> {
         Runner {
             pd_client: pd_client,
             ch: ch,
@@ -129,10 +131,13 @@ impl<T: PdClient> Runner<T> {
         }
     }
 
-    fn handle_heartbeat(&self, region: metapb::Region, peer: metapb::Peer) {
+    fn handle_heartbeat(&self,
+                        region: metapb::Region,
+                        peer: metapb::Peer,
+                        down_peers: Vec<pdpb::PeerStats>) {
         metric_incr!("pd.heartbeat");
         // Now we use put region protocol for heartbeat.
-        match self.pd_client.region_heartbeat(region.clone(), peer.clone()) {
+        match self.pd_client.region_heartbeat(region.clone(), peer.clone(), down_peers) {
             Ok(mut resp) => {
                 metric_incr!("pd.heartbeat.success");
                 if resp.has_change_peer() {
@@ -181,7 +186,9 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::AskSplit { region, split_key, peer } => {
                 self.handle_ask_split(region, split_key, peer)
             }
-            Task::Heartbeat { region, peer } => self.handle_heartbeat(region, peer),
+            Task::Heartbeat { region, peer, down_peers } => {
+                self.handle_heartbeat(region, peer, down_peers)
+            }
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
             Task::ReportSplit { left, right } => self.handle_report_split(left, right),
         };

@@ -35,12 +35,14 @@ pub mod panic_hook;
 pub mod worker;
 pub mod codec;
 pub mod xeval;
+#[macro_use]
 pub mod event;
 pub mod rocksdb;
 pub mod config;
 pub mod fs;
 pub mod buf;
 pub mod sockopt;
+pub mod transport;
 
 pub use self::fs::{DiskStat, get_disk_stat};
 

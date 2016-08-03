@@ -1,35 +1,35 @@
 /// Worker contains all workers that do the expensive job in background.
 
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle, Builder};
 use std::io;
-use std::fmt::Display;
+use std::fmt::{self, Formatter, Display, Debug};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Sender, Receiver};
-use std::result;
+use std::sync::mpsc::{self, Sender, Receiver, SendError};
+use std::error::Error;
 
 use util::SlowTimer;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Stopped
-        Io(e: io::Error) {
-            from()
-            display("{}", e)
-        }
+pub struct Stopped<T>(pub T);
+
+impl<T> Display for Stopped<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "channel has been closed")
     }
 }
 
-impl<T> From<mpsc::SendError<T>> for Error {
-    fn from(_: mpsc::SendError<T>) -> Error {
-        // do we need to return the failed data
-        Error::Stopped
+impl<T> Debug for Stopped<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "channel has been closed")
     }
 }
 
-pub type Result<T> = result::Result<T, Error>;
+impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
+    fn from(_: Stopped<T>) -> Box<Error + Sync + Send + 'static> {
+        box_err!("channel has been closed")
+    }
+}
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T);
@@ -70,9 +70,11 @@ impl<T: Display> Scheduler<T> {
     /// Schedule a task to run.
     ///
     /// If the worker is stopped, an error will return.
-    pub fn schedule(&self, task: T) -> Result<()> {
+    pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
         debug!("scheduling task {}", task);
-        try!(self.sender.send(Some(task)));
+        if let Err(SendError(Some(t))) = self.sender.send(Some(task)) {
+            return Err(Stopped(t));
+        }
         self.counter.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -105,7 +107,7 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 pub struct Worker<T: Display> {
     name: String,
     scheduler: Scheduler<T>,
-    receiver: Option<Receiver<Option<T>>>,
+    receiver: Mutex<Option<Receiver<Option<T>>>>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -144,26 +146,27 @@ impl<T: Display + Send + 'static> Worker<T> {
         Worker {
             name: name.into(),
             scheduler: Scheduler::new(AtomicUsize::new(0), tx),
-            receiver: Some(rx),
+            receiver: Mutex::new(Some(rx)),
             handle: None,
         }
     }
 
     /// Start the worker.
-    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<()> {
+    pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<(), io::Error> {
         self.start_batch(runner, 1)
     }
 
-    pub fn start_batch<R>(&mut self, runner: R, batch_size: usize) -> Result<()>
+    pub fn start_batch<R>(&mut self, runner: R, batch_size: usize) -> Result<(), io::Error>
         where R: BatchRunnable<T> + Send + 'static
     {
+        let mut receiver = self.receiver.lock().unwrap();
         info!("starting working thread: {}", self.name);
-        if self.receiver.is_none() {
+        if receiver.is_none() {
             warn!("worker {} has been started.", self.name);
             return Ok(());
         }
 
-        let rx = self.receiver.take().unwrap();
+        let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
         let h = try!(Builder::new()
             .name(thd_name!(self.name.clone()))
@@ -180,7 +183,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// Schedule a task to run.
     ///
     /// If the worker is stopped, an error will return.
-    pub fn schedule(&self, task: T) -> Result<()> {
+    pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
         self.scheduler.schedule(task)
     }
 

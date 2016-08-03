@@ -37,10 +37,11 @@ use raft::SnapshotStatus;
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
+use util::transport::SendCh;
 use util::get_disk_stat;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
-use super::{util, SendCh, Msg, Tick, SnapManager};
+use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Iterable, Peekable};
 use super::config::Config;
@@ -58,20 +59,20 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
-    sendch: SendCh,
+    sendch: SendCh<Msg>,
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
-
+    pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     snap_worker: Worker<SnapTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
 
-    trans: Arc<RwLock<T>>,
+    trans: T,
     pd_client: Arc<C>,
 
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
@@ -97,7 +98,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
-               trans: Arc<RwLock<T>>,
+               trans: T,
                pd_client: Arc<C>,
                mgr: SnapManager)
                -> Result<Store<T, C>> {
@@ -120,6 +121,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
+            pending_regions: vec![],
             trans: trans,
             pd_client: pd_client,
             peer_cache: Arc::new(RwLock::new(peer_cache)),
@@ -200,7 +202,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    pub fn get_sendch(&self) -> SendCh {
+    pub fn get_sendch(&self) -> SendCh<Msg> {
         self.sendch.clone()
     }
 
@@ -288,7 +290,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
         }
 
-        if try!(self.is_snapshot_overlapped(&msg)) {
+        if try!(self.check_snapshot_overlapped(&msg)) {
             return Ok(());
         }
 
@@ -297,7 +299,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
-        try!(peer.raft_group.step(msg.take_message()));
+        try!(peer.step(msg.take_message()));
         slow_log!(timer, "{} raft step", peer.tag);
 
         // Add into pending raft groups for later handling ready.
@@ -429,7 +431,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         gc_msg.set_to_peer(from_peer.clone());
         gc_msg.set_region_epoch(cur_epoch.clone());
         gc_msg.set_is_tombstone(true);
-        if let Err(e) = self.trans.rl().send(gc_msg) {
+        if let Err(e) = self.trans.send(gc_msg) {
             error!("[region {}] send gc message failed {:?}", region_id, e);
         }
     }
@@ -455,26 +457,36 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn is_snapshot_overlapped(&self, msg: &RaftMessage) -> Result<bool> {
+    fn check_snapshot_overlapped(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
-        if !self.region_peers[&region_id].get_store().is_initialized() &&
-           msg.get_message().has_snapshot() {
-            let snap = msg.get_message().get_snapshot();
-            let mut snap_data = RaftSnapshotData::new();
-            try!(snap_data.merge_from_bytes(snap.get_data()));
-            let snap_region = snap_data.get_region();
-            if let Some((_, &exist_region_id)) = self.region_ranges
-                .range(Excluded(&enc_start_key(snap_region)), Unbounded::<&Key>)
-                .next() {
-                let exist_region = self.region_peers[&exist_region_id].region();
-                if enc_start_key(exist_region) < enc_end_key(snap_region) {
-                    warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
-                    return Ok(true);
-                }
+        if self.region_peers[&region_id].get_store().is_initialized() ||
+           !msg.get_message().has_snapshot() {
+            return Ok(false);
+        }
+
+        let snap = msg.get_message().get_snapshot();
+        let mut snap_data = RaftSnapshotData::new();
+        try!(snap_data.merge_from_bytes(snap.get_data()));
+        let snap_region = snap_data.take_region();
+        if let Some((_, &exist_region_id)) = self.region_ranges
+            .range(Excluded(&enc_start_key(&snap_region)), Unbounded::<&Key>)
+            .next() {
+            let exist_region = self.region_peers[&exist_region_id].region();
+            if enc_start_key(exist_region) < enc_end_key(&snap_region) {
+                warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
+                return Ok(true);
             }
         }
+        for region in &self.pending_regions {
+            if enc_start_key(region) < enc_end_key(&snap_region) &&
+               enc_end_key(region) > enc_start_key(&snap_region) {
+                warn!("pending region overlapped {:?}, {:?}", region, snap_region);
+                return Ok(true);
+            }
+        }
+        self.pending_regions.push(snap_region);
 
         Ok(false)
     }
@@ -927,6 +939,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let task = PdTask::Heartbeat {
             region: peer.region().clone(),
             peer: peer.peer.clone(),
+            down_peers: peer.collect_down_peers(self.cfg.max_peer_down_duration),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", peer.tag, e);
@@ -934,6 +947,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        for peer in self.region_peers.values_mut() {
+            peer.check_peers();
+        }
+
         let mut leader_count = 0;
         for peer in self.region_peers.values() {
             if peer.is_leader() {
@@ -1235,7 +1252,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         slow_log!(t, "handle timeout {:?}", timeout);
     }
 
-    #[allow(useless_vec)]
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
             for (handle, name) in vec![(self.split_check_worker.stop(),
@@ -1256,6 +1272,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             // TODO: should we panic here or shutdown the store?
             error!("handle raft ready err: {:?}", e);
         }
+        self.pending_regions.clear();
     }
 }
 

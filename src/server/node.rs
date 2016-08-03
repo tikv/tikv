@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use mio::EventLoop;
 use rocksdb::DB;
@@ -20,17 +20,18 @@ use rocksdb::DB;
 use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
-use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport, SendCh,
+use util::transport::SendCh;
+use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
                        SnapManager};
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
-use super::transport::ServerRaftStoreRouter;
+use super::transport::RaftStoreRouter;
 
-pub fn create_raft_storage<C>(node: Node<C>, db: Arc<DB>, cfg: &Config) -> Result<Storage>
-    where C: PdClient + 'static
+pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
+    where S: RaftStoreRouter + 'static
 {
-    let engine = box RaftKv::new(node, db);
+    let engine = box RaftKv::new(db, router);
     let store = try!(Storage::from_engine(engine, &cfg.storage));
     Ok(store)
 }
@@ -42,11 +43,9 @@ pub struct Node<C: PdClient + 'static> {
     store: metapb::Store,
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
-    ch: SendCh,
+    ch: SendCh<Msg>,
 
     pd_client: Arc<C>,
-
-    raft_router: Arc<RwLock<ServerRaftStoreRouter>>,
 }
 
 impl<C> Node<C>
@@ -67,7 +66,6 @@ impl<C> Node<C>
         }
 
         let ch = SendCh::new(event_loop.channel());
-        let router = Arc::new(RwLock::new(ServerRaftStoreRouter::new(ch.clone())));
         Node {
             cluster_id: cfg.cluster_id,
             store: store,
@@ -75,14 +73,13 @@ impl<C> Node<C>
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
-            raft_router: router,
         }
     }
 
     pub fn start<T>(&mut self,
                     event_loop: EventLoop<Store<T, C>>,
                     engine: Arc<DB>,
-                    trans: Arc<RwLock<T>>,
+                    trans: T,
                     snap_mgr: SnapManager)
                     -> Result<()>
         where T: Transport + 'static
@@ -119,12 +116,8 @@ impl<C> Node<C>
         self.store.get_id()
     }
 
-    pub fn get_sendch(&self) -> SendCh {
+    pub fn get_sendch(&self) -> SendCh<Msg> {
         self.ch.clone()
-    }
-
-    pub fn raft_store_router(&self) -> Arc<RwLock<ServerRaftStoreRouter>> {
-        self.raft_router.clone()
     }
 
     // check store, return store id for the engine.
@@ -200,7 +193,7 @@ impl<C> Node<C>
                       mut event_loop: EventLoop<Store<T, C>>,
                       store_id: u64,
                       db: Arc<DB>,
-                      trans: Arc<RwLock<T>>,
+                      trans: T,
                       snap_mgr: SnapManager)
                       -> Result<()>
         where T: Transport + 'static
@@ -235,7 +228,7 @@ impl<C> Node<C>
             Some(h) => h,
         };
 
-        try!(self.ch.send(Msg::Quit));
+        box_try!(self.ch.send(Msg::Quit));
         if let Err(e) = h.join() {
             return Err(box_err!("join store {} thread err {:?}", store_id, e));
         }
@@ -243,11 +236,9 @@ impl<C> Node<C>
         Ok(())
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&mut self) -> Result<()> {
         let store_id = self.store.get_id();
-        if let Err(e) = self.stop_store(store_id) {
-            error!("stop store {} err {:?}", store_id, e);
-        }
+        self.stop_store(store_id)
     }
 }
 
@@ -255,6 +246,6 @@ impl<C> Drop for Node<C>
     where C: PdClient
 {
     fn drop(&mut self) {
-        self.stop();
+        self.stop().unwrap();
     }
 }

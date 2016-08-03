@@ -18,19 +18,19 @@ fn test_raftkv() {
 
     let region = cluster.get_region(b"");
     let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
-    let storage = cluster.sim.rl().storages.get(&leader_id.get_id()).unwrap().clone();
+    let storage = cluster.sim.rl().storages[&leader_id.get_id()].clone();
 
     let mut ctx = Context::new();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
 
-    get_put(&ctx, storage.as_ref().as_ref());
-    batch(&ctx, storage.as_ref().as_ref());
-    seek(&ctx, storage.as_ref().as_ref());
-    near_seek(&ctx, storage.as_ref().as_ref());
-    cf(&ctx, storage.as_ref().as_ref());
-    empty_write(&ctx, storage.as_ref().as_ref());
+    get_put(&ctx, storage.as_ref());
+    batch(&ctx, storage.as_ref());
+    seek(&ctx, storage.as_ref());
+    near_seek(&ctx, storage.as_ref());
+    cf(&ctx, storage.as_ref());
+    empty_write(&ctx, storage.as_ref());
     // TODO: test multiple node
 }
 

@@ -12,20 +12,17 @@
 // limitations under the License.
 
 
-use server::Node;
-use server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
+use server::transport::RaftStoreRouter;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
-use util::HandyRwLock;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 
-use pd::PdClient;
 use uuid::Uuid;
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::Arc;
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
 use std::time::Duration;
@@ -89,10 +86,10 @@ impl From<RaftServerError> for engine::Error {
 }
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
-pub struct RaftKv<C: PdClient + 'static> {
-    node: Mutex<Node<C>>,
+#[derive(Clone)]
+pub struct RaftKv<S: RaftStoreRouter + 'static> {
     db: Arc<DB>,
-    router: Arc<RwLock<ServerRaftStoreRouter>>,
+    router: S,
 }
 
 enum CmdRes {
@@ -124,12 +121,10 @@ fn on_result(mut resp: RaftCmdResponse,
     Ok(CmdRes::Snap(snap))
 }
 
-impl<C: PdClient> RaftKv<C> {
+impl<S: RaftStoreRouter> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(node: Node<C>, db: Arc<DB>) -> RaftKv<C> {
-        let router = node.raft_store_router();
+    pub fn new(db: Arc<DB>, router: S) -> RaftKv<S> {
         RaftKv {
-            node: Mutex::new(node),
             db: db,
             router: router,
         }
@@ -139,12 +134,11 @@ impl<C: PdClient> RaftKv<C> {
         let uuid = req.get_header().get_uuid().to_vec();
         let l = req.get_requests().len();
         let db = self.db.clone();
-        try!(self.router.rl().send_command(req,
-                                           box move |resp| {
-                                               cb(on_result(resp, l, &uuid, db)
-                                                   .map_err(Error::into));
-                                               Ok(())
-                                           }));
+        try!(self.router.send_command(req,
+                                      box move |resp| {
+                                          cb(on_result(resp, l, &uuid, db).map_err(Error::into));
+                                          Ok(())
+                                      }));
         Ok(())
     }
 
@@ -170,13 +164,13 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!", exp, act))
 }
 
-impl<C: PdClient> Debug for RaftKv<C> {
+impl<S: RaftStoreRouter> Debug for RaftKv<S> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<C: PdClient> Engine for RaftKv<C> {
+impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     fn async_write(&self,
                    ctx: &Context,
                    mut modifies: Vec<Modify>,
@@ -239,11 +233,9 @@ impl<C: PdClient> Engine for RaftKv<C> {
         }));
         Ok(())
     }
-}
 
-impl<C: PdClient> Drop for RaftKv<C> {
-    fn drop(&mut self) {
-        self.node.lock().unwrap().stop();
+    fn clone(&self) -> Box<Engine> {
+        box RaftKv::new(self.db.clone(), self.router.clone())
     }
 }
 

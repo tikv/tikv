@@ -18,9 +18,10 @@ use std::time::Instant;
 use rocksdb::DB;
 
 use kvproto::metapb::RegionEpoch;
-use raftstore::store::{PeerStorage, keys, SendCh, Msg};
+use raftstore::store::{PeerStorage, keys, Msg};
 use raftstore::store::engine::Iterable;
 use util::escape;
+use util::transport::SendCh;
 use util::worker::Runnable;
 
 /// Split checking task.
@@ -51,13 +52,13 @@ impl Display for Task {
 }
 
 pub struct Runner {
-    ch: SendCh,
+    ch: SendCh<Msg>,
     region_max_size: u64,
     split_size: u64,
 }
 
 impl Runner {
-    pub fn new(ch: SendCh, region_max_size: u64, split_size: u64) -> Runner {
+    pub fn new(ch: SendCh<Msg>, region_max_size: u64, split_size: u64) -> Runner {
         Runner {
             ch: ch,
             region_max_size: region_max_size,

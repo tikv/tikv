@@ -15,9 +15,10 @@
 use std::fs;
 
 use tikv::pd::PdClient;
+use tikv::util::HandyRwLock;
 use kvproto::eraftpb::MessageType;
 
-use super::transport_simulate::IsolateRegionStore;
+use super::transport_simulate::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
@@ -90,8 +91,8 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // isolate node 3 for region 1, but keep the heartbeat to make
     // 3 not vote after filters are cleared.
-    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgSnapshot));
-    cluster.add_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
+    cluster.add_send_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgSnapshot));
+    cluster.add_send_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
@@ -121,7 +122,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     let snapfiles: Vec<_> = fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
     assert!(snapfiles.len() > 2);
 
-    cluster.clear_filters();
+    cluster.clear_send_filters();
     debug!("filters cleared.");
 
     // node 3 must have k1, k2.
@@ -159,4 +160,46 @@ fn test_node_snap_gc() {
 fn test_server_snap_gc() {
     let mut cluster = new_server_cluster(0, 3);
     test_snap_gc(&mut cluster);
+}
+
+fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
+    // util::init_log();
+    // disable raft log gc.
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = 60000;
+
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_rule();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    // peer 2 can't step to leader.
+    cluster.add_send_filter(IsolateRegionStore::new(r1, 2)
+        .msg_type(MessageType::MsgRequestVote)
+        .direction(Direction::Send));
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
+    cluster.must_put(b"k3", b"v3");
+    // Now peer 1 can't send snapshot to peer 2
+    cluster.sim.wl().add_recv_filter(3, box PauseFirstSnap::new());
+    cluster.sim.wl().add_recv_filter(1, box PauseFirstSnap::new());
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    let region = cluster.get_region(b"k1");
+    // TODO: should check whether snapshot has been sent before split.
+    cluster.must_split(&region, b"k2");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+}
+
+#[test]
+fn test_node_concurrent_snap() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_concurrent_snap(&mut cluster);
+}
+
+#[test]
+fn test_server_concurrent_snap() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_concurrent_snap(&mut cluster);
 }

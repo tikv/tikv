@@ -130,9 +130,9 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
 
     // hook transport and drop all snapshot packet, so follower's status
     // will stay at snapshot.
-    cluster.add_filter(DropSnapshot);
+    cluster.add_send_filter(DropSnapshot);
     // don't allow leader transfer succeed if it is actually triggered.
-    cluster.add_filter(IsolateRegionStore::new(1, 2)
+    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgTimeoutNow)
         .direction(Direction::Recv));
 

@@ -17,9 +17,9 @@ ${ROCKSDB_DIR}/librocksdb.so: ${ROCKSDB_DIR}/libgflags.a
 	export CPLUS_INCLUDE_PATH="${CPLUS_INCLUDE_PATH}:${ROCKSDB_DIR}/include" && \
 	export CXX=${COMPILER} && \
 	cd /tmp && \
-	curl -L https://github.com/facebook/rocksdb/archive/rocksdb-4.3.1.tar.gz -o rocksdb.tar.gz && \
+	curl -L https://github.com/facebook/rocksdb/archive/rocksdb-4.9.tar.gz -o rocksdb.tar.gz && \
 	tar xf rocksdb.tar.gz && \
-	cd rocksdb-rocksdb-4.3.1 && \
+	cd rocksdb-rocksdb-4.9 && \
 	make shared_lib && \
 	cp librocksdb.so* ${ROCKSDB_DIR}
 

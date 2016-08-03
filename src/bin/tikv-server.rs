@@ -28,7 +28,7 @@ extern crate fs2;
 use std::env;
 use std::fs::{self, File};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::io::Read;
 use std::net::UdpSocket;
 use std::time::Duration;
@@ -42,8 +42,9 @@ use cadence::{StatsdClient, NopMetricSink};
 use tikv::storage::{Storage, TEMP_DIR, DEFAULT_CFS};
 use tikv::util::{self, logger, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::metric::{self, BufferedUdpMetricSink};
-use tikv::server::{DEFAULT_LISTENING_ADDR, SendCh, Server, Node, Config, bind, create_event_loop,
-                   create_raft_storage};
+use tikv::util::transport::SendCh;
+use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_event_loop,
+                   create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
@@ -130,13 +131,13 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
 }
 
 fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>) {
-    let host = get_string_value("metric-addr",
+    let host = get_string_value("",
                                 "metric.addr",
                                 matches,
                                 config,
                                 Some("".to_owned()),
                                 |v| v.as_str().map(|s| s.to_owned()));
-    let mut prefix = get_string_value("metric-prefix",
+    let mut prefix = get_string_value("",
                                       "metric.prefix",
                                       matches,
                                       config,
@@ -163,6 +164,10 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
 }
 
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
+    get_rocksdb_default_cf_option(matches, config)
+}
+
+fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     let block_size = get_integer_value("",
@@ -179,6 +184,18 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                              Some(1024 * 1024 * 1024),
                                              |v| v.as_integer());
     block_base_opts.set_lru_cache(block_cache_size as u64);
+    let bloom_bits_per_key = get_integer_value("",
+                                               "rocksdb.block-based-table.\
+                                                bloom-filter-bits-per-key",
+                                               matches,
+                                               config,
+                                               Some(10),
+                                               |v| v.as_integer());
+    let block_based_filter = config.lookup("rocksdb.block-based-table.block-based-bloom-filter")
+        .unwrap_or(&toml::Value::Boolean(false))
+        .as_bool()
+        .unwrap_or(false);
+    block_base_opts.set_bloom_filter(bloom_bits_per_key as i32, block_based_filter);
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
@@ -269,6 +286,29 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
     opts
 }
 
+fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
+    let mut opts = RocksdbOptions::new();
+    let mut block_base_opts = BlockBasedOptions::new();
+    block_base_opts.set_block_size(16 * 1024);
+    block_base_opts.set_lru_cache(32 * 1024 * 1024);
+    block_base_opts.set_bloom_filter(10, false);
+    opts.set_block_based_table_factory(&block_base_opts);
+
+    let cpl = "no:no:no:no:no:no:no".to_owned();
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
+    opts.compression_per_level(&per_level_compression);
+    opts.set_write_buffer_size(32 * 1024 * 1024);
+    opts.set_max_write_buffer_number(5);
+    opts.set_max_bytes_for_level_base(32 * 1024 * 1024);
+    opts.set_target_file_size_base(32 * 1024 * 1024);
+
+    // set level0_file_num_compaction_trigger = 1 is very important,
+    // this will result in fewer sst files in lock cf.
+    opts.set_level_zero_file_num_compaction_trigger(1);
+
+    opts
+}
+
 fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &str) -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
@@ -306,14 +346,14 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                                           Some(addr.to_owned()),
                                           |v| v.as_str().map(|s| s.to_owned()));
     cfg.send_buffer_size =
-        get_integer_value("send-buffer-size",
+        get_integer_value("",
                           "server.send-buffer-size",
                           matches,
                           config,
                           Some(128 * 1024),
                           |v| v.as_integer()) as usize;
     cfg.recv_buffer_size =
-        get_integer_value("recv-buffer-size",
+        get_integer_value("",
                           "server.recv-buffer-size",
                           matches,
                           config,
@@ -335,29 +375,38 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           Some(4096),
                           |v| v.as_integer()) as usize;
     cfg.raft_store.region_split_size =
-        get_integer_value("region-split-size",
+        get_integer_value("",
                           "raftstore.region-split-size",
                           matches,
                           config,
                           Some(64 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
     cfg.raft_store.region_max_size =
-        get_integer_value("region-max-size",
+        get_integer_value("",
                           "raftstore.region-max-size",
                           matches,
                           config,
                           Some(80 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
     cfg.raft_store.region_check_size_diff =
-        get_integer_value("region-split-check-diff",
+        get_integer_value("",
                           "raftstore.region-split-check-diff",
                           matches,
                           config,
                           Some(8 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
 
+    let max_peer_down_millis =
+        get_integer_value("",
+                          "raftstore.max-peer-down-duration",
+                          matches,
+                          config,
+                          Some(300_000),
+                          |v| v.as_integer()) as u64;
+    cfg.raft_store.max_peer_down_duration = Duration::from_millis(max_peer_down_millis);
+
     cfg.raft_store.pd_heartbeat_tick_interval =
-        get_integer_value("pd-heartbeat-tick-interval",
+        get_integer_value("",
                           "raftstore.pd-heartbeat-tick-interval",
                           matches,
                           config,
@@ -365,12 +414,13 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           |v| v.as_integer()) as u64;
 
     cfg.raft_store.pd_store_heartbeat_tick_interval =
-        get_integer_value("pd-store-heartbeat-tick-interval",
+        get_integer_value("",
                           "raftstore.pd-store-heartbeat-tick-interval",
                           matches,
                           config,
                           Some(10000),
                           |v| v.as_integer()) as u64;
+
     cfg.storage.sched_notify_capacity =
         get_integer_value("",
                           "storage.scheduler-notify-capacity",
@@ -397,18 +447,22 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
 
 fn build_raftkv(matches: &Matches,
                 config: &toml::Value,
-                ch: SendCh,
+                ch: SendCh<Msg>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config)
-                -> (Storage, Arc<RwLock<ServerRaftStoreRouter>>, u64, SnapManager) {
-    let trans = Arc::new(RwLock::new(ServerTransport::new(ch)));
+                -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager) {
+    let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
+    let cfs_opts = vec![get_rocksdb_default_cf_option(matches, config),
+                        get_rocksdb_lock_cf_option()];
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine =
-        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), DEFAULT_CFS)
-            .unwrap());
+    let engine = Arc::new(rocksdb_util::new_engine_opt(opts,
+                                                       db_path.to_str().unwrap(),
+                                                       DEFAULT_CFS,
+                                                       cfs_opts)
+        .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
     let mut node = Node::new(&mut event_loop, cfg, pd_client);
@@ -419,10 +473,9 @@ fn build_raftkv(matches: &Matches,
     let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
 
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
-    let raft_router = node.raft_store_router();
-    let node_id = node.id();
+    let router = ServerRaftStoreRouter::new(node.get_sendch());
 
-    (create_raft_storage(node, engine, cfg).unwrap(), raft_router, node_id, snap_mgr)
+    (node, create_raft_storage(router.clone(), engine, cfg).unwrap(), router, snap_mgr)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -449,7 +502,6 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
 
 fn run_local_server(listener: TcpListener, config: &Config) {
     let mut event_loop = create_event_loop(config).unwrap();
-    let router = Arc::new(RwLock::new(MockRaftStoreRouter));
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
 
     let mut store = Storage::new(&config.storage).unwrap();
@@ -461,7 +513,7 @@ fn run_local_server(listener: TcpListener, config: &Config) {
                               config,
                               listener,
                               store,
-                              router,
+                              MockRaftStoreRouter,
                               MockStoreAddrResolver,
                               snap_mgr)
         .unwrap();
@@ -471,20 +523,13 @@ fn run_local_server(listener: TcpListener, config: &Config) {
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel());
-    let etcd_endpoints = get_string_value("etcd",
-                                          "etcd.endpoints",
+    let etcd_endpoints = get_string_value("pd",
+                                          "pd.endpoints",
                                           matches,
                                           config,
                                           None,
                                           |v| v.as_str().map(|s| s.to_owned()));
-    let etcd_pd_root = get_string_value("pd-root",
-                                        "etcd.pd-root",
-                                        matches,
-                                        config,
-                                        Some("/pd".to_owned()),
-                                        |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(new_rpc_client(&etcd_endpoints, &etcd_pd_root, cfg.cluster_id)
-        .unwrap());
+    let pd_client = Arc::new(new_rpc_client(&etcd_endpoints, cfg.cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let store_path = get_store_path(matches, config);
@@ -496,10 +541,10 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                store_path);
     }
 
-    let (mut store, raft_router, node_id, snap_mgr) =
+    let (mut node, mut store, raft_router, snap_mgr) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
-    initial_metric(matches, config, Some(node_id));
+    initial_metric(matches, config, Some(node.id()));
 
     info!("start storage");
     if let Err(e) = store.start(&cfg.storage) {
@@ -515,6 +560,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                               snap_mgr)
         .unwrap();
     svr.run(&mut event_loop).unwrap();
+    node.stop().unwrap();
 }
 
 fn main() {
@@ -528,7 +574,7 @@ fn main() {
     opts.optopt("",
                 "advertise-addr",
                 "set advertise listening address for client communication",
-                "127.0.0.1:20160, if not set, use addr instead.");
+                "if not set, use ${addr} instead.");
     opts.optopt("L",
                 "log",
                 "set log level",
@@ -548,44 +594,7 @@ fn main() {
                 "set which dsn to use, warning: default is rocksdb without persistent",
                 "dsn: rocksdb, raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
-    opts.optopt("", "metric-addr", "set statsd server address", "host:port");
-    opts.optopt("",
-                "metric-prefix",
-                "set metric prefix",
-                "metric prefix: tikv");
-    opts.optopt("",
-                "region-split-size",
-                "set region split size",
-                "default: 64 MB");
-    opts.optopt("",
-                "region-max-size",
-                "set region max size",
-                "default: 80 MB");
-    opts.optopt("",
-                "region-split-check-diff",
-                "set region split check diff",
-                "default: 8 MB");
-    opts.optopt("",
-                "etcd",
-                "etcd endpoints",
-                "127.0.0.1:2379,127.0.0.1:3379");
-    opts.optopt("", "pd-root", "pd root path in etcd", "/pd");
-    opts.optopt("",
-                "pd-heartbeat-tick-interval",
-                "set region heartbeat tick interval",
-                "default 5000 (ms)");
-    opts.optopt("",
-                "pd-store-heartbeat-tick-interval",
-                "set region store heartbeat tick interval",
-                "default 5000 (ms)");
-    opts.optopt("",
-                "send-buffer-size",
-                "server socket send buffer size",
-                "default 128 KB");
-    opts.optopt("",
-                "recv-buffer-size",
-                "server socket recv buffer size",
-                "default 128 KB");
+    opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {

@@ -13,7 +13,6 @@
 
 use std::time::Duration;
 use std::boxed::Box;
-use std::sync::Arc;
 use threadpool::ThreadPool;
 use storage::{Engine, Command, Snapshot, CallbackType, Result as StorageResult,
               Error as StorageError};
@@ -22,10 +21,10 @@ use storage::mvcc::{MvccTxn, Error as MvccError};
 use storage::{Key, Value, KvPair};
 use std::collections::HashMap;
 use mio::{self, EventLoop};
+use util::transport::SendCh;
 use storage::engine::{Result as EngineResult, Callback as EngineCallback, Modify};
 use super::Result;
 use super::Error;
-use super::SchedCh;
 use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 
@@ -133,7 +132,7 @@ impl RunningCtx {
     }
 }
 
-fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SchedCh) -> EngineCallback<()> {
+fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallback<()> {
     Box::new(move |result: EngineResult<()>| {
         if let Err(e) = ch.send(Msg::WriteFinished {
             cid: cid,
@@ -148,12 +147,12 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SchedCh) -> EngineCallback<()
 }
 
 pub struct Scheduler {
-    engine: Arc<Box<Engine>>,
+    engine: Box<Engine>,
 
     // cid -> context
     cmd_ctxs: HashMap<u64, RunningCtx>,
 
-    schedch: SchedCh,
+    schedch: SendCh<Msg>,
 
     // cmd id generator
     id_alloc: u64,
@@ -165,7 +164,21 @@ pub struct Scheduler {
     worker_pool: ThreadPool,
 }
 
-fn process_read(cid: u64, cmd: Command, ch: SchedCh, snapshot: Box<Snapshot>) {
+impl Scheduler {
+    pub fn new(engine: Box<Engine>, schedch: SendCh<Msg>, concurrency: usize) -> Scheduler {
+        Scheduler {
+            engine: engine,
+            cmd_ctxs: HashMap::new(),
+            schedch: schedch,
+            id_alloc: 0,
+            latches: Latches::new(concurrency),
+            worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
+                                                   DEFAULT_WOKER_POOL_SIZES),
+        }
+    }
+}
+
+fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     debug!("process read cmd(cid={}) in worker pool.", cid);
     let pr = match cmd {
         Command::Get { ref key, start_ts, .. } => {
@@ -220,7 +233,7 @@ fn process_read(cid: u64, cmd: Command, ch: SchedCh, snapshot: Box<Snapshot>) {
     }
 }
 
-fn process_write(cid: u64, cmd: Command, ch: SchedCh, snapshot: Box<Snapshot>) {
+fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref()) {
         if let Err(err) = ch.send(Msg::PrepareWriteFailed { cid: cid, err: e }) {
             error!("send PrepareWriteFailed message to channel failed. cid={}, err={:?}",
@@ -230,8 +243,8 @@ fn process_write(cid: u64, cmd: Command, ch: SchedCh, snapshot: Box<Snapshot>) {
     }
 }
 
-fn process_write_impl(cid: u64, cmd: Command, ch: SchedCh, snapshot: &Snapshot) -> Result<()> {
-    if let Err(e) = match cmd {
+fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapshot) -> Result<()> {
+    box_try!(match cmd {
         Command::Prewrite { ref mutations, ref primary, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts);
             let mut results = vec![];
@@ -310,27 +323,12 @@ fn process_write_impl(cid: u64, cmd: Command, ch: SchedCh, snapshot: &Snapshot) 
             })
         }
         _ => panic!("unsupported write command"),
-    } {
-        error!("process write impl send msg to channel failed, cid={}", cid);
-        return Err(e);
-    }
+    });
 
     Ok(())
 }
 
 impl Scheduler {
-    pub fn new(engine: Arc<Box<Engine>>, schedch: SchedCh, concurrency: usize) -> Scheduler {
-        Scheduler {
-            engine: engine,
-            cmd_ctxs: HashMap::new(),
-            schedch: schedch,
-            id_alloc: 0,
-            latches: Latches::new(concurrency),
-            worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
-                                                   DEFAULT_WOKER_POOL_SIZES),
-        }
-    }
-
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
         self.id_alloc

@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
+use std::time::{Instant, Duration};
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
@@ -27,12 +28,13 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
                              RegionLocalState};
+use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer, rocksdb};
-use pd::PdClient;
+use pd::{PdClient, INVALID_ID};
 use super::store::Store;
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state};
 use super::util;
@@ -148,6 +150,8 @@ pub struct Peer {
     pub raft_group: RawNode<PeerStorage>,
     pending_cmds: PendingCmdQueue,
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
+    // Record the last instant of each peer's heartbeat response.
+    pub peer_heartbeats: HashMap<u64, Instant>,
     coprocessor_host: CoprocessorHost,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
@@ -173,6 +177,9 @@ impl Peer {
             Some(peer) => peer.get_id(),
         };
 
+        info!("[region {}] create peer with id {}",
+              region.get_id(),
+              peer_id);
         Peer::new(store, region, peer_id)
     }
 
@@ -230,6 +237,7 @@ impl Peer {
             raft_group: raft_group,
             pending_cmds: Default::default(),
             peer_cache: store.peer_cache(),
+            peer_heartbeats: HashMap::new(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             pending_remove: false,
@@ -341,7 +349,7 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T>(&mut self, trans: &Arc<RwLock<T>>, msgs: &[eraftpb::Message]) -> Result<()>
+    fn send<T>(&mut self, trans: &T, msgs: &[eraftpb::Message]) -> Result<()>
         where T: Transport
     {
         for msg in msgs {
@@ -350,9 +358,49 @@ impl Peer {
         Ok(())
     }
 
-    pub fn handle_raft_ready<T: Transport>(&mut self,
-                                           trans: &Arc<RwLock<T>>)
-                                           -> Result<Option<ReadyResult>> {
+    pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
+        if self.is_leader() && m.get_from() != INVALID_ID {
+            self.peer_heartbeats.insert(m.get_from(), Instant::now());
+        }
+        try!(self.raft_group.step(m));
+        Ok(())
+    }
+
+    pub fn check_peers(&mut self) {
+        if !self.is_leader() {
+            self.peer_heartbeats.clear();
+            return;
+        }
+
+        if self.peer_heartbeats.len() == self.region().get_peers().len() {
+            return;
+        }
+
+        // Insert heartbeats in case that some peers never reponse heartbeats.
+        for peer in self.region().get_peers().to_owned() {
+            self.peer_heartbeats.entry(peer.get_id()).or_insert_with(Instant::now);
+        }
+    }
+
+    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
+        let mut down_peers = Vec::new();
+        for p in self.region().get_peers() {
+            if p.get_id() == self.peer.get_id() {
+                continue;
+            }
+            if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
+                if instant.elapsed() >= max_duration {
+                    let mut stats = PeerStats::new();
+                    stats.set_peer(p.clone());
+                    stats.set_down_seconds(instant.elapsed().as_secs());
+                    down_peers.push(stats);
+                }
+            }
+        }
+        down_peers
+    }
+
+    pub fn handle_raft_ready<T: Transport>(&mut self, trans: &T) -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
             return Ok(None);
         }
@@ -601,10 +649,7 @@ impl Peer {
         None
     }
 
-    fn send_raft_message<T: Transport>(&mut self,
-                                       msg: &eraftpb::Message,
-                                       trans: &Arc<RwLock<T>>)
-                                       -> Result<()> {
+    fn send_raft_message<T: Transport>(&mut self, msg: &eraftpb::Message, trans: &T) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // TODO: can we use move instead?
@@ -644,7 +689,7 @@ impl Peer {
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
 
-        if let Err(e) = trans.rl().send(send_msg) {
+        if let Err(e) = trans.send(send_msg) {
             warn!("{} failed to send msg to {} in store {}, err: {:?}",
                   self.tag,
                   to_peer_id,
@@ -985,6 +1030,7 @@ impl Peer {
 
                 // Add this peer to cache.
                 self.peer_cache.wl().insert(peer.get_id(), peer.clone());
+                self.peer_heartbeats.insert(peer.get_id(), Instant::now());
                 region.mut_peers().push(peer.clone());
 
                 metric_incr!("raftstore.add_peer.success");
@@ -1012,6 +1058,7 @@ impl Peer {
 
                 // Remove this peer from cache.
                 self.peer_cache.wl().remove(&peer.get_id());
+                self.peer_heartbeats.remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
                 metric_incr!("raftstore.remove_peer.success");
