@@ -87,7 +87,8 @@ pub trait PdClient: Send + Sync {
     // Leader for a region will use this to heartbeat Pd.
     fn region_heartbeat(&self,
                         region: metapb::Region,
-                        leader: metapb::Peer)
+                        leader: metapb::Peer,
+                        down_peers: Vec<pdpb::PeerStats>)
                         -> Result<pdpb::RegionHeartbeatResponse>;
 
     // Ask pd for split, pd will returns the new split region id.
