@@ -210,27 +210,25 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
         }
         Command::Scan { ref start_key, limit, start_ts, .. } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
-            let scanner = snap_store.scanner();
-            match scanner {
-                Ok(mut scanner) => {
-                    let key = start_key.clone();
-                    match scanner.scan(key, limit) {
-                        Ok(mut results) => {
-                            let pairs = results.drain(..)
-                                .map(|x| x.map_err(StorageError::from))
-                                .collect();
-                            ProcessResult::MultiKvpairs { pairs: pairs }
-                        }
-                        Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+            let res = snap_store.scanner().and_then(|mut scanner| {
+                let key = start_key.clone();
+                match scanner.scan(key, limit) {
+                    Ok(mut results) => {
+                        Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
                     }
+                    Err(e) => Err(e),
                 }
-                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+            });
+            match res {
+                Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
+                Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
         _ => panic!("unsupported read command"),
     };
 
     if let Err(e) = ch.send(Msg::ReadFinished { cid: cid, pr: pr }) {
+        // Todo: if this happens we need to clean up command's context
         error!("send read finished failed, cid={}, err={:?}", cid, e);
     }
 }
@@ -238,7 +236,8 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
 fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref()) {
         if let Err(err) = ch.send(Msg::PrepareWriteFailed { cid: cid, err: e }) {
-            error!("send PrepareWriteFailed message to channel failed. cid={}, err={:?}",
+            // Todo: if this happens, lock will hold for ever
+            panic!("send PrepareWriteFailed message to channel failed. cid={}, err={:?}",
                    cid,
                    err);
         }
@@ -486,23 +485,11 @@ impl Scheduler {
                                  cid: u64,
                                  pr: ProcessResult,
                                  to_be_write: Vec<Modify>) {
-        let res = {
-            let ctx = self.cmd_ctxs.get(&cid).unwrap();
-            assert_eq!(ctx.cid, cid);
-            match ctx.cmd {
-                Command::Prewrite { ref ctx, .. } |
-                Command::Commit { ref ctx, .. } |
-                Command::CommitThenGet { ref ctx, .. } |
-                Command::Cleanup { ref ctx, .. } |
-                Command::Rollback { ref ctx, .. } |
-                Command::RollbackThenGet { ref ctx, .. } => {
-                    let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
-                    self.engine.async_write(ctx, to_be_write, engine_cb)
-                }
-                _ => panic!("unsupported write command"),
-            }
-        };
-        if let Err(e) = res {
+        if let Err(e) = {
+            let ctx = self.extract_context(cid);
+            let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
+            self.engine.async_write(ctx, to_be_write, engine_cb)
+        } {
             let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
             assert_eq!(ctx.cid, cid);
             let cb = ctx.callback.take().unwrap();
