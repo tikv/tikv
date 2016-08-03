@@ -595,7 +595,7 @@ fn main() {
             run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {
-            let _ = TimeMonitor::default();
+            let _m = TimeMonitor::default();
             run_raft_server(listener, &matches, &config, &cfg);
         }
         n => panic!("unrecognized dns name: {}", n),
