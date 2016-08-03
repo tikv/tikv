@@ -22,6 +22,7 @@ use tempdir::TempDir;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
 use super::util::*;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
@@ -424,6 +425,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_region_id(&self, key: &[u8]) -> u64 {
         self.get_region(key).get_id()
+    }
+
+    pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
+        self.pd_client.get_down_peers()
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {

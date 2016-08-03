@@ -299,7 +299,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
-        try!(peer.raft_group.step(msg.take_message()));
+        try!(peer.step(msg.take_message()));
         slow_log!(timer, "{} raft step", peer.tag);
 
         // Add into pending raft groups for later handling ready.
@@ -939,6 +939,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let task = PdTask::Heartbeat {
             region: peer.region().clone(),
             peer: peer.peer.clone(),
+            down_peers: peer.collect_down_peers(self.cfg.max_peer_down_duration),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", peer.tag, e);
@@ -946,6 +947,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        for peer in self.region_peers.values_mut() {
+            peer.check_peers();
+        }
+
         let mut leader_count = 0;
         for peer in self.region_peers.values() {
             if peer.is_leader() {
