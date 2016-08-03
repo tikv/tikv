@@ -119,3 +119,12 @@ block-size = "64KB"
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read
 block-cache-size = "1GB"
 
+# If you're doing point lookups you definitely want to turn bloom filters on, We use
+# bloom filters to avoid unnecessary disk reads. Default bits_per_key is 10, which
+# yields ~1% false positive rate. Larger bits_per_key values will reduce false positive
+# rate, but increase memory usage and space amplification.
+bloom-filter-bits-per-key = 10
+
+# false means one sst file one bloom filter, true means evry block has a corresponding bloom filter
+block-based-bloom-filter = false
+
