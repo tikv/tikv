@@ -61,14 +61,13 @@ fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u
 fn parse_urls(addr: &str) -> Result<Vec<String>> {
     let mut hosts = Vec::new();
     for a in addr.split(',') {
-        let url = match Url::parse(a) {
-            Ok(url) => url,
-            Err(e) => return Err(box_err!("parse url failed: {:?}", e)),
-        };
-        if url.host_str().is_none() || url.port().is_none() {
+        let url = box_try!(Url::parse(a));
+        let host = url.host_str();
+        let port = url.port_or_known_default();
+        if host.is_none() || port.is_none() {
             return Err(box_err!("invalid url {:?}", url));
         }
-        hosts.push(format!("{}:{}", url.host_str().unwrap(), url.port().unwrap()));
+        hosts.push(format!("{}:{}", host.unwrap(), port.unwrap()));
     }
     Ok(hosts)
 }
@@ -183,5 +182,39 @@ impl RpcClient {
 
     fn alloc_msg_id(&self) -> u64 {
         self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::parse_urls;
+
+    #[test]
+    fn test_parse_urls() {
+        assert!(parse_urls("example.com").is_err());
+
+        // test default port.
+        let hosts = parse_urls("http://example.com").unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0], "example.com:80");
+        let hosts = parse_urls("https://example.com").unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0], "example.com:443");
+
+        // test non-default port.
+        let hosts = parse_urls("http://example.com:1234").unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0], "example.com:1234");
+        let hosts = parse_urls("https://example.com:4321").unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0], "example.com:4321");
+
+        // test multiple urls.
+        let hosts = parse_urls("http://127.0.0.1:8080,http://example.com:2379,https://example.com")
+            .unwrap();
+        assert_eq!(hosts.len(), 3);
+        assert_eq!(hosts[0], "127.0.0.1:8080");
+        assert_eq!(hosts[1], "example.com:2379");
+        assert_eq!(hosts[2], "example.com:443");
     }
 }
