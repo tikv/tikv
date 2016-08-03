@@ -442,7 +442,13 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
-        let resp = self.request(key, vec![new_put_cmd(key, value)], Duration::from_secs(5));
+        self.must_put_cf("default", key, value);
+    }
+
+    pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
+        let resp = self.request(key,
+                                vec![new_put_cf_cmd(cf, key, value)],
+                                Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -466,7 +472,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_delete(&mut self, key: &[u8]) {
-        let resp = self.request(key, vec![new_delete_cmd(key)], Duration::from_secs(5));
+        self.must_delete_cf("default", key)
+    }
+
+    pub fn must_delete_cf(&mut self, cf: &str, key: &[u8]) {
+        let resp = self.request(key, vec![new_delete_cmd(cf, key)], Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
