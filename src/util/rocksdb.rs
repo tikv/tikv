@@ -55,6 +55,8 @@ pub fn new_engine_opt(mut opts: Options,
     // Currently we support 1) Create new db. 2) Open a db with CFs we want. 3) Open db with no
     // CF.
     // TODO: Support open db with incomplete CFs.
+
+    // opts is used as Rocksdb's DBOptions when call DB::open_cf
     opts.create_if_missing(false);
     let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
     match DB::open_cf(&opts, path, cfs, &cfs_ref_opts) {
@@ -62,12 +64,14 @@ pub fn new_engine_opt(mut opts: Options,
         Err(e) => warn!("open rocksdb fail: {}", e),
     }
 
+    // opts is used as Rocksdb's Options(include DBOptions and ColumnFamilyOptions)
+    // when call DB::open
     opts.create_if_missing(true);
     let mut db = match DB::open(&opts, path) {
         Ok(db) => db,
         Err(e) => return Err(e),
     };
-    for (&cf, &cf_opts) in cfs.iter().zip(cfs_ref_opts.iter()) {
+    for (&cf, &cf_opts) in cfs.iter().zip(&cfs_ref_opts) {
         if cf == "default" {
             continue;
         }

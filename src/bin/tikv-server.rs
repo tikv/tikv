@@ -164,6 +164,10 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
 }
 
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
+    get_rocksdb_default_cf_option(matches, config)
+}
+
+fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     let block_size = get_integer_value("",
@@ -440,7 +444,8 @@ fn build_raftkv(matches: &Matches,
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
-    let cfs_opts = vec![get_rocksdb_option(matches, config), get_rocksdb_lock_cf_option()];
+    let cfs_opts = vec![get_rocksdb_default_cf_option(matches, config),
+                        get_rocksdb_lock_cf_option()];
     let mut db_path = path.clone();
     db_path.push("db");
     let engine = Arc::new(rocksdb_util::new_engine_opt(opts,
