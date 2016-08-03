@@ -180,6 +180,18 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                              Some(1024 * 1024 * 1024),
                                              |v| v.as_integer());
     block_base_opts.set_lru_cache(block_cache_size as u64);
+    let bloom_bits_per_key = get_integer_value("",
+                                               "rocksdb.block-based-table.\
+                                                bloom-filter-bits-per-key",
+                                               matches,
+                                               config,
+                                               Some(10),
+                                               |v| v.as_integer());
+    let block_based_filter = config.lookup("rocksdb.block-based-table.block-based-bloom-filter")
+        .unwrap_or(&toml::Value::Boolean(false))
+        .as_bool()
+        .unwrap_or(false);
+    block_base_opts.set_bloom_filter(bloom_bits_per_key as i32, block_based_filter);
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
@@ -266,6 +278,29 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                                            Some(16),
                                                            |v| v.as_integer());
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
+
+    opts
+}
+
+fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
+    let mut opts = RocksdbOptions::new();
+    let mut block_base_opts = BlockBasedOptions::new();
+    block_base_opts.set_block_size(16 * 1024);
+    block_base_opts.set_lru_cache(32 * 1024 * 1024);
+    block_base_opts.set_bloom_filter(10, false);
+    opts.set_block_based_table_factory(&block_base_opts);
+
+    let cpl = "no:no:no:no:no:no:no".to_owned();
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
+    opts.compression_per_level(&per_level_compression);
+    opts.set_write_buffer_size(32 * 1024 * 1024);
+    opts.set_max_write_buffer_number(5);
+    opts.set_max_bytes_for_level_base(32 * 1024 * 1024);
+    opts.set_target_file_size_base(32 * 1024 * 1024);
+
+    // set level0_file_num_compaction_trigger = 1 is very important,
+    // this will result in fewer sst files in lock cf.
+    opts.set_level_zero_file_num_compaction_trigger(1);
 
     opts
 }
@@ -405,11 +440,14 @@ fn build_raftkv(matches: &Matches,
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
+    let cfs_opts = vec![get_rocksdb_option(matches, config), get_rocksdb_lock_cf_option()];
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine =
-        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), DEFAULT_CFS)
-            .unwrap());
+    let engine = Arc::new(rocksdb_util::new_engine_opt(opts,
+                                                       db_path.to_str().unwrap(),
+                                                       DEFAULT_CFS,
+                                                       cfs_opts)
+        .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
     let mut node = Node::new(&mut event_loop, cfg, pd_client);
