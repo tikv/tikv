@@ -1412,7 +1412,7 @@ fn test_leader_election_with_check_quorum() {
     let a_election_timeout = nt.peers.get(&1).unwrap().get_election_timeout();
     let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
     nt.peers.get_mut(&1).unwrap().set_randomized_election_timeout(a_election_timeout + 1);
-    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
+    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 2);
 
     // Letting b's electionElapsed reach to timeout so that it can vote for a
     for _ in 0..b_election_timeout {
