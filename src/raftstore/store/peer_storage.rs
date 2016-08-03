@@ -375,18 +375,7 @@ impl PeerStorage {
 
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
-            let timer = Instant::now();
-            // Delete everything in the region for this peer.
-            for cf in self.engine.as_ref().cf_names() {
-                let handle = box_try!(rocksdb::get_cf_handle(self.engine.as_ref(), cf));
-                try!(self.scan_region_cf(self.engine.as_ref(),
-                                         cf,
-                                         &mut |key, _| {
-                                             try!(ctx.wb.delete_cf(*handle, key));
-                                             Ok(true)
-                                         }));
-            }
-            info!("{} clean old region takes {:?}", self.tag, timer.elapsed());
+            try!(self.clear(&mut ctx.wb));
         }
 
         let mut region_state = RegionLocalState::new();
@@ -436,6 +425,37 @@ impl PeerStorage {
         Ok(())
     }
 
+    // Delete all data belong to the region. Results are stored in `wb`.
+    pub fn clear(&self, wb: &mut WriteBatch) -> Result<()> {
+        let timer = Instant::now();
+        for r in self.region_key_ranges() {
+            try!(self.engine.scan(&r.0,
+                                  &r.1,
+                                  &mut |key, _| {
+                                      try!(wb.delete(key));
+                                      Ok(true)
+                                  }));
+        }
+
+        let (start_key, end_key) = (enc_start_key(self.get_region()),
+                                    enc_end_key(self.get_region()));
+        for cf in self.engine.cf_names() {
+            if cf == "default" {
+                continue;
+            }
+            let handle = box_try!(rocksdb::get_cf_handle(self.engine.as_ref(), cf));
+            try!(self.engine.scan_cf(cf,
+                                     &start_key,
+                                     &end_key,
+                                     &mut |key, _| {
+                                         try!(wb.delete_cf(*handle, key));
+                                         Ok(true)
+                                     }));
+        }
+        info!("{} clean peer takes {:?}", self.tag, timer.elapsed());
+        Ok(())
+    }
+
     pub fn get_engine(&self) -> Arc<DB> {
         self.engine.clone()
     }
@@ -468,33 +488,6 @@ impl PeerStorage {
              (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1)),
              (start_key, end_key)]
 
-    }
-
-    /// scan all region related kv
-    ///
-    /// Note: all keys will be iterated with prefix untouched.
-    pub fn scan_region<T, F>(&self, db: &T, f: &mut F) -> Result<()>
-        where T: Iterable,
-              F: FnMut(&[u8], &[u8]) -> Result<bool>
-    {
-        let ranges = self.region_key_ranges();
-        for r in ranges {
-            try!(db.scan(&r.0, &r.1, f));
-        }
-
-        Ok(())
-    }
-
-    pub fn scan_region_cf<T, F>(&self, db: &T, cf: &str, f: &mut F) -> Result<()>
-        where T: Iterable,
-              F: FnMut(&[u8], &[u8]) -> Result<bool>
-    {
-        let ranges = self.region_key_ranges();
-        for r in ranges {
-            try!(db.scan_cf(cf, &r.0, &r.1, f));
-        }
-
-        Ok(())
     }
 
     pub fn get_region_id(&self) -> u64 {
