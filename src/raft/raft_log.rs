@@ -315,7 +315,7 @@ impl<T: Storage> RaftLog<T> {
             return Some(Error::Store(StorageError::Compacted));
         }
 
-        let length = self.last_index() - first_index + 1;
+        let length = self.last_index() + 1 - first_index;
         if low < first_index || high > first_index + length {
             panic!("slice[{},{}] out of bound[{},{}]",
                    low,
@@ -335,7 +335,7 @@ impl<T: Storage> RaftLog<T> {
         }
     }
 
-    fn slice(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
+    pub fn slice(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
         let err = self.must_check_outofbounds(low, high);
         if err.is_some() {
             return Err(err.unwrap());

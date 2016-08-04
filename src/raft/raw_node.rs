@@ -174,7 +174,11 @@ impl<T: Storage> RawNode<T> {
             }
         }
         rn.prev_ss = rn.raft.soft_state();
-        rn.prev_hs = rn.raft.hard_state();
+        if last_index == 0 {
+            rn.prev_hs = Default::default();
+        } else {
+            rn.prev_hs = rn.raft.hard_state();
+        }
         Ok(rn)
     }
 
