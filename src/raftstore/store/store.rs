@@ -67,7 +67,6 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
-
     split_check_worker: Worker<SplitCheckTask>,
     snap_worker: Worker<SnapTask>,
     compact_worker: Worker<CompactTask>,
@@ -291,7 +290,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
         }
 
-        if try!(self.is_snapshot_overlapped(&msg)) {
+        if try!(self.check_snapshot_overlapped(&msg)) {
             return Ok(());
         }
 
@@ -300,7 +299,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
-        try!(peer.raft_group.step(msg.take_message()));
+        try!(peer.step(msg.take_message()));
         slow_log!(timer, "{} raft step", peer.tag);
 
         // Add into pending raft groups for later handling ready.
@@ -458,7 +457,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn is_snapshot_overlapped(&mut self, msg: &RaftMessage) -> Result<bool> {
+    fn check_snapshot_overlapped(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
@@ -940,6 +939,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let task = PdTask::Heartbeat {
             region: peer.region().clone(),
             peer: peer.peer.clone(),
+            down_peers: peer.collect_down_peers(self.cfg.max_peer_down_duration),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", peer.tag, e);
@@ -947,6 +947,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        for peer in self.region_peers.values_mut() {
+            peer.check_peers();
+        }
+
         let mut leader_count = 0;
         for peer in self.region_peers.values() {
             if peer.is_leader() {

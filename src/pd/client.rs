@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io::Write;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use std::sync::Mutex;
@@ -18,6 +19,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use util::codec::rpc;
 use util::make_std_tcp_conn;
+
+use hyper::Url;
 
 use kvproto::pdpb::{Request, Response};
 use kvproto::msgpb::{Message, MessageType};
@@ -55,6 +58,50 @@ fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u
     Ok((id, resp.take_pd_resp()))
 }
 
+fn parse_urls(addr: &str) -> Result<Vec<String>> {
+    let mut hosts = Vec::new();
+    for a in addr.split(',') {
+        let url = box_try!(Url::parse(a));
+        let host = url.host_str();
+        let port = url.port_or_known_default();
+        if host.is_none() || port.is_none() {
+            return Err(box_err!("invalid url {:?}", url));
+        }
+        hosts.push(format!("{}:{}", host.unwrap(), port.unwrap()));
+    }
+    Ok(hosts)
+}
+
+fn rpc_connect(addr: &str) -> Result<TcpStream> {
+    let hosts = try!(parse_urls(addr));
+
+    for host in &hosts {
+        let mut stream = match make_std_tcp_conn(host.as_str()) {
+            Ok(stream) => stream,
+            Err(_) => continue,
+        };
+
+        // Send a HTTP header to tell PD to hijack this connection for RPC.
+        let header = b"GET /pd/rpc HTTP/1.0\r\n\r\n";
+        try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
+        match stream.write(header) {
+            Ok(n) if n == header.len() => {
+                return Ok(stream);
+            }
+            Ok(n) => {
+                return Err(box_err!("write header failed: header len {} written len {}",
+                                    header.len(),
+                                    n));
+            }
+            Err(e) => {
+                return Err(box_err!("write header failed: {:?}", e));
+            }
+        }
+    }
+
+    Err(box_err!("connect to {} failed", addr))
+}
+
 impl RpcClientCore {
     fn new(client: EtcdPdClient) -> RpcClientCore {
         RpcClientCore {
@@ -67,7 +114,7 @@ impl RpcClientCore {
         let addr = box_try!(self.client.get_leader_addr());
         info!("get pd leader {}", addr);
 
-        let stream = try!(make_std_tcp_conn(&*addr));
+        let stream = try!(rpc_connect(&addr));
         self.stream = Some(stream);
         Ok(())
     }
@@ -135,5 +182,39 @@ impl RpcClient {
 
     fn alloc_msg_id(&self) -> u64 {
         self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::parse_urls;
+
+    #[test]
+    fn test_parse_urls() {
+        assert!(parse_urls("example.com").is_err());
+
+        // test default port.
+        let hosts = parse_urls("http://example.com").unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0], "example.com:80");
+        let hosts = parse_urls("https://example.com").unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0], "example.com:443");
+
+        // test non-default port.
+        let hosts = parse_urls("http://example.com:1234").unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0], "example.com:1234");
+        let hosts = parse_urls("https://example.com:4321").unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0], "example.com:4321");
+
+        // test multiple urls.
+        let hosts = parse_urls("http://127.0.0.1:8080,http://example.com:2379,https://example.com")
+            .unwrap();
+        assert_eq!(hosts.len(), 3);
+        assert_eq!(hosts[0], "127.0.0.1:8080");
+        assert_eq!(hosts[1], "example.com:2379");
+        assert_eq!(hosts[2], "example.com:443");
     }
 }

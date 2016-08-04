@@ -17,6 +17,7 @@ use std::thread;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::BTreeMap;
+use std::io::Read;
 
 use rustc_serialize::json::Json;
 use protobuf::Message;
@@ -55,9 +56,9 @@ fn test_get_leader() {
 
     let mut client = EtcdPdClient::new(&endpoints, 0).unwrap();
 
-    put_leader_addr(&mut client, "127.0.0.1:1234");
+    put_leader_addr(&mut client, "http://127.0.0.1:2379");
     let addr = client.get_leader_addr().unwrap();
-    assert_eq!(&addr, "127.0.0.1:1234");
+    assert_eq!(&addr, "http://127.0.0.1:2379");
 }
 
 fn start_pd_server(client: &mut EtcdPdClient,
@@ -66,7 +67,8 @@ fn start_pd_server(client: &mut EtcdPdClient,
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
 
     let addr = format!("{}", l.local_addr().unwrap());
-    put_leader_addr(client, &addr);
+    let urls = format!("http://{}", addr);
+    put_leader_addr(client, &urls);
 
     let h = thread::spawn(move || {
         loop {
@@ -77,6 +79,13 @@ fn start_pd_server(client: &mut EtcdPdClient,
             }
 
             stream.set_nodelay(true).unwrap();
+
+            // Read a HTTP header and hijack the stream.
+            let header = b"GET /pd/rpc HTTP/1.0\r\n\r\n";
+            let mut buffer = vec![0; header.len()];
+            let n = stream.read(&mut buffer).unwrap();
+            assert_eq!(n, header.len());
+            assert_eq!(buffer, header);
 
             let (id, _) = rpc::decode_data(&mut stream).unwrap();
             let mut msg = PbMessage::new();
@@ -99,7 +108,7 @@ fn test_rpc_client() {
 
     let quit = Arc::new(AtomicBool::new(false));
 
-    let mut etcd_client = EtcdPdClient::new(&endpoints, 0).unwrap();
+    let mut etcd_client = EtcdPdClient::new(&endpoints, 1).unwrap();
     let (h, addr) = start_pd_server(&mut etcd_client, quit.clone());
 
     let client = RpcClient::new(etcd_client, 0).unwrap();

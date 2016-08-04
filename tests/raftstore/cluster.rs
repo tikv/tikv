@@ -22,6 +22,7 @@ use tempdir::TempDir;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
 use super::util::*;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
@@ -426,6 +427,10 @@ impl<T: Simulator> Cluster<T> {
         self.get_region(key).get_id()
     }
 
+    pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
+        self.pd_client.get_down_peers()
+    }
+
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let mut resp = self.request(key, vec![new_get_cmd(key)], Duration::from_secs(5));
         if resp.get_header().has_error() {
@@ -442,7 +447,13 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
-        let resp = self.request(key, vec![new_put_cmd(key, value)], Duration::from_secs(5));
+        self.must_put_cf("default", key, value);
+    }
+
+    pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
+        let resp = self.request(key,
+                                vec![new_put_cf_cmd(cf, key, value)],
+                                Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -466,7 +477,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_delete(&mut self, key: &[u8]) {
-        let resp = self.request(key, vec![new_delete_cmd(key)], Duration::from_secs(5));
+        self.must_delete_cf("default", key)
+    }
+
+    pub fn must_delete_cf(&mut self, cf: &str, key: &[u8]) {
+        let resp = self.request(key, vec![new_delete_cmd(cf, key)], Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
