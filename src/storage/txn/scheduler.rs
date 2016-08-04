@@ -65,6 +65,7 @@ pub enum Msg {
     },
     PrepareWriteFinished {
         cid: u64,
+        cmd: Command,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
     },
@@ -81,21 +82,21 @@ pub enum Msg {
 
 fn execute_callback(callback: StorageCb, pr: ProcessResult) {
     match callback {
-        StorageCb::Result(cb) => {
+        StorageCb::Boolean(cb) => {
             match pr {
                 ProcessResult::Res => cb(Ok(())),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
         }
-        StorageCb::MultiResults(cb) => {
+        StorageCb::Booleans(cb) => {
             match pr {
                 ProcessResult::MultiRes { results } => cb(Ok(results)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
         }
-        StorageCb::Value(cb) => {
+        StorageCb::SingleValue(cb) => {
             match pr {
                 ProcessResult::Value { value } => cb(Ok(value)),
                 ProcessResult::Failed { err } => cb(Err(err)),
@@ -114,7 +115,7 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
 
 pub struct RunningCtx {
     cid: u64,
-    cmd: Command,
+    cmd: Option<Command>,
     lock: Lock,
     callback: Option<StorageCb>,
 }
@@ -123,7 +124,7 @@ impl RunningCtx {
     pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> RunningCtx {
         RunningCtx {
             cid: cid,
-            cmd: cmd,
+            cmd: Some(cmd),
             lock: lock,
             callback: Some(cb),
         }
@@ -245,12 +246,12 @@ fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot
 }
 
 fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapshot) -> Result<()> {
-    box_try!(match cmd {
-        Command::Prewrite { mutations, primary, start_ts, .. } => {
+    let (pr, modifies) = match cmd {
+        Command::Prewrite { ref mutations, ref primary, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts);
             let mut results = vec![];
             for m in mutations {
-                match txn.prewrite(m.clone(), &primary) {
+                match txn.prewrite(m.clone(), primary) {
                     Ok(_) => results.push(Ok(())),
                     e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
                     Err(e) => return Err(Error::from(e)),
@@ -258,11 +259,7 @@ fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapsh
             }
             let res = results.drain(..).map(|x| x.map_err(StorageError::from)).collect();
             let pr = ProcessResult::MultiRes { results: res };
-            ch.send(Msg::PrepareWriteFinished {
-                cid: cid,
-                pr: pr,
-                to_be_write: txn.modifies(),
-            })
+            (pr, txn.modifies())
         }
         Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, lock_ts);
@@ -271,33 +268,21 @@ fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapsh
             }
 
             let pr = ProcessResult::Res;
-            ch.send(Msg::PrepareWriteFinished {
-                cid: cid,
-                pr: pr,
-                to_be_write: txn.modifies(),
-            })
+            (pr, txn.modifies())
         }
         Command::CommitThenGet { ref key, lock_ts, commit_ts, get_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, lock_ts);
             let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
 
             let pr = ProcessResult::Value { value: val };
-            ch.send(Msg::PrepareWriteFinished {
-                cid: cid,
-                pr: pr,
-                to_be_write: txn.modifies(),
-            })
+            (pr, txn.modifies())
         }
         Command::Cleanup { ref key, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts);
             try!(txn.rollback(&key));
 
             let pr = ProcessResult::Res;
-            ch.send(Msg::PrepareWriteFinished {
-                cid: cid,
-                pr: pr,
-                to_be_write: txn.modifies(),
-            })
+            (pr, txn.modifies())
         }
         Command::Rollback { ref keys, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts);
@@ -306,27 +291,40 @@ fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapsh
             }
 
             let pr = ProcessResult::Res;
-            ch.send(Msg::PrepareWriteFinished {
-                cid: cid,
-                pr: pr,
-                to_be_write: txn.modifies(),
-            })
+            (pr, txn.modifies())
         }
         Command::RollbackThenGet { ref key, lock_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, lock_ts);
             let val = try!(txn.rollback_then_get(&key));
 
             let pr = ProcessResult::Value { value: val };
-            ch.send(Msg::PrepareWriteFinished {
-                cid: cid,
-                pr: pr,
-                to_be_write: txn.modifies(),
-            })
+            (pr, txn.modifies())
         }
         _ => panic!("unsupported write command"),
-    });
+    };
+
+    box_try!(ch.send(Msg::PrepareWriteFinished {
+        cid: cid,
+        cmd: cmd,
+        pr: pr,
+        to_be_write: modifies,
+    }));
 
     Ok(())
+}
+
+fn extract_ctx(cmd: &Command) -> &Context {
+    match *cmd {
+        Command::Get { ref ctx, .. } |
+        Command::BatchGet { ref ctx, .. } |
+        Command::Scan { ref ctx, .. } |
+        Command::Prewrite { ref ctx, .. } |
+        Command::Commit { ref ctx, .. } |
+        Command::CommitThenGet { ref ctx, .. } |
+        Command::Cleanup { ref ctx, .. } |
+        Command::Rollback { ref ctx, .. } |
+        Command::RollbackThenGet { ref ctx, .. } => ctx,
+    }
 }
 
 impl Scheduler {
@@ -353,9 +351,9 @@ impl Scheduler {
     fn process_by_worker(&mut self, cid: u64, snapshot: Box<Snapshot>) {
         debug!("process cmd with snapshot, cid={}", cid);
         let cmd = {
-            let ctx = self.cmd_ctxs.get(&cid).unwrap();
+            let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
             assert_eq!(ctx.cid, cid);
-            ctx.cmd.clone()
+            ctx.cmd.take().unwrap()
         };
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
@@ -381,17 +379,7 @@ impl Scheduler {
     fn extract_context(&self, cid: u64) -> &Context {
         let ctx = &self.cmd_ctxs.get(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
-        match ctx.cmd {
-            Command::Get { ref ctx, .. } |
-            Command::BatchGet { ref ctx, .. } |
-            Command::Scan { ref ctx, .. } |
-            Command::Prewrite { ref ctx, .. } |
-            Command::Commit { ref ctx, .. } |
-            Command::CommitThenGet { ref ctx, .. } |
-            Command::Cleanup { ref ctx, .. } |
-            Command::Rollback { ref ctx, .. } |
-            Command::RollbackThenGet { ref ctx, .. } => ctx,
-        }
+        extract_ctx(ctx.cmd.as_ref().unwrap())
     }
 
     fn register_report_tick(&self, event_loop: &mut EventLoop<Self>) {
@@ -408,7 +396,7 @@ impl Scheduler {
         self.register_report_tick(event_loop);
     }
 
-    fn on_received_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
+    fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         let cid = self.gen_id();
         let lock = self.gen_lock(&cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
@@ -459,36 +447,29 @@ impl Scheduler {
         let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
         let cb = ctx.callback.take().unwrap();
-        match ctx.cmd {
-            Command::Get { .. } |
-            Command::BatchGet { .. } |
-            Command::Scan { .. } => execute_callback(cb, pr),
-            _ => panic!("unsupported read command"),
-        }
+        execute_callback(cb, pr);
     }
 
     fn on_prepare_write_failed(&mut self, cid: u64, e: Error) {
         debug!("write command(cid={}) failed at prewrite.", cid);
 
-        // execute callback
         let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
         let cb = ctx.callback.take().unwrap();
         let pr = ProcessResult::Failed { err: StorageError::from(e) };
         execute_callback(cb, pr);
 
-        // release lock
         self.release_lock(&ctx.lock, cid);
     }
 
     fn on_prepare_write_finished(&mut self,
                                  cid: u64,
+                                 cmd: Command,
                                  pr: ProcessResult,
                                  to_be_write: Vec<Modify>) {
         if let Err(e) = {
-            let ctx = self.extract_context(cid);
             let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
-            self.engine.async_write(ctx, to_be_write, engine_cb)
+            self.engine.async_write(extract_ctx(&cmd), to_be_write, engine_cb)
         } {
             let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
             assert_eq!(ctx.cid, cid);
@@ -553,11 +534,11 @@ impl mio::Handler for Scheduler {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => self.shutdown(event_loop),
-            Msg::RawCmd { cmd, cb } => self.on_received_new_cmd(cmd, cb),
+            Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
             Msg::SnapshotFinished { cid, snapshot } => self.on_snapshot_finished(cid, snapshot),
             Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
-            Msg::PrepareWriteFinished { cid, pr, to_be_write } => {
-                self.on_prepare_write_finished(cid, pr, to_be_write)
+            Msg::PrepareWriteFinished { cid, cmd, pr, to_be_write } => {
+                self.on_prepare_write_finished(cid, cmd, pr, to_be_write)
             }
             Msg::PrepareWriteFailed { cid, err } => self.on_prepare_write_failed(cid, err),
             Msg::WriteFinished { cid, pr, result } => self.on_write_finished(cid, pr, result),

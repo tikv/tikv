@@ -58,14 +58,13 @@ impl Mutation {
 use kvproto::kvrpcpb::Context;
 
 pub enum StorageCb {
-    Result(Callback<()>),
-    Value(Callback<Option<Value>>),
+    Boolean(Callback<()>),
+    Booleans(Callback<Vec<Result<()>>>),
+    SingleValue(Callback<Option<Value>>),
     KvPairs(Callback<Vec<Result<KvPair>>>),
-    MultiResults(Callback<Vec<Result<()>>>),
 }
 
 #[allow(type_complexity)]
-#[derive(Clone)]
 pub enum Command {
     Get {
         ctx: Context,
@@ -282,7 +281,7 @@ impl Storage {
             key: key,
             start_ts: start_ts,
         };
-        try!(self.send(cmd, StorageCb::Value(callback)));
+        try!(self.send(cmd, StorageCb::SingleValue(callback)));
         Ok(())
     }
 
@@ -331,7 +330,7 @@ impl Storage {
             primary: primary,
             start_ts: start_ts,
         };
-        try!(self.send(cmd, StorageCb::MultiResults(callback)));
+        try!(self.send(cmd, StorageCb::Booleans(callback)));
         Ok(())
     }
 
@@ -348,7 +347,7 @@ impl Storage {
             lock_ts: lock_ts,
             commit_ts: commit_ts,
         };
-        try!(self.send(cmd, StorageCb::Result(callback)));
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
     }
 
@@ -367,7 +366,7 @@ impl Storage {
             commit_ts: commit_ts,
             get_ts: get_ts,
         };
-        try!(self.send(cmd, StorageCb::Value(callback)));
+        try!(self.send(cmd, StorageCb::SingleValue(callback)));
         Ok(())
     }
 
@@ -382,7 +381,7 @@ impl Storage {
             key: key,
             start_ts: start_ts,
         };
-        try!(self.send(cmd, StorageCb::Result(callback)));
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
     }
 
@@ -397,7 +396,7 @@ impl Storage {
             keys: keys,
             start_ts: start_ts,
         };
-        try!(self.send(cmd, StorageCb::Result(callback)));
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
     }
 
@@ -412,7 +411,7 @@ impl Storage {
             key: key,
             lock_ts: lock_ts,
         };
-        try!(self.send(cmd, StorageCb::Value(callback)));
+        try!(self.send(cmd, StorageCb::SingleValue(callback)));
         Ok(())
     }
 }
