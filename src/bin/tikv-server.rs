@@ -442,6 +442,13 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           config,
                           Some(1024),
                           |v| v.as_integer()) as usize;
+    cfg.storage.sched_worker_pool_size =
+        get_integer_value("",
+                          "storage.scheduler-worker-pool-size",
+                          matches,
+                          config,
+                          Some(4),
+                          |v| v.as_integer()) as usize;
     cfg
 }
 
