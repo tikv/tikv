@@ -15,6 +15,7 @@ const DEFAULT_STORE_PATH: &'static str = "";
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024;
+const DEFAULT_SCHED_WORKER_POOL_SIZE: usize = 4;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -22,6 +23,7 @@ pub struct Config {
     pub sched_notify_capacity: usize,
     pub sched_msg_per_tick: usize,
     pub sched_concurrency: usize,
+    pub sched_worker_pool_size: usize,
 }
 
 impl Default for Config {
@@ -31,6 +33,7 @@ impl Default for Config {
             sched_notify_capacity: DEFAULT_SCHED_CAPACITY,
             sched_msg_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
             sched_concurrency: DEFAULT_SCHED_CONCURRENCY,
+            sched_worker_pool_size: DEFAULT_SCHED_WORKER_POOL_SIZE,
         }
     }
 }

@@ -57,40 +57,42 @@ impl Mutation {
 
 use kvproto::kvrpcpb::Context;
 
+pub enum StorageCb {
+    Boolean(Callback<()>),
+    Booleans(Callback<Vec<Result<()>>>),
+    SingleValue(Callback<Option<Value>>),
+    KvPairs(Callback<Vec<Result<KvPair>>>),
+}
+
 #[allow(type_complexity)]
 pub enum Command {
     Get {
         ctx: Context,
         key: Key,
         start_ts: u64,
-        callback: Option<Callback<Option<Value>>>,
     },
     BatchGet {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
-        callback: Option<Callback<Vec<Result<KvPair>>>>,
     },
     Scan {
         ctx: Context,
         start_key: Key,
         limit: usize,
         start_ts: u64,
-        callback: Option<Callback<Vec<Result<KvPair>>>>,
     },
     Prewrite {
         ctx: Context,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
-        callback: Option<Callback<Vec<Result<()>>>>,
     },
     Commit {
         ctx: Context,
         keys: Vec<Key>,
         lock_ts: u64,
         commit_ts: u64,
-        callback: Option<Callback<()>>,
     },
     CommitThenGet {
         ctx: Context,
@@ -98,25 +100,21 @@ pub enum Command {
         lock_ts: u64,
         commit_ts: u64,
         get_ts: u64,
-        callback: Option<Callback<Option<Value>>>,
     },
     Cleanup {
         ctx: Context,
         key: Key,
         start_ts: u64,
-        callback: Option<Callback<()>>,
     },
     Rollback {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
-        callback: Option<Callback<()>>,
     },
     RollbackThenGet {
         ctx: Context,
         key: Key,
         lock_ts: u64,
-        callback: Option<Callback<Option<Value>>>,
     },
 }
 
@@ -193,7 +191,7 @@ struct StorageHandle {
 
 pub struct Storage {
     engine: Box<Engine>,
-    schedch: SendCh<Msg>,
+    sendch: SendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
 }
 
@@ -201,12 +199,12 @@ impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let event_loop = try!(create_event_loop(config.sched_notify_capacity,
                                                 config.sched_msg_per_tick));
-        let schedch = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel());
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
             engine: engine,
-            schedch: schedch,
+            sendch: sendch,
             handle: Arc::new(Mutex::new(StorageHandle {
                 handle: None,
                 event_loop: Some(event_loop),
@@ -229,9 +227,10 @@ impl Storage {
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
         let mut el = handle.event_loop.take().unwrap();
         let sched_concurrency = config.sched_concurrency;
-        let ch = self.schedch.clone();
+        let sched_worker_pool_size = config.sched_worker_pool_size;
+        let ch = self.sendch.clone();
         let h = try!(builder.spawn(move || {
-            let mut sched = Scheduler::new(engine, ch, sched_concurrency);
+            let mut sched = Scheduler::new(engine, ch, sched_concurrency, sched_worker_pool_size);
             if let Err(e) = el.run(&mut sched) {
                 panic!("scheduler run err:{:?}", e);
             }
@@ -248,7 +247,7 @@ impl Storage {
             return Ok(());
         }
 
-        if let Err(e) = self.schedch.send(Msg::Quit) {
+        if let Err(e) = self.sendch.send(Msg::Quit) {
             error!("send quit cmd to scheduler failed, error:{:?}", e);
             return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }
@@ -266,8 +265,8 @@ impl Storage {
         self.engine.clone()
     }
 
-    fn send(&self, cmd: Command) -> Result<()> {
-        box_try!(self.schedch.send(Msg::RawCmd { cmd: cmd }));
+    fn send(&self, cmd: Command, cb: StorageCb) -> Result<()> {
+        box_try!(self.sendch.send(Msg::RawCmd { cmd: cmd, cb: cb }));
         Ok(())
     }
 
@@ -281,9 +280,8 @@ impl Storage {
             ctx: ctx,
             key: key,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::SingleValue(callback)));
         Ok(())
     }
 
@@ -297,9 +295,8 @@ impl Storage {
             ctx: ctx,
             keys: keys,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::KvPairs(callback)));
         Ok(())
     }
 
@@ -315,9 +312,8 @@ impl Storage {
             start_key: start_key,
             limit: limit,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::KvPairs(callback)));
         Ok(())
     }
 
@@ -333,9 +329,8 @@ impl Storage {
             mutations: mutations,
             primary: primary,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::Booleans(callback)));
         Ok(())
     }
 
@@ -351,9 +346,8 @@ impl Storage {
             keys: keys,
             lock_ts: lock_ts,
             commit_ts: commit_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
     }
 
@@ -371,9 +365,8 @@ impl Storage {
             lock_ts: lock_ts,
             commit_ts: commit_ts,
             get_ts: get_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::SingleValue(callback)));
         Ok(())
     }
 
@@ -387,9 +380,8 @@ impl Storage {
             ctx: ctx,
             key: key,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
     }
 
@@ -403,9 +395,8 @@ impl Storage {
             ctx: ctx,
             keys: keys,
             start_ts: start_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
     }
 
@@ -419,9 +410,8 @@ impl Storage {
             ctx: ctx,
             key: key,
             lock_ts: lock_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::SingleValue(callback)));
         Ok(())
     }
 }
@@ -430,7 +420,7 @@ impl Clone for Storage {
     fn clone(&self) -> Storage {
         Storage {
             engine: self.engine.clone(),
-            schedch: self.schedch.clone(),
+            sendch: self.sendch.clone(),
             handle: self.handle.clone(),
         }
     }
