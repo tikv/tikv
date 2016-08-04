@@ -49,6 +49,7 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{new_rpc_client, RpcClient};
+use tikv::util::time_monitor::TimeMonitor;
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
 const RAFTKV_DSN: &'static str = "raftkv";
@@ -654,6 +655,7 @@ fn main() {
             run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {
+            let _m = TimeMonitor::default();
             run_raft_server(listener, &matches, &config, &cfg);
         }
         n => panic!("unrecognized dns name: {}", n),
