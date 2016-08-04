@@ -33,9 +33,9 @@ use tikv::util::escape;
 
 pub use tikv::raftstore::store::util::find_peer;
 
-pub fn must_get(engine: &Arc<DB>, key: &[u8], value: Option<&[u8]>) {
+pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
-        if let Ok(res) = engine.get_value(&keys::data_key(key)) {
+        if let Ok(res) = engine.get_value_cf(cf, &keys::data_key(key)) {
             if value.is_some() && res.is_some() {
                 assert_eq!(value.unwrap(), &*res.unwrap());
                 return;
@@ -47,7 +47,7 @@ pub fn must_get(engine: &Arc<DB>, key: &[u8], value: Option<&[u8]>) {
         }
     }
     debug!("last try to get {}", escape(key));
-    let res = engine.get_value(&keys::data_key(key)).unwrap();
+    let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none() ||
        value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap() {
         return;
@@ -58,11 +58,19 @@ pub fn must_get(engine: &Arc<DB>, key: &[u8], value: Option<&[u8]>) {
 }
 
 pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
-    must_get(engine, key, Some(value));
+    must_get(engine, "default", key, Some(value));
 }
 
 pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
-    must_get(engine, key, None);
+    must_get(engine, "default", key, None);
+}
+
+pub fn must_get_cf_equal(engine: &Arc<DB>, cf: &str, key: &[u8], value: &[u8]) {
+    must_get(engine, cf, key, Some(value));
+}
+
+pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
+    must_get(engine, cf, key, None);
 }
 
 pub fn new_store_cfg() -> Config {
@@ -115,6 +123,15 @@ pub fn new_put_cmd(key: &[u8], value: &[u8]) -> Request {
     cmd
 }
 
+pub fn new_put_cf_cmd(cf: &str, key: &[u8], value: &[u8]) -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::Put);
+    cmd.mut_put().set_key(key.to_vec());
+    cmd.mut_put().set_value(value.to_vec());
+    cmd.mut_put().set_cf(cf.to_string());
+    cmd
+}
+
 pub fn new_get_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Get);
@@ -122,10 +139,11 @@ pub fn new_get_cmd(key: &[u8]) -> Request {
     cmd
 }
 
-pub fn new_delete_cmd(key: &[u8]) -> Request {
+pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Delete);
     cmd.mut_delete().set_key(key.to_vec());
+    cmd.mut_delete().set_cf(cf.to_string());
     cmd
 }
 

@@ -268,12 +268,8 @@ impl Peer {
             notify_region_removed(self.region_id, peer_id, cmd);
         }
 
-        let wb = WriteBatch::new();
-        try!(self.get_store().scan_region(self.engine.as_ref(),
-                                          &mut |key, _| {
-                                              try!(wb.delete(key));
-                                              Ok(true)
-                                          }));
+        let mut wb = WriteBatch::new();
+        try!(self.get_store().clear(&mut wb));
         let mut local_state = RegionLocalState::new();
         local_state.set_state(PeerState::Tombstone);
         local_state.set_region(self.get_store().get_region().clone());

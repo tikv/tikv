@@ -203,3 +203,52 @@ fn test_server_concurrent_snap() {
     let mut cluster = new_server_cluster(0, 3);
     test_concurrent_snap(&mut cluster);
 }
+
+fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+    // truncate the log quickly so that we can force sending snapshot.
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
+    cluster.cfg.raft_store.raft_log_gc_limit = 2;
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
+    cluster.cfg.raft_store.snap_gc_timeout = 2;
+
+    cluster.run();
+    let cf = "lock";
+    cluster.must_put_cf(cf, b"k1", b"v1");
+    cluster.must_put_cf(cf, b"k2", b"v2");
+    let engine1 = cluster.get_engine(1);
+    must_get_cf_equal(&engine1, cf, b"k1", b"v1");
+    must_get_cf_equal(&engine1, cf, b"k2", b"v2");
+
+    // Isolate node 1.
+    cluster.add_send_filter(Isolate::new(1));
+
+    // Write some data to trigger snapshot.
+    for i in 100..110 {
+        let key = format!("k{}", i);
+        let value = format!("v{}", i);
+        cluster.must_put_cf(cf, key.as_bytes(), value.as_bytes());
+    }
+
+    cluster.must_delete_cf(cf, b"k2");
+
+    // Add node 1 back.
+    cluster.clear_send_filters();
+
+    cluster.must_put_cf(cf, b"k3", b"v3");
+    must_get_cf_equal(&engine1, cf, b"k3", b"v3");
+    // Now snapshot must be applied on node 1.
+    must_get_cf_equal(&engine1, cf, b"k1", b"v1");
+    must_get_cf_none(&engine1, cf, b"k2");
+}
+
+#[test]
+fn test_node_cf_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_cf_snapshot(&mut cluster);
+}
+
+#[test]
+fn test_server_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_cf_snapshot(&mut cluster);
+}
