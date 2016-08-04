@@ -43,6 +43,7 @@ pub mod fs;
 pub mod buf;
 pub mod sockopt;
 pub mod transport;
+pub mod time_monitor;
 
 pub use self::fs::{DiskStat, get_disk_stat};
 
