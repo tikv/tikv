@@ -250,6 +250,44 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
     }
 
+    fn check_target_peer_valid(&mut self, region_id: u64, target: &metapb::Peer) -> Result<bool> {
+        // we may encounter a message with larger peer id, which means
+        // current peer is stale, then we should remove current peer
+        let mut has_peer = false;
+        let mut stale_peer = None;
+        if let Some(p) = self.region_peers.get(&region_id) {
+            has_peer = true;
+            let target_peer_id = target.get_id();
+            if p.peer_id() < target_peer_id {
+                if p.is_applying_snap() {
+                    // to remove the applying peer, we should find a reliable way to abort
+                    // the apply process.
+                    warn!("Stale peer {} is applying snapshot, will destroy next time.",
+                          p.peer_id());
+                    return Ok(false);
+                }
+                stale_peer = Some(p.peer.clone());
+            } else if p.peer_id() > target_peer_id {
+                warn!("target peer id {} is less than {}, msg maybe stale.",
+                      target_peer_id,
+                      p.peer_id());
+                return Ok(false);
+            }
+        }
+        if let Some(p) = stale_peer {
+            self.destroy_peer(region_id, p);
+            has_peer = false;
+        }
+
+        if !has_peer {
+            let peer = try!(Peer::replicate(self, region_id, target.get_id()));
+            // We don't have start_key of the region, so there is no need to insert into
+            // region_ranges
+            self.region_peers.insert(region_id, peer);
+        }
+        Ok(true)
+    }
+
     // Clippy doesn't allow hash_map contains_key followed by insert, and suggests
     // using entry().or_insert() instead, but we can't use this because creating peer
     // may fail, so we allow map_entry.
@@ -269,39 +307,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        // we may encounter a message with larger peer id, which means
-        // current peer is stale, then we should remove current peer
-        let mut has_peer = false;
-        let mut stale_peer = None;
-        if let Some(p) = self.region_peers.get(&region_id) {
-            has_peer = true;
-            let target_peer_id = msg.get_to_peer().get_id();
-            if p.peer_id() < target_peer_id {
-                if p.is_applying_snap() {
-                    // to remove the applying peer, we should find a reliable way to abort
-                    // the apply process.
-                    warn!("Stale peer {} is applying snapshot, will destroy next time.",
-                          p.peer_id());
-                    return Ok(());
-                }
-                stale_peer = Some(p.peer.clone());
-            } else if p.peer_id() > target_peer_id {
-                warn!("target peer id {} is less than {}, msg maybe stale.",
-                      target_peer_id,
-                      p.peer_id());
-                return Ok(());
-            }
-        }
-        if let Some(p) = stale_peer {
-            self.destroy_peer(region_id, p);
-            has_peer = false;
-        }
-
-        if !has_peer {
-            let peer = try!(Peer::replicate(self, region_id, msg.get_to_peer().get_id()));
-            // We don't have start_key of the region, so there is no need to insert into
-            // region_ranges
-            self.region_peers.insert(region_id, peer);
+        if !try!(self.check_target_peer_valid(region_id, msg.get_to_peer())) {
+            return Ok(());
         }
 
         if try!(self.check_snapshot_overlapped(&msg)) {
