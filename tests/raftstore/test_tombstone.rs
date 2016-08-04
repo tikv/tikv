@@ -17,6 +17,7 @@ use kvproto::raft_serverpb;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
+use super::transport_simulate::*;
 use super::server::new_server_cluster;
 use super::util::*;
 
@@ -87,4 +88,59 @@ fn test_server_tombstone() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_tombstone(&mut cluster);
+}
+
+fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.disable_default_rule();
+
+    let r1 = cluster.run_conf_change();
+
+    // add peer (2,2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    let (key, value) = (b"k1", b"v1");
+    cluster.must_put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+    let engine_2 = cluster.get_engine(2);
+    must_get_equal(&engine_2, b"k1", b"v1");
+
+    // add peer (3, 3) to region 1.
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    let engine_3 = cluster.get_engine(3);
+    must_get_equal(&engine_3, b"k1", b"v1");
+
+    cluster.add_send_filter(Isolate::new(2));
+
+    // Remove peer (2, 2) from region 1.
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
+
+    // After new leader is elected, the change peer must be finished.
+    cluster.leader_of_region(r1).unwrap();
+    let (key, value) = (b"k3", b"v3");
+    cluster.must_put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+    pd_client.must_add_peer(r1, new_peer(2, 4));
+
+    cluster.clear_send_filters();
+    cluster.must_put(b"k4", b"v4");
+    let engine = cluster.get_engine(2);
+    must_get_equal(&engine, b"k4", b"v4");
+}
+
+#[test]
+fn test_node_readd_peer() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_readd_peer(&mut cluster);
+}
+
+#[test]
+fn test_server_readd_peer() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_readd_peer(&mut cluster);
 }
