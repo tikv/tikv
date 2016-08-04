@@ -240,11 +240,29 @@ pub trait Mutable: Writable {
 impl Mutable for DB {}
 impl Mutable for WriteBatch {}
 
+// `delete_in_range` fast deletes date in range [start_key, end_key).
+// It uses rocksdb `delete_file_in_range` first, then scans the left keys and
+// uses WriteBatch to deletes them.
+// Note: this function is dangerous and not guarantees consistence. If you call
+// delete_file_in_range successfully but commit following WriteBatch failed,
+// some keys are really deleted and can't be recovered.
+pub fn delete_in_range(db: &DB, wb: &WriteBatch, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    try!(db.delete_file_in_range(start_key, end_key));
+
+    try!(db.scan(start_key,
+                 end_key,
+                 &mut |key, _| {
+                     try!(wb.delete(key));
+                     Ok(true)
+                 }));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use tempdir::TempDir;
-    use rocksdb::Writable;
+    use rocksdb::{Writable, WriteBatch, Options, DBCompressionType};
 
     use super::*;
     use kvproto::metapb::Region;
@@ -376,5 +394,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(data.len(), 2);
+    }
+
+
+    #[test]
+    fn test_delete_in_range() {
+        let path = TempDir::new("var").unwrap();
+        let mut opt = Options::new();
+        opt.set_target_file_size_base(1024 * 1024);
+        opt.set_write_buffer_size(1024);
+        opt.compression(DBCompressionType::DBNo);
+
+        let engine =
+            Arc::new(rocksdb::new_engine_opt(opt, path.path().to_str().unwrap(), &[], vec![])
+                .unwrap());
+
+        let count = 10 * 1024;
+        let value = vec![0;1024];
+        for i in 0..10 {
+            let wb = WriteBatch::new();
+            // we should write a batch, then flush to
+            // generate multiply SST files.
+            for j in 0..1024 {
+                let key = format!("k_{}", i * 1024 + j);
+                wb.put(key.as_bytes(), &value).unwrap();
+            }
+
+            engine.write(wb).unwrap();
+            engine.flush(true).unwrap();
+        }
+
+        let wb = WriteBatch::new();
+        delete_in_range(&engine, &wb, b"\x00", b"\xFF").unwrap();
+        assert!(wb.count() < count, format!("{} < {}", wb.count(), count));
+        engine.write(wb).unwrap();
+        assert!(engine.get(b"k_0").unwrap().is_none());
     }
 }

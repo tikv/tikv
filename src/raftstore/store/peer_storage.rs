@@ -34,7 +34,7 @@ use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::worker::SnapTask;
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
+use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable, delete_in_range};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -429,17 +429,28 @@ impl PeerStorage {
     // Delete all data belong to the region. Results are stored in `wb`.
     pub fn clear(&self, wb: &mut WriteBatch) -> Result<()> {
         let timer = Instant::now();
-        for r in self.region_key_ranges() {
-            try!(self.engine.scan(&r.0,
-                                  &r.1,
-                                  &mut |key, _| {
-                                      try!(wb.delete(key));
-                                      Ok(true)
-                                  }));
+
+        for (start_key, end_key) in self.region_key_ranges() {
+            // meta range only has little keys, no need use unsafe delete.
+            if !start_key.starts_with(keys::REGION_META_PREFIX_KEY) {
+                // TODO:
+                // 1. need to handle `delete_in_range` successfully but following
+                // WriteBatch failed.
+                // 2. need to care other CF?
+                try!(delete_in_range(&self.engine, &wb, &start_key, &end_key));
+            } else {
+                try!(self.engine.scan(&start_key,
+                                      &end_key,
+                                      &mut |key, _| {
+                                          try!(wb.delete(key));
+                                          Ok(true)
+                                      }));
+            }
         }
 
         let (start_key, end_key) = (enc_start_key(self.get_region()),
                                     enc_end_key(self.get_region()));
+
         for cf in self.engine.cf_names() {
             if cf == DEFAULT_CFNAME {
                 continue;
