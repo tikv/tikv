@@ -63,13 +63,13 @@ pub enum Msg {
         cid: u64,
         pr: ProcessResult,
     },
-    PrepareWriteFinished {
+    WritePrepareFinished {
         cid: u64,
         cmd: Command,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
     },
-    PrepareWriteFailed {
+    WritePrepareFailed {
         cid: u64,
         err: Error,
     },
@@ -236,9 +236,9 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
 
 fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref()) {
-        if let Err(err) = ch.send(Msg::PrepareWriteFailed { cid: cid, err: e }) {
+        if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
             // Todo: if this happens, lock will hold for ever
-            panic!("send PrepareWriteFailed message to channel failed. cid={}, err={:?}",
+            panic!("send WritePrepareFailed message to channel failed. cid={}, err={:?}",
                    cid,
                    err);
         }
@@ -303,7 +303,7 @@ fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapsh
         _ => panic!("unsupported write command"),
     };
 
-    box_try!(ch.send(Msg::PrepareWriteFinished {
+    box_try!(ch.send(Msg::WritePrepareFinished {
         cid: cid,
         cmd: cmd,
         pr: pr,
@@ -450,7 +450,7 @@ impl Scheduler {
         execute_callback(cb, pr);
     }
 
-    fn on_prepare_write_failed(&mut self, cid: u64, e: Error) {
+    fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
         debug!("write command(cid={}) failed at prewrite.", cid);
 
         let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
@@ -462,7 +462,7 @@ impl Scheduler {
         self.release_lock(&ctx.lock, cid);
     }
 
-    fn on_prepare_write_finished(&mut self,
+    fn on_write_prepare_finished(&mut self,
                                  cid: u64,
                                  cmd: Command,
                                  pr: ProcessResult,
@@ -537,10 +537,10 @@ impl mio::Handler for Scheduler {
             Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
             Msg::SnapshotFinished { cid, snapshot } => self.on_snapshot_finished(cid, snapshot),
             Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
-            Msg::PrepareWriteFinished { cid, cmd, pr, to_be_write } => {
-                self.on_prepare_write_finished(cid, cmd, pr, to_be_write)
+            Msg::WritePrepareFinished { cid, cmd, pr, to_be_write } => {
+                self.on_write_prepare_finished(cid, cmd, pr, to_be_write)
             }
-            Msg::PrepareWriteFailed { cid, err } => self.on_prepare_write_failed(cid, err),
+            Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
             Msg::WriteFinished { cid, pr, result } => self.on_write_finished(cid, pr, result),
         }
     }
