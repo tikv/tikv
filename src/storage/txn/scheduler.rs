@@ -211,15 +211,11 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
         }
         Command::Scan { ref start_key, limit, start_ts, .. } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
-            let res = snap_store.scanner().and_then(|mut scanner| {
-                let key = start_key.clone();
-                match scanner.scan(key, limit) {
-                    Ok(mut results) => {
-                        Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
-                    }
-                    Err(e) => Err(e),
-                }
-            });
+            let res = snap_store.scanner()
+                .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
+                .and_then(|mut results| {
+                    Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
+                });
             match res {
                 Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
                 Err(e) => ProcessResult::Failed { err: e.into() },
