@@ -14,7 +14,8 @@
 use std::time::Duration;
 use std::boxed::Box;
 use threadpool::ThreadPool;
-use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult, Error as StorageError};
+use storage::{Engine, Command, Snapshot, StorageCb, CF_LOCK, Result as StorageResult,
+              Error as StorageError};
 use protobuf::core::Message;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use kvproto::mvccpb::MetaLock;
@@ -237,7 +238,7 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
             }
         }
         Command::ScanLock { max_ts, .. } => {
-            let res = snapshot.iter_cf("lock").map_err(Error::from).and_then(|mut cursor| {
+            let res = snapshot.iter_cf(CF_LOCK).map_err(Error::from).and_then(|mut cursor| {
                 cursor.seek_to_first(); // ignore result, valid() is checked below.
                 let mut locks = vec![];
                 while cursor.valid() {
@@ -261,7 +262,7 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
             }
         }
         Command::ResolveLock { ref ctx, start_ts, commit_ts } => {
-            let res = snapshot.iter_cf("lock").map_err(Error::from).and_then(|mut cursor| {
+            let res = snapshot.iter_cf(CF_LOCK).map_err(Error::from).and_then(|mut cursor| {
                 cursor.seek_to_first(); // ignore result, valid() is checked below.
                 let mut keys = vec![];
                 while cursor.valid() {

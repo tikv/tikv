@@ -15,12 +15,12 @@ use std::fmt::{self, Formatter, Debug, Display};
 use std::sync::{Arc, Mutex};
 use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
 use kvproto::kvrpcpb::Context;
-use storage::{Key, Value, CfName};
+use storage::{Key, Value, CfName, CF_DEFAULT};
 use raftstore::store::engine::{Snapshot as RocksSnapshot, Peekable, Iterable};
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
-use super::{Engine, Snapshot, Modify, Cursor, Callback, TEMP_DIR, Result, Error, DEFAULT_CFNAME};
+use super::{Engine, Snapshot, Modify, Cursor, Callback, TEMP_DIR, Result, Error};
 use tempdir::TempDir;
 
 enum Task {
@@ -103,7 +103,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
-                if cf == DEFAULT_CFNAME {
+                if cf == CF_DEFAULT {
                     trace!("EngineRocksdb: delete {}", k);
                     wb.delete(k.encoded())
                 } else {
@@ -113,7 +113,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                 }
             }
             Modify::Put(cf, k, v) => {
-                if cf == DEFAULT_CFNAME {
+                if cf == CF_DEFAULT {
                     trace!("EngineRocksdb: put {},{}", k, escape(&v));
                     wb.put(k.encoded(), &v)
                 } else {

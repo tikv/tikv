@@ -35,7 +35,9 @@ pub use self::types::{Key, Value, KvPair, make_key};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
-pub const DEFAULT_CFS: &'static [CfName] = &["default", "lock"];
+pub const CF_DEFAULT: CfName = "default";
+pub const CF_LOCK: CfName = "lock";
+pub const DEFAULT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK];
 
 #[derive(Debug, Clone)]
 pub enum Mutation {
