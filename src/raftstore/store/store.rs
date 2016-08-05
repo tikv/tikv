@@ -30,9 +30,9 @@ use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer};
 use pd::PdClient;
-use kvproto::raft_cmdpb::{CmdType, AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use raft::SnapshotStatus;
 use raftstore::{Result, Error};
 use kvproto::metapb;
@@ -770,19 +770,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // but it doesn't matter, if the peer is not leader, the proposing command
         // log entry can't be committed.
 
-
-        // for read-only, if we don't care stale read, we can
-        // execute these commands immediately in leader.
-        if self.cfg.local_read_in_lease &&
-           peer.raft_group.raft.in_lease(self.cfg.leader_lease_safe_distance) &&
-           msg.get_requests().len() == 1 &&
-           msg.get_requests()[0].get_cmd_type() == CmdType::Snap {
-            let mut snap_resp = peer.do_snap().unwrap();
-            snap_resp.set_cmd_type(CmdType::Snap);
-            resp.set_responses(RepeatedField::from_vec(vec![snap_resp]));
-
-            return cb.call_box((resp,));
-        }
 
         let pending_cmd = PendingCmd {
             uuid: uuid,

@@ -59,13 +59,6 @@ region-split-check-diff = "8MB"
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
 
-# If true, when leader in it's lease readonly query can directly handled in local.
-local-read-in-lease = false
-
-# For advanced user. If leader's election_elapsed + leader-lease-safe-distance <= election_timeout,
-# we say it is in leader's lease
-leader-lease-safe-distance = 5
-
 [raft]
 # set cluster id, must greater than 0.
 cluster-id = 1

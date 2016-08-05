@@ -469,7 +469,31 @@ impl Peer {
             return cmd.cb.call_box((err_resp,));
         }
 
-        if get_transfer_leader_cmd(&req).is_some() {
+        let local_read = req.has_header() && req.get_header().has_read_quorum() &&
+                         !req.get_header().get_read_quorum() &&
+                         self.raft_group.raft.in_lease() &&
+                         req.get_requests().len() == 1 &&
+                         req.get_requests()[0].get_cmd_type() == CmdType::Snap;
+
+        if local_read {
+            // for read-only, if we don't care stale read, we can
+            // execute these commands immediately in leader.
+            let engine = self.engine.clone();
+            let mut ctx = ExecContext {
+                snap: Snapshot::new(engine),
+                apply_state: self.get_store().apply_state.clone(),
+                wb: WriteBatch::new(),
+                req: &req,
+            };
+            let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
+                error!("{} execute raft command err: {:?}", self.tag, e);
+                (cmd_resp::new_error(e), None)
+            });
+
+            cmd_resp::bind_uuid(&mut resp, cmd.uuid);
+            cmd_resp::bind_term(&mut resp, self.term());
+            return cmd.cb.call_box((resp,));
+        } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
 
@@ -1188,7 +1212,7 @@ impl Peer {
                 CmdType::Seek => self.do_seek(ctx, req),
                 CmdType::Put => self.do_put(ctx, req),
                 CmdType::Delete => self.do_delete(ctx, req),
-                CmdType::Snap => self.do_snap(),
+                CmdType::Snap => self.do_snap(ctx, req),
                 CmdType::Invalid => Err(box_err!("invalid cmd type, message maybe currupted")),
             });
 
@@ -1290,7 +1314,7 @@ impl Peer {
         Ok(resp)
     }
 
-    pub fn do_snap(&mut self) -> Result<Response> {
+    fn do_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
         let mut resp = Response::new();
         resp.mut_snap().set_region(self.get_store().get_region().clone());
         Ok(resp)
