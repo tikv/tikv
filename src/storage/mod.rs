@@ -62,6 +62,7 @@ pub enum StorageCb {
     Booleans(Callback<Vec<Result<()>>>),
     SingleValue(Callback<Option<Value>>),
     KvPairs(Callback<Vec<Result<KvPair>>>),
+    Locks(Callback<Vec<LockInfo>>),
 }
 
 #[allow(type_complexity)]
@@ -119,13 +120,11 @@ pub enum Command {
     ScanLock {
         ctx: Context,
         max_ts: u64,
-        callback: Option<Callback<Vec<LockInfo>>>,
     },
     ResolveLock {
         ctx: Context,
         start_ts: u64,
         commit_ts: Option<u64>,
-        callback: Option<Callback<()>>,
     },
 }
 
@@ -440,9 +439,8 @@ impl Storage {
         let cmd = Command::ScanLock {
             ctx: ctx,
             max_ts: max_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::Locks(callback)));
         Ok(())
     }
 
@@ -456,9 +454,8 @@ impl Storage {
             ctx: ctx,
             start_ts: start_ts,
             commit_ts: commit_ts,
-            callback: Some(callback),
         };
-        try!(self.send(cmd));
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
     }
 }
