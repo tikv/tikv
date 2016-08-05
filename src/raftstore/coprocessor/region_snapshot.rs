@@ -53,12 +53,33 @@ impl RegionSnapshot {
         RegionIterator::new(self.snap.new_iterator(), self.region.clone())
     }
 
+    pub fn iter_cf(&self, cf: &str) -> Result<RegionIterator> {
+        Ok(RegionIterator::new(try!(self.snap.new_iterator_cf(cf)), self.region.clone()))
+    }
+
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
     pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        let mut it = self.iter();
+        self.scan_impl(self.iter(), start_key, end_key, f)
+    }
+
+    // like `scan`, only on a specific column family.
+    pub fn scan_cf<F>(&self, cf: &str, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
+        where F: FnMut(&[u8], &[u8]) -> Result<bool>
+    {
+        self.scan_impl(try!(self.iter_cf(cf)), start_key, end_key, f)
+    }
+
+    fn scan_impl<F>(&self,
+                    mut it: RegionIterator,
+                    start_key: &[u8],
+                    end_key: &[u8],
+                    f: &mut F)
+                    -> Result<()>
+        where F: FnMut(&[u8], &[u8]) -> Result<bool>
+    {
         if !try!(it.seek(start_key)) {
             return Ok(());
         }

@@ -17,7 +17,7 @@ use std::time::Duration;
 use std::thread;
 use rand::random;
 use super::sync_storage::SyncStorage;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::{Mutation, Key, KvPair, make_key};
 use tikv::storage::mvcc::TEST_TS_BASE;
 
@@ -133,6 +133,14 @@ impl AssertionStorage {
                        .unwrap()
                        .unwrap(),
                    expect);
+    }
+
+    fn scan_lock_ok(&self, max_ts: u64, expect: Vec<LockInfo>) {
+        assert_eq!(self.0.scan_lock(Context::new(), max_ts).unwrap(), expect);
+    }
+
+    fn resolve_lock_ok(&self, start_ts: u64, commit_ts: Option<u64>) {
+        self.0.resolve_lock(Context::new(), start_ts, commit_ts).unwrap();
     }
 }
 
@@ -362,6 +370,59 @@ fn test_txn_store_scan() {
     check_v20();
     check_v30();
     check_v40();
+}
+
+fn lock(key: &[u8], primary: &[u8], ts: u64) -> LockInfo {
+    let mut lock = LockInfo::new();
+    lock.set_key(key.to_vec());
+    lock.set_primary_lock(primary.to_vec());
+    lock.set_lock_version(ts);
+    lock
+}
+
+#[test]
+fn test_txn_store_scan_lock() {
+    let store = new_assertion_storage();
+
+    store.put_ok(b"k1", b"v1", 1, 2);
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"p1"), b"v5".to_vec())),
+                           Mutation::Put((make_key(b"s1"), b"v5".to_vec()))],
+                      b"p1",
+                      5);
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"p2"), b"v10".to_vec())),
+                           Mutation::Put((make_key(b"s2"), b"v10".to_vec()))],
+                      b"p2",
+                      10);
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"p3"), b"v20".to_vec())),
+                           Mutation::Put((make_key(b"s3"), b"v20".to_vec()))],
+                      b"p3",
+                      20);
+    store.scan_lock_ok(10,
+                       vec![lock(b"p1", b"p1", 5),
+                            lock(b"p2", b"p2", 10),
+                            lock(b"s1", b"p1", 5),
+                            lock(b"s2", b"p2", 10)]);
+}
+
+#[test]
+fn test_txn_store_resolve_lock() {
+    let store = new_assertion_storage();
+
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"p1"), b"v5".to_vec())),
+                           Mutation::Put((make_key(b"s1"), b"v5".to_vec()))],
+                      b"p1",
+                      5);
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"p2"), b"v10".to_vec())),
+                           Mutation::Put((make_key(b"s2"), b"v10".to_vec()))],
+                      b"p2",
+                      10);
+    store.resolve_lock_ok(5, None);
+    store.resolve_lock_ok(10, Some(20));
+    store.get_none(b"p1", 20);
+    store.get_none(b"s1", 30);
+    store.get_ok(b"p2", 20, b"v10");
+    store.get_ok(b"s2", 30, b"v10");
+    store.scan_lock_ok(30, vec![]);
 }
 
 struct Oracle {
