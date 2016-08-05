@@ -304,6 +304,11 @@ impl<T: Storage> Raft<T> {
         hs
     }
 
+    pub fn in_lease(&self, safe_distance: usize) -> bool {
+        self.state == StateRole::Leader && self.check_quorum &&
+        self.election_elapsed + safe_distance <= self.election_timeout
+    }
+
     fn quorum(&self) -> usize {
         self.prs.len() / 2 + 1
     }

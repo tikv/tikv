@@ -36,6 +36,7 @@ const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
 const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
 const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
+const DEFAULT_LEADER_LEASE_SAFE_DISTANCE: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -79,6 +80,13 @@ pub struct Config {
     /// When a peer hasn't been active for max_peer_down_duration,
     /// we will consider this peer to be down and report it to pd.
     pub max_peer_down_duration: Duration,
+
+    /// When leader in it's lease, use local read instead of raft read.
+    pub local_read_in_lease: bool,
+
+    /// When leader's election_elapsed + leader-lease-safe-distance <= election_timeout,
+    /// we say it is in leader's lease
+    pub leader_lease_safe_distance: usize,
 }
 
 impl Default for Config {
@@ -104,6 +112,8 @@ impl Default for Config {
             snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
+            local_read_in_lease: false,
+            leader_lease_safe_distance: DEFAULT_LEADER_LEASE_SAFE_DISTANCE,
         }
     }
 }

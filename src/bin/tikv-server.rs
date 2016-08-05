@@ -421,6 +421,19 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           config,
                           Some(10000),
                           |v| v.as_integer()) as u64;
+    cfg.raft_store.leader_lease_safe_distance =
+        get_integer_value("",
+                          "raftstore.leader-lease-safe-distance",
+                          matches,
+                          config,
+                          Some(5),
+                          |v| v.as_integer()) as usize;
+
+    let local_read_in_lease = config.lookup("raftstore.local-read-in-lease")
+        .unwrap_or(&toml::Value::Boolean(false))
+        .as_bool()
+        .unwrap_or(false);
+    cfg.raft_store.local_read_in_lease = local_read_in_lease;
 
     cfg.storage.sched_notify_capacity =
         get_integer_value("",

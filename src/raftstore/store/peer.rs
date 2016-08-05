@@ -1188,7 +1188,7 @@ impl Peer {
                 CmdType::Seek => self.do_seek(ctx, req),
                 CmdType::Put => self.do_put(ctx, req),
                 CmdType::Delete => self.do_delete(ctx, req),
-                CmdType::Snap => self.do_snap(ctx, req),
+                CmdType::Snap => self.do_snap(),
                 CmdType::Invalid => Err(box_err!("invalid cmd type, message maybe currupted")),
             });
 
@@ -1290,7 +1290,7 @@ impl Peer {
         Ok(resp)
     }
 
-    fn do_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
+    pub fn do_snap(&mut self) -> Result<Response> {
         let mut resp = Response::new();
         resp.mut_snap().set_region(self.get_store().get_region().clone());
         Ok(resp)
