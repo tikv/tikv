@@ -88,7 +88,7 @@ impl<'a> MvccTxn<'a> {
 
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
         let lock_type = match try!(self.reader.load_lock(key)) {
-            Some(ref lock) if lock.ts == self.start_ts => lock.typ.clone(),
+            Some(ref lock) if lock.ts == self.start_ts => lock.lock_type,
             _ => {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
                     // Committed by concurrent transaction.

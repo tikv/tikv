@@ -17,7 +17,7 @@ use util::codec::number::{NumberEncoder, NumberDecoder};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 use super::{Error, Result};
 
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,Copy)]
 pub enum LockType {
     Put,
     Delete,
@@ -52,15 +52,15 @@ impl LockType {
 }
 
 pub struct Lock {
-    pub typ: LockType,
+    pub lock_type: LockType,
     pub primary: Vec<u8>,
     pub ts: u64,
 }
 
 impl Lock {
-    pub fn new(typ: LockType, primary: Vec<u8>, ts: u64) -> Lock {
+    pub fn new(lock_type: LockType, primary: Vec<u8>, ts: u64) -> Lock {
         Lock {
-            typ: typ,
+            lock_type: lock_type,
             primary: primary,
             ts: ts,
         }
@@ -68,7 +68,7 @@ impl Lock {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = vec![];
-        b.push(self.typ.to_u8());
+        b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
         b.encode_var_u64(self.ts).unwrap();
         b
@@ -78,12 +78,9 @@ impl Lock {
         if b.len() == 0 {
             return Err(Error::BadFormatLock);
         }
-        let typ = match LockType::from_u8(try!(b.read_u8())) {
-            Some(x) => x,
-            None => return Err(Error::BadFormatLock),
-        };
+        let lock_type = try!(LockType::from_u8(try!(b.read_u8())).ok_or(Error::BadFormatLock));
         let primary = try!(b.decode_compact_bytes());
         let ts = try!(b.decode_var_u64());
-        Ok(Lock::new(typ, primary, ts))
+        Ok(Lock::new(lock_type, primary, ts))
     }
 }
