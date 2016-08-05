@@ -14,8 +14,11 @@
 use std::time::Duration;
 use std::boxed::Box;
 use threadpool::ThreadPool;
-use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult, Error as StorageError};
-use kvproto::kvrpcpb::Context;
+use storage::{Engine, Command, Snapshot, StorageCb, CF_LOCK, Result as StorageResult,
+              Error as StorageError};
+use protobuf::core::Message;
+use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::mvccpb::MetaLock;
 use storage::mvcc::{MvccTxn, Error as MvccError};
 use storage::{Key, Value, KvPair};
 use std::collections::HashMap;
@@ -43,6 +46,12 @@ pub enum ProcessResult {
     },
     Value {
         value: Option<Value>,
+    },
+    Locks {
+        locks: Vec<LockInfo>,
+    },
+    NextCommand {
+        cmd: Command,
     },
     Failed {
         err: StorageError,
@@ -106,6 +115,13 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
         StorageCb::KvPairs(cb) => {
             match pr {
                 ProcessResult::MultiKvpairs { pairs } => cb(Ok(pairs)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
+        }
+        StorageCb::Locks(cb) => {
+            match pr {
+                ProcessResult::Locks { locks } => cb(Ok(locks)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
@@ -221,6 +237,66 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
+        Command::ScanLock { max_ts, .. } => {
+            let res = snapshot.iter_cf(CF_LOCK).map_err(Error::from).and_then(|mut cursor| {
+                cursor.seek_to_first(); // ignore result, valid() is checked below.
+                let mut locks = vec![];
+                while cursor.valid() {
+                    let mut pb = MetaLock::new();
+                    try!(pb.merge_from_bytes(cursor.value()));
+                    if pb.get_start_ts() <= max_ts {
+                        let key = Key::from_encoded(cursor.key().to_vec());
+                        let mut lock = LockInfo::new();
+                        lock.set_primary_lock(pb.take_primary_key());
+                        lock.set_lock_version(pb.get_start_ts());
+                        lock.set_key(try!(key.raw()));
+                        locks.push(lock);
+                    }
+                    cursor.next();
+                }
+                Ok(locks)
+            });
+            match res {
+                Ok(locks) => ProcessResult::Locks { locks: locks },
+                Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
+        Command::ResolveLock { ref ctx, start_ts, commit_ts } => {
+            let res = snapshot.iter_cf(CF_LOCK).map_err(Error::from).and_then(|mut cursor| {
+                cursor.seek_to_first(); // ignore result, valid() is checked below.
+                let mut keys = vec![];
+                while cursor.valid() {
+                    let mut pb = MetaLock::new();
+                    try!(pb.merge_from_bytes(cursor.value()));
+                    if pb.get_start_ts() == start_ts {
+                        keys.push(Key::from_encoded(cursor.key().to_vec()));
+                    }
+                    cursor.next();
+                }
+                let next_cmd = match commit_ts {
+                    Some(ts) => {
+                        Command::Commit {
+                            ctx: ctx.clone(),
+                            keys: keys,
+                            lock_ts: start_ts,
+                            commit_ts: ts,
+                        }
+                    }
+                    None => {
+                        Command::Rollback {
+                            ctx: ctx.clone(),
+                            keys: keys,
+                            start_ts: start_ts,
+                        }
+                    }
+                };
+                Ok(next_cmd)
+            });
+            match res {
+                Ok(cmd) => ProcessResult::NextCommand { cmd: cmd },
+                Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
         _ => panic!("unsupported read command"),
     };
 
@@ -319,7 +395,9 @@ fn extract_ctx(cmd: &Command) -> &Context {
         Command::CommitThenGet { ref ctx, .. } |
         Command::Cleanup { ref ctx, .. } |
         Command::Rollback { ref ctx, .. } |
-        Command::RollbackThenGet { ref ctx, .. } => ctx,
+        Command::RollbackThenGet { ref ctx, .. } |
+        Command::ScanLock { ref ctx, .. } |
+        Command::ResolveLock { ref ctx, .. } => ctx,
     }
 }
 
@@ -443,7 +521,11 @@ impl Scheduler {
         let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
         let cb = ctx.callback.take().unwrap();
-        execute_callback(cb, pr);
+        if let ProcessResult::NextCommand { cmd } = pr {
+            self.on_receive_new_cmd(cmd, cb);
+        } else {
+            execute_callback(cb, pr);
+        }
     }
 
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
