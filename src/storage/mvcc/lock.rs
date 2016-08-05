@@ -24,6 +24,10 @@ pub enum LockType {
     Lock,
 }
 
+const FLAG_PUT: u8 = b'P';
+const FLAG_DELETE: u8 = b'D';
+const FLAG_LOCK: u8 = b'L';
+
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> LockType {
         match *mutation {
@@ -35,18 +39,18 @@ impl LockType {
 
     fn from_u8(b: u8) -> Option<LockType> {
         match b {
-            b'P' => Some(LockType::Put),
-            b'D' => Some(LockType::Delete),
-            b'L' => Some(LockType::Lock),
+            FLAG_PUT => Some(LockType::Put),
+            FLAG_DELETE => Some(LockType::Delete),
+            FLAG_LOCK => Some(LockType::Lock),
             _ => None,
         }
     }
 
     fn to_u8(&self) -> u8 {
         match *self {
-            LockType::Put => b'P',
-            LockType::Delete => b'D',
-            LockType::Lock => b'L',
+            LockType::Put => FLAG_PUT,
+            LockType::Delete => FLAG_DELETE,
+            LockType::Lock => FLAG_LOCK,
         }
     }
 }
