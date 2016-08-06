@@ -29,7 +29,7 @@ use util::rocksdb;
 use util::HandyRwLock;
 use util::codec::bytes::BytesEncoder;
 use util::worker::Scheduler;
-use storage::engine::DEFAULT_CFNAME;
+use storage::CF_DEFAULT;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::worker::SnapTask;
@@ -452,7 +452,7 @@ impl PeerStorage {
                                     enc_end_key(self.get_region()));
 
         for cf in self.engine.cf_names() {
-            if cf == DEFAULT_CFNAME {
+            if cf == CF_DEFAULT {
                 continue;
             }
             let handle = box_try!(rocksdb::get_cf_handle(self.engine.as_ref(), cf));

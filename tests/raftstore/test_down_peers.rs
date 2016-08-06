@@ -22,7 +22,9 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
 }
 
 fn check_down_seconds(peer: &pdpb::PeerStats, secs: u64) {
-    assert!(peer.get_down_seconds() == secs || secs > 0 && peer.get_down_seconds() == secs - 1);
+    debug!("down {} secs {}", peer.get_down_seconds(), secs);
+    assert!(peer.get_down_seconds() <= secs);
+
 }
 
 fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {

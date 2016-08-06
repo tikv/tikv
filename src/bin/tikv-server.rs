@@ -49,6 +49,7 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{new_rpc_client, RpcClient};
+use tikv::util::time_monitor::TimeMonitor;
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
 const RAFTKV_DSN: &'static str = "raftkv";
@@ -442,6 +443,13 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           config,
                           Some(1024),
                           |v| v.as_integer()) as usize;
+    cfg.storage.sched_worker_pool_size =
+        get_integer_value("",
+                          "storage.scheduler-worker-pool-size",
+                          matches,
+                          config,
+                          Some(4),
+                          |v| v.as_integer()) as usize;
     cfg
 }
 
@@ -647,6 +655,7 @@ fn main() {
             run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {
+            let _m = TimeMonitor::default();
             run_raft_server(listener, &matches, &config, &cfg);
         }
         n => panic!("unrecognized dns name: {}", n),

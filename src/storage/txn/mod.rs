@@ -34,6 +34,11 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        ProtoBuf(err: ::protobuf::error::ProtobufError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         Mvcc(err: ::storage::mvcc::Error) {
             from()
             cause(err)

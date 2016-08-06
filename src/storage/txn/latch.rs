@@ -28,6 +28,7 @@ impl Latch {
     }
 }
 
+#[derive(Clone)]
 pub struct Lock {
     pub required_slots: Vec<usize>,
     pub owned_count: usize,
@@ -141,10 +142,6 @@ mod tests {
 
         // b acquire lock failed
         let mut acquired_b = latches.acquire(&mut lock_b, cid_b);
-        assert_eq!(acquired_b, false);
-
-        // b retry acquire lock, failed again
-        acquired_b = latches.acquire(&mut lock_b, cid_b);
         assert_eq!(acquired_b, false);
 
         // a release lock, and get wakeup list

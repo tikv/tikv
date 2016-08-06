@@ -13,15 +13,18 @@
 
 use std::time::Duration;
 use std::boxed::Box;
-use storage::{Engine, Command, Snapshot};
-use kvproto::kvrpcpb::Context;
+use threadpool::ThreadPool;
+use storage::{Engine, Command, Snapshot, StorageCb, CF_LOCK, Result as StorageResult,
+              Error as StorageError};
+use protobuf::core::Message;
+use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::mvccpb::MetaLock;
 use storage::mvcc::{MvccTxn, Error as MvccError};
-use storage::{Key, Value};
+use storage::{Key, Value, KvPair};
 use std::collections::HashMap;
 use mio::{self, EventLoop};
-
-use storage::engine::{Result as EngineResult, Callback};
 use util::transport::SendCh;
+use storage::engine::{Result as EngineResult, Callback as EngineCallback, Modify};
 use super::Result;
 use super::Error;
 use super::store::SnapshotStore;
@@ -34,55 +37,124 @@ pub enum Tick {
 }
 
 pub enum ProcessResult {
-    ResultSet {
-        result: Vec<Result<()>>,
+    Res,
+    MultiRes {
+        results: Vec<StorageResult<()>>,
+    },
+    MultiKvpairs {
+        pairs: Vec<StorageResult<KvPair>>,
     },
     Value {
         value: Option<Value>,
     },
-    Nothing,
+    Locks {
+        locks: Vec<LockInfo>,
+    },
+    NextCommand {
+        cmd: Command,
+    },
+    Failed {
+        err: StorageError,
+    },
 }
 
 pub enum Msg {
     Quit,
     RawCmd {
         cmd: Command,
+        cb: StorageCb,
     },
-    SnapshotFinish {
+    SnapshotFinished {
         cid: u64,
         snapshot: EngineResult<Box<Snapshot>>,
     },
-    WriteFinish {
+    ReadFinished {
+        cid: u64,
+        pr: ProcessResult,
+    },
+    WritePrepareFinished {
+        cid: u64,
+        cmd: Command,
+        pr: ProcessResult,
+        to_be_write: Vec<Modify>,
+    },
+    WritePrepareFailed {
+        cid: u64,
+        err: Error,
+    },
+    WriteFinished {
         cid: u64,
         pr: ProcessResult,
         result: EngineResult<()>,
     },
 }
 
-struct RunningCtx {
-    cid: u64,
-    cmd: Command,
-    lock: Lock,
-}
-
-impl RunningCtx {
-    pub fn new(cid: u64, cmd: Command, lock: Lock) -> RunningCtx {
-        RunningCtx {
-            cid: cid,
-            cmd: cmd,
-            lock: lock,
+fn execute_callback(callback: StorageCb, pr: ProcessResult) {
+    match callback {
+        StorageCb::Boolean(cb) => {
+            match pr {
+                ProcessResult::Res => cb(Ok(())),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
+        }
+        StorageCb::Booleans(cb) => {
+            match pr {
+                ProcessResult::MultiRes { results } => cb(Ok(results)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
+        }
+        StorageCb::SingleValue(cb) => {
+            match pr {
+                ProcessResult::Value { value } => cb(Ok(value)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
+        }
+        StorageCb::KvPairs(cb) => {
+            match pr {
+                ProcessResult::MultiKvpairs { pairs } => cb(Ok(pairs)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
+        }
+        StorageCb::Locks(cb) => {
+            match pr {
+                ProcessResult::Locks { locks } => cb(Ok(locks)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
         }
     }
 }
 
-fn make_write_cb(pr: ProcessResult, cid: u64, ch: SendCh<Msg>) -> Callback<()> {
+pub struct RunningCtx {
+    cid: u64,
+    cmd: Option<Command>,
+    lock: Lock,
+    callback: Option<StorageCb>,
+}
+
+impl RunningCtx {
+    pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> RunningCtx {
+        RunningCtx {
+            cid: cid,
+            cmd: Some(cmd),
+            lock: lock,
+            callback: Some(cb),
+        }
+    }
+}
+
+fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallback<()> {
     Box::new(move |result: EngineResult<()>| {
-        if let Err(e) = ch.send(Msg::WriteFinish {
+        if let Err(e) = ch.send(Msg::WriteFinished {
             cid: cid,
             pr: pr,
             result: result,
         }) {
-            error!("send write finished to scheduler failed cid = {}, err:{:?}",
+            error!("send write finished to scheduler failed cid={}, err:{:?}",
                    cid,
                    e);
         }
@@ -102,28 +174,237 @@ pub struct Scheduler {
 
     // write concurrency control
     latches: Latches,
+
+    // worker pool
+    worker_pool: ThreadPool,
 }
 
 impl Scheduler {
-    pub fn new(engine: Box<Engine>, schedch: SendCh<Msg>, concurrency: usize) -> Scheduler {
+    pub fn new(engine: Box<Engine>,
+               schedch: SendCh<Msg>,
+               concurrency: usize,
+               worker_pool_size: usize)
+               -> Scheduler {
         Scheduler {
             engine: engine,
             cmd_ctxs: HashMap::new(),
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
+            worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
+                                                   worker_pool_size),
         }
     }
+}
 
+fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
+    debug!("process read cmd(cid={}) in worker pool.", cid);
+    let pr = match cmd {
+        Command::Get { ref key, start_ts, .. } => {
+            let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
+            let res = snap_store.get(key);
+            match res {
+                Ok(val) => ProcessResult::Value { value: val },
+                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+            }
+        }
+        Command::BatchGet { ref keys, start_ts, .. } => {
+            let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
+            match snap_store.batch_get(keys) {
+                Ok(results) => {
+                    let mut res = vec![];
+                    for (k, v) in keys.into_iter().zip(results) {
+                        match v {
+                            Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
+                            Ok(None) => {}
+                            Err(e) => res.push(Err(StorageError::from(e))),
+                        }
+                    }
+                    ProcessResult::MultiKvpairs { pairs: res }
+                }
+                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+            }
+        }
+        Command::Scan { ref start_key, limit, start_ts, .. } => {
+            let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
+            let res = snap_store.scanner()
+                .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
+                .and_then(|mut results| {
+                    Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
+                });
+            match res {
+                Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
+                Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
+        Command::ScanLock { max_ts, .. } => {
+            let res = snapshot.iter_cf(CF_LOCK).map_err(Error::from).and_then(|mut cursor| {
+                cursor.seek_to_first(); // ignore result, valid() is checked below.
+                let mut locks = vec![];
+                while cursor.valid() {
+                    let mut pb = MetaLock::new();
+                    try!(pb.merge_from_bytes(cursor.value()));
+                    if pb.get_start_ts() <= max_ts {
+                        let key = Key::from_encoded(cursor.key().to_vec());
+                        let mut lock = LockInfo::new();
+                        lock.set_primary_lock(pb.take_primary_key());
+                        lock.set_lock_version(pb.get_start_ts());
+                        lock.set_key(try!(key.raw()));
+                        locks.push(lock);
+                    }
+                    cursor.next();
+                }
+                Ok(locks)
+            });
+            match res {
+                Ok(locks) => ProcessResult::Locks { locks: locks },
+                Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
+        Command::ResolveLock { ref ctx, start_ts, commit_ts } => {
+            let res = snapshot.iter_cf(CF_LOCK).map_err(Error::from).and_then(|mut cursor| {
+                cursor.seek_to_first(); // ignore result, valid() is checked below.
+                let mut keys = vec![];
+                while cursor.valid() {
+                    let mut pb = MetaLock::new();
+                    try!(pb.merge_from_bytes(cursor.value()));
+                    if pb.get_start_ts() == start_ts {
+                        keys.push(Key::from_encoded(cursor.key().to_vec()));
+                    }
+                    cursor.next();
+                }
+                let next_cmd = match commit_ts {
+                    Some(ts) => {
+                        Command::Commit {
+                            ctx: ctx.clone(),
+                            keys: keys,
+                            lock_ts: start_ts,
+                            commit_ts: ts,
+                        }
+                    }
+                    None => {
+                        Command::Rollback {
+                            ctx: ctx.clone(),
+                            keys: keys,
+                            start_ts: start_ts,
+                        }
+                    }
+                };
+                Ok(next_cmd)
+            });
+            match res {
+                Ok(cmd) => ProcessResult::NextCommand { cmd: cmd },
+                Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
+        _ => panic!("unsupported read command"),
+    };
+
+    if let Err(e) = ch.send(Msg::ReadFinished { cid: cid, pr: pr }) {
+        // Todo: if this happens we need to clean up command's context
+        error!("send read finished failed, cid={}, err={:?}", cid, e);
+    }
+}
+
+fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
+    if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref()) {
+        if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
+            // Todo: if this happens, lock will hold for ever
+            panic!("send WritePrepareFailed message to channel failed. cid={}, err={:?}",
+                   cid,
+                   err);
+        }
+    }
+}
+
+fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapshot) -> Result<()> {
+    let (pr, modifies) = match cmd {
+        Command::Prewrite { ref mutations, ref primary, start_ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot, start_ts);
+            let mut results = vec![];
+            for m in mutations {
+                match txn.prewrite(m.clone(), primary) {
+                    Ok(_) => results.push(Ok(())),
+                    e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
+                    Err(e) => return Err(Error::from(e)),
+                }
+            }
+            let res = results.drain(..).map(|x| x.map_err(StorageError::from)).collect();
+            let pr = ProcessResult::MultiRes { results: res };
+            (pr, txn.modifies())
+        }
+        Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot, lock_ts);
+            for k in keys {
+                try!(txn.commit(&k, commit_ts));
+            }
+
+            let pr = ProcessResult::Res;
+            (pr, txn.modifies())
+        }
+        Command::CommitThenGet { ref key, lock_ts, commit_ts, get_ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot, lock_ts);
+            let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
+
+            let pr = ProcessResult::Value { value: val };
+            (pr, txn.modifies())
+        }
+        Command::Cleanup { ref key, start_ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot, start_ts);
+            try!(txn.rollback(&key));
+
+            let pr = ProcessResult::Res;
+            (pr, txn.modifies())
+        }
+        Command::Rollback { ref keys, start_ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot, start_ts);
+            for k in keys {
+                try!(txn.rollback(&k));
+            }
+
+            let pr = ProcessResult::Res;
+            (pr, txn.modifies())
+        }
+        Command::RollbackThenGet { ref key, lock_ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot, lock_ts);
+            let val = try!(txn.rollback_then_get(&key));
+
+            let pr = ProcessResult::Value { value: val };
+            (pr, txn.modifies())
+        }
+        _ => panic!("unsupported write command"),
+    };
+
+    box_try!(ch.send(Msg::WritePrepareFinished {
+        cid: cid,
+        cmd: cmd,
+        pr: pr,
+        to_be_write: modifies,
+    }));
+
+    Ok(())
+}
+
+fn extract_ctx(cmd: &Command) -> &Context {
+    match *cmd {
+        Command::Get { ref ctx, .. } |
+        Command::BatchGet { ref ctx, .. } |
+        Command::Scan { ref ctx, .. } |
+        Command::Prewrite { ref ctx, .. } |
+        Command::Commit { ref ctx, .. } |
+        Command::CommitThenGet { ref ctx, .. } |
+        Command::Cleanup { ref ctx, .. } |
+        Command::Rollback { ref ctx, .. } |
+        Command::RollbackThenGet { ref ctx, .. } |
+        Command::ScanLock { ref ctx, .. } |
+        Command::ResolveLock { ref ctx, .. } => ctx,
+    }
+}
+
+impl Scheduler {
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
         self.id_alloc
-    }
-
-    fn save_cmd_context(&mut self, cid: u64, ctx: RunningCtx) {
-        if self.cmd_ctxs.insert(cid, ctx).is_some() {
-            panic!("cid = {} shouldn't exist", cid);
-        }
     }
 
     fn gen_lock(&self, cmd: &Command) -> Lock {
@@ -141,159 +422,38 @@ impl Scheduler {
         }
     }
 
-    fn process_cmd_with_snapshot(&mut self, cid: u64, snapshot: &Snapshot) -> Result<()> {
-        debug!("process cmd with snapshot, cid = {}", cid);
-
-        let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
-        match ctx.cmd {
-            Command::Get { ref key, start_ts, ref mut callback, .. } => {
-                let snap_store = SnapshotStore::new(snapshot, start_ts);
-                callback.take().unwrap()(snap_store.get(key).map_err(::storage::Error::from));
-            }
-            Command::BatchGet { ref keys, start_ts, ref mut callback, .. } => {
-                let snap_store = SnapshotStore::new(snapshot, start_ts);
-                let res = match snap_store.batch_get(keys) {
-                    Ok(results) => {
-                        let mut res = vec![];
-                        for (k, v) in keys.into_iter().zip(results.into_iter()) {
-                            match v {
-                                Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
-                                Ok(None) => {}
-                                Err(e) => res.push(Err(::storage::Error::from(e))),
-                            }
-                        }
-                        Ok(res)
-                    }
-                    Err(e) => Err(e.into()),
-                };
-                callback.take().unwrap()(res);
-            }
-            Command::Scan { ref start_key, limit, start_ts, ref mut callback, .. } => {
-                let snap_store = SnapshotStore::new(snapshot, start_ts);
-                let mut scanner = try!(snap_store.scanner());
-                let key = start_key.clone();
-                let res = match scanner.scan(key, limit) {
-                    Ok(mut results) => {
-                        Ok(results.drain(..).map(|x| x.map_err(::storage::Error::from)).collect())
-                    }
-                    Err(e) => Err(e.into()),
-                };
-                callback.take().unwrap()(res);
-            }
-            Command::Prewrite { ref ctx, ref mutations, ref primary, start_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, start_ts);
-                let mut results = vec![];
-                for m in mutations {
-                    match txn.prewrite(m.clone(), primary) {
-                        Ok(_) => results.push(Ok(())),
-                        e @ Err(MvccError::KeyIsLocked { .. }) => {
-                            results.push(e.map_err(Error::from))
-                        }
-                        Err(e) => return Err(Error::from(e)),
-                    }
-                }
-
-                let pr: ProcessResult = ProcessResult::ResultSet { result: results };
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
-            }
-            Command::Commit { ref ctx, ref keys, lock_ts, commit_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, lock_ts);
-                for k in keys {
-                    try!(txn.commit(&k, commit_ts));
-                }
-
-                let pr: ProcessResult = ProcessResult::Nothing;
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
-            }
-            Command::CommitThenGet { ref ctx, ref key, lock_ts, commit_ts, get_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, lock_ts);
-                let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
-
-                let pr: ProcessResult = ProcessResult::Value { value: val };
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
-            }
-            Command::Cleanup { ref ctx, ref key, start_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, start_ts);
-                try!(txn.rollback(&key));
-
-                let pr: ProcessResult = ProcessResult::Nothing;
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(&ctx, txn.modifies(), cb));
-            }
-            Command::Rollback { ref ctx, ref keys, start_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, start_ts);
-                for k in keys {
-                    try!(txn.rollback(&k));
-                }
-
-                let pr: ProcessResult = ProcessResult::Nothing;
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
-            }
-            Command::RollbackThenGet { ref ctx, ref key, lock_ts, .. } => {
-                let mut txn = MvccTxn::new(snapshot, lock_ts);
-                let val = try!(txn.rollback_then_get(&key));
-
-                let pr: ProcessResult = ProcessResult::Value { value: val };
-                let cb = make_write_cb(pr, cid, self.schedch.clone());
-                try!(self.engine.async_write(ctx, txn.modifies(), cb));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn process_failed_cmd(&mut self, cid: u64, err: Error) {
-        let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
-        match ctx.cmd {
-            Command::Get { ref mut callback, .. } |
-            Command::CommitThenGet { ref mut callback, .. } |
-            Command::RollbackThenGet { ref mut callback, .. } => {
-                callback.take().unwrap()(Err(err.into()));
-            }
-            Command::BatchGet { ref mut callback, .. } => {
-                callback.take().unwrap()(Err(err.into()));
-            }
-            Command::Scan { ref mut callback, .. } => {
-                callback.take().unwrap()(Err(err.into()));
-            }
-            Command::Prewrite { ref mut callback, .. } => {
-                callback.take().unwrap()(Err(err.into()));
-            }
-            Command::Commit { ref mut callback, .. } => {
-                callback.take().unwrap()(Err(err.into()));
-            }
-            Command::Cleanup { ref mut callback, .. } => {
-                callback.take().unwrap()(Err(err.into()));
-            }
-            Command::Rollback { ref mut callback, .. } => {
-                callback.take().unwrap()(Err(err.into()));
-            }
+    fn process_by_worker(&mut self, cid: u64, snapshot: Box<Snapshot>) {
+        debug!("process cmd with snapshot, cid={}", cid);
+        let cmd = {
+            let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
+            assert_eq!(ctx.cid, cid);
+            ctx.cmd.take().unwrap()
+        };
+        let ch = self.schedch.clone();
+        let readcmd = cmd.readonly();
+        if readcmd {
+            self.worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
+        } else {
+            self.worker_pool.execute(move || process_write(cid, cmd, ch, snapshot));
         }
     }
 
     fn finish_with_err(&mut self, cid: u64, err: Error) {
-        self.process_failed_cmd(cid, err);
-        self.finish_cmd(cid);
+        debug!("command cid={}, finished with error", cid);
+
+        let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
+        assert_eq!(ctx.cid, cid);
+        let cb = ctx.callback.take().unwrap();
+        let pr = ProcessResult::Failed { err: StorageError::from(err) };
+        execute_callback(cb, pr);
+
+        self.release_lock(&ctx.lock, cid);
     }
 
     fn extract_context(&self, cid: u64) -> &Context {
-        let ctx: &RunningCtx = self.cmd_ctxs.get(&cid).unwrap();
-        match ctx.cmd {
-            Command::Get { ref ctx, .. } |
-            Command::BatchGet { ref ctx, .. } |
-            Command::Scan { ref ctx, .. } |
-            Command::Prewrite { ref ctx, .. } |
-            Command::Commit { ref ctx, .. } |
-            Command::CommitThenGet { ref ctx, .. } |
-            Command::Cleanup { ref ctx, .. } |
-            Command::Rollback { ref ctx, .. } |
-            Command::RollbackThenGet { ref ctx, .. } => ctx,
-        }
+        let ctx = &self.cmd_ctxs.get(&cid).unwrap();
+        assert_eq!(ctx.cid, cid);
+        extract_ctx(ctx.cmd.as_ref().unwrap())
     }
 
     fn register_report_tick(&self, event_loop: &mut EventLoop<Self>) {
@@ -310,13 +470,15 @@ impl Scheduler {
         self.register_report_tick(event_loop);
     }
 
-    fn on_received_new_cmd(&mut self, cmd: Command) {
+    fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         let cid = self.gen_id();
         let lock = self.gen_lock(&cmd);
-        let ctx = RunningCtx::new(cid, cmd, lock);
-        self.save_cmd_context(cid, ctx);
+        let ctx = RunningCtx::new(cid, cmd, lock, callback);
+        if self.cmd_ctxs.insert(cid, ctx).is_some() {
+            panic!("command cid={} shouldn't exist", cid);
+        }
 
-        debug!("received new command, cid = {}", cid);
+        debug!("received new command, cid={}", cid);
 
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);
@@ -325,13 +487,14 @@ impl Scheduler {
 
     fn acquire_lock(&mut self, cid: u64) -> bool {
         let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
+        assert_eq!(ctx.cid, cid);
         self.latches.acquire(&mut ctx.lock, cid)
     }
 
     fn get_snapshot(&mut self, cid: u64) {
         let ch = self.schedch.clone();
         let cb = box move |snapshot: EngineResult<Box<Snapshot>>| {
-            if let Err(e) = ch.send(Msg::SnapshotFinish {
+            if let Err(e) = ch.send(Msg::SnapshotFinished {
                 cid: cid,
                 snapshot: snapshot,
             }) {
@@ -345,101 +508,72 @@ impl Scheduler {
     }
 
     fn on_snapshot_finished(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
-        debug!("receive snapshot finish msg for cid = {}", cid);
-
+        debug!("receive snapshot finish msg for cid={}", cid);
         match snapshot {
-            Ok(snapshot) => {
-                let res = self.process_cmd_with_snapshot(cid, snapshot.as_ref());
+            Ok(snapshot) => self.process_by_worker(cid, snapshot),
+            Err(e) => self.finish_with_err(cid, Error::from(e)),
+        }
+    }
 
-                let finished = match res {
-                    Ok(()) => {
-                        let ctx = self.cmd_ctxs.get(&cid).unwrap();
-                        ctx.cmd.readonly()
-                    }
-                    Err(e) => {
-                        self.process_failed_cmd(cid, Error::from(e));
-                        true
-                    }
-                };
-                if finished {
-                    self.finish_cmd(cid);
-                }
-            }
-            Err(e) => {
-                self.finish_with_err(cid, Error::from(e));
-            }
+    fn on_read_finished(&mut self, cid: u64, pr: ProcessResult) {
+        debug!("read command(cid={}) finished", cid);
+
+        let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
+        assert_eq!(ctx.cid, cid);
+        let cb = ctx.callback.take().unwrap();
+        if let ProcessResult::NextCommand { cmd } = pr {
+            self.on_receive_new_cmd(cmd, cb);
+        } else {
+            execute_callback(cb, pr);
+        }
+    }
+
+    fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
+        debug!("write command(cid={}) failed at prewrite.", cid);
+
+        let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
+        assert_eq!(ctx.cid, cid);
+        let cb = ctx.callback.take().unwrap();
+        let pr = ProcessResult::Failed { err: StorageError::from(e) };
+        execute_callback(cb, pr);
+
+        self.release_lock(&ctx.lock, cid);
+    }
+
+    fn on_write_prepare_finished(&mut self,
+                                 cid: u64,
+                                 cmd: Command,
+                                 pr: ProcessResult,
+                                 to_be_write: Vec<Modify>) {
+        if let Err(e) = {
+            let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
+            self.engine.async_write(extract_ctx(&cmd), to_be_write, engine_cb)
+        } {
+            let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
+            assert_eq!(ctx.cid, cid);
+            let cb = ctx.callback.take().unwrap();
+            execute_callback(cb, ProcessResult::Failed { err: StorageError::from(e) });
+
+            self.release_lock(&ctx.lock, cid);
         }
     }
 
     fn on_write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
-        debug!("write finished for command, cid = {}", cid);
+        debug!("write finished for command, cid={}", cid);
+        let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
+        assert_eq!(ctx.cid, cid);
+        let cb = ctx.callback.take().unwrap();
+        let pr = match result {
+            Ok(()) => pr,
+            Err(e) => ProcessResult::Failed { err: ::storage::Error::from(e) },
+        };
+        execute_callback(cb, pr);
 
-        let ctx = self.cmd_ctxs.get_mut(&cid).unwrap();
-        assert_eq!(cid, ctx.cid);
-
-        match ctx.cmd {
-            Command::Prewrite { ref mut callback, .. } => {
-                let res = match result {
-                    Ok(()) => {
-                        match pr {
-                            ProcessResult::ResultSet { mut result } => {
-                                Ok(result.drain(..)
-                                    .map(|x| x.map_err(::storage::Error::from))
-                                    .collect())
-                            }
-                            _ => {
-                                panic!("prewrite return but process result is not result set.");
-                            }
-                        }
-                    }
-                    Err(e) => Err(e.into()),
-                };
-                callback.take().unwrap()(res);
-            }
-            Command::CommitThenGet { ref mut callback, .. } => {
-                let res = match result {
-                    Ok(()) => {
-                        match pr {
-                            ProcessResult::Value { value } => Ok(value),
-                            _ => {
-                                panic!("commit then get return but process result is not value.");
-                            }
-                        }
-                    }
-                    Err(e) => Err(::storage::Error::from(e)),
-                };
-                callback.take().unwrap()(res);
-            }
-            Command::Commit { ref mut callback, .. } |
-            Command::Cleanup { ref mut callback, .. } |
-            Command::Rollback { ref mut callback, .. } => {
-                callback.take().unwrap()(result.map_err(::storage::Error::from));
-            }
-            Command::RollbackThenGet { ref mut callback, .. } => {
-                let res = match result {
-                    Ok(()) => {
-                        match pr {
-                            ProcessResult::Value { value } => Ok(value),
-                            _ => {
-                                panic!("rollback then get return but process result is not value.");
-                            }
-                        }
-                    }
-                    Err(e) => Err(::storage::Error::from(e)),
-                };
-                callback.take().unwrap()(res);
-            }
-            _ => {
-                panic!("unsupported write cmd");
-            }
-        }
+        self.release_lock(&ctx.lock, cid);
     }
 
-    fn finish_cmd(&mut self, cid: u64) {
-        let ctx = self.cmd_ctxs.remove(&cid).unwrap();
-        assert_eq!(cid, ctx.cid);
-
-        let wakeup_list = self.latches.release(&ctx.lock, cid);
+    fn release_lock(&mut self, lock: &Lock, cid: u64) {
+        let wakeup_list = self.latches.release(lock, cid);
         for wcid in wakeup_list {
             self.wakeup_cmd(wcid);
         }
@@ -478,12 +612,14 @@ impl mio::Handler for Scheduler {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => self.shutdown(event_loop),
-            Msg::RawCmd { cmd } => self.on_received_new_cmd(cmd),
-            Msg::SnapshotFinish { cid, snapshot } => self.on_snapshot_finished(cid, snapshot),
-            Msg::WriteFinish { cid, pr, result } => {
-                self.on_write_finished(cid, pr, result);
-                self.finish_cmd(cid);
+            Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
+            Msg::SnapshotFinished { cid, snapshot } => self.on_snapshot_finished(cid, snapshot),
+            Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
+            Msg::WritePrepareFinished { cid, cmd, pr, to_be_write } => {
+                self.on_write_prepare_finished(cid, cmd, pr, to_be_write)
             }
+            Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
+            Msg::WriteFinished { cid, pr, result } => self.on_write_finished(cid, pr, result),
         }
     }
 
