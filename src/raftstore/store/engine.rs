@@ -21,7 +21,7 @@ use byteorder::{ByteOrder, BigEndian};
 use util::rocksdb;
 
 use raftstore::Result;
-
+use storage::CF_DEFAULT;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -240,21 +240,51 @@ pub trait Mutable: Writable {
 impl Mutable for DB {}
 impl Mutable for WriteBatch {}
 
-// `delete_in_range` fast deletes date in range [start_key, end_key).
+const MAX_DELETE_KEYS_COUNT: usize = 10000;
+
+// `delete_in_range` fast deletes data in range [start_key, end_key).
 // It uses rocksdb `delete_file_in_range` first, then scans the left keys and
 // uses WriteBatch to deletes them.
 // Note: this function is dangerous and not guarantees consistence. If you call
 // delete_file_in_range successfully but commit following WriteBatch failed,
 // some keys are really deleted and can't be recovered.
-pub fn delete_in_range(db: &DB, wb: &WriteBatch, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-    try!(db.delete_file_in_range(start_key, end_key));
+pub fn delete_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    delete_in_range_cf(db, CF_DEFAULT, start_key, end_key)
+}
 
-    try!(db.scan(start_key,
-                 end_key,
-                 &mut |key, _| {
-                     try!(wb.delete(key));
-                     Ok(true)
-                 }));
+pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    let handle = try!(rocksdb::get_cf_handle(db, cf));
+    try!(db.delete_file_in_range_cf(*handle, start_key, end_key));
+
+    let mut it = try!(db.new_iterator_cf(cf));
+
+    let mut wb = WriteBatch::new();
+    it.seek(start_key.into());
+    while it.valid() {
+        {
+            let key = it.key();
+            if key >= end_key {
+                break;
+            }
+
+            try!(wb.delete(key));
+            if wb.count() == MAX_DELETE_KEYS_COUNT {
+                // this function can't guarantee data consistence, so using
+                // no WAL is ok.
+                try!(db.write_without_wal(wb));
+                wb = WriteBatch::new();
+            }
+        };
+
+        if !it.next() {
+            break;
+        }
+    }
+
+    if wb.count() > 0 {
+        try!(db.write_without_wal(wb));
+    }
+
     Ok(())
 }
 
@@ -409,7 +439,6 @@ mod tests {
             Arc::new(rocksdb::new_engine_opt(opt, path.path().to_str().unwrap(), &[], vec![])
                 .unwrap());
 
-        let count = 10 * 1024;
         let value = vec![0;1024];
         for i in 0..10 {
             let wb = WriteBatch::new();
@@ -424,10 +453,7 @@ mod tests {
             engine.flush(true).unwrap();
         }
 
-        let wb = WriteBatch::new();
-        delete_in_range(&engine, &wb, b"\x00", b"\xFF").unwrap();
-        assert!(wb.count() < count, format!("{} < {}", wb.count(), count));
-        engine.write(wb).unwrap();
+        delete_in_range(&engine, b"\x00", b"\xFF").unwrap();
         assert!(engine.get(b"k_0").unwrap().is_none());
     }
 }

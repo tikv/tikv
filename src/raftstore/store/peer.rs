@@ -26,8 +26,7 @@ use kvproto::eraftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
-                             RegionLocalState};
+use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, RegionLocalState};
 use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
@@ -36,7 +35,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
 use super::store::Store;
-use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state};
+use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, destroy_peer};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -255,9 +254,7 @@ impl Peer {
     }
 
     pub fn destroy(&mut self) -> Result<()> {
-        // TODO maybe very slow
-        // Delete all data in this peer.
-        let t = SlowTimer::new();
+        let t = Instant::now();
 
         // TODO: figure out a way to unit test this.
         let peer_id = self.peer_id();
@@ -268,16 +265,13 @@ impl Peer {
             notify_region_removed(self.region_id, peer_id, cmd);
         }
 
-        let mut wb = WriteBatch::new();
-        try!(self.get_store().clear(&mut wb));
-        let mut local_state = RegionLocalState::new();
-        local_state.set_state(PeerState::Tombstone);
-        local_state.set_region(self.get_store().get_region().clone());
-        try!(wb.put_msg(&keys::region_state_key(self.region_id), &local_state));
-        try!(self.engine.write(wb));
+        let region = self.get_store().get_region().clone();
+        info!("{} begin to destroy", self.tag);
+
+        try!(destroy_peer(&self.engine, &region));
 
         self.coprocessor_host.shutdown();
-        slow_log!(t, "{} destroy itself", self.tag);
+        info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
 
         Ok(())
     }

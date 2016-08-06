@@ -34,7 +34,8 @@ use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::worker::SnapTask;
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable, delete_in_range};
+use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable, delete_in_range,
+                    delete_in_range_cf};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -428,24 +429,18 @@ impl PeerStorage {
 
     // Delete all data belong to the region. Results are stored in `wb`.
     pub fn clear(&self, wb: &mut WriteBatch) -> Result<()> {
+        // TODO: refactor or remove it later after we use delete_in_range
+        // when applying.
         let timer = Instant::now();
 
         for (start_key, end_key) in self.region_key_ranges() {
-            // meta range only has little keys, no need use unsafe delete.
-            if !start_key.starts_with(keys::REGION_META_PREFIX_KEY) {
-                // TODO:
-                // 1. need to handle `delete_in_range` successfully but following
-                // WriteBatch failed.
-                // 2. need to care other CF?
-                try!(delete_in_range(&self.engine, &wb, &start_key, &end_key));
-            } else {
-                try!(self.engine.scan(&start_key,
-                                      &end_key,
-                                      &mut |key, _| {
-                                          try!(wb.delete(key));
-                                          Ok(true)
-                                      }));
-            }
+
+            try!(self.engine.scan(&start_key,
+                                  &end_key,
+                                  &mut |key, _| {
+                                      try!(wb.delete(key));
+                                      Ok(true)
+                                  }));
         }
 
         let (start_key, end_key) = (enc_start_key(self.get_region()),
@@ -684,6 +679,47 @@ pub fn write_initial_state<T: Mutable>(w: &T, region_id: u64) -> Result<()> {
     Ok(())
 }
 
+pub fn write_peer_state<T: Mutable>(w: &T,
+                                    region: &metapb::Region,
+                                    state: PeerState)
+                                    -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::new();
+    region_state.set_state(state);
+    region_state.set_region(region.clone());
+    try!(w.put_msg(&keys::region_state_key(region_id), &region_state));
+    Ok(())
+}
+
+// delete only StateMachine data.
+fn delete_peer_data(db: &DB, region: &metapb::Region) -> Result<()> {
+    let (start_key, end_key) = (enc_start_key(region), enc_end_key(region));
+
+    for cf in db.cf_names() {
+        try!(delete_in_range_cf(db, cf, &start_key, &end_key));
+    }
+
+    Ok(())
+}
+
+// Destroy all data
+pub fn destroy_peer(db: &DB, region: &metapb::Region) -> Result<()> {
+    let region_id = region.get_id();
+
+    // First set Destroying state explicitly, if we meet panic later,
+    // we can still destroy the peer after restart.
+    try!(write_peer_state(db, region, PeerState::Destroying));
+
+    try!(delete_peer_data(db, region));
+
+    // delete Raft data
+    let (start_key, end_key) = (keys::region_raft_prefix(region_id),
+                                keys::region_raft_prefix(region_id + 1));
+    try!(delete_in_range(db, &start_key, &end_key));
+
+    // Set Tombstone state.
+    write_peer_state(db, region, PeerState::Tombstone)
+}
 
 impl Storage for PeerStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {

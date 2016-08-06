@@ -46,7 +46,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Iterable, Peekable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::{ApplySnapResult, SnapState};
+use super::peer_storage::{ApplySnapResult, SnapState, destroy_peer};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -144,13 +144,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
+            let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
                 debug!("region {:?} is tombstone in store {}",
-                       local_state.get_region(),
+                       region,
                        self.store_id());
                 return Ok(true);
             }
-            let region = local_state.get_region();
+
+            if local_state.get_state() == PeerState::Destroying {
+                info!("region {:?} is destroying in store {}, try destroy again",
+                      region,
+                      self.store_id());
+                try!(destroy_peer(self.engine.as_ref(), region));
+                return Ok(true);
+            }
+
             let mut peer = try!(Peer::create(self, region));
 
             if local_state.get_state() == PeerState::Applying {

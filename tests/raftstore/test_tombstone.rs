@@ -13,12 +13,14 @@
 
 use std::time::Duration;
 
-use kvproto::raft_serverpb;
+use rocksdb::Writable;
 
+use kvproto::raft_serverpb::{self, RegionLocalState, PeerState};
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::*;
+use tikv::raftstore::store::{keys, Peekable, Mutable};
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
@@ -87,4 +89,53 @@ fn test_server_tombstone() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_tombstone(&mut cluster);
+}
+
+fn test_destroying<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+
+    // Disable default max peer number check.
+    pd_client.disable_default_rule();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    let engine_3 = cluster.get_engine(3);
+    must_get_equal(&engine_3, b"k1", b"v1");
+    // remove peer (3, 3)
+    pd_client.must_remove_peer(1, new_peer(3, 3));
+
+    must_get_none(&engine_3, b"k1");
+
+    cluster.stop_node(3);
+
+    let key = keys::region_state_key(1);
+    let mut state: RegionLocalState = engine_3.get_msg(&key).unwrap().unwrap();
+    assert_eq!(state.get_state(), PeerState::Tombstone);
+
+    // Force update to Destroying and add some data.
+    state.set_state(PeerState::Destroying);
+    engine_3.put_msg(&key, &state).unwrap();
+    engine_3.put(&keys::data_key(b"k1"), b"v1").unwrap();
+
+    // start node again, must Tombstone and none data.
+    cluster.run_node(3);
+
+    must_get_none(&engine_3, b"k1");
+    let state: RegionLocalState = engine_3.get_msg(&key).unwrap().unwrap();
+    assert_eq!(state.get_state(), PeerState::Tombstone);
+}
+
+#[test]
+fn test_node_destroying() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    test_destroying(&mut cluster);
+}
+
+#[test]
+fn test_server_destroying() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    test_destroying(&mut cluster);
 }
