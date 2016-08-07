@@ -267,7 +267,7 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
                 break;
             }
 
-            try!(wb.delete(key));
+            try!(wb.delete_cf(*handle, key));
             if wb.count() == MAX_DELETE_KEYS_COUNT {
                 // this function can't guarantee data consistence, so using
                 // no WAL is ok.

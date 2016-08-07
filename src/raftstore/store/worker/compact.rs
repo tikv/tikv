@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::{PeerStorage, keys};
+use raftstore::store::{PeerStorage, keys, delete_raft_log};
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
 
-use rocksdb::{DB, WriteBatch, Writable};
+use rocksdb::DB;
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
@@ -72,15 +72,11 @@ impl Runner {
             info!("no need to compact");
             return Ok(0);
         }
-        let wb = WriteBatch::new();
-        for idx in first_idx..task.compact_idx {
-            let key = keys::raft_log_key(task.region_id, idx);
-            box_try!(wb.delete(&key));
-        }
-        // It is safe to disable WAL here. If crashed, we can still
-        // compact the log after restart.
-        // TODO: use delete_in_range to speedup.
-        box_try!(task.engine.write_without_wal(wb));
+
+        box_try!(delete_raft_log(task.engine.as_ref(),
+                                 task.region_id,
+                                 first_idx,
+                                 task.compact_idx));
         Ok(task.compact_idx - first_idx)
     }
 }

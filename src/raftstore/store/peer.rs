@@ -26,7 +26,8 @@ use kvproto::eraftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, RegionLocalState};
+use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, RegionLocalState,
+                             PeerState};
 use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
@@ -35,7 +36,8 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
 use super::store::Store;
-use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, destroy_peer};
+use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state,
+                          delete_peer_data, delete_raft_log};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -268,7 +270,20 @@ impl Peer {
         let region = self.get_store().get_region().clone();
         info!("{} begin to destroy", self.tag);
 
-        try!(destroy_peer(&self.engine, &region));
+        let region_id = region.get_id();
+
+        // First set Tombstone state explicitly, and clear raft meta.
+        // If we meet panic when deleting data and raft log, the dirty data
+        // will be cleared by Compaction Filter later or a newer snapshot applying.
+        let wb = WriteBatch::new();
+        try!(write_peer_state(&wb, &region, PeerState::Tombstone));
+        try!(wb.delete(&keys::raft_state_key(region_id)));
+        try!(wb.delete(&keys::apply_state_key(region_id)));
+        try!(self.engine.write(wb));
+
+        // delete data and raft log.
+        try!(delete_peer_data(self.engine.as_ref(), &region));
+        try!(delete_raft_log(self.engine.as_ref(), region_id, 0, u64::max_value()));
 
         self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
@@ -1128,12 +1143,8 @@ impl Peer {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        let mut state = RegionLocalState::new();
-        state.set_region(region.clone());
-        try!(ctx.wb.put_msg(&keys::region_state_key(region.get_id()), &state));
-        let mut new_state = RegionLocalState::new();
-        new_state.set_region(new_region.clone());
-        try!(ctx.wb.put_msg(&keys::region_state_key(new_region.get_id()), &new_state));
+        try!(write_peer_state(&ctx.wb, &region, PeerState::Normal));
+        try!(write_peer_state(&ctx.wb, &new_region, PeerState::Normal));
         try!(write_initial_state(&ctx.wb, new_region.get_id()));
 
         let mut resp = AdminResponse::new();

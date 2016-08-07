@@ -46,7 +46,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Iterable, Peekable};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
-use super::peer_storage::{ApplySnapResult, SnapState, destroy_peer};
+use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -149,14 +149,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 debug!("region {:?} is tombstone in store {}",
                        region,
                        self.store_id());
-                return Ok(true);
-            }
-
-            if local_state.get_state() == PeerState::Destroying {
-                info!("region {:?} is destroying in store {}, try destroy again",
-                      region,
-                      self.store_id());
-                try!(destroy_peer(self.engine.as_ref(), region));
                 return Ok(true);
             }
 
