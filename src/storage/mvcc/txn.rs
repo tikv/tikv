@@ -119,7 +119,7 @@ impl<'a> MvccTxn<'a> {
             _ => {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
                     // Already committed by concurrent transaction.
-                    Some(ts) => Err(Error::AlreadyCommitted { commit_ts: ts }),
+                    Some(ts) => Err(Error::Committed { commit_ts: ts }),
                     // Rollbacked by concurrent transaction.
                     None => Ok(()),
                 };

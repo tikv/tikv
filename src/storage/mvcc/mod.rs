@@ -43,7 +43,7 @@ quick_error! {
             display("key is locked (backoff or cleanup) {}-{}@{}", escape(key), escape(primary), ts)
         }
         BadFormatLock {description("bad format lock data")}
-        AlreadyCommitted {commit_ts: u64} {
+        Committed {commit_ts: u64} {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }

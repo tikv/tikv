@@ -13,7 +13,7 @@
 
 use byteorder::ReadBytesExt;
 use storage::Mutation;
-use util::codec::number::{NumberEncoder, NumberDecoder};
+use util::codec::number::{NumberEncoder, NumberDecoder, MAX_VAR_U64_LEN};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 use super::{Error, Result};
 
@@ -71,7 +71,8 @@ impl Lock {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = vec![];
+        let mut b = Vec::<u8>::with_capacity(1 + MAX_VAR_U64_LEN + self.primary.len() +
+                                             MAX_VAR_U64_LEN);
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
         b.encode_var_u64(self.ts).unwrap();

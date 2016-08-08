@@ -71,7 +71,7 @@ impl<'a> MvccReader<'a> {
             if self.write_cursor.is_none() {
                 self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE)));
             }
-            let mut cursor = self.write_cursor.as_mut().unwrap().as_mut();
+            let mut cursor = self.write_cursor.as_mut().unwrap();
             let ok = if reverse {
                 try!(cursor.reverse_seek(&key.append_ts(ts)))
             } else {
@@ -135,7 +135,7 @@ impl<'a> MvccReader<'a> {
 
         loop {
             key = {
-                let mut cursor = self.data_cursor.as_mut().unwrap().as_mut();
+                let mut cursor = self.data_cursor.as_mut().unwrap();
                 if !try!(cursor.seek(&key)) {
                     return Ok(None);
                 }
@@ -153,7 +153,7 @@ impl<'a> MvccReader<'a> {
 
         loop {
             key = {
-                let mut cursor = self.data_cursor.as_mut().unwrap().as_mut();
+                let mut cursor = self.data_cursor.as_mut().unwrap();
                 if !try!(cursor.reverse_seek(&key)) {
                     return Ok(None);
                 }
@@ -171,7 +171,7 @@ impl<'a> MvccReader<'a> {
         if self.lock_cursor.is_none() {
             self.lock_cursor = Some(try!(self.snapshot.iter_cf("lock")));
         }
-        let mut cursor = self.lock_cursor.as_mut().unwrap().as_mut();
+        let mut cursor = self.lock_cursor.as_mut().unwrap();
         cursor.seek_to_first();
         let mut locks = vec![];
         while cursor.valid() {

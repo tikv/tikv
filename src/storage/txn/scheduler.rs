@@ -14,8 +14,7 @@
 use std::time::Duration;
 use std::boxed::Box;
 use threadpool::ThreadPool;
-use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
-              Error as StorageError};
+use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult, Error as StorageError};
 use kvproto::kvrpcpb::{Context, LockInfo};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError};
 use storage::{Key, Value, KvPair};
@@ -241,7 +240,7 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
                 .map_err(Error::from)
                 .and_then(|v| {
                     let mut locks = vec![];
-                    for (key, lock) in v.into_iter() {
+                    for (key, lock) in v {
                         let mut lock_info = LockInfo::new();
                         lock_info.set_primary_lock(lock.primary);
                         lock_info.set_lock_version(lock.ts);
