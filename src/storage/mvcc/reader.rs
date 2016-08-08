@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use storage::engine::{Snapshot, Cursor};
-use storage::{Key, Value, CF_WRITE};
+use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::codec::number::NumberDecoder;
 use super::{Error, Result};
 use super::lock::Lock;
@@ -51,7 +51,7 @@ impl<'a> MvccReader<'a> {
                 None => Ok(None),
             }
         } else {
-            match try!(self.snapshot.get_cf("lock", &key)) {
+            match try!(self.snapshot.get_cf(CF_LOCK, &key)) {
                 Some(v) => Ok(Some(try!(Lock::parse(&v)))),
                 None => Ok(None),
             }
@@ -169,7 +169,7 @@ impl<'a> MvccReader<'a> {
         where F: Fn(&Lock) -> bool
     {
         if self.lock_cursor.is_none() {
-            self.lock_cursor = Some(try!(self.snapshot.iter_cf("lock")));
+            self.lock_cursor = Some(try!(self.snapshot.iter_cf(CF_LOCK)));
         }
         let mut cursor = self.lock_cursor.as_mut().unwrap();
         cursor.seek_to_first();
