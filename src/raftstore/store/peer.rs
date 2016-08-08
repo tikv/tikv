@@ -469,12 +469,7 @@ impl Peer {
             return cmd.cb.call_box((err_resp,));
         }
 
-        let local_read = req.has_header() && req.get_header().has_read_quorum() &&
-                         !req.get_header().get_read_quorum() &&
-                         self.raft_group.raft.in_lease() &&
-                         req.get_requests().len() == 1 &&
-                         req.get_requests()[0].get_cmd_type() == CmdType::Snap;
-
+        let local_read = self.use_local_read(&req);
         if local_read {
             // for read-only, if we don't care stale read, we can
             // execute these commands immediately in leader.
@@ -535,6 +530,21 @@ impl Peer {
 
         metric_incr!("raftstore.propose.success");
         Ok(())
+    }
+
+    fn use_local_read(&self, req: &RaftCmdRequest) -> bool {
+        if !req.has_header() || !req.get_header().has_read_quorum() ||
+           req.get_header().get_read_quorum() || !self.raft_group.raft.in_lease() {
+            return false;
+        }
+
+        for i in 0..req.get_requests().len() {
+            if req.get_requests()[i].get_cmd_type() != CmdType::Snap {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Call the callback of `cmd` that leadership may have been changed.

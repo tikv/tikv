@@ -7,8 +7,7 @@ use kvproto::kvrpcpb::Context;
 
 use raftstore::server::new_server_cluster_with_cfs;
 
-#[test]
-fn test_raftkv() {
+fn test_raftkv(read_quorum: bool) {
     let count = 1;
     let mut cluster = new_server_cluster_with_cfs(0, count, &["cf"]);
     cluster.run();
@@ -24,6 +23,9 @@ fn test_raftkv() {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
+    if read_quorum {
+        ctx.set_read_quorum(true);
+    }
 
     get_put(&ctx, storage.as_ref());
     batch(&ctx, storage.as_ref());
@@ -32,6 +34,16 @@ fn test_raftkv() {
     cf(&ctx, storage.as_ref());
     empty_write(&ctx, storage.as_ref());
     // TODO: test multiple node
+}
+
+#[test]
+fn test_raftkv_with_read_local() {
+    test_raftkv(false);
+}
+
+#[test]
+fn test_raftkv_with_read_quorum() {
+    test_raftkv(true);
 }
 
 pub fn make_key(k: &[u8]) -> Key {
