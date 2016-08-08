@@ -469,7 +469,7 @@ impl Peer {
             return cmd.cb.call_box((err_resp,));
         }
 
-        let local_read = self.use_local_read(&req);
+        let local_read = self.whether_use_local_read(&req);
         if local_read {
             // for read-only, if we don't care stale read, we can
             // execute these commands immediately in leader.
@@ -532,9 +532,9 @@ impl Peer {
         Ok(())
     }
 
-    fn use_local_read(&self, req: &RaftCmdRequest) -> bool {
-        if (req.has_header() && req.get_header().has_read_quorum() &&
-            req.get_header().get_read_quorum()) || !self.raft_group.raft.in_lease() {
+    fn whether_use_local_read(&self, req: &RaftCmdRequest) -> bool {
+        if (req.has_header() && req.get_header().get_read_quorum()) ||
+           !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
             return false;
         }
 
