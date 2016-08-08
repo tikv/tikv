@@ -31,8 +31,8 @@ use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
-use super::{Engine, Modify, Cursor, Snapshot, Callback, DEFAULT_CFNAME};
-use storage::{Key, Value, CfName};
+use super::{Engine, Modify, Cursor, Snapshot, Callback};
+use storage::{Key, Value, CfName, CF_DEFAULT};
 
 quick_error! {
     #[derive(Debug)]
@@ -185,7 +185,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 Modify::Delete(cf, k) => {
                     let mut delete = DeleteRequest::new();
                     delete.set_key(k.encoded().to_owned());
-                    if cf != DEFAULT_CFNAME {
+                    if cf != CF_DEFAULT {
                         delete.set_cf(cf.to_string());
                     }
                     req.set_cmd_type(CmdType::Delete);
@@ -195,7 +195,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     let mut put = PutRequest::new();
                     put.set_key(k.encoded().to_owned());
                     put.set_value(v);
-                    if cf != DEFAULT_CFNAME {
+                    if cf != CF_DEFAULT {
                         put.set_cf(cf.to_string());
                     }
                     req.set_cmd_type(CmdType::Put);
@@ -254,6 +254,11 @@ impl Snapshot for RegionSnapshot {
     #[allow(needless_lifetimes)]
     fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
         Ok(box RegionSnapshot::iter(self))
+    }
+
+    #[allow(needless_lifetimes)]
+    fn iter_cf<'b>(&'b self, cf: CfName) -> engine::Result<Box<Cursor + 'b>> {
+        Ok(box try!(RegionSnapshot::iter_cf(self, cf)))
     }
 }
 

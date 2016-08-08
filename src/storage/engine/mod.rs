@@ -18,7 +18,7 @@ use std::boxed::FnBox;
 use std::time::Duration;
 
 use self::rocksdb::EngineRocksdb;
-use storage::{Key, Value, CfName};
+use storage::{Key, Value, CfName, CF_DEFAULT};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -27,9 +27,6 @@ pub mod raftkv;
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &'static str = "";
-
-// The default column family is created by Rocksdb automatically.
-pub const DEFAULT_CFNAME: CfName = "default";
 
 const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -59,7 +56,7 @@ pub trait Engine: Send + Debug {
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
-        self.put_cf(ctx, DEFAULT_CFNAME, key, value)
+        self.put_cf(ctx, CF_DEFAULT, key, value)
     }
 
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
@@ -67,7 +64,7 @@ pub trait Engine: Send + Debug {
     }
 
     fn delete(&self, ctx: &Context, key: Key) -> Result<()> {
-        self.delete_cf(ctx, DEFAULT_CFNAME, key)
+        self.delete_cf(ctx, CF_DEFAULT, key)
     }
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
@@ -83,6 +80,8 @@ pub trait Snapshot: Send {
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
     fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
+    #[allow(needless_lifetimes)]
+    fn iter_cf<'a>(&'a self, cf: CfName) -> Result<Box<Cursor + 'a>>;
 }
 
 pub trait Cursor {
@@ -219,7 +218,7 @@ pub type Result<T> = result::Result<T, Error>;
 mod tests {
     use super::*;
     use tempdir::TempDir;
-    use storage::{CfName, make_key};
+    use storage::{CfName, CF_DEFAULT, make_key};
     use util::codec::bytes;
     use util::escape;
     use kvproto::kvrpcpb::Context;
@@ -325,15 +324,15 @@ mod tests {
 
     fn test_batch(engine: &Engine) {
         engine.write(&Context::new(),
-                   vec![Modify::Put(DEFAULT_CFNAME, make_key(b"x"), b"1".to_vec()),
-                        Modify::Put(DEFAULT_CFNAME, make_key(b"y"), b"2".to_vec())])
+                   vec![Modify::Put(CF_DEFAULT, make_key(b"x"), b"1".to_vec()),
+                        Modify::Put(CF_DEFAULT, make_key(b"y"), b"2".to_vec())])
             .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
         engine.write(&Context::new(),
-                   vec![Modify::Delete(DEFAULT_CFNAME, make_key(b"x")),
-                        Modify::Delete(DEFAULT_CFNAME, make_key(b"y"))])
+                   vec![Modify::Delete(CF_DEFAULT, make_key(b"x")),
+                        Modify::Delete(CF_DEFAULT, make_key(b"y"))])
             .unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
