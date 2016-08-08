@@ -533,8 +533,8 @@ impl Peer {
     }
 
     fn use_local_read(&self, req: &RaftCmdRequest) -> bool {
-        if !req.has_header() || !req.get_header().has_read_quorum() ||
-           req.get_header().get_read_quorum() || !self.raft_group.raft.in_lease() {
+        if (req.has_header() && req.get_header().has_read_quorum() &&
+            req.get_header().get_read_quorum()) || !self.raft_group.raft.in_lease() {
             return false;
         }
 
