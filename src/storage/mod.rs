@@ -17,7 +17,7 @@ use std::fmt;
 use std::error;
 use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
-
+use kvproto::kvrpcpb::LockInfo;
 use mio::{EventLoop, EventLoopBuilder};
 
 pub mod engine;
@@ -35,7 +35,9 @@ pub use self::types::{Key, Value, KvPair, make_key};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
-pub const DEFAULT_CFS: &'static [CfName] = &["default", "lock"];
+pub const CF_DEFAULT: CfName = "default";
+pub const CF_LOCK: CfName = "lock";
+pub const DEFAULT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK];
 
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -62,6 +64,7 @@ pub enum StorageCb {
     Booleans(Callback<Vec<Result<()>>>),
     SingleValue(Callback<Option<Value>>),
     KvPairs(Callback<Vec<Result<KvPair>>>),
+    Locks(Callback<Vec<LockInfo>>),
 }
 
 #[allow(type_complexity)]
@@ -116,6 +119,15 @@ pub enum Command {
         key: Key,
         lock_ts: u64,
     },
+    ScanLock {
+        ctx: Context,
+        max_ts: u64,
+    },
+    ResolveLock {
+        ctx: Context,
+        start_ts: u64,
+        commit_ts: Option<u64>,
+    },
 }
 
 impl fmt::Display for Command {
@@ -167,6 +179,10 @@ impl fmt::Display for Command {
             Command::RollbackThenGet { ref key, lock_ts, .. } => {
                 write!(f, "kv::rollback_then_get {} @ {}", key, lock_ts)
             }
+            Command::ScanLock { max_ts, .. } => write!(f, "kv::scan_lock {}", max_ts),
+            Command::ResolveLock { start_ts, commit_ts, .. } => {
+                write!(f, "kv::resolve_txn {} -> {:?}", start_ts, commit_ts)
+            }
         }
     }
 }
@@ -176,7 +192,9 @@ impl Command {
         match *self {
             Command::Get { .. } |
             Command::BatchGet { .. } |
-            Command::Scan { .. } => true,
+            Command::Scan { .. } |
+            Command::ScanLock { .. } |
+            Command::ResolveLock { .. } => true,
             _ => false,
         }
     }
@@ -412,6 +430,34 @@ impl Storage {
             lock_ts: lock_ts,
         };
         try!(self.send(cmd, StorageCb::SingleValue(callback)));
+        Ok(())
+    }
+
+    pub fn async_scan_lock(&self,
+                           ctx: Context,
+                           max_ts: u64,
+                           callback: Callback<Vec<LockInfo>>)
+                           -> Result<()> {
+        let cmd = Command::ScanLock {
+            ctx: ctx,
+            max_ts: max_ts,
+        };
+        try!(self.send(cmd, StorageCb::Locks(callback)));
+        Ok(())
+    }
+
+    pub fn async_resolve_lock(&self,
+                              ctx: Context,
+                              start_ts: u64,
+                              commit_ts: Option<u64>,
+                              callback: Callback<()>)
+                              -> Result<()> {
+        let cmd = Command::ResolveLock {
+            ctx: ctx,
+            start_ts: start_ts,
+            commit_ts: commit_ts,
+        };
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
     }
 }

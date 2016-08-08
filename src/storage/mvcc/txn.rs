@@ -13,8 +13,8 @@
 
 use std::fmt;
 use protobuf::core::Message;
-use storage::{Key, Value, Mutation};
-use storage::engine::{Snapshot, Modify, Cursor, DEFAULT_CFNAME};
+use storage::{Key, Value, Mutation, CF_DEFAULT, CF_LOCK};
+use storage::engine::{Snapshot, Modify, Cursor};
 use kvproto::mvccpb::{MetaLock, MetaLockType, MetaItem};
 use super::meta::{Meta, FIRST_META_INDEX};
 use super::{Error, Result};
@@ -54,12 +54,10 @@ impl<'a> MvccTxn<'a> {
 
     fn write_meta(&mut self, key: &Key, meta: &mut Meta) {
         if let Some((split_meta, index)) = meta.split() {
-            let modify = Modify::Put(DEFAULT_CFNAME, key.append_ts(index), split_meta.to_bytes());
+            let modify = Modify::Put(CF_DEFAULT, key.append_ts(index), split_meta.to_bytes());
             self.writes.push(modify);
         }
-        let modify = Modify::Put(DEFAULT_CFNAME,
-                                 key.append_ts(FIRST_META_INDEX),
-                                 meta.to_bytes());
+        let modify = Modify::Put(CF_DEFAULT, key.append_ts(FIRST_META_INDEX), meta.to_bytes());
         self.writes.push(modify);
     }
 
@@ -71,11 +69,11 @@ impl<'a> MvccTxn<'a> {
 
         let mut b = vec![];
         lock.write_to_vec(&mut b).unwrap();
-        self.writes.push(Modify::Put("lock", key, b));
+        self.writes.push(Modify::Put(CF_LOCK, key, b));
     }
 
     fn unlock_key(&mut self, key: Key) {
-        self.writes.push(Modify::Delete("lock", key));
+        self.writes.push(Modify::Delete(CF_LOCK, key));
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
@@ -105,7 +103,7 @@ impl<'a> MvccTxn<'a> {
 
         if let Mutation::Put((_, ref value)) = mutation {
             let value_key = key.append_ts(self.start_ts);
-            self.writes.push(Modify::Put(DEFAULT_CFNAME, value_key, value.clone()));
+            self.writes.push(Modify::Put(CF_DEFAULT, value_key, value.clone()));
         }
         Ok(())
     }
@@ -162,7 +160,7 @@ impl<'a> MvccTxn<'a> {
         match try!(self.snapshot.load_lock(key)) {
             Some(ref lock) if lock.get_start_ts() == self.start_ts => {
                 let value_key = key.append_ts(lock.get_start_ts());
-                self.writes.push(Modify::Delete(DEFAULT_CFNAME, value_key));
+                self.writes.push(Modify::Delete(CF_DEFAULT, value_key));
             }
             _ => {
                 return match try!(self.snapshot.get_txn_commit_ts(key, meta, self.start_ts)) {
@@ -206,7 +204,7 @@ impl<'a> MvccSnapshot<'a> {
     }
 
     fn load_lock(&self, key: &Key) -> Result<Option<MetaLock>> {
-        match try!(self.snapshot.get_cf("lock", &key)) {
+        match try!(self.snapshot.get_cf(CF_LOCK, &key)) {
             Some(x) => {
                 let mut pb = MetaLock::new();
                 try!(pb.merge_from_bytes(&x));
