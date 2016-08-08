@@ -24,7 +24,6 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
 fn check_down_seconds(peer: &pdpb::PeerStats, secs: u64) {
     debug!("down {} secs {}", peer.get_down_seconds(), secs);
     assert!(peer.get_down_seconds() <= secs);
-
 }
 
 fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
@@ -32,6 +31,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     let node = cluster.leader_of_region(1).unwrap();
     let node_id = node.get_id();
     cluster.add_send_filter(Isolate::new(node_id));
+
     // Kill another node.
     let next_id = if node_id < count {
         node_id + 1
@@ -39,10 +39,11 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
         1
     };
     cluster.stop_node(next_id);
-    let secs = wait_down_peers(cluster, 2);
 
     // Check node and another are down.
+    let secs = wait_down_peers(cluster, 2);
     let down_peers = cluster.get_down_peers();
+    debug!("down_peers: {:?}", down_peers);
     check_down_seconds(down_peers.get(&node_id).unwrap(), secs);
     check_down_seconds(down_peers.get(&next_id).unwrap(), secs);
 
@@ -77,7 +78,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
 }
 
 fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
-    cluster.cfg.raft_store.max_peer_down_duration = Duration::from_millis(100);
+    cluster.cfg.raft_store.max_peer_down_duration = Duration::from_millis(500);
     cluster.run();
 
     // Kill 1, 3
