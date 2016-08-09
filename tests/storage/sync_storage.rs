@@ -107,6 +107,10 @@ impl SyncStorage {
         wait_event!(|cb| self.store.async_resolve_lock(ctx, start_ts, commit_ts, cb).unwrap())
             .unwrap()
     }
+
+    pub fn gc(&self, ctx: Context, safe_point: u64) -> Result<()> {
+        wait_event!(|cb| self.store.async_gc(ctx, safe_point, cb).unwrap()).unwrap()
+    }
 }
 
 impl Clone for SyncStorage {

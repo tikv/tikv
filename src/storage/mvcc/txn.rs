@@ -250,6 +250,28 @@ mod tests {
         must_rollback_err(engine.as_ref(), b"x", 5);
     }
 
+    #[test]
+    fn test_gc() {
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+
+        must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
+        must_commit(engine.as_ref(), b"x", 5, 10);
+        must_prewrite_put(engine.as_ref(), b"x", b"x10", b"x", 15);
+        must_commit(engine.as_ref(), b"x", 15, 20);
+        must_prewrite_delete(engine.as_ref(), b"x", b"x", 25);
+        must_commit(engine.as_ref(), b"x", 25, 30);
+
+        must_gc(engine.as_ref(), b"x", 12);
+        must_get(engine.as_ref(), b"x", 12, b"x5");
+
+        must_gc(engine.as_ref(), b"x", 22);
+        must_get_none(engine.as_ref(), b"x", 12);
+
+        must_gc(engine.as_ref(), b"x", 32);
+        must_get_none(engine.as_ref(), b"x", 22);
+        must_get_none(engine.as_ref(), b"x", 40);
+    }
+
     fn to_fake_ts(ts: u64) -> u64 {
         TEST_TS_BASE + ts
     }
@@ -334,5 +356,13 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot.as_ref(), to_fake_ts(start_ts));
         assert!(txn.rollback(&make_key(key)).is_err());
+    }
+
+    fn must_gc(engine: &Engine, key: &[u8], safe_point: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), 0);
+        txn.gc(&make_key(key), to_fake_ts(safe_point)).unwrap();
+        engine.write(&ctx, txn.modifies()).unwrap();
     }
 }
