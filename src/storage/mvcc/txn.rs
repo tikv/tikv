@@ -128,6 +128,29 @@ impl<'a> MvccTxn<'a> {
         self.unlock_key(key.clone());
         Ok(())
     }
+
+    pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
+        let mut after_safe_point = false;
+        let mut ts: u64 = u64::max_value();
+        while let Some((start, commit)) = try!(self.reader.seek_write(key, ts)) {
+            if !after_safe_point {
+                if commit <= safe_point {
+                    // Set `after_safe_point` after the latest write after `safe_point`.
+                    after_safe_point = true;
+                    // Latest write can be deleted if it's a `Modify::Delete`.
+                    if try!(self.reader.load_data(key, start)).is_none() {
+                        self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
+                    }
+                }
+            } else {
+                // Delete all data after safe point.
+                self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
+                self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(start)));
+            }
+            ts = commit - 1;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
