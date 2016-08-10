@@ -4,7 +4,6 @@ use tikv::storage::{Key, CfName, CF_DEFAULT};
 use tikv::util::codec::bytes;
 use tikv::util::escape;
 use kvproto::kvrpcpb::Context;
-use super::sleep_ms;
 use raftstore::transport_simulate::Isolate;
 use raftstore::server::new_server_cluster_with_cfs;
 
@@ -14,7 +13,7 @@ fn test_raftkv(read_quorum: bool) {
     cluster.run();
 
     // make sure leader has been elected.
-    assert_eq!(cluster.get(b"k1"), None);
+    cluster.must_delete(b"k1");
 
     let region = cluster.get_region(b"");
     let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
@@ -60,8 +59,11 @@ fn test_read_leader_in_lease(read_quorum: bool) {
     let mut cluster = new_server_cluster_with_cfs(0, count, &["cf"]);
     cluster.run();
 
+    let k1 = b"k1";
+    let (k2, v2) = (b"k2", b"v2");
+
     // make sure leader has been elected.
-    sleep_ms(2000);
+    cluster.must_delete(k1);
     let region = cluster.get_region(b"");
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
@@ -73,14 +75,14 @@ fn test_read_leader_in_lease(read_quorum: bool) {
     ctx.set_read_quorum(read_quorum);
 
     // write some data
-    assert_none(&ctx, storage.as_ref(), b"x");
-    must_put(&ctx, storage.as_ref(), b"x", b"1");
+    assert_none(&ctx, storage.as_ref(), k2);
+    must_put(&ctx, storage.as_ref(), k2, v2);
 
     // isolate leader
     cluster.add_send_filter(Isolate::new(leader.get_store_id()));
 
     // leader still in lease, check if can read on leader
-    assert_eq!(can_read(&ctx, storage.as_ref(), b"x"), !read_quorum);
+    assert_eq!(can_read(&ctx, storage.as_ref(), k2, v2), !read_quorum);
 }
 
 pub fn make_key(k: &[u8]) -> Key {
@@ -108,9 +110,9 @@ fn assert_has(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) {
     assert_eq!(snapshot.get(&make_key(key)).unwrap().unwrap(), value);
 }
 
-fn can_read(ctx: &Context, engine: &Engine, key: &[u8]) -> bool {
+fn can_read(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) -> bool {
     if let Ok(s) = engine.snapshot(ctx) {
-        s.get(&make_key(key)).unwrap().unwrap();
+        assert_eq!(s.get(&make_key(key)).unwrap().unwrap(), value);
         return true;
     }
     false

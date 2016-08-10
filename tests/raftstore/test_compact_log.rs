@@ -82,7 +82,7 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         before_states.insert(id, state);
     }
 
-    for i in 1..300 {
+    for i in 1..600 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);
@@ -104,7 +104,8 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(idx, before_state.get_index());
     }
 
-    for i in 300..600 {
+    // get will use lease read so will not increase raft index
+    for i in 600..1200 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);

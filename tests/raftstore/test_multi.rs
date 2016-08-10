@@ -37,18 +37,30 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let check_res = cluster.check_quorum(|engine| {
-        match engine.get_value(&keys::data_key(key)).unwrap() {
-            None => false,
-            Some(v) => &*v == value,
+        for _ in 0..50 {
+            match engine.get_value(&keys::data_key(key)).unwrap() {
+                None => {
+                    sleep_ms(10);
+                }
+                Some(v) => return &*v == value,
+            }
         }
+        false
     });
     assert!(check_res);
 
     cluster.must_delete(key);
     assert_eq!(cluster.get(key), None);
 
-    let check_res =
-        cluster.check_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
+    let check_res = cluster.check_quorum(|engine| {
+        for _ in 0..50 {
+            if engine.get_value(&keys::data_key(key)).unwrap().is_none() {
+                return true;
+            }
+            sleep_ms(10);
+        }
+        false
+    });
     assert!(check_res);
 
     // TODO add stale epoch test cases.

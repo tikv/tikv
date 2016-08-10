@@ -538,8 +538,9 @@ impl Peer {
             return false;
         }
 
-        for i in 0..req.get_requests().len() {
-            if req.get_requests()[i].get_cmd_type() != CmdType::Snap {
+        for cmd_req in req.get_requests() {
+            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get &&
+               cmd_req.get_cmd_type() != CmdType::Seek {
                 return false;
             }
         }

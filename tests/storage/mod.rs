@@ -15,9 +15,3 @@ mod test_raftkv;
 pub mod sync_storage;
 mod test_storage;
 
-use std::time::Duration;
-use std::thread;
-
-pub fn sleep_ms(ms: u64) {
-    thread::sleep(Duration::from_millis(ms));
-}
