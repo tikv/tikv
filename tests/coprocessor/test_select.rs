@@ -353,11 +353,11 @@ impl<'a> Delete<'a> {
         let key = build_row_key(self.table.id, id);
         let mut keys = vec![];
         keys.push(key);
-        for (&id, idxs) in &self.table.idxs {
-            let mut v: Vec<_> = idxs.iter().map(|id| values[id].clone()).collect();
+        for (&idx_id, idx_cols) in &self.table.idxs {
+            let mut v: Vec<_> = idx_cols.iter().map(|id| values[id].clone()).collect();
             v.push(Datum::I64(id));
             let encoded = datum::encode_key(&v).unwrap();
-            let idx_key = table::encode_index_seek_key(self.table.id, id, &encoded);
+            let idx_key = table::encode_index_seek_key(self.table.id, idx_id, &encoded);
             keys.push(idx_key);
         }
         self.store.delete(keys);
