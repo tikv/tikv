@@ -49,14 +49,17 @@ else
 	cp -f etcd ${ETCD_DIR}
 endif
 
-prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov ${ETCD_DIR}/etcd
+prepare_rust:
+	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=2016-07-31 --prefix=~/rust --disable-sudo --channel=nightly
+
+prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov ${ETCD_DIR}/etcd prepare_rust
 
 prepare_brew: 
 	brew update && \
 	brew install gflags snappy rocksdb
 
-prepare_osx: prepare_brew ${ETCD_DIR}/etcd
-	
+prepare_osx: prepare_brew ${ETCD_DIR}/etcd prepare_rust
+
 test_linux:
 	export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	export LIBRARY_PATH="${LIBRARY_PATH}:${ROCKSDB_DIR}" && \
