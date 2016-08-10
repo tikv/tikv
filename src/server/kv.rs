@@ -375,9 +375,7 @@ fn extract_region_error<T>(res: &StorageResult<T>) -> Option<RegionError> {
 
 fn extract_committed(err: &StorageError) -> Option<u64> {
     match *err {
-        StorageError::Txn(TxnError::Mvcc(MvccError::AlreadyCommitted { commit_ts })) => {
-            Some(commit_ts)
-        }
+        StorageError::Txn(TxnError::Mvcc(MvccError::Committed { commit_ts })) => Some(commit_ts),
         _ => None,
     }
 }
