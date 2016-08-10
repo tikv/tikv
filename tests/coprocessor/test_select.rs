@@ -63,12 +63,8 @@ impl ColumnBuilder {
         self
     }
 
-    fn index_key(mut self, b: bool) -> ColumnBuilder {
-        if b {
-            self.index = next_id();
-        } else {
-            self.index = -1;
-        }
+    fn index_key(mut self, idx_id: i64) -> ColumnBuilder {
+        self.index = idx_id;
         self
     }
 
@@ -155,6 +151,13 @@ impl TableBuilder {
             }
             let e = idx.entry(col.index).or_insert_with(Vec::new);
             e.push(id);
+        }
+        for (id, val) in &mut idx {
+            if *id == 0 {
+                continue;
+            }
+            // TODO: support uniq index.
+            val.push(self.handle_id);
         }
         Table {
             id: next_id(),
@@ -436,8 +439,9 @@ struct ProductTable {
 impl ProductTable {
     fn new() -> ProductTable {
         let id = ColumnBuilder::new().col_type(TYPE_LONG).primary_key(true).build();
-        let name = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
-        let count = ColumnBuilder::new().col_type(TYPE_LONG).index_key(true).build();
+        let idx_id = next_id();
+        let name = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).index_key(idx_id).build();
+        let count = ColumnBuilder::new().col_type(TYPE_LONG).index_key(idx_id).build();
         let table = TableBuilder::new().add_col(id).add_col(name).add_col(count).build();
 
         ProductTable {
@@ -891,4 +895,250 @@ fn test_del_select() {
     assert_eq!(resp.get_rows().len(), data.len());
 
     end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_index_group_by() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:2"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let req = Select::from_index(&product.table, product.name).group_by(&[product.name]).build();
+    let resp = handle_select(&end_point, req);
+    // should only have name:0, name:2 and name:1
+    assert_eq!(resp.get_rows().len(), 3);
+    for (row, name) in resp.get_rows().iter().zip(&[b"name:0", b"name:1", b"name:2"]) {
+        let gk = datum::encode_value(&[Datum::Bytes(name.to_vec())]).unwrap();
+        let expected_encoded = datum::encode_value(&[Datum::Bytes(gk)]).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_index_aggr_count() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let req = Select::from_index(&product.table, product.name).count().build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), 1);
+    let gk = Datum::Bytes(coprocessor::SINGLE_GROUP.to_vec());
+    let mut expected_encoded = datum::encode_value(&[gk, Datum::U64(data.len() as u64)]).unwrap();
+    assert_eq!(resp.get_rows()[0].get_data(), &*expected_encoded);
+
+    let exp = vec![
+        (Datum::Null, 1),
+        (Datum::Bytes(b"name:0".to_vec()), 2),
+        (Datum::Bytes(b"name:3".to_vec()), 1),
+        (Datum::Bytes(b"name:5".to_vec()), 2),
+    ];
+    let req =
+        Select::from_index(&product.table, product.name).count().group_by(&[product.name]).build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), exp.len());
+    for (row, (name, cnt)) in resp.get_rows().iter().zip(exp) {
+        let gk = datum::encode_value(&[name]);
+        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(cnt)];
+        expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    let exp = vec![
+        (vec![Datum::Null, Datum::I64(4)], 1),
+        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)], 1),
+        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)], 1),
+        (vec![Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)], 1),
+        (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2),
+    ];
+    let req = Select::from_index(&product.table, product.name)
+        .count()
+        .group_by(&[product.name, product.count])
+        .build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), exp.len());
+    for (row, (gk_data, cnt)) in resp.get_rows().iter().zip(exp) {
+        let gk = datum::encode_value(&gk_data);
+        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(cnt)];
+        expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_index_aggr_first() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let exp = vec![
+        (Datum::Null, 7),
+        (Datum::Bytes(b"name:0".to_vec()), 4),
+        (Datum::Bytes(b"name:3".to_vec()), 2),
+        (Datum::Bytes(b"name:5".to_vec()), 5),
+    ];
+    let req = Select::from_index(&product.table, product.name)
+        .first(product.id)
+        .group_by(&[product.name])
+        .build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), exp.len());
+    for (row, (name, id)) in resp.get_rows().iter().zip(exp) {
+        let gk = datum::encode_value(&[name]).unwrap();
+        let expected_datum = vec![Datum::Bytes(gk), Datum::I64(id)];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_index_aggr_avg() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (mut store, mut end_point) = init_with_data(&product, &data);
+
+    store.begin();
+    store.insert_into(&product.table)
+        .set(product.id, Datum::I64(8))
+        .set(product.name, Datum::Bytes(b"name:4".to_vec()))
+        .set(product.count, Datum::Null)
+        .execute();
+    store.commit();
+
+    let exp = vec![(Datum::Null, (Datum::Dec(4.into()), 1)),
+                   (Datum::Bytes(b"name:0".to_vec()), (Datum::Dec(3.into()), 2)),
+                   (Datum::Bytes(b"name:3".to_vec()), (Datum::Dec(3.into()), 1)),
+                   (Datum::Bytes(b"name:4".to_vec()), (Datum::Null, 0)),
+                   (Datum::Bytes(b"name:5".to_vec()), (Datum::Dec(8.into()), 2))];
+    let req = Select::from_index(&product.table, product.name)
+        .avg(product.count)
+        .group_by(&[product.name])
+        .build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), exp.len());
+    for (row, (name, (sum, cnt))) in resp.get_rows().iter().zip(exp) {
+        let gk = datum::encode_value(&[name]).unwrap();
+        let expected_datum = vec![Datum::Bytes(gk), Datum::U64(cnt), sum];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+    end_point.stop().unwrap();
+}
+
+#[test]
+fn test_index_aggr_sum() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let exp = vec![
+        (Datum::Null, 4),
+        (Datum::Bytes(b"name:0".to_vec()), 3),
+        (Datum::Bytes(b"name:3".to_vec()), 3),
+        (Datum::Bytes(b"name:5".to_vec()), 8),
+    ];
+    let req = Select::from_index(&product.table, product.name)
+        .sum(product.count)
+        .group_by(&[product.name])
+        .build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), exp.len());
+    for (row, (name, cnt)) in resp.get_rows().iter().zip(exp) {
+        let gk = datum::encode_value(&[name]).unwrap();
+        let expected_datum = vec![Datum::Bytes(gk), Datum::Dec(cnt.into())];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+    end_point.stop().unwrap();
+}
+
+#[test]
+fn test_index_aggr_extre() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 5),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (mut store, mut end_point) = init_with_data(&product, &data);
+
+    store.begin();
+    for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
+        store.insert_into(&product.table)
+            .set(product.id, Datum::I64(id))
+            .set(product.name, Datum::Bytes(name.to_vec()))
+            .set(product.count, Datum::Null)
+            .execute();
+    }
+    store.commit();
+
+    let exp = vec![
+        (Datum::Null, Datum::I64(4), Datum::I64(4)),
+        (Datum::Bytes(b"name:0".to_vec()), Datum::I64(2), Datum::I64(1)),
+        (Datum::Bytes(b"name:3".to_vec()), Datum::I64(3), Datum::I64(3)),
+        (Datum::Bytes(b"name:5".to_vec()), Datum::I64(5), Datum::I64(4)),
+        (Datum::Bytes(b"name:6".to_vec()), Datum::Null, Datum::Null),
+    ];
+    let req = Select::from_index(&product.table, product.name)
+        .max(product.count)
+        .min(product.count)
+        .group_by(&[product.name])
+        .build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), exp.len());
+    for (row, (name, max, min)) in resp.get_rows().iter().zip(exp) {
+        let gk = datum::encode_value(&[name]).unwrap();
+        let expected_datum = vec![Datum::Bytes(gk), max, min];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+    end_point.stop().unwrap();
 }
