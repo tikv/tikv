@@ -71,8 +71,7 @@ impl Lock {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::<u8>::with_capacity(1 + MAX_VAR_U64_LEN + self.primary.len() +
-                                             MAX_VAR_U64_LEN);
+        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN);
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
         b.encode_var_u64(self.ts).unwrap();
