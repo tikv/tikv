@@ -130,8 +130,20 @@ pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<
 }
 
 // `decode_index_key` decodes datums from an index key.
-pub fn decode_index_key(encoded: &[u8]) -> Result<Vec<Datum>> {
-    (&encoded[PREFIX_LEN + ID_LEN..]).decode()
+pub fn decode_index_key(mut encoded: &[u8], infos: &[ColumnInfo]) -> Result<Vec<Datum>> {
+    encoded = &encoded[PREFIX_LEN + ID_LEN..];
+    let mut res = vec![];
+
+    for info in infos {
+        if encoded.is_empty() {
+            return Err(box_err!("{} is too short.", escape(encoded)));
+        }
+        let mut v = try!(encoded.decode_datum());
+        v = try!(unflatten(v, info));
+        res.push(v);
+    }
+
+    Ok(res)
 }
 
 /// `unflatten` converts a raw datum to a column datum.
@@ -208,7 +220,7 @@ impl<T: BytesDecoder> TableDecoder for T {}
 
 // `cut_row` cut encoded row into byte slices and return interested columns' byte slice.
 // Row layout: colID1, value1, colID2, value2, .....
-pub fn cut_row<'a>(mut data: &'a [u8], cols: &HashSet<i64>) -> Result<HashMap<i64, &'a [u8]>> {
+pub fn cut_row<'a>(mut data: &'a [u8], cols: &HashSet<i64>) -> Result<ValDict<'a>> {
     let mut res = HashMap::with_capacity(cols.len());
     if data.is_empty() || data.len() == 1 && data[0] == datum::NIL_FLAG {
         return Ok(res);
@@ -222,6 +234,20 @@ pub fn cut_row<'a>(mut data: &'a [u8], cols: &HashSet<i64>) -> Result<HashMap<i6
         data = rem;
     }
     Ok(res)
+}
+
+pub type ValDict<'a> = HashMap<i64, &'a [u8]>;
+
+// `cut_idx_key` cuts encoded index key into colIDs to bytes slices map.
+pub fn cut_idx_key<'a>(mut key: &'a [u8], col_ids: &[i64]) -> Result<(ValDict<'a>, &'a [u8])> {
+    key = &key[PREFIX_LEN + ID_LEN..];
+    let mut values = HashMap::with_capacity(col_ids.len());
+    for &id in col_ids {
+        let (val, rem) = try!(datum::split_datum(key, false));
+        values.insert(id, val);
+        key = rem;
+    }
+    Ok((values, key))
 }
 
 #[cfg(test)]
@@ -248,9 +274,12 @@ mod test {
     #[test]
     fn test_index_key_codec() {
         let tests = vec![Datum::U64(1), Datum::Bytes(b"123".to_vec()), Datum::I64(-1)];
+        let types = vec![new_col_info(types::LONG_LONG),
+                         new_col_info(types::VARCHAR),
+                         new_col_info(types::LONG_LONG)];
         let buf = datum::encode_key(&tests).unwrap();
         let encoded = encode_index_seek_key(1, 2, &buf);
-        assert_eq!(tests, decode_index_key(&encoded).unwrap());
+        assert_eq!(tests, decode_index_key(&encoded, &types).unwrap());
     }
 
     fn new_col_info(tp: i32) -> ColumnInfo {
@@ -262,6 +291,11 @@ mod test {
     fn cut_row_as_owned(bs: &[u8], col_id_set: &HashSet<i64>) -> HashMap<i64, Vec<u8>> {
         let res = cut_row(bs, col_id_set).unwrap();
         res.iter().map(|(k, v)| (*k, v.to_vec())).collect()
+    }
+
+    fn cut_idx_key_as_owned(bs: &[u8], ids: &[i64]) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
+        let (res, left) = cut_idx_key(bs, ids).unwrap();
+        (res.iter().map(|(k, v)| (*k, v.to_vec())).collect(), left.to_vec())
     }
 
     #[test]
@@ -321,5 +355,49 @@ mod test {
         assert!(bs.as_slice().decode_row(&cols).unwrap().is_empty());
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert!(datums.is_empty());
+    }
+
+    #[test]
+    fn test_idx_codec() {
+        let mut col_ids = vec![1, 2, 3];
+        let col_types = vec![new_col_info(types::LONG_LONG),
+                             new_col_info(types::VARCHAR),
+                             new_col_info(types::NEW_DECIMAL)];
+        let col_values = vec![Datum::I64(100),
+                              Datum::Bytes(b"abc".to_vec()),
+                              Datum::Dec(Decimal::new(1.into(), 1, MAX_FSP))];
+        let mut col_encoded: HashMap<_, _> = col_ids.iter()
+            .zip(&col_types)
+            .zip(&col_values)
+            .map(|((id, t), v)| {
+                let unflattened = super::unflatten(v.clone(), t).unwrap();
+                let encoded = datum::encode_key(&[unflattened]).unwrap();
+                (*id, encoded)
+            })
+            .collect();
+
+        let key = datum::encode_key(&col_values).unwrap();
+        let bs = encode_index_seek_key(1, 1, &key);
+        assert!(!bs.is_empty());
+
+        let r = decode_index_key(&bs, &col_types).unwrap();
+        assert_eq!(col_values, r);
+
+        let mut res: (HashMap<_, _>, _) = cut_idx_key_as_owned(&bs, &col_ids);
+        assert_eq!(col_encoded, res.0);
+        assert!(res.1.is_empty());
+
+        let handle = col_encoded.remove(&3).unwrap();
+        col_ids.remove(2);
+        res = cut_idx_key_as_owned(&bs, &col_ids);
+        assert_eq!(col_encoded, res.0);
+        assert_eq!(res.1, handle);
+
+        let bs = encode_index_seek_key(1, 1, &[]);
+        assert!(!bs.is_empty());
+        assert!(decode_index_key(&bs, &[]).unwrap().is_empty());
+        res = cut_idx_key_as_owned(&bs, &[]);
+        assert!(res.0.is_empty());
+        assert!(res.1.is_empty());
     }
 }

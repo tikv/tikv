@@ -231,7 +231,7 @@ impl<'a> Select<'a> {
         Select {
             table: table,
             sel: sel,
-            idx: idx.map_or(0, |c| c.index),
+            idx: idx.map_or(-1, |c| c.index),
         }
     }
 
@@ -300,7 +300,7 @@ impl<'a> Select<'a> {
     fn build(mut self) -> Request {
         let mut req = Request::new();
 
-        if self.idx == 0 {
+        if self.idx < 0 {
             self.sel.set_table_info(self.table.get_table_info());
             req.set_tp(REQ_TYPE_SELECT);
         } else {
@@ -314,7 +314,7 @@ impl<'a> Select<'a> {
 
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(i64::MIN).unwrap();
-        if self.idx == 0 {
+        if self.idx < 0 {
             range.set_start(table::encode_row_key(self.table.id, &buf));
         } else {
             range.set_start(table::encode_index_seek_key(self.table.id, self.idx, &buf));
@@ -322,7 +322,7 @@ impl<'a> Select<'a> {
 
         buf.clear();
         buf.encode_i64(i64::MAX).unwrap();
-        if self.idx == 0 {
+        if self.idx < 0 {
             range.set_end(table::encode_row_key(self.table.id, &buf));
         } else {
             range.set_end(table::encode_index_seek_key(self.table.id, self.idx, &buf));
