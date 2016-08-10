@@ -90,21 +90,6 @@ impl SyncStorage {
             .unwrap()
     }
 
-    pub fn commit_then_get(&self,
-                           ctx: Context,
-                           key: Key,
-                           lock_ts: u64,
-                           commit_ts: u64,
-                           get_ts: u64)
-                           -> Result<Option<Value>> {
-        wait_event!(|cb| {
-                self.store
-                    .async_commit_then_get(ctx, key, lock_ts, commit_ts, get_ts, cb)
-                    .unwrap();
-            })
-            .unwrap()
-    }
-
     #[allow(dead_code)]
     pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64) -> Result<()> {
         wait_event!(|cb| self.store.async_cleanup(ctx, key, start_ts, cb).unwrap()).unwrap()
@@ -112,11 +97,6 @@ impl SyncStorage {
 
     pub fn rollback(&self, ctx: Context, keys: Vec<Key>, start_ts: u64) -> Result<()> {
         wait_event!(|cb| self.store.async_rollback(ctx, keys, start_ts, cb).unwrap()).unwrap()
-    }
-
-    pub fn rollback_then_get(&self, ctx: Context, key: Key, lock_ts: u64) -> Result<Option<Value>> {
-        wait_event!(|cb| self.store.async_rollback_then_get(ctx, key, lock_ts, cb).unwrap())
-            .unwrap()
     }
 
     pub fn scan_lock(&self, ctx: Context, max_ts: u64) -> Result<Vec<LockInfo>> {
