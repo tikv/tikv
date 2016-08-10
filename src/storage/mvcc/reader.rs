@@ -67,35 +67,26 @@ impl<'a> MvccReader<'a> {
     }
 
     fn seek_write_impl(&mut self, key: &Key, ts: u64, reverse: bool) -> Result<Option<(u64, u64)>> {
-        let (k, v) = {
-            if self.write_cursor.is_none() {
-                self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE)));
-            }
-            let mut cursor = self.write_cursor.as_mut().unwrap();
-            let ok = if reverse {
-                try!(cursor.reverse_seek(&key.append_ts(ts)))
-            } else {
-                try!(cursor.seek(&key.append_ts(ts)))
-            };
-            if !ok {
-                return Ok(None);
-            }
-            (cursor.key().to_vec(), cursor.value().to_vec())
-        };
-        let (k, s, c) = try!(self.decode_write(k, v));
-        if &k == key {
-            Ok(Some((s, c)))
-        } else {
-            Ok(None)
+        if self.write_cursor.is_none() {
+            self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE)));
         }
-    }
-
-    fn decode_write(&self, key: Vec<u8>, value: Vec<u8>) -> Result<(Key, u64, u64)> {
-        let k = Key::from_encoded(key);
-        let commit_ts = try!(k.decode_ts());
-        let key = try!(k.truncate_ts());
-        let start_ts = try!(value.as_slice().decode_var_u64());
-        Ok((key, start_ts, commit_ts))
+        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let ok = if reverse {
+            try!(cursor.near_reverse_seek(&key.append_ts(ts)))
+        } else {
+            try!(cursor.near_seek(&key.append_ts(ts)))
+        };
+        if !ok {
+            return Ok(None);
+        }
+        let write_key = Key::from_encoded(cursor.key().to_vec());
+        let commit_ts = try!(write_key.decode_ts());
+        let k = try!(write_key.truncate_ts());
+        if &k != key {
+            return Ok(None);
+        }
+        let start_ts = try!(cursor.value().decode_var_u64());
+        Ok(Some((start_ts, commit_ts)))
     }
 
     pub fn get(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
@@ -136,7 +127,7 @@ impl<'a> MvccReader<'a> {
         loop {
             key = {
                 let mut cursor = self.data_cursor.as_mut().unwrap();
-                if !try!(cursor.seek(&key)) {
+                if !try!(cursor.near_seek(&key)) {
                     return Ok(None);
                 }
                 try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts())
@@ -154,7 +145,7 @@ impl<'a> MvccReader<'a> {
         loop {
             key = {
                 let mut cursor = self.data_cursor.as_mut().unwrap();
-                if !try!(cursor.reverse_seek(&key)) {
+                if !try!(cursor.near_reverse_seek(&key)) {
                     return Ok(None);
                 }
                 try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts())
