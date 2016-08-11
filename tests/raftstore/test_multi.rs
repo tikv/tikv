@@ -346,6 +346,76 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 }
 
 #[test]
+fn test_node_read_leader_with_unapplied_log() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_read_leader_with_unapplied_log(&mut cluster);
+}
+
+#[test]
+fn test_server_read_leader_with_unapplied_log() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_read_leader_with_unapplied_log(&mut cluster);
+}
+
+fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
+    // disable compact log to make test more stable.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    // We use three peers([1, 2, 3]) for this test.
+    cluster.run();
+
+    sleep_ms(500);
+
+    // guarantee peer 1 is leader
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // hack: first MsgAppend will append log, second MsgAppend will set commit index,
+    // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
+    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
+        .msg_type(MessageType::MsgAppend)
+        .direction(Direction::Recv)
+        .allow(1));
+    // Make peer 2 have no way to know the uncommitted entries can be applied
+    // when it becomes leader.
+    cluster.add_send_filter(IsolateRegionStore::new(1, 1)
+        .msg_type(MessageType::MsgHeartbeatResponse)
+        .direction(Direction::Send));
+    cluster.add_send_filter(IsolateRegionStore::new(1, 3)
+        .msg_type(MessageType::MsgHeartbeatResponse)
+        .direction(Direction::Send));
+    // Make peer 2's msg won't be replicated when it becomes leader,
+    // so the uncommitted entries won't be applied immediatly.
+    cluster.add_send_filter(IsolateRegionStore::new(1, 1)
+        .msg_type(MessageType::MsgAppend)
+        .direction(Direction::Recv));
+    cluster.add_send_filter(IsolateRegionStore::new(1, 3)
+        .msg_type(MessageType::MsgAppend)
+        .direction(Direction::Recv));
+
+    // Make peer 2 have no way to know the uncommitted entries can be applied
+    // when it's still follower.
+    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
+        .msg_type(MessageType::MsgHeartbeat)
+        .direction(Direction::Recv));
+
+    let (k1, v1) = (b"k1", b"v1");
+    cluster.must_put(k1, v1);
+
+    // peer 1 must have committed, but peer 2 has not.
+    must_get_equal(&cluster.get_engine(1), k1, v1);
+
+    cluster.must_transfer_leader(1, util::new_peer(2, 2));
+
+    // leader's term not equal applied index's term, if we read local, we may get old value
+    // in this situation we need use raft read
+    must_get_none(&cluster.get_engine(2), k1);
+
+    cluster.clear_send_filters();
+
+    assert_eq!(cluster.get(k1).unwrap(), v1);
+}
+
+#[test]
 fn test_node_leader_change_with_uncommitted_log() {
     let mut cluster = new_node_cluster(0, 3);
     test_leader_change_with_uncommitted_log(&mut cluster);
