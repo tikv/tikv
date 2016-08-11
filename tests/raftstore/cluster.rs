@@ -461,21 +461,6 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
     }
 
-    pub fn must_seek(&mut self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-        let resp = self.request(key, vec![new_seek_cmd(key)], Duration::from_secs(5));
-        if resp.get_header().has_error() {
-            panic!("response {:?} has error", resp);
-        }
-        assert_eq!(resp.get_responses().len(), 1);
-        let resp = &resp.get_responses()[0];
-        assert_eq!(resp.get_cmd_type(), CmdType::Seek);
-        if resp.has_seek() {
-            Some((resp.get_seek().get_key().to_vec(), resp.get_seek().get_value().to_vec()))
-        } else {
-            None
-        }
-    }
-
     pub fn must_delete(&mut self, key: &[u8]) {
         self.must_delete_cf("default", key)
     }
