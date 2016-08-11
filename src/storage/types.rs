@@ -16,9 +16,8 @@ use std::fmt::{self, Formatter, Display};
 use std::u64;
 
 use util::{escape, codec};
-use util::codec::number::{self, NumberEncoder};
+use util::codec::number::{self, NumberEncoder, NumberDecoder};
 use util::codec::bytes::BytesDecoder;
-use super::mvcc;
 
 pub type Value = Vec<u8>;
 pub type KvPair = (Vec<u8>, Value);
@@ -45,12 +44,18 @@ impl Key {
 
     pub fn append_ts(&self, ts: u64) -> Key {
         let mut encoded = self.0.clone();
-        if ts == mvcc::FIRST_META_INDEX || ts == u64::MAX {
-            encoded.encode_u64(ts).unwrap();
-        } else {
-            encoded.encode_u64_desc(ts).unwrap();
-        }
+        encoded.encode_u64_desc(ts).unwrap();
         Key(encoded)
+    }
+
+    pub fn decode_ts(&self) -> Result<u64, codec::Error> {
+        let len = self.0.len();
+        if len < number::U64_SIZE {
+            Err(codec::Error::KeyLength)
+        } else {
+            let mut ts = &self.0[len - number::U64_SIZE..];
+            Ok(try!(ts.decode_u64_desc()))
+        }
     }
 
     pub fn truncate_ts(&self) -> Result<Key, codec::Error> {
@@ -71,6 +76,12 @@ impl Hash for Key {
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", escape(&self.0))
+    }
+}
+
+impl PartialEq for Key {
+    fn eq(&self, other: &Key) -> bool {
+        self.0 == other.0
     }
 }
 

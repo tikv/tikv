@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use storage::{Key, Value, KvPair};
-use storage::{Snapshot, Cursor};
-use storage::mvcc::{MvccSnapshot, Error as MvccError, MvccCursor};
+use storage::Snapshot;
+use storage::mvcc::{MvccReader, Error as MvccError};
 use super::{Error, Result};
 
 pub struct SnapshotStore<'a> {
@@ -30,65 +30,40 @@ impl<'a> SnapshotStore<'a> {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let txn = MvccSnapshot::new(self.snapshot, self.start_ts);
-        Ok(try!(txn.get(key)))
+        let mut reader = MvccReader::new(self.snapshot);
+        let v = try!(reader.get(key, self.start_ts));
+        Ok(v)
     }
 
     pub fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
-        let txn = MvccSnapshot::new(self.snapshot, self.start_ts);
+        let mut reader = MvccReader::new(self.snapshot);
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
-            results.push(txn.get(k).map_err(Error::from));
+            results.push(reader.get(k, self.start_ts).map_err(Error::from));
         }
         Ok(results)
     }
 
     pub fn scanner(&self) -> Result<StoreScanner> {
-        let cursor = try!(self.snapshot.iter());
         Ok(StoreScanner {
-            cursor: cursor,
-            snapshot: MvccSnapshot::new(self.snapshot, self.start_ts),
+            reader: MvccReader::new(self.snapshot),
             start_ts: self.start_ts,
         })
     }
 }
 
 pub struct StoreScanner<'a> {
-    cursor: Box<Cursor + 'a>,
-    snapshot: MvccSnapshot<'a>,
+    reader: MvccReader<'a>,
     start_ts: u64,
 }
 
 impl<'a> StoreScanner<'a> {
-    pub fn seek(&mut self, mut key: Key) -> Result<Option<(Key, Value)>> {
-        loop {
-            if !try!(self.cursor.seek(&key)) {
-                return Ok(None);
-            }
-            key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
-            let cursor = self.cursor.as_mut();
-            let mut txn = MvccCursor::new(cursor, &self.snapshot, self.start_ts);
-            if let Some(v) = try!(txn.get(&key)) {
-                // TODO: find a way to avoid copy.
-                return Ok(Some((key, v.to_vec())));
-            }
-            // None means value is deleted, so just continue.
-            key = key.append_ts(u64::max_value());
-        }
+    pub fn seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
+        Ok(try!(self.reader.seek(key, self.start_ts)))
     }
 
-    pub fn reverse_seek(&mut self, mut key: Key) -> Result<Option<(Key, Value)>> {
-        loop {
-            if !try!(self.cursor.reverse_seek(&key)) {
-                return Ok(None);
-            }
-            key = try!(Key::from_encoded(self.cursor.key().to_vec()).truncate_ts());
-            let cursor = self.cursor.as_mut();
-            let mut txn = MvccCursor::new(cursor, &self.snapshot, self.start_ts);
-            if let Some(v) = try!(txn.get(&key)) {
-                return Ok(Some((key, v.to_vec())));
-            }
-        }
+    pub fn reverse_seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
+        Ok(try!(self.reader.reverse_seek(key, self.start_ts)))
     }
 
     #[inline]
@@ -119,7 +94,7 @@ impl<'a> StoreScanner<'a> {
                 Err(Error::Mvcc(e)) => key = try!(StoreScanner::handle_mvcc_err(e, &mut results)),
                 Err(e) => return Err(e),
             }
-            key = key.append_ts(u64::max_value());
+            key = key.append_ts(0);
         }
         Ok(results)
     }
@@ -138,9 +113,5 @@ impl<'a> StoreScanner<'a> {
             }
         }
         Ok(results)
-    }
-
-    pub fn get(&mut self, key: &Key, ts: u64) -> Result<Option<&[u8]>> {
-        self.cursor.get(&key.append_ts(ts)).map_err(From::from)
     }
 }

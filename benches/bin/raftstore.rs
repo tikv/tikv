@@ -78,21 +78,6 @@ fn bench_get<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
     }
 }
 
-fn bench_seek<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
-    let mut kvs = generate_random_kvs(DEFAULT_DATA_SIZE, 100, 128);
-    prepare_cluster(&mut cluster, &kvs);
-
-    let mut keys = kvs.drain(..)
-        .take(DEFAULT_DATA_SIZE / 10)
-        .map(|i| i.0)
-        .chain(KvGenerator::new(100, 0).map(|i| i.0));
-
-    bench!{
-            let k = keys.next().unwrap();
-            cluster.must_seek(&k)
-    }
-}
-
 fn bench_delete<T: Simulator>(mut cluster: Cluster<T>) -> BenchSamples {
     let mut kvs = generate_random_kvs(DEFAULT_DATA_SIZE, 100, 128);
     prepare_cluster(&mut cluster, &kvs);
@@ -122,8 +107,6 @@ fn bench_raft_cluster<T, F>(factory: F, tag: &'static str)
         }
         print_other_progress(tag, "Get", ncnt);
         print_result(bench_get(factory(1, ncnt)));
-        print_other_progress(tag, "Seek", ncnt);
-        print_result(bench_seek(factory(1, ncnt)));
         print_other_progress(tag, "Delete", ncnt);
         print_result(bench_delete(factory(1, ncnt)));
     }

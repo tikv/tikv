@@ -114,27 +114,6 @@ impl AssertionStorage {
         assert!(self.0.rollback(Context::new(), keys, start_ts).is_err());
     }
 
-    fn commit_then_get_ok(&self,
-                          key: &[u8],
-                          lock_ts: u64,
-                          commit_ts: u64,
-                          get_ts: u64,
-                          expect: &[u8]) {
-        assert_eq!(self.0
-                       .commit_then_get(Context::new(), make_key(key), lock_ts, commit_ts, get_ts)
-                       .unwrap()
-                       .unwrap(),
-                   expect);
-    }
-
-    fn rollback_then_get_ok(&self, key: &[u8], lock_ts: u64, expect: &[u8]) {
-        assert_eq!(self.0
-                       .rollback_then_get(Context::new(), make_key(key), lock_ts)
-                       .unwrap()
-                       .unwrap(),
-                   expect);
-    }
-
     fn scan_lock_ok(&self, max_ts: u64, expect: Vec<LockInfo>) {
         assert_eq!(self.0.scan_lock(Context::new(), max_ts).unwrap(), expect);
     }
@@ -183,8 +162,6 @@ fn test_txn_store_cleanup_rollback() {
                       5);
     store.get_err(b"secondary", 10);
     store.rollback_ok(vec![b"primary"], 5);
-    store.rollback_then_get_ok(b"secondary", 5, b"s-0");
-    store.rollback_then_get_ok(b"secondary", 5, b"s-0");
 }
 
 #[test]
@@ -199,10 +176,6 @@ fn test_txn_store_cleanup_commit() {
     store.get_err(b"secondary", 12);
     store.commit_ok(vec![b"primary"], 5, 10);
     store.rollback_err(vec![b"primary"], 5);
-    store.commit_then_get_ok(b"secondary", 5, 10, 8, b"s-0");
-    store.commit_then_get_ok(b"secondary", 5, 10, 12, b"s-5");
-    store.commit_then_get_ok(b"secondary", 5, 10, 8, b"s-0");
-    store.commit_then_get_ok(b"secondary", 5, 10, 12, b"s-5");
 }
 
 #[test]
