@@ -42,7 +42,7 @@ use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
-use super::engine::{Snapshot, Peekable, Iterable, Mutable};
+use super::engine::{Snapshot, Peekable, Mutable};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -539,8 +539,7 @@ impl Peer {
         }
 
         for cmd_req in req.get_requests() {
-            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get &&
-               cmd_req.get_cmd_type() != CmdType::Seek {
+            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
                 return false;
             }
         }
@@ -631,7 +630,7 @@ impl Peer {
                 }
             };
         } else {
-            // for get/set/seek/delete, we don't care conf_version.
+            // for get/set/delete, we don't care conf_version.
             check_ver = true;
         }
 
@@ -1220,7 +1219,6 @@ impl Peer {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
                 CmdType::Get => self.do_get(ctx, req),
-                CmdType::Seek => self.do_seek(ctx, req),
                 CmdType::Put => self.do_put(ctx, req),
                 CmdType::Delete => self.do_delete(ctx, req),
                 CmdType::Snap => self.do_snap(ctx, req),
@@ -1258,20 +1256,6 @@ impl Peer {
         };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
-        }
-
-        Ok(resp)
-    }
-
-    fn do_seek(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
-        let key = req.get_seek().get_key();
-        try!(self.check_data_key(key));
-
-        let mut resp = Response::new();
-        let res = try!(ctx.snap.seek(&keys::data_key(key)));
-        if let Some((k, v)) = res {
-            resp.mut_seek().set_key(keys::origin_key(&k).to_vec());
-            resp.mut_seek().set_value(v);
         }
 
         Ok(resp)

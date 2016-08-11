@@ -152,13 +152,6 @@ pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
     cmd
 }
 
-pub fn new_seek_cmd(key: &[u8]) -> Request {
-    let mut cmd = Request::new();
-    cmd.set_cmd_type(CmdType::Seek);
-    cmd.mut_seek().set_key(key.to_vec());
-    cmd
-}
-
 pub fn new_status_request(region_id: u64,
                           peer: metapb::Peer,
                           request: StatusRequest)

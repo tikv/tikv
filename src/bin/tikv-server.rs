@@ -310,6 +310,10 @@ fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
     opts
 }
 
+fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
+    get_rocksdb_default_cf_option(matches, config)
+}
+
 fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &str) -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
@@ -463,7 +467,8 @@ fn build_raftkv(matches: &Matches,
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
     let cfs_opts = vec![get_rocksdb_default_cf_option(matches, config),
-                        get_rocksdb_lock_cf_option()];
+                        get_rocksdb_lock_cf_option(),
+                        get_rocksdb_write_cf_option(matches, config)];
     let mut db_path = path.clone();
     db_path.push("db");
     let engine = Arc::new(rocksdb_util::new_engine_opt(opts,
