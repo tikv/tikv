@@ -494,7 +494,9 @@ fn test_select() {
     assert_eq!(resp.get_rows().len(), data.len());
     for (row, (id, name, cnt)) in resp.get_rows().iter().zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
-        let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
+        let expected_encoded = datum::encode_value(&[name_datum, cnt.into()]).unwrap();
+        let encoded_id = datum::encode_value(&[Datum::I64(id)]).unwrap();
+        assert_eq!(encoded_id, row.get_handle());
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
@@ -753,7 +755,9 @@ fn test_limit() {
     assert_eq!(resp.get_rows().len(), 5);
     for (row, (id, name, cnt)) in resp.get_rows().iter().zip(data.drain(..5)) {
         let name_datum = name.map(|s| s.as_bytes()).into();
-        let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
+        let expected_encoded = datum::encode_value(&[name_datum, cnt.into()]).unwrap();
+        let encoded_id = datum::encode_value(&[Datum::I64(id)]).unwrap();
+        assert_eq!(encoded_id, row.get_handle());
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
@@ -780,7 +784,9 @@ fn test_reverse() {
     data.reverse();
     for (row, (id, name, cnt)) in resp.get_rows().iter().zip(data.drain(..5)) {
         let name_datum = name.map(|s| s.as_bytes()).into();
-        let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
+        let expected_encoded = datum::encode_value(&[name_datum, cnt.into()]).unwrap();
+        let encoded_id = datum::encode_value(&[Datum::I64(id)]).unwrap();
+        assert_eq!(encoded_id, row.get_handle());
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 

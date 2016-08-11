@@ -451,7 +451,7 @@ impl SelectContextCore {
                 continue;
             }
             if col.get_pk_handle() {
-                box_try!(datum::encode_to(row.mut_data(), &[get_pk(col, h)], false));
+                // handle has been encoded as row handle, so just skip.
             } else if mysql::has_not_null_flag(col.get_flag() as u64) {
                 return Err(box_err!("column {} of {} is missing", col_id, h));
             } else {
@@ -676,7 +676,7 @@ impl<'a> SelectContext<'a> {
         let mut rows = vec![];
         let ids: Vec<i64> = {
             let cols = self.core.sel.get_index_info().get_columns();
-            cols.iter().map(|c| c.get_column_id()).collect()
+            cols.iter().filter(|c| !c.get_pk_handle()).map(|c| c.get_column_id()).collect()
         };
         let mut seek_key = if desc {
             r.get_end().to_vec()
