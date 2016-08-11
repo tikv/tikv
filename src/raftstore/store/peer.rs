@@ -540,14 +540,8 @@ impl Peer {
 
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
-        let applied_index = self.get_store().applied_index();
-        match self.get_store().term(applied_index) {
-            Ok(term) => {
-                if self.raft_group.raft.term != term {
-                    return false;
-                }
-            }
-            Err(_) => return false,
+        if self.get_store().applied_index_term != self.raft_group.raft.term {
+            return false;
         }
 
         for cmd_req in req.get_requests() {
@@ -867,7 +861,7 @@ impl Peer {
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cb = self.find_cb(uuid, term, &cmd);
-        let (mut resp, exec_result) = self.apply_raft_cmd(index, &cmd).unwrap_or_else(|e| {
+        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd).unwrap_or_else(|e| {
             error!("{} apply raft command err {:?}", self.tag, e);
             (cmd_resp::new_error(e), None)
         });
@@ -901,6 +895,7 @@ impl Peer {
 
     fn apply_raft_cmd(&mut self,
                       index: u64,
+                      term: u64,
                       req: &RaftCmdRequest)
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         if self.pending_remove {
@@ -939,6 +934,7 @@ impl Peer {
         match storage.engine.write(ctx.wb) {
             Ok(_) => {
                 storage.apply_state = ctx.apply_state;
+                storage.applied_index_term = term;
 
                 if let Some(ref exec_result) = exec_result {
                     match *exec_result {
