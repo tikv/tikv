@@ -538,6 +538,18 @@ impl Peer {
             return false;
         }
 
+        // If applied index's term is differ from current raft's term, leader transfer
+        // must happened, if read locally, we may read old value.
+        let applied_index = self.get_store().applied_index();
+        match self.get_store().term(applied_index) {
+            Ok(term) => {
+                if self.raft_group.raft.term != term {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
+
         for cmd_req in req.get_requests() {
             if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
                 return false;
