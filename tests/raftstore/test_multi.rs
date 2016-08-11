@@ -34,33 +34,21 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     let (key, value) = (b"k1", b"v1");
 
     cluster.must_put(key, value);
-    assert_eq!(cluster.get(key), Some(value.to_vec()));
+    assert_eq!(cluster.must_get(key), Some(value.to_vec()));
 
     let check_res = cluster.check_quorum(|engine| {
-        for _ in 0..50 {
-            match engine.get_value(&keys::data_key(key)).unwrap() {
-                None => {
-                    sleep_ms(10);
-                }
-                Some(v) => return &*v == value,
-            }
+        match engine.get_value(&keys::data_key(key)).unwrap() {
+            None => false,
+            Some(v) => &*v == value,
         }
-        false
     });
     assert!(check_res);
 
     cluster.must_delete(key);
-    assert_eq!(cluster.get(key), None);
+    assert_eq!(cluster.must_get(key), None);
 
-    let check_res = cluster.check_quorum(|engine| {
-        for _ in 0..50 {
-            if engine.get_value(&keys::data_key(key)).unwrap().is_none() {
-                return true;
-            }
-            sleep_ms(10);
-        }
-        false
-    });
+    let check_res =
+        cluster.check_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
     assert!(check_res);
 
     // TODO add stale epoch test cases.
@@ -341,7 +329,10 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
     let region = cluster.get_region(b"");
     let reqs = vec![new_put_cmd(b"k3", b"v3")];
-    let mut put = new_request(region.get_id(), region.get_region_epoch().clone(), reqs);
+    let mut put = new_request(region.get_id(),
+                              region.get_region_epoch().clone(),
+                              reqs,
+                              false);
     debug!("requesting: {:?}", put);
     put.mut_header().set_peer(new_peer(2, 2));
     cluster.clear_send_filters();
@@ -395,7 +386,10 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
     let region = cluster.get_region(b"");
     let reqs = vec![new_put_cmd(b"k3", b"v3")];
-    let mut put = new_request(region.get_id(), region.get_region_epoch().clone(), reqs);
+    let mut put = new_request(region.get_id(),
+                              region.get_region_epoch().clone(),
+                              reqs,
+                              false);
     debug!("requesting: {:?}", put);
     put.mut_header().set_peer(new_peer(1, 1));
     cluster.clear_send_filters();

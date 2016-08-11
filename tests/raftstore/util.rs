@@ -101,16 +101,21 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 }
 
 // Create a base request.
-pub fn new_base_request(region_id: u64, epoch: RegionEpoch) -> RaftCmdRequest {
+pub fn new_base_request(region_id: u64, epoch: RegionEpoch, read_quorum: bool) -> RaftCmdRequest {
     let mut req = RaftCmdRequest::new();
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(epoch);
     req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    req.mut_header().set_read_quorum(read_quorum);
     req
 }
 
-pub fn new_request(region_id: u64, epoch: RegionEpoch, requests: Vec<Request>) -> RaftCmdRequest {
-    let mut req = new_base_request(region_id, epoch);
+pub fn new_request(region_id: u64,
+                   epoch: RegionEpoch,
+                   requests: Vec<Request>,
+                   read_quorum: bool)
+                   -> RaftCmdRequest {
+    let mut req = new_base_request(region_id, epoch, read_quorum);
     req.set_requests(protobuf::RepeatedField::from_vec(requests));
     req
 }
@@ -158,7 +163,7 @@ pub fn new_status_request(region_id: u64,
                           peer: metapb::Peer,
                           request: StatusRequest)
                           -> RaftCmdRequest {
-    let mut req = new_base_request(region_id, RegionEpoch::new());
+    let mut req = new_base_request(region_id, RegionEpoch::new(), false);
     req.mut_header().set_peer(peer);
     req.set_status_request(request);
     req
@@ -180,7 +185,7 @@ pub fn new_admin_request(region_id: u64,
                          epoch: &RegionEpoch,
                          request: AdminRequest)
                          -> RaftCmdRequest {
-    let mut req = new_base_request(region_id, epoch.clone());
+    let mut req = new_base_request(region_id, epoch.clone(), false);
     req.set_admin_request(request);
     req
 }

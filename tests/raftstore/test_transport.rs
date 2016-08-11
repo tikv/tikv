@@ -37,8 +37,7 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // leader in minority, new leader should be elected
     cluster.partition(vec![1, 2], vec![3, 4, 5]);
-    cluster.reset_leader_of_region(region_id);
-    cluster.must_put(key, value);
+    assert_eq!(cluster.must_get(key), Some(value.to_vec()));
     assert!(cluster.leader_of_region(region_id).unwrap().get_id() != 1);
     assert!(cluster.leader_of_region(region_id).unwrap().get_id() != 2);
     cluster.must_put(key, b"changed");

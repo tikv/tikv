@@ -13,7 +13,7 @@ fn test_raftkv(read_quorum: bool) {
     cluster.run();
 
     // make sure leader has been elected.
-    cluster.must_delete(b"k1");
+    assert_eq!(cluster.must_get(b"k1"), None);
 
     let region = cluster.get_region(b"");
     let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
@@ -63,7 +63,8 @@ fn test_read_leader_in_lease(read_quorum: bool) {
     let (k2, v2) = (b"k2", b"v2");
 
     // make sure leader has been elected.
-    cluster.must_delete(k1);
+    assert_eq!(cluster.must_get(k1), None);
+
     let region = cluster.get_region(b"");
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
