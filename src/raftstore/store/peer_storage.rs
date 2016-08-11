@@ -159,7 +159,7 @@ impl PeerStorage {
             snap_sched: snap_sched,
             snap_tried_cnt: AtomicUsize::new(0),
             tag: tag,
-            applied_index_term: 0,
+            applied_index_term: RAFT_INIT_LOG_TERM,
         })
     }
 

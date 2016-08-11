@@ -786,6 +786,7 @@ impl Peer {
             try!(wb.put_msg(&keys::apply_state_key(self.region_id), &state));
             try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
+            self.mut_store().applied_index_term = term;
             return Ok(None);
         }
 
