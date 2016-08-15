@@ -792,10 +792,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // log entry can't be committed.
 
 
-        // TODO: support handing read-only commands later.
-        // for read-only, if we don't care stale read, we can
-        // execute these commands immediately in leader.
-
         let pending_cmd = PendingCmd {
             uuid: uuid,
             term: term,
