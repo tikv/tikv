@@ -129,6 +129,12 @@ pub enum Command {
         start_ts: u64,
         commit_ts: Option<u64>,
     },
+    Gc {
+        ctx: Context,
+        safe_point: u64,
+        scan_key: Option<Key>,
+        keys: Vec<Key>,
+    },
 }
 
 impl fmt::Display for Command {
@@ -184,6 +190,9 @@ impl fmt::Display for Command {
             Command::ResolveLock { start_ts, commit_ts, .. } => {
                 write!(f, "kv::resolve_txn {} -> {:?}", start_ts, commit_ts)
             }
+            Command::Gc { safe_point, ref scan_key, .. } => {
+                write!(f, "kv::command::gc scan {:?} @{}", scan_key, safe_point)
+            }
         }
     }
 }
@@ -196,6 +205,7 @@ impl Command {
             Command::Scan { .. } |
             Command::ScanLock { .. } |
             Command::ResolveLock { .. } => true,
+            Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
     }
@@ -457,6 +467,17 @@ impl Storage {
             ctx: ctx,
             start_ts: start_ts,
             commit_ts: commit_ts,
+        };
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
+        Ok(())
+    }
+
+    pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
+        let cmd = Command::Gc {
+            ctx: ctx,
+            safe_point: safe_point,
+            scan_key: None,
+            keys: vec![],
         };
         try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
