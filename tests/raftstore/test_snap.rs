@@ -113,8 +113,8 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     for _ in 0..30 {
         // write many logs to force log GC for region 1 and region 2.
         // and trigger snapshot more than one time.
-        cluster.get(b"k1").unwrap();
-        cluster.get(b"k2").unwrap();
+        cluster.must_put(b"k1", b"v1");
+        cluster.must_put(b"k2", b"v2");
     }
 
     let snap_dir = cluster.get_snap_dir(3);

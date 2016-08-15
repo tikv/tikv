@@ -469,7 +469,26 @@ impl Peer {
             return cmd.cb.call_box((err_resp,));
         }
 
-        if get_transfer_leader_cmd(&req).is_some() {
+        let local_read = self.is_local_read(&req);
+        if local_read {
+            // for read-only, if we don't care stale read, we can
+            // execute these commands immediately in leader.
+            let engine = self.engine.clone();
+            let mut ctx = ExecContext {
+                snap: Snapshot::new(engine),
+                apply_state: self.get_store().apply_state.clone(),
+                wb: WriteBatch::new(),
+                req: &req,
+            };
+            let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
+                error!("{} execute raft command err: {:?}", self.tag, e);
+                (cmd_resp::new_error(e), None)
+            });
+
+            cmd_resp::bind_uuid(&mut resp, cmd.uuid);
+            cmd_resp::bind_term(&mut resp, self.term());
+            return cmd.cb.call_box((resp,));
+        } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
 
@@ -511,6 +530,27 @@ impl Peer {
 
         metric_incr!("raftstore.propose.success");
         Ok(())
+    }
+
+    fn is_local_read(&self, req: &RaftCmdRequest) -> bool {
+        if (req.has_header() && req.get_header().get_read_quorum()) ||
+           !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
+            return false;
+        }
+
+        // If applied index's term is differ from current raft's term, leader transfer
+        // must happened, if read locally, we may read old value.
+        if self.get_store().applied_index_term != self.raft_group.raft.term {
+            return false;
+        }
+
+        for cmd_req in req.get_requests() {
+            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Call the callback of `cmd` that leadership may have been changed.
@@ -746,6 +786,7 @@ impl Peer {
             try!(wb.put_msg(&keys::apply_state_key(self.region_id), &state));
             try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
+            self.mut_store().applied_index_term = term;
             return Ok(None);
         }
 
@@ -821,7 +862,7 @@ impl Peer {
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cb = self.find_cb(uuid, term, &cmd);
-        let (mut resp, exec_result) = self.apply_raft_cmd(index, &cmd).unwrap_or_else(|e| {
+        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd).unwrap_or_else(|e| {
             error!("{} apply raft command err {:?}", self.tag, e);
             (cmd_resp::new_error(e), None)
         });
@@ -855,6 +896,7 @@ impl Peer {
 
     fn apply_raft_cmd(&mut self,
                       index: u64,
+                      term: u64,
                       req: &RaftCmdRequest)
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         if self.pending_remove {
@@ -893,6 +935,7 @@ impl Peer {
         match storage.engine.write(ctx.wb) {
             Ok(_) => {
                 storage.apply_state = ctx.apply_state;
+                storage.applied_index_term = term;
 
                 if let Some(ref exec_result) = exec_result {
                     match *exec_result {
