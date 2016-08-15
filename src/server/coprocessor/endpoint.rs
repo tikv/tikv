@@ -35,9 +35,8 @@ use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
-use util::{escape, duration_to_ms};
+use util::{escape, duration_to_ms, SlowTimer, Either};
 use util::worker::{BatchRunnable, Scheduler};
-use util::SlowTimer;
 use server::OnResponse;
 
 use super::{Error, Result};
@@ -351,7 +350,7 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
 pub struct SelectContextCore {
     sel: SelectRequest,
     eval: Evaluator,
-    cols: HashSet<i64>,
+    cols: Either<HashSet<i64>, Vec<i64>>,
     cond_cols: Vec<ColumnInfo>,
     aggr: bool,
     aggr_cols: Vec<ColumnInfo>,
@@ -360,8 +359,7 @@ pub struct SelectContextCore {
 }
 
 impl SelectContextCore {
-    fn new(sel: SelectRequest) -> Result<SelectContextCore> {
-        let cols;
+    fn new(mut sel: SelectRequest) -> Result<SelectContextCore> {
         let cond_cols;
         let mut aggr_cols = vec![];
 
@@ -371,10 +369,6 @@ impl SelectContextCore {
             } else {
                 sel.get_index_info().get_columns()
             };
-            cols = select_cols.iter()
-                .filter(|c| !c.get_pk_handle())
-                .map(|c| c.get_column_id())
-                .collect();
             let mut cond_col_map = HashMap::new();
             try!(collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
             let mut aggr_cols_map = HashMap::new();
@@ -392,6 +386,21 @@ impl SelectContextCore {
             }
             cond_cols = cond_col_map.drain().map(|(_, v)| v).collect();
         }
+
+        let cols = if sel.has_table_info() {
+            Either::Left(sel.get_table_info()
+                .get_columns()
+                .iter()
+                .filter(|c| !c.get_pk_handle())
+                .map(|c| c.get_column_id())
+                .collect())
+        } else {
+            let cols = sel.mut_index_info().mut_columns();
+            if cols.last().map_or(false, |c| c.get_pk_handle()) {
+                cols.pop();
+            }
+            Either::Right(cols.iter().map(|c| c.get_column_id()).collect())
+        };
 
         Ok(SelectContextCore {
             aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
@@ -451,7 +460,7 @@ impl SelectContextCore {
                 continue;
             }
             if col.get_pk_handle() {
-                // handle has been encoded as row handle, so just skip.
+                box_try!(datum::encode_to(row.mut_data(), &[get_pk(col, h)], false));
             } else if mysql::has_not_null_flag(col.get_flag() as u64) {
                 return Err(box_err!("column {} of {} is missing", col_id, h));
             } else {
@@ -604,7 +613,10 @@ impl<'a> SelectContext<'a> {
                 None => return Ok(rows),
                 Some(v) => v,
             };
-            let values = box_try!(table::cut_row(&value, &self.core.cols));
+            let values = {
+                let ids = self.core.cols.as_ref().left().unwrap();
+                box_try!(table::cut_row(&value, ids))
+            };
             let h = box_try!(table::decode_handle(range.get_start()));
             try!(self.core.handle_row(h, values, &mut rows));
         } else {
@@ -632,7 +644,10 @@ impl<'a> SelectContext<'a> {
                     break;
                 }
                 let h = box_try!(table::decode_handle(&key));
-                let row_data = box_try!(table::cut_row(&value, &self.core.cols));
+                let row_data = {
+                    let ids = self.core.cols.as_ref().left().unwrap();
+                    box_try!(table::cut_row(&value, ids))
+                };
                 try!(self.core.handle_row(h, row_data, &mut rows));
                 seek_key = if desc {
                     box_try!(table::truncate_as_row_key(&key)).to_vec()
@@ -674,10 +689,6 @@ impl<'a> SelectContext<'a> {
                               desc: bool)
                               -> Result<Vec<Row>> {
         let mut rows = vec![];
-        let ids: Vec<i64> = {
-            let cols = self.core.sel.get_index_info().get_columns();
-            cols.iter().filter(|c| !c.get_pk_handle()).map(|c| c.get_column_id()).collect()
-        };
         let mut seek_key = if desc {
             r.get_end().to_vec()
         } else {
@@ -702,7 +713,10 @@ impl<'a> SelectContext<'a> {
                 break;
             }
             {
-                let (values, mut handle) = box_try!(table::cut_idx_key(&key, &ids));
+                let (values, mut handle) = {
+                    let ids = self.core.cols.as_ref().right().unwrap();
+                    box_try!(table::cut_idx_key(&key, ids))
+                };
                 let handle = if handle.is_empty() {
                     box_try!(val.as_slice().read_i64::<BigEndian>())
                 } else {

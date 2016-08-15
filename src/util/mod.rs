@@ -335,6 +335,39 @@ impl<T: FnOnce()> Drop for DeferContext<T> {
     }
 }
 
+/// Represents a value of one of two possible types (a more generic Result.)
+#[derive(Debug)]
+pub enum Either<L, R> {
+    Left(L),
+    Right(R),
+}
+
+impl<L, R> Either<L, R> {
+    #[inline]
+    pub fn as_ref(&self) -> Either<&L, &R> {
+        match *self {
+            Either::Left(ref l) => Either::Left(l),
+            Either::Right(ref r) => Either::Right(r),
+        }
+    }
+
+    #[inline]
+    pub fn left(self) -> Option<L> {
+        match self {
+            Either::Left(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn right(self) -> Option<R> {
+        match self {
+            Either::Right(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{SocketAddr, AddrParseError};

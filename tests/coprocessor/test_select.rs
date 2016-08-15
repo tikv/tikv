@@ -110,6 +110,13 @@ impl Table {
             c_info.set_pk_handle(col.id == self.handle_id);
             idx_info.mut_columns().push(c_info);
         }
+        if let Some(col) = self.cols.get(&self.handle_id) {
+            let mut c_info = ColumnInfo::new();
+            c_info.set_tp(col.col_type);
+            c_info.set_column_id(col.id);
+            c_info.set_pk_handle(true);
+            idx_info.mut_columns().push(c_info);
+        }
         idx_info
     }
 }
@@ -494,7 +501,8 @@ fn test_select() {
     assert_eq!(resp.get_rows().len(), data.len());
     for (row, (id, name, cnt)) in resp.get_rows().iter().zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
-        let expected_encoded = datum::encode_value(&[name_datum, cnt.into()]).unwrap();
+        let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()])
+            .unwrap();
         let encoded_id = datum::encode_value(&[Datum::I64(id)]).unwrap();
         assert_eq!(encoded_id, row.get_handle());
         assert_eq!(row.get_data(), &*expected_encoded);
@@ -755,7 +763,7 @@ fn test_limit() {
     assert_eq!(resp.get_rows().len(), 5);
     for (row, (id, name, cnt)) in resp.get_rows().iter().zip(data.drain(..5)) {
         let name_datum = name.map(|s| s.as_bytes()).into();
-        let expected_encoded = datum::encode_value(&[name_datum, cnt.into()]).unwrap();
+        let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
         let encoded_id = datum::encode_value(&[Datum::I64(id)]).unwrap();
         assert_eq!(encoded_id, row.get_handle());
         assert_eq!(row.get_data(), &*expected_encoded);
@@ -784,7 +792,7 @@ fn test_reverse() {
     data.reverse();
     for (row, (id, name, cnt)) in resp.get_rows().iter().zip(data.drain(..5)) {
         let name_datum = name.map(|s| s.as_bytes()).into();
-        let expected_encoded = datum::encode_value(&[name_datum, cnt.into()]).unwrap();
+        let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
         let encoded_id = datum::encode_value(&[Datum::I64(id)]).unwrap();
         assert_eq!(encoded_id, row.get_handle());
         assert_eq!(row.get_data(), &*expected_encoded);
