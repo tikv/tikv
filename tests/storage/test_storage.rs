@@ -121,6 +121,10 @@ impl AssertionStorage {
     fn resolve_lock_ok(&self, start_ts: u64, commit_ts: Option<u64>) {
         self.0.resolve_lock(Context::new(), start_ts, commit_ts).unwrap();
     }
+
+    fn gc_ok(&self, safe_point: u64) {
+        self.0.gc(Context::new(), safe_point).unwrap();
+    }
 }
 
 fn new_assertion_storage() -> AssertionStorage {
@@ -396,6 +400,16 @@ fn test_txn_store_resolve_lock() {
     store.get_ok(b"p2", 20, b"v10");
     store.get_ok(b"s2", 30, b"v10");
     store.scan_lock_ok(30, vec![]);
+}
+
+#[test]
+fn test_txn_store_gc() {
+    let store = new_assertion_storage();
+    store.put_ok(b"k", b"v1", 5, 10);
+    store.put_ok(b"k", b"v2", 15, 20);
+    store.gc_ok(30);
+    store.get_none(b"k", 15);
+    store.get_ok(b"k", 25, b"v2");
 }
 
 struct Oracle {

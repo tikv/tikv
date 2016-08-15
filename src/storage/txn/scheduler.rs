@@ -29,6 +29,9 @@ use super::latch::{Latches, Lock};
 
 const REPORT_STATISTIC_INTERVAL: u64 = 60000; // 60 seconds
 
+// TODO: make it configurable.
+const GC_BATCH_SIZE: usize = 512;
+
 pub enum Tick {
     ReportStatistic,
 }
@@ -194,7 +197,7 @@ impl Scheduler {
     }
 }
 
-fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
+fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     debug!("process read cmd(cid={}) in worker pool.", cid);
     let pr = match cmd {
         Command::Get { ref key, start_ts, .. } => {
@@ -284,6 +287,23 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
+        Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
+            let mut reader = MvccReader::new(snapshot.as_ref());
+            let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
+                .map_err(Error::from)
+                .and_then(|(keys, next_start)| {
+                    Ok(Command::Gc {
+                        ctx: ctx.clone(),
+                        safe_point: safe_point,
+                        scan_key: next_start,
+                        keys: keys,
+                    })
+                });
+            match res {
+                Ok(cmd) => ProcessResult::NextCommand { cmd: cmd },
+                Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
         _ => panic!("unsupported read command"),
     };
 
@@ -304,7 +324,11 @@ fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot
     }
 }
 
-fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapshot) -> Result<()> {
+fn process_write_impl(cid: u64,
+                      mut cmd: Command,
+                      ch: SendCh<Msg>,
+                      snapshot: &Snapshot)
+                      -> Result<()> {
     let (pr, modifies) = match cmd {
         Command::Prewrite { ref mutations, ref primary, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts);
@@ -345,6 +369,25 @@ fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapsh
             let pr = ProcessResult::Res;
             (pr, txn.modifies())
         }
+        Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
+            let mut txn = MvccTxn::new(snapshot, 0);
+            for k in keys {
+                try!(txn.gc(k, safe_point));
+            }
+            if scan_key.is_none() {
+                (ProcessResult::Res, txn.modifies())
+            } else {
+                let pr = ProcessResult::NextCommand {
+                    cmd: Command::Gc {
+                        ctx: ctx.clone(),
+                        safe_point: safe_point,
+                        scan_key: scan_key.take(),
+                        keys: vec![],
+                    },
+                };
+                (pr, txn.modifies())
+            }
+        }
         _ => panic!("unsupported write command"),
     };
 
@@ -370,7 +413,8 @@ fn extract_ctx(cmd: &Command) -> &Context {
         Command::Rollback { ref ctx, .. } |
         Command::RollbackThenGet { ref ctx, .. } |
         Command::ScanLock { ref ctx, .. } |
-        Command::ResolveLock { ref ctx, .. } => ctx,
+        Command::ResolveLock { ref ctx, .. } |
+        Command::Gc { ref ctx, .. } => ctx,
     }
 }
 
@@ -540,7 +584,11 @@ impl Scheduler {
             Ok(()) => pr,
             Err(e) => ProcessResult::Failed { err: ::storage::Error::from(e) },
         };
-        execute_callback(cb, pr);
+        if let ProcessResult::NextCommand { cmd } = pr {
+            self.on_receive_new_cmd(cmd, cb);
+        } else {
+            execute_callback(cb, pr);
+        }
 
         self.release_lock(&ctx.lock, cid);
     }

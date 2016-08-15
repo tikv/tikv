@@ -35,7 +35,7 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    fn load_data(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
+    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
         let k = key.append_ts(ts);
         if let Some(ref mut cursor) = self.data_cursor {
             cursor.get(&k).map(|x| x.map(|x| x.to_vec())).map_err(Error::from)
@@ -174,5 +174,31 @@ impl<'a> MvccReader<'a> {
             cursor.next();
         }
         Ok(locks)
+    }
+
+    pub fn scan_keys(&mut self,
+                     mut start: Option<Key>,
+                     limit: usize)
+                     -> Result<(Vec<Key>, Option<Key>)> {
+        if self.write_cursor.is_none() {
+            self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE)));
+        }
+        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let mut keys = vec![];
+        loop {
+            let ok = match start {
+                Some(ref x) => try!(cursor.near_seek(x)),
+                None => cursor.seek_to_first(),
+            };
+            if !ok {
+                return Ok((keys, None));
+            }
+            if keys.len() >= limit {
+                return Ok((keys, start));
+            }
+            let key = try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts());
+            start = Some(key.append_ts(0));
+            keys.push(key);
+        }
     }
 }
