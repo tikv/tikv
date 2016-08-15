@@ -205,7 +205,7 @@ impl Command {
             Command::Scan { .. } |
             Command::ScanLock { .. } |
             Command::ResolveLock { .. } => true,
-            Command::Gc { ref keys, .. } => keys.len() == 0,
+            Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
     }
