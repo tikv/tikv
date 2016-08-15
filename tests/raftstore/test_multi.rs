@@ -398,21 +398,21 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
         .msg_type(MessageType::MsgHeartbeat)
         .direction(Direction::Recv));
 
-    let (k1, v1) = (b"k1", b"v1");
-    cluster.must_put(k1, v1);
+    let (k, v) = (b"k", b"v");
+    cluster.must_put(k, v);
 
     // peer 1 must have committed, but peer 2 has not.
-    must_get_equal(&cluster.get_engine(1), k1, v1);
+    must_get_equal(&cluster.get_engine(1), k, v);
 
     cluster.must_transfer_leader(1, util::new_peer(2, 2));
 
     // leader's term not equal applied index's term, if we read local, we may get old value
     // in this situation we need use raft read
-    must_get_none(&cluster.get_engine(2), k1);
+    must_get_none(&cluster.get_engine(2), k);
 
     cluster.clear_send_filters();
 
-    assert_eq!(cluster.get(k1).unwrap(), v1);
+    assert_eq!(cluster.get(k).unwrap(), v);
 }
 
 #[test]
