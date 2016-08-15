@@ -4,17 +4,16 @@ use tikv::storage::{Key, CfName, CF_DEFAULT};
 use tikv::util::codec::bytes;
 use tikv::util::escape;
 use kvproto::kvrpcpb::Context;
-
+use raftstore::transport_simulate::Isolate;
 use raftstore::server::new_server_cluster_with_cfs;
 
-#[test]
-fn test_raftkv() {
+fn test_raftkv(read_quorum: bool) {
     let count = 1;
     let mut cluster = new_server_cluster_with_cfs(0, count, &["cf"]);
     cluster.run();
 
     // make sure leader has been elected.
-    assert_eq!(cluster.get(b"k1"), None);
+    assert_eq!(cluster.must_get(b"k1"), None);
 
     let region = cluster.get_region(b"");
     let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
@@ -24,6 +23,7 @@ fn test_raftkv() {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
+    ctx.set_read_quorum(read_quorum);
 
     get_put(&ctx, storage.as_ref());
     batch(&ctx, storage.as_ref());
@@ -32,6 +32,58 @@ fn test_raftkv() {
     cf(&ctx, storage.as_ref());
     empty_write(&ctx, storage.as_ref());
     // TODO: test multiple node
+}
+
+#[test]
+fn test_raftkv_with_read_local() {
+    test_raftkv(false);
+}
+
+#[test]
+fn test_raftkv_with_read_quorum() {
+    test_raftkv(true);
+}
+
+#[test]
+fn test_read_with_quorum() {
+    test_read_leader_in_lease(true);
+}
+
+#[test]
+fn test_read_with_lease() {
+    test_read_leader_in_lease(false);
+}
+
+fn test_read_leader_in_lease(read_quorum: bool) {
+    let count = 3;
+    let mut cluster = new_server_cluster_with_cfs(0, count, &["cf"]);
+    cluster.run();
+
+    let k1 = b"k1";
+    let (k2, v2) = (b"k2", b"v2");
+
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(k1), None);
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
+
+    let mut ctx = Context::new();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader.clone());
+    ctx.set_read_quorum(read_quorum);
+
+    // write some data
+    assert_none(&ctx, storage.as_ref(), k2);
+    must_put(&ctx, storage.as_ref(), k2, v2);
+
+    // isolate leader
+    cluster.add_send_filter(Isolate::new(leader.get_store_id()));
+
+    // leader still in lease, check if can read on leader
+    assert_eq!(can_read(&ctx, storage.as_ref(), k2, v2), !read_quorum);
 }
 
 pub fn make_key(k: &[u8]) -> Key {
@@ -57,6 +109,14 @@ fn must_delete_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8]) {
 fn assert_has(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
     assert_eq!(snapshot.get(&make_key(key)).unwrap().unwrap(), value);
+}
+
+fn can_read(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) -> bool {
+    if let Ok(s) = engine.snapshot(ctx) {
+        assert_eq!(s.get(&make_key(key)).unwrap().unwrap(), value);
+        return true;
+    }
+    false
 }
 
 fn assert_has_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8], value: &[u8]) {

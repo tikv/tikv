@@ -59,43 +59,6 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-fn test_seek<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.run();
-
-    for i in 100..200 {
-        let (k, v) = (format!("key{}", i), format!("value{}", i));
-        let key = k.as_bytes();
-        let value = v.as_bytes();
-        cluster.must_put(key, value);
-    }
-
-    for i in 0..100 {
-        let k = format!("key{:03}", i);
-        let key = k.as_bytes();
-        let (k, v) = cluster.must_seek(key).unwrap();
-        assert_eq!(k, b"key100");
-        assert_eq!(v, b"value100");
-    }
-
-    for i in 100..200 {
-        let (k, v) = (format!("key{}", i), format!("value{}", i));
-        let key = k.as_bytes();
-        let value = v.as_bytes();
-        let (sk, sv) = cluster.must_seek(key).unwrap();
-        assert_eq!(sk, key);
-        assert_eq!(sv, value);
-    }
-
-    for i in 200..300 {
-        let k = format!("key{}", i);
-        let key = k.as_bytes();
-        assert!(cluster.must_seek(key).is_none());
-    }
-
-    assert!(cluster.must_seek(b"key2").is_none(),
-            "seek should follow binary order");
-}
-
 #[test]
 fn test_node_put() {
     let mut cluster = new_node_cluster(0, 1);
@@ -109,12 +72,6 @@ fn test_node_delete() {
 }
 
 #[test]
-fn test_node_seek() {
-    let mut cluster = new_node_cluster(0, 1);
-    test_seek(&mut cluster);
-}
-
-#[test]
 fn test_server_put() {
     let mut cluster = new_server_cluster(0, 1);
     test_put(&mut cluster);
@@ -124,10 +81,4 @@ fn test_server_put() {
 fn test_server_delete() {
     let mut cluster = new_server_cluster(0, 1);
     test_delete(&mut cluster);
-}
-
-#[test]
-fn test_server_seek() {
-    let mut cluster = new_server_cluster(0, 1);
-    test_seek(&mut cluster);
 }
