@@ -606,16 +606,20 @@ impl<T: Storage> Raft<T> {
         let ents = self.raft_log
             .entries(begin, raft_log::NO_LIMIT)
             .expect("unexpected error getting uncommitted entries");
-        for e in ents {
-            if e.get_entry_type() != EntryType::EntryConfChange {
-                continue;
-            }
-            assert!(!self.pending_conf,
-                    "unexpected double uncommitted config entry");
+        let nconf = self.num_pending_conf(&ents);
+        if nconf > 1 {
+            panic!("unexpected double uncommitted config entry");
+        }
+
+        if nconf == 1 {
             self.pending_conf = true;
         }
         self.append_entry(&mut [Entry::new()]);
         info!("{} became leader at term {}", self.tag, self.term);
+    }
+
+    fn num_pending_conf(&self, ents: &[Entry]) -> usize {
+        ents.into_iter().filter(|e| e.get_entry_type() == EntryType::EntryConfChange).count()
     }
 
     fn campaign(&mut self, campaign_type: &[u8]) {
@@ -668,6 +672,20 @@ impl<T: Storage> Raft<T> {
             if self.state == StateRole::Leader {
                 debug!("{} ignoring MsgHup because already leader", self.tag);
             } else {
+                let ents = self.raft_log
+                    .slice(self.raft_log.applied + 1,
+                           self.raft_log.committed + 1,
+                           raft_log::NO_LIMIT)
+                    .expect("unexpected error getting unapplied entries");
+                let n = self.num_pending_conf(&ents);
+                if n != 0 && self.raft_log.committed > self.raft_log.applied {
+                    warn!("{} cannot campaign at term {} since there are still {} pending \
+                           configuration changes to apply",
+                          self.id,
+                          self.term,
+                          n);
+                    return Ok(());
+                }
                 info!("{} is starting a new election at term {}",
                       self.tag,
                       self.term);
