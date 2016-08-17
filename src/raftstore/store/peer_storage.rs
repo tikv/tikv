@@ -58,6 +58,7 @@ pub struct PeerStorage {
     pub region: metapb::Region,
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
+    pub applied_index_term: u64,
 
     snap_state: RefCell<SnapState>,
     snap_sched: Scheduler<SnapTask>,
@@ -156,6 +157,7 @@ impl PeerStorage {
             snap_sched: snap_sched,
             snap_tried_cnt: AtomicUsize::new(0),
             tag: tag,
+            applied_index_term: RAFT_INIT_LOG_TERM,
         })
     }
 

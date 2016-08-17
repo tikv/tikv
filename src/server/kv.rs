@@ -18,7 +18,7 @@ use protobuf::RepeatedField;
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
                        CmdBatchRollbackResponse, CmdCleanupResponse, CmdRollbackThenGetResponse,
                        CmdCommitThenGetResponse, CmdBatchGetResponse, CmdScanLockResponse,
-                       CmdResolveLockResponse, Request, Response, MessageType,
+                       CmdResolveLockResponse, CmdGCResponse, Request, Response, MessageType,
                        KvPair as RpcKvPair, KeyError, LockInfo, Op};
 use kvproto::msgpb;
 use kvproto::errorpb::Error as RegionError;
@@ -210,6 +210,15 @@ impl StoreHandler {
             .map_err(Error::Storage)
     }
 
+    fn on_gc(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
+        if !msg.has_cmd_gc_req() {
+            return Err(box_err!("msg doesn't contain a CmdGcRequest"));
+        }
+        let req = msg.take_cmd_gc_req();
+        let cb = self.make_cb(StoreHandler::cmd_gc_done, on_resp);
+        self.store.async_gc(msg.take_context(), req.get_safe_point(), cb).map_err(Error::Storage)
+    }
+
     fn make_cb<T: 'static>(&self,
                            f: fn(StorageResult<T>, &mut Response),
                            on_resp: OnResponse)
@@ -331,6 +340,15 @@ impl StoreHandler {
         resp.set_cmd_resolve_lock_resp(resolve_lock);
     }
 
+    fn cmd_gc_done(r: StorageResult<()>, resp: &mut Response) {
+        resp.set_field_type(MessageType::CmdGC);
+        let mut gc = CmdGCResponse::new();
+        if let Err(e) = r {
+            gc.set_error(extract_key_error(&e));
+        }
+        resp.set_cmd_gc_resp(gc);
+    }
+
     pub fn on_request(&self, req: Request, on_resp: OnResponse) -> Result<()> {
         if let Err(e) = match req.get_field_type() {
             MessageType::CmdGet => self.on_get(req, on_resp),
@@ -344,6 +362,7 @@ impl StoreHandler {
             MessageType::CmdBatchRollback => self.on_batch_rollback(req, on_resp),
             MessageType::CmdScanLock => self.on_scan_lock(req, on_resp),
             MessageType::CmdResolveLock => self.on_resolve_lock(req, on_resp),
+            MessageType::CmdGC => self.on_gc(req, on_resp),
         } {
             // TODO: should we return an error and tell the client later?
             error!("Some error occur err[{:?}]", e);
@@ -375,9 +394,7 @@ fn extract_region_error<T>(res: &StorageResult<T>) -> Option<RegionError> {
 
 fn extract_committed(err: &StorageError) -> Option<u64> {
     match *err {
-        StorageError::Txn(TxnError::Mvcc(MvccError::AlreadyCommitted { commit_ts })) => {
-            Some(commit_ts)
-        }
+        StorageError::Txn(TxnError::Mvcc(MvccError::Committed { commit_ts })) => Some(commit_ts),
         _ => None,
     }
 }

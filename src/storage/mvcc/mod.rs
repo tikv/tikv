@@ -11,11 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod meta;
+mod reader;
 mod txn;
+mod lock;
 
-pub use self::meta::FIRST_META_INDEX;
-pub use self::txn::{MvccTxn, MvccSnapshot, MvccCursor};
+use std::io;
+pub use self::txn::MvccTxn;
+pub use self::reader::MvccReader;
 use util::escape;
 
 quick_error! {
@@ -26,7 +28,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        ProtoBuf(err: ::protobuf::error::ProtobufError) {
+        Io(err: io::Error) {
             from()
             cause(err)
             description(err.description())
@@ -40,7 +42,8 @@ quick_error! {
             description("key is locked (backoff or cleanup)")
             display("key is locked (backoff or cleanup) {}-{}@{}", escape(key), escape(primary), ts)
         }
-        AlreadyCommitted {commit_ts: u64} {
+        BadFormatLock {description("bad format lock data")}
+        Committed {commit_ts: u64} {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }

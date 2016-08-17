@@ -14,12 +14,9 @@
 use std::time::Duration;
 use std::boxed::Box;
 use threadpool::ThreadPool;
-use storage::{Engine, Command, Snapshot, StorageCb, CF_LOCK, Result as StorageResult,
-              Error as StorageError};
-use protobuf::core::Message;
+use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult, Error as StorageError};
 use kvproto::kvrpcpb::{Context, LockInfo};
-use kvproto::mvccpb::MetaLock;
-use storage::mvcc::{MvccTxn, Error as MvccError};
+use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError};
 use storage::{Key, Value, KvPair};
 use std::collections::HashMap;
 use mio::{self, EventLoop};
@@ -31,6 +28,9 @@ use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 
 const REPORT_STATISTIC_INTERVAL: u64 = 60000; // 60 seconds
+
+// TODO: make it configurable.
+const GC_BATCH_SIZE: usize = 512;
 
 pub enum Tick {
     ReportStatistic,
@@ -197,7 +197,7 @@ impl Scheduler {
     }
 }
 
-fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
+fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     debug!("process read cmd(cid={}) in worker pool.", cid);
     let pr = match cmd {
         Command::Get { ref key, start_ts, .. } => {
@@ -238,60 +238,67 @@ fn process_read(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>
             }
         }
         Command::ScanLock { max_ts, .. } => {
-            let res = snapshot.iter_cf(CF_LOCK).map_err(Error::from).and_then(|mut cursor| {
-                cursor.seek_to_first(); // ignore result, valid() is checked below.
-                let mut locks = vec![];
-                while cursor.valid() {
-                    let mut pb = MetaLock::new();
-                    try!(pb.merge_from_bytes(cursor.value()));
-                    if pb.get_start_ts() <= max_ts {
-                        let key = Key::from_encoded(cursor.key().to_vec());
-                        let mut lock = LockInfo::new();
-                        lock.set_primary_lock(pb.take_primary_key());
-                        lock.set_lock_version(pb.get_start_ts());
-                        lock.set_key(try!(key.raw()));
-                        locks.push(lock);
+            let mut reader = MvccReader::new(snapshot.as_ref());
+            let res = reader.scan_lock(|lock| lock.ts <= max_ts)
+                .map_err(Error::from)
+                .and_then(|v| {
+                    let mut locks = vec![];
+                    for (key, lock) in v {
+                        let mut lock_info = LockInfo::new();
+                        lock_info.set_primary_lock(lock.primary);
+                        lock_info.set_lock_version(lock.ts);
+                        lock_info.set_key(try!(key.raw()));
+                        locks.push(lock_info);
                     }
-                    cursor.next();
-                }
-                Ok(locks)
-            });
+                    Ok(locks)
+                });
             match res {
                 Ok(locks) => ProcessResult::Locks { locks: locks },
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
         Command::ResolveLock { ref ctx, start_ts, commit_ts } => {
-            let res = snapshot.iter_cf(CF_LOCK).map_err(Error::from).and_then(|mut cursor| {
-                cursor.seek_to_first(); // ignore result, valid() is checked below.
-                let mut keys = vec![];
-                while cursor.valid() {
-                    let mut pb = MetaLock::new();
-                    try!(pb.merge_from_bytes(cursor.value()));
-                    if pb.get_start_ts() == start_ts {
-                        keys.push(Key::from_encoded(cursor.key().to_vec()));
-                    }
-                    cursor.next();
-                }
-                let next_cmd = match commit_ts {
-                    Some(ts) => {
-                        Command::Commit {
-                            ctx: ctx.clone(),
-                            keys: keys,
-                            lock_ts: start_ts,
-                            commit_ts: ts,
+            let mut reader = MvccReader::new(snapshot.as_ref());
+            let res = reader.scan_lock(|lock| lock.ts == start_ts)
+                .map_err(Error::from)
+                .and_then(|v| {
+                    let keys = v.into_iter().map(|x| x.0).collect();
+                    let next_cmd = match commit_ts {
+                        Some(ts) => {
+                            Command::Commit {
+                                ctx: ctx.clone(),
+                                keys: keys,
+                                lock_ts: start_ts,
+                                commit_ts: ts,
+                            }
                         }
-                    }
-                    None => {
-                        Command::Rollback {
-                            ctx: ctx.clone(),
-                            keys: keys,
-                            start_ts: start_ts,
+                        None => {
+                            Command::Rollback {
+                                ctx: ctx.clone(),
+                                keys: keys,
+                                start_ts: start_ts,
+                            }
                         }
-                    }
-                };
-                Ok(next_cmd)
-            });
+                    };
+                    Ok(next_cmd)
+                });
+            match res {
+                Ok(cmd) => ProcessResult::NextCommand { cmd: cmd },
+                Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
+        Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
+            let mut reader = MvccReader::new(snapshot.as_ref());
+            let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
+                .map_err(Error::from)
+                .and_then(|(keys, next_start)| {
+                    Ok(Command::Gc {
+                        ctx: ctx.clone(),
+                        safe_point: safe_point,
+                        scan_key: next_start,
+                        keys: keys,
+                    })
+                });
             match res {
                 Ok(cmd) => ProcessResult::NextCommand { cmd: cmd },
                 Err(e) => ProcessResult::Failed { err: e.into() },
@@ -317,7 +324,11 @@ fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot
     }
 }
 
-fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapshot) -> Result<()> {
+fn process_write_impl(cid: u64,
+                      mut cmd: Command,
+                      ch: SendCh<Msg>,
+                      snapshot: &Snapshot)
+                      -> Result<()> {
     let (pr, modifies) = match cmd {
         Command::Prewrite { ref mutations, ref primary, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts);
@@ -342,13 +353,6 @@ fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapsh
             let pr = ProcessResult::Res;
             (pr, txn.modifies())
         }
-        Command::CommitThenGet { ref key, lock_ts, commit_ts, get_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, lock_ts);
-            let val = try!(txn.commit_then_get(&key, commit_ts, get_ts));
-
-            let pr = ProcessResult::Value { value: val };
-            (pr, txn.modifies())
-        }
         Command::Cleanup { ref key, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts);
             try!(txn.rollback(&key));
@@ -365,12 +369,24 @@ fn process_write_impl(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: &Snapsh
             let pr = ProcessResult::Res;
             (pr, txn.modifies())
         }
-        Command::RollbackThenGet { ref key, lock_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, lock_ts);
-            let val = try!(txn.rollback_then_get(&key));
-
-            let pr = ProcessResult::Value { value: val };
-            (pr, txn.modifies())
+        Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
+            let mut txn = MvccTxn::new(snapshot, 0);
+            for k in keys {
+                try!(txn.gc(k, safe_point));
+            }
+            if scan_key.is_none() {
+                (ProcessResult::Res, txn.modifies())
+            } else {
+                let pr = ProcessResult::NextCommand {
+                    cmd: Command::Gc {
+                        ctx: ctx.clone(),
+                        safe_point: safe_point,
+                        scan_key: scan_key.take(),
+                        keys: vec![],
+                    },
+                };
+                (pr, txn.modifies())
+            }
         }
         _ => panic!("unsupported write command"),
     };
@@ -397,7 +413,8 @@ fn extract_ctx(cmd: &Command) -> &Context {
         Command::Rollback { ref ctx, .. } |
         Command::RollbackThenGet { ref ctx, .. } |
         Command::ScanLock { ref ctx, .. } |
-        Command::ResolveLock { ref ctx, .. } => ctx,
+        Command::ResolveLock { ref ctx, .. } |
+        Command::Gc { ref ctx, .. } => ctx,
     }
 }
 
@@ -567,7 +584,11 @@ impl Scheduler {
             Ok(()) => pr,
             Err(e) => ProcessResult::Failed { err: ::storage::Error::from(e) },
         };
-        execute_callback(cb, pr);
+        if let ProcessResult::NextCommand { cmd } = pr {
+            self.on_receive_new_cmd(cmd, cb);
+        } else {
+            execute_callback(cb, pr);
+        }
 
         self.release_lock(&ctx.lock, cid);
     }

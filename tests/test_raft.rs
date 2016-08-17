@@ -1423,6 +1423,13 @@ fn test_leader_election_with_check_quorum() {
     assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
     assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Follower);
 
+    // need to reset randomizedElectionTimeout larger than electionTimeout again,
+    // because the value might be reset to electionTimeout since the last state changes
+    let a_election_timeout = nt.peers.get(&1).unwrap().get_election_timeout();
+    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    nt.peers.get_mut(&1).unwrap().set_randomized_election_timeout(a_election_timeout + 1);
+    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 2);
+
     for _ in 0..a_election_timeout {
         nt.peers.get_mut(&1).unwrap().tick();
     }
@@ -2139,6 +2146,8 @@ fn test_leader_transfer_with_check_quorum() {
     for i in 1..4 {
         let r = &mut nt.peers.get_mut(&i).unwrap();
         r.check_quorum = true;
+        let election_timeout = r.get_election_timeout();
+        r.set_randomized_election_timeout(election_timeout + i as usize);
     }
 
     let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();

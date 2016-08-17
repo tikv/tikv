@@ -251,10 +251,47 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
     }
 
+    fn check_target_peer_valid(&mut self, region_id: u64, target: &metapb::Peer) -> Result<bool> {
+        // we may encounter a message with larger peer id, which means
+        // current peer is stale, then we should remove current peer
+        let mut has_peer = false;
+        let mut stale_peer = None;
+        if let Some(p) = self.region_peers.get(&region_id) {
+            has_peer = true;
+            let target_peer_id = target.get_id();
+            if p.peer_id() < target_peer_id {
+                if p.is_applying_snap() {
+                    // to remove the applying peer, we should find a reliable way to abort
+                    // the apply process.
+                    warn!("Stale peer {} is applying snapshot, will destroy next time.",
+                          p.peer_id());
+                    return Ok(false);
+                }
+                stale_peer = Some(p.peer.clone());
+            } else if p.peer_id() > target_peer_id {
+                warn!("target peer id {} is less than {}, msg maybe stale.",
+                      target_peer_id,
+                      p.peer_id());
+                return Ok(false);
+            }
+        }
+        if let Some(p) = stale_peer {
+            self.destroy_peer(region_id, p);
+            has_peer = false;
+        }
+
+        if !has_peer {
+            let peer = try!(Peer::replicate(self, region_id, target.get_id()));
+            // We don't have start_key of the region, so there is no need to insert into
+            // region_ranges
+            self.region_peers.insert(region_id, peer);
+        }
+        Ok(true)
+    }
+
     // Clippy doesn't allow hash_map contains_key followed by insert, and suggests
     // using entry().or_insert() instead, but we can't use this because creating peer
     // may fail, so we allow map_entry.
-    #[allow(map_entry)]
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         if !self.is_raft_msg_valid(&msg) {
@@ -271,24 +308,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        // TODO: we may encounter a message with larger peer id, which
-        // means current peer is stale, then we should remove current peer
-
-        if !self.region_peers.contains_key(&region_id) {
-            let peer = match Peer::replicate(self, region_id, msg.get_to_peer().get_id()) {
-                Ok(peer) => peer,
-                Err(e) => {
-                    error!("[region {}] peer replication from {:?} to {:?} failed {:?}",
-                           region_id,
-                           msg.get_from_peer(),
-                           msg.get_to_peer(),
-                           e);
-                    return Err(e);
-                }
-            };
-            // We don't have start_key of the region, so there is no need to insert into
-            // region_ranges
-            self.region_peers.insert(region_id, peer);
+        if !try!(self.check_target_peer_valid(region_id, msg.get_to_peer())) {
+            return Ok(());
         }
 
         if try!(self.check_snapshot_overlapped(&msg)) {
@@ -454,7 +475,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if need_remove {
-            self.destory_peer(region_id, msg.get_to_peer().clone());
+            self.destroy_peer(region_id, msg.get_to_peer().clone());
         }
     }
 
@@ -529,7 +550,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn destory_peer(&mut self, region_id: u64, peer: metapb::Peer) {
+    fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
         warn!("[region {}] destroy peer {:?}", region_id, peer);
         // TODO: should we check None here?
         // Can we destroy it in another thread later?
@@ -575,7 +596,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             // The remove peer is in the same store.
-            self.destory_peer(region_id, peer)
+            self.destroy_peer(region_id, peer)
         }
     }
 
@@ -771,10 +792,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // but it doesn't matter, if the peer is not leader, the proposing command
         // log entry can't be committed.
 
-
-        // TODO: support handing read-only commands later.
-        // for read-only, if we don't care stale read, we can
-        // execute these commands immediately in leader.
 
         let pending_cmd = PendingCmd {
             uuid: uuid,

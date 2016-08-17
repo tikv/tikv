@@ -31,7 +31,8 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut region = cluster.get_region(b"k3");
     let mut req = new_request(region.get_id(),
                               region.take_region_epoch(),
-                              vec![new_put_cmd(b"k3", b"v3")]);
+                              vec![new_put_cmd(b"k3", b"v3")],
+                              false);
     req.mut_header().set_peer(new_peer(3, 3));
     // transfer leader to (4, 4)
     cluster.must_transfer_leader(1, new_peer(4, 4));
@@ -64,7 +65,8 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut region = cluster.get_region(b"");
     let mut req = new_request(region.get_id(),
                               region.take_region_epoch(),
-                              vec![new_get_cmd(b"k")]);
+                              vec![new_get_cmd(b"k")],
+                              false);
 
     for id in 1..4 {
         // select a new leader to transfer
@@ -142,7 +144,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     sleep_ms(1000);
 
     let epoch = cluster.get_region_epoch(1);
-    let put = new_request(1, epoch, vec![new_put_cmd(b"k1", b"v1")]);
+    let put = new_request(1, epoch, vec![new_put_cmd(b"k1", b"v1")], false);
     cluster.transfer_leader(r1, new_peer(2, 2));
     let resp = cluster.call_command_on_leader(put, Duration::from_secs(5));
     // if it's transfering leader, resp will timeout.

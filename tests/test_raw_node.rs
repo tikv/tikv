@@ -54,13 +54,6 @@ fn conf_change(t: ConfChangeType, node_id: u64) -> ConfChange {
     cc
 }
 
-fn soft_state(leader_id: u64, state: StateRole) -> SoftState {
-    SoftState {
-        leader_id: leader_id,
-        raft_state: state,
-    }
-}
-
 fn new_ready(ss: Option<SoftState>,
              hs: Option<HardState>,
              entries: Vec<Entry>,
@@ -111,6 +104,9 @@ fn test_raw_node_step() {
 fn test_raw_node_propose_and_conf_change() {
     let s = new_storage();
     let mut raw_node = new_raw_node(1, vec![], 10, 1, s.clone(), vec![new_peer(1)]);
+    let rd = raw_node.ready();
+    s.wl().append(&rd.entries).expect("");
+    raw_node.advance(rd);
     raw_node.campaign().expect("");
     let mut proposed = false;
     let mut last_index;
@@ -152,15 +148,13 @@ fn test_raw_node_propose_and_conf_change() {
 fn test_raw_node_start() {
     let cc = conf_change(ConfChangeType::AddNode, 1);
     let ccdata = protobuf::Message::write_to_bytes(&cc).unwrap();
-    let wants = vec![new_ready(Some(soft_state(1, StateRole::Leader)),
-                               Some(hard_state(2, 2, 1)),
+    let wants = vec![new_ready(None,
+                               Some(hard_state(1, 1, 0)),
                                vec![
                 entry(EntryType::EntryConfChange, 1, 1, Some(ccdata.clone())),
-                empty_entry(2, 2),
             ],
                                vec![
                 entry(EntryType::EntryConfChange, 1, 1, Some(ccdata.clone())),
-                empty_entry(2, 2),
             ]),
                      new_ready(None,
                                Some(hard_state(2, 3, 1)),
@@ -169,10 +163,18 @@ fn test_raw_node_start() {
 
     let store = new_storage();
     let mut raw_node = new_raw_node(1, vec![], 10, 1, store.clone(), vec![new_peer(1)]);
-    raw_node.campaign().expect("");
     let rd = raw_node.ready();
     info!("rd {:?}", &rd);
     assert_eq!(rd, wants[0]);
+    store.wl().append(&rd.entries).expect("");
+    raw_node.advance(rd);
+
+    let rd = raw_node.ready();
+    store.wl().append(&rd.entries).expect("");
+    raw_node.advance(rd);
+
+    raw_node.campaign().expect("");
+    let rd = raw_node.ready();
     store.wl().append(&rd.entries).expect("");
     raw_node.advance(rd);
 
