@@ -32,11 +32,11 @@ use kvproto::coprocessor::{Request, Response, KeyRange};
 use storage::{engine, Snapshot, Key};
 use util::codec::table::TableDecoder;
 use util::codec::number::NumberDecoder;
+use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
-use util::{escape, duration_to_ms};
+use util::{escape, duration_to_ms, SlowTimer, Either};
 use util::worker::{BatchRunnable, Scheduler};
-use util::SlowTimer;
 use server::OnResponse;
 
 use super::{Error, Result};
@@ -350,7 +350,7 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
 pub struct SelectContextCore {
     sel: SelectRequest,
     eval: Evaluator,
-    cols: HashSet<i64>,
+    cols: Either<HashSet<i64>, Vec<i64>>,
     cond_cols: Vec<ColumnInfo>,
     aggr: bool,
     aggr_cols: Vec<ColumnInfo>,
@@ -359,8 +359,7 @@ pub struct SelectContextCore {
 }
 
 impl SelectContextCore {
-    fn new(sel: SelectRequest) -> Result<SelectContextCore> {
-        let cols;
+    fn new(mut sel: SelectRequest) -> Result<SelectContextCore> {
         let cond_cols;
         let mut aggr_cols = vec![];
 
@@ -370,10 +369,6 @@ impl SelectContextCore {
             } else {
                 sel.get_index_info().get_columns()
             };
-            cols = select_cols.iter()
-                .filter(|c| !c.get_pk_handle())
-                .map(|c| c.get_column_id())
-                .collect();
             let mut cond_col_map = HashMap::new();
             try!(collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
             let mut aggr_cols_map = HashMap::new();
@@ -392,6 +387,21 @@ impl SelectContextCore {
             cond_cols = cond_col_map.drain().map(|(_, v)| v).collect();
         }
 
+        let cols = if sel.has_table_info() {
+            Either::Left(sel.get_table_info()
+                .get_columns()
+                .iter()
+                .filter(|c| !c.get_pk_handle())
+                .map(|c| c.get_column_id())
+                .collect())
+        } else {
+            let cols = sel.mut_index_info().mut_columns();
+            if cols.last().map_or(false, |c| c.get_pk_handle()) {
+                cols.pop();
+            }
+            Either::Right(cols.iter().map(|c| c.get_column_id()).collect())
+        };
+
         Ok(SelectContextCore {
             aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
             aggr_cols: aggr_cols,
@@ -404,10 +414,11 @@ impl SelectContextCore {
         })
     }
 
-    fn handle_row(&mut self, key: &[u8], value: &[u8], dest: &mut Vec<Row>) -> Result<()> {
-        let h = box_try!(table::decode_handle(key));
-
-        let row_data = box_try!(table::cut_row(value, &self.cols));
+    fn handle_row(&mut self,
+                  h: i64,
+                  row_data: HashMap<i64, &[u8]>,
+                  dest: &mut Vec<Row>)
+                  -> Result<()> {
         // clear all dirty values.
         self.eval.row.clear();
 
@@ -437,7 +448,12 @@ impl SelectContextCore {
         let mut row = Row::new();
         let handle = box_try!(datum::encode_value(&[Datum::I64(h)]));
         row.set_handle(handle);
-        for col in self.sel.get_table_info().get_columns() {
+        let cols = if self.sel.has_table_info() {
+            self.sel.get_table_info().get_columns()
+        } else {
+            self.sel.get_index_info().get_columns()
+        };
+        for col in cols {
             let col_id = col.get_column_id();
             if let Some(v) = values.get(&col_id) {
                 row.mut_data().extend_from_slice(v);
@@ -576,7 +592,11 @@ impl<'a> SelectContext<'a> {
                    duration_to_ms(timer.elapsed()));
             rows.extend(ran_rows);
         }
-        Ok(rows)
+        if self.core.aggr {
+            self.core.aggr_rows()
+        } else {
+            Ok(rows)
+        }
     }
 
     fn get_rows_from_range(&mut self,
@@ -593,7 +613,12 @@ impl<'a> SelectContext<'a> {
                 None => return Ok(rows),
                 Some(v) => v,
             };
-            try!(self.core.handle_row(range.get_start(), &value, &mut rows));
+            let values = {
+                let ids = self.core.cols.as_ref().left().unwrap();
+                box_try!(table::cut_row(&value, ids))
+            };
+            let h = box_try!(table::decode_handle(range.get_start()));
+            try!(self.core.handle_row(h, values, &mut rows));
         } else {
             let mut seek_key = if desc {
                 range.get_end().to_vec()
@@ -618,7 +643,12 @@ impl<'a> SelectContext<'a> {
                            escape(range.get_end()));
                     break;
                 }
-                try!(self.core.handle_row(&key, &value, &mut rows));
+                let h = box_try!(table::decode_handle(&key));
+                let row_data = {
+                    let ids = self.core.cols.as_ref().left().unwrap();
+                    box_try!(table::cut_row(&value, ids))
+                };
+                try!(self.core.handle_row(h, row_data, &mut rows));
                 seek_key = if desc {
                     box_try!(table::truncate_as_row_key(&key)).to_vec()
                 } else {
@@ -627,13 +657,13 @@ impl<'a> SelectContext<'a> {
             }
         }
         if self.core.aggr {
-            self.core.aggr_rows()
+            Ok(vec![])
         } else {
             Ok(rows)
         }
     }
 
-    fn get_rows_from_idx(&self,
+    fn get_rows_from_idx(&mut self,
                          ranges: Vec<KeyRange>,
                          limit: usize,
                          desc: bool)
@@ -646,12 +676,19 @@ impl<'a> SelectContext<'a> {
             let part = try!(self.get_idx_row_from_range(r, limit, desc));
             rows.extend(part);
         }
-        Ok(rows)
+        if self.core.aggr {
+            self.core.aggr_rows()
+        } else {
+            Ok(rows)
+        }
     }
 
-    fn get_idx_row_from_range(&self, r: KeyRange, limit: usize, desc: bool) -> Result<Vec<Row>> {
+    fn get_idx_row_from_range(&mut self,
+                              r: KeyRange,
+                              limit: usize,
+                              desc: bool)
+                              -> Result<Vec<Row>> {
         let mut rows = vec![];
-        let info = self.core.sel.get_index_info();
         let mut seek_key = if desc {
             r.get_end().to_vec()
         } else {
@@ -675,25 +712,28 @@ impl<'a> SelectContext<'a> {
                        escape(r.get_end()));
                 break;
             }
-            let mut datums = box_try!(table::decode_index_key(&key));
-            let handle = if datums.len() > info.get_columns().len() {
-                datums.pop().unwrap()
-            } else {
-                let h = box_try!(val.as_slice().read_i64::<BigEndian>());
-                Datum::I64(h)
-            };
-            let data = box_try!(datum::encode_value(&datums));
-            let handle_data = box_try!(datum::encode_value(&[handle]));
-            let mut row = Row::new();
-            row.set_handle(handle_data);
-            row.set_data(data);
-            rows.push(row);
+            {
+                let (values, mut handle) = {
+                    let ids = self.core.cols.as_ref().right().unwrap();
+                    box_try!(table::cut_idx_key(&key, ids))
+                };
+                let handle = if handle.is_empty() {
+                    box_try!(val.as_slice().read_i64::<BigEndian>())
+                } else {
+                    box_try!(handle.decode_datum()).i64()
+                };
+                try!(self.core.handle_row(handle, values, &mut rows));
+            }
             seek_key = if desc {
                 key
             } else {
                 prefix_next(&key)
             };
         }
-        Ok(rows)
+        if self.core.aggr {
+            Ok(vec![])
+        } else {
+            Ok(rows)
+        }
     }
 }
