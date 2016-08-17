@@ -40,7 +40,7 @@ use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
 
 use tikv::storage::{Storage, TEMP_DIR, DEFAULT_CFS};
-use tikv::util::{self, logger, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::metric::{self, BufferedUdpMetricSink};
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_event_loop,
@@ -128,7 +128,17 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
                                  config,
                                  Some("info".to_owned()),
                                  |v| v.as_str().map(|s| s.to_owned()));
-    util::init_log(logger::get_level_by_string(&level)).unwrap();
+    let log_file_path = get_string_value("f",
+                                         "server.log-file",
+                                         matches,
+                                         config,
+                                         Some("".to_owned()),
+                                         |v| v.as_str().map(|s| s.to_owned()));
+    if log_file_path.is_empty() {
+        util::init_log(logger::get_level_by_string(&level)).unwrap();
+    } else {
+        file_log::init(&level, &log_file_path).unwrap();
+    }
 }
 
 fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>) {
@@ -592,6 +602,10 @@ fn main() {
                 "log",
                 "set log level",
                 "log level: trace, debug, info, warn, error, off");
+    opts.optopt("f",
+                "log-file",
+                "set log file",
+                "if not set, output log to stdout");
     opts.optflag("h", "help", "print this help menu");
     opts.optopt("C", "config", "set configuration file", "file path");
     opts.optopt("s",
