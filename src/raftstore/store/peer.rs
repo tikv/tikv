@@ -26,8 +26,8 @@ use kvproto::eraftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, RegionLocalState,
-                             PeerState};
+use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
+                             RegionLocalState};
 use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
@@ -36,8 +36,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
 use super::store::Store;
-use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state,
-                          delete_peer_data, delete_raft_log};
+use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -270,21 +269,14 @@ impl Peer {
         let region = self.get_store().get_region().clone();
         info!("{} begin to destroy", self.tag);
 
-        let region_id = region.get_id();
-
         // First set Tombstone state explicitly, and clear raft meta.
         // If we meet panic when deleting data and raft log, the dirty data
         // will be cleared by Compaction Filter later or a newer snapshot applying.
         let wb = WriteBatch::new();
+        try!(self.get_store().clear_meta(&wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
-        try!(wb.delete(&keys::raft_state_key(region_id)));
-        try!(wb.delete(&keys::apply_state_key(region_id)));
         try!(self.engine.write(wb));
-
-        // delete data and raft log.
-        try!(delete_peer_data(self.engine.as_ref(), &region));
-        try!(delete_raft_log(self.engine.as_ref(), region_id, 0, u64::max_value()));
-
+        try!(self.get_store().clear_data());
         self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
 

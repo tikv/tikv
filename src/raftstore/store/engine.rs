@@ -21,7 +21,6 @@ use byteorder::{ByteOrder, BigEndian};
 use util::rocksdb;
 
 use raftstore::Result;
-use storage::CF_DEFAULT;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -242,14 +241,18 @@ impl Mutable for WriteBatch {}
 
 const MAX_DELETE_KEYS_COUNT: usize = 10000;
 
-// `delete_in_range` fast deletes data in range [start_key, end_key).
-// It uses rocksdb `delete_file_in_range` first, then scans the left keys and
-// uses WriteBatch to deletes them.
-// Note: this function is dangerous and not guarantees consistence. If you call
-// delete_file_in_range successfully but commit following WriteBatch failed,
-// some keys are really deleted and can't be recovered.
-pub fn delete_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-    delete_in_range_cf(db, CF_DEFAULT, start_key, end_key)
+/// `delete_all_in_range` fast deletes data of all cfs in range [`start_key`, `end_key`).
+/// It uses rocksdb `delete_file_in_range` first, then scans the left keys and
+/// uses `WriteBatch` to deletes them.
+/// Note: this function is dangerous and not guarantees consistence. If `delete_file_in_range`
+/// finishes successfully but commit following `WriteBatch` failed, some keys are really deleted
+/// and can't be recovered.
+pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    for cf in db.cf_names() {
+        try!(delete_in_range_cf(db, cf, start_key, end_key));
+    }
+
+    Ok(())
 }
 
 pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
@@ -269,9 +272,9 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
 
             try!(wb.delete_cf(*handle, key));
             if wb.count() == MAX_DELETE_KEYS_COUNT {
-                // this function can't guarantee data consistence, so using
-                // no WAL is ok.
-                try!(db.write_without_wal(wb));
+                // Can't use write_without_wal here.
+                // Otherwise it may cause dirty data when applying snapshot.
+                try!(db.write(wb));
                 wb = WriteBatch::new();
             }
         };
@@ -282,7 +285,7 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
     }
 
     if wb.count() > 0 {
-        try!(db.write_without_wal(wb));
+        try!(db.write(wb));
     }
 
     Ok(())
@@ -428,7 +431,7 @@ mod tests {
 
 
     #[test]
-    fn test_delete_in_range() {
+    fn test_delete_all_in_range() {
         let path = TempDir::new("var").unwrap();
         let mut opt = Options::new();
         opt.set_target_file_size_base(1024 * 1024);
@@ -453,7 +456,7 @@ mod tests {
             engine.flush(true).unwrap();
         }
 
-        delete_in_range(&engine, b"\x00", b"\xFF").unwrap();
+        delete_all_in_range(&engine, b"\x00", b"\xFF").unwrap();
         assert!(engine.get(b"k_0").unwrap().is_none());
     }
 }

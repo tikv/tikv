@@ -15,6 +15,7 @@ use std::sync::{self, Arc};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
 use std::error;
+use std::time::Instant;
 use std::mem;
 
 use rocksdb::{DB, WriteBatch, Writable};
@@ -31,8 +32,7 @@ use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::worker::SnapTask;
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable, delete_in_range,
-                    delete_in_range_cf};
+use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable, delete_all_in_range};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -374,7 +374,12 @@ impl PeerStorage {
             return Err(box_err!("mismatch region id {} != {}", region_id, region.get_id()));
         }
 
-        try!(write_peer_state(&ctx.wb, &region, PeerState::Applying));
+        if self.is_initialized() {
+            // we can only delete the old data when the peer is initialized.
+            try!(self.clear_meta(&ctx.wb));
+        }
+
+        try!(write_peer_state(&ctx.wb, region, PeerState::Applying));
 
         let last_index = snap.get_metadata().get_index();
 
@@ -415,6 +420,36 @@ impl PeerStorage {
         state.mut_truncated_state().set_index(compact_index - 1);
         state.mut_truncated_state().set_term(term);
 
+        Ok(())
+    }
+
+    /// Delete all meta belong to the region. Results are stored in `wb`.
+    pub fn clear_meta(&self, wb: &WriteBatch) -> Result<()> {
+        let region_id = self.get_region_id();
+        let ranges = [
+            (keys::region_raft_prefix(region_id), keys::region_raft_prefix(region_id + 1)),
+            (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1)),
+        ];
+
+        for &(ref start_key, ref end_key) in &ranges {
+            try!(self.engine.scan(start_key, end_key, &mut |key, _| {
+                try!(wb.delete(key));
+                Ok(true)
+            }));
+        }
+
+        Ok(())
+    }
+
+    /// Delete all data belong to the region.
+    /// If return Err, data may get partial deleted.
+    pub fn clear_data(&self) -> Result<()> {
+        let timer = Instant::now();
+        let (start_key, end_key) = (enc_start_key(self.get_region()),
+                                    enc_end_key(self.get_region()));
+
+        try!(delete_all_in_range(&self.engine, &start_key, &end_key));
+        info!("{} clean peer data takes {:?}", self.tag, timer.elapsed());
         Ok(())
     }
 
@@ -477,16 +512,19 @@ impl PeerStorage {
         self.apply_state = ctx.apply_state;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
-            // If previous region is initialized and the applying snapshot range changed,
-            // we should force clear peer data here to avoid dirty data after applying snapshot.
-            // TODO: if we introduce Compaction Filter, no need to do it here.
-            if !res.prev_region.get_peers().is_empty() &&
-               (res.prev_region.get_start_key() != res.region.get_start_key() ||
-                res.prev_region.get_end_key() != res.region.get_end_key()) {
-                try!(delete_peer_data(self.engine.as_ref(), &res.prev_region));
+            self.set_snap_state(SnapState::Applying);
+
+            // cleanup data before schedule apply task
+            if self.is_initialized() {
+                if let Err(e) = self.clear_data() {
+                    // No need panic here, when applying snapshot, the deletion will be tried 
+                    // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
+                    // [b, c) will be kept in rocksdb until a covered snapshot is applied or
+                    // store is restarted.
+                    error!("{} cleanup data fail, may leave some dirty data: {:?}", self.tag, e);
+                }
             }
 
-            self.set_snap_state(SnapState::Applying);
             let task = SnapTask::Apply { region_id: region_id };
             // TODO: gracefully remove region instead.
             self.snap_sched.schedule(task).expect("snap apply job should not fail");
@@ -638,28 +676,6 @@ pub fn write_peer_state<T: Mutable>(w: &T,
     region_state.set_region(region.clone());
     try!(w.put_msg(&keys::region_state_key(region_id), &region_state));
     Ok(())
-}
-
-// delete only StateMachine data.
-pub fn delete_peer_data(db: &DB, region: &metapb::Region) -> Result<()> {
-    // the peer must be initialized.
-    assert!(!region.get_peers().is_empty());
-
-    let (start_key, end_key) = (enc_start_key(region), enc_end_key(region));
-
-    for cf in db.cf_names() {
-        try!(delete_in_range_cf(db, cf, &start_key, &end_key));
-    }
-
-    Ok(())
-}
-
-// delete raft log which index in [start_index, end_index)
-pub fn delete_raft_log(db: &DB, region_id: u64, start_index: u64, end_index: u64) -> Result<()> {
-    let start_key = keys::raft_log_key(region_id, start_index);
-    let end_key = keys::raft_log_key(region_id, end_index);
-
-    delete_in_range(db, &start_key, &end_key)
 }
 
 impl Storage for PeerStorage {

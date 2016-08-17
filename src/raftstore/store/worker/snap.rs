@@ -27,10 +27,8 @@ use util::codec::bytes::CompactBytesDecoder;
 use util::{escape, HandyRwLock, rocksdb};
 use util::transport::SendCh;
 use raftstore;
-use raftstore::store::engine::Mutable;
-use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable,
-                       delete_peer_data};
-use raftstore::store::engine::Snapshot;
+use raftstore::store::engine::{Mutable, Snapshot, delete_all_in_range};
+use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
 
 const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 
@@ -132,7 +130,9 @@ impl<T: MsgSender> Runner<T> {
         };
 
         // clear up origin data.
-        box_try!(delete_peer_data(self.db.as_ref(), region_state.get_region()));
+        let start_key = keys::enc_start_key(region_state.get_region());
+        let end_key = keys::enc_end_key(region_state.get_region());
+        box_try!(delete_all_in_range(self.db.as_ref(), &start_key, &end_key));
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match box_try!(self.db.get_msg(&state_key)) {
