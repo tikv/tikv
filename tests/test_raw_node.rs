@@ -54,13 +54,6 @@ fn conf_change(t: ConfChangeType, node_id: u64) -> ConfChange {
     cc
 }
 
-fn soft_state(leader_id: u64, state: StateRole) -> SoftState {
-    SoftState {
-        leader_id: leader_id,
-        raft_state: state,
-    }
-}
-
 fn new_ready(ss: Option<SoftState>,
              hs: Option<HardState>,
              entries: Vec<Entry>,

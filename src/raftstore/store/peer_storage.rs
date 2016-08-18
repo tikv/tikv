@@ -25,16 +25,14 @@ use kvproto::metapb;
 use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
-use util::rocksdb;
 use util::HandyRwLock;
 use util::codec::bytes::BytesEncoder;
 use util::worker::Scheduler;
-use storage::CF_DEFAULT;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::worker::SnapTask;
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
+use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable, delete_all_in_range};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -378,13 +376,10 @@ impl PeerStorage {
 
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
-            try!(self.clear(&mut ctx.wb));
+            try!(self.clear_meta(&ctx.wb));
         }
 
-        let mut region_state = RegionLocalState::new();
-        region_state.set_state(PeerState::Applying);
-        region_state.set_region(region.clone());
-        try!(ctx.wb.put_msg(&keys::region_state_key(region_id), &region_state));
+        try!(write_peer_state(&ctx.wb, region, PeerState::Applying));
 
         let last_index = snap.get_metadata().get_index();
 
@@ -428,34 +423,33 @@ impl PeerStorage {
         Ok(())
     }
 
-    // Delete all data belong to the region. Results are stored in `wb`.
-    pub fn clear(&self, wb: &mut WriteBatch) -> Result<()> {
-        let timer = Instant::now();
-        for r in self.region_key_ranges() {
-            try!(self.engine.scan(&r.0,
-                                  &r.1,
-                                  &mut |key, _| {
-                                      try!(wb.delete(key));
-                                      Ok(true)
-                                  }));
+    /// Delete all meta belong to the region. Results are stored in `wb`.
+    pub fn clear_meta(&self, wb: &WriteBatch) -> Result<()> {
+        let region_id = self.get_region_id();
+        let ranges = [
+            (keys::region_raft_prefix(region_id), keys::region_raft_prefix(region_id + 1)),
+            (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1)),
+        ];
+
+        for &(ref start_key, ref end_key) in &ranges {
+            try!(self.engine.scan(start_key, end_key, &mut |key, _| {
+                try!(wb.delete(key));
+                Ok(true)
+            }));
         }
 
+        Ok(())
+    }
+
+    /// Delete all data belong to the region.
+    /// If return Err, data may get partial deleted.
+    pub fn clear_data(&self) -> Result<()> {
+        let timer = Instant::now();
         let (start_key, end_key) = (enc_start_key(self.get_region()),
                                     enc_end_key(self.get_region()));
-        for cf in self.engine.cf_names() {
-            if cf == CF_DEFAULT {
-                continue;
-            }
-            let handle = box_try!(rocksdb::get_cf_handle(self.engine.as_ref(), cf));
-            try!(self.engine.scan_cf(cf,
-                                     &start_key,
-                                     &end_key,
-                                     &mut |key, _| {
-                                         try!(wb.delete_cf(*handle, key));
-                                         Ok(true)
-                                     }));
-        }
-        info!("{} clean peer takes {:?}", self.tag, timer.elapsed());
+
+        try!(delete_all_in_range(&self.engine, &start_key, &end_key));
+        info!("{} clean peer data takes {:?}", self.tag, timer.elapsed());
         Ok(())
     }
 
@@ -476,21 +470,6 @@ impl PeerStorage {
     #[inline]
     pub fn is_snap_state(&self, state: SnapState) -> bool {
         *self.snap_state.borrow() == state
-    }
-
-    // For region snapshot, we return three key ranges in database for this region.
-    // [region raft start, region raft end) -> saving raft entries, applied index, etc.
-    // [region meta start, region meta end) -> saving region meta information except raft.
-    // [region data start, region data end) -> saving region data.
-    pub fn region_key_ranges(&self) -> Ranges {
-        let (start_key, end_key) = (enc_start_key(self.get_region()),
-                                    enc_end_key(self.get_region()));
-
-        let region_id = self.get_region_id();
-        vec![(keys::region_raft_prefix(region_id), keys::region_raft_prefix(region_id + 1)),
-             (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1)),
-             (start_key, end_key)]
-
     }
 
     pub fn get_region_id(&self) -> u64 {
@@ -534,6 +513,18 @@ impl PeerStorage {
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
             self.set_snap_state(SnapState::Applying);
+
+            // cleanup data before schedule apply task
+            if self.is_initialized() {
+                if let Err(e) = self.clear_data() {
+                    // No need panic here, when applying snapshot, the deletion will be tried 
+                    // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
+                    // [b, c) will be kept in rocksdb until a covered snapshot is applied or
+                    // store is restarted.
+                    error!("{} cleanup data fail, may leave some dirty data: {:?}", self.tag, e);
+                }
+            }
+
             let task = SnapTask::Apply { region_id: region_id };
             // TODO: gracefully remove region instead.
             self.snap_sched.schedule(task).expect("snap apply job should not fail");
@@ -675,6 +666,17 @@ pub fn write_initial_state<T: Mutable>(w: &T, region_id: u64) -> Result<()> {
     Ok(())
 }
 
+pub fn write_peer_state<T: Mutable>(w: &T,
+                                    region: &metapb::Region,
+                                    state: PeerState)
+                                    -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::new();
+    region_state.set_state(state);
+    region_state.set_region(region.clone());
+    try!(w.put_msg(&keys::region_state_key(region_id), &region_state));
+    Ok(())
+}
 
 impl Storage for PeerStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {

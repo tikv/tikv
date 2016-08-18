@@ -36,7 +36,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
 use super::store::Store;
-use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state};
+use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -255,9 +255,7 @@ impl Peer {
     }
 
     pub fn destroy(&mut self) -> Result<()> {
-        // TODO maybe very slow
-        // Delete all data in this peer.
-        let t = SlowTimer::new();
+        let t = Instant::now();
 
         // TODO: figure out a way to unit test this.
         let peer_id = self.peer_id();
@@ -268,16 +266,19 @@ impl Peer {
             notify_region_removed(self.region_id, peer_id, cmd);
         }
 
-        let mut wb = WriteBatch::new();
-        try!(self.get_store().clear(&mut wb));
-        let mut local_state = RegionLocalState::new();
-        local_state.set_state(PeerState::Tombstone);
-        local_state.set_region(self.get_store().get_region().clone());
-        try!(wb.put_msg(&keys::region_state_key(self.region_id), &local_state));
-        try!(self.engine.write(wb));
+        let region = self.get_store().get_region().clone();
+        info!("{} begin to destroy", self.tag);
 
+        // First set Tombstone state explicitly, and clear raft meta.
+        // If we meet panic when deleting data and raft log, the dirty data
+        // will be cleared by Compaction Filter later or a newer snapshot applying.
+        let wb = WriteBatch::new();
+        try!(self.get_store().clear_meta(&wb));
+        try!(write_peer_state(&wb, &region, PeerState::Tombstone));
+        try!(self.engine.write(wb));
+        try!(self.get_store().clear_data());
         self.coprocessor_host.shutdown();
-        slow_log!(t, "{} destroy itself", self.tag);
+        info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
 
         Ok(())
     }
@@ -1177,12 +1178,8 @@ impl Peer {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        let mut state = RegionLocalState::new();
-        state.set_region(region.clone());
-        try!(ctx.wb.put_msg(&keys::region_state_key(region.get_id()), &state));
-        let mut new_state = RegionLocalState::new();
-        new_state.set_region(new_region.clone());
-        try!(ctx.wb.put_msg(&keys::region_state_key(new_region.get_id()), &new_state));
+        try!(write_peer_state(&ctx.wb, &region, PeerState::Normal));
+        try!(write_peer_state(&ctx.wb, &new_region, PeerState::Normal));
         try!(write_initial_state(&ctx.wb, new_region.get_id()));
 
         let mut resp = AdminResponse::new();

@@ -27,9 +27,8 @@ use util::codec::bytes::CompactBytesDecoder;
 use util::{escape, HandyRwLock, rocksdb};
 use util::transport::SendCh;
 use raftstore;
-use raftstore::store::engine::Mutable;
+use raftstore::store::engine::{Mutable, Snapshot, delete_all_in_range};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
-use raftstore::store::engine::Snapshot;
 
 const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 
@@ -124,6 +123,17 @@ impl<T: MsgSender> Runner<T> {
 
     fn apply_snap(&self, region_id: u64) -> Result<(), Error> {
         info!("begin apply snap data for {}", region_id);
+        let region_key = keys::region_state_key(region_id);
+        let mut region_state: RegionLocalState = match box_try!(self.db.get_msg(&region_key)) {
+            Some(state) => state,
+            None => return Err(box_err!("failed to get region_state from {}", escape(&region_key))),
+        };
+
+        // clear up origin data.
+        let start_key = keys::enc_start_key(region_state.get_region());
+        let end_key = keys::enc_end_key(region_state.get_region());
+        box_try!(delete_all_in_range(self.db.as_ref(), &start_key, &end_key));
+
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match box_try!(self.db.get_msg(&state_key)) {
             Some(state) => state,
@@ -172,13 +182,9 @@ impl<T: MsgSender> Runner<T> {
                 }
             }
         }
-        let state_key = keys::region_state_key(region_id);
-        let mut region_state: RegionLocalState = match box_try!(self.db.get_msg(&state_key)) {
-            Some(state) => state,
-            None => return Err(box_err!("failed to get region_state from {}", escape(&state_key))),
-        };
+
         region_state.set_state(PeerState::Normal);
-        box_try!(self.db.put_msg(&state_key, &region_state));
+        box_try!(self.db.put_msg(&region_key, &region_state));
         snap_file.delete();
         info!("apply new data takes {:?}", timer.elapsed());
         Ok(())
