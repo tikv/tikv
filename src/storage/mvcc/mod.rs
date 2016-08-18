@@ -14,6 +14,7 @@
 mod reader;
 mod txn;
 mod lock;
+mod write;
 
 use std::io;
 pub use self::txn::MvccTxn;
@@ -43,6 +44,7 @@ quick_error! {
             display("key is locked (backoff or cleanup) {}-{}@{}", escape(key), escape(primary), ts)
         }
         BadFormatLock {description("bad format lock data")}
+        BadFormatWrite {description("bad format write data")}
         Committed {commit_ts: u64} {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)

@@ -1,0 +1,76 @@
+// Copyright 2016 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use byteorder::ReadBytesExt;
+use util::codec::number::{NumberEncoder, NumberDecoder, MAX_VAR_U64_LEN};
+use super::{Error, Result};
+
+#[derive(Debug,Clone,Copy)]
+pub enum WriteType {
+    Put,
+    Delete,
+    Rollback,
+}
+
+const FLAG_PUT: u8 = b'P';
+const FLAG_DELETE: u8 = b'D';
+const FLAG_ROLLBACK: u8 = b'R';
+
+impl WriteType {
+    pub fn from_u8(b: u8) -> Option<WriteType> {
+        match b {
+            FLAG_PUT => Some(WriteType::Put),
+            FLAG_DELETE => Some(WriteType::Delete),
+            FLAG_ROLLBACK => Some(WriteType::Rollback),
+            _ => None,
+        }
+    }
+
+    fn to_u8(&self) -> u8 {
+        match *self {
+            WriteType::Put => FLAG_PUT,
+            WriteType::Delete => FLAG_DELETE,
+            WriteType::Rollback => FLAG_ROLLBACK,
+        }
+    }
+}
+
+pub struct Write {
+    pub write_type: WriteType,
+    pub start_ts: u64,
+}
+
+impl Write {
+    pub fn new(write_type: WriteType, start_ts: u64) -> Write {
+        Write {
+            write_type: write_type,
+            start_ts: start_ts,
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN);
+        b.push(self.write_type.to_u8());
+        b.encode_var_u64(self.start_ts).unwrap();
+        b
+    }
+
+    pub fn parse(mut b: &[u8]) -> Result<Write> {
+        if b.len() == 0 {
+            return Err(Error::BadFormatWrite);
+        }
+        let write_type = try!(WriteType::from_u8(try!(b.read_u8())).ok_or(Error::BadFormatWrite));
+        let start_ts = try!(b.decode_var_u64());
+        Ok(Write::new(write_type, start_ts))
+    }
+}

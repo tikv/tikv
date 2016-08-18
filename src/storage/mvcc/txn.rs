@@ -14,9 +14,9 @@
 use std::fmt;
 use storage::{Key, Value, Mutation, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use storage::engine::{Snapshot, Modify};
-use util::codec::number::NumberEncoder;
 use super::reader::MvccReader;
 use super::lock::{LockType, Lock};
+use super::write::{WriteType, Write};
 use super::{Error, Result};
 
 pub struct MvccTxn<'a> {
@@ -59,7 +59,7 @@ impl<'a> MvccTxn<'a> {
 
     pub fn prewrite(&mut self, mutation: Mutation, primary: &[u8]) -> Result<()> {
         let key = mutation.key();
-        if let Some((_, commit)) = try!(self.reader.seek_write(&key, u64::max_value())) {
+        if let Some((commit, _)) = try!(self.reader.seek_write(&key, u64::max_value())) {
             // Abort on writes after our start timestamp ...
             if commit >= self.start_ts {
                 return Err(Error::WriteConflict);
@@ -99,12 +99,18 @@ impl<'a> MvccTxn<'a> {
             }
         };
         match lock_type {
-            LockType::Put | LockType::Delete => {
-                let mut value = vec![];
-                value.encode_var_u64(self.start_ts).unwrap();
-                self.writes.push(Modify::Put(CF_WRITE, key.append_ts(commit_ts), value));
+            LockType::Put => {
+                self.writes.push(Modify::Put(CF_WRITE,
+                                             key.append_ts(commit_ts),
+                                             Write::new(WriteType::Put, self.start_ts).to_bytes()));
             }
-            _ => {}
+            LockType::Delete => {
+                self.writes.push(Modify::Put(CF_WRITE,
+                                             key.append_ts(commit_ts),
+                                             Write::new(WriteType::Delete, self.start_ts)
+                                                 .to_bytes()));
+            }
+            LockType::Lock => {}
         }
         self.unlock_key(key.clone());
         Ok(())
@@ -125,6 +131,9 @@ impl<'a> MvccTxn<'a> {
                 };
             }
         }
+        self.writes.push(Modify::Put(CF_WRITE,
+                                     key.append_ts(self.start_ts),
+                                     Write::new(WriteType::Rollback, self.start_ts).to_bytes()));
         self.unlock_key(key.clone());
         Ok(())
     }
@@ -132,20 +141,23 @@ impl<'a> MvccTxn<'a> {
     pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
         let mut after_safe_point = false;
         let mut ts: u64 = u64::max_value();
-        while let Some((start, commit)) = try!(self.reader.seek_write(key, ts)) {
+        while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
             if !after_safe_point {
                 if commit <= safe_point {
                     // Set `after_safe_point` after the latest write after `safe_point`.
                     after_safe_point = true;
-                    // Latest write can be deleted if it's a `Modify::Delete`.
-                    if try!(self.reader.load_data(key, start)).is_none() {
-                        self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
+                    // Latest write can be deleted if its type is Delete/Rollback.
+                    match write.write_type {
+                        WriteType::Delete | WriteType::Rollback => {
+                            self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)))
+                        }
+                        WriteType::Put => {}
                     }
                 }
             } else {
                 // Delete all data after safe point.
                 self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
-                self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(start)));
+                self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(write.start_ts)));
             }
             ts = commit - 1;
         }
@@ -198,6 +210,8 @@ mod tests {
         // Not conflict
         must_prewrite_lock(engine.as_ref(), b"x", b"x", 12);
         must_rollback(engine.as_ref(), b"x", 12);
+        // Cannot retry Prewrite after rollback.
+        must_prewrite_lock_err(engine.as_ref(), b"x", b"x", 12);
         // Can prewrite after rollback
         must_prewrite_lock(engine.as_ref(), b"x", b"x", 13);
         must_rollback(engine.as_ref(), b"x", 13);
