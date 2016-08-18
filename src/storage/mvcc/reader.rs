@@ -13,9 +13,9 @@
 
 use storage::engine::{Snapshot, Cursor};
 use storage::{Key, Value, CF_LOCK, CF_WRITE};
-use util::codec::number::NumberDecoder;
 use super::{Error, Result};
 use super::lock::Lock;
+use super::write::{Write, WriteType};
 
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
@@ -58,15 +58,19 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, u64)>> {
+    pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
         self.seek_write_impl(key, ts, false)
     }
 
-    pub fn reverse_seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, u64)>> {
+    pub fn reverse_seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
         self.seek_write_impl(key, ts, true)
     }
 
-    fn seek_write_impl(&mut self, key: &Key, ts: u64, reverse: bool) -> Result<Option<(u64, u64)>> {
+    fn seek_write_impl(&mut self,
+                       key: &Key,
+                       ts: u64,
+                       reverse: bool)
+                       -> Result<Option<(u64, Write)>> {
         if self.write_cursor.is_none() {
             self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE)));
         }
@@ -85,11 +89,11 @@ impl<'a> MvccReader<'a> {
         if &k != key {
             return Ok(None);
         }
-        let start_ts = try!(cursor.value().decode_var_u64());
-        Ok(Some((start_ts, commit_ts)))
+        let write = try!(Write::parse(cursor.value()));
+        Ok(Some((commit_ts, write)))
     }
 
-    pub fn get(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
+    pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         if let Some(lock) = try!(self.load_lock(key)) {
             if lock.ts <= ts {
@@ -101,17 +105,30 @@ impl<'a> MvccReader<'a> {
                 });
             }
         }
-        match try!(self.seek_write(key, ts)) {
-            Some((start_ts, _)) => self.load_data(key, start_ts),
-            None => Ok(None),
+        loop {
+            match try!(self.seek_write(key, ts)) {
+                Some((commit_ts, write)) => {
+                    match write.write_type {
+                        WriteType::Put => return self.load_data(key, write.start_ts),
+                        WriteType::Delete => return Ok(None),
+                        WriteType::Rollback => ts = commit_ts - 1,
+                    }
+                }
+                None => return Ok(None),
+            }
         }
     }
 
     pub fn get_txn_commit_ts(&mut self, key: &Key, start_ts: u64) -> Result<Option<u64>> {
-        match try!(self.reverse_seek_write(key, start_ts)) {
-            Some((s, commit_ts)) if s == start_ts => Ok(Some(commit_ts)),
-            _ => Ok(None),
+        if let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, start_ts)) {
+            if write.start_ts == start_ts {
+                match write.write_type {
+                    WriteType::Put | WriteType::Delete => return Ok(Some(commit_ts)),
+                    WriteType::Rollback => {}
+                }
+            }
         }
+        Ok(None)
     }
 
     fn create_data_cursor(&mut self) -> Result<()> {
