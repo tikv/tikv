@@ -22,7 +22,6 @@ use util::rocksdb;
 
 use raftstore::Result;
 
-
 pub struct Snapshot {
     db: Arc<DB>,
     snap: UnsafeSnap,
@@ -240,11 +239,63 @@ pub trait Mutable: Writable {
 impl Mutable for DB {}
 impl Mutable for WriteBatch {}
 
+const MAX_DELETE_KEYS_COUNT: usize = 10000;
+
+/// `delete_all_in_range` fast deletes data of all cfs in range [`start_key`, `end_key`).
+/// It uses rocksdb `delete_file_in_range` first, then scans the left keys and
+/// uses `WriteBatch` to deletes them.
+/// Note: this function is dangerous and not guarantees consistence. If `delete_file_in_range`
+/// finishes successfully but commit following `WriteBatch` failed, some keys are really deleted
+/// and can't be recovered.
+pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    for cf in db.cf_names() {
+        try!(delete_in_range_cf(db, cf, start_key, end_key));
+    }
+
+    Ok(())
+}
+
+pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    let handle = try!(rocksdb::get_cf_handle(db, cf));
+    try!(db.delete_file_in_range_cf(*handle, start_key, end_key));
+
+    let mut it = try!(db.new_iterator_cf(cf));
+
+    let mut wb = WriteBatch::new();
+    it.seek(start_key.into());
+    while it.valid() {
+        {
+            let key = it.key();
+            if key >= end_key {
+                break;
+            }
+
+            try!(wb.delete_cf(*handle, key));
+            if wb.count() == MAX_DELETE_KEYS_COUNT {
+                // Can't use write_without_wal here.
+                // Otherwise it may cause dirty data when applying snapshot.
+                try!(db.write(wb));
+                wb = WriteBatch::new();
+            }
+        };
+
+        if !it.next() {
+            break;
+        }
+    }
+
+    if wb.count() > 0 {
+        try!(db.write(wb));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use tempdir::TempDir;
-    use rocksdb::Writable;
+    use rocksdb::{Writable, WriteBatch, Options, DBCompressionType};
 
     use super::*;
     use kvproto::metapb::Region;
@@ -376,5 +427,36 @@ mod tests {
             .unwrap();
 
         assert_eq!(data.len(), 2);
+    }
+
+
+    #[test]
+    fn test_delete_all_in_range() {
+        let path = TempDir::new("var").unwrap();
+        let mut opt = Options::new();
+        opt.set_target_file_size_base(1024 * 1024);
+        opt.set_write_buffer_size(1024);
+        opt.compression(DBCompressionType::DBNo);
+
+        let engine =
+            Arc::new(rocksdb::new_engine_opt(opt, path.path().to_str().unwrap(), &[], vec![])
+                .unwrap());
+
+        let value = vec![0;1024];
+        for i in 0..10 {
+            let wb = WriteBatch::new();
+            // we should write a batch, then flush to
+            // generate multiply SST files.
+            for j in 0..1024 {
+                let key = format!("k_{}", i * 1024 + j);
+                wb.put(key.as_bytes(), &value).unwrap();
+            }
+
+            engine.write(wb).unwrap();
+            engine.flush(true).unwrap();
+        }
+
+        delete_all_in_range(&engine, b"\x00", b"\xFF").unwrap();
+        assert!(engine.get(b"k_0").unwrap().is_none());
     }
 }

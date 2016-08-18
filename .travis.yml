@@ -17,6 +17,8 @@ matrix:
             sources: ['ubuntu-toolchain-r-test']
             packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
     - os: osx
+      compiler: clang++
+      env: COMPILER=clang++
       rust: nightly
 
 install:

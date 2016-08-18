@@ -43,7 +43,7 @@ use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, Comp
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::{Iterable, Peekable};
+use super::engine::{Iterable, Peekable, delete_all_in_range};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
 use super::peer_storage::{ApplySnapResult, SnapState};
@@ -130,6 +130,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     // Do something before store runs.
+    // TODO: should not accept request before prepare is finished.
     fn prepare(&mut self) -> Result<()> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
@@ -144,13 +145,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
+            let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
-                debug!("region {:?} is tombstone in store {}",
-                       local_state.get_region(),
-                       self.store_id());
+                debug!("region {:?} is tombstone in store {}", region, self.store_id());
                 return Ok(true);
             }
-            let region = local_state.get_region();
             let mut peer = try!(Peer::create(self, region));
 
             if local_state.get_state() == PeerState::Applying {
@@ -168,7 +167,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(true)
         }));
 
+        try!(self.clean_up());
+
         Ok(())
+    }
+
+    /// `clean_up` clean up all possible garbage data.
+    fn clean_up(&mut self) -> Result<()> {
+        let mut last_start_key = keys::data_key(b"");
+        for region_id in self.region_ranges.values() {
+            let region = self.region_peers[region_id].region();
+            let start_key = keys::enc_start_key(region);
+            try!(delete_all_in_range(&self.engine, &last_start_key, &start_key));
+            last_start_key = keys::enc_end_key(region);
+        }
+
+        delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY)
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {

@@ -11,7 +11,9 @@ ${ROCKSDB_DIR}/libgflags.a:
 	cp lib/* ${ROCKSDB_DIR} && \
 	cp -r include ${ROCKSDB_DIR}
 
+${ROCKSDB_DIR}/librocksdb.dylib: prepare_brew
 ${ROCKSDB_DIR}/librocksdb.so: ${ROCKSDB_DIR}/libgflags.a
+${ROCKSDB_DIR}/librocksdb.dylib ${ROCKSDB_DIR}/librocksdb.so:
 	export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	export LIBRARY_PATH="${LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	export CPLUS_INCLUDE_PATH="${CPLUS_INCLUDE_PATH}:${ROCKSDB_DIR}/include" && \
@@ -21,7 +23,7 @@ ${ROCKSDB_DIR}/librocksdb.so: ${ROCKSDB_DIR}/libgflags.a
 	tar xf rocksdb.tar.gz && \
 	cd rocksdb-rocksdb-4.9 && \
 	make shared_lib && \
-	cp librocksdb.so* ${ROCKSDB_DIR}
+	cp -R librocksdb.* ${ROCKSDB_DIR}
 
 # TODO: use offical archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
 ${KCOV_DIR}/kcov:
@@ -56,17 +58,15 @@ prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov ${ETCD_DIR}/etcd pr
 
 prepare_brew: 
 	brew update && \
-	brew install gflags snappy rocksdb
+	brew install gflags snappy
 
-prepare_osx: prepare_brew ${ETCD_DIR}/etcd prepare_rust
+prepare_osx: ${ROCKSDB_DIR}/librocksdb.dylib ${ETCD_DIR}/etcd prepare_rust
 
-test_linux:
+test_linux test_osx:
+	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	export LIBRARY_PATH="${LIBRARY_PATH}:${ROCKSDB_DIR}" && \
 	ulimit -n 2000 && \
-	./travis-build/test.sh
-
-test_osx:
 	./travis-build/test.sh
 
 cover_linux:
