@@ -19,29 +19,15 @@ use std::{str, i64, u64};
 use std::io::Write;
 
 use util::codec::Result;
-use util::escape;
-use super::Decimal;
+use super::{Decimal, parse_frac, check_fsp};
 
 const NANOS_PER_SEC: i64 = 1_000_000_000;
 const NANO_WIDTH: u32 = 9;
 const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
 
-/// `MAX_FSP` is the maximum digit of fractional seconds part.
-pub const MAX_FSP: usize = 6;
-/// `DEFAULT_FSP` is the default digit of fractional seconds part.
-/// `MySQL` use 0 as the default Fsp.
-pub const DEFAULT_FSP: usize = 0;
-
 /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
 const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
-
-fn check_fsp(fsp: usize) -> Result<()> {
-    if fsp > MAX_FSP {
-        return Err(invalid_type!("Invalid fsp {}", fsp));
-    }
-    Ok(())
-}
 
 fn check_dur(dur: &StdDuration) -> Result<()> {
     let secs = dur.as_secs();
@@ -49,24 +35,6 @@ fn check_dur(dur: &StdDuration) -> Result<()> {
         return Err(invalid_type!("{:?} is larger than {:?}", dur, MAX_TIME_IN_SECS));
     }
     Ok(())
-}
-
-/// Parse string as if it's a fraction part of a number and keep
-/// only `fsp` precision.
-fn parse_frac(s: &[u8], fsp: usize) -> Result<u32> {
-    if s.iter().any(|&c| c < b'0' || c > b'9') {
-        return Err(invalid_type!("{} contains invalid char", escape(s)));
-    }
-    let res = s.iter().take(fsp + 1).fold(0, |l, r| l * 10 + (r - b'0') as u32);
-    if s.len() > fsp {
-        if res % 10 >= 5 {
-            Ok(res / 10 + 1)
-        } else {
-            Ok(res / 10)
-        }
-    } else {
-        Ok(res * 10u32.pow((fsp - s.len()) as u32))
-    }
 }
 
 fn tm_to_secs(t: Tm) -> u64 {
@@ -80,7 +48,7 @@ pub struct Duration {
     neg: bool,
     // Fsp is short for Fractional Seconds Precision.
     // See http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    fsp: usize,
+    fsp: u8,
 }
 
 impl Duration {
@@ -92,7 +60,7 @@ impl Duration {
         }
     }
 
-    pub fn get_fsp(&self) -> usize {
+    pub fn get_fsp(&self) -> u8 {
         self.fsp
     }
 
@@ -134,7 +102,7 @@ impl Duration {
         }
     }
 
-    pub fn from_nanos(nanos: i64, fsp: usize) -> Result<Duration> {
+    pub fn from_nanos(nanos: i64, fsp: u8) -> Result<Duration> {
         let neg = nanos < 0;
         let nanos = nanos.abs();
 
@@ -149,7 +117,7 @@ impl Duration {
         })
     }
 
-    pub fn new(dur: StdDuration, neg: bool, fsp: usize) -> Result<Duration> {
+    pub fn new(dur: StdDuration, neg: bool, fsp: u8) -> Result<Duration> {
         try!(check_dur(&dur));
         Ok(Duration {
             dur: dur,
@@ -161,7 +129,7 @@ impl Duration {
     // `parse` parses the time form a formatted string with a fractional seconds part,
     // returns the duration type Time value.
     // See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    pub fn parse(mut s: &[u8], fsp: usize) -> Result<Duration> {
+    pub fn parse(mut s: &[u8], fsp: u8) -> Result<Duration> {
         try!(check_fsp(fsp));
 
         let (mut neg, mut day, mut frac) = (false, None, 0);
@@ -244,7 +212,7 @@ impl Duration {
         if self.fsp > 0 {
             try!(write!(buf, "."));
             let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - self.fsp as u32));
-            try!(write!(buf, "{:01$}", nanos, self.fsp));
+            try!(write!(buf, "{:01$}", nanos, self.fsp as usize));
         }
         let d = unsafe { try!(str::from_utf8_unchecked(&buf).parse()) };
         Ok(d)
@@ -264,7 +232,7 @@ impl Display for Duration {
         if self.fsp > 0 {
             try!(write!(formatter, "."));
             let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - self.fsp as u32));
-            try!(write!(formatter, "{:01$}", nanos, self.fsp));
+            try!(write!(formatter, "{:01$}", nanos, self.fsp as usize));
         }
         Ok(())
     }
@@ -302,7 +270,7 @@ mod test {
 
     #[test]
     fn test_parse() {
-        let cases: Vec<(&'static [u8], usize, Option<&'static str>)> = vec![
+        let cases: Vec<(&'static [u8], u8, Option<&'static str>)> = vec![
             (b"10:11:12", 0, Some("10:11:12")),
             (b"101112", 0, Some("10:11:12")),
             (b"10:11", 0, Some("10:11:00")),
