@@ -426,16 +426,17 @@ impl PeerStorage {
     /// Delete all meta belong to the region. Results are stored in `wb`.
     pub fn clear_meta(&self, wb: &WriteBatch) -> Result<()> {
         let region_id = self.get_region_id();
-        let ranges = [
-            (keys::region_raft_prefix(region_id), keys::region_raft_prefix(region_id + 1)),
-            (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1)),
-        ];
+        let ranges =
+            [(keys::region_raft_prefix(region_id), keys::region_raft_prefix(region_id + 1)),
+             (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1))];
 
         for &(ref start_key, ref end_key) in &ranges {
-            try!(self.engine.scan(start_key, end_key, &mut |key, _| {
-                try!(wb.delete(key));
-                Ok(true)
-            }));
+            try!(self.engine.scan(start_key,
+                                  end_key,
+                                  &mut |key, _| {
+                                      try!(wb.delete(key));
+                                      Ok(true)
+                                  }));
         }
 
         Ok(())
@@ -517,11 +518,13 @@ impl PeerStorage {
             // cleanup data before schedule apply task
             if self.is_initialized() {
                 if let Err(e) = self.clear_data() {
-                    // No need panic here, when applying snapshot, the deletion will be tried 
+                    // No need panic here, when applying snapshot, the deletion will be tried
                     // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                     // [b, c) will be kept in rocksdb until a covered snapshot is applied or
                     // store is restarted.
-                    error!("{} cleanup data fail, may leave some dirty data: {:?}", self.tag, e);
+                    error!("{} cleanup data fail, may leave some dirty data: {:?}",
+                           self.tag,
+                           e);
                 }
             }
 
