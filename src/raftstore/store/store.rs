@@ -147,7 +147,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
-                debug!("region {:?} is tombstone in store {}", region, self.store_id());
+                debug!("region {:?} is tombstone in store {}",
+                       region,
+                       self.store_id());
                 return Ok(true);
             }
             let mut peer = try!(Peer::create(self, region));
