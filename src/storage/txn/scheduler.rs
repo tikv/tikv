@@ -489,13 +489,12 @@ impl Scheduler {
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         let cid = self.gen_id();
+        debug!("received new command, cid={}, cmd={}", cid, cmd);
         let lock = self.gen_lock(&cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
-
-        debug!("received new command, cid={}", cid);
 
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);
