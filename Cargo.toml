@@ -2,6 +2,7 @@
 name = "tikv"
 version = "0.0.1"
 keywords = ["KV", "distributed-systems", "raft"]
+build = "build.rs"
 
 [features]
 default = []
