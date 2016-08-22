@@ -30,8 +30,8 @@ const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
 impl WriteType {
-    pub fn from_lock_type(t: LockType) -> WriteType {
-        match t {
+    pub fn from_lock_type(tp: LockType) -> WriteType {
+        match tp {
             LockType::Put => WriteType::Put,
             LockType::Delete => WriteType::Delete,
             LockType::Lock => WriteType::Lock,
