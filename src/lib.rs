@@ -18,6 +18,7 @@
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(plugin)]
+#![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(const_fn)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
@@ -50,6 +51,7 @@ extern crate hyper;
 #[cfg(unix)]
 extern crate nix;
 extern crate alloc;
+extern crate chrono;
 
 #[macro_use]
 pub mod util;

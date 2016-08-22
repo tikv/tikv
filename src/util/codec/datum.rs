@@ -23,7 +23,7 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 use util::escape;
 use super::{number, Result, bytes, convert};
 use super::number::NumberDecoder;
-use super::mysql::{self, Duration, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder};
+use super::mysql::{self, Duration, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder, Time};
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -36,7 +36,6 @@ const DURATION_FLAG: u8 = 7;
 const VAR_INT_FLAG: u8 = 8;
 const VAR_UINT_FLAG: u8 = 9;
 const MAX_FLAG: u8 = 250;
-// TODO: support more flags
 
 #[derive(PartialEq, Clone)]
 pub enum Datum {
@@ -47,6 +46,7 @@ pub enum Datum {
     Dur(Duration),
     Bytes(Vec<u8>),
     Dec(Decimal),
+    Time(Time),
     Min,
     Max,
 }
@@ -61,6 +61,7 @@ impl Display for Datum {
             Datum::Dur(ref d) => write!(f, "Dur({})", d),
             Datum::Bytes(ref bs) => write!(f, "Bytes(\"{}\")", escape(bs)),
             Datum::Dec(ref d) => write!(f, "Dec({})", d),
+            Datum::Time(ref t) => write!(f, "Time({})", t),
             Datum::Min => write!(f, "MIN"),
             Datum::Max => write!(f, "MAX"),
         }
@@ -138,6 +139,7 @@ impl Datum {
             Datum::Bytes(ref bs) => self.cmp_bytes(bs),
             Datum::Dur(ref d) => self.cmp_dur(d),
             Datum::Dec(ref d) => self.cmp_dec(d),
+            Datum::Time(ref t) => self.cmp_time(t),
         }
     }
 
@@ -180,25 +182,18 @@ impl Datum {
                 let ff = try!(convert::bytes_to_f64(bs));
                 cmp_f64(ff, f)
             }
-            Datum::Dur(ref d) => {
-                let ff = d.to_secs();
-                cmp_f64(ff, f)
-            }
             Datum::Dec(ref d) => {
                 let ff = try!(d.to_f64());
                 cmp_f64(ff, f)
             }
-        }
-    }
-
-    fn cmp_dur(&self, d: &Duration) -> Result<Ordering> {
-        match *self {
-            Datum::Dur(ref d2) => Ok(d2.cmp(d)),
-            Datum::Bytes(ref bs) => {
-                let d2 = try!(Duration::parse(bs, MAX_FSP));
-                Ok(d2.cmp(d))
+            Datum::Dur(ref d) => {
+                let ff = d.to_secs();
+                cmp_f64(ff, f)
             }
-            _ => self.cmp_f64(d.to_secs()),
+            Datum::Time(ref t) => {
+                let ff = try!(t.to_f64());
+                cmp_f64(ff, f)
+            }
         }
     }
 
@@ -207,13 +202,18 @@ impl Datum {
             Datum::Null | Datum::Min => Ok(Ordering::Less),
             Datum::Max => Ok(Ordering::Greater),
             Datum::Bytes(ref bss) => Ok((bss as &[u8]).cmp(bs)),
-            Datum::Dur(ref d) => {
-                let d2 = try!(Duration::parse(bs, MAX_FSP));
-                Ok(d.cmp(&d2))
-            }
             Datum::Dec(ref d) => {
                 let s = try!(str::from_utf8(bs));
                 let d2 = try!(Decimal::from_str(s));
+                Ok(d.cmp(&d2))
+            }
+            Datum::Time(ref t) => {
+                let s = try!(str::from_utf8(bs));
+                let t2 = try!(Time::from_str(s));
+                Ok(t.cmp(&t2))
+            }
+            Datum::Dur(ref d) => {
+                let d2 = try!(Duration::parse(bs, MAX_FSP));
                 Ok(d.cmp(&d2))
             }
             _ => {
@@ -238,28 +238,58 @@ impl Datum {
         }
     }
 
-    // into_bool converts self to a bool.
+    fn cmp_dur(&self, d: &Duration) -> Result<Ordering> {
+        match *self {
+            Datum::Dur(ref d2) => Ok(d2.cmp(d)),
+            Datum::Bytes(ref bs) => {
+                let d2 = try!(Duration::parse(bs, MAX_FSP));
+                Ok(d2.cmp(d))
+            }
+            _ => self.cmp_f64(d.to_secs()),
+        }
+    }
+
+    fn cmp_time(&self, time: &Time) -> Result<Ordering> {
+        match *self {
+            Datum::Bytes(ref bs) => {
+                let s = try!(str::from_utf8(bs));
+                let t = try!(Time::from_str(s));
+                Ok(t.cmp(time))
+            }
+            Datum::Time(ref t) => Ok(t.cmp(time)),
+            _ => {
+                let f = try!(time.to_f64());
+                self.cmp_f64(f)
+            }
+        }
+    }
+
+    /// `into_bool` converts self to a bool.
+    /// source function name is `ToBool`.
     pub fn into_bool(self) -> Result<Option<bool>> {
         let b = match self {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
             Datum::Bytes(ref bs) => Some(!bs.is_empty() && try!(convert::bytes_to_int(bs)) != 0),
-            Datum::Null => None,
+            Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_empty()),
             Datum::Dec(d) => Some(try!(d.to_f64()).round() != 0f64),
+            Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {:?} to bool", self)),
         };
         Ok(b)
     }
 
     /// into_string convert self into a string.
+    /// source function name is `ToString`.
     pub fn into_string(self) -> Result<String> {
         let s = match self {
             Datum::I64(i) => format!("{}", i),
             Datum::U64(u) => format!("{}", u),
             Datum::F64(f) => format!("{}", f),
             Datum::Bytes(bs) => try!(String::from_utf8(bs)),
+            Datum::Time(t) => format!("{}", t),
             Datum::Dur(d) => format!("{}", d),
             Datum::Dec(d) => format!("{}", d),
             d => return Err(invalid_type!("can't convert {:?} to string", d)),
@@ -267,27 +297,45 @@ impl Datum {
         Ok(s)
     }
 
-    /// Convert decimal to f64.
+    /// Keep compatible with TiDB's `GetFloat64` function.
     pub fn f64(&self) -> f64 {
         let i = self.i64();
         unsafe { mem::transmute(i) }
     }
 
+    /// Keep compatible with TiDB's `GetInt64` function.
     pub fn i64(&self) -> i64 {
         match *self {
             Datum::I64(i) => i,
             Datum::U64(u) => u as i64,
             Datum::F64(f) => unsafe { mem::transmute(f) },
             Datum::Dur(ref d) => d.to_nanos(),
-            Datum::Bytes(_) | Datum::Dec(_) | Datum::Max | Datum::Min | Datum::Null => 0,
+            Datum::Time(_) | Datum::Bytes(_) | Datum::Dec(_) | Datum::Max | Datum::Min |
+            Datum::Null => 0,
         }
     }
 
-    // into_arith converts datum to appropriate datum for arithmetic computing.
+    /// Keep compatible with TiDB's `GetUint64` function.
+    pub fn u64(&self) -> u64 {
+        self.i64() as u64
+    }
+
+    /// into_arith converts datum to appropriate datum for arithmetic computing.
+    /// Keep compatible with TiDB's `CoerceArithmetic` fucntion.
     pub fn into_arith(self) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
             Datum::Bytes(bs) => convert::bytes_to_f64(&bs).map(From::from),
+            Datum::Time(t) => {
+                // if time has no precision, return int64
+                let dec = try!(t.to_decimal());
+                if t.get_fsp() == 0 {
+                    return dec.i64()
+                        .map(Datum::I64)
+                        .ok_or_else(|| box_err!("{} to int will overflow", t));
+                }
+                Ok(Datum::Dec(dec))
+            }
             Datum::Dur(d) => {
                 let dec = try!(d.to_decimal());
                 if d.get_fsp() == 0 {
@@ -301,8 +349,10 @@ impl Datum {
         }
     }
 
+    /// Keep compatible with TiDB's `ToDecimal` function.
     pub fn into_dec(self) -> Result<Decimal> {
         match self {
+            Datum::Time(t) => t.to_decimal().map_err(From::from),
             Datum::Dur(d) => d.to_decimal().map_err(From::from),
             d => {
                 match d.coerce_to_dec() {
@@ -314,6 +364,7 @@ impl Datum {
     }
 
     /// Try its best effort to convert into a decimal datum.
+    /// source function name is `ConvertDatumToDecimal`.
     fn coerce_to_dec(self) -> Datum {
         let dec_opt = match self {
             Datum::I64(i) => Some(i.into()),
@@ -334,9 +385,10 @@ impl Datum {
         }
     }
 
-    // `coerce` changes type.
-    // If left or right is Decimal, changes the both to Decimal.
-    // Else if left or right is Float, changes the both to Float.
+    /// `coerce` changes type.
+    /// If left or right is Decimal, changes the both to Decimal.
+    /// Else if left or right is Float, changes the both to Float.
+    /// Keep compatible with TiDB's `CoerceDatum` function.
     pub fn coerce(left: Datum, right: Datum) -> (Datum, Datum) {
         match (left, right) {
             a @ (Datum::Dec(_), Datum::Dec(_)) |
@@ -349,11 +401,12 @@ impl Datum {
         }
     }
 
+    /// Keep compatible with TiDB's `ComputePlus` function.
     pub fn checked_add(self, d: Datum) -> Result<Datum> {
         let res: Datum = match (self, d) {
             (Datum::I64(l), Datum::I64(r)) => l.checked_add(r).into(),
-            (Datum::I64(l), Datum::U64(r)) => checked_add_i64(r, l).into(),
-            (Datum::U64(l), Datum::I64(r)) => checked_add_i64(l, r).into(),
+            (Datum::I64(l), Datum::U64(r)) |
+            (Datum::U64(r), Datum::I64(l)) => checked_add_i64(r, l).into(),
             (Datum::U64(l), Datum::U64(r)) => l.checked_add(r).into(),
             (Datum::F64(l), Datum::F64(r)) => {
                 let res = l + r;
@@ -419,6 +472,12 @@ impl From<u64> for Datum {
 impl From<Decimal> for Datum {
     fn from(data: Decimal) -> Datum {
         Datum::Dec(data)
+    }
+}
+
+impl From<Time> for Datum {
+    fn from(t: Time) -> Datum {
+        Datum::Time(t)
     }
 }
 
@@ -512,6 +571,10 @@ pub trait DatumEncoder: DecimalEncoder {
                     find_min = true;
                 }
                 Datum::Max => try!(self.write_u8(MAX_FLAG)),
+                Datum::Time(ref t) => {
+                    try!(self.write_u8(UINT_FLAG));
+                    try!(self.encode_u64(t.to_packed_u64()));
+                }
                 Datum::Dur(ref d) => {
                     try!(self.write_u8(DURATION_FLAG));
                     try!(self.encode_i64(d.to_nanos()));
@@ -552,6 +615,7 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                     }
                 }
                 Datum::F64(_) => number::F64_SIZE,
+                Datum::Time(_) => number::U64_SIZE,
                 Datum::Dur(_) => number::I64_SIZE,
                 Datum::Bytes(ref bs) => {
                     if comparable {
@@ -627,7 +691,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use util::codec::mysql::{MAX_FSP, Duration, Decimal};
+    use util::codec::mysql::{MAX_FSP, Duration, Decimal, Time};
     use util::as_slice;
 
     use std::cmp::Ordering;
@@ -767,6 +831,23 @@ mod test {
              Duration::new(StdDuration::from_millis(34), true, 2).unwrap().into(),
              Ordering::Greater),
 
+            (Time::parse_datetime("2011-10-10 00:00:00", 0).unwrap().into(),
+             Time::parse_datetime("2000-12-12 11:11:11", 0).unwrap().into(),
+             Ordering::Greater),
+            (Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+             Time::parse_datetime("2001-10-10 00:00:00", 0).unwrap().into(),
+             Ordering::Less),
+            (Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+             Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+             Ordering::Equal),
+            (Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+             Datum::I64(20001010000000), Ordering::Equal),
+            (Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+             Datum::I64(0), Ordering::Greater),
+            (Datum::I64(0),
+             Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+             Ordering::Less),
+
             (Datum::Dec("1234".parse().unwrap()), Datum::Dec("123400".parse().unwrap()),
              Ordering::Less),
             (Datum::Dec("12340".parse().unwrap()), Datum::Dec("123400".parse().unwrap()),
@@ -905,6 +986,7 @@ mod test {
             (b"0".as_ref().into(), Some(false)),
             (b"2".as_ref().into(), Some(true)),
             (b"abc".as_ref().into(), Some(false)),
+            (Time::parse_datetime("2011-11-10 11:11:11.999999", 6).unwrap().into(), Some(true)),
             (Duration::parse(b"11:11:11.999999", MAX_FSP).unwrap().into(), Some(true)),
             (Datum::Dec(Decimal::from_f64(0.1415926).unwrap()), Some(false)),
             (Datum::Dec(0u64.into()), Some(false)),
