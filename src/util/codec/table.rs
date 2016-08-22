@@ -14,14 +14,14 @@
 
 use std::io::Write;
 use std::collections::{HashMap, HashSet};
-use std::cmp;
+use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
 
 use super::number::{NumberDecoder, NumberEncoder};
 use super::bytes::BytesDecoder;
 use super::datum::DatumDecoder;
 use super::{Result, Datum, datum};
-use super::mysql::{self, types, Duration};
+use super::mysql::{types, Duration, Time, decimal};
 use util::escape;
 
 // handle or index id
@@ -151,7 +151,10 @@ fn unflatten(datum: Datum, col: &ColumnInfo) -> Result<Datum> {
     if let Datum::Null = datum {
         return Ok(datum);
     }
-    match col.get_tp() {
+    if col.get_tp() > u8::MAX as i32 || col.get_tp() < 0 {
+        error!("unknown type {} {:?}", col.get_tp(), datum);
+    }
+    match col.get_tp() as u8 {
         types::FLOAT => Ok(Datum::F64(datum.f64() as f32 as f64)),
         types::TINY |
         types::SHORT |
@@ -166,14 +169,27 @@ fn unflatten(datum: Datum, col: &ColumnInfo) -> Result<Datum> {
         types::LONG_BLOB |
         types::VARCHAR |
         types::STRING => Ok(datum),
-        types::DATE | types::DATETIME | types::TIMESTAMP | types::ENUM | types::SET |
-        types::BIT => Err(box_err!("unflatten column {:?} is not supported yet.", col)),
-        types::DURATION => Duration::from_nanos(datum.i64(), mysql::MAX_FSP).map(Datum::Dur),
+        types::DATE | types::DATETIME | types::TIMESTAMP => {
+            let fsp = col.get_decimal() as u8;
+            let t = try!(Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp));
+            Ok(Datum::Time(t))
+        }
+        types::DURATION => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
         types::NEW_DECIMAL => {
-            if let Datum::Dec(_) = datum {
-                return Ok(datum);
+            let mut d = match datum {
+                Datum::Dec(d) => d,
+                _ => try!(datum.into_string().and_then(|s| s.parse())),
+            };
+            if col.get_decimal() >= 0 {
+                if col.get_decimal() > decimal::MAX_FSP as i32 {
+                    return Err(box_err!("fsp {} > {}", col.get_decimal(), decimal::MAX_FSP));
+                }
+                d = d.truncate(col.get_decimal() as u8);
             }
-            datum.into_string().and_then(|s| s.parse()).map(Datum::Dec)
+            Ok(Datum::Dec(d))
+        }
+        types::ENUM | types::SET | types::BIT => {
+            Err(box_err!("unflatten column {:?} is not supported yet.", col))
         }
         t => {
             error!("unknown type {} {:?}", t, datum);
@@ -282,9 +298,9 @@ mod test {
         assert_eq!(tests, decode_index_key(&encoded, &types).unwrap());
     }
 
-    fn new_col_info(tp: i32) -> ColumnInfo {
+    fn new_col_info(tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
-        col_info.set_tp(tp);
+        col_info.set_tp(tp as i32);
         col_info
     }
 

@@ -39,10 +39,10 @@ pub struct Decimal {
     coeff: BigInt,
     exp: i32,
     // fsp means how many fraction digit should be preseved.
-    fsp: usize,
+    fsp: u8,
 }
 
-const MAX_FSP: usize = 30;
+pub const MAX_FSP: u8 = 30;
 
 macro_rules! enable_conv_for_int {
     ($t:ty) => {
@@ -87,7 +87,7 @@ impl Decimal {
     ///
     /// If constucted decimal contains more fraction digit than fsp, they will be
     /// rounded.
-    pub fn new(coeff: BigInt, mut exp: i32, mut fsp: usize) -> Decimal {
+    pub fn new(coeff: BigInt, mut exp: i32, mut fsp: u8) -> Decimal {
         fsp = cmp::min(fsp, MAX_FSP);
 
         if coeff.is_zero() {
@@ -164,7 +164,7 @@ impl Decimal {
             coeff: coeff,
             exp: exp,
             fsp: if exp < 0 {
-                -exp as usize
+                -exp as u8
             } else {
                 0
             },
@@ -217,6 +217,19 @@ impl Decimal {
             None => self.coeff.to_i64(),
         }
     }
+
+    /// Truncate truncates off digits from the number, without rounding.
+    /// Note: this function will round the last digit, which is not compatible with
+    /// TiDB. But since we are about to use `MyDecimal` very soon, so let's keep it now.
+    pub fn truncate(&self, precision: u8) -> Decimal {
+        let mut d = if -(precision as i32) > self.exp {
+            self.rescale(-(precision as i32)).unwrap()
+        } else {
+            self.clone()
+        };
+        d.fsp = precision as u8;
+        d
+    }
 }
 
 impl FromStr for Decimal {
@@ -267,7 +280,7 @@ impl FromStr for Decimal {
         }
 
         let fsp = if exp < 0 {
-            -exp as usize
+            cmp::min(-exp as u8, MAX_FSP)
         } else {
             0
         };
@@ -306,7 +319,7 @@ impl Display for Decimal {
                 v.resize(exp_len, b'0');
             } else {
                 let point_pos = v.len() + self.exp as usize;
-                let exp_len = point_pos + self.fsp + 1;
+                let exp_len = point_pos + self.fsp as usize + 1;
                 v.resize(exp_len, b'0');
                 v[point_pos] = b'.';
             }
@@ -325,19 +338,19 @@ impl Display for Decimal {
         };
 
         let mut v;
-        if self.fsp >= vlen {
-            v = Vec::with_capacity(self.fsp + 3);
+        if self.fsp as usize >= vlen {
+            v = Vec::with_capacity(self.fsp as usize + 3);
             if self.is_negative() {
                 v.push(b'-');
             }
             v.extend_from_slice(b"0.");
-            for _ in 0..self.fsp - vlen {
+            for _ in 0..self.fsp as usize - vlen {
                 v.push(b'0');
             }
             v.extend_from_slice(&s[s.len() - vlen..]);
         } else {
             v = Vec::with_capacity(s.len() + 1);
-            let insert_pos = s.len() - self.fsp;
+            let insert_pos = s.len() - self.fsp as usize;
             v.extend_from_slice(&s[..insert_pos]);
             v.push(b'.');
             v.extend_from_slice(&s[insert_pos..]);
@@ -497,7 +510,7 @@ pub trait DecimalDecoder: BytesDecoder {
         exp -= bs.len() as i64;
 
         let fsp = if exp < 0 {
-            -exp as usize
+            cmp::min(-exp as u8, MAX_FSP)
         } else {
             0
         };
