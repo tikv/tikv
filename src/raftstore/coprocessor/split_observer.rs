@@ -221,13 +221,13 @@ mod test {
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
-        key = new_index_key(1, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 0);
+        key = new_index_key(1, 2, &[Datum::I64(1), (b"brgege" as &[u8]).into()], 0);
         req = new_split_request(&key);
         expect_key = key[..key.len() - 8].to_vec();
         assert!(observer.pre_admin(&mut ctx, &mut req).is_ok());
         assert_eq!(req.get_split().get_split_key(), &*expect_key);
 
-        key = new_index_key(1, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 5);
+        key = new_index_key(1, 2, &[Datum::I64(1), (b"brgege" as &[u8]).into()], 5);
         req = new_split_request(&key);
         observer.pre_admin(&mut ctx, &mut req).unwrap();
         assert_eq!(req.get_split().get_split_key(), &*expect_key);

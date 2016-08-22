@@ -45,7 +45,7 @@ pub enum Datum {
     U64(u64),
     F64(f64),
     Dur(Duration),
-    Bytes(Vec<u8>),
+    Bytes(Box<[u8]>),
     Dec(Decimal),
     Min,
     Max,
@@ -259,7 +259,7 @@ impl Datum {
             Datum::I64(i) => format!("{}", i),
             Datum::U64(u) => format!("{}", u),
             Datum::F64(f) => format!("{}", f),
-            Datum::Bytes(bs) => try!(String::from_utf8(bs)),
+            Datum::Bytes(bs) => try!(String::from_utf8(bs.into_vec())),
             Datum::Dur(d) => format!("{}", d),
             Datum::Dec(d) => format!("{}", d),
             d => return Err(invalid_type!("can't convert {:?} to string", d)),
@@ -394,7 +394,7 @@ impl<T: Into<Datum>> From<Option<T>> for Datum {
 
 impl<'a> From<&'a [u8]> for Datum {
     fn from(data: &'a [u8]) -> Datum {
-        Datum::Bytes(data.to_vec())
+        Datum::Bytes(data.to_vec().into_boxed_slice())
     }
 }
 
@@ -435,8 +435,10 @@ pub trait DatumDecoder: DecimalDecoder {
         match flag {
             INT_FLAG => self.decode_i64().map(Datum::I64),
             UINT_FLAG => self.decode_u64().map(Datum::U64),
-            BYTES_FLAG => self.decode_bytes(false).map(Datum::Bytes),
-            COMPACT_BYTES_FLAG => self.decode_compact_bytes().map(Datum::Bytes),
+            BYTES_FLAG => self.decode_bytes(false).map(|bs| Datum::Bytes(bs.into_boxed_slice())),
+            COMPACT_BYTES_FLAG => {
+                self.decode_compact_bytes().map(|bs| Datum::Bytes(bs.into_boxed_slice()))
+            }
             NIL_FLAG => Ok(Datum::Null),
             FLOAT_FLAG => self.decode_f64().map(Datum::F64),
             DURATION_FLAG => {
@@ -920,14 +922,14 @@ mod test {
     fn test_split_datum() {
         let table = vec![
             vec![Datum::I64(1)],
-            vec![Datum::F64(1f64), Datum::F64(3.15), Datum::Bytes(b"123".to_vec())],
-            vec![Datum::U64(1), Datum::F64(3.15), Datum::Bytes(b"123".to_vec()), Datum::I64(-1)],
+            vec![Datum::F64(1f64), Datum::F64(3.15), (b"123" as &[u8]).into()],
+            vec![Datum::U64(1), Datum::F64(3.15), (b"123" as &[u8]).into(), Datum::I64(-1)],
             vec![Datum::I64(1), Datum::I64(0)],
             vec![Datum::Null],
             vec![Datum::I64(100), Datum::U64(100)],
             vec![Datum::U64(1), Datum::U64(1)],
             vec![Datum::Dec(Decimal::new(1.into(), 1, MAX_FSP))],
-            vec![Datum::F64(1f64), Datum::F64(3.15), Datum::Bytes(b"123456789012345".to_vec())],
+            vec![Datum::F64(1f64), Datum::F64(3.15), (b"123456789012345" as &[u8]).into()],
         ];
 
         for case in table {
