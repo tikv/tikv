@@ -13,24 +13,36 @@
 
 use byteorder::ReadBytesExt;
 use util::codec::number::{NumberEncoder, NumberDecoder, MAX_VAR_U64_LEN};
+use super::lock::LockType;
 use super::{Error, Result};
 
 #[derive(Debug,Clone,Copy)]
 pub enum WriteType {
     Put,
     Delete,
+    Lock,
     Rollback,
 }
 
 const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
+const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
 impl WriteType {
+    pub fn from_lock_type(tp: LockType) -> WriteType {
+        match tp {
+            LockType::Put => WriteType::Put,
+            LockType::Delete => WriteType::Delete,
+            LockType::Lock => WriteType::Lock,
+        }
+    }
+
     pub fn from_u8(b: u8) -> Option<WriteType> {
         match b {
             FLAG_PUT => Some(WriteType::Put),
             FLAG_DELETE => Some(WriteType::Delete),
+            FLAG_LOCK => Some(WriteType::Lock),
             FLAG_ROLLBACK => Some(WriteType::Rollback),
             _ => None,
         }
@@ -40,6 +52,7 @@ impl WriteType {
         match *self {
             WriteType::Put => FLAG_PUT,
             WriteType::Delete => FLAG_DELETE,
+            WriteType::Lock => FLAG_LOCK,
             WriteType::Rollback => FLAG_ROLLBACK,
         }
     }
