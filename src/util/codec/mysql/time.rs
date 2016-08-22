@@ -18,13 +18,15 @@ use std::fmt::{self, Formatter, Display};
 
 use chrono::{NaiveDate, NaiveDateTime, Timelike, Datelike, Duration};
 
-use util::codec::mysql::{self, types, parse_frac};
+use util::codec::mysql::{self, types, parse_frac, check_fsp};
 use util::codec::mysql::Decimal;
 use util::codec::{Error, Result, TEN_POW};
 
 
 const ZERO_DATETIME_STR: &'static str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &'static str = "0000-00-00";
+/// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
+/// `-0001-11-30 00:00:00 +0000 UTC`, whose timestamp is -62169984000.
 const ZERO_TIMESTAMP: i64 = -62169984000;
 
 #[inline]
@@ -169,6 +171,7 @@ impl Time {
     }
 
     pub fn parse_datetime(s: &str, fsp: u8) -> Result<Time> {
+        try!(check_fsp(fsp));
         let mut frac_str = "";
         let mut need_adjust = false;
         let parts = Time::parse_datetime_format(s);
