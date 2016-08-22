@@ -98,20 +98,8 @@ impl<'a> MvccTxn<'a> {
                 };
             }
         };
-        match lock_type {
-            LockType::Put => {
-                self.writes.push(Modify::Put(CF_WRITE,
-                                             key.append_ts(commit_ts),
-                                             Write::new(WriteType::Put, self.start_ts).to_bytes()));
-            }
-            LockType::Delete => {
-                self.writes.push(Modify::Put(CF_WRITE,
-                                             key.append_ts(commit_ts),
-                                             Write::new(WriteType::Delete, self.start_ts)
-                                                 .to_bytes()));
-            }
-            LockType::Lock => {}
-        }
+        let write = Write::new(WriteType::from_lock_type(lock_type), self.start_ts);
+        self.writes.push(Modify::Put(CF_WRITE, key.append_ts(commit_ts), write.to_bytes()));
         self.unlock_key(key.clone());
         Ok(())
     }
@@ -151,7 +139,7 @@ impl<'a> MvccTxn<'a> {
                         WriteType::Delete | WriteType::Rollback => {
                             self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)))
                         }
-                        WriteType::Put => {}
+                        WriteType::Put | WriteType::Lock => {}
                     }
                 }
             } else {
@@ -221,9 +209,12 @@ mod tests {
     fn test_mvcc_txn_commit_ok() {
         let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
         must_prewrite_put(engine.as_ref(), b"x", b"x10", b"x", 10);
+        must_prewrite_lock(engine.as_ref(), b"y", b"x", 10);
         must_commit(engine.as_ref(), b"x", 10, 15);
+        must_commit(engine.as_ref(), b"y", 10, 15);
         // commit should be idempotent
         must_commit(engine.as_ref(), b"x", 10, 15);
+        must_commit(engine.as_ref(), b"y", 10, 15);
     }
 
     #[test]

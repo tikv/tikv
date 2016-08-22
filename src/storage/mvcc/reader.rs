@@ -111,7 +111,7 @@ impl<'a> MvccReader<'a> {
                     match write.write_type {
                         WriteType::Put => return self.load_data(key, write.start_ts),
                         WriteType::Delete => return Ok(None),
-                        WriteType::Rollback => ts = commit_ts - 1,
+                        WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
                     }
                 }
                 None => return Ok(None),
@@ -123,7 +123,9 @@ impl<'a> MvccReader<'a> {
         if let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, start_ts)) {
             if write.start_ts == start_ts {
                 match write.write_type {
-                    WriteType::Put | WriteType::Delete => return Ok(Some(commit_ts)),
+                    WriteType::Put | WriteType::Delete | WriteType::Lock => {
+                        return Ok(Some(commit_ts))
+                    }
                     WriteType::Rollback => {}
                 }
             }
