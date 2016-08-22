@@ -54,7 +54,7 @@ impl<T: Write> TableEncoder for T {}
 fn flatten(data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
-        Datum::Dec(d) => Ok(Datum::Bytes(format!("{}", d).into_bytes())),
+        Datum::Dec(d) => Ok(Datum::Bytes(format!("{}", d).into_bytes().into_boxed_slice())),
         _ => Ok(data),
     }
 }
@@ -273,7 +273,7 @@ mod test {
 
     #[test]
     fn test_index_key_codec() {
-        let tests = vec![Datum::U64(1), Datum::Bytes(b"123".to_vec()), Datum::I64(-1)];
+        let tests = vec![Datum::U64(1), (b"123" as &[u8]).into(), Datum::I64(-1)];
         let types = vec![new_col_info(types::LONG_LONG),
                          new_col_info(types::VARCHAR),
                          new_col_info(types::LONG_LONG)];
@@ -308,7 +308,7 @@ mod test {
 
         let mut row = map![
             1 => Datum::I64(100),
-            2 => Datum::Bytes(b"abc".to_vec()),
+            2 => (b"abc" as &[u8]).into(),
             3 => Datum::Dec(Decimal::new(1.into(), 1, MAX_FSP))
         ];
 
@@ -364,7 +364,7 @@ mod test {
                              new_col_info(types::VARCHAR),
                              new_col_info(types::NEW_DECIMAL)];
         let col_values = vec![Datum::I64(100),
-                              Datum::Bytes(b"abc".to_vec()),
+                              (b"abc" as &[u8]).into(),
                               Datum::Dec(Decimal::new(1.into(), 1, MAX_FSP))];
         let mut col_encoded: HashMap<_, _> = col_ids.iter()
             .zip(&col_types)

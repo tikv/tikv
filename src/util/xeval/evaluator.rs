@@ -50,7 +50,7 @@ impl Evaluator {
             ExprType::Int64 => self.eval_int(expr),
             ExprType::Uint64 => self.eval_uint(expr),
             // maybe we should use take here?
-            ExprType::String | ExprType::Bytes => Ok(Datum::Bytes(expr.get_val().to_vec())),
+            ExprType::String | ExprType::Bytes => Ok(expr.get_val().into()),
             ExprType::ColumnRef => self.eval_column_ref(expr),
             ExprType::LT => self.eval_lt(expr),
             ExprType::LE => self.eval_le(expr),
@@ -326,7 +326,7 @@ mod test {
             }
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
-                expr.set_val(bs);
+                expr.set_val(bs.into_vec());
             }
             Datum::F64(f) => {
                 expr.set_tp(ExprType::Float64);
@@ -379,8 +379,8 @@ mod test {
     }
 
     fn like_expr(target: &'static str, pattern: &'static str) -> Expr {
-        let target_expr = datum_expr(Datum::Bytes(target.as_bytes().to_vec()));
-        let pattern_expr = datum_expr(Datum::Bytes(pattern.as_bytes().to_vec()));
+        let target_expr = datum_expr(target.as_bytes().into());
+        let pattern_expr = datum_expr(pattern.as_bytes().into());
         let mut expr = Expr::new();
         expr.set_tp(ExprType::Like);
         expr.mut_children().push(target_expr);
@@ -501,8 +501,8 @@ mod test {
                vec![
 		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Plus), Datum::U64(2)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Plus), Datum::F64(2.0)),
-        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Plus), Datum::F64(0.0)),
+        (bin_expr(Datum::I64(1), (b"1" as &[u8]).into(), ExprType::Plus), Datum::F64(2.0)),
+        (bin_expr(Datum::I64(1), (b"-1" as &[u8]).into(), ExprType::Plus), Datum::F64(0.0)),
         (bin_expr(Datum::Null, Datum::Null, ExprType::Plus), Datum::Null),
         (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Plus), Datum::Null),
         (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Plus), Datum::Null),

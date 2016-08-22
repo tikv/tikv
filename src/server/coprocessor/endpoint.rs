@@ -527,7 +527,7 @@ impl SelectContextCore {
 
             let mut row = Row::new();
             // The first column is group key.
-            row_data.push(Datum::Bytes(Rc::try_unwrap(gk).unwrap()));
+            row_data.push(Datum::Bytes(Rc::try_unwrap(gk).unwrap().into_boxed_slice()));
             for mut aggr in aggrs {
                 try!(aggr.calc(&mut row_data));
             }

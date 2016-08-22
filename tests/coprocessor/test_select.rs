@@ -528,8 +528,8 @@ fn test_group_by() {
     // should only have name:0, name:2 and name:1
     assert_eq!(resp.get_rows().len(), 3);
     for (row, name) in resp.get_rows().iter().zip(&[b"name:0", b"name:2", b"name:1"]) {
-        let gk = datum::encode_value(&[Datum::Bytes(name.to_vec())]).unwrap();
-        let expected_encoded = datum::encode_value(&[Datum::Bytes(gk)]).unwrap();
+        let gk = datum::encode_value(&[(*name as &[u8]).into()]).unwrap();
+        let expected_encoded = datum::encode_value(&[Datum::Bytes(gk.into_boxed_slice())]).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
@@ -553,14 +553,14 @@ fn test_aggr_count() {
     let req = Select::from(&product.table).count().build();
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_rows().len(), 1);
-    let gk = Datum::Bytes(coprocessor::SINGLE_GROUP.to_vec());
+    let gk = coprocessor::SINGLE_GROUP.into();
     let mut expected_encoded = datum::encode_value(&[gk, Datum::U64(data.len() as u64)]).unwrap();
     assert_eq!(resp.get_rows()[0].get_data(), &*expected_encoded);
 
     let exp = vec![
-        (Datum::Bytes(b"name:0".to_vec()), 2),
-        (Datum::Bytes(b"name:3".to_vec()), 1),
-        (Datum::Bytes(b"name:5".to_vec()), 2),
+        ((b"name:0" as &[u8]).into(), 2),
+        ((b"name:3" as &[u8]).into(), 1),
+        ((b"name:5" as &[u8]).into(), 2),
         (Datum::Null, 1),
     ];
     let req = Select::from(&product.table).count().group_by(&[product.name]).build();
@@ -568,24 +568,24 @@ fn test_aggr_count() {
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, cnt)) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]);
-        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(cnt)];
+        let expected_datum = vec![Datum::Bytes(gk.unwrap().into_boxed_slice()), Datum::U64(cnt)];
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
     let exp = vec![
-        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)], 1),
-        (vec![Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)], 1),
-        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)], 1),
-        (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2),
+        (vec![(b"name:0" as &[u8]).into(), Datum::I64(2)], 1),
+        (vec![(b"name:3" as &[u8]).into(), Datum::I64(3)], 1),
+        (vec![(b"name:0" as &[u8]).into(), Datum::I64(1)], 1),
+        (vec![(b"name:5" as &[u8]).into(), Datum::I64(4)], 2),
         (vec![Datum::Null, Datum::I64(4)], 1),
     ];
     let req = Select::from(&product.table).count().group_by(&[product.name, product.count]).build();
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (gk_data, cnt)) in resp.get_rows().iter().zip(exp) {
-        let gk = datum::encode_value(&gk_data);
-        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(cnt)];
+        let gk = datum::encode_value(&gk_data).unwrap();
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), Datum::U64(cnt)];
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -608,9 +608,9 @@ fn test_aggr_first() {
     let (_, mut end_point) = init_with_data(&product, &data);
 
     let exp = vec![
-        (Datum::Bytes(b"name:0".to_vec()), 1),
-        (Datum::Bytes(b"name:3".to_vec()), 2),
-        (Datum::Bytes(b"name:5".to_vec()), 5),
+        ((b"name:0" as &[u8]).into(), 1),
+        ((b"name:3" as &[u8]).into(), 2),
+        ((b"name:5" as &[u8]).into(), 5),
         (Datum::Null, 7),
     ];
     let req = Select::from(&product.table).first(product.id).group_by(&[product.name]).build();
@@ -618,7 +618,7 @@ fn test_aggr_first() {
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, id)) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]).unwrap();
-        let expected_datum = vec![Datum::Bytes(gk), Datum::I64(id)];
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), Datum::I64(id)];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -643,22 +643,22 @@ fn test_aggr_avg() {
     store.begin();
     store.insert_into(&product.table)
         .set(product.id, Datum::I64(8))
-        .set(product.name, Datum::Bytes(b"name:4".to_vec()))
+        .set(product.name, (b"name:4" as &[u8]).into())
         .set(product.count, Datum::Null)
         .execute();
     store.commit();
 
-    let exp = vec![(Datum::Bytes(b"name:0".to_vec()), (Datum::Dec(3.into()), 2)),
-                   (Datum::Bytes(b"name:3".to_vec()), (Datum::Dec(3.into()), 1)),
-                   (Datum::Bytes(b"name:5".to_vec()), (Datum::Dec(8.into()), 2)),
+    let exp = vec![((b"name:0" as &[u8]).into(), (Datum::Dec(3.into()), 2)),
+                   ((b"name:3" as &[u8]).into(), (Datum::Dec(3.into()), 1)),
+                   ((b"name:5" as &[u8]).into(), (Datum::Dec(8.into()), 2)),
                    (Datum::Null, (Datum::Dec(4.into()), 1)),
-                   (Datum::Bytes(b"name:4".to_vec()), (Datum::Null, 0))];
+                   ((b"name:4" as &[u8]).into(), (Datum::Null, 0))];
     let req = Select::from(&product.table).avg(product.count).group_by(&[product.name]).build();
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, (sum, cnt))) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]).unwrap();
-        let expected_datum = vec![Datum::Bytes(gk), Datum::U64(cnt), sum];
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), Datum::U64(cnt), sum];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -680,9 +680,9 @@ fn test_aggr_sum() {
     let (_, mut end_point) = init_with_data(&product, &data);
 
     let exp = vec![
-        (Datum::Bytes(b"name:0".to_vec()), 3),
-        (Datum::Bytes(b"name:3".to_vec()), 3),
-        (Datum::Bytes(b"name:5".to_vec()), 8),
+        ((b"name:0" as &[u8]).into(), 3),
+        ((b"name:3" as &[u8]).into(), 3),
+        ((b"name:5" as &[u8]).into(), 8),
         (Datum::Null, 4),
     ];
     let req = Select::from(&product.table).sum(product.count).group_by(&[product.name]).build();
@@ -690,7 +690,7 @@ fn test_aggr_sum() {
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, cnt)) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]).unwrap();
-        let expected_datum = vec![Datum::Bytes(gk), Datum::Dec(cnt.into())];
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), Datum::Dec(cnt.into())];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -715,18 +715,18 @@ fn test_aggr_extre() {
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
         store.insert_into(&product.table)
             .set(product.id, Datum::I64(id))
-            .set(product.name, Datum::Bytes(name.to_vec()))
+            .set(product.name, (name as &[u8]).into())
             .set(product.count, Datum::Null)
             .execute();
     }
     store.commit();
 
     let exp = vec![
-        (Datum::Bytes(b"name:0".to_vec()), Datum::I64(2), Datum::I64(1)),
-        (Datum::Bytes(b"name:3".to_vec()), Datum::I64(3), Datum::I64(3)),
-        (Datum::Bytes(b"name:5".to_vec()), Datum::I64(5), Datum::I64(4)),
+        ((b"name:0" as &[u8]).into(), Datum::I64(2), Datum::I64(1)),
+        ((b"name:3" as &[u8]).into(), Datum::I64(3), Datum::I64(3)),
+        ((b"name:5" as &[u8]).into(), Datum::I64(5), Datum::I64(4)),
         (Datum::Null, Datum::I64(4), Datum::I64(4)),
-        (Datum::Bytes(b"name:6".to_vec()), Datum::Null, Datum::Null),
+        ((b"name:6" as &[u8]).into(), Datum::Null, Datum::Null),
     ];
     let req = Select::from(&product.table)
         .max(product.count)
@@ -737,7 +737,7 @@ fn test_aggr_extre() {
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, max, min)) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]).unwrap();
-        let expected_datum = vec![Datum::Bytes(gk), max, min];
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), max, min];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -928,8 +928,8 @@ fn test_index_group_by() {
     // should only have name:0, name:2 and name:1
     assert_eq!(resp.get_rows().len(), 3);
     for (row, name) in resp.get_rows().iter().zip(&[b"name:0", b"name:1", b"name:2"]) {
-        let gk = datum::encode_value(&[Datum::Bytes(name.to_vec())]).unwrap();
-        let expected_encoded = datum::encode_value(&[Datum::Bytes(gk)]).unwrap();
+        let gk = datum::encode_value(&[(*name as &[u8]).into()]).unwrap();
+        let expected_encoded = datum::encode_value(&[Datum::Bytes(gk.into_boxed_slice())]).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
@@ -953,33 +953,33 @@ fn test_index_aggr_count() {
     let req = Select::from_index(&product.table, product.name).count().build();
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_rows().len(), 1);
-    let gk = Datum::Bytes(coprocessor::SINGLE_GROUP.to_vec());
+    let gk = (coprocessor::SINGLE_GROUP as &[u8]).into();
     let mut expected_encoded = datum::encode_value(&[gk, Datum::U64(data.len() as u64)]).unwrap();
     assert_eq!(resp.get_rows()[0].get_data(), &*expected_encoded);
 
     let exp = vec![
         (Datum::Null, 1),
-        (Datum::Bytes(b"name:0".to_vec()), 2),
-        (Datum::Bytes(b"name:3".to_vec()), 1),
-        (Datum::Bytes(b"name:5".to_vec()), 2),
+        ((b"name:0" as &[u8]).into(), 2),
+        ((b"name:3" as &[u8]).into(), 1),
+        ((b"name:5" as &[u8]).into(), 2),
     ];
     let req =
         Select::from_index(&product.table, product.name).count().group_by(&[product.name]).build();
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, cnt)) in resp.get_rows().iter().zip(exp) {
-        let gk = datum::encode_value(&[name]);
-        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(cnt)];
+        let gk = datum::encode_value(&[name]).unwrap();
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), Datum::U64(cnt)];
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
 
     let exp = vec![
         (vec![Datum::Null, Datum::I64(4)], 1),
-        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)], 1),
-        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)], 1),
-        (vec![Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)], 1),
-        (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2),
+        (vec![(b"name:0" as &[u8]).into(), Datum::I64(1)], 1),
+        (vec![(b"name:0" as &[u8]).into(), Datum::I64(2)], 1),
+        (vec![(b"name:3" as &[u8]).into(), Datum::I64(3)], 1),
+        (vec![(b"name:5" as &[u8]).into(), Datum::I64(4)], 2),
     ];
     let req = Select::from_index(&product.table, product.name)
         .count()
@@ -988,8 +988,8 @@ fn test_index_aggr_count() {
     let resp = handle_select(&end_point, req);
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (gk_data, cnt)) in resp.get_rows().iter().zip(exp) {
-        let gk = datum::encode_value(&gk_data);
-        let expected_datum = vec![Datum::Bytes(gk.unwrap()), Datum::U64(cnt)];
+        let gk = datum::encode_value(&gk_data).unwrap();
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), Datum::U64(cnt)];
         expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -1013,9 +1013,9 @@ fn test_index_aggr_first() {
 
     let exp = vec![
         (Datum::Null, 7),
-        (Datum::Bytes(b"name:0".to_vec()), 4),
-        (Datum::Bytes(b"name:3".to_vec()), 2),
-        (Datum::Bytes(b"name:5".to_vec()), 5),
+        ((b"name:0" as &[u8]).into(), 4),
+        ((b"name:3" as &[u8]).into(), 2),
+        ((b"name:5" as &[u8]).into(), 5),
     ];
     let req = Select::from_index(&product.table, product.name)
         .first(product.id)
@@ -1025,7 +1025,7 @@ fn test_index_aggr_first() {
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, id)) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]).unwrap();
-        let expected_datum = vec![Datum::Bytes(gk), Datum::I64(id)];
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), Datum::I64(id)];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -1050,16 +1050,16 @@ fn test_index_aggr_avg() {
     store.begin();
     store.insert_into(&product.table)
         .set(product.id, Datum::I64(8))
-        .set(product.name, Datum::Bytes(b"name:4".to_vec()))
+        .set(product.name, (b"name:4" as &[u8]).into())
         .set(product.count, Datum::Null)
         .execute();
     store.commit();
 
     let exp = vec![(Datum::Null, (Datum::Dec(4.into()), 1)),
-                   (Datum::Bytes(b"name:0".to_vec()), (Datum::Dec(3.into()), 2)),
-                   (Datum::Bytes(b"name:3".to_vec()), (Datum::Dec(3.into()), 1)),
-                   (Datum::Bytes(b"name:4".to_vec()), (Datum::Null, 0)),
-                   (Datum::Bytes(b"name:5".to_vec()), (Datum::Dec(8.into()), 2))];
+                   ((b"name:0" as &[u8]).into(), (Datum::Dec(3.into()), 2)),
+                   ((b"name:3" as &[u8]).into(), (Datum::Dec(3.into()), 1)),
+                   ((b"name:4" as &[u8]).into(), (Datum::Null, 0)),
+                   ((b"name:5" as &[u8]).into(), (Datum::Dec(8.into()), 2))];
     let req = Select::from_index(&product.table, product.name)
         .avg(product.count)
         .group_by(&[product.name])
@@ -1068,7 +1068,7 @@ fn test_index_aggr_avg() {
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, (sum, cnt))) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]).unwrap();
-        let expected_datum = vec![Datum::Bytes(gk), Datum::U64(cnt), sum];
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), Datum::U64(cnt), sum];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -1091,9 +1091,9 @@ fn test_index_aggr_sum() {
 
     let exp = vec![
         (Datum::Null, 4),
-        (Datum::Bytes(b"name:0".to_vec()), 3),
-        (Datum::Bytes(b"name:3".to_vec()), 3),
-        (Datum::Bytes(b"name:5".to_vec()), 8),
+        ((b"name:0" as &[u8]).into(), 3),
+        ((b"name:3" as &[u8]).into(), 3),
+        ((b"name:5" as &[u8]).into(), 8),
     ];
     let req = Select::from_index(&product.table, product.name)
         .sum(product.count)
@@ -1103,7 +1103,7 @@ fn test_index_aggr_sum() {
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, cnt)) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]).unwrap();
-        let expected_datum = vec![Datum::Bytes(gk), Datum::Dec(cnt.into())];
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), Datum::Dec(cnt.into())];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
@@ -1128,7 +1128,7 @@ fn test_index_aggr_extre() {
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
         store.insert_into(&product.table)
             .set(product.id, Datum::I64(id))
-            .set(product.name, Datum::Bytes(name.to_vec()))
+            .set(product.name, (name as &[u8]).into())
             .set(product.count, Datum::Null)
             .execute();
     }
@@ -1136,10 +1136,10 @@ fn test_index_aggr_extre() {
 
     let exp = vec![
         (Datum::Null, Datum::I64(4), Datum::I64(4)),
-        (Datum::Bytes(b"name:0".to_vec()), Datum::I64(2), Datum::I64(1)),
-        (Datum::Bytes(b"name:3".to_vec()), Datum::I64(3), Datum::I64(3)),
-        (Datum::Bytes(b"name:5".to_vec()), Datum::I64(5), Datum::I64(4)),
-        (Datum::Bytes(b"name:6".to_vec()), Datum::Null, Datum::Null),
+        ((b"name:0" as &[u8]).into(), Datum::I64(2), Datum::I64(1)),
+        ((b"name:3" as &[u8]).into(), Datum::I64(3), Datum::I64(3)),
+        ((b"name:5" as &[u8]).into(), Datum::I64(5), Datum::I64(4)),
+        ((b"name:6" as &[u8]).into(), Datum::Null, Datum::Null),
     ];
     let req = Select::from_index(&product.table, product.name)
         .max(product.count)
@@ -1150,7 +1150,7 @@ fn test_index_aggr_extre() {
     assert_eq!(resp.get_rows().len(), exp.len());
     for (row, (name, max, min)) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]).unwrap();
-        let expected_datum = vec![Datum::Bytes(gk), max, min];
+        let expected_datum = vec![Datum::Bytes(gk.into_boxed_slice()), max, min];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }
