@@ -641,6 +641,10 @@ fn main() {
     };
 
     initial_log(&matches, &config);
+
+    // Print version information.
+    util::print_tikv_info();
+
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,
