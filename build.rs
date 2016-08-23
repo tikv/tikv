@@ -42,6 +42,5 @@ fn utc_time() -> String {
 fn commit_hash() -> String {
     let mut cmd = Command::new("git");
     cmd.args(&["rev-parse", "HEAD"]);
-    cmd.output().ok().map_or("None".to_owned(),
-                             |o| String::from_utf8(o.stdout).unwrap_or("None".to_owned()))
+    cmd.output().ok().and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or("None".to_owned())
 }
