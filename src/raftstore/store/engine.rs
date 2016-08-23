@@ -73,6 +73,20 @@ pub trait Peekable {
         Ok(Some(m))
     }
 
+    fn get_msg_cf<M>(&self, cf: &str, key: &[u8]) -> Result<Option<M>>
+        where M: protobuf::Message + protobuf::MessageStatic
+    {
+        let value = try!(self.get_value_cf(cf, key));
+
+        if value.is_none() {
+            return Ok(None);
+        }
+
+        let mut m = M::new();
+        try!(m.merge_from_bytes(&value.unwrap()));
+        Ok(Some(m))
+    }
+
     fn get_u64(&self, key: &[u8]) -> Result<Option<u64>> {
         let value = try!(self.get_value(key));
 
@@ -121,6 +135,13 @@ pub trait Iterable {
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.new_iterator();
+        iter.seek(key.into());
+        Ok(iter.kv())
+    }
+
+    // Seek the first key >= given key, if no found, return None.
+    fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let mut iter = try!(self.new_iterator_cf(cf));
         iter.seek(key.into());
         Ok(iter.kv())
     }

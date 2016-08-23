@@ -28,12 +28,14 @@ use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState,
 use util::HandyRwLock;
 use util::codec::bytes::BytesEncoder;
 use util::worker::Scheduler;
+use util::rocksdb;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::worker::SnapTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable, delete_all_in_range};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
+use storage::CF_RAFTLOG;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -214,9 +216,10 @@ impl PeerStorage {
         let start_key = keys::raft_log_key(self.get_region_id(), low);
         let end_key = keys::raft_log_key(self.get_region_id(), high);
 
-        try!(self.engine.scan(&start_key,
-                              &end_key,
-                              &mut |_, value| {
+        try!(self.engine.scan_cf(CF_RAFTLOG,
+                                 &start_key,
+                                 &end_key,
+                                 &mut |_, value| {
             let mut entry = Entry::new();
             try!(entry.merge_from_bytes(value));
 
@@ -252,7 +255,7 @@ impl PeerStorage {
         }
         try!(self.check_range(idx, idx + 1));
         let key = keys::raft_log_key(self.get_region_id(), idx);
-        match try!(self.engine.get_msg::<Entry>(&key)) {
+        match try!(self.engine.get_msg_cf::<Entry>(CF_RAFTLOG, &key)) {
             Some(entry) => Ok(entry.get_term()),
             None => Err(RaftError::Store(StorageError::Unavailable)),
         }
@@ -341,8 +344,11 @@ impl PeerStorage {
         }
 
         for entry in entries {
-            try!(ctx.wb.put_msg(&keys::raft_log_key(self.get_region_id(), entry.get_index()),
-                                entry));
+            let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFTLOG));
+            let value = try!(entry.write_to_bytes());
+            try!(ctx.wb.put_cf(*handle,
+                               &keys::raft_log_key(self.get_region_id(), entry.get_index()),
+                               &value));
         }
 
         let last_index = entries[entries.len() - 1].get_index();
@@ -437,6 +443,15 @@ impl PeerStorage {
                                       try!(wb.delete(key));
                                       Ok(true)
                                   }));
+
+            let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFTLOG));
+            try!(self.engine.scan_cf(CF_RAFTLOG,
+                                     start_key,
+                                     end_key,
+                                     &mut |key, _| {
+                                         try!(wb.delete_cf(*handle, key));
+                                         Ok(true)
+                                     }));
         }
 
         Ok(())
@@ -585,7 +600,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        match try!(snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))) {
+        match try!(snap.get_msg_cf::<Entry>(CF_RAFTLOG, &keys::raft_log_key(region_id, idx))) {
             None => return Err(box_err!("entry {} of {} not found.", idx, region_id)),
             Some(entry) => entry.get_term(),
         }
