@@ -200,7 +200,7 @@ impl StoreHandler {
         }
         let req = msg.take_cmd_resolve_lock_req();
         let cb = self.make_cb(StoreHandler::cmd_resolve_lock_done, on_resp);
-        let commit_ts = if req.has_commit_version() {
+        let commit_ts = if req.get_commit_version() != 0 {
             Some(req.get_commit_version())
         } else {
             None
