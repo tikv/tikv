@@ -343,8 +343,8 @@ impl PeerStorage {
             return Ok(prev_last_index);
         }
 
+        let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFTLOG));
         for entry in entries {
-            let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFTLOG));
             let value = try!(entry.write_to_bytes());
             try!(ctx.wb.put_cf(*handle,
                                &keys::raft_log_key(self.get_region_id(), entry.get_index()),
@@ -436,6 +436,7 @@ impl PeerStorage {
             [(keys::region_raft_prefix(region_id), keys::region_raft_prefix(region_id + 1)),
              (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1))];
 
+        let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFTLOG));
         for &(ref start_key, ref end_key) in &ranges {
             try!(self.engine.scan(start_key,
                                   end_key,
@@ -444,7 +445,6 @@ impl PeerStorage {
                                       Ok(true)
                                   }));
 
-            let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFTLOG));
             try!(self.engine.scan_cf(CF_RAFTLOG,
                                      start_key,
                                      end_key,
