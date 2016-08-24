@@ -239,16 +239,11 @@ impl EtcdPdClient {
         let endpoints: Vec<_> = endpoints.split(',').map(|v| format!("http://{}", v)).collect();
         assert!(!endpoints.is_empty());
 
-        let client = box_try!(Client::<EtcdHandler>::configure()
-            .connector(HttpConnector::default().threads(1))
-            .keep_alive(true)
-            .build());
-
         Ok(EtcdPdClient {
             root_path: format!("{}/{}", PD_ROOT_PATH, cluster_id),
             endpoints: endpoints,
             next_index: 0,
-            client: Some(client),
+            client: None,
         })
     }
 
@@ -257,9 +252,15 @@ impl EtcdPdClient {
     }
 
     pub fn request(&mut self, path: &str, obj: Json) -> Result<Json> {
-        if self.client.is_none() {
-            return Err(box_err!("miss etcd client, may be closed already"));
-        }
+        let client = match self.client.take() {
+            Some(client) => client,
+            None => {
+                box_try!(Client::<EtcdHandler>::configure()
+                    .connector(HttpConnector::default().threads(1))
+                    .keep_alive(true)
+                    .build())
+            }
+        };
 
         let endpoint = self.endpoints.get(self.next_index).unwrap();
 
@@ -270,16 +271,15 @@ impl EtcdPdClient {
 
         let handler = EtcdHandler::new(obj, finish.clone());
 
-        let client = self.client.take().unwrap();
         let res = client.request(url, handler);
-        self.client = Some(client);
-
         if let Err(e) = res {
+            client.close();
             return Err(box_err!("request {} at {} failed {}", path, endpoint, e));
         }
 
         let timeout = Duration::from_secs(HTTP_REQUEST_TIMEOUT);
         if !finish.wait_timeout(Some(timeout)) {
+            client.close();
             return Err(Error::Timeout(timeout));
         }
 
@@ -290,6 +290,11 @@ impl EtcdPdClient {
             self.next_index = (self.next_index + 1) % self.endpoints.len();
         }
 
+        // Hyper async client queues the request handlers and
+        // call the first handler on the first response.
+        // But this will be a problem if we do not handle responses in order.
+        // So we reuse the hyper client only if we complete the request/response.
+        self.client = Some(client);
         res
     }
 
