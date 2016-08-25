@@ -71,9 +71,8 @@ git = "https://github.com/pingcap/tipb.git"
 git = "https://github.com/carllerche/mio.git"
 
 [dependencies.hyper]
-git = "https://github.com/hyperium/hyper.git"
+version = "0.9"
 default-features = false # don't use ssl now.
-features = ["nightly"]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
