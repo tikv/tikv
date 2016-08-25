@@ -91,9 +91,9 @@ impl<C> Node<C>
             store_id = try!(self.bootstrap_store(&engine));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
-            return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped, you \
-                                 may connect wrong PD or need to remove the TiKV data and \
-                                 start again",
+            return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped, \
+                                 maybe you connected a wrong PD or need to remove the TiKV data \
+                                 and start again",
                                 store_id,
                                 self.cluster_id));
         }
