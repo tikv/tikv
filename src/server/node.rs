@@ -91,7 +91,9 @@ impl<C> Node<C>
             store_id = try!(self.bootstrap_store(&engine));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
-            return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped",
+            return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped, you \
+                                 may connect wrong PD or need to remove the TiKV data and \
+                                 start again",
                                 store_id,
                                 self.cluster_id));
         }
@@ -150,7 +152,7 @@ impl<C> Node<C>
 
     fn bootstrap_store(&self, engine: &DB) -> Result<u64> {
         let store_id = try!(self.alloc_id());
-        debug!("alloc store id {} ", store_id);
+        info!("alloc store id {} ", store_id);
 
         try!(store::bootstrap_store(engine, self.cluster_id, store_id));
 
