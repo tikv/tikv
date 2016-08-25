@@ -36,6 +36,9 @@ const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
 const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
 const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
+// If the leader missing time exceeds 2 hours,
+// a peer should consider itself as a stale peer out of region.
+const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -79,6 +82,11 @@ pub struct Config {
     /// When a peer hasn't been active for max_peer_down_duration,
     /// we will consider this peer to be down and report it to pd.
     pub max_peer_down_duration: Duration,
+
+    /// When a peer has leader missing longer than max_leader_missing_duration,
+    /// It would ask pd to confirm whether it's still valid in some region.
+    /// If it's stale and out of any region, it will destroy itself.
+    pub max_leader_missing_duration: Duration,
 }
 
 impl Default for Config {
@@ -104,6 +112,7 @@ impl Default for Config {
             snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
+            max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
         }
     }
 }

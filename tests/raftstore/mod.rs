@@ -30,3 +30,4 @@ mod test_transfer_leader;
 mod test_stats;
 mod test_snap;
 mod test_down_peers;
+mod test_stale_peer;
