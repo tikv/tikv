@@ -129,9 +129,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         })
     }
 
-    // Do something before store runs.
-    // TODO: should not accept request before prepare is finished.
-    fn prepare(&mut self) -> Result<()> {
+    /// Initialize this store. It scans the db engine, load all regions
+    /// and their peers from it, and schedule snapshot worker if neccessary.
+    /// WARN: This store should not be used before Initialized.
+    pub fn init(&mut self) -> Result<()> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
@@ -188,8 +189,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        try!(self.prepare());
-
         try!(self.snap_mgr.wl().init());
 
         self.register_raft_base_tick(event_loop);
