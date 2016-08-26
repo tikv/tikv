@@ -69,13 +69,15 @@ fn rpc_connect(endpoints: &str) -> Result<TcpStream> {
             Ok(stream) => stream,
             Err(_) => continue,
         };
+        try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
 
         // Send a HTTP header to tell PD to hijack this connection for RPC.
         let header_str = format!("GET {} HTTP/1.0\r\n\r\n", PD_RPC_PREFIX);
         let header = header_str.as_bytes();
-        try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
-        try!(stream.write_all(header));
-        return Ok(stream);
+        match stream.write_all(header) {
+            Ok(_) => return Ok(stream),
+            Err(_) => continue,
+        }
     }
 
     Err(box_err!("failed connect to {:?}", hosts))

@@ -37,11 +37,14 @@ ${KCOV_DIR}/kcov:
 	cp src/kcov ${KCOV_DIR}/kcov
 
 ${PD_DIR}/pd-server: prepare_go
+	export GOROOT=/tmp/goroot/go && \
+	export GOPATH=/tmp/gopath && \
+	export PATH=$GOROOT/bin:$PATH && \
 	mkdir -p /tmp/gopath/src/github.com/pingcap && \
 	cd /tmp/gopath/src/github.com/pingcap && \
 	git clone --depth=1 https://github.com/pingcap/pd && \
 	cd pd && \
-	GOROOT=/tmp/goroot/go PATH=$GOROOT/bin:$PATH GOPATH=/tmp/gopath make build && \
+	make build && \
 	mkdir -p ${PD_DIR} && \
 	cp bin/pd-server ${PD_DIR}/
 
@@ -49,7 +52,7 @@ prepare_go:
 ifeq ($(TRAVIS_OS_NAME),linux)
 	mkdir -p /tmp/goroot && \
 	cd /tmp/goroot && \
-	curl -L https://storage.googleapis.com/golang/go1.7.linux-amd64.tar.gz -o go.tar.gz
+	curl -L https://storage.googleapis.com/golang/go1.7.linux-amd64.tar.gz -o go.tar.gz && \
 	tar xf go.tar.gz
 else
 	mkdir -p /tmp/goroot && \
