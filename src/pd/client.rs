@@ -74,19 +74,8 @@ fn rpc_connect(endpoints: &str) -> Result<TcpStream> {
         let header_str = format!("GET {} HTTP/1.0\r\n\r\n", PD_RPC_PREFIX);
         let header = header_str.as_bytes();
         try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
-        match stream.write(header) {
-            Ok(n) if n == header.len() => {
-                return Ok(stream);
-            }
-            Ok(n) => {
-                return Err(box_err!("write header failed: header len {} written len {}",
-                                    header.len(),
-                                    n));
-            }
-            Err(e) => {
-                return Err(box_err!("write header failed: {:?}", e));
-            }
-        }
+        try!(stream.write_all(header));
+        return Ok(stream);
     }
 
     Err(box_err!("failed connect to {:?}", hosts))

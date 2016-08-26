@@ -36,31 +36,38 @@ ${KCOV_DIR}/kcov:
 	mkdir -p ${KCOV_DIR} && \
 	cp src/kcov ${KCOV_DIR}/kcov
 
-${ETCD_DIR}/etcd:
+${PD_DIR}/pd-server: prepare_go
+	mkdir -p /tmp/gopath/src/github.com/pingcap && \
+	cd /tmp/gopath/src/github.com/pingcap && \
+	git clone --depth=1 https://github.com/pingcap/pd && \
+	cd pd && \
+	GOROOT=/tmp/goroot/go PATH=$GOROOT/bin:$PATH GOPATH=/tmp/gopath make build && \
+	mkdir -p ${PD_DIR} && \
+	cp bin/pd-server ${PD_DIR}/
+
+prepare_go:
 ifeq ($(TRAVIS_OS_NAME),linux)
-	cd /tmp && \
-	curl -L https://github.com/coreos/etcd/releases/download/v3.0.0/etcd-v3.0.0-linux-amd64.tar.gz -o etcd-v3.0.0-linux-amd64.tar.gz && \
-	tar xzvf etcd-v3.0.0-linux-amd64.tar.gz && \
-	cd etcd-v3.0.0-linux-amd64 && \
-	cp -f etcd ${ETCD_DIR}
+	mkdir -p /tmp/goroot && \
+	cd /tmp/goroot && \
+	curl -L https://storage.googleapis.com/golang/go1.7.linux-amd64.tar.gz -o go.tar.gz
+	tar xf go.tar.gz
 else
-	cd /tmp && \
-	curl -L https://github.com/coreos/etcd/releases/download/v3.0.0/etcd-v3.0.0-darwin-amd64.zip -o etcd-v3.0.0-darwin-amd64.zip && \
-	unzip etcd-v3.0.0-darwin-amd64.zip && \
-	cd etcd-v3.0.0-darwin-amd64 && \
-	cp -f etcd ${ETCD_DIR}
+	mkdir -p /tmp/goroot && \
+	cd /tmp/goroot && \
+	curl -L https://storage.googleapis.com/golang/go1.7.darwin-amd64.tar.gz -o go.tar.gz && \
+	tar xf go.tar.gz
 endif
 
 prepare_rust:
 	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=2016-07-31 --prefix=~/rust --disable-sudo --channel=nightly
 
-prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov ${ETCD_DIR}/etcd prepare_rust
+prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov ${PD_DIR}/pd-server prepare_rust
 
-prepare_brew: 
+prepare_brew:
 	brew update && \
 	brew install gflags snappy
 
-prepare_osx: ${ROCKSDB_DIR}/librocksdb.dylib ${ETCD_DIR}/etcd prepare_rust
+prepare_osx: ${ROCKSDB_DIR}/librocksdb.dylib ${PD_DIR}/pd-server prepare_rust
 
 test_linux test_osx:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${ROCKSDB_DIR}" && \
@@ -78,4 +85,3 @@ cover_linux:
 	grep " Running " tests.out | sed -e 's/Running//g' | xargs -n 1 -i ${KCOV_DIR}/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src --exclude-pattern tikv/src/bin --strip-path `pwd`/ target/kcov {} --nocapture
 
 cover_osx:
-	

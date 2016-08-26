@@ -29,7 +29,8 @@ use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::RaftStoreRouter;
 
-const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u32 = 60;
+const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
+const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
     where S: RaftStoreRouter + 'static
@@ -199,7 +200,7 @@ impl<C> Node<C>
                     warn!("check cluster bootstrapped failed: {:?}", e);
                 }
             }
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_secs(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS));
         }
         Err(box_err!("check cluster bootstrapped failed"))
     }
