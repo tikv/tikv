@@ -15,7 +15,7 @@ use raftstore::store::{PeerStorage, keys};
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
 use util::rocksdb;
-use storage::CF_RAFTLOG;
+use storage::CF_RAFT;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use std::sync::Arc;
@@ -67,7 +67,7 @@ impl Runner {
     fn compact(&mut self, task: Task) -> Result<u64, Error> {
         let start_key = keys::raft_log_key(task.region_id, 0);
         let mut first_idx = task.compact_idx;
-        if let Some((k, _)) = box_try!(task.engine.seek_cf(CF_RAFTLOG, &start_key)) {
+        if let Some((k, _)) = box_try!(task.engine.seek_cf(CF_RAFT, &start_key)) {
             first_idx = box_try!(keys::raft_log_index(&k));
         }
         if first_idx >= task.compact_idx {
@@ -75,7 +75,7 @@ impl Runner {
             return Ok(0);
         }
         let wb = WriteBatch::new();
-        let handle = box_try!(rocksdb::get_cf_handle(&task.engine, CF_RAFTLOG));
+        let handle = box_try!(rocksdb::get_cf_handle(&task.engine, CF_RAFT));
         for idx in first_idx..task.compact_idx {
             let key = keys::raft_log_key(task.region_id, idx);
             box_try!(wb.delete_cf(*handle, &key));

@@ -1180,7 +1180,7 @@ impl Peer {
         new_region.mut_region_epoch().set_version(region_ver);
         try!(write_peer_state(&ctx.wb, &region, PeerState::Normal));
         try!(write_peer_state(&ctx.wb, &new_region, PeerState::Normal));
-        try!(write_initial_state(&ctx.wb, new_region.get_id()));
+        try!(write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()));
 
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());

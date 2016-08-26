@@ -31,6 +31,7 @@ use tikv::util::{self, escape, unescape};
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
 use tikv::storage::DEFAULT_CFS;
+use tikv::storage::CF_RAFT;
 
 /// # Message dump tool
 ///
@@ -124,7 +125,7 @@ fn dump_region_info(db: DB, region_id_str: String) {
 
     let raft_state_key = keys::raft_state_key(region_id);
     println!("raft state key: {}", escape(&raft_state_key));
-    let raft_state: Option<RaftLocalState> = db.get_msg(&raft_state_key).unwrap();
+    let raft_state: Option<RaftLocalState> = db.get_msg_cf(CF_RAFT, &raft_state_key).unwrap();
     println!("raft state: {:?}", raft_state);
 
     let apply_state_key = keys::apply_state_key(region_id);
