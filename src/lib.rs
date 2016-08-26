@@ -47,7 +47,6 @@ extern crate cadence;
 extern crate libc;
 extern crate crc;
 extern crate rustc_serialize;
-extern crate hyper;
 #[cfg(unix)]
 extern crate nix;
 extern crate alloc;
