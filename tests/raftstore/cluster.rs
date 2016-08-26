@@ -49,7 +49,11 @@ pub trait Simulator {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
-    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
+    fn call_command(&self,
+                    node_id: u64,
+                    request: RaftCmdRequest,
+                    timeout: Duration)
+                    -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
@@ -163,10 +167,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn call_command(&self,
+                        node_id: u64,
                         request: RaftCmdRequest,
                         timeout: Duration)
                         -> Result<RaftCmdResponse> {
-        match self.sim.rl().call_command(request.clone(), timeout) {
+        match self.sim.rl().call_command(node_id, request.clone(), timeout) {
             Err(e) => {
                 warn!("failed to call command {:?}: {:?}", request, e);
                 Err(e)
@@ -186,8 +191,9 @@ impl<T: Simulator> Cluster<T> {
                 None => return Err(box_err!("can't get leader of region {}", region_id)),
                 Some(l) => l,
             };
+            let node_id = leader.get_store_id();
             request.mut_header().set_peer(leader);
-            let resp = match self.call_command(request.clone(), timeout) {
+            let resp = match self.call_command(node_id, request.clone(), timeout) {
                 e @ Err(_) => return e,
                 Ok(resp) => resp,
             };
@@ -219,7 +225,7 @@ impl<T: Simulator> Cluster<T> {
         // To get region leader, we don't care real peer id, so use 0 instead.
         let peer = new_peer(store_id, 0);
         let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-        let mut resp = self.call_command(find_leader, Duration::from_secs(5)).unwrap();
+        let mut resp = self.call_command(store_id, find_leader, Duration::from_secs(5)).unwrap();
         let mut region_leader = resp.take_status_response().take_region_leader();
         // NOTE: node id can't be 0.
         if self.valid_leader_id(region_id, region_leader.get_leader().get_store_id()) {
@@ -408,7 +414,7 @@ impl<T: Simulator> Cluster<T> {
             }
             return resp;
         }
-        panic!("request failed after retry for 10 times");
+        panic!("request failed after retry for 20 times");
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
@@ -505,7 +511,7 @@ impl<T: Simulator> Cluster<T> {
         let status_cmd = new_region_detail_cmd();
         let peer = new_peer(peer_id, peer_id);
         let req = new_status_request(region_id, peer, status_cmd);
-        let resp = self.call_command(req, Duration::from_secs(5));
+        let resp = self.call_command(peer_id, req, Duration::from_secs(5));
         assert!(resp.is_ok(), format!("{:?}", resp));
 
         let mut resp = resp.unwrap();

@@ -367,7 +367,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // and the command can't be executed because we have only one peer,
     // so here will return timeout error, we should ignore it.
-    let _ = cluster.call_command(compact_log, Duration::from_millis(1));
+    let _ = cluster.call_command(1, compact_log, Duration::from_millis(1));
 
     cluster.run_node(2);
     cluster.run_node(3);
@@ -464,8 +464,9 @@ fn find_leader_response_header<T: Simulator>(cluster: &mut Cluster<T>,
                                              region_id: u64,
                                              peer: metapb::Peer)
                                              -> RaftResponseHeader {
+    let node_id = peer.get_store_id();
     let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-    let resp = cluster.call_command(find_leader, Duration::from_secs(5));
+    let resp = cluster.call_command(node_id, find_leader, Duration::from_secs(5));
     resp.unwrap().take_header()
 }
 
