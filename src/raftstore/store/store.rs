@@ -777,6 +777,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return cb.call_box((resp,));
         }
 
+        let store_id = msg.get_header().get_peer().get_store_id();
+        if store_id != self.store.get_id() {
+            bind_error(&mut resp,
+                       box_err!("mismatch store id {} != {}", store_id, self.store.get_id()));
+            return cb.call_box((resp,));
+        }
+
         let region_id = msg.get_header().get_region_id();
         let mut peer = match self.region_peers.get_mut(&region_id) {
             None => {
