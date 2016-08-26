@@ -13,7 +13,7 @@
 
 use std::thread;
 use std::boxed::FnBox;
-use std::fmt;
+use std::fmt::{self, Debug, Display, Formatter};
 use std::error;
 use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
@@ -68,7 +68,6 @@ pub enum StorageCb {
     Locks(Callback<Vec<LockInfo>>),
 }
 
-#[allow(type_complexity)]
 pub enum Command {
     Get {
         ctx: Context,
@@ -137,8 +136,8 @@ pub enum Command {
     },
 }
 
-impl fmt::Display for Command {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for Command {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Command::Get { ref key, start_ts, .. } => {
                 write!(f, "kv::command::get {} @ {}", key, start_ts)
@@ -194,6 +193,12 @@ impl fmt::Display for Command {
                 write!(f, "kv::command::gc scan {:?} @{}", scan_key, safe_point)
             }
         }
+    }
+}
+
+impl Debug for Command {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 

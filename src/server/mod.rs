@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::net::SocketAddr;
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Formatter, Display, Debug};
 use std::boxed::{Box, FnBox};
 use std::io::Write;
 
@@ -106,6 +106,13 @@ impl Display for ConnData {
     }
 }
 
+impl Debug for ConnData {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+#[derive(Debug)]
 pub enum Msg {
     // Quit event loop.
     Quit,
