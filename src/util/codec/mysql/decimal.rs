@@ -1537,6 +1537,7 @@ mod test {
     use super::WORD_BUF_LEN;
 
     use std::f64;
+    use std::iter::repeat;
     use std::cmp::Ordering;
 
     macro_rules! assert_f64_eq {
@@ -1922,6 +1923,9 @@ mod test {
 
     #[test]
     fn test_add() {
+        let a = "2".to_owned() + &repeat('1').take(71).collect::<String>();
+        let b: String = repeat('8').take(81).collect();
+        let c = "8888888890".to_owned() + &repeat('9').take(71).collect::<String>();
         let cases = vec![
             (".00012345000098765", "123.45", Res::Ok("123.45012345000098765")),
             (".1", ".45", Res::Ok("0.55")),
@@ -1943,6 +1947,7 @@ mod test {
             (".1", ".1", Res::Ok("0.2")),
             (".1", "-.1", Res::Ok("0")),
             ("0", "1.001", Res::Ok("1.001")),
+            (&a, &b, Res::Ok(&c)),
         ];
 
         for (lhs_str, rhs_str, exp) in cases {
