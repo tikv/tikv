@@ -184,7 +184,7 @@ fn sub(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
 type SubTmp = (usize, usize, u8);
 
 #[inline]
-fn calc_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, SubTmp) {
+fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, SubTmp) {
     let (l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt), word_cnt!(lhs.frac_cnt));
     let (r_int_word_cnt, mut r_frac_word_cnt) = (word_cnt!(rhs.int_cnt), word_cnt!(rhs.frac_cnt));
     let frac_word_to = cmp::max(l_frac_word_cnt, r_frac_word_cnt);
@@ -241,7 +241,7 @@ fn calc_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, SubTmp)
 }
 
 fn do_sub(mut lhs: Decimal, mut rhs: Decimal) -> Res<Decimal> {
-    let (carry, mut frac_word_to, l_res, r_res) = calc_carry(&lhs, &rhs);
+    let (carry, mut frac_word_to, l_res, r_res) = calc_sub_carry(&lhs, &rhs);
     if carry.is_none() {
         lhs.reset_to_zero();
         return Res::Ok(lhs);
@@ -1485,7 +1485,7 @@ impl Eq for Decimal {}
 impl Ord for Decimal {
     fn cmp(&self, right: &Decimal) -> Ordering {
         if self.negative == right.negative {
-            let (carry, _, _, _) = calc_carry(self, right);
+            let (carry, _, _, _) = calc_sub_carry(self, right);
             carry.map_or(Ordering::Equal, |carry| {
                 if (carry > 0) == self.negative {
                     Ordering::Greater
