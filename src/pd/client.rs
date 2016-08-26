@@ -67,7 +67,10 @@ fn rpc_connect(endpoints: &str) -> Result<TcpStream> {
     for host in &hosts {
         let mut stream = match make_std_tcp_conn(host.as_str()) {
             Ok(stream) => stream,
-            Err(_) => continue,
+            Err(e) => {
+                warn!("connect to {} failed: {:?}", host, e);
+                continue;
+            }
         };
         try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
 
@@ -76,7 +79,10 @@ fn rpc_connect(endpoints: &str) -> Result<TcpStream> {
         let header = header_str.as_bytes();
         match stream.write_all(header) {
             Ok(_) => return Ok(stream),
-            Err(_) => continue,
+            Err(e) => {
+                warn!("write header to {} failed: {:?}", host, e);
+                continue;
+            }
         }
     }
 
