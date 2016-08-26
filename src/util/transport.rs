@@ -13,6 +13,7 @@
 
 
 use std::{thread, error};
+use std::fmt::Debug;
 use std::time::Duration;
 
 use mio::{Sender, NotifyError};
@@ -35,7 +36,7 @@ pub struct SendCh<T> {
     ch: Sender<T>,
 }
 
-impl<T> SendCh<T> {
+impl<T: Debug> SendCh<T> {
     pub fn new(ch: Sender<T>) -> SendCh<T> {
         SendCh { ch: ch }
     }
@@ -51,6 +52,8 @@ impl<T> SendCh<T> {
             warn!("notify queue is full, sleep and retry");
             try_cnt += 1;
             if try_cnt >= MAX_SEND_RETRY_CNT {
+                // ALLERT!! make cause sensitive data leak.
+                error!("failed to send msg {:?}", t);
                 return Err(box_err!("failed to send msg after {} tries", MAX_SEND_RETRY_CNT));
             }
             thread::sleep(Duration::from_millis(100));
@@ -74,6 +77,7 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug)]
     enum Msg {
         Quit,
         Stop,
