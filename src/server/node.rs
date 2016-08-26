@@ -13,6 +13,7 @@
 
 use std::thread;
 use std::sync::Arc;
+use std::time::Duration;
 
 use mio::EventLoop;
 use rocksdb::DB;
@@ -27,6 +28,9 @@ use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::RaftStoreRouter;
+
+const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
+const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
     where S: RaftStoreRouter + 'static
@@ -84,14 +88,15 @@ impl<C> Node<C>
                     -> Result<()>
         where T: Transport + 'static
     {
-        let bootstrapped = try!(self.pd_client
-            .is_cluster_bootstrapped());
+        let bootstrapped = try!(self.check_cluster_bootstrapped());
         let mut store_id = try!(self.check_store(&engine));
         if store_id == INVALID_ID {
             store_id = try!(self.bootstrap_store(&engine));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
-            return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped",
+            return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped, \
+                                 maybe you connected a wrong PD or need to remove the TiKV data \
+                                 and start again",
                                 store_id,
                                 self.cluster_id));
         }
@@ -150,7 +155,7 @@ impl<C> Node<C>
 
     fn bootstrap_store(&self, engine: &DB) -> Result<u64> {
         let store_id = try!(self.alloc_id());
-        debug!("alloc store id {} ", store_id);
+        info!("alloc store id {} ", store_id);
 
         try!(store::bootstrap_store(engine, self.cluster_id, store_id));
 
@@ -187,6 +192,19 @@ impl<C> Node<C>
                 Ok(())
             }
         }
+    }
+
+    fn check_cluster_bootstrapped(&self) -> Result<bool> {
+        for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
+            match self.pd_client.is_cluster_bootstrapped() {
+                Ok(b) => return Ok(b),
+                Err(e) => {
+                    warn!("check cluster bootstrapped failed: {:?}", e);
+                }
+            }
+            thread::sleep(Duration::from_secs(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS));
+        }
+        Err(box_err!("check cluster bootstrapped failed"))
     }
 
     fn start_store<T>(&mut self,

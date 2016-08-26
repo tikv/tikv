@@ -163,11 +163,7 @@ pub trait BytesDecoder: NumberDecoder + CompactBytesDecoder {
             }
             let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
             key.write_all(bytes).unwrap();
-            let pad_byte = if desc {
-                !0
-            } else {
-                0
-            };
+            let pad_byte = if desc { !0 } else { 0 };
             if padding.iter().any(|x| *x != pad_byte) {
                 return Err(Error::KeyPadding);
             }
@@ -188,11 +184,7 @@ impl<'a> BytesDecoder for &'a [u8] {
     }
 
     fn peak_u8(&self) -> Option<u8> {
-        if self.is_empty() {
-            None
-        } else {
-            Some(self[0])
-        }
+        if self.is_empty() { None } else { Some(self[0]) }
     }
 }
 

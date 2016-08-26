@@ -48,7 +48,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_ev
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
-use tikv::pd::{new_rpc_client, RpcClient};
+use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -324,6 +324,10 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
     get_rocksdb_default_cf_option(matches, config)
 }
 
+// TODO: merge this function with Config::new
+// Currently, to add a new option, we will define three default value
+// in config.rs, this file and config-template.toml respectively. It may be more
+// maintainable to keep things in one place.
 fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &str) -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
@@ -334,6 +338,13 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                                             config,
                                             Some(40960),
                                             |v| v.as_integer()) as usize;
+    cfg.end_point_concurrency =
+        get_integer_value("",
+                          "server.end-point-concurrency",
+                          matches,
+                          config,
+                          Some(8),
+                          |v| v.as_integer()) as usize;
     cfg.messages_per_tick =
         get_integer_value("",
                           "server.messages-per-tick",
@@ -546,13 +557,13 @@ fn run_local_server(listener: TcpListener, config: &Config) {
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel());
-    let etcd_endpoints = get_string_value("pd",
-                                          "pd.endpoints",
-                                          matches,
-                                          config,
-                                          None,
-                                          |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(new_rpc_client(&etcd_endpoints, cfg.cluster_id).unwrap());
+    let pd_endpoints = get_string_value("pd",
+                                        "pd.endpoints",
+                                        matches,
+                                        config,
+                                        None,
+                                        |v| v.as_str().map(|s| s.to_owned()));
+    let pd_client = Arc::new(RpcClient::new(&pd_endpoints, cfg.cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let store_path = get_store_path(matches, config);

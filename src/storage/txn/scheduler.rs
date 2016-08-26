@@ -13,6 +13,7 @@
 
 use std::time::Duration;
 use std::boxed::Box;
+use std::fmt::{self, Formatter, Debug};
 use threadpool::ThreadPool;
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult, Error as StorageError};
 use kvproto::kvrpcpb::{Context, LockInfo};
@@ -38,55 +39,52 @@ pub enum Tick {
 
 pub enum ProcessResult {
     Res,
-    MultiRes {
-        results: Vec<StorageResult<()>>,
-    },
-    MultiKvpairs {
-        pairs: Vec<StorageResult<KvPair>>,
-    },
-    Value {
-        value: Option<Value>,
-    },
-    Locks {
-        locks: Vec<LockInfo>,
-    },
-    NextCommand {
-        cmd: Command,
-    },
-    Failed {
-        err: StorageError,
-    },
+    MultiRes { results: Vec<StorageResult<()>> },
+    MultiKvpairs { pairs: Vec<StorageResult<KvPair>> },
+    Value { value: Option<Value> },
+    Locks { locks: Vec<LockInfo> },
+    NextCommand { cmd: Command },
+    Failed { err: StorageError },
 }
 
 pub enum Msg {
     Quit,
-    RawCmd {
-        cmd: Command,
-        cb: StorageCb,
-    },
+    RawCmd { cmd: Command, cb: StorageCb },
     SnapshotFinished {
         cid: u64,
         snapshot: EngineResult<Box<Snapshot>>,
     },
-    ReadFinished {
-        cid: u64,
-        pr: ProcessResult,
-    },
+    ReadFinished { cid: u64, pr: ProcessResult },
     WritePrepareFinished {
         cid: u64,
         cmd: Command,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
     },
-    WritePrepareFailed {
-        cid: u64,
-        err: Error,
-    },
+    WritePrepareFailed { cid: u64, err: Error },
     WriteFinished {
         cid: u64,
         pr: ProcessResult,
         result: EngineResult<()>,
     },
+}
+
+impl Debug for Msg {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match *self {
+            Msg::Quit => write!(f, "Quit"),
+            Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
+            Msg::SnapshotFinished { cid, .. } => write!(f, "SnapshotFinished [cid={}]", cid),
+            Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
+            Msg::WritePrepareFinished { cid, ref cmd, .. } => {
+                write!(f, "WritePrepareFinished [cid={}, cmd={:?}]", cid, cmd)
+            }
+            Msg::WritePrepareFailed { cid, ref err } => {
+                write!(f, "WritePrepareFailed [cid={}, err={:?}]", cid, err)
+            }
+            Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
+        }
+    }
 }
 
 fn execute_callback(callback: StorageCb, pr: ProcessResult) {

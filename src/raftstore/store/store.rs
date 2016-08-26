@@ -865,7 +865,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if applied_idx > first_idx && applied_idx - first_idx >= self.cfg.raft_log_gc_limit {
                 compact_idx = applied_idx;
             } else if replicated_idx < first_idx ||
-               replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {
+                      replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {
                 continue;
             } else {
                 compact_idx = replicated_idx;
@@ -1097,20 +1097,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let f = try!(self.snap_mgr.rl().get_snap_file(&key, is_sending));
             if is_sending {
                 if key.term < compacted_term || key.idx < compacted_idx {
-                    debug!("snap file {} has been compacted, delete.", key);
+                    info!("snap file {} has been compacted, delete.", key);
                     f.delete();
                 } else if let Ok(meta) = f.meta() {
                     let modified = box_try!(meta.modified());
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed > Duration::from_secs(self.cfg.snap_gc_timeout) {
-                            debug!("snap file {} has been expired, delete.", key);
+                            info!("snap file {} has been expired, delete.", key);
                             f.delete();
                         }
                     }
                 }
             } else if key.term <= compacted_term &&
-               (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap) {
-                debug!("snap file {} has been applied, delete.", key);
+                      (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap) {
+                info!("snap file {} has been applied, delete.", key);
                 f.delete();
             }
         }

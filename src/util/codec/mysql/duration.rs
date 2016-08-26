@@ -82,11 +82,7 @@ impl Duration {
 
     pub fn to_secs(&self) -> f64 {
         let res = self.dur.as_secs() as f64 + self.dur.subsec_nanos() as f64 * 10e-9;
-        if self.neg {
-            -res
-        } else {
-            res
-        }
+        if self.neg { -res } else { res }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -95,11 +91,7 @@ impl Duration {
 
     pub fn to_nanos(&self) -> i64 {
         let nanos = self.dur.as_secs() as i64 * NANOS_PER_SEC + self.dur.subsec_nanos() as i64;
-        if self.neg {
-            -nanos
-        } else {
-            nanos
-        }
+        if self.neg { -nanos } else { nanos }
     }
 
     pub fn from_nanos(nanos: i64, fsp: u8) -> Result<Duration> {

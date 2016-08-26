@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::net::SocketAddr;
-use std::fmt::{self, Formatter, Display};
+use std::fmt::{self, Formatter, Display, Debug};
 use std::boxed::{Box, FnBox};
 use std::io::Write;
 
@@ -106,26 +106,25 @@ impl Display for ConnData {
     }
 }
 
+impl Debug for ConnData {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+#[derive(Debug)]
 pub enum Msg {
     // Quit event loop.
     Quit,
     // Write data to connection.
-    WriteData {
-        token: Token,
-        data: ConnData,
-    },
+    WriteData { token: Token, data: ConnData },
     // Send data to remote store.
-    SendStore {
-        store_id: u64,
-        data: ConnData,
-    },
+    SendStore { store_id: u64, data: ConnData },
     // Resolve store address result.
     ResolveResult {
         store_id: u64,
         sock_addr: Result<SocketAddr>,
         data: ConnData,
     },
-    CloseConn {
-        token: Token,
-    },
+    CloseConn { token: Token },
 }

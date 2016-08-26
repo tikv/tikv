@@ -1268,11 +1268,7 @@ pub trait DecimalEncoder: Write {
     #[allow(cyclomatic_complexity)]
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
         try!(self.write_all(&[prec, frac]));
-        let mut mask = if d.negative {
-            u32::MAX
-        } else {
-            0
-        };
+        let mut mask = if d.negative { u32::MAX } else { 0 };
         let mut int_cnt = prec - frac;
         let int_word_cnt = int_cnt / DIGITS_PER_WORD;
         let leading_digits = (int_cnt - int_word_cnt * DIGITS_PER_WORD) as usize;
