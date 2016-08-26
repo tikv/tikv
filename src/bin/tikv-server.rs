@@ -48,7 +48,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_ev
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
-use tikv::pd::{new_rpc_client, RpcClient};
+use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
@@ -557,13 +557,13 @@ fn run_local_server(listener: TcpListener, config: &Config) {
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel());
-    let etcd_endpoints = get_string_value("pd",
-                                          "pd.endpoints",
-                                          matches,
-                                          config,
-                                          None,
-                                          |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(new_rpc_client(&etcd_endpoints, cfg.cluster_id).unwrap());
+    let pd_endpoints = get_string_value("pd",
+                                        "pd.endpoints",
+                                        matches,
+                                        config,
+                                        None,
+                                        |v| v.as_str().map(|s| s.to_owned()));
+    let pd_client = Arc::new(RpcClient::new(&pd_endpoints, cfg.cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let store_path = get_store_path(matches, config);
