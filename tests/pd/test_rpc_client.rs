@@ -11,4 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod test_rpc_client;
+use std::env;
+
+use tikv::pd::{PdClient, RpcClient};
+
+#[test]
+fn test_rpc_client() {
+    // We need to set all members in PD_ENDPOINTS to pass this test.
+    let endpoints = match env::var("PD_ENDPOINTS") {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut id = 0;
+
+    for _ in 0..100 {
+        let client = RpcClient::new(&endpoints, 0).unwrap();
+        let alloc_id = client.alloc_id().unwrap();
+        assert!(alloc_id > id);
+        id = alloc_id;
+    }
+}
