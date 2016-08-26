@@ -56,17 +56,11 @@ pub enum Msg {
         status: SnapshotStatus,
     },
 
-    ReportUnreachable {
-        region_id: u64,
-        to_peer_id: u64,
-    },
+    ReportUnreachable { region_id: u64, to_peer_id: u64 },
 
     // For snapshot stats.
     SnapshotStats,
-    SnapApplyRes {
-        region_id: u64,
-        is_success: bool,
-    },
+    SnapApplyRes { region_id: u64, is_success: bool },
     SnapGenRes {
         region_id: u64,
         snap: Option<Snapshot>,

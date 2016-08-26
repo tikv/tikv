@@ -163,11 +163,7 @@ impl Decimal {
         Some(Decimal {
             coeff: coeff,
             exp: exp,
-            fsp: if exp < 0 {
-                -exp as u8
-            } else {
-                0
-            },
+            fsp: if exp < 0 { -exp as u8 } else { 0 },
         })
     }
 

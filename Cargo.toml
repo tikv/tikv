@@ -27,10 +27,6 @@ name = "tikv-dump"
 [[test]]
 name = "tests"
 
-[[test]]
-name = "benches"
-path = "benches/benches.rs"
-
 [dependencies]
 log = "0.3"
 byteorder = "0.5"

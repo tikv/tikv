@@ -62,7 +62,7 @@ else
 endif
 
 prepare_rust:
-	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=2016-07-31 --prefix=~/rust --disable-sudo --channel=nightly
+	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=2016-08-25 --prefix=~/rust --disable-sudo --channel=nightly
 
 prepare_linux: ${ROCKSDB_DIR}/librocksdb.so ${KCOV_DIR}/kcov ${PD_DIR}/pd-server prepare_rust
 

@@ -119,10 +119,7 @@ pub enum Command {
         key: Key,
         lock_ts: u64,
     },
-    ScanLock {
-        ctx: Context,
-        max_ts: u64,
-    },
+    ScanLock { ctx: Context, max_ts: u64 },
     ResolveLock {
         ctx: Context,
         start_ts: u64,
