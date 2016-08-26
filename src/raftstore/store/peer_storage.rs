@@ -391,7 +391,10 @@ impl PeerStorage {
         ctx.apply_state.mut_truncated_state().set_index(last_index);
         ctx.apply_state.mut_truncated_state().set_term(snap.get_metadata().get_term());
 
-        info!("{} apply snapshot meta ok", self.tag);
+        info!("{} apply snapshot for region {:?} with state {:?} ok",
+              self.tag,
+              region,
+              ctx.apply_state);
 
         Ok(ApplySnapResult {
             prev_region: self.region.clone(),
