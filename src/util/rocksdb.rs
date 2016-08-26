@@ -59,9 +59,8 @@ pub fn new_engine_opt(mut opts: Options,
     // opts is used as Rocksdb's DBOptions when call DB::open_cf
     opts.create_if_missing(false);
     let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
-    match DB::open_cf(&opts, path, cfs, &cfs_ref_opts) {
-        Ok(db) => return Ok(db),
-        Err(e) => warn!("open rocksdb fail: {}", e),
+    if let Ok(db) = DB::open_cf(&opts, path, cfs, &cfs_ref_opts) {
+        return Ok(db);
     }
 
     // opts is used as Rocksdb's Options(include DBOptions and ColumnFamilyOptions)
