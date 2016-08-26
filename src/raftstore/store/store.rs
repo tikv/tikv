@@ -129,8 +129,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         })
     }
 
-    /// Initialize this store. It scans the db engine, load all regions
-    /// and their peers from it, and schedule snapshot worker if neccessary.
+    /// Initialize this store. It scans the db engine, loads all regions
+    /// and their peers from it, and schedules snapshot worker if neccessary.
     /// WARN: This store should not be used before Initialized.
     pub fn init(&mut self) -> Result<()> {
         // Scan region meta to get saved regions.
