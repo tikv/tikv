@@ -39,7 +39,7 @@ ${KCOV_DIR}/kcov:
 ${PD_DIR}/pd-server: prepare_go
 	export GOROOT=/tmp/goroot/go && \
 	export GOPATH=/tmp/gopath && \
-	export PATH=$GOROOT/bin:$PATH && \
+	export PATH=${GOROOT}/bin:${PATH} && \
 	mkdir -p /tmp/gopath/src/github.com/pingcap && \
 	cd /tmp/gopath/src/github.com/pingcap && \
 	git clone --depth=1 https://github.com/pingcap/pd && \
