@@ -130,7 +130,7 @@ fn dump_region_info(db: DB, region_id_str: String) {
 
     let apply_state_key = keys::apply_state_key(region_id);
     println!("apply state key: {}", escape(&apply_state_key));
-    let apply_state: Option<RaftApplyState> = db.get_msg(&apply_state_key).unwrap();
+    let apply_state: Option<RaftApplyState> = db.get_msg_cf(CF_RAFT, &apply_state_key).unwrap();
     println!("apply state: {:?}", apply_state);
 }
 

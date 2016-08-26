@@ -240,6 +240,16 @@ pub trait Mutable: Writable {
         Ok(())
     }
 
+    fn put_msg_cf<M: protobuf::Message>(&self,
+                                        cf: rocksdb::DBCFHandle,
+                                        key: &[u8],
+                                        m: &M)
+                                        -> Result<()> {
+        let value = try!(m.write_to_bytes());
+        try!(self.put_cf(cf, key, &value));
+        Ok(())
+    }
+
     fn put_u64(&self, key: &[u8], n: u64) -> Result<()> {
         let mut value = vec![0;8];
         BigEndian::write_u64(&mut value, n);

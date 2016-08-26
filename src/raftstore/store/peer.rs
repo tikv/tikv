@@ -35,6 +35,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
+use storage::CF_RAFT;
 use super::store::Store;
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
@@ -480,6 +481,7 @@ impl Peer {
                 apply_state: self.get_store().apply_state.clone(),
                 wb: WriteBatch::new(),
                 req: &req,
+                engine: self.engine.clone(),
             };
             let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
                 error!("{} execute raft command err: {:?}", self.tag, e);
@@ -784,7 +786,9 @@ impl Peer {
             let wb = WriteBatch::new();
             let mut state = self.get_store().apply_state.clone();
             state.set_applied_index(index);
-            try!(wb.put_msg(&keys::apply_state_key(self.region_id), &state));
+            let engine = self.engine.clone();
+            let raft_cf = try!(rocksdb::get_cf_handle(engine.as_ref(), CF_RAFT));
+            try!(wb.put_msg_cf(*raft_cf, &keys::apply_state_key(self.region_id), &state));
             try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
             self.mut_store().applied_index_term = term;
@@ -922,6 +926,7 @@ impl Peer {
             apply_state: self.get_store().apply_state.clone(),
             wb: WriteBatch::new(),
             req: req,
+            engine: self.engine.clone(),
         };
         let (mut resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             error!("{} execute raft command err: {:?}", self.tag, e);
@@ -989,11 +994,15 @@ struct ExecContext<'a> {
     pub apply_state: RaftApplyState,
     pub wb: WriteBatch,
     pub req: &'a RaftCmdRequest,
+    pub engine: Arc<DB>,
 }
 
 impl<'a> ExecContext<'a> {
     fn save(&self, region_id: u64) -> Result<()> {
-        try!(self.wb.put_msg(&keys::apply_state_key(region_id), &self.apply_state));
+        let raft_cf = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
+        try!(self.wb.put_msg_cf(*raft_cf,
+                                &keys::apply_state_key(region_id),
+                                &self.apply_state));
         Ok(())
     }
 }

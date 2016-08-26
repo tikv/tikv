@@ -250,9 +250,10 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                                        "rocksdb.max-background-compactions",
                                                        matches,
                                                        config,
-                                                       Some(4),
+                                                       Some(6),
                                                        |v| v.as_integer());
     opts.set_max_background_compactions(max_background_compactions as i32);
+    opts.set_max_background_flushes(2);
 
     let max_bytes_for_level_base = get_integer_value("",
                                                      "rocksdb.max-bytes-for-level-base",

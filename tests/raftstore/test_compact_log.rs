@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use tikv::raftstore::store::*;
+use tikv::storage::CF_RAFT;
 use kvproto::raft_serverpb::RaftApplyState;
 
 use super::util::*;
@@ -28,7 +29,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for (&id, engine) in &cluster.engines {
         let mut state: RaftApplyState =
-            engine.get_msg(&keys::apply_state_key(1)).unwrap().unwrap_or_default();
+            engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().unwrap_or_default();
         before_states.insert(id, state.take_truncated_state());
     }
 
@@ -47,7 +48,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
     for (&id, engine) in &cluster.engines {
         let mut state: RaftApplyState =
-            engine.get_msg(&keys::apply_state_key(1)).unwrap().unwrap_or_default();
+            engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().unwrap_or_default();
         let after_state = state.take_truncated_state();
 
         let before_state = before_states.get(&id).unwrap();
@@ -74,7 +75,7 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     for (&id, engine) in &cluster.engines {
         must_get_equal(engine, b"k1", b"v1");
         let mut state: RaftApplyState =
-            engine.get_msg(&keys::apply_state_key(1)).unwrap().unwrap_or_default();
+            engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().unwrap_or_default();
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -96,7 +97,7 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     // limit has not reached, should not gc.
     for (&id, engine) in &cluster.engines {
         let mut state: RaftApplyState =
-            engine.get_msg(&keys::apply_state_key(1)).unwrap().unwrap_or_default();
+            engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().unwrap_or_default();
         let after_state = state.take_truncated_state();
 
         let before_state = before_states.get(&id).unwrap();
@@ -118,7 +119,7 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
     for (&id, engine) in &cluster.engines {
         let mut state: RaftApplyState =
-            engine.get_msg(&keys::apply_state_key(1)).unwrap().unwrap_or_default();
+            engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().unwrap_or_default();
         let after_state = state.take_truncated_state();
 
         let before_state = before_states.get(&id).unwrap();

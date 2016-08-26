@@ -111,14 +111,16 @@ impl InvokeContext {
     }
 
     pub fn save_raft(&self, region_id: u64) -> Result<()> {
-        let value = try!(self.raft_state.write_to_bytes());
         let raft_cf = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
-        try!(self.wb.put_cf(*raft_cf, &keys::raft_state_key(region_id), &value));
+        try!(self.wb.put_msg_cf(*raft_cf, &keys::raft_state_key(region_id), &self.raft_state));
         Ok(())
     }
 
     pub fn save_apply(&self, region_id: u64) -> Result<()> {
-        try!(self.wb.put_msg(&keys::apply_state_key(region_id), &self.apply_state));
+        let raft_cf = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
+        try!(self.wb.put_msg_cf(*raft_cf,
+                                &keys::apply_state_key(region_id),
+                                &self.apply_state));
         Ok(())
     }
 }
@@ -141,19 +143,20 @@ impl PeerStorage {
                     raft_state
                 }
             };
-        let apply_state = match try!(engine.get_msg(&keys::apply_state_key(region.get_id()))) {
-            Some(s) => s,
-            None => {
-                let mut apply_state = RaftApplyState::new();
-                if !region.get_peers().is_empty() {
-                    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
-                    let state = apply_state.mut_truncated_state();
-                    state.set_index(RAFT_INIT_LOG_INDEX);
-                    state.set_term(RAFT_INIT_LOG_TERM);
+        let apply_state =
+            match try!(engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))) {
+                Some(s) => s,
+                None => {
+                    let mut apply_state = RaftApplyState::new();
+                    if !region.get_peers().is_empty() {
+                        apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+                        let state = apply_state.mut_truncated_state();
+                        state.set_index(RAFT_INIT_LOG_INDEX);
+                        state.set_term(RAFT_INIT_LOG_TERM);
+                    }
+                    apply_state
                 }
-                apply_state
-            }
-        };
+            };
 
         Ok(PeerStorage {
             engine: engine,
@@ -596,10 +599,11 @@ fn build_snap_file(f: &mut SnapFile,
 pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft::Result<Snapshot> {
     debug!("[region {}] begin to generate a snapshot", region_id);
 
-    let apply_state: RaftApplyState = match try!(snap.get_msg(&keys::apply_state_key(region_id))) {
-        None => return Err(box_err!("could not load raft state of region {}", region_id)),
-        Some(state) => state,
-    };
+    let apply_state: RaftApplyState =
+        match try!(snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))) {
+            None => return Err(box_err!("could not load raft state of region {}", region_id)),
+            Some(state) => state,
+        };
 
     let idx = apply_state.get_applied_index();
     let term = if idx == apply_state.get_truncated_state().get_index() {
@@ -683,12 +687,9 @@ pub fn write_initial_state<T: Mutable>(engine: &DB, w: &T, region_id: u64) -> Re
     apply_state.mut_truncated_state().set_index(RAFT_INIT_LOG_INDEX);
     apply_state.mut_truncated_state().set_term(RAFT_INIT_LOG_TERM);
 
-    let raft_state_value = try!(raft_state.write_to_bytes());
     let raft_cf = try!(rocksdb::get_cf_handle(engine, CF_RAFT));
-    try!(w.put_cf(*raft_cf,
-                  &keys::raft_state_key(region_id),
-                  &raft_state_value));
-    try!(w.put_msg(&keys::apply_state_key(region_id), &apply_state));
+    try!(w.put_msg_cf(*raft_cf, &keys::raft_state_key(region_id), &raft_state));
+    try!(w.put_msg_cf(*raft_cf, &keys::apply_state_key(region_id), &apply_state));
 
     Ok(())
 }
