@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 
 use mio::EventLoop;
 use rocksdb::DB;
@@ -211,13 +211,21 @@ impl<C> Node<C>
         let store = self.store.clone();
         let ch = event_loop.channel();
 
+        let (tx, rx): (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel();
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
             let mut store = Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr).unwrap();
+            // make sure the initialization of store is done successfully in startup
+            if let Err(e) = store.init() {
+                panic!("store {} prepare err {:?}", store_id, e);
+            }
+            tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);
             };
         }));
+        // wait for store to be fully initialized(or error happens during its initialization)
+        let _ = rx.recv();
 
         self.store_handle = Some(h);
         Ok(())
