@@ -49,12 +49,13 @@ impl<T: Debug> SendCh<T> {
                 _ => return Err(box_err!("{:?}", e)),
             };
 
-            warn!("notify queue is full, sleep and retry");
+            // ALLERT!! make cause sensitive data leak.
+            warn!("notify queue is full, sleep and retry sending {:?}", t);
             try_cnt += 1;
             if try_cnt >= MAX_SEND_RETRY_CNT {
-                // ALLERT!! make cause sensitive data leak.
-                error!("failed to send msg {:?}", t);
-                return Err(box_err!("failed to send msg after {} tries", MAX_SEND_RETRY_CNT));
+                return Err(box_err!("failed to send msg {:?} after {} tries",
+                                    t,
+                                    MAX_SEND_RETRY_CNT));
             }
             thread::sleep(Duration::from_millis(100));
         }
