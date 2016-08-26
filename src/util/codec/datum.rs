@@ -31,10 +31,11 @@ const COMPACT_BYTES_FLAG: u8 = 2;
 const INT_FLAG: u8 = 3;
 const UINT_FLAG: u8 = 4;
 const FLOAT_FLAG: u8 = 5;
-const DECIMAL_FLAG: u8 = 6;
+const NEW_DECIMAL_FLAG: u8 = 6;
 const DURATION_FLAG: u8 = 7;
 const VAR_INT_FLAG: u8 = 8;
 const VAR_UINT_FLAG: u8 = 9;
+const DECIMAL_FLAG: u8 = 10;
 const MAX_FLAG: u8 = 250;
 
 #[derive(PartialEq, Clone)]
@@ -667,6 +668,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         NIL_FLAG => 0,
         FLOAT_FLAG => number::F64_SIZE,
         DURATION_FLAG => number::I64_SIZE,
+        NEW_DECIMAL_FLAG => try!(mysql::dec_encoded_len(&buf[1..])),
         DECIMAL_FLAG => mysql::encoded_len(&buf[1..]),
         VAR_INT_FLAG => {
             let mut v = &buf[1..];

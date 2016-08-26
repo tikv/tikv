@@ -344,6 +344,10 @@ fn get_rocksdb_raftlog_cf_option() -> RocksdbOptions {
     opts
 }
 
+// TODO: merge this function with Config::new
+// Currently, to add a new option, we will define three default value
+// in config.rs, this file and config-template.toml respectively. It may be more
+// maintainable to keep things in one place.
 fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &str) -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
@@ -354,6 +358,13 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                                             config,
                                             Some(40960),
                                             |v| v.as_integer()) as usize;
+    cfg.end_point_concurrency =
+        get_integer_value("",
+                          "server.end-point-concurrency",
+                          matches,
+                          config,
+                          Some(8),
+                          |v| v.as_integer()) as usize;
     cfg.messages_per_tick =
         get_integer_value("",
                           "server.messages-per-tick",
@@ -662,6 +673,10 @@ fn main() {
     };
 
     initial_log(&matches, &config);
+
+    // Print version information.
+    util::print_tikv_info();
+
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,

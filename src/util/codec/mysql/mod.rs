@@ -50,6 +50,7 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
 }
 
 mod duration;
+mod mydecimal;
 pub mod decimal;
 pub mod types;
 mod time;
@@ -57,6 +58,7 @@ mod time;
 pub use self::duration::Duration;
 pub use self::decimal::{Decimal, DecimalEncoder, DecimalDecoder, encoded_len};
 pub use self::types::{has_unsigned_flag, has_not_null_flag};
+pub use self::mydecimal::dec_encoded_len;
 pub use self::time::Time;
 
 #[cfg(test)]

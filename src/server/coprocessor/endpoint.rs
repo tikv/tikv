@@ -47,9 +47,6 @@ pub const REQ_TYPE_INDEX: i64 = 102;
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
-// TODO: make this number configurable.
-const DEFAULT_POOL_SIZE: usize = 8;
-
 pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
 
 pub struct Host {
@@ -61,13 +58,13 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>) -> Host {
+    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, concurrency: usize) -> Host {
         Host {
             engine: engine,
             sched: scheduler,
             reqs: HashMap::new(),
             last_req_id: 0,
-            pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), DEFAULT_POOL_SIZE),
+            pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), concurrency),
         }
     }
 }
