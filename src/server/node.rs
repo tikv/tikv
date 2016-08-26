@@ -215,13 +215,11 @@ impl<C> Node<C>
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
             let mut store = Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr).unwrap();
-            let result = store.init();
-            // make sure the initialization of store is finished (even if error happens) in startup
-            tx.send(0).unwrap();
-            if let Err(e) = result {
-                error!("store {} prepare err {:?}", store_id, e);
-                return;
+            // make sure the initialization of store is done successfully in startup
+            if let Err(e) = store.init() {
+                panic!("store {} prepare err {:?}", store_id, e);
             }
+            tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);
             };
