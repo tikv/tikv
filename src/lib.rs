@@ -25,6 +25,8 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![recursion_limit="100"]
 
+#![allow(module_inception)]
+
 #[macro_use]
 extern crate log;
 #[macro_use]
