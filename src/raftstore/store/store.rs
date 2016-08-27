@@ -768,19 +768,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         };
 
+        let store_id = msg.get_header().get_peer().get_store_id();
+        if store_id != self.store.get_id() {
+            bind_error(&mut resp,
+                       box_err!("mismatch store id {} != {}", store_id, self.store.get_id()));
+            return cb.call_box((resp,));
+        }
+
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
             match self.execute_status_command(msg) {
                 Err(e) => bind_error(&mut resp, e),
                 Ok(status_resp) => resp = status_resp,
             };
-            return cb.call_box((resp,));
-        }
-
-        let store_id = msg.get_header().get_peer().get_store_id();
-        if store_id != self.store.get_id() {
-            bind_error(&mut resp,
-                       box_err!("mismatch store id {} != {}", store_id, self.store.get_id()));
             return cb.call_box((resp,));
         }
 
