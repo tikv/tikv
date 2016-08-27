@@ -443,27 +443,25 @@ impl PeerStorage {
     /// Delete all meta belong to the region. Results are stored in `wb`.
     pub fn clear_meta(&self, wb: &WriteBatch) -> Result<()> {
         let region_id = self.get_region_id();
-        let ranges =
-            [(keys::region_raft_prefix(region_id), keys::region_raft_prefix(region_id + 1)),
-             (keys::region_meta_prefix(region_id), keys::region_meta_prefix(region_id + 1))];
+        let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
+                                      keys::region_meta_prefix(region_id + 1));
+        try!(self.engine.scan(&meta_start,
+                              &meta_end,
+                              &mut |key, _| {
+                                  try!(wb.delete(key));
+                                  Ok(true)
+                              }));
 
         let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
-        for &(ref start_key, ref end_key) in &ranges {
-            try!(self.engine.scan(start_key,
-                                  end_key,
-                                  &mut |key, _| {
-                                      try!(wb.delete(key));
-                                      Ok(true)
-                                  }));
-
-            try!(self.engine.scan_cf(CF_RAFT,
-                                     start_key,
-                                     end_key,
-                                     &mut |key, _| {
-                                         try!(wb.delete_cf(*handle, key));
-                                         Ok(true)
-                                     }));
-        }
+        let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
+                                      keys::region_raft_prefix(region_id + 1));
+        try!(self.engine.scan_cf(CF_RAFT,
+                                 &raft_start,
+                                 &raft_end,
+                                 &mut |key, _| {
+                                     try!(wb.delete_cf(*handle, key));
+                                     Ok(true)
+                                 }));
 
         Ok(())
     }
