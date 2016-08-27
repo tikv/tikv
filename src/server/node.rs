@@ -211,7 +211,7 @@ impl<C> Node<C>
         let store = self.store.clone();
         let ch = event_loop.channel();
 
-        let (tx, rx): (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
             let mut store = Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr).unwrap();
@@ -219,13 +219,13 @@ impl<C> Node<C>
             if let Err(e) = store.init() {
                 panic!("store {} prepare err {:?}", store_id, e);
             }
-            tx.send(0).unwrap();
+            sender.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);
             };
         }));
         // wait for store to be fully initialized(or error happens during its initialization)
-        let _ = rx.recv();
+        receiver.recv().unwrap();
 
         self.store_handle = Some(h);
         Ok(())
