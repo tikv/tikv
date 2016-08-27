@@ -215,7 +215,7 @@ impl<C> Node<C>
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
             let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
-                Err(e) => panic!("store {} prepare err {:?}", store_id, e),
+                Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };
             tx.send(0).unwrap();
