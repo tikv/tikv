@@ -335,13 +335,14 @@ mod tests {
     #[test]
     fn test_base() {
         let path = TempDir::new("var").unwrap();
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap());
+        let cf = "cf";
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap());
 
         let mut r = Region::new();
         r.set_id(10);
 
         let key = b"key";
-        let handle = rocksdb::get_cf_handle(&engine, "cf").unwrap();
+        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
         engine.put_msg(key, &r).unwrap();
         engine.put_msg_cf(*handle, key, &r).unwrap();
 
@@ -349,12 +350,12 @@ mod tests {
 
         let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r1);
-        let r1_cf: Region = engine.get_msg_cf("cf", key).unwrap().unwrap();
+        let r1_cf: Region = engine.get_msg_cf(cf, key).unwrap().unwrap();
         assert_eq!(r, r1_cf);
 
         let mut r2: Region = snap.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r2);
-        let r2_cf: Region = snap.get_msg_cf("cf", key).unwrap().unwrap();
+        let r2_cf: Region = snap.get_msg_cf(cf, key).unwrap().unwrap();
         assert_eq!(r, r2_cf);
 
         r.set_id(11);
@@ -382,7 +383,8 @@ mod tests {
     #[test]
     fn test_peekable() {
         let path = TempDir::new("var").unwrap();
-        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap();
+        let cf = "cf";
+        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         let handle = engine.cf_handle("cf").unwrap();
@@ -390,14 +392,15 @@ mod tests {
 
         assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
         assert!(engine.get_value_cf("foo", b"k1").is_err());
-        assert_eq!(&*engine.get_value_cf("cf", b"k1").unwrap().unwrap(), b"v2");
+        assert_eq!(&*engine.get_value_cf(cf, b"k1").unwrap().unwrap(), b"v2");
     }
 
     #[test]
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap());
-        let handle = engine.cf_handle("cf").unwrap();
+        let cf = "cf";
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap());
+        let handle = engine.cf_handle(cf).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();
@@ -416,7 +419,7 @@ mod tests {
                    vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a2".to_vec(), b"v2".to_vec())]);
         data.clear();
 
-        engine.scan_cf("cf",
+        engine.scan_cf(cf,
                      b"",
                      &[0xFF, 0xFF],
                      &mut |key, value| {
@@ -431,9 +434,9 @@ mod tests {
         let pair = engine.seek(b"a1").unwrap().unwrap();
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         assert!(engine.seek(b"a3").unwrap().is_none());
-        let pair_cf = engine.seek_cf("cf", b"a1").unwrap().unwrap();
+        let pair_cf = engine.seek_cf(cf, b"a1").unwrap().unwrap();
         assert_eq!(pair_cf, (b"a1".to_vec(), b"v1".to_vec()));
-        assert!(engine.seek_cf("cf", b"a3").unwrap().is_none());
+        assert!(engine.seek_cf(cf, b"a3").unwrap().is_none());
 
         let mut index = 0;
         engine.scan(b"",
