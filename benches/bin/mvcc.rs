@@ -19,7 +19,6 @@ mod sync_storage;
 
 use test_util::*;
 use tikv::storage::{Mutation, Key};
-use tikv::storage::mvcc::TEST_TS_BASE;
 use kvproto::kvrpcpb::Context;
 use self::sync_storage::SyncStorage;
 
@@ -29,7 +28,7 @@ use super::print_result;
 /// when doing scan.
 fn bench_tombstone_scan() -> BenchSamples {
     let store = SyncStorage::new(&Default::default());
-    let mut ts_generator = TEST_TS_BASE..;
+    let mut ts_generator = 1..;
 
     let mut kvs = KvGenerator::new(100, 1000);
 
