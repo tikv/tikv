@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use mio::EventLoop;
@@ -227,13 +227,20 @@ impl<C> Node<C>
         let store = self.store.clone();
         let ch = event_loop.channel();
 
+        let (tx, rx) = mpsc::channel();
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
-            let mut store = Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr).unwrap();
+            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
+                Err(e) => panic!("construct store {} err {:?}", store_id, e),
+                Ok(s) => s,
+            };
+            tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);
             };
         }));
+        // wait for store to be initialized
+        rx.recv().unwrap();
 
         self.store_handle = Some(h);
         Ok(())
