@@ -19,7 +19,6 @@ use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::{Mutation, Key, KvPair, make_key};
-use tikv::storage::mvcc::TEST_TS_BASE;
 
 #[derive(Clone)]
 struct AssertionStorage(SyncStorage);
@@ -418,7 +417,7 @@ struct Oracle {
 
 impl Oracle {
     fn new() -> Oracle {
-        Oracle { ts: AtomicUsize::new(TEST_TS_BASE as usize) }
+        Oracle { ts: AtomicUsize::new(1 as usize) }
     }
 
     fn get_ts(&self) -> u64 {

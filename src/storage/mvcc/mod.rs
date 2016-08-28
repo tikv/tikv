@@ -56,6 +56,3 @@ quick_error! {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
-
-// Make sure meta version in tests could never catch up with key version(timestamp).
-pub const TEST_TS_BASE: u64 = 1000000;
