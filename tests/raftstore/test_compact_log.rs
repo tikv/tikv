@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
+use tikv::util::rocksdb::get_cf_handle;
 use rocksdb::DB;
 use protobuf;
 use kvproto::raft_serverpb::RaftApplyState;
@@ -62,9 +63,10 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         assert!(idx > before_state.get_index());
         assert!(after_state.get_term() > before_state.get_term());
 
+        let handle = get_cf_handle(engine, CF_RAFT).unwrap();
         for i in 0..idx {
             let key = keys::raft_log_key(1, i);
-            assert!(engine.get(&key).unwrap().is_none());
+            assert!(engine.get_cf(*handle, &key).unwrap().is_none());
         }
     }
 }
@@ -129,9 +131,10 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         let idx = after_state.get_index();
         assert!(idx > before_state.get_index());
 
+        let handle = get_cf_handle(engine, CF_RAFT).unwrap();
         for i in 0..idx {
             let key = keys::raft_log_key(1, i);
-            assert!(engine.get(&key).unwrap().is_none());
+            assert!(engine.get_cf(*handle, &key).unwrap().is_none());
         }
     }
 }

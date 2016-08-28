@@ -107,7 +107,7 @@ fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
 
     let idx_key = keys::raft_log_key(region_id, idx);
     println!("idx_key: {}", escape(&idx_key));
-    let mut ent: Entry = db.get_msg(&idx_key).unwrap().unwrap();
+    let mut ent: Entry = db.get_msg_cf(CF_RAFT, &idx_key).unwrap().unwrap();
     let data = ent.take_data();
     println!("entry {:?}", ent);
     let mut msg = RaftCmdRequest::new();

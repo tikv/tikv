@@ -363,7 +363,7 @@ impl PeerStorage {
 
         // Delete any previously appended log entries which never committed.
         for i in (last_index + 1)..(prev_last_index + 1) {
-            try!(ctx.wb.delete(&keys::raft_log_key(self.get_region_id(), i)));
+            try!(ctx.wb.delete_cf(*handle, &keys::raft_log_key(self.get_region_id(), i)));
         }
 
         ctx.raft_state.set_last_index(last_index);
