@@ -33,11 +33,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     cluster.add_send_filter(Isolate::new(node_id));
 
     // Kill another node.
-    let next_id = if node_id < count {
-        node_id + 1
-    } else {
-        1
-    };
+    let next_id = if node_id < count { node_id + 1 } else { 1 };
     cluster.stop_node(next_id);
 
     // Check node and another are down.

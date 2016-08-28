@@ -1273,11 +1273,7 @@ impl<T: Storage> Raft<T> {
         self.prs = HashMap::with_capacity(meta.get_conf_state().get_nodes().len());
         for &n in meta.get_conf_state().get_nodes() {
             let next_idx = self.raft_log.last_index() + 1;
-            let matched = if n == self.id {
-                next_idx - 1
-            } else {
-                0
-            };
+            let matched = if n == self.id { next_idx - 1 } else { 0 };
             self.set_progress(n, matched, next_idx);
             info!("{} restored progress of {} [{:?}]",
                   self.tag,
