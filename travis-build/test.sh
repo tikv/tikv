@@ -27,6 +27,7 @@ fi
 export ENABLE_FEATURES=default
 export LOG_FILE=tests.log
 export RUST_TEST_THREADS=1
+export RUSTFLAGS=-Dwarnings
 make test 2>&1 | tee tests.out
 status=$?
 for case in `cat tests.out | python -c "import sys
