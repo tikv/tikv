@@ -149,6 +149,7 @@ fn count_trailing_zeroes(i: u8, word: u32) -> u8 {
     c
 }
 
+/// `add` adds a and b and carry, stores the sum and new carry.
 fn add(a: u32, b: u32, carry: &mut u32, res: &mut u32) {
     let sum = a + b + *carry;
     if sum >= WORD_BASE {
@@ -160,6 +161,7 @@ fn add(a: u32, b: u32, carry: &mut u32, res: &mut u32) {
     }
 }
 
+/// `fix_word_cnt_err` limits word count in `word_buf_len`.
 fn fix_word_cnt_err(int_word_cnt: u8, frac_word_cnt: u8, word_buf_len: u8) -> Res<(u8, u8)> {
     if int_word_cnt + frac_word_cnt > word_buf_len {
         if int_word_cnt > word_buf_len {
@@ -170,6 +172,7 @@ fn fix_word_cnt_err(int_word_cnt: u8, frac_word_cnt: u8, word_buf_len: u8) -> Re
     Res::Ok((int_word_cnt, frac_word_cnt))
 }
 
+/// `sub` substracts rhs and carry from lhs, store the diff and new carry.
 fn sub(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
     let diff = lhs as i32 - rhs as i32 - *carry;
     if diff < 0 {
@@ -183,6 +186,10 @@ fn sub(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
 
 type SubTmp = (usize, usize, u8);
 
+/// calculate the carry for lhs - rhs, returns the carry and needed temporary results for
+/// begining a subtraction.
+///
+/// The new carry can be None if lhs is equals to rhs.
 #[inline]
 fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, SubTmp) {
     let (l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt), word_cnt!(lhs.frac_cnt));
@@ -240,6 +247,7 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
     (carry, frac_word_to, l_res, r_res)
 }
 
+/// subtract rhs from lhs.
 fn do_sub(mut lhs: Decimal, mut rhs: Decimal) -> Res<Decimal> {
     let (carry, mut frac_word_to, l_res, r_res) = calc_sub_carry(&lhs, &rhs);
     if carry.is_none() {
@@ -326,6 +334,7 @@ fn do_sub(mut lhs: Decimal, mut rhs: Decimal) -> Res<Decimal> {
     res
 }
 
+/// Get the max possible decimal with giving precision and fraction digit count.
 fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
     let int_cnt = prec - frac_cnt;
     let mut res = Decimal::new(int_cnt, frac_cnt, false);
@@ -354,6 +363,7 @@ fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
     res
 }
 
+/// add lhs to rhs.
 fn do_add(mut lhs: Decimal, mut rhs: Decimal) -> Res<Decimal> {
     let (mut l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt),
                                                      word_cnt!(lhs.frac_cnt));
@@ -456,7 +466,9 @@ pub struct Decimal {
     /// The number of decimal digits after the point.
     frac_cnt: u8,
 
+    /// The number of significant digits of the decimal.
     precision: u8,
+    /// The number of calculated or printed result fraction digits.
     result_frac_cnt: u8,
 
     negative: bool,
@@ -467,6 +479,7 @@ pub struct Decimal {
 }
 
 impl Decimal {
+    /// create a new decimal for internal usage.
     fn new(int_cnt: u8, frac_cnt: u8, negative: bool) -> Decimal {
         Decimal {
             int_cnt: int_cnt,
@@ -478,6 +491,7 @@ impl Decimal {
         }
     }
 
+    /// reset the decimal to zero.
     fn reset_to_zero(&mut self) {
         self.int_cnt = 1;
         self.frac_cnt = 0;
@@ -486,6 +500,7 @@ impl Decimal {
         self.word_buf[0] = 0;
     }
 
+    /// get the index of first non-zero word and the actual int_cnt.
     fn remove_leading_zeros(&self) -> (u8, u8) {
         let mut int_cnt = self.int_cnt;
         let mut i = ((int_cnt + DIGITS_PER_WORD - 1) % DIGITS_PER_WORD) + 1;
@@ -502,6 +517,7 @@ impl Decimal {
         (word_idx as u8, int_cnt)
     }
 
+    /// Prepare a buf for string output.
     fn prepare_buf(&self) -> (Vec<u8>, u8, u8, u8, u8) {
         let frac_cnt = self.frac_cnt;
         let (mut word_start_idx, mut int_cnt) = self.remove_leading_zeros();
@@ -522,6 +538,7 @@ impl Decimal {
         (buf, word_start_idx, int_len, int_cnt, frac_cnt)
     }
 
+    /// `to_string` converts decimal to its printable string representation without rounding.
     fn to_string(&self) -> String {
         let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
         if self.negative {
@@ -566,6 +583,7 @@ impl Decimal {
         unsafe { String::from_utf8_unchecked(buf) }
     }
 
+    /// Get the least precision and fraction count to encode this decimal completely.
     pub fn prec_and_frac(&self) -> (u8, u8) {
         if self.precision == 0 {
             let (_, int_cnt) = self.remove_leading_zeros();
@@ -580,6 +598,7 @@ impl Decimal {
         }
     }
 
+    /// `digit_bounds` returns bounds of decimal digits in the number.
     fn digit_bounds(&self) -> (u8, u8) {
         let mut buf_beg = 0;
         let buf_len = (word_cnt!(self.int_cnt) + word_cnt!(self.frac_cnt)) as usize;
@@ -617,6 +636,10 @@ impl Decimal {
         (start, end)
     }
 
+    /// `do_mini_left_shift` does left shift for alignment of data in buffer.
+    ///
+    /// Result fitting in the buffer should be garanted.
+    /// 'shift' have to be from 1 to DIGITS_PER_WORD - 1 (inclusive)
     fn do_mini_left_shift(&mut self, shift: u8, beg: u8, end: u8) {
         let shift = shift as usize;
         let mut buf_from = (beg / DIGITS_PER_WORD) as usize;
@@ -634,6 +657,10 @@ impl Decimal {
         self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) * TEN_POW[shift];
     }
 
+    /// `do_mini_right_shift` does right shift for alignment of data in buffer.
+    ///
+    /// Result fitting in the buffer should be garanted.
+    /// 'shift' have to be from 1 to DIGITS_PER_WORD - 1 (inclusive)
     fn do_mini_right_shift(&mut self, shift: u8, beg: u8, end: u8) {
         let shift = shift as usize;
         let mut buf_from = ((end - 1) / DIGITS_PER_WORD) as usize;
@@ -654,16 +681,9 @@ impl Decimal {
 
     /// Round rounds the decimal to "frac" digits.
     ///
-    ///    to     - result buffer. d == to is allowed
-    ///    frac   - to what position after fraction point to round. can be negative!
-    ///    mode   - round to nearest even or truncate
-    ///
     /// NOTES
     ///  scale can be negative !
     ///  one TRUNCATED error (line XXX below) isn't treated very logical :(
-    ///
-    /// RETURN VALUE
-    ///  eDecOK/eDecTruncated
     pub fn round(self, frac: i8) -> Res<Decimal> {
         self.round_with_word_buf_len(frac, WORD_BUF_LEN)
     }
@@ -823,6 +843,10 @@ impl Decimal {
         dec
     }
 
+    /// `shift` shifts decimal digits in given number (with rounding if it need),
+    /// shift > 0 means shift to left shift, shift < 0 means right shift.
+    ///
+    /// In fact it is multiplying on 10^shift.
     pub fn shift(self, shift: isize) -> Res<Decimal> {
         self.shift_with_word_buf_len(shift, WORD_BUF_LEN)
     }
@@ -951,6 +975,7 @@ impl Decimal {
         res
     }
 
+    /// `as_i64` returns int part of the decimal.
     pub fn as_i64(&self) -> Res<i64> {
         let mut x = 0i64;
         let int_word_cnt = word_cnt!(self.int_cnt) as usize;
@@ -978,6 +1003,7 @@ impl Decimal {
         Res::Ok(x)
     }
 
+    /// `as_u64` returns int part of the decimal
     pub fn as_u64(&self) -> Res<u64> {
         if self.negative {
             return Res::Overflow(0);
@@ -1177,6 +1203,7 @@ impl From<u64> for Decimal {
     }
 }
 
+/// Get the first non-digit ascii char in `bs` from `start_idx`.
 fn first_non_digit(bs: &[u8], start_idx: usize) -> usize {
     bs.iter()
         .skip(start_idx)
