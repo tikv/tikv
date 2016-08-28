@@ -375,22 +375,12 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv)
         .allow(1));
-    // Make peer 2 have no way to know the uncommitted entries can be applied
-    // when it becomes leader.
-    cluster.add_send_filter(IsolateRegionStore::new(1, 1)
-        .msg_type(MessageType::MsgHeartbeatResponse)
-        .direction(Direction::Send));
-    cluster.add_send_filter(IsolateRegionStore::new(1, 3)
-        .msg_type(MessageType::MsgHeartbeatResponse)
-        .direction(Direction::Send));
+
     // Make peer 2's msg won't be replicated when it becomes leader,
     // so the uncommitted entries won't be applied immediatly.
-    cluster.add_send_filter(IsolateRegionStore::new(1, 1)
+    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Recv));
-    cluster.add_send_filter(IsolateRegionStore::new(1, 3)
-        .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Recv));
+        .direction(Direction::Send));
 
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.

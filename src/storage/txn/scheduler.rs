@@ -39,29 +39,50 @@ pub enum Tick {
 
 pub enum ProcessResult {
     Res,
-    MultiRes { results: Vec<StorageResult<()>> },
-    MultiKvpairs { pairs: Vec<StorageResult<KvPair>> },
-    Value { value: Option<Value> },
-    Locks { locks: Vec<LockInfo> },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
+    MultiRes {
+        results: Vec<StorageResult<()>>,
+    },
+    MultiKvpairs {
+        pairs: Vec<StorageResult<KvPair>>,
+    },
+    Value {
+        value: Option<Value>,
+    },
+    Locks {
+        locks: Vec<LockInfo>,
+    },
+    NextCommand {
+        cmd: Command,
+    },
+    Failed {
+        err: StorageError,
+    },
 }
 
 pub enum Msg {
     Quit,
-    RawCmd { cmd: Command, cb: StorageCb },
+    RawCmd {
+        cmd: Command,
+        cb: StorageCb,
+    },
     SnapshotFinished {
         cid: u64,
         snapshot: EngineResult<Box<Snapshot>>,
     },
-    ReadFinished { cid: u64, pr: ProcessResult },
+    ReadFinished {
+        cid: u64,
+        pr: ProcessResult,
+    },
     WritePrepareFinished {
         cid: u64,
         cmd: Command,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
     },
-    WritePrepareFailed { cid: u64, err: Error },
+    WritePrepareFailed {
+        cid: u64,
+        err: Error,
+    },
     WriteFinished {
         cid: u64,
         pr: ProcessResult,

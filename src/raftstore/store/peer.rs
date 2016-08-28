@@ -59,7 +59,9 @@ pub enum ExecResult {
         peer: metapb::Peer,
         region: metapb::Region,
     },
-    CompactLog { state: RaftTruncatedState },
+    CompactLog {
+        state: RaftTruncatedState,
+    },
     SplitRegion {
         left: metapb::Region,
         right: metapb::Region,
