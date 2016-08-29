@@ -49,7 +49,11 @@ pub trait Simulator {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
-    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse>;
+    fn call_command_on_node(&self,
+                            node_id: u64,
+                            request: RaftCmdRequest,
+                            timeout: Duration)
+                            -> Result<RaftCmdResponse>;
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
@@ -57,6 +61,11 @@ pub trait Simulator {
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter);
     fn clear_recv_filters(&mut self, node_id: u64);
+
+    fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
+        let node_id = request.get_header().get_peer().get_store_id();
+        self.call_command_on_node(node_id, request, timeout)
+    }
 }
 
 pub struct Cluster<T: Simulator> {
@@ -160,6 +169,20 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         self.sim.rl().send_raft_msg(msg)
+    }
+
+    pub fn call_command_on_node(&self,
+                                node_id: u64,
+                                request: RaftCmdRequest,
+                                timeout: Duration)
+                                -> Result<RaftCmdResponse> {
+        match self.sim.rl().call_command_on_node(node_id, request.clone(), timeout) {
+            Err(e) => {
+                warn!("failed to call command {:?}: {:?}", request, e);
+                Err(e)
+            }
+            a => a,
+        }
     }
 
     pub fn call_command(&self,
@@ -408,7 +431,7 @@ impl<T: Simulator> Cluster<T> {
             }
             return resp;
         }
-        panic!("request failed after retry for 10 times");
+        panic!("request failed after retry for 20 times");
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {

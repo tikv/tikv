@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
 use super::cluster::{Cluster, Simulator};
+use super::util::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
@@ -59,6 +61,23 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
+fn test_wrong_store_id<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+
+    let (k, v) = (b"k", b"v");
+    let mut region = cluster.get_region(k);
+    let region_id = region.get_id();
+    let cmd = new_put_cmd(k, v);
+    let mut req = new_request(region_id, region.take_region_epoch(), vec![cmd], true);
+    let mut leader = cluster.leader_of_region(region_id).unwrap();
+    // setup wrong store id.
+    let store_id = leader.get_store_id();
+    leader.set_store_id(store_id + 1);
+    req.mut_header().set_peer(leader);
+    let result = cluster.call_command_on_node(store_id, req, Duration::from_secs(5));
+    assert!(!result.unwrap().get_header().get_error().get_message().is_empty());
+}
+
 #[test]
 fn test_node_put() {
     let mut cluster = new_node_cluster(0, 1);
@@ -72,6 +91,12 @@ fn test_node_delete() {
 }
 
 #[test]
+fn test_node_wrong_store_id() {
+    let mut cluster = new_node_cluster(0, 1);
+    test_wrong_store_id(&mut cluster);
+}
+
+#[test]
 fn test_server_put() {
     let mut cluster = new_server_cluster(0, 1);
     test_put(&mut cluster);
@@ -81,4 +106,10 @@ fn test_server_put() {
 fn test_server_delete() {
     let mut cluster = new_server_cluster(0, 1);
     test_delete(&mut cluster);
+}
+
+#[test]
+fn test_server_wrong_store_id() {
+    let mut cluster = new_server_cluster(0, 1);
+    test_wrong_store_id(&mut cluster);
 }
