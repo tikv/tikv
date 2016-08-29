@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::thread;
 
 use tikv::raftstore::store::*;
+use tikv::storage::CF_RAFT;
 use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
 use kvproto::metapb;
@@ -359,7 +360,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         .clone();
 
     let engine1 = cluster.get_engine(1);
-    let state = engine1.get_msg::<RaftApplyState>(&keys::apply_state_key(r1)).unwrap().unwrap();
+    let state =
+        engine1.get_msg_cf::<RaftApplyState>(CF_RAFT, &keys::apply_state_key(r1)).unwrap().unwrap();
     let index = state.get_applied_index();
     let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
     compact_log.mut_header().set_peer(new_peer(1, 1));

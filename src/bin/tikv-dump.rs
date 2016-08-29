@@ -31,6 +31,7 @@ use tikv::util::{self, escape, unescape};
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
 use tikv::storage::DEFAULT_CFS;
+use tikv::storage::CF_RAFT;
 
 /// # Message dump tool
 ///
@@ -106,7 +107,7 @@ fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
 
     let idx_key = keys::raft_log_key(region_id, idx);
     println!("idx_key: {}", escape(&idx_key));
-    let mut ent: Entry = db.get_msg(&idx_key).unwrap().unwrap();
+    let mut ent: Entry = db.get_msg_cf(CF_RAFT, &idx_key).unwrap().unwrap();
     let data = ent.take_data();
     println!("entry {:?}", ent);
     let mut msg = RaftCmdRequest::new();
@@ -124,12 +125,12 @@ fn dump_region_info(db: DB, region_id_str: String) {
 
     let raft_state_key = keys::raft_state_key(region_id);
     println!("raft state key: {}", escape(&raft_state_key));
-    let raft_state: Option<RaftLocalState> = db.get_msg(&raft_state_key).unwrap();
+    let raft_state: Option<RaftLocalState> = db.get_msg_cf(CF_RAFT, &raft_state_key).unwrap();
     println!("raft state: {:?}", raft_state);
 
     let apply_state_key = keys::apply_state_key(region_id);
     println!("apply state key: {}", escape(&apply_state_key));
-    let apply_state: Option<RaftApplyState> = db.get_msg(&apply_state_key).unwrap();
+    let apply_state: Option<RaftApplyState> = db.get_msg_cf(CF_RAFT, &apply_state_key).unwrap();
     println!("apply state: {:?}", apply_state);
 }
 

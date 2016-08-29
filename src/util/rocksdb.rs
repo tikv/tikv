@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use rocksdb::{DB, Options};
-use rocksdb::rocksdb_ffi::DBCFHandle;
+pub use rocksdb::rocksdb_ffi::DBCFHandle;
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a DBCFHandle, String> {
     db.cf_handle(cf)
