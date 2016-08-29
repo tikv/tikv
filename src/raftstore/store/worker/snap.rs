@@ -29,6 +29,7 @@ use util::transport::SendCh;
 use raftstore;
 use raftstore::store::engine::{Mutable, Snapshot, delete_all_in_range};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
+use storage::CF_RAFT;
 
 const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 
@@ -131,7 +132,7 @@ impl<T: MsgSender> Runner<T> {
         box_try!(delete_all_in_range(self.db.as_ref(), &start_key, &end_key));
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState = match box_try!(self.db.get_msg(&state_key)) {
+        let apply_state: RaftApplyState = match box_try!(self.db.get_msg_cf(CF_RAFT, &state_key)) {
             Some(state) => state,
             None => return Err(box_err!("failed to get raftstate from {}", escape(&state_key))),
         };

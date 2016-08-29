@@ -53,7 +53,7 @@ pub fn write_region(engine: &DB, region: &metapb::Region) -> Result<()> {
 
     let wb = WriteBatch::new();
     try!(wb.put_msg(&keys::region_state_key(region.get_id()), &state));
-    try!(write_initial_state(&wb, region.get_id()));
+    try!(write_initial_state(engine, &wb, region.get_id()));
     try!(engine.write(wb));
     Ok(())
 }

@@ -21,6 +21,7 @@ use byteorder::{ByteOrder, BigEndian};
 use util::rocksdb;
 
 use raftstore::Result;
+use raftstore::Error;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -44,6 +45,10 @@ impl Snapshot {
     pub fn cf_names(&self) -> Vec<&str> {
         self.db.cf_names()
     }
+
+    pub fn cf_handle<'a>(&'a self, cf: &str) -> Result<&'a rocksdb::DBCFHandle> {
+        rocksdb::get_cf_handle(&self.db, cf).map_err(Error::from)
+    }
 }
 
 impl Drop for Snapshot {
@@ -63,6 +68,20 @@ pub trait Peekable {
         where M: protobuf::Message + protobuf::MessageStatic
     {
         let value = try!(self.get_value(key));
+
+        if value.is_none() {
+            return Ok(None);
+        }
+
+        let mut m = M::new();
+        try!(m.merge_from_bytes(&value.unwrap()));
+        Ok(Some(m))
+    }
+
+    fn get_msg_cf<M>(&self, cf: &str, key: &[u8]) -> Result<Option<M>>
+        where M: protobuf::Message + protobuf::MessageStatic
+    {
+        let value = try!(self.get_value_cf(cf, key));
 
         if value.is_none() {
             return Ok(None);
@@ -121,6 +140,13 @@ pub trait Iterable {
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.new_iterator();
+        iter.seek(key.into());
+        Ok(iter.kv())
+    }
+
+    // Seek the first key >= given key, if no found, return None.
+    fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let mut iter = try!(self.new_iterator_cf(cf));
         iter.seek(key.into());
         Ok(iter.kv())
     }
@@ -219,6 +245,16 @@ pub trait Mutable: Writable {
         Ok(())
     }
 
+    fn put_msg_cf<M: protobuf::Message>(&self,
+                                        cf: rocksdb::DBCFHandle,
+                                        key: &[u8],
+                                        m: &M)
+                                        -> Result<()> {
+        let value = try!(m.write_to_bytes());
+        try!(self.put_cf(cf, key, &value));
+        Ok(())
+    }
+
     fn put_u64(&self, key: &[u8], n: u64) -> Result<()> {
         let mut value = vec![0;8];
         BigEndian::write_u64(&mut value, n);
@@ -304,21 +340,28 @@ mod tests {
     #[test]
     fn test_base() {
         let path = TempDir::new("var").unwrap();
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[]).unwrap());
+        let cf = "cf";
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap());
 
         let mut r = Region::new();
         r.set_id(10);
 
         let key = b"key";
+        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
         engine.put_msg(key, &r).unwrap();
+        engine.put_msg_cf(*handle, key, &r).unwrap();
 
         let snap = Snapshot::new(engine.clone());
 
         let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r1);
+        let r1_cf: Region = engine.get_msg_cf(cf, key).unwrap().unwrap();
+        assert_eq!(r, r1_cf);
 
         let mut r2: Region = snap.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r2);
+        let r2_cf: Region = snap.get_msg_cf(cf, key).unwrap().unwrap();
+        assert_eq!(r, r2_cf);
 
         r.set_id(11);
         engine.put_msg(key, &r).unwrap();
@@ -345,7 +388,8 @@ mod tests {
     #[test]
     fn test_peekable() {
         let path = TempDir::new("var").unwrap();
-        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap();
+        let cf = "cf";
+        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         let handle = engine.cf_handle("cf").unwrap();
@@ -353,14 +397,15 @@ mod tests {
 
         assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
         assert!(engine.get_value_cf("foo", b"k1").is_err());
-        assert_eq!(&*engine.get_value_cf("cf", b"k1").unwrap().unwrap(), b"v2");
+        assert_eq!(&*engine.get_value_cf(cf, b"k1").unwrap().unwrap(), b"v2");
     }
 
     #[test]
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &["cf"]).unwrap());
-        let handle = engine.cf_handle("cf").unwrap();
+        let cf = "cf";
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap());
+        let handle = engine.cf_handle(cf).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();
@@ -379,7 +424,7 @@ mod tests {
                    vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a2".to_vec(), b"v2".to_vec())]);
         data.clear();
 
-        engine.scan_cf("cf",
+        engine.scan_cf(cf,
                      b"",
                      &[0xFF, 0xFF],
                      &mut |key, value| {
@@ -394,6 +439,9 @@ mod tests {
         let pair = engine.seek(b"a1").unwrap().unwrap();
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         assert!(engine.seek(b"a3").unwrap().is_none());
+        let pair_cf = engine.seek_cf(cf, b"a1").unwrap().unwrap();
+        assert_eq!(pair_cf, (b"a1".to_vec(), b"v1".to_vec()));
+        assert!(engine.seek_cf(cf, b"a3").unwrap().is_none());
 
         let mut index = 0;
         engine.scan(b"",

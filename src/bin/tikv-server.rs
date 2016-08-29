@@ -250,9 +250,10 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                                        "rocksdb.max-background-compactions",
                                                        matches,
                                                        config,
-                                                       Some(4),
+                                                       Some(6),
                                                        |v| v.as_integer());
     opts.set_max_background_compactions(max_background_compactions as i32);
+    opts.set_max_background_flushes(2);
 
     let max_bytes_for_level_base = get_integer_value("",
                                                      "rocksdb.max-bytes-for-level-base",
@@ -322,6 +323,25 @@ fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
 
 fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
     get_rocksdb_default_cf_option(matches, config)
+}
+
+fn get_rocksdb_raftlog_cf_option() -> RocksdbOptions {
+    let mut opts = RocksdbOptions::new();
+    let mut block_base_opts = BlockBasedOptions::new();
+    block_base_opts.set_block_size(16 * 1024);
+    block_base_opts.set_lru_cache(256 * 1024 * 1024);
+    block_base_opts.set_bloom_filter(10, false);
+    opts.set_block_based_table_factory(&block_base_opts);
+
+    let cpl = "no:no:no:no:no:no:no".to_owned();
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
+    opts.compression_per_level(&per_level_compression);
+    opts.set_write_buffer_size(32 * 1024 * 1024);
+    opts.set_max_write_buffer_number(5);
+    opts.set_max_bytes_for_level_base(128 * 1024 * 1024);
+    opts.set_target_file_size_base(8 * 1024 * 1024);
+
+    opts
 }
 
 // TODO: merge this function with Config::new
@@ -489,7 +509,8 @@ fn build_raftkv(matches: &Matches,
     let opts = get_rocksdb_option(matches, config);
     let cfs_opts = vec![get_rocksdb_default_cf_option(matches, config),
                         get_rocksdb_lock_cf_option(),
-                        get_rocksdb_write_cf_option(matches, config)];
+                        get_rocksdb_write_cf_option(matches, config),
+                        get_rocksdb_raftlog_cf_option()];
     let mut db_path = path.clone();
     db_path.push("db");
     let engine = Arc::new(rocksdb_util::new_engine_opt(opts,

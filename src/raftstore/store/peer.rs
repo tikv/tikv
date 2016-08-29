@@ -35,6 +35,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, HandyRwLock, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
+use storage::CF_RAFT;
 use super::store::Store;
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
@@ -782,7 +783,9 @@ impl Peer {
             let wb = WriteBatch::new();
             let mut state = self.get_store().apply_state.clone();
             state.set_applied_index(index);
-            try!(wb.put_msg(&keys::apply_state_key(self.region_id), &state));
+            let engine = self.engine.clone();
+            let raft_cf = try!(rocksdb::get_cf_handle(engine.as_ref(), CF_RAFT));
+            try!(wb.put_msg_cf(*raft_cf, &keys::apply_state_key(self.region_id), &state));
             try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
             self.mut_store().applied_index_term = term;
@@ -991,7 +994,10 @@ struct ExecContext<'a> {
 
 impl<'a> ExecContext<'a> {
     fn save(&self, region_id: u64) -> Result<()> {
-        try!(self.wb.put_msg(&keys::apply_state_key(region_id), &self.apply_state));
+        let raft_cf = try!(self.snap.cf_handle(CF_RAFT));
+        try!(self.wb.put_msg_cf(*raft_cf,
+                                &keys::apply_state_key(region_id),
+                                &self.apply_state));
         Ok(())
     }
 }
@@ -1178,7 +1184,7 @@ impl Peer {
         new_region.mut_region_epoch().set_version(region_ver);
         try!(write_peer_state(&ctx.wb, &region, PeerState::Normal));
         try!(write_peer_state(&ctx.wb, &new_region, PeerState::Normal));
-        try!(write_initial_state(&ctx.wb, new_region.get_id()));
+        try!(write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()));
 
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());
