@@ -179,7 +179,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(true)
         }));
 
-        info!("[store {}] starts with {} regions, including {} tombstone and {} applying ones",
+        info!("[store {}] starts with {} regions, including {} tombstones and {} applying regions",
               self.store_id(),
               total_count,
               tomebstone_count,
