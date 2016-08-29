@@ -602,6 +602,9 @@ fn test_aggr_first() {
         (5, Some("name:5"), 4),
         (6, Some("name:5"), 4),
         (7, None, 4),
+        (8, None, 5),
+        (9, Some("name:5"), 5),
+        (10, None, 6),
     ];
 
     let product = ProductTable::new();
@@ -619,6 +622,24 @@ fn test_aggr_first() {
     for (row, (name, id)) in resp.get_rows().iter().zip(exp) {
         let gk = datum::encode_value(&[name]).unwrap();
         let expected_datum = vec![Datum::Bytes(gk), Datum::I64(id)];
+        let expected_encoded = datum::encode_value(&expected_datum).unwrap();
+        assert_eq!(row.get_data(), &*expected_encoded);
+    }
+
+    let exp = vec![
+        (2, Datum::Bytes(b"name:0".to_vec())),
+        (3, Datum::Bytes(b"name:3".to_vec())),
+        (1, Datum::Bytes(b"name:0".to_vec())),
+        (4, Datum::Bytes(b"name:5".to_vec())),
+        (5, Datum::Bytes(b"name:5".to_vec())),
+        (6, Datum::Null),
+    ];
+    let req = Select::from(&product.table).first(product.name).group_by(&[product.count]).build();
+    let resp = handle_select(&end_point, req);
+    assert_eq!(resp.get_rows().len(), exp.len());
+    for (row, (count, name)) in resp.get_rows().iter().zip(exp) {
+        let gk = datum::encode_value(&[Datum::I64(count)]).unwrap();
+        let expected_datum = vec![Datum::Bytes(gk), name];
         let expected_encoded = datum::encode_value(&expected_datum).unwrap();
         assert_eq!(row.get_data(), &*expected_encoded);
     }

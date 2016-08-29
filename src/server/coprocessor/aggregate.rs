@@ -61,12 +61,15 @@ impl AggrFunc for First {
         if args.len() != 1 {
             return Err(box_err!("Wrong number of args for AggFuncFirstRow: {}", args.len()));
         }
+        if args[0] == Datum::Null {
+            return Ok(());
+        }
         *self = args.pop();
         Ok(())
     }
 
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
-        collector.push(self.take().unwrap());
+        collector.push(self.take().unwrap_or(Datum::Null));
         Ok(())
     }
 }
