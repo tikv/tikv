@@ -12,7 +12,8 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 
 use mio::EventLoop;
 use rocksdb::DB;
@@ -27,6 +28,9 @@ use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::RaftStoreRouter;
+
+const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
+const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
     where S: RaftStoreRouter + 'static
@@ -84,8 +88,7 @@ impl<C> Node<C>
                     -> Result<()>
         where T: Transport + 'static
     {
-        let bootstrapped = try!(self.pd_client
-            .is_cluster_bootstrapped());
+        let bootstrapped = try!(self.check_cluster_bootstrapped());
         let mut store_id = try!(self.check_store(&engine));
         if store_id == INVALID_ID {
             store_id = try!(self.bootstrap_store(&engine));
@@ -191,6 +194,19 @@ impl<C> Node<C>
         }
     }
 
+    fn check_cluster_bootstrapped(&self) -> Result<bool> {
+        for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
+            match self.pd_client.is_cluster_bootstrapped() {
+                Ok(b) => return Ok(b),
+                Err(e) => {
+                    warn!("check cluster bootstrapped failed: {:?}", e);
+                }
+            }
+            thread::sleep(Duration::from_secs(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS));
+        }
+        Err(box_err!("check cluster bootstrapped failed"))
+    }
+
     fn start_store<T>(&mut self,
                       mut event_loop: EventLoop<Store<T, C>>,
                       store_id: u64,
@@ -211,13 +227,20 @@ impl<C> Node<C>
         let store = self.store.clone();
         let ch = event_loop.channel();
 
+        let (tx, rx) = mpsc::channel();
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
-            let mut store = Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr).unwrap();
+            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
+                Err(e) => panic!("construct store {} err {:?}", store_id, e),
+                Ok(s) => s,
+            };
+            tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);
             };
         }));
+        // wait for store to be initialized
+        rx.recv().unwrap();
 
         self.store_handle = Some(h);
         Ok(())

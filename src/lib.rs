@@ -25,6 +25,8 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![recursion_limit="100"]
 
+#![allow(module_inception)]
+
 #[macro_use]
 extern crate log;
 #[macro_use]
@@ -47,7 +49,6 @@ extern crate cadence;
 extern crate libc;
 extern crate crc;
 extern crate rustc_serialize;
-extern crate hyper;
 #[cfg(unix)]
 extern crate nix;
 extern crate alloc;

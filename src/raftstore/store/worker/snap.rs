@@ -35,12 +35,8 @@ const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 
 /// Snapshot related task.
 pub enum Task {
-    Gen {
-        region_id: u64,
-    },
-    Apply {
-        region_id: u64,
-    },
+    Gen { region_id: u64 },
+    Apply { region_id: u64 },
 }
 
 impl Display for Task {

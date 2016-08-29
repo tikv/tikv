@@ -653,11 +653,7 @@ impl<'a> SelectContext<'a> {
                 };
             }
         }
-        if self.core.aggr {
-            Ok(vec![])
-        } else {
-            Ok(rows)
-        }
+        if self.core.aggr { Ok(vec![]) } else { Ok(rows) }
     }
 
     fn get_rows_from_idx(&mut self,
@@ -721,16 +717,8 @@ impl<'a> SelectContext<'a> {
                 };
                 try!(self.core.handle_row(handle, values, &mut rows));
             }
-            seek_key = if desc {
-                key
-            } else {
-                prefix_next(&key)
-            };
+            seek_key = if desc { key } else { prefix_next(&key) };
         }
-        if self.core.aggr {
-            Ok(vec![])
-        } else {
-            Ok(rows)
-        }
+        if self.core.aggr { Ok(vec![]) } else { Ok(rows) }
     }
 }

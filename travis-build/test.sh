@@ -15,18 +15,19 @@
 set -o pipefail
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
-    
-# start etcd
-which etcd
+
+# start pd
+which pd-server
 if [ $? -eq 0 ]; then
-    etcd &
+    pd-server &
     sleep 3s
-    export ETCD_ENDPOINTS=127.0.0.1:2379
+    export PD_ENDPOINTS=127.0.0.1:2379
 fi
 
 export ENABLE_FEATURES=default
 export LOG_FILE=tests.log
 export RUST_TEST_THREADS=1
+export RUSTFLAGS=-Dwarnings
 make test 2>&1 | tee tests.out
 status=$?
 for case in `cat tests.out | python -c "import sys
