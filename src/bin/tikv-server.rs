@@ -391,7 +391,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
 
     let level_zero_slowdown_writes_trigger = {
         get_integer_value("",
-                          "rocksdb.level0-slowdown-writes-trigger",
+                          "rocksdb.writecf.level0-slowdown-writes-trigger",
                           matches,
                           config,
                           Some(12),
@@ -400,7 +400,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
     opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
 
     let level_zero_stop_writes_trigger = get_integer_value("",
-                                                           "rocksdb.level0-stop-writes-trigger",
+                                                           "rocksdb.writecf.level0-stop-writes-trigger",
                                                            matches,
                                                            config,
                                                            Some(16),
