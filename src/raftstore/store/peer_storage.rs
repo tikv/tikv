@@ -353,10 +353,9 @@ impl PeerStorage {
 
         let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
         for entry in entries {
-            let value = try!(entry.write_to_bytes());
-            try!(ctx.wb.put_cf(*handle,
-                               &keys::raft_log_key(self.get_region_id(), entry.get_index()),
-                               &value));
+            try!(ctx.wb.put_msg_cf(*handle,
+                                   &keys::raft_log_key(self.get_region_id(), entry.get_index()),
+                                   entry));
         }
 
         let last_index = entries[entries.len() - 1].get_index();
