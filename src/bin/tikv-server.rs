@@ -332,7 +332,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
                                              config,
                                              Some(1024 * 1024 * 1024),
                                              |v| v.as_integer());
-    let write_cf_block_cache_size: u64 = block_cache_size / 4;
+    let write_cf_block_cache_size: u64 = block_cache_size as u64 / 4;
     block_base_opts.set_lru_cache(write_cf_block_cache_size);
     opts.set_block_based_table_factory(&block_base_opts);
 
