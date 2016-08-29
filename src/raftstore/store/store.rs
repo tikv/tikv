@@ -138,6 +138,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let engine = self.engine.clone();
+        let mut total_count = 0;
+        let mut tomebstone_count = 0;
+        let mut applying_count = 0;
+
         try!(engine.scan(start_key,
                          end_key,
                          &mut |key, value| {
@@ -146,9 +150,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(true);
             }
 
+            total_count += 1;
+
             let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
+                tomebstone_count += 1;
                 debug!("region {:?} is tombstone in store {}",
                        region,
                        self.store_id());
@@ -157,6 +164,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut peer = try!(Peer::create(self, region));
 
             if local_state.get_state() == PeerState::Applying {
+                applying_count += 1;
                 info!("region {:?} is applying in store {}",
                       local_state.get_region(),
                       self.store_id());
@@ -170,6 +178,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers.insert(region_id, peer);
             Ok(true)
         }));
+
+        info!("[store {}] starts with {} regions, including {} tombstone and {} applying ones",
+              self.store_id(),
+              total_count,
+              tomebstone_count,
+              applying_count);
 
         try!(self.clean_up());
 
