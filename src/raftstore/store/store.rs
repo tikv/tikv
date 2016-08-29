@@ -16,7 +16,7 @@ use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use rocksdb::DB;
@@ -142,6 +142,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut tomebstone_count = 0;
         let mut applying_count = 0;
 
+        let t = Instant::now();
         try!(engine.scan(start_key,
                          end_key,
                          &mut |key, value| {
@@ -179,11 +180,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(true)
         }));
 
-        info!("[store {}] starts with {} regions, including {} tombstones and {} applying regions",
+        info!("[store {}] starts with {} regions, including {} tombstones and {} applying \
+               regions, takes {:?}",
               self.store_id(),
               total_count,
               tomebstone_count,
-              applying_count);
+              applying_count,
+              t.elapsed());
 
         try!(self.clean_up());
 
