@@ -334,22 +334,10 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
                                              |v| v.as_integer());
     let write_cf_block_cache_size: u64 = block_cache_size / 4;
     block_base_opts.set_lru_cache(write_cf_block_cache_size);
-    let bloom_bits_per_key = get_integer_value("",
-                                               "rocksdb.block-based-table.\
-                                                bloom-filter-bits-per-key",
-                                               matches,
-                                               config,
-                                               Some(10),
-                                               |v| v.as_integer());
-    let block_based_filter = config.lookup("rocksdb.block-based-table.block-based-bloom-filter")
-    .unwrap_or(&toml::Value::Boolean(false))
-    .as_bool()
-    .unwrap_or(false);
-    block_base_opts.set_bloom_filter(bloom_bits_per_key as i32, block_based_filter);
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
-                               "rocksdb.compression_per_level",
+                               "rocksdb.writecf.compression_per_level",
                                matches,
                                config,
                                Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
@@ -358,7 +346,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
     opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_integer_value("",
-                                              "rocksdb.write-buffer-size",
+                                              "rocksdb.writecf.write-buffer-size",
                                               matches,
                                               config,
                                               Some(64 * 1024 * 1024),
@@ -367,7 +355,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
 
     let max_write_buffer_number = {
         get_integer_value("",
-                          "rocksdb.max-write-buffer-number",
+                          "rocksdb.writecf.max-write-buffer-number",
                           matches,
                           config,
                           Some(5),
@@ -377,7 +365,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
 
     let min_write_buffer_number_to_merge = {
         get_integer_value("",
-                          "rocksdb.min-write-buffer-number-to-merge",
+                          "rocksdb.writecf.min-write-buffer-number-to-merge",
                           matches,
                           config,
                           Some(1),
@@ -386,7 +374,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
     opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
 
     let max_bytes_for_level_base = get_integer_value("",
-                                                     "rocksdb.max-bytes-for-level-base",
+                                                     "rocksdb.writecf.max-bytes-for-level-base",
                                                      matches,
                                                      config,
                                                      Some(64 * 1024 * 1024),
@@ -394,7 +382,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
 
     let target_file_size_base = get_integer_value("",
-                                                  "rocksdb.target-file-size-base",
+                                                  "rocksdb.writecf.target-file-size-base",
                                                   matches,
                                                   config,
                                                   Some(16 * 1024 * 1024),
