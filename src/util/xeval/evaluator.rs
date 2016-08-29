@@ -304,7 +304,7 @@ mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
     use util::codec::{Datum, datum};
-    use util::codec::mysql::{MAX_FSP, Decimal, Duration, DecimalEncoder};
+    use util::codec::mysql::{self, MAX_FSP, Decimal, Duration, DecimalEncoder};
 
     use tipb::expression::{Expr, ExprType};
     use protobuf::RepeatedField;
@@ -342,8 +342,9 @@ mod test {
             }
             Datum::Dec(d) => {
                 expr.set_tp(ExprType::MysqlDecimal);
-                let mut buf = Vec::with_capacity(d.max_encode_bytes());
-                buf.encode_decimal(&d).unwrap();
+                let (prec, frac) = d.prec_and_frac();
+                let mut buf = Vec::with_capacity(mysql::dec_encoded_len(&[prec, frac]).unwrap());
+                buf.encode_decimal(&d, prec, frac).unwrap();
                 expr.set_val(buf);
             }
             _ => expr.set_tp(ExprType::Null),

@@ -141,6 +141,8 @@ pub trait BytesDecoder: NumberDecoder + CompactBytesDecoder {
     /// Get the remaining length in bytes of current reader.
     fn remaining(&self) -> usize;
 
+    fn peak_u8(&self) -> Option<u8>;
+
     fn decode_bytes(&mut self, desc: bool) -> Result<Vec<u8>> {
         let mut key = Vec::with_capacity(self.remaining());
         let mut chunk = [0; ENC_GROUP_SIZE + 1];
@@ -179,6 +181,10 @@ pub trait BytesDecoder: NumberDecoder + CompactBytesDecoder {
 impl<'a> BytesDecoder for &'a [u8] {
     fn remaining(&self) -> usize {
         self.len()
+    }
+
+    fn peak_u8(&self) -> Option<u8> {
+        if self.is_empty() { None } else { Some(self[0]) }
     }
 }
 

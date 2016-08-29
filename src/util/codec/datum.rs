@@ -23,7 +23,8 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 use util::escape;
 use super::{number, Result, bytes, convert};
 use super::number::NumberDecoder;
-use super::mysql::{self, Duration, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder, Time};
+use super::bytes::BytesEncoder;
+use super::mysql::{self, Duration, MAX_FSP, Res, Decimal, DecimalEncoder, DecimalDecoder, Time};
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -31,11 +32,10 @@ const COMPACT_BYTES_FLAG: u8 = 2;
 const INT_FLAG: u8 = 3;
 const UINT_FLAG: u8 = 4;
 const FLOAT_FLAG: u8 = 5;
-const NEW_DECIMAL_FLAG: u8 = 6;
+const DECIMAL_FLAG: u8 = 6;
 const DURATION_FLAG: u8 = 7;
 const VAR_INT_FLAG: u8 = 8;
 const VAR_UINT_FLAG: u8 = 9;
-const DECIMAL_FLAG: u8 = 10;
 const MAX_FLAG: u8 = 250;
 
 #[derive(PartialEq, Clone)]
@@ -78,28 +78,6 @@ impl Debug for Datum {
 fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
     l.partial_cmp(&r)
         .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
-}
-
-/// Get the opposite numbers of negative numbers.
-#[cfg(debug_assertions)]
-macro_rules! opp_neg {
-    ($r:ident) => {
-        // in debug mode, if r is `i64::min_value()`, `-r` will panic.
-        // but in release mode, `-r as u64` will get `|r|`.
-        if $r == i64::min_value() {
-            i64::max_value() as u64 + 1
-        } else {
-            -$r as u64
-        }
-    };
-}
-
-/// Get the opposite numbers of negative numbers.
-#[cfg(not(debug_assertions))]
-macro_rules! opp_neg {
-    ($r:ident) => {
-        -$r as u64
-    };
 }
 
 #[inline]
@@ -184,7 +162,7 @@ impl Datum {
                 cmp_f64(ff, f)
             }
             Datum::Dec(ref d) => {
-                let ff = try!(d.to_f64());
+                let ff = try!(d.as_f64());
                 cmp_f64(ff, f)
             }
             Datum::Dur(ref d) => {
@@ -205,7 +183,7 @@ impl Datum {
             Datum::Bytes(ref bss) => Ok((bss as &[u8]).cmp(bs)),
             Datum::Dec(ref d) => {
                 let s = try!(str::from_utf8(bs));
-                let d2 = try!(Decimal::from_str(s));
+                let d2 = try!(s.parse());
                 Ok(d.cmp(&d2))
             }
             Datum::Time(ref t) => {
@@ -229,11 +207,11 @@ impl Datum {
             Datum::Dec(ref d) => Ok(d.cmp(dec)),
             Datum::Bytes(ref bs) => {
                 let s = try!(str::from_utf8(bs));
-                let d = try!(Decimal::from_str(s));
+                let d = try!(s.parse::<Decimal>());
                 Ok(d.cmp(dec))
             }
             _ => {
-                let f = try!(dec.to_f64());
+                let f = try!(dec.as_f64());
                 self.cmp_f64(f)
             }
         }
@@ -275,7 +253,7 @@ impl Datum {
             Datum::Bytes(ref bs) => Some(!bs.is_empty() && try!(convert::bytes_to_int(bs)) != 0),
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_empty()),
-            Datum::Dec(d) => Some(try!(d.to_f64()).round() != 0f64),
+            Datum::Dec(d) => Some(try!(d.as_f64()).round() != 0f64),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {:?} to bool", self)),
         };
@@ -331,18 +309,14 @@ impl Datum {
                 // if time has no precision, return int64
                 let dec = try!(t.to_decimal());
                 if t.get_fsp() == 0 {
-                    return dec.i64()
-                        .map(Datum::I64)
-                        .ok_or_else(|| box_err!("{} to int will overflow", t));
+                    return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
                 Ok(Datum::Dec(dec))
             }
             Datum::Dur(d) => {
                 let dec = try!(d.to_decimal());
                 if d.get_fsp() == 0 {
-                    return dec.i64()
-                        .map(Datum::I64)
-                        .ok_or_else(|| box_err!("{} to int will overflow", d));
+                    return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
                 Ok(Datum::Dec(dec))
             }
@@ -417,7 +391,12 @@ impl Datum {
                     Datum::F64(res)
                 }
             }
-            (Datum::Dec(l), Datum::Dec(r)) => Datum::Dec(l + r),
+            (Datum::Dec(l), Datum::Dec(r)) => {
+                match l + r {
+                    Res::Ok(d) => Datum::Dec(d),
+                    _ => Datum::Null,
+                }
+            }
             (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
         };
         if let Datum::Null = res {
@@ -522,7 +501,7 @@ pub trait DatumDecoder: DecimalDecoder {
 
 impl<T: DecimalDecoder> DatumDecoder for T {}
 
-pub trait DatumEncoder: DecimalEncoder {
+pub trait DatumEncoder: BytesEncoder + DecimalEncoder {
     /// Encode values to buf slice.
     fn encode(&mut self, values: &[Datum], comparable: bool) -> Result<()> {
         let mut find_min = false;
@@ -578,7 +557,8 @@ pub trait DatumEncoder: DecimalEncoder {
                 }
                 Datum::Dec(ref d) => {
                     try!(self.write_u8(DECIMAL_FLAG));
-                    try!(self.encode_decimal(d));
+                    let (prec, frac) = d.prec_and_frac();
+                    try!(self.encode_decimal(d, prec, frac));
                 }
             }
         }
@@ -621,7 +601,7 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                         bs.len() + number::MAX_VAR_I64_LEN
                     }
                 }
-                Datum::Dec(ref d) => d.max_encode_bytes(),
+                Datum::Dec(ref d) => d.approximate_encoded_size(),
                 Datum::Null | Datum::Min | Datum::Max => 0,
             }
         })
@@ -664,8 +644,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         NIL_FLAG => 0,
         FLOAT_FLAG => number::F64_SIZE,
         DURATION_FLAG => number::I64_SIZE,
-        NEW_DECIMAL_FLAG => try!(mysql::dec_encoded_len(&buf[1..])),
-        DECIMAL_FLAG => mysql::encoded_len(&buf[1..]),
+        DECIMAL_FLAG => try!(mysql::dec_encoded_len(&buf[1..])),
         VAR_INT_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
@@ -705,8 +684,8 @@ mod test {
             (&Datum::Min, &Datum::Min) |
             (&Datum::Bytes(_), &Datum::Bytes(_)) |
             (&Datum::Dur(_), &Datum::Dur(_)) |
-            (&Datum::Dec(_), &Datum::Dec(_)) |
             (&Datum::Null, &Datum::Null) => true,
+            (&Datum::Dec(ref d1), &Datum::Dec(ref d2)) => d1.prec_and_frac() == d2.prec_and_frac(),
             _ => false,
         }
     }
@@ -906,10 +885,10 @@ mod test {
              Ordering::Greater),
             (Datum::Dec("-12340".parse().unwrap()), Datum::Dec("-123400".parse().unwrap()),
              Ordering::Greater),
-            (Datum::Dec(Decimal::new(1.into(), 2, 2)), Datum::I64(1), Ordering::Greater),
-            (Datum::Dec(Decimal::new((-1).into(), 2, 2)), Datum::I64(-1), Ordering::Less),
-            (Datum::Dec(Decimal::new((-1).into(), 2, 2)), Datum::I64(-100), Ordering::Equal),
-            (Datum::Dec(Decimal::new(1.into(), 2, 2)), Datum::I64(100), Ordering::Equal),
+            (Datum::Dec(100.into()), Datum::I64(1), Ordering::Greater),
+            (Datum::Dec((-100).into()), Datum::I64(-1), Ordering::Less),
+            (Datum::Dec((-100).into()), Datum::I64(-100), Ordering::Equal),
+            (Datum::Dec(100.into()), Datum::I64(100), Ordering::Equal),
 
             // Test for int type decimal.
             (Datum::Dec((-1i64).into()), Datum::Dec(1i64.into()), Ordering::Less),
@@ -1006,7 +985,7 @@ mod test {
             vec![Datum::Null],
             vec![Datum::I64(100), Datum::U64(100)],
             vec![Datum::U64(1), Datum::U64(1)],
-            vec![Datum::Dec(Decimal::new(1.into(), 1, MAX_FSP))],
+            vec![Datum::Dec(10.into())],
             vec![Datum::F64(1f64), Datum::F64(3.15), Datum::Bytes(b"123456789012345".to_vec())],
         ];
 

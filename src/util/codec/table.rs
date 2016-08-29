@@ -21,7 +21,7 @@ use super::number::{NumberDecoder, NumberEncoder};
 use super::bytes::BytesDecoder;
 use super::datum::DatumDecoder;
 use super::{Result, Datum, datum};
-use super::mysql::{types, Duration, Time, decimal};
+use super::mysql::{types, Duration, Time};
 use util::escape;
 
 // handle or index id
@@ -54,7 +54,7 @@ impl<T: Write> TableEncoder for T {}
 fn flatten(data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
-        Datum::Dec(d) => Ok(Datum::Bytes(format!("{}", d).into_bytes())),
+        Datum::Time(t) => Ok(Datum::U64(t.to_packed_u64())),
         _ => Ok(data),
     }
 }
@@ -168,26 +168,14 @@ fn unflatten(datum: Datum, col: &ColumnInfo) -> Result<Datum> {
         types::BLOB |
         types::LONG_BLOB |
         types::VARCHAR |
-        types::STRING => Ok(datum),
+        types::STRING |
+        types::NEW_DECIMAL => Ok(datum),
         types::DATE | types::DATETIME | types::TIMESTAMP => {
             let fsp = col.get_decimal() as u8;
             let t = try!(Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp));
             Ok(Datum::Time(t))
         }
         types::DURATION => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
-        types::NEW_DECIMAL => {
-            let mut d = match datum {
-                Datum::Dec(d) => d,
-                _ => try!(datum.into_string().and_then(|s| s.parse())),
-            };
-            if col.get_decimal() >= 0 {
-                if col.get_decimal() > decimal::MAX_FSP as i32 {
-                    return Err(box_err!("fsp {} > {}", col.get_decimal(), decimal::MAX_FSP));
-                }
-                d = d.truncate(col.get_decimal() as u8);
-            }
-            Ok(Datum::Dec(d))
-        }
         types::ENUM | types::SET | types::BIT => {
             Err(box_err!("unflatten column {:?} is not supported yet.", col))
         }
@@ -325,7 +313,7 @@ mod test {
         let mut row = map![
             1 => Datum::I64(100),
             2 => Datum::Bytes(b"abc".to_vec()),
-            3 => Datum::Dec(Decimal::new(1.into(), 1, MAX_FSP))
+            3 => Datum::Dec(10.into())
         ];
 
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
@@ -379,9 +367,8 @@ mod test {
         let col_types = vec![new_col_info(types::LONG_LONG),
                              new_col_info(types::VARCHAR),
                              new_col_info(types::NEW_DECIMAL)];
-        let col_values = vec![Datum::I64(100),
-                              Datum::Bytes(b"abc".to_vec()),
-                              Datum::Dec(Decimal::new(1.into(), 1, MAX_FSP))];
+        let col_values =
+            vec![Datum::I64(100), Datum::Bytes(b"abc".to_vec()), Datum::Dec(10.into())];
         let mut col_encoded: HashMap<_, _> = col_ids.iter()
             .zip(&col_types)
             .zip(&col_values)

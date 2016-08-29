@@ -151,3 +151,27 @@ macro_rules! defer {
         let __ctx = $crate::util::DeferContext::new(|| $t);
     );
 }
+
+/// Get the opposite numbers of negative numbers.
+#[cfg(debug_assertions)]
+#[macro_export]
+macro_rules! opp_neg {
+    ($r:ident) => {
+        // in debug mode, if r is `i64::min_value()`, `-r` will panic.
+        // but in release mode, `-r as u64` will get `|r|`.
+        if $r == i64::min_value() {
+            i64::max_value() as u64 + 1
+        } else {
+            -$r as u64
+        }
+    };
+}
+
+/// Get the opposite numbers of negative numbers.
+#[cfg(not(debug_assertions))]
+#[macro_export]
+macro_rules! opp_neg {
+    ($r:ident) => {
+        (-$r as u64)
+    };
+}
