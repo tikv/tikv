@@ -194,11 +194,11 @@ impl Simulator for NodeCluster {
         self.nodes.keys().cloned().collect()
     }
 
-    fn call_command(&self,
-                    node_id: u64,
-                    request: RaftCmdRequest,
-                    timeout: Duration)
-                    -> Result<RaftCmdResponse> {
+    fn call_command_on_node(&self,
+                            node_id: u64,
+                            request: RaftCmdRequest,
+                            timeout: Duration)
+                            -> Result<RaftCmdResponse> {
         if !self.trans.rl().routers.contains_key(&node_id) {
             return Err(box_err!("missing sender for store {}", node_id));
         }

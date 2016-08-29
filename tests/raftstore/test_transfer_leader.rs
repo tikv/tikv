@@ -37,7 +37,7 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     // transfer leader to (4, 4)
     cluster.must_transfer_leader(1, new_peer(4, 4));
     // send request to old leader (3, 3) directly and verify it fails
-    let resp = cluster.call_command(3, req, Duration::from_secs(5)).unwrap();
+    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
     assert!(resp.get_header().get_error().has_not_leader());
 }
 
@@ -94,7 +94,7 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(cluster.leader_of_region(1), Some(new_peer(id, id)));
         req.mut_header().set_peer(new_peer(id, id));
         debug!("requesting {:?}", req);
-        let resp = cluster.call_command(id, req.clone(), Duration::from_secs(5)).unwrap();
+        let resp = cluster.call_command(req.clone(), Duration::from_secs(5)).unwrap();
         assert!(!resp.get_header().has_error(), format!("{:?}", resp));
         assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
     }

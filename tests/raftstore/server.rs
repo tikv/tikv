@@ -226,11 +226,11 @@ impl Simulator for ServerCluster {
         self.senders.keys().cloned().collect()
     }
 
-    fn call_command(&self,
-                    node_id: u64,
-                    request: RaftCmdRequest,
-                    timeout: Duration)
-                    -> Result<RaftCmdResponse> {
+    fn call_command_on_node(&self,
+                            node_id: u64,
+                            request: RaftCmdRequest,
+                            timeout: Duration)
+                            -> Result<RaftCmdResponse> {
         let addr = self.addrs.get(&node_id).unwrap();
         let mut conn = self.pool_get(addr).unwrap();
 
