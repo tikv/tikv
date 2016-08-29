@@ -389,24 +389,6 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
                                                   |v| v.as_integer());
     opts.set_target_file_size_base(target_file_size_base as u64);
 
-    let level_zero_slowdown_writes_trigger = {
-        get_integer_value("",
-                          "rocksdb.writecf.level0-slowdown-writes-trigger",
-                          matches,
-                          config,
-                          Some(12),
-                          |v| v.as_integer())
-    };
-    opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
-
-    let level_zero_stop_writes_trigger = get_integer_value("",
-                                                           "rocksdb.writecf.level0-stop-writes-trigger",
-                                                           matches,
-                                                           config,
-                                                           Some(16),
-                                                           |v| v.as_integer());
-    opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
-
     opts
 }
 
