@@ -479,7 +479,6 @@ impl Peer {
                 apply_state: self.get_store().apply_state.clone(),
                 wb: WriteBatch::new(),
                 req: &req,
-                engine: self.engine.clone(),
             };
             let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
                 error!("{} execute raft command err: {:?}", self.tag, e);
@@ -924,7 +923,6 @@ impl Peer {
             apply_state: self.get_store().apply_state.clone(),
             wb: WriteBatch::new(),
             req: req,
-            engine: self.engine.clone(),
         };
         let (mut resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             error!("{} execute raft command err: {:?}", self.tag, e);
@@ -992,12 +990,11 @@ struct ExecContext<'a> {
     pub apply_state: RaftApplyState,
     pub wb: WriteBatch,
     pub req: &'a RaftCmdRequest,
-    pub engine: Arc<DB>,
 }
 
 impl<'a> ExecContext<'a> {
     fn save(&self, region_id: u64) -> Result<()> {
-        let raft_cf = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
+        let raft_cf = try!(self.snap.cf_handle(CF_RAFT));
         try!(self.wb.put_msg_cf(*raft_cf,
                                 &keys::apply_state_key(region_id),
                                 &self.apply_state));

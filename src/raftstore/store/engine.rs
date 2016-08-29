@@ -21,6 +21,7 @@ use byteorder::{ByteOrder, BigEndian};
 use util::rocksdb;
 
 use raftstore::Result;
+use raftstore::Error;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -43,6 +44,10 @@ impl Snapshot {
 
     pub fn cf_names(&self) -> Vec<&str> {
         self.db.cf_names()
+    }
+
+    pub fn cf_handle<'a>(&'a self, cf: &str) -> Result<&'a rocksdb::DBCFHandle> {
+        rocksdb::get_cf_handle(&self.db, cf).map_err(Error::from)
     }
 }
 
