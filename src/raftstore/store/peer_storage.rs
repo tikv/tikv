@@ -441,6 +441,9 @@ impl PeerStorage {
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
     pub fn clear_meta(&self, wb: &WriteBatch) -> Result<()> {
+        let t = Instant::now();
+        let mut meta_count = 0;
+        let mut raft_count = 0;
         let region_id = self.get_region_id();
         let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
                                       keys::region_meta_prefix(region_id + 1));
@@ -448,6 +451,7 @@ impl PeerStorage {
                               &meta_end,
                               &mut |key, _| {
                                   try!(wb.delete(key));
+                                  meta_count += 1;
                                   Ok(true)
                               }));
 
@@ -459,9 +463,14 @@ impl PeerStorage {
                                  &raft_end,
                                  &mut |key, _| {
                                      try!(wb.delete_cf(*handle, key));
+                                     raft_count += 1;
                                      Ok(true)
                                  }));
-
+        info!("{} clean peer {} meta keys and {} raft keys, takes {:?}",
+              self.tag,
+              meta_count,
+              raft_count,
+              t.elapsed());
         Ok(())
     }
 
@@ -473,7 +482,7 @@ impl PeerStorage {
                                     enc_end_key(self.get_region()));
 
         try!(delete_all_in_range(&self.engine, &start_key, &end_key));
-        info!("{} clean peer data takes {:?}", self.tag, timer.elapsed());
+        info!("{} clean peer data, takes {:?}", self.tag, timer.elapsed());
         Ok(())
     }
 
@@ -566,6 +575,7 @@ fn build_snap_file(f: &mut SnapFile,
                    snap: &DbSnapshot,
                    region: &metapb::Region)
                    -> raft::Result<()> {
+    let t = Instant::now();
     let mut snap_size = 0;
     let mut snap_key_cnt = 0;
     let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
@@ -589,10 +599,11 @@ fn build_snap_file(f: &mut SnapFile,
     box_try!(f.encode_compact_bytes(b""));
     try!(f.save());
 
-    info!("[region {}] scan snapshot, size {}, key count {}",
+    info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
           region.get_id(),
           snap_size,
-          snap_key_cnt);
+          snap_key_cnt,
+          t.elapsed());
     Ok(())
 }
 
