@@ -466,7 +466,7 @@ impl PeerStorage {
                                      raft_count += 1;
                                      Ok(true)
                                  }));
-        info!("{} clean peer {} meta keys and {} raft keys, takes {:?}",
+        info!("{} clear peer {} meta keys and {} raft keys, takes {:?}",
               self.tag,
               meta_count,
               raft_count,
@@ -482,7 +482,7 @@ impl PeerStorage {
                                     enc_end_key(self.get_region()));
 
         try!(delete_all_in_range(&self.engine, &start_key, &end_key));
-        info!("{} clean peer data, takes {:?}", self.tag, timer.elapsed());
+        info!("{} clear peer data, takes {:?}", self.tag, timer.elapsed());
         Ok(())
     }
 
