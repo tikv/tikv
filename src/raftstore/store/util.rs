@@ -59,13 +59,13 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     }
 }
 
-const CONF_CHANGE_ADD_NODE_STR: &'static str = "AddNode";
-const CONF_CHANGE_REMOVE_NODE_STR: &'static str = "RemoveNode";
+const STR_CONF_CHANGE_ADD_NODE: &'static str = "AddNode";
+const STR_CONF_CHANGE_REMOVE_NODE: &'static str = "RemoveNode";
 
 pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
     match *conf_type {
-        ConfChangeType::AddNode => CONF_CHANGE_ADD_NODE_STR,
-        ConfChangeType::RemoveNode => CONF_CHANGE_REMOVE_NODE_STR,
+        ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
+        ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
     }
 }
 
