@@ -42,6 +42,8 @@ fn compute_rollover_time(tm: Tm) -> Tm {
     (day_start_tm.to_utc() + duration).to_local()
 }
 
+/// Returns a Tm at the time one day before the given Tm.
+/// It expects the argument `tm` to be in local timezone. The resulting Tm is in local timezone.
 fn one_day_before(tm: Tm) -> Tm {
     let duration = time::Duration::from_std(Duration::new(ONE_DAY_SECONDS, 0)).unwrap();
     (tm.to_utc() - duration).to_local()
@@ -175,6 +177,13 @@ mod tests {
     use std::path::Path;
     use tempdir::TempDir;
     use super::{RotatingFileLoggerCore, ONE_DAY_SECONDS};
+
+    #[test]
+    fn test_one_day_before() {
+        let tm = time::strptime("2016-08-30", "%Y-%m-%d").unwrap().to_local();
+        let one_day_ago = time::strptime("2016-08-29", "%Y-%m-%d").unwrap().to_local();
+        assert_eq!(one_day_ago, super::one_day_before(tm));
+    }
 
     fn file_exists(file: &str) -> bool {
         let path = Path::new(file);
