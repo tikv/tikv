@@ -204,7 +204,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             last_start_key = keys::enc_end_key(region);
         }
 
-        delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY);
+        try!(delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
 
         info!("[store {}] cleans up garbage data, takes {:?}",
               self.store_id(),
