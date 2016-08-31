@@ -19,7 +19,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::time::Duration;
 use std::{cmp, u64};
 
-use rocksdb::{DB, WriteBatch};
+use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use uuid::Uuid;
@@ -537,38 +537,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
-        let mut apply_batch = WriteBatch::new();
-        let mut results: HashMap<u64, Option<ReadyResult>> = HashMap::new();
-        let mut cb_lists: HashMap<u64, Vec<(Callback, RaftCmdResponse)>> = HashMap::new();
         for region_id in ids {
-            cb_lists.insert(region_id, vec![]);
-            let mut cb_list = cb_lists.get_mut(&region_id).unwrap();
+            let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                let res = peer.handle_raft_ready(&self.trans, &mut apply_batch, &mut cb_list);
-                if let Err(e) = res {
-                    panic!("{} handle raft ready err: {:?}", peer.tag, e);
-                }
-                results.insert(region_id, res.unwrap());
-            }
-        }
-
-        // write rocksdb must success
-        if !apply_batch.is_empty() {
-            if let Err(e) = self.engine.write(apply_batch) {
-                panic!("write apply_batch err: {:?}", e);
-            }
-        }
-
-        for (region_id, mut cb_list) in cb_lists.drain() {
-            for (cb, resp) in cb_list.drain(..) {
-                if let Err(e) = cb.call_box((resp,)) {
-                    error!("region {} callback err {:?}", region_id, e);
+                match peer.handle_raft_ready(&self.trans) {
+                    Err(e) => {
+                        // TODO: should we panic or shutdown the store?
+                        error!("{} handle raft ready err: {:?}", peer.tag, e);
+                        return Err(e);
+                    }
+                    Ok(ready) => ready_result = ready,
                 }
             }
-        }
 
-        for (region_id, res) in results.drain() {
-            if let Some(ready_result) = res {
+            if let Some(ready_result) = ready_result {
                 if let Err(e) = self.on_ready_result(region_id, ready_result) {
                     error!("[region {}] handle raft ready result err: {:?}",
                            region_id,
