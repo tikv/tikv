@@ -1414,10 +1414,8 @@ fn test_leader_election_with_check_quorum() {
     nt.peers.get_mut(&1).unwrap().set_randomized_election_timeout(a_election_timeout + 1);
     nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 2);
 
-    // Letting b's electionElapsed reach to timeout so that it can vote for a
-    for _ in 0..b_election_timeout {
-        nt.peers.get_mut(&2).unwrap().tick();
-    }
+    // Immediately after creation, votes are cast regardless of the election timeout
+
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
     assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
