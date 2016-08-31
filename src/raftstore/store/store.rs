@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
@@ -75,7 +77,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     trans: T,
     pd_client: Arc<C>,
 
-    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
+    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
 
     snap_mgr: SnapManager,
 }
@@ -123,7 +125,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pending_regions: vec![],
             trans: trans,
             pd_client: pd_client,
-            peer_cache: Arc::new(RwLock::new(peer_cache)),
+            peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
         };
         try!(s.init());
@@ -260,7 +262,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &self.cfg
     }
 
-    pub fn peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
+    pub fn peer_cache(&self) -> Rc<RefCell<HashMap<u64, metapb::Peer>>> {
         self.peer_cache.clone()
     }
 
@@ -546,7 +548,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn insert_peer_cache(&mut self, peer: metapb::Peer) {
-        self.peer_cache.wl().insert(peer.get_id(), peer);
+        self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
     fn on_raft_ready(&mut self) -> Result<()> {
@@ -1167,7 +1169,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             // The peer must exist in peer_cache.
-            let to_peer = match self.peer_cache.rl().get(&to_peer_id).cloned() {
+            let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
                 Some(peer) => peer,
                 None => {
                     // If to_peer is removed immediately after sending snapshot, the command
