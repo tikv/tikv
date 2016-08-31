@@ -559,7 +559,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        for (region_id, mut cb_list) in cb_lists.drain().take(1) {
+        for (region_id, mut cb_list) in cb_lists.drain() {
             for (cb, resp) in cb_list.drain(..) {
                 if let Err(e) = cb.call_box((resp,)) {
                     error!("region {} callback err {:?}", region_id, e);
