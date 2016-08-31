@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
@@ -33,7 +35,7 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use util::{escape, HandyRwLock, SlowTimer, rocksdb};
+use util::{escape, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
 use storage::CF_RAFT;
 use super::store::Store;
@@ -144,19 +146,19 @@ fn notify_region_removed(region_id: u64, peer_id: u64, cmd: PendingCmd) {
 
 pub struct Peer {
     engine: Arc<DB>,
+    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
+    // if we remove ourself in ChangePeer remove, we should set this flag, then
+    // any following committed logs in same Ready should be applied failed.
+    pending_remove: bool,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
     pending_cmds: PendingCmdQueue,
-    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
     coprocessor_host: CoprocessorHost,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
-    // if we remove ourself in ChangePeer remove, we should set this flag, then
-    // any following committed logs in same Ready should be applied failed.
-    pending_remove: bool,
 
     pub tag: String,
 }
@@ -670,14 +672,14 @@ impl Peer {
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
-        if let Some(peer) = self.peer_cache.rl().get(&peer_id).cloned() {
+        if let Some(peer) = self.peer_cache.borrow().get(&peer_id).cloned() {
             return Some(peer);
         }
 
         // Try to find in region, if found, set in cache.
         for peer in self.get_store().get_region().get_peers() {
             if peer.get_id() == peer_id {
-                self.peer_cache.wl().insert(peer_id, peer.clone());
+                self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
                 return Some(peer.clone());
             }
         }
@@ -1073,7 +1075,7 @@ impl Peer {
                 // TODO: Do we allow adding peer in same node?
 
                 // Add this peer to cache.
-                self.peer_cache.wl().insert(peer.get_id(), peer.clone());
+                self.peer_cache.borrow_mut().insert(peer.get_id(), peer.clone());
                 self.peer_heartbeats.insert(peer.get_id(), Instant::now());
                 region.mut_peers().push(peer.clone());
 
@@ -1101,7 +1103,7 @@ impl Peer {
                 }
 
                 // Remove this peer from cache.
-                self.peer_cache.wl().remove(&peer.get_id());
+                self.peer_cache.borrow_mut().remove(&peer.get_id());
                 self.peer_heartbeats.remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
@@ -1175,7 +1177,7 @@ impl Peer {
             peer.set_id(peer_id);
 
             // Add this peer to cache.
-            self.peer_cache.wl().insert(peer_id, peer.clone());
+            self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
         }
 
         // update region version
