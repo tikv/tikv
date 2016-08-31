@@ -21,6 +21,7 @@ use mio::{Token, Handler, EventLoop, EventLoopBuilder, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, ConnData};
 use super::conn::Conn;
@@ -72,6 +73,16 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     conn_token_counter: usize,
     sendch: SendCh<Msg>,
 
+    // the cache of all known store ids
+    // It's used for validating incoming raft messages. Everytime a server receives
+    // a raft message, it will check:
+    // 1. whether it from known store, if not, go to 2
+    // 2. validate whether PD has the info of this store. if yes,
+    //    mark this store id as "known" by inserting this store id into this cache
+    // Only a message from a known store will be routed to the local store,
+    // otherwise it will be thrown away.
+    known_store_ids: HashSet<u64>,
+
     // store id -> Token
     // This is for communicating with other raft stores.
     store_tokens: HashMap<u64, Token>,
@@ -119,6 +130,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             sendch: sendch,
             conns: HashMap::new(),
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
+            known_store_ids: HashSet::new(),
             store_tokens: HashMap::new(),
             store_resolving: HashSet::new(),
             raft_router: raft_router,
@@ -237,10 +249,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
         let msg_type = msg.get_msg_type();
         match msg_type {
-            MessageType::Raft => {
-                try!(self.raft_router.send_raft_msg(msg.take_raft()));
-                Ok(())
-            }
+            MessageType::Raft => self.on_raft_msg(msg.take_raft()),
             MessageType::Cmd => self.on_raft_command(msg.take_cmd_req(), token, msg_id),
             MessageType::KvReq => {
                 let req = msg.take_kv_req();
@@ -264,6 +273,29 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                              msg_id))
             }
         }
+    }
+
+    // validates the source store id of this raft message before deliver it to the underlying store
+    fn on_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
+        let store_id = msg.get_from_peer().get_store_id();
+        // check whether this store id is known already
+        if self.known_store_ids.contains(&store_id) {
+            try!(self.raft_router.send_raft_msg(msg));
+            return Ok(());
+        }
+
+        // if we are resolving the store id, simply drop the message
+        if self.store_resolving.contains(&store_id) {
+            debug!("store {} address is being resolved, drop msg {:?}",
+                   store_id,
+                   msg);
+            return Ok(());
+        }
+
+        // try to validate whether PD has the store info of the specified store id
+        info!("begin to validate store id {}", store_id);
+        self.store_resolving.insert(store_id);
+        self.validate_store_id(store_id, msg)
     }
 
     fn on_raft_command(&mut self, msg: RaftCmdRequest, token: Token, msg_id: u64) -> Result<()> {
@@ -390,6 +422,29 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
     }
 
+    // asks resolver to resolve the address of the specified store id
+    // We could tell whether that store is valid by the result of address resolving.
+    fn validate_store_id(&mut self, store_id: u64, msg: RaftMessage) -> Result<()> {
+        let ch = self.sendch.clone();
+        let cb = box move |r| {
+            let valid = match r {
+                Ok(_) => true,
+                Err(_) => false,
+            };
+            if let Err(e) = ch.send(Msg::ValidateResult {
+                store_id: store_id,
+                valid: valid,
+                msg: msg,
+            }) {
+                error!("send store id msg err {:?}", e)
+            }
+        };
+        if let Err(e) = self.resolver.resolve(store_id, cb) {
+            error!("try to validate store {} err {:?}", store_id, e);
+        }
+        Ok(())
+    }
+
     fn report_unreachable(&self, data: ConnData) {
         if data.msg.has_raft() {
             return;
@@ -469,6 +524,28 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         };
 
         self.write_data(event_loop, token, data)
+    }
+
+    // Performs the actions basing on the store id validation result.
+    // If the store id is valid, deliver the raft message to the underlying store.
+    // Otherwise simply log a error and drop the message.
+    fn on_validate_store_result(&mut self, store_id: u64, valid: bool, msg: RaftMessage) {
+        // unmark this store id from resolving
+        self.store_resolving.remove(&store_id);
+        // if the store id is validated by PD to be invalid, drop the message
+        if !valid {
+            error!("drop msg {:?} from invalid store id {}", msg, store_id);
+            return;
+        }
+        // send the message to the underlying store
+        let from_peer = msg.get_from_peer().clone();
+        let to_peer = msg.get_to_peer().clone();
+        if let Err(e) = self.raft_router.send_raft_msg(msg) {
+            error!("send msg from peer: {:?} to peer: {:?} err {:?}",
+                   from_peer,
+                   to_peer,
+                   e);
+        }
     }
 
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter<T> {
@@ -553,6 +630,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             Msg::ResolveResult { store_id, sock_addr, data } => {
                 self.on_resolve_result(event_loop, store_id, sock_addr, data)
             }
+            Msg::ValidateResult { store_id, valid, msg } => {
+                self.on_validate_store_result(store_id, valid, msg)
+            }
             Msg::CloseConn { token } => self.remove_conn(event_loop, token),
         }
     }
@@ -617,8 +697,10 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
 #[cfg(test)]
 mod tests {
     use std::thread;
+    use std::time::Duration;
+    use std::collections::HashSet;
     use std::sync::mpsc::{self, Sender};
-    use std::net::SocketAddr;
+    use std::net::{SocketAddr, TcpStream};
 
     use mio::tcp::TcpListener;
 
@@ -626,11 +708,16 @@ mod tests {
     use super::super::{Msg, ConnData, Result, Config};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
+    use super::super::errors::Error;
+    use pd::errors::Error as PdError;
     use storage::Storage;
     use kvproto::msgpb::{Message, MessageType};
+    use kvproto::raft_serverpb::RaftMessage;
+    use kvproto::metapb::Peer;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::{self, Msg as StoreMsg};
     use raft::SnapshotStatus;
+    use util::codec::rpc;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -700,6 +787,124 @@ mod tests {
 
         rx.recv().unwrap();
 
+        ch.send(Msg::Quit).unwrap();
+        h.join().unwrap();
+    }
+
+    struct MockFailResolver {
+        addr: SocketAddr,
+        valid_store_ids: HashSet<u64>,
+    }
+
+    impl StoreAddrResolver for MockFailResolver {
+        fn resolve(&self, id: u64, cb: ResolveCallback) -> Result<()> {
+            match self.valid_store_ids.contains(&id) {
+                true => cb.call_box((Ok(self.addr),)),
+                false => {
+                    cb.call_box((Err(Error::Pd(PdError::Other(box_err!("error from \
+                                                                        MockFailResolver")))),))
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestStoreIdRaftStoreRouter {
+        tx: Sender<u64>,
+    }
+
+    impl RaftStoreRouter for TestStoreIdRaftStoreRouter {
+        fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+            match msg {
+                StoreMsg::RaftMessage(raft_msg) => {
+                    let id = raft_msg.get_from_peer().get_store_id();
+                    self.tx.send(id).unwrap();
+                }
+                _ => panic!("unexpected message"),
+            }
+            Ok(())
+        }
+
+        fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) -> RaftStoreResult<()> {
+            unimplemented!();
+        }
+
+        fn report_unreachable(&self, _: u64, _: u64) -> RaftStoreResult<()> {
+            unimplemented!();
+        }
+    }
+
+    /// A helper function to construct a raft message with specified store id.
+    fn new_raft_message(store_id: u64) -> Message {
+        let mut msg = Message::new();
+        msg.set_msg_type(MessageType::Raft);
+        let mut from_peer = Peer::new();
+        from_peer.set_store_id(store_id);
+        let mut raft_msg = RaftMessage::new();
+        raft_msg.set_from_peer(from_peer);
+        msg.set_raft(raft_msg);
+        msg
+    }
+
+    /// This test case tests whether store id validation is working.
+    /// After the setup of server, it send two raft message with
+    /// 1. invalid store id
+    /// 2. valid store id
+    /// and verify that only message 2 is delivered to the underlying store of that server.
+    #[test]
+    fn test_store_id_validation() {
+        // setup the testing server
+        let addr = "127.0.0.1:60001".parse().unwrap();
+        let listener = TcpListener::bind(&addr).unwrap();
+
+        let valid_store_id = 2u64;
+        let mut valid_store_ids = HashSet::new();
+        valid_store_ids.insert(valid_store_id);
+        let resolver = MockFailResolver {
+            addr: listener.local_addr().unwrap(),
+            valid_store_ids: valid_store_ids,
+        };
+        let (tx, rx) = mpsc::channel();
+        let cfg = Config::new();
+        let mut event_loop = create_event_loop(&cfg).unwrap();
+        let mut storage = Storage::new(&cfg.storage).unwrap();
+        storage.start(&cfg.storage).unwrap();
+
+        let mut server = Server::new(&mut event_loop,
+                                     &cfg,
+                                     listener,
+                                     storage,
+                                     TestStoreIdRaftStoreRouter { tx: tx },
+                                     resolver,
+                                     store::new_snap_mgr("", None))
+            .unwrap();
+
+        let ch = server.get_sendch();
+        let h = thread::spawn(move || {
+            event_loop.run(&mut server).unwrap();
+        });
+
+        // construct a raft message with invalid store id and send it to server
+        let msg_1 = new_raft_message(1u64);
+        let mut sock = TcpStream::connect(&addr).unwrap();
+        sock.set_write_timeout(Some(Duration::from_secs(1))).unwrap();
+        rpc::encode_msg(&mut sock, 1u64, &msg_1).unwrap();
+
+        // check the raft message is not delivered to the underlying store
+        if let Ok(_) = rx.try_recv() {
+            panic!("should not receive value");
+        }
+
+        // construct a raft message with valid store id and send it to server
+        let msg_2 = new_raft_message(valid_store_id);
+        rpc::encode_msg(&mut sock, 1u64, &msg_2).unwrap();
+
+        // check the raft message is delivered to the underlying store
+        let rid = rx.recv().unwrap();
+        assert_eq!(rid, valid_store_id);
+
+        // tear down the test case
         ch.send(Msg::Quit).unwrap();
         h.join().unwrap();
     }

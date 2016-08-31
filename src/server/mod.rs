@@ -18,6 +18,7 @@ use std::io::Write;
 
 use mio::Token;
 
+use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{self, MessageType};
 use util::codec::rpc;
 use kvproto::eraftpb::MessageType as RaftMessageType;
@@ -117,14 +118,28 @@ pub enum Msg {
     // Quit event loop.
     Quit,
     // Write data to connection.
-    WriteData { token: Token, data: ConnData },
+    WriteData {
+        token: Token,
+        data: ConnData,
+    },
     // Send data to remote store.
-    SendStore { store_id: u64, data: ConnData },
+    SendStore {
+        store_id: u64,
+        data: ConnData,
+    },
     // Resolve store address result.
     ResolveResult {
         store_id: u64,
         sock_addr: Result<SocketAddr>,
         data: ConnData,
     },
-    CloseConn { token: Token },
+    // Validate store id result.
+    ValidateResult {
+        store_id: u64,
+        valid: bool,
+        msg: RaftMessage,
+    },
+    CloseConn {
+        token: Token,
+    },
 }
