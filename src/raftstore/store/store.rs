@@ -195,6 +195,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     /// `clean_up` clean up all possible garbage data.
     fn clean_up(&mut self) -> Result<()> {
+        let t = Instant::now();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
@@ -203,7 +204,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             last_start_key = keys::enc_end_key(region);
         }
 
-        delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY)
+        try!(delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
+
+        info!("[store {}] cleans up garbage data, takes {:?}",
+              self.store_id(),
+              t.elapsed());
+        Ok(())
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
