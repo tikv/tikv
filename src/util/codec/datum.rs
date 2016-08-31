@@ -24,7 +24,7 @@ use util::escape;
 use super::{number, Result, bytes, convert};
 use super::number::NumberDecoder;
 use super::bytes::BytesEncoder;
-use super::mysql::{self, Duration, MAX_FSP, Res, Decimal, DecimalEncoder, DecimalDecoder, Time};
+use super::mysql::{self, Duration, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder, Time};
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -276,6 +276,27 @@ impl Datum {
         Ok(s)
     }
 
+    /// `into_f64` converts self into f64.
+    /// source function name is `ToFloat64`.
+    pub fn into_f64(self) -> Result<f64> {
+        match self {
+            Datum::I64(i) => Ok(i as f64),
+            Datum::U64(u) => Ok(u as f64),
+            Datum::F64(f) => Ok(f),
+            Datum::Bytes(bs) => convert::bytes_to_f64(&bs),
+            Datum::Time(t) => {
+                let d = try!(t.to_decimal());
+                d.as_f64()
+            }
+            Datum::Dur(d) => {
+                let d = try!(d.to_decimal());
+                d.as_f64()
+            }
+            Datum::Dec(d) => d.as_f64(),
+            _ => Err(box_err!("failed to convert {} to f64", self)),
+        }
+    }
+
     /// Keep compatible with TiDB's `GetFloat64` function.
     pub fn f64(&self) -> f64 {
         let i = self.i64();
@@ -376,6 +397,29 @@ impl Datum {
         }
     }
 
+    pub fn checked_div(self, d: Datum) -> Result<Datum> {
+        match (self, d) {
+            (Datum::F64(f), d) => {
+                match d.coerce_to_f64() {
+                    Datum::F64(0f64) => Ok(Datum::Null),
+                    Datum::F64(f2) => Ok(Datum::F64(f / f2)),
+                    d => Err(box_err!("failed to convert {} to f64", d)),
+                }
+            }
+            (a, b) => {
+                let a = try!(a.into_dec());
+                let b = try!(b.into_dec());
+                match a / b {
+                    None => Ok(Datum::Null),
+                    Some(res) => {
+                        let d = try!(res.into_result());
+                        Ok(Datum::Dec(d))
+                    }
+                }
+            }
+        }
+    }
+
     /// Keep compatible with TiDB's `ComputePlus` function.
     pub fn checked_add(self, d: Datum) -> Result<Datum> {
         let res: Datum = match (self, d) {
@@ -392,10 +436,8 @@ impl Datum {
                 }
             }
             (Datum::Dec(l), Datum::Dec(r)) => {
-                match l + r {
-                    Res::Ok(d) => Datum::Dec(d),
-                    _ => Datum::Null,
-                }
+                let dec = try!((l + r).into_result());
+                return Ok(Datum::Dec(dec));
             }
             (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
         };

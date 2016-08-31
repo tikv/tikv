@@ -69,6 +69,7 @@ impl Evaluator {
             ExprType::MysqlDecimal => self.eval_decimal(expr),
             ExprType::In => self.eval_in(expr),
             ExprType::Plus => self.eval_arith(expr, Datum::checked_add),
+            ExprType::Div => self.eval_arith(expr, Datum::checked_div),
             _ => Ok(Datum::Null),
         }
     }
@@ -347,7 +348,8 @@ mod test {
                 buf.encode_decimal(&d, prec, frac).unwrap();
                 expr.set_val(buf);
             }
-            _ => expr.set_tp(ExprType::Null),
+            Datum::Null => expr.set_tp(ExprType::Null),
+            d => panic!("unsupport datum: {:?}", d),
         };
         expr
     }
@@ -498,7 +500,8 @@ mod test {
         (like_expr("aAb", "%C%"), Datum::I64(0)),
     ]);
 
-    test_eval!(test_eval_arith,
+    // TODO: test time
+    test_eval!(test_eval_plus,
                vec![
 		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Plus), Datum::U64(2)),
@@ -517,6 +520,27 @@ mod test {
          ExprType::Plus), Datum::Dec(Decimal::from_f64(5040202.000000).unwrap())),
         (bin_expr(Datum::I64(2), Datum::Dur(Duration::parse(b"21 00:02:00.321", 2).unwrap()),
          ExprType::Plus), Datum::Dec(Decimal::from_f64(5040202.32).unwrap())),
+    ]);
+
+    test_eval!(test_eval_div,
+               vec![
+		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Div), Datum::Dec(1.into())),
+        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Div), Datum::Dec(1.into())),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Div), Datum::F64(1f64)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Div), Datum::F64(-1f64)),
+        (bin_expr(Datum::Null, Datum::Null, ExprType::Div), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Div), Datum::Null),
+        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Div), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::U64(1), ExprType::Div), Datum::Dec((-1).into())),
+        (bin_expr(Datum::I64(i64::min_value()), Datum::U64(i64::max_value() as u64 + 1),
+         ExprType::Div), Datum::Dec((-1).into())),
+        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Div), Datum::F64(-2.0)),
+        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Div),
+         Datum::Dec("-3.3".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Div), Datum::Dec("0.008326394671107410".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+         ExprType::Div), Datum::Dec("9.984025559105431309".parse().unwrap())),
     ]);
 
     fn in_expr(target: Datum, mut list: Vec<Datum>) -> Expr {
