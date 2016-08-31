@@ -42,6 +42,13 @@ fn compute_rollover_time(tm: Tm) -> Tm {
     (day_start_tm.to_utc() + duration).to_local()
 }
 
+/// Returns a Tm at the time one day before the given Tm.
+/// It expects the argument `tm` to be in local timezone. The resulting Tm is in local timezone.
+fn one_day_before(tm: Tm) -> Tm {
+    let duration = time::Duration::from_std(Duration::new(ONE_DAY_SECONDS, 0)).unwrap();
+    (tm.to_utc() - duration).to_local()
+}
+
 fn open_log_file(path: &str) -> io::Result<File> {
     let p = Path::new(path);
     let parent = p.parent().unwrap();
@@ -86,7 +93,7 @@ impl RotatingFileLoggerCore {
         self.close();
         let mut s = self.file_path.clone();
         s.push_str(".");
-        s.push_str(&time::strftime("%Y%m%d", &self.rollover_time).unwrap());
+        s.push_str(&time::strftime("%Y%m%d", &one_day_before(self.rollover_time)).unwrap());
         fs::rename(&self.file_path, &s).unwrap();
         self.update_rollover_time();
         self.open()
@@ -171,6 +178,13 @@ mod tests {
     use tempdir::TempDir;
     use super::{RotatingFileLoggerCore, ONE_DAY_SECONDS};
 
+    #[test]
+    fn test_one_day_before() {
+        let tm = time::strptime("2016-08-30", "%Y-%m-%d").unwrap().to_local();
+        let one_day_ago = time::strptime("2016-08-29", "%Y-%m-%d").unwrap().to_local();
+        assert_eq!(one_day_ago, super::one_day_before(tm));
+    }
+
     fn file_exists(file: &str) -> bool {
         let path = Path::new(file);
         path.exists() && path.is_file()
@@ -192,7 +206,6 @@ mod tests {
         }
         let ts = time::now().to_timespec();
         let one_day_ago = Timespec::new(ts.sec - ONE_DAY_SECONDS as i64, ts.nsec);
-        let rollover_time = super::compute_rollover_time(time::at(one_day_ago));
         let time_in_sec = one_day_ago.sec as u64;
         utime::set_file_times(&log_file, time_in_sec, time_in_sec).unwrap();
         // initialize the logger
@@ -202,7 +215,9 @@ mod tests {
         // check the rotated file exist
         let mut rotated_file = log_file.clone();
         rotated_file.push_str(".");
-        rotated_file.push_str(&time::strftime("%Y%m%d", &rollover_time).unwrap());
+        let file_suffix_time =
+            super::one_day_before(super::compute_rollover_time(time::at(one_day_ago)));
+        rotated_file.push_str(&time::strftime("%Y%m%d", &file_suffix_time).unwrap());
         assert!(file_exists(&rotated_file));
         assert!(!core.should_rollover());
     }
