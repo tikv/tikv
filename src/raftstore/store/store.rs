@@ -567,7 +567,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        for (region_id, res) in results.drain().take(1) {
+        for (region_id, res) in results.drain() {
             if let Some(ready_result) = res {
                 if let Err(e) = self.on_ready_result(region_id, ready_result) {
                     error!("[region {}] handle raft ready result err: {:?}",
