@@ -21,7 +21,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use rocksdb::DB;
+use rocksdb::{DB, WriteBatch};
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use uuid::Uuid;
@@ -562,20 +562,43 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
+        let mut apply_wb = WriteBatch::new();
+        let mut cb_lists: HashMap<u64, Vec<(Callback, RaftCmdResponse)>> = HashMap::new();
+        let mut results: HashMap<u64, Option<ReadyResult>> = HashMap::new();
         for region_id in ids {
-            let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans) {
+                let mut cb_list: Vec<(Callback, RaftCmdResponse)> = vec![];
+                match peer.handle_raft_ready(&self.trans, &mut apply_wb, &mut cb_list) {
                     Err(e) => {
-                        // TODO: should we panic or shutdown the store?
-                        error!("{} handle raft ready err: {:?}", peer.tag, e);
-                        return Err(e);
+                        panic!("{} handle raft ready err: {:?}", peer.tag, e);
                     }
-                    Ok(ready) => ready_result = ready,
+                    Ok(ready) => {
+                        results.insert(region_id, ready);
+                    }
+                }
+                cb_lists.insert(region_id, cb_list);
+            }
+        }
+
+        // write apply write batch, write must success
+        if !apply_wb.is_empty() {
+            if let Err(e) = self.engine.write(apply_wb) {
+                panic!("write apply write batch failed, err {:?}", e);
+            }
+        }
+
+        // call callbacks
+        for (region_id, mut cb_list) in cb_lists.drain() {
+            for (cb, resp) in cb_list.drain(..) {
+                if let Err(e) = cb.call_box((resp,)) {
+                    error!("call callback for region {} failed, err {:?}", region_id, e);
                 }
             }
+        }
 
-            if let Some(ready_result) = ready_result {
+        // handle results
+        for (region_id, result) in results.drain() {
+            if let Some(ready_result) = result {
                 if let Err(e) = self.on_ready_result(region_id, ready_result) {
                     error!("[region {}] handle raft ready result err: {:?}",
                            region_id,

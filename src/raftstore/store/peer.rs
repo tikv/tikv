@@ -398,7 +398,11 @@ impl Peer {
         down_peers
     }
 
-    pub fn handle_raft_ready<T: Transport>(&mut self, trans: &T) -> Result<Option<ReadyResult>> {
+    pub fn handle_raft_ready<T: Transport>(&mut self,
+                                           trans: &T,
+                                           mut apply_wb: &mut WriteBatch,
+                                           mut cb_list: &mut Vec<(Callback, RaftCmdResponse)>)
+                                           -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
             return Ok(None);
         }
@@ -429,7 +433,9 @@ impl Peer {
             try!(self.send(trans, &ready.messages));
         }
 
-        let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
+        let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries,
+                                                                &mut apply_wb,
+                                                                &mut cb_list));
 
         slow_log!(t,
                   "{} handle ready, entries {}, committed entries {}, messages \
@@ -750,15 +756,15 @@ impl Peer {
     }
 
     fn handle_raft_commit_entries(&mut self,
-                                  committed_entries: &[eraftpb::Entry])
+                                  committed_entries: &[eraftpb::Entry],
+                                  mut apply_wb: &mut WriteBatch,
+                                  mut cb_list: &mut Vec<(Callback, RaftCmdResponse)>)
                                   -> Result<Vec<ExecResult>> {
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         let t = SlowTimer::new();
         let mut results = vec![];
-        let mut apply_wb = WriteBatch::new();
-        let mut cb_list: Vec<(Callback, RaftCmdResponse)> = vec![];
         let committed_count = committed_entries.len();
         for entry in committed_entries {
             let res = try!(match entry.get_entry_type() {
@@ -772,18 +778,6 @@ impl Peer {
 
             if let Some(res) = res {
                 results.push(res);
-            }
-        }
-
-        if !apply_wb.is_empty() {
-            if let Err(e) = self.engine.write(apply_wb) {
-                panic!("{} write apply_wb failed {:?}", self.tag, e);
-            }
-        }
-
-        for (cb, resp) in cb_list.drain(..) {
-            if let Err(e) = cb.call_box((resp,)) {
-                error!("{} callback error {:?}", self.tag, e);
             }
         }
 
