@@ -28,6 +28,8 @@ use pd::PdClient;
 use raftstore::store::Msg;
 use raftstore::Result;
 
+use super::metrics::*;
+
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
     AskSplit {
@@ -114,9 +116,13 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_ask_split(&self, region: metapb::Region, split_key: Vec<u8>, peer: metapb::Peer) {
         metric_incr!("pd.ask_split");
+        PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "all"]).inc();
+
         match self.pd_client.ask_split(region.clone()) {
             Ok(mut resp) => {
                 metric_incr!("pd.ask_split.success");
+                PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "success"]).inc();
+
                 info!("try to split with new region id {} for region {:?}",
                       resp.get_new_region_id(),
                       region);
@@ -134,12 +140,18 @@ impl<T: PdClient> Runner<T> {
                         peer: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>) {
         metric_incr!("pd.heartbeat");
+        PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
+
         // Now we use put region protocol for heartbeat.
         match self.pd_client.region_heartbeat(region.clone(), peer.clone(), down_peers) {
             Ok(mut resp) => {
                 metric_incr!("pd.heartbeat.success");
+                PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
+
                 if resp.has_change_peer() {
                     metric_incr!("pd.heartbeat.change_peer");
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]);
+
                     let mut change_peer = resp.take_change_peer();
                     info!("try to change peer {:?} {:?} for region {:?}",
                           change_peer.get_change_type(),
@@ -150,6 +162,8 @@ impl<T: PdClient> Runner<T> {
                     self.send_admin_request(region, peer, req);
                 } else if resp.has_transfer_leader() {
                     metric_incr!("pd.heartbeat.transfer_leader");
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["transfer leader"]);
+
                     let mut transfer_leader = resp.take_transfer_leader();
                     info!("try to transfer leader from {:?} to {:?}",
                           peer,
@@ -170,9 +184,12 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_report_split(&self, left: metapb::Region, right: metapb::Region) {
         metric_incr!("pd.report_split");
+        PD_REQ_COUNTER_VEC.with_label_values(&["report split", "all"]).inc();
+
         if let Err(e) = self.pd_client.report_split(left, right) {
             error!("report split failed {:?}", e);
         }
+        PD_REQ_COUNTER_VEC.with_label_values(&["report split", "success"]).inc();
     }
 }
 

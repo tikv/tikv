@@ -11,13 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod snap;
-mod split_check;
-mod compact;
-mod pd;
-mod metrics;
+use prometheus::CounterVec;
 
-pub use self::snap::{Task as SnapTask, Runner as SnapRunner, MsgSender};
-pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
-pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
-pub use self::pd::{Task as PdTask, Runner as PdRunner};
+lazy_static! {
+    pub static ref PD_REQ_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_pd_request_sent_total",
+            "Total number of pd client request sent.",
+            &["type", "stauts"]
+        ).unwrap();
+
+    pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_pd_heartbeat_sent_total",
+            "Total number of pd client heartbeat sent.",
+            &["type"]
+        ).unwrap();
+}
