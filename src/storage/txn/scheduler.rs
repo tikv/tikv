@@ -540,6 +540,8 @@ impl Scheduler {
         } else {
             execute_callback(cb, pr);
         }
+
+        self.release_lock(&ctx.lock, cid);
     }
 
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
