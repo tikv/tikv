@@ -11,12 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use rocksdb::DB;
@@ -75,7 +77,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     trans: T,
     pd_client: Arc<C>,
 
-    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
+    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
 
     snap_mgr: SnapManager,
 }
@@ -123,7 +125,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pending_regions: vec![],
             trans: trans,
             pd_client: pd_client,
-            peer_cache: Arc::new(RwLock::new(peer_cache)),
+            peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
         };
         try!(s.init());
@@ -138,6 +140,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let engine = self.engine.clone();
+        let mut total_count = 0;
+        let mut tomebstone_count = 0;
+        let mut applying_count = 0;
+
+        let t = Instant::now();
         try!(engine.scan(start_key,
                          end_key,
                          &mut |key, value| {
@@ -146,9 +153,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(true);
             }
 
+            total_count += 1;
+
             let local_state = try!(protobuf::parse_from_bytes::<RegionLocalState>(value));
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
+                tomebstone_count += 1;
                 debug!("region {:?} is tombstone in store {}",
                        region,
                        self.store_id());
@@ -157,6 +167,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut peer = try!(Peer::create(self, region));
 
             if local_state.get_state() == PeerState::Applying {
+                applying_count += 1;
                 info!("region {:?} is applying in store {}",
                       local_state.get_region(),
                       self.store_id());
@@ -171,6 +182,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(true)
         }));
 
+        info!("[store {}] starts with {} regions, including {} tombstones and {} applying \
+               regions, takes {:?}",
+              self.store_id(),
+              total_count,
+              tomebstone_count,
+              applying_count,
+              t.elapsed());
+
         try!(self.clean_up());
 
         Ok(())
@@ -178,6 +197,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     /// `clean_up` clean up all possible garbage data.
     fn clean_up(&mut self) -> Result<()> {
+        let t = Instant::now();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
@@ -186,7 +206,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             last_start_key = keys::enc_end_key(region);
         }
 
-        delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY)
+        try!(delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
+
+        info!("[store {}] cleans up garbage data, takes {:?}",
+              self.store_id(),
+              t.elapsed());
+        Ok(())
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
@@ -243,7 +268,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &self.cfg
     }
 
-    pub fn peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
+    pub fn peer_cache(&self) -> Rc<RefCell<HashMap<u64, metapb::Peer>>> {
         self.peer_cache.clone()
     }
 
@@ -529,7 +554,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn insert_peer_cache(&mut self, peer: metapb::Peer) {
-        self.peer_cache.wl().insert(peer.get_id(), peer);
+        self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
     fn on_raft_ready(&mut self) -> Result<()> {
@@ -1150,7 +1175,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             // The peer must exist in peer_cache.
-            let to_peer = match self.peer_cache.rl().get(&to_peer_id).cloned() {
+            let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
                 Some(peer) => peer,
                 None => {
                     // If to_peer is removed immediately after sending snapshot, the command

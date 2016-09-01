@@ -706,7 +706,7 @@ impl<T: Storage> Raft<T> {
         } else if m.get_term() > self.term {
             let leader_id = if m.get_msg_type() == MessageType::MsgRequestVote {
                 let force = m.get_context() == CAMPAIGN_TRANSFER;
-                let in_lease = self.check_quorum && self.state != StateRole::Candidate &&
+                let in_lease = self.check_quorum && self.leader_id != INVALID_ID &&
                                self.election_elapsed < self.election_timeout;
                 if !force && in_lease {
                     // if a server receives ReqeustVote request within the minimum election
