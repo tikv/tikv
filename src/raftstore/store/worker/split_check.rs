@@ -24,6 +24,8 @@ use util::escape;
 use util::transport::SendCh;
 use util::worker::Runnable;
 
+use super::metrics::*;
+
 /// Split checking task.
 pub struct Task {
     region_id: u64,
@@ -73,6 +75,8 @@ impl Runnable<Task> for Runner {
                escape(&task.start_key),
                escape(&task.end_key));
         metric_incr!("raftstore.check_split");
+        CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
+
         let mut size = 0;
         let mut split_key = vec![];
         let ts = Instant::now();
@@ -96,6 +100,8 @@ impl Runnable<Task> for Runner {
 
         if size < self.region_max_size {
             metric_incr!("raftstore.check_split.ignore");
+            CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
+
             debug!("no need to send for {} < {}", size, self.region_max_size);
             return;
         }
@@ -104,6 +110,7 @@ impl Runnable<Task> for Runner {
             warn!("failed to send check result of {}: {}", task.region_id, e);
         }
         metric_incr!("raftstore.check_split.success");
+        CHECK_SPILT_COUNTER_VEC.with_label_values(&["success"]).inc();
     }
 }
 

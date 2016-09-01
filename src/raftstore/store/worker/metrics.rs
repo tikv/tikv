@@ -34,4 +34,11 @@ lazy_static! {
             "Total number of raftstore snapshot processed.",
             &["type", "stauts"]
         ).unwrap();
+
+    pub static ref CHECK_SPILT_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_check_split_total",
+            "Total number of raftstore split check.",
+            &["type"]
+        ).unwrap();
 }
