@@ -49,6 +49,9 @@ bytes  = "0.3.0"
 nix = "0.6.0"
 utime = "0.1"
 chrono = "0.2"
+prometheus = "0.2.2"
+lazy_static = "0.2.1"
+hyper = "0.9"
 
 # The getopts in crate.io is outdated, use the latest getopts instead.
 [dependencies.getopts]

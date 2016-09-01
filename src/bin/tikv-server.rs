@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::io::Read;
 use std::net::UdpSocket;
 use std::time::Duration;
+use std::thread;
 
 use getopts::{Options, Matches};
 use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
@@ -750,6 +751,10 @@ fn main() {
     // Print version information.
     util::print_tikv_info();
 
+    let handler = thread::spawn(|| {
+        metric::run_prometheus("127.0.0.1:8989");
+    });
+
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,
@@ -788,4 +793,6 @@ fn main() {
         }
         n => panic!("unrecognized dns name: {}", n),
     };
+
+    handler.join();
 }

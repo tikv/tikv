@@ -53,6 +53,11 @@ extern crate rustc_serialize;
 extern crate nix;
 extern crate alloc;
 extern crate chrono;
+#[macro_use]
+extern crate prometheus;
+#[macro_use]
+extern crate lazy_static;
+extern crate hyper;
 
 #[macro_use]
 pub mod util;

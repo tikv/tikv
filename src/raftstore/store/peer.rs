@@ -46,6 +46,8 @@ use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
+use super::metrics::{RAFTSTORE_RAFT_MESSAGE_COUNTER, RAFTSTORE_SNAPSHOT_COUNTER,
+                     RAFTSTORE_ENTRY_COUNTER_VEC};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -330,19 +332,27 @@ impl Peer {
     fn send_ready_metric(&self, ready: &Ready) {
         if !ready.messages.is_empty() {
             metric_count!("raftstore.send_raft_message", ready.messages.len() as i64);
+            RAFTSTORE_RAFT_MESSAGE_COUNTER.inc_by(ready.messages.len() as f64).unwrap();
         }
 
         if !ready.committed_entries.is_empty() {
             metric_count!("raftstore.handle_raft_commit_entries",
                           ready.committed_entries.len() as i64);
+            RAFTSTORE_ENTRY_COUNTER_VEC.with_label_values(&["commit"])
+                .inc_by(ready.committed_entries.len() as f64)
+                .unwrap();
         }
 
         if !ready.entries.is_empty() {
             metric_count!("raftstore.append_entries", ready.entries.len() as i64);
+            RAFTSTORE_ENTRY_COUNTER_VEC.with_label_values(&["append"])
+                .inc_by(ready.committed_entries.len() as f64)
+                .unwrap();
         }
 
         if !raft::is_empty_snap(&ready.snapshot) {
             metric_incr!("raftstore.apply_snapshot");
+            RAFTSTORE_SNAPSHOT_COUNTER.inc();
         }
     }
 
