@@ -16,15 +16,22 @@ use prometheus::CounterVec;
 lazy_static! {
     pub static ref PD_REQ_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_pd_request_sent_total",
-            "Total number of pd client request sent.",
+            "tikv_raftstore_pd_request_sent_total",
+            "Total number of raftstore pd client request sent.",
             &["type", "stauts"]
         ).unwrap();
 
     pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_pd_heartbeat_sent_total",
-            "Total number of pd client heartbeat sent.",
+            "tikv_raftstore_pd_heartbeat_sent_total",
+            "Total number of raftstore pd client heartbeat sent.",
             &["type"]
+        ).unwrap();
+
+    pub static ref SNAP_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_snapshot_total",
+            "Total number of raftstore snapshot processed.",
+            &["type", "stauts"]
         ).unwrap();
 }

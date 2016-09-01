@@ -31,6 +31,8 @@ use raftstore::store::engine::{Mutable, Snapshot, delete_all_in_range};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
 use storage::CF_RAFT;
 
+use super::metrics::*;
+
 const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 
 /// Snapshot related task.
@@ -103,6 +105,8 @@ impl<T: MsgSender> Runner<T> {
 
     fn handle_gen(&self, region_id: u64) {
         metric_incr!("raftstore.generate_snap");
+        SNAP_COUNTER_VEC.with_label_values(&["generate", "all"]).inc();
+
         let ts = Instant::now();
         if let Err(e) = self.generate_snap(region_id) {
             if let Err(e) = self.ch.send(Msg::SnapGenRes {
@@ -115,6 +119,8 @@ impl<T: MsgSender> Runner<T> {
             return;
         }
         metric_incr!("raftstore.generate_snap.success");
+        SNAP_COUNTER_VEC.with_label_values(&["generate", "success"]).inc();
+
         metric_time!("raftstore.generate_snap.cost", ts.elapsed());
     }
 
@@ -189,6 +195,8 @@ impl<T: MsgSender> Runner<T> {
 
     fn handle_apply(&self, region_id: u64) {
         metric_incr!("raftstore.apply_snap");
+        SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
+
         let ts = Instant::now();
         let mut is_success = true;
         if let Err(e) = self.apply_snap(region_id) {
@@ -205,6 +213,8 @@ impl<T: MsgSender> Runner<T> {
                    e);
         }
         metric_incr!("raftstore.apply_snap.success");
+        SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
+
         metric_time!("raftstore.apply_snap.cost", ts.elapsed());
     }
 }
