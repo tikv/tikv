@@ -24,8 +24,11 @@ use super::worker::{Worker, Runnable};
 use cadence::prelude::*;
 use cadence::{MetricSink, MetricResult, ErrorKind};
 use hyper::header::ContentType;
+use hyper::status::StatusCode;
 use hyper::server::{Server, Request, Response};
+use hyper::uri::RequestUri;
 use hyper::mime::Mime;
+use hyper::method::Method;
 use prometheus::{self, Encoder, TextEncoder, Histogram};
 
 #[macro_use]
@@ -165,34 +168,48 @@ impl MetricSink for BufferedUdpMetricSink {
     }
 }
 
-lazy_static! {
-    static ref HTTP_REQ_HISTOGRAM: Histogram = register_histogram!(
-        histogram_opts!(
-            "prometheus_http_request_duration_seconds",
-            "The HTTP request latencies in seconds.",
-            labels!{"handler" => "all",}
-        )
-    ).unwrap();
-}
-
-/// `run_prometheus` runs a http server with a Registry and a Encoder, it blocks current thread.
+/// `run_prometheus` runs a http server, it blocks current thread.
 pub fn run_prometheus<'a>(addr: &str) {
-    println!("listening addr {:?}", addr);
+    info!("prometheus client listens address: {:?}", addr);
+
+    lazy_static! {
+        static ref HTTP_REQ_HISTOGRAM: Histogram = register_histogram!(
+            histogram_opts!(
+                "prometheus_http_request_duration_seconds",
+                "The HTTP request latencies in seconds.",
+                labels!{"handler" => "metrics",}
+            )
+        ).unwrap();
+    }
 
     let encoder = TextEncoder::new();
     Server::http(addr)
         .unwrap()
-        .handle(move |_: Request, mut res: Response| {
-            let start = Instant::now();
+        .handle(move |req: Request, mut res: Response| {
+            match req.uri {
+                RequestUri::AbsolutePath(ref path) => {
+                    match (&req.method, &path[..]) {
+                        (&Method::Get, "/metrics") => {
+                            let start = Instant::now();
 
-            let metric_familys = prometheus::gather();
-            let mut buffer = vec![];
-            encoder.encode(&metric_familys, &mut buffer).unwrap();
-            res.headers_mut()
-                .set(ContentType(encoder.format_type().parse::<Mime>().unwrap()));
-            res.send(&buffer).unwrap();
+                            let metric_familys = prometheus::gather();
+                            let mut buffer = vec![];
+                            encoder.encode(&metric_familys, &mut buffer).unwrap();
+                            res.headers_mut()
+                                .set(ContentType(encoder.format_type().parse::<Mime>().unwrap()));
+                            res.send(&buffer).unwrap();
 
-            HTTP_REQ_HISTOGRAM.observe_duration(start.elapsed());
+                            HTTP_REQ_HISTOGRAM.observe_duration(start.elapsed());
+                        }
+                        _ => {
+                            *res.status_mut() = StatusCode::NotFound;
+                        }
+                    }
+                }
+                _ => {
+                    *res.status_mut() = StatusCode::NotFound;
+                }
+            }
         })
         .unwrap();
 }
