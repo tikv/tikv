@@ -35,7 +35,6 @@ end-point-concurrency = 8
 addr = ""
 # metric prefix.
 prefix = "tikv"
-prometheus = "127.0.0.1:8989"
 
 [raftstore]
 # notify capacity, 40960 is suitable for about 7000 regions.
