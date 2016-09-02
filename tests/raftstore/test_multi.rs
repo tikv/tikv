@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use tikv::raftstore::store::*;
+use tikv::raftstore::Error;
 use kvproto::eraftpb::MessageType;
 
 use super::util::*;
@@ -399,6 +400,14 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // leader's term not equal applied index's term, if we read local, we may get old value
     // in this situation we need use raft read
     must_get_none(&cluster.get_engine(2), k);
+
+    // internal read will use raft read no matter read_quorum is false or true, cause applied
+    // index's term not equal leader's term, and will failed with timeout
+    if let Err(Error::Timeout(_)) = cluster.get_impl(k, false) {
+        debug!("raft read failed with timeout");
+    } else {
+        assert!(false);
+    }
 
     cluster.clear_send_filters();
 
