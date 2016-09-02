@@ -14,22 +14,30 @@
 use prometheus::{CounterVec, Counter};
 
 lazy_static! {
-    pub static ref RAFTSTORE_RAFT_MESSAGE_COUNTER: Counter =
-        register_counter!(
-            "tikv_raftstore_raft_message_sent_total",
-            "Total number of raft messages sent."
-        ).unwrap();
-
-    pub static ref RAFTSTORE_SNAPSHOT_COUNTER: Counter =
-        register_counter!(
-            "tikv_raftstore_apply_snapshot_total",
-            "Total number of snapshots applied."
-        ).unwrap();
-
-    pub static ref RAFTSTORE_ENTRY_COUNTER_VEC: CounterVec =
+    pub static ref PEER_RAFT_READY_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_raftstore_entry_processed_total",
-            "Total number of raft enties be processed.",
-            &["action"]
+            "tikv_raftstore_raft_ready_handled_total",
+            "Total number of raft ready handled.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_proposal_total",
+            "Total number of proposal made.",
+            &["type", "status"]
+        ).unwrap();
+
+    pub static ref PEER_ADMIN_CMD_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_admin_cmd_total",
+            "Total number of admin cmd processed.",
+            &["type", "status"]
+        ).unwrap();
+
+    pub static ref PEER_ENTRY_CONF_CHANGE_COUNTER: Counter =
+        register_counter!(
+            "tikv_raftstore_handle_raft_entry_conf_change_total",
+            "Total number of raft entry conf change handled."
         ).unwrap();
 }
