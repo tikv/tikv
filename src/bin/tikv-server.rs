@@ -752,20 +752,9 @@ fn main() {
     util::print_tikv_info();
 
     // Run prometheus client.
-    let prometheus_addr = get_string_value("",
-                                           "metric.prometheus",
-                                           &matches,
-                                           &config,
-                                           Some(String::new()),
-                                           |v| v.as_str().map(|s| s.to_owned()));
-    let prometheus_handler = match prometheus_addr.len() {
-        0 => None,
-        _ => {
-            Some(thread::spawn(move || {
-                metric::run_prometheus(&prometheus_addr);
-            }))
-        }
-    };
+    thread::spawn(move || {
+        metric::run_prometheus();
+    });
 
     let addr = get_string_value("A",
                                 "server.addr",
@@ -805,6 +794,4 @@ fn main() {
         }
         n => panic!("unrecognized dns name: {}", n),
     };
-
-    prometheus_handler.map(|handler| handler.join().unwrap());
 }

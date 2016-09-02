@@ -57,7 +57,6 @@ extern crate chrono;
 extern crate prometheus;
 #[macro_use]
 extern crate lazy_static;
-extern crate hyper;
 
 #[macro_use]
 pub mod util;

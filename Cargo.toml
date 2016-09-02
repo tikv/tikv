@@ -49,9 +49,7 @@ bytes  = "0.3.0"
 nix = "0.6.0"
 utime = "0.1"
 chrono = "0.2"
-prometheus = "0.2.2"
 lazy_static = "0.2.1"
-hyper = "0.9"
 
 # The getopts in crate.io is outdated, use the latest getopts instead.
 [dependencies.getopts]
@@ -68,6 +66,9 @@ git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio.git"
+
+[dependencies.prometheus]
+git = "https://github.com/pingcap/rust-prometheus"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
