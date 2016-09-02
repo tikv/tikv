@@ -384,9 +384,8 @@ impl<T: Simulator> Cluster<T> {
                    reqs: Vec<Request>,
                    read_quorum: bool,
                    timeout: Duration)
-                   -> Result<RaftCmdResponse> {
-        let mut res = Ok(RaftCmdResponse::new());
-        for _ in 0..10 {
+                   -> RaftCmdResponse {
+        for _ in 0..20 {
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(region_id,
@@ -397,7 +396,6 @@ impl<T: Simulator> Cluster<T> {
 
             if let Err(Error::Timeout(_)) = result {
                 warn!("call command timeout, let's retry");
-                res = result;
                 sleep_ms(100);
                 continue;
             }
@@ -405,13 +403,12 @@ impl<T: Simulator> Cluster<T> {
             let resp = result.unwrap();
             if resp.get_header().get_error().has_stale_epoch() {
                 warn!("seems split, let's retry");
-                res = Err(box_err!("occur split, need retry"));
                 sleep_ms(100);
                 continue;
             }
-            return Ok(resp);
+            return resp;
         }
-        res
+        panic!("request failed after retry for 10 times");
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
@@ -439,18 +436,18 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, false).unwrap()
+        self.get_impl(key, false)
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, true).unwrap()
+        self.get_impl(key, true)
     }
 
-    pub fn get_impl(&mut self, key: &[u8], read_quorum: bool) -> Result<Option<Vec<u8>>> {
-        let mut resp = try!(self.request(key,
-                                         vec![new_get_cmd(key)],
-                                         read_quorum,
-                                         Duration::from_secs(5)));
+    fn get_impl(&mut self, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
+        let mut resp = self.request(key,
+                                    vec![new_get_cmd(key)],
+                                    read_quorum,
+                                    Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -458,9 +455,9 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
         let mut get = resp.mut_responses()[0].take_get();
         if get.has_value() {
-            Ok(Some(get.take_value()))
+            Some(get.take_value())
         } else {
-            Ok(None)
+            None
         }
     }
 
@@ -470,10 +467,9 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn must_put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) {
         let resp = self.request(key,
-                     vec![new_put_cf_cmd(cf, key, value)],
-                     false,
-                     Duration::from_secs(5))
-            .unwrap();
+                                vec![new_put_cf_cmd(cf, key, value)],
+                                false,
+                                Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -487,10 +483,9 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn must_delete_cf(&mut self, cf: &str, key: &[u8]) {
         let resp = self.request(key,
-                     vec![new_delete_cmd(cf, key)],
-                     false,
-                     Duration::from_secs(5))
-            .unwrap();
+                                vec![new_delete_cmd(cf, key)],
+                                false,
+                                Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }

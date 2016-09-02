@@ -12,8 +12,9 @@
 // limitations under the License.
 
 use tikv::raftstore::store::*;
-use tikv::raftstore::Error;
+use tikv::raftstore::{Error, Result};
 use kvproto::eraftpb::MessageType;
+use kvproto::raft_cmdpb::RaftCmdResponse;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
@@ -403,15 +404,30 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // internal read will use raft read no matter read_quorum is false or true, cause applied
     // index's term not equal leader's term, and will failed with timeout
-    if let Err(Error::Timeout(_)) = cluster.get_impl(k, false) {
+    if let Err(Error::Timeout(_)) = get_with_timeout(cluster, k, false, Duration::from_secs(10)) {
         debug!("raft read failed with timeout");
     } else {
-        assert!(false);
+        panic!("read didn't use raft, beyond exceptions");
     }
 
+    // recover network
     cluster.clear_send_filters();
 
     assert_eq!(cluster.get(k).unwrap(), v);
+}
+
+fn get_with_timeout<T: Simulator>(cluster: &mut Cluster<T>,
+                                  key: &[u8],
+                                  read_quorum: bool,
+                                  timeout: Duration)
+                                  -> Result<RaftCmdResponse> {
+    let mut region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let req = new_request(region_id,
+                          region.take_region_epoch(),
+                          vec![new_get_cmd(key)],
+                          read_quorum);
+    cluster.call_command_on_leader(req, timeout)
 }
 
 #[test]
