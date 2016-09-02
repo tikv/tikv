@@ -543,7 +543,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         for region in &self.pending_regions {
             if enc_start_key(region) < enc_end_key(&snap_region) &&
-               enc_end_key(region) > enc_start_key(&snap_region) {
+               enc_end_key(region) > enc_start_key(&snap_region) &&
+               // Same region can overlap, we will apply the latest version of snapshot.
+               region.get_id() != snap_region.get_id() {
                 warn!("pending region overlapped {:?}, {:?}", region, snap_region);
                 return Ok(true);
             }
