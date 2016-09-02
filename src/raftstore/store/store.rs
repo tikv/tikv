@@ -563,12 +563,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let pending_count = ids.len();
 
         let mut apply_wb = WriteBatch::new();
-        let mut cb_lists: HashMap<u64, Vec<(Callback, RaftCmdResponse)>> = HashMap::new();
         let mut results: HashMap<u64, Option<ReadyResult>> = HashMap::new();
         for region_id in ids {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                let mut cb_list: Vec<(Callback, RaftCmdResponse)> = vec![];
-                match peer.handle_raft_ready(&self.trans, &mut apply_wb, &mut cb_list) {
+                match peer.handle_raft_ready(&self.trans, &mut apply_wb) {
                     Err(e) => {
                         panic!("{} handle raft ready err: {:?}", peer.tag, e);
                     }
@@ -576,7 +574,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         results.insert(region_id, ready);
                     }
                 }
-                cb_lists.insert(region_id, cb_list);
             }
         }
 
@@ -584,15 +581,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if !apply_wb.is_empty() {
             if let Err(e) = self.engine.write(apply_wb) {
                 panic!("write apply write batch failed, err {:?}", e);
-            }
-        }
-
-        // call callbacks
-        for (region_id, mut cb_list) in cb_lists.drain() {
-            for (cb, resp) in cb_list.drain(..) {
-                if let Err(e) = cb.call_box((resp,)) {
-                    error!("call callback for region {} failed, err {:?}", region_id, e);
-                }
             }
         }
 
