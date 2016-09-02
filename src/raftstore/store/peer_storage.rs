@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::{self, Arc};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering, AtomicBool};
 use std::cell::RefCell;
 use std::error;
 use std::time::Instant;
@@ -45,13 +45,30 @@ const MAX_SNAP_TRY_CNT: usize = 5;
 
 pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
-#[derive(PartialEq, Debug)]
+#[derive(Debug)]
 pub enum SnapState {
     Relax,
     Generating,
     Snap(Snapshot),
-    Applying,
+    Applying(Arc<AtomicBool>),
+    ApplyAbort,
     Failed,
+}
+
+impl PartialEq for SnapState {
+    fn eq(&self, other: &SnapState) -> bool {
+        match (self, other) {
+            (&SnapState::Relax, &SnapState::Relax) |
+            (&SnapState::Generating, &SnapState::Generating) |
+            (&SnapState::Failed, &SnapState::Failed) |
+            (&SnapState::ApplyAbort, &SnapState::ApplyAbort) => true,
+            (&SnapState::Snap(ref s1), &SnapState::Snap(ref s2)) => s1 == s2,
+            (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
+                b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
+            }
+            _ => false,
+        }
+    }
 }
 
 pub struct PeerStorage {
@@ -490,9 +507,37 @@ impl PeerStorage {
         self.engine.clone()
     }
 
+    /// Check whether the storage has finished applying snapshot.
+    #[inline]
+    pub fn is_applying(&self) -> bool {
+        match *self.snap_state.borrow() {
+            SnapState::Applying(_) |
+            SnapState::ApplyAbort => true,
+            _ => false,
+        }
+    }
+
+    /// Check if the storage is applying a snapshot.
     #[inline]
     pub fn is_applying_snap(&self) -> bool {
-        self.is_snap_state(SnapState::Applying)
+        match *self.snap_state.borrow() {
+            SnapState::Applying(_) => true,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    pub fn is_canceling_snap(&self) -> bool {
+        match *self.snap_state.borrow() {
+            SnapState::Applying(ref abort) => abort.load(Ordering::Relaxed),
+            _ => false,
+        }
+    }
+
+    pub fn cancle_applying_snap(&mut self) {
+        if let SnapState::Applying(ref abort) = *self.snap_state.borrow() {
+            abort.store(true, Ordering::Relaxed);
+        }
     }
 
     #[inline]
@@ -545,7 +590,8 @@ impl PeerStorage {
         self.apply_state = ctx.apply_state;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
-            self.set_snap_state(SnapState::Applying);
+            let abort = Arc::new(AtomicBool::new(false));
+            self.set_snap_state(SnapState::Applying(abort.clone()));
 
             // cleanup data before schedule apply task
             if self.is_initialized() {
@@ -560,7 +606,10 @@ impl PeerStorage {
                 }
             }
 
-            let task = SnapTask::Apply { region_id: region_id };
+            let task = SnapTask::Apply {
+                region_id: region_id,
+                abort: abort,
+            };
             // TODO: gracefully remove region instead.
             self.snap_sched.schedule(task).expect("snap apply job should not fail");
             self.region = res.region.clone();

@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::option::Option;
@@ -171,8 +172,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("region {:?} is applying in store {}",
                       local_state.get_region(),
                       self.store_id());
-                peer.mut_store().set_snap_state(SnapState::Applying);
-                box_try!(self.snap_worker.schedule(SnapTask::Apply { region_id: region_id }));
+                let abort = Arc::new(AtomicBool::new(false));
+                peer.mut_store().set_snap_state(SnapState::Applying(abort.clone()));
+                box_try!(self.snap_worker.schedule(SnapTask::Apply {
+                    region_id: region_id,
+                    abort: abort,
+                }));
             }
 
             self.region_ranges.insert(enc_end_key(region), region_id);
@@ -282,7 +287,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
-            if !peer.get_store().is_applying_snap() {
+            if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
                 self.pending_raft_groups.insert(region_id);
             }
@@ -300,7 +305,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             has_peer = true;
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
-                if p.is_applying_snap() {
+                if p.is_applying() {
                     // to remove the applying peer, we should find a reliable way to abort
                     // the apply process.
                     warn!("Stale peer {} is applying snapshot, will destroy next time.",
@@ -598,7 +603,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Can we destroy it in another thread later?
         let mut p = self.region_peers.remove(&region_id).unwrap();
         // We can't destroy a peer which is applying snapshot.
-        assert!(!p.is_applying_snap());
+        assert!(!p.is_applying());
 
         let is_initialized = p.is_initialized();
         let end_key = enc_end_key(p.region());
@@ -1123,7 +1128,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         let s = peer.get_store();
                         compacted_idx = s.truncated_index();
                         compacted_term = s.truncated_term();
-                        is_applying_snap = s.is_applying_snap();
+                        is_applying_snap = s.is_applying();
                     }
                 };
             }
@@ -1223,16 +1228,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool) {
+    fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool, is_abort: bool) {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let mut storage = peer.mut_store();
-        assert!(storage.is_snap_state(SnapState::Applying),
+        assert!(storage.is_applying_snap(),
                 "snap state should not change during applying");
-        if !is_success {
-            // TODO: cleanup region and treat it as tombstone.
-            panic!("applying snapshot to {} failed", region_id);
+        if is_success {
+            storage.set_snap_state(SnapState::Relax);
+        } else {
+            if !is_abort {
+                // TODO: cleanup region and treat it as tombstone.
+                panic!("applying snapshot to {} failed", region_id);
+            }
+            self.pending_raft_groups.insert(region_id);
+            storage.set_snap_state(SnapState::ApplyAbort);
         }
-        storage.set_snap_state(SnapState::Relax);
     }
 }
 
@@ -1296,8 +1306,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_unreachable(region_id, to_peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
-            Msg::SnapApplyRes { region_id, is_success } => {
-                self.on_snap_apply_res(region_id, is_success);
+            Msg::SnapApplyRes { region_id, is_success, is_abort } => {
+                self.on_snap_apply_res(region_id, is_success, is_abort);
             }
             Msg::SnapGenRes { region_id, snap } => {
                 self.on_snap_gen_res(region_id, snap);

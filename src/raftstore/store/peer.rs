@@ -323,8 +323,8 @@ impl Peer {
         self.raft_group.mut_store()
     }
 
-    pub fn is_applying_snap(&self) -> bool {
-        self.get_store().is_applying_snap()
+    pub fn is_applying(&self) -> bool {
+        self.get_store().is_applying()
     }
 
     fn send_ready_metric(&self, ready: &Ready) {
@@ -408,6 +408,13 @@ impl Peer {
         let mut ready = self.raft_group.ready();
         let is_applying = self.get_store().is_applying_snap();
         if is_applying {
+            if !raft::is_empty_snap(&ready.snapshot) {
+                if !self.get_store().is_canceling_snap() {
+                    warn!("receiving a new snap when applying the old one, try to abort.");
+                    self.mut_store().cancle_applying_snap();
+                }
+                return Ok(None);
+            }
             // skip apply and snapshot
             ready.committed_entries = vec![];
             ready.snapshot = RaftSnapshot::new();
