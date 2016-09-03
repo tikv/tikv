@@ -139,25 +139,34 @@ impl<'a> MvccTxn<'a> {
     }
 
     pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
-        let mut after_safe_point = false;
+        let mut delete_flag = false;
         let mut ts: u64 = u64::max_value();
         while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
-            if !after_safe_point {
+            if !delete_flag {
                 if commit <= safe_point {
-                    // Set `after_safe_point` after the latest write after `safe_point`.
-                    after_safe_point = true;
-                    // Latest write can be deleted if its type is Delete/Rollback.
+                    // Set `delete_flag` after we find the latest value.
                     match write.write_type {
-                        WriteType::Delete | WriteType::Rollback => {
+                        WriteType::Put | WriteType::Delete => {
+                            delete_flag = true;
+                        }
+                        WriteType::Rollback | WriteType::Lock => {}
+                    }
+
+                    // Latest write before `safe_point` can be deleted if its type is Delete,
+                    // Rollback or Lock.
+                    match write.write_type {
+                        WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
                             self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)))
                         }
-                        WriteType::Put | WriteType::Lock => {}
+                        WriteType::Put => {}
                     }
                 }
             } else {
                 // Delete all data after safe point.
                 self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
-                self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(write.start_ts)));
+                if write.write_type == WriteType::Put {
+                    self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(write.start_ts)));
+                }
             }
             ts = commit - 1;
         }
@@ -296,21 +305,38 @@ mod tests {
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_commit(engine.as_ref(), b"x", 5, 10);
-        must_prewrite_put(engine.as_ref(), b"x", b"x10", b"x", 15);
+        must_prewrite_put(engine.as_ref(), b"x", b"x15", b"x", 15);
         must_commit(engine.as_ref(), b"x", 15, 20);
         must_prewrite_delete(engine.as_ref(), b"x", b"x", 25);
         must_commit(engine.as_ref(), b"x", 25, 30);
+        must_prewrite_put(engine.as_ref(), b"x", b"x35", b"x", 35);
+        must_commit(engine.as_ref(), b"x", 35, 40);
+        must_prewrite_lock(engine.as_ref(), b"x", b"x", 45);
+        must_commit(engine.as_ref(), b"x", 45, 50);
+        must_prewrite_put(engine.as_ref(), b"x", b"x55", b"x", 55);
+        must_rollback(engine.as_ref(), b"x", 55);
+
+        // start commit command
+        // 55    -      PUT "x55" (Rollback)
+        // 45    50     LOCK
+        // 35    40     PUT "x35"
+        // 25    30     DELETE
+        // 15    20     PUT "x15"
+        //  5    10     PUT "x5"
 
         must_gc(engine.as_ref(), b"x", 12);
         must_get(engine.as_ref(), b"x", 12, b"x5");
 
         must_gc(engine.as_ref(), b"x", 22);
-        must_get(engine.as_ref(), b"x", 22, b"x10");
+        must_get(engine.as_ref(), b"x", 22, b"x15");
         must_get_none(engine.as_ref(), b"x", 12);
 
         must_gc(engine.as_ref(), b"x", 32);
         must_get_none(engine.as_ref(), b"x", 22);
-        must_get_none(engine.as_ref(), b"x", 40);
+        must_get_none(engine.as_ref(), b"x", 35);
+
+        must_gc(engine.as_ref(), b"x", 60);
+        must_get(engine.as_ref(), b"x", 62, b"x35");
     }
 
     #[test]
