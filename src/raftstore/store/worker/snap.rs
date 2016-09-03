@@ -108,6 +108,9 @@ impl<T: MsgSender> Runner<T> {
         SNAP_COUNTER_VEC.with_label_values(&["generate", "all"]).inc();
 
         let ts = Instant::now();
+        let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
+        let timer = gen_histogram.start_timer();
+
         if let Err(e) = self.generate_snap(region_id) {
             if let Err(e) = self.ch.send(Msg::SnapGenRes {
                 region_id: region_id,
@@ -122,6 +125,7 @@ impl<T: MsgSender> Runner<T> {
         SNAP_COUNTER_VEC.with_label_values(&["generate", "success"]).inc();
 
         metric_time!("raftstore.generate_snap.cost", ts.elapsed());
+        timer.observe_duration();
     }
 
     fn apply_snap(&self, region_id: u64) -> Result<(), Error> {
@@ -198,6 +202,9 @@ impl<T: MsgSender> Runner<T> {
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
 
         let ts = Instant::now();
+        let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
+        let timer = apply_histogram.start_timer();
+
         let mut is_success = true;
         if let Err(e) = self.apply_snap(region_id) {
             is_success = false;
@@ -216,6 +223,7 @@ impl<T: MsgSender> Runner<T> {
         SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
 
         metric_time!("raftstore.apply_snap.cost", ts.elapsed());
+        timer.observe_duration();
     }
 }
 
