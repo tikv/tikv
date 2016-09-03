@@ -164,11 +164,10 @@ impl MetricSink for BufferedUdpMetricSink {
 }
 
 /// `run_prometheus` runs a prometheus client, it blocks current thread.
-pub fn run_prometheus() {
+pub fn run_prometheus(interval: Duration) {
     let encoder = TextEncoder::new();
     let mut buffer = Vec::<u8>::new();
 
-    let log_interval = Duration::from_secs(1);
     loop {
         let metric_familys = prometheus::gather();
         encoder.encode(&metric_familys, &mut buffer).unwrap();
@@ -177,7 +176,6 @@ pub fn run_prometheus() {
         info!("{}", String::from_utf8(buffer.clone()).unwrap());
 
         buffer.clear();
-        thread::sleep(log_interval);
-        buffer.clear();
+        thread::sleep(interval);
     }
 }

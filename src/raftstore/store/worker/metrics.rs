@@ -16,8 +16,8 @@ use prometheus::CounterVec;
 lazy_static! {
     pub static ref PD_REQ_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_raftstore_pd_request_sent_total",
-            "Total number of raftstore pd client request sent.",
+            "tikv_pd_request_sent_total",
+            "Total number of pd client request sent.",
             &["type", "stauts"]
         ).unwrap();
 

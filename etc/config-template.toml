@@ -35,6 +35,7 @@ end-point-concurrency = 8
 addr = ""
 # metric prefix.
 prefix = "tikv"
+report-interval = "1s"
 
 [raftstore]
 # notify capacity, 40960 is suitable for about 7000 regions.

@@ -331,7 +331,7 @@ impl Peer {
     fn send_ready_metric(&self, ready: &Ready) {
         if !ready.messages.is_empty() {
             metric_count!("raftstore.send_raft_message", ready.messages.len() as i64);
-            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["send raft message"])
+            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["message"])
                 .inc_by(ready.messages.len() as f64)
                 .unwrap();
         }
@@ -339,21 +339,21 @@ impl Peer {
         if !ready.committed_entries.is_empty() {
             metric_count!("raftstore.handle_raft_commit_entries",
                           ready.committed_entries.len() as i64);
-            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["handle raft commit entries"])
+            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["commit"])
                 .inc_by(ready.committed_entries.len() as f64)
                 .unwrap();
         }
 
         if !ready.entries.is_empty() {
             metric_count!("raftstore.append_entries", ready.entries.len() as i64);
-            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["append entries"])
+            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["append"])
                 .inc_by(ready.committed_entries.len() as f64)
                 .unwrap();
         }
 
         if !raft::is_empty_snap(&ready.snapshot) {
             metric_incr!("raftstore.apply_snapshot");
-            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["apply snapshot"]).inc();
+            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"]).inc();
         }
     }
 

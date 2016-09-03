@@ -752,8 +752,14 @@ fn main() {
     util::print_tikv_info();
 
     // Run prometheus client.
+    let report_interval = get_integer_value("",
+                                            "metric.report-interval",
+                                            &matches,
+                                            &config,
+                                            Some(1_000),
+                                            |v| v.as_integer());
     thread::spawn(move || {
-        metric::run_prometheus();
+        metric::run_prometheus(Duration::from_millis(report_interval as u64));
     });
 
     let addr = get_string_value("A",
