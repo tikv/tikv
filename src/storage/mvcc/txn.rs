@@ -179,12 +179,12 @@ mod tests {
     use super::MvccTxn;
     use super::super::MvccReader;
     use super::super::write::{Write, WriteType};
-    use storage::{make_key, Mutation, DEFAULT_CFS, CF_WRITE};
+    use storage::{make_key, Mutation, ALL_CFS, CF_WRITE};
     use storage::engine::{self, Engine, Dsn, TEMP_DIR};
 
     #[test]
     fn test_mvcc_txn_read() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
 
         must_get_none(engine.as_ref(), b"x", 1);
 
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_prewrite() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         // Key is locked.
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_commit_ok() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
         must_prewrite_put(engine.as_ref(), b"x", b"x10", b"x", 10);
         must_prewrite_lock(engine.as_ref(), b"y", b"x", 10);
         must_prewrite_delete(engine.as_ref(), b"z", b"x", 10);
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_commit_err() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
 
         // Not prewrite yet
         must_commit_err(engine.as_ref(), b"x", 1, 2);
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_rollback(engine.as_ref(), b"x", 5);
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback_err() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_commit(engine.as_ref(), b"x", 5, 10);
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_commit(engine.as_ref(), b"x", 5, 10);
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn test_write() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), DEFAULT_CFS).unwrap();
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_seek_write_none(engine.as_ref(), b"x", 5);

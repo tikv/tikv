@@ -39,7 +39,7 @@ use mio::tcp::TcpListener;
 use fs2::FileExt;
 use cadence::{StatsdClient, NopMetricSink};
 
-use tikv::storage::{Storage, TEMP_DIR, DEFAULT_CFS};
+use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::metric::{self, BufferedUdpMetricSink};
 use tikv::util::transport::SendCh;
@@ -586,11 +586,9 @@ fn build_raftkv(matches: &Matches,
                         get_rocksdb_binlog_cf_option()];
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine = Arc::new(rocksdb_util::new_engine_opt(opts,
-                                                       db_path.to_str().unwrap(),
-                                                       DEFAULT_CFS,
-                                                       cfs_opts)
-        .unwrap());
+    let engine =
+        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), ALL_CFS, cfs_opts)
+            .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
     let mut node = Node::new(&mut event_loop, cfg, pd_client);

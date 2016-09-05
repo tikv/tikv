@@ -30,7 +30,7 @@ use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::transport::SendCh;
-use tikv::storage::{Engine, CfName, DEFAULT_CFS};
+use tikv::storage::{Engine, CfName, ALL_CFS};
 use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::msgpb::{Message, MessageType};
@@ -303,7 +303,7 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    new_server_cluster_with_cfs(id, count, DEFAULT_CFS)
+    new_server_cluster_with_cfs(id, count, ALL_CFS)
 }
 
 pub fn new_server_cluster_with_cfs(id: u64,
