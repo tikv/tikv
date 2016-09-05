@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, HistogramVec};
+use prometheus::{CounterVec, HistogramVec, Histogram};
 
 lazy_static! {
     pub static ref PD_REQ_COUNTER_VEC: CounterVec =
@@ -47,5 +47,12 @@ lazy_static! {
             "tikv_raftstore_snapshot_duration_seconds",
             "Bucketed histogram of raftstore snapshot process duration",
             &["type"]
+        ).unwrap();
+
+    pub static ref CHECK_SPILT_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_check_split_duration_seconds",
+            "Bucketed histogram of raftstore split check duration",
+            labels!{"type" => "cost",}
         ).unwrap();
 }

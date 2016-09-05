@@ -80,6 +80,8 @@ impl Runnable<Task> for Runner {
         let mut size = 0;
         let mut split_key = vec![];
         let ts = Instant::now();
+        let timer = CHECK_SPILT_HISTOGRAM.start_timer();
+
         let res = task.engine.scan(&task.start_key,
                                    &task.end_key,
                                    &mut |k, v| {
@@ -97,6 +99,7 @@ impl Runnable<Task> for Runner {
             return;
         }
         metric_time!("raftstore.check_split.cost", ts.elapsed());
+        timer.observe_duration();
 
         if size < self.region_max_size {
             metric_incr!("raftstore.check_split.ignore");
