@@ -42,7 +42,7 @@ use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
-use storage::DEFAULT_CFS;
+use storage::ALL_CFS;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
@@ -1057,7 +1057,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // Must get the total SST file size here.
         let mut used_size: u64 = 0;
-        for cf in DEFAULT_CFS {
+        for cf in ALL_CFS {
             let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
             let cf_used_size = self.engine
                 .get_property_int_cf(*handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
