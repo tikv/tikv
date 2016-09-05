@@ -410,7 +410,8 @@ impl Peer {
         if is_applying {
             if !raft::is_empty_snap(&ready.snapshot) {
                 if !self.get_store().is_canceling_snap() {
-                    warn!("receiving a new snap when applying the old one, try to abort.");
+                    warn!("receiving a new snap {:?} when applying the old one, try to abort.",
+                          ready.snapshot);
                     self.mut_store().cancle_applying_snap();
                 }
                 return Ok(None);

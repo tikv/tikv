@@ -254,7 +254,7 @@ impl<T: MsgSender> Runner<T> {
     fn handle_apply(&self, region_id: u64, abort: Arc<AtomicBool>) {
         metric_incr!("raftstore.apply_snap");
         let ts = Instant::now();
-        let (is_success, is_abort) = match self.apply_snap(region_id, abort) {
+        let (is_success, is_aborted) = match self.apply_snap(region_id, abort) {
             Ok(()) => (true, false),
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is abort.", region_id);
@@ -268,14 +268,14 @@ impl<T: MsgSender> Runner<T> {
         let msg = Msg::SnapApplyRes {
             region_id: region_id,
             is_success: is_success,
-            is_abort: is_abort,
+            is_aborted: is_aborted,
         };
         if let Err(e) = self.ch.send(msg) {
             panic!("failed to notify snap apply result of {}: {:?}",
                    region_id,
                    e);
         }
-        if is_abort {
+        if is_aborted {
             metric_incr!("raftstore.apply_snap.abort");
         } else if is_success {
             metric_incr!("raftstore.apply_snap.success");
