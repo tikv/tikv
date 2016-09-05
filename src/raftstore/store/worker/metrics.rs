@@ -16,7 +16,7 @@ use prometheus::{CounterVec, HistogramVec, Histogram};
 lazy_static! {
     pub static ref PD_REQ_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_pd_request_sent_total",
+            "tikv_raftstore_pd_request_sent_total",
             "Total number of pd client request sent.",
             &["type", "stauts"]
         ).unwrap();

@@ -197,7 +197,7 @@ impl TiDbEndPoint {
     fn handle_requests(&self, reqs: Vec<RequestTask>) {
         for t in reqs {
             let histogram =
-                COPR_REQ_HISTOGRAM_VEC.with_label_values(&[&format!("{}", t.req.get_tp())]);
+                COPR_REQ_HISTOGRAM_VEC.with_label_values(&[&t.req.get_tp().to_string()]);
             let histogram_timer = histogram.start_timer();
 
             self.handle_request(t.req, t.on_resp);
@@ -245,7 +245,7 @@ impl TiDbEndPoint {
         };
 
         let select_histogram =
-            COPR_SELECT_HISTOGRAM_VEC.with_label_values(&[&format!("{}", req.get_tp())]);
+            COPR_SELECT_HISTOGRAM_VEC.with_label_values(&[&req.get_tp().to_string()]);
         let select_timer = select_histogram.start_timer();
 
         let res = if req.get_tp() == REQ_TYPE_SELECT {
