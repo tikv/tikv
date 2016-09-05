@@ -30,7 +30,7 @@ use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
-use tikv::storage::DEFAULT_CFS;
+use tikv::storage::ALL_CFS;
 use tikv::storage::CF_RAFT;
 
 /// # Message dump tool
@@ -73,7 +73,7 @@ fn main() {
     }
 
     let db_str = matches.opt_str("db").unwrap();
-    let db = util::rocksdb::open(&db_str, DEFAULT_CFS).unwrap();
+    let db = util::rocksdb::open(&db_str, ALL_CFS).unwrap();
     let key = matches.opt_str("k");
     let from = matches.opt_str("f");
     let to = matches.opt_str("t");
