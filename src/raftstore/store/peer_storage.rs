@@ -51,7 +51,7 @@ pub enum SnapState {
     Generating,
     Snap(Snapshot),
     Applying(Arc<AtomicBool>),
-    ApplyAbort,
+    ApplyAborted,
     Failed,
 }
 
@@ -61,7 +61,7 @@ impl PartialEq for SnapState {
             (&SnapState::Relax, &SnapState::Relax) |
             (&SnapState::Generating, &SnapState::Generating) |
             (&SnapState::Failed, &SnapState::Failed) |
-            (&SnapState::ApplyAbort, &SnapState::ApplyAbort) => true,
+            (&SnapState::ApplyAborted, &SnapState::ApplyAborted) => true,
             (&SnapState::Snap(ref s1), &SnapState::Snap(ref s2)) => s1 == s2,
             (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
                 b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
@@ -512,7 +512,7 @@ impl PeerStorage {
     pub fn is_applying(&self) -> bool {
         match *self.snap_state.borrow() {
             SnapState::Applying(_) |
-            SnapState::ApplyAbort => true,
+            SnapState::ApplyAborted => true,
             _ => false,
         }
     }

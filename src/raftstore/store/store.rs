@@ -1241,7 +1241,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("applying snapshot to {} failed", region_id);
             }
             self.pending_raft_groups.insert(region_id);
-            storage.set_snap_state(SnapState::ApplyAbort);
+            storage.set_snap_state(SnapState::ApplyAborted);
         }
     }
 }

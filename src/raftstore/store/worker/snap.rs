@@ -257,7 +257,7 @@ impl<T: MsgSender> Runner<T> {
         let (is_success, is_aborted) = match self.apply_snap(region_id, abort) {
             Ok(()) => (true, false),
             Err(Error::Abort) => {
-                warn!("applying snapshot for region {} is abort.", region_id);
+                warn!("applying snapshot for region {} is aborted.", region_id);
                 (false, true)
             }
             Err(e) => {
