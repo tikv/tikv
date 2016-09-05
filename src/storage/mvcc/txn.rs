@@ -139,15 +139,15 @@ impl<'a> MvccTxn<'a> {
     }
 
     pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
-        let mut delete_flag = false;
+        let mut remove_older = false;
         let mut ts: u64 = u64::max_value();
         while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
-            if !delete_flag {
+            if !remove_older {
                 if commit <= safe_point {
-                    // Set `delete_flag` after we find the latest value.
+                    // Set `remove_older` after we find the latest value.
                     match write.write_type {
                         WriteType::Put | WriteType::Delete => {
-                            delete_flag = true;
+                            remove_older = true;
                         }
                         WriteType::Rollback | WriteType::Lock => {}
                     }
@@ -162,7 +162,6 @@ impl<'a> MvccTxn<'a> {
                     }
                 }
             } else {
-                // Delete all data after safe point.
                 self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
                 if write.write_type == WriteType::Put {
                     self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(write.start_ts)));
@@ -316,13 +315,30 @@ mod tests {
         must_prewrite_put(engine.as_ref(), b"x", b"x55", b"x", 55);
         must_rollback(engine.as_ref(), b"x", 55);
 
-        // start commit command
-        // 55    -      PUT "x55" (Rollback)
-        // 45    50     LOCK
-        // 35    40     PUT "x35"
-        // 25    30     DELETE
-        // 15    20     PUT "x15"
-        //  5    10     PUT "x5"
+        // Transactions:
+        // startTS commitTS Command
+        // --
+        // 55      -        PUT "x55" (Rollback)
+        // 45      50       LOCK
+        // 35      40       PUT "x35"
+        // 25      30       DELETE
+        // 15      20       PUT "x15"
+        //  5      10       PUT "x5"
+
+        // CF data layout:
+        // ts CFDefault   CFWrite
+        // --
+        // 55             Rollback(PUT,50)
+        // 50             Commit(LOCK,45)
+        // 45
+        // 40             Commit(PUT,35)
+        // 35   x35
+        // 30             Commit(Delete,25)
+        // 25
+        // 20             Commit(PUT,15)
+        // 15   x15
+        // 10             Commit(PUT,5)
+        // 5    x5
 
         must_gc(engine.as_ref(), b"x", 12);
         must_get(engine.as_ref(), b"x", 12, b"x5");
