@@ -112,7 +112,6 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
                meta.len(),
                timer.elapsed());
     }
-    metric_time!("server.send_snap", timer.elapsed());
     send_timer.observe_duration();
 
     res

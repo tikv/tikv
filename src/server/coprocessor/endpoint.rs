@@ -35,7 +35,7 @@ use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::Evaluator;
-use util::{escape, duration_to_ms, SlowTimer, Either};
+use util::{escape, duration_to_ms, Either};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
@@ -196,13 +196,11 @@ impl TiDbEndPoint {
 impl TiDbEndPoint {
     fn handle_requests(&self, reqs: Vec<RequestTask>) {
         for t in reqs {
-            let timer = SlowTimer::new();
-            let histogram = COPR_REQ_HISTOGRAM_VEC.with_label_values(&[&format!("{}", t.req.get_tp())]);
+            let histogram =
+                COPR_REQ_HISTOGRAM_VEC.with_label_values(&[&format!("{}", t.req.get_tp())]);
             let histogram_timer = histogram.start_timer();
 
-            let tp = t.req.get_tp();
             self.handle_request(t.req, t.on_resp);
-            metric_time!(&format!("copr.request.{}", tp), timer.elapsed());
             histogram_timer.observe_duration();
         }
     }
@@ -244,8 +242,8 @@ impl TiDbEndPoint {
         } else {
             usize::MAX
         };
-        let sel_ts = Instant::now();
-        let select_histogram = COPR_SELECT_HISTOGRAM_VEC.with_label_values(&[&format!("{}", req.get_tp())]);
+        let select_histogram =
+            COPR_SELECT_HISTOGRAM_VEC.with_label_values(&[&format!("{}", req.get_tp())]);
         let select_timer = select_histogram.start_timer();
 
         let res = if req.get_tp() == REQ_TYPE_SELECT {
@@ -253,10 +251,8 @@ impl TiDbEndPoint {
         } else {
             ctx.get_rows_from_idx(range, limit, desc)
         };
-        metric_time!(&format!("copr.select.{}", req.get_tp()), sel_ts.elapsed());
         select_timer.observe_duration();
 
-        let resp_ts = Instant::now();
         let comspose_timer = COPR_COMPOSE_HISTOGRAM.start_timer();
 
         let mut resp = Response::new();
@@ -277,7 +273,6 @@ impl TiDbEndPoint {
         }
         let data = box_try!(sel_resp.write_to_bytes());
         resp.set_data(data);
-        metric_time!("copr.compose_resp", resp_ts.elapsed());
         comspose_timer.observe_duration();
 
         Ok(resp)

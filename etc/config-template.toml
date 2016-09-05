@@ -30,11 +30,7 @@ end-point-concurrency = 8
 # capacity = 0 # 0 is unlimited.
 
 [metric]
-# if host applied then `udp` will be activated.
-# remote statsd server address.
-addr = ""
-# metric prefix.
-prefix = "tikv"
+# prometheus client report interval.
 report-interval = "1s"
 
 [raftstore]
