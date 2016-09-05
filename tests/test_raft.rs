@@ -1524,6 +1524,72 @@ fn test_non_promotable_voter_wich_check_quorum() {
     assert_eq!(nt.peers.get(&2).unwrap().leader_id, 1);
 }
 
+/// Tests read index feature with check quorum enabled.
+#[test]
+fn test_read_index_with_check_quorum() {
+    let mut a = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let mut b = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let mut c = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+
+    a.check_quorum = true;
+    b.check_quorum = true;
+    c.check_quorum = true;
+
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+
+    // we can not let system choose the value of randomizedElectionTimeout
+    // otherwise it will introduce some uncertainty into this test case
+    // we need to ensure randomizedElectionTimeout > electionTimeout here
+    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
+
+    for _ in 0..b_election_timeout {
+        nt.peers.get_mut(&2).unwrap().tick();
+    }
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
+
+    let tests = vec![
+        (2, 10, 11, "ctx1"),
+        (3, 10, 21, "ctx2"),
+        (2, 10, 31, "ctx3"),
+        (3, 10, 41, "ctx4"),
+    ];
+
+    for &(id, proposals, expected_index, expected_ctx) in tests.iter() {
+        for _ in 0..proposals {
+            nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+        }
+
+        let e = new_entry(0, 0, Some(expected_ctx));
+        nt.send(vec![new_message_with_entries(id, id, MessageType::MsgReadIndex, vec![e])]);
+
+        let ref read_state = nt.peers.get(&id).unwrap().read_state;
+        assert_eq!(read_state.index, expected_index);
+        assert_eq!(read_state.request_ctx, expected_ctx.as_bytes().to_vec());
+    }
+}
+
+/// Tests read index feature with check quorum disabled.
+#[test]
+fn test_read_index_without_check_quorum() {
+    let a = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let b = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let c = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    let ctx = "ctx1";
+    let e = new_entry(0, 0, Some(ctx));
+    nt.send(vec![new_message_with_entries(2, 2, MessageType::MsgReadIndex, vec![e])]);
+
+    let ref read_state = nt.peers.get(&2).unwrap().read_state;
+    assert_eq!(read_state.index, 0);
+    assert_eq!(read_state.request_ctx, ctx.as_bytes().to_vec());
+}
+
 #[test]
 fn test_leader_append_response() {
     // initial progress: match = 0; next = 3

@@ -137,12 +137,25 @@ pub struct SoftState {
     pub raft_state: StateRole,
 }
 
+// ReadState provides state for read only query.
+// It's caller's responsibility to send MsgReadIndex first before getting
+// this state from ready. It's also caller's duty to differentiate if this
+// state is what it requests through request_ctx, e.g. given a unique id as
+// request_ctx.
+#[derive(Default, PartialEq, Debug)]
+pub struct ReadState {
+    pub index: u64,
+    pub request_ctx: Vec<u8>,
+}
+
 #[derive(Default)]
 pub struct Raft<T: Storage> {
     pub term: u64,
     pub vote: u64,
 
     pub id: u64,
+
+    pub read_state: ReadState,
 
     /// the log
     pub raft_log: RaftLog<T>,
@@ -230,6 +243,7 @@ impl<T: Storage> Raft<T> {
         }
         let mut r = Raft {
             id: c.id,
+            read_state: Default::default(),
             raft_log: raft_log,
             max_inflight: c.max_inflight_msgs,
             max_msg_size: c.max_size_per_msg,
@@ -1042,6 +1056,26 @@ impl<T: Storage> Raft<T> {
                 self.send(to_sent);
                 return;
             }
+            MessageType::MsgReadIndex => {
+                let mut read_index = 0;
+                if self.check_quorum {
+                    read_index = self.raft_log.committed
+                }
+                if m.get_from() == 0 || m.get_from() == self.id {
+                    // from local member
+                    self.read_state.index = read_index;
+                    self.read_state.request_ctx =
+                        m.mut_entries().as_mut_slice().first_mut().unwrap().take_data()
+                } else {
+                    let mut to_send = Message::new();
+                    to_send.set_to(m.get_from());
+                    to_send.set_msg_type(MessageType::MsgReadIndexResp);
+                    to_send.set_index(read_index);
+                    to_send.set_entries(m.take_entries());
+                    self.send(to_send);
+                }
+                return;
+            }
             _ => {}
         }
 
@@ -1167,6 +1201,28 @@ impl<T: Storage> Raft<T> {
                       self.term,
                       m.get_from());
                 self.campaign(CAMPAIGN_TRANSFER);
+            }
+            MessageType::MsgReadIndex => {
+                if self.leader_id == INVALID_ID {
+                    info!("{} no leader at term {}; dropping index reading msg",
+                          self.tag,
+                          self.term);
+                    return;
+                }
+                m.set_to(self.leader_id);
+                self.send(m);
+            }
+            MessageType::MsgReadIndexResp => {
+                if m.get_entries().len() != 1 {
+                    error!("{} invalid format of MsgReadIndexResp from {}, entries count: {}",
+                           self.tag,
+                           m.get_from(),
+                           m.get_entries().len());
+                    return;
+                }
+                self.read_state.index = m.get_index();
+                self.read_state.request_ctx =
+                    m.mut_entries().as_mut_slice().first_mut().unwrap().take_data();
             }
             _ => {}
         }
