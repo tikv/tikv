@@ -105,7 +105,6 @@ impl<T: MsgSender> Runner<T> {
 
     fn handle_gen(&self, region_id: u64) {
         SNAP_COUNTER_VEC.with_label_values(&["generate", "all"]).inc();
-
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
         let timer = gen_histogram.start_timer();
 
@@ -119,8 +118,8 @@ impl<T: MsgSender> Runner<T> {
             error!("failed to generate snap: {:?}!!!", e);
             return;
         }
-        SNAP_COUNTER_VEC.with_label_values(&["generate", "success"]).inc();
 
+        SNAP_COUNTER_VEC.with_label_values(&["generate", "success"]).inc();
         timer.observe_duration();
     }
 
@@ -195,7 +194,6 @@ impl<T: MsgSender> Runner<T> {
 
     fn handle_apply(&self, region_id: u64) {
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
-
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_timer();
 
@@ -213,8 +211,8 @@ impl<T: MsgSender> Runner<T> {
                    region_id,
                    e);
         }
-        SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
 
+        SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
         timer.observe_duration();
     }
 }

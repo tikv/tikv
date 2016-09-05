@@ -112,8 +112,8 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
                meta.len(),
                timer.elapsed());
     }
-    send_timer.observe_duration();
 
+    send_timer.observe_duration();
     res
 }
 

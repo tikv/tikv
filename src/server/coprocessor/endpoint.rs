@@ -201,6 +201,7 @@ impl TiDbEndPoint {
             let histogram_timer = histogram.start_timer();
 
             self.handle_request(t.req, t.on_resp);
+
             histogram_timer.observe_duration();
         }
     }
@@ -242,6 +243,7 @@ impl TiDbEndPoint {
         } else {
             usize::MAX
         };
+
         let select_histogram =
             COPR_SELECT_HISTOGRAM_VEC.with_label_values(&[&format!("{}", req.get_tp())]);
         let select_timer = select_histogram.start_timer();
@@ -251,8 +253,8 @@ impl TiDbEndPoint {
         } else {
             ctx.get_rows_from_idx(range, limit, desc)
         };
-        select_timer.observe_duration();
 
+        select_timer.observe_duration();
         let comspose_timer = COPR_COMPOSE_HISTOGRAM.start_timer();
 
         let mut resp = Response::new();
@@ -273,8 +275,8 @@ impl TiDbEndPoint {
         }
         let data = box_try!(sel_resp.write_to_bytes());
         resp.set_data(data);
-        comspose_timer.observe_duration();
 
+        comspose_timer.observe_duration();
         Ok(resp)
     }
 }

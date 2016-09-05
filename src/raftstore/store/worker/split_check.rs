@@ -95,6 +95,7 @@ impl Runnable<Task> for Runner {
                    e);
             return;
         }
+
         timer.observe_duration();
 
         if size < self.region_max_size {
@@ -107,6 +108,7 @@ impl Runnable<Task> for Runner {
         if let Err(e) = res {
             warn!("failed to send check result of {}: {}", task.region_id, e);
         }
+
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["success"]).inc();
     }
 }
