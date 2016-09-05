@@ -30,7 +30,7 @@ end-point-concurrency = 8
 # capacity = 0 # 0 is unlimited.
 
 [metric]
-# prometheus client report interval.
+# prometheus client report interval, set 0s to disable prometheus.
 report-interval = "1s"
 
 [raftstore]
