@@ -369,8 +369,8 @@ impl Datum {
     }
 
     /// `coerce` changes type.
-    /// If left or right is Decimal, changes the both to Decimal.
-    /// Else if left or right is Float, changes the both to Float.
+    /// If left or right is F64, changes the both to F64.
+    /// Else if left or right is Decimal, changes the both to Decimal.
     /// Keep compatible with TiDB's `CoerceDatum` function.
     pub fn coerce(left: Datum, right: Datum) -> Result<(Datum, Datum)> {
         let res = match (left, right) {
