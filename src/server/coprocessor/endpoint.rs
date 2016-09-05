@@ -41,6 +41,7 @@ use server::OnResponse;
 
 use super::{Error, Result};
 use super::aggregate::{self, AggrFunc};
+use super::metrics::*;
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
@@ -196,9 +197,13 @@ impl TiDbEndPoint {
     fn handle_requests(&self, reqs: Vec<RequestTask>) {
         for t in reqs {
             let timer = SlowTimer::new();
+            let histogram = COPR_REQ_HISTOGRAM_VEC.with_label_values(&[&format!("{}", t.req.get_tp())]);
+            let histogram_timer = histogram.start_timer();
+
             let tp = t.req.get_tp();
             self.handle_request(t.req, t.on_resp);
             metric_time!(&format!("copr.request.{}", tp), timer.elapsed());
+            histogram_timer.observe_duration();
         }
     }
 
@@ -240,13 +245,20 @@ impl TiDbEndPoint {
             usize::MAX
         };
         let sel_ts = Instant::now();
+        let select_histogram = COPR_SELECT_HISTOGRAM_VEC.with_label_values(&[&format!("{}", req.get_tp())]);
+        let select_timer = select_histogram.start_timer();
+
         let res = if req.get_tp() == REQ_TYPE_SELECT {
             ctx.get_rows_from_sel(range, limit, desc)
         } else {
             ctx.get_rows_from_idx(range, limit, desc)
         };
         metric_time!(&format!("copr.select.{}", req.get_tp()), sel_ts.elapsed());
+        select_timer.observe_duration();
+
         let resp_ts = Instant::now();
+        let comspose_timer = COPR_COMPOSE_HISTOGRAM.start_timer();
+
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
         match res {
@@ -266,6 +278,8 @@ impl TiDbEndPoint {
         let data = box_try!(sel_resp.write_to_bytes());
         resp.set_data(data);
         metric_time!("copr.compose_resp", resp_ts.elapsed());
+        comspose_timer.observe_duration();
+
         Ok(resp)
     }
 }
