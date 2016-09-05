@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, Counter};
+use prometheus::{CounterVec, Counter, GaugeVec};
 
 lazy_static! {
     pub static ref PEER_RAFT_READY_COUNTER_VEC: CounterVec =
@@ -39,5 +39,26 @@ lazy_static! {
         register_counter!(
             "tikv_raftstore_handle_raft_entry_conf_change_total",
             "Total number of raft entry conf change handled."
+        ).unwrap();
+
+    pub static ref STORE_PD_HEARTBEAT_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_pd_heartbeat_tick_total",
+            "Total number of pd heartbeat ticks.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_SIZE_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_raftstore_store_size_bytes",
+            "Size of raftstore storage.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_SNAPSHOT_TAFFIC_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_raftstore_snapshot_traffic_total",
+            "Total number of raftstore snapshot traffic.",
+            &["type"]
         ).unwrap();
 }
