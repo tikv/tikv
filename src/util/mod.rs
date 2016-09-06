@@ -180,7 +180,10 @@ pub fn escape(data: &[u8]) -> String {
             b'\t' => escaped.extend_from_slice(br"\t"),
             b'"' => escaped.extend_from_slice(b"\\\""),
             b'\\' => escaped.extend_from_slice(br"\\"),
-            b'\x20'...b'\x7e' => escaped.push(c),
+            b'\x20' |
+            b'\x21' |
+            b'\x23'...b'\x5b' |
+            b'\x5d'...b'\x7e' => escaped.push(c),
             _ => {
                 escaped.push(b'\\');
                 escaped.push(b'0' + (c >> 6));
