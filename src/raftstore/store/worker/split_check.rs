@@ -70,7 +70,8 @@ impl Runner {
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
-        debug!("executing task {} {}",
+        debug!("[region {}] executing task {} {}",
+               task.region_id,
                escape(&task.start_key),
                escape(&task.end_key));
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
@@ -99,14 +100,19 @@ impl Runnable<Task> for Runner {
         timer.observe_duration();
 
         if size < self.region_max_size {
-            CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
+            debug!("[region {}] no need to send for {} < {}",
+                   task.region_id,
+                   size,
+                   self.region_max_size);
 
-            debug!("no need to send for {} < {}", size, self.region_max_size);
+            CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
             return;
         }
         let res = self.ch.send(new_split_check_result(task.region_id, task.epoch, split_key));
         if let Err(e) = res {
-            warn!("failed to send check result of {}: {}", task.region_id, e);
+            warn!("[region {}] failed to send check result, err {:?}",
+                  task.region_id,
+                  e);
         }
 
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["success"]).inc();

@@ -24,7 +24,7 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
+use kvproto::eraftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -422,9 +422,8 @@ impl Peer {
                 }
                 return Ok(None);
             }
-            // skip apply and snapshot
+            // skip apply
             ready.committed_entries = vec![];
-            ready.snapshot = RaftSnapshot::new();
         }
 
         let t = SlowTimer::new();
