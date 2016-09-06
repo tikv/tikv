@@ -41,6 +41,8 @@ use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
 use util::get_disk_stat;
+use util::rocksdb;
+use storage::ALL_CFS;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
@@ -1065,9 +1067,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_capacity(capacity);
 
         // Must get the total SST file size here.
-        let used_size = self.engine
-            .get_property_int(ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
-            .expect("rocksdb is too old, missing total-sst-files-size property");
+        let mut used_size: u64 = 0;
+        for cf in ALL_CFS {
+            let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+            let cf_used_size = self.engine
+                .get_property_int_cf(*handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
+                .expect("rocksdb is too old, missing total-sst-files-size property");
+
+            used_size += cf_used_size;
+        }
 
         let mut available = if capacity > used_size {
             capacity - used_size
