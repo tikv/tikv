@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
@@ -39,6 +41,8 @@ use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
 use util::get_disk_stat;
+use util::rocksdb;
+use storage::ALL_CFS;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
@@ -50,6 +54,7 @@ use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
+use super::metrics::*;
 
 type Key = Vec<u8>;
 
@@ -75,7 +80,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     trans: T,
     pd_client: Arc<C>,
 
-    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
+    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
 
     snap_mgr: SnapManager,
 }
@@ -123,7 +128,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pending_regions: vec![],
             trans: trans,
             pd_client: pd_client,
-            peer_cache: Arc::new(RwLock::new(peer_cache)),
+            peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
         };
         try!(s.init());
@@ -195,6 +200,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     /// `clean_up` clean up all possible garbage data.
     fn clean_up(&mut self) -> Result<()> {
+        let t = Instant::now();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
@@ -203,7 +209,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             last_start_key = keys::enc_end_key(region);
         }
 
-        delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY)
+        try!(delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
+
+        info!("[store {}] cleans up garbage data, takes {:?}",
+              self.store_id(),
+              t.elapsed());
+        Ok(())
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
@@ -260,7 +271,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &self.cfg
     }
 
-    pub fn peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
+    pub fn peer_cache(&self) -> Rc<RefCell<HashMap<u64, metapb::Peer>>> {
         self.peer_cache.clone()
     }
 
@@ -546,7 +557,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn insert_peer_cache(&mut self, peer: metapb::Peer) {
-        self.peer_cache.wl().insert(peer.get_id(), peer);
+        self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
     fn on_raft_ready(&mut self) -> Result<()> {
@@ -1016,8 +1027,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        metric_gauge!("raftstore.leader_count", leader_count);
-        metric_gauge!("raftstore.region_count", self.region_peers.len() as u64);
+        STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["leader"]).set(leader_count as f64);
+        STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["region"])
+            .set(self.region_peers.len() as f64);
 
         self.register_pd_heartbeat_tick(event_loop);
     }
@@ -1046,9 +1058,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_capacity(capacity);
 
         // Must get the total SST file size here.
-        let used_size = self.engine
-            .get_property_int(ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
-            .expect("rocksdb is too old, missing total-sst-files-size property");
+        let mut used_size: u64 = 0;
+        for cf in ALL_CFS {
+            let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+            let cf_used_size = self.engine
+                .get_property_int_cf(*handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
+                .expect("rocksdb is too old, missing total-sst-files-size property");
+
+            used_size += cf_used_size;
+        }
 
         let mut available = if capacity > used_size {
             capacity - used_size
@@ -1071,12 +1089,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
 
-        metric_gauge!("raftstore.capacity", capacity);
-        metric_gauge!("raftstore.available", available);
-        metric_gauge!("raftstore.snapshot.sending",
-                      snap_stats.sending_count as u64);
-        metric_gauge!("raftstore.snapshot.receiving",
-                      snap_stats.receiving_count as u64);
+        STORE_SIZE_GAUGE_VEC.with_label_values(&["capacity"]).set(capacity as f64);
+        STORE_SIZE_GAUGE_VEC.with_label_values(&["available"]).set(available as f64);
+
+        STORE_SNAPSHOT_TAFFIC_GAUGE_VEC.with_label_values(&["sending"])
+            .set(snap_stats.sending_count as f64);
+        STORE_SNAPSHOT_TAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
+            .set(snap_stats.sending_count as f64);
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("failed to notify pd: {}", e);
@@ -1167,7 +1186,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             // The peer must exist in peer_cache.
-            let to_peer = match self.peer_cache.rl().get(&to_peer_id).cloned() {
+            let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
                 Some(peer) => peer,
                 None => {
                     // If to_peer is removed immediately after sending snapshot, the command

@@ -13,7 +13,7 @@
 
 use std::io::Write;
 use std::net::TcpStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -26,6 +26,7 @@ use kvproto::pdpb::{Request, Response};
 use kvproto::msgpb::{Message, MessageType};
 
 use super::Result;
+use super::metrics::*;
 
 const MAX_PD_SEND_RETRY_COUNT: usize = 100;
 const SOCKET_READ_TIMEOUT: u64 = 3;
@@ -40,7 +41,8 @@ struct RpcClientCore {
 }
 
 fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u64, Response)> {
-    let ts = Instant::now();
+    let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
+
     let mut req = Message::new();
     req.set_msg_type(MessageType::PdReq);
     // TODO: optimize clone later in HTTP refactor.
@@ -55,7 +57,8 @@ fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u
     if resp.get_msg_type() != MessageType::PdResp {
         return Err(box_err!("invalid pd response type {:?}", resp.get_msg_type()));
     }
-    metric_time!("pd.send_msg", ts.elapsed());
+    timer.observe_duration();
+
     Ok((id, resp.take_pd_resp()))
 }
 

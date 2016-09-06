@@ -11,6 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Scheduler which schedules the execution of `storage::Command`s.
+//!
+//! There is one scheduler for each store. It receives commands from clients, executes them against
+//! the MVCC layer storage engine.
+//!
+//! Logically, the data organization hierarchy from bottom to top is row -> region -> store ->
+//! database. But each region is replicated onto N stores for reliability, the replicas form a Raft
+//! group, one of which acts as the leader. When the client read or write a row, the command is
+//! sent to the scheduler which is on the region leader's store.
+//!
+//! Scheduler runs in a single-thread event loop, but command executions are delegated to a pool of
+//! worker thread.
+//!
+//! Scheduler keeps track of all the running commands and uses latches to ensure serialized access
+//! to the overlapping rows involved in concurrent commands. But note that scheduler only ensures
+//! serialized access to the overlapping rows at command level, but a transaction may consist of
+//! multiple commands, therefore conflicts may happen at transaction level. Transaction semantics
+//! is ensured by the transaction protocol implemented in the client library, which is transparent
+//! to the scheduler.
+
 use std::time::Duration;
 use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
@@ -37,6 +57,7 @@ pub enum Tick {
     ReportStatistic,
 }
 
+/// Process result of a command.
 pub enum ProcessResult {
     Res,
     MultiRes { results: Vec<StorageResult<()>> },
@@ -47,6 +68,7 @@ pub enum ProcessResult {
     Failed { err: StorageError },
 }
 
+/// Message types for the scheduler event loop.
 pub enum Msg {
     Quit,
     RawCmd { cmd: Command, cb: StorageCb },
@@ -69,6 +91,7 @@ pub enum Msg {
     },
 }
 
+/// Debug for messages.
 impl Debug for Msg {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
@@ -87,6 +110,7 @@ impl Debug for Msg {
     }
 }
 
+/// Delivers the process result of a command to the storage callback.
 fn execute_callback(callback: StorageCb, pr: ProcessResult) {
     match callback {
         StorageCb::Boolean(cb) => {
@@ -127,6 +151,7 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
     }
 }
 
+/// Context for a running command.
 pub struct RunningCtx {
     cid: u64,
     cmd: Option<Command>,
@@ -135,6 +160,7 @@ pub struct RunningCtx {
 }
 
 impl RunningCtx {
+    /// Creates a context for a running command.
     pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> RunningCtx {
         RunningCtx {
             cid: cid,
@@ -145,6 +171,7 @@ impl RunningCtx {
     }
 }
 
+/// Creates a callback to receive async results of write prepare from the storage engine.
 fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallback<()> {
     Box::new(move |result: EngineResult<()>| {
         if let Err(e) = ch.send(Msg::WriteFinished {
@@ -159,6 +186,7 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallbac
     })
 }
 
+/// Scheduler which schedules the execution of `storage::Command`s.
 pub struct Scheduler {
     engine: Box<Engine>,
 
@@ -178,6 +206,7 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
+    /// Creates a scheduler.
     pub fn new(engine: Box<Engine>,
                schedch: SendCh<Msg>,
                concurrency: usize,
@@ -195,9 +224,12 @@ impl Scheduler {
     }
 }
 
+/// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
+/// event loop.
 fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     debug!("process read cmd(cid={}) in worker pool.", cid);
     let pr = match cmd {
+        // Gets from the snapshot.
         Command::Get { ref key, start_ts, .. } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
             let res = snap_store.get(key);
@@ -206,6 +238,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
             }
         }
+        // Batch gets from the snapshot.
         Command::BatchGet { ref keys, start_ts, .. } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
             match snap_store.batch_get(keys) {
@@ -223,6 +256,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
             }
         }
+        // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
         Command::Scan { ref start_key, limit, start_ts, .. } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
             let res = snap_store.scanner()
@@ -235,6 +269,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
+        // Scans locks with timestamp <= `max_ts`
         Command::ScanLock { max_ts, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref());
             let res = reader.scan_lock(|lock| lock.ts <= max_ts)
@@ -255,6 +290,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
+        // Gets the lock with timestamp `start_ts`, then sends either a `Commit` command if the
+        // lock has commit timestamp populated or a `Rollback` command otherwise.
         Command::ResolveLock { ref ctx, start_ts, commit_ts } => {
             let mut reader = MvccReader::new(snapshot.as_ref());
             let res = reader.scan_lock(|lock| lock.ts == start_ts)
@@ -285,6 +322,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
+        // Collects garbage.
         Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref());
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
@@ -311,6 +349,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
     }
 }
 
+/// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
+/// message if successful or a `WritePrepareFailed` message back to the event loop.
 fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref()) {
         if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
@@ -399,6 +439,7 @@ fn process_write_impl(cid: u64,
     Ok(())
 }
 
+/// Extracts the context of a command.
 fn extract_ctx(cmd: &Command) -> &Context {
     match *cmd {
         Command::Get { ref ctx, .. } |
@@ -417,11 +458,16 @@ fn extract_ctx(cmd: &Command) -> &Context {
 }
 
 impl Scheduler {
+    /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
         self.id_alloc
     }
 
+    /// Generates the lock for a command.
+    ///
+    /// Basically, read-only commands require no latches, write commands require latches hashed
+    /// by the referenced keys.
     fn gen_lock(&self, cmd: &Command) -> Lock {
         match *cmd {
             Command::Prewrite { ref mutations, .. } => {
@@ -437,6 +483,7 @@ impl Scheduler {
         }
     }
 
+    /// Delivers a command to a worker thread for processing.
     fn process_by_worker(&mut self, cid: u64, snapshot: Box<Snapshot>) {
         debug!("process cmd with snapshot, cid={}", cid);
         let cmd = {
@@ -453,6 +500,7 @@ impl Scheduler {
         }
     }
 
+    /// Calls the callback with an error.
     fn finish_with_err(&mut self, cid: u64, err: Error) {
         debug!("command cid={}, finished with error", cid);
 
@@ -465,6 +513,7 @@ impl Scheduler {
         self.release_lock(&ctx.lock, cid);
     }
 
+    /// Extracts the context of a command.
     fn extract_context(&self, cid: u64) -> &Context {
         let ctx = &self.cmd_ctxs.get(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
@@ -485,6 +534,15 @@ impl Scheduler {
         self.register_report_tick(event_loop);
     }
 
+    /// Event handler for new command.
+    ///
+    /// This method will try to acquire all the necessary latches. If successful, initiates a get
+    /// snapshot for furthur processing; otherwise, adds the command to the waiting queue(s), it
+    /// will be handled later in `wakeup_cmd` when its turn comes.
+    ///
+    /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
+    /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
+    /// 2) there may be non-conflicitng commands running concurrently, but it doesn't matter.
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
@@ -499,12 +557,17 @@ impl Scheduler {
         }
     }
 
+    /// Tries to acquire all the required latches for a command.
+    ///
+    /// Returns true if successful; returns false otherwise.
     fn acquire_lock(&mut self, cid: u64) -> bool {
         let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
         self.latches.acquire(&mut ctx.lock, cid)
     }
 
+    /// Initiates an async operation to get a snapshot from the storage engine, then posts a
+    /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&mut self, cid: u64) {
         let ch = self.schedch.clone();
         let cb = box move |snapshot: EngineResult<Box<Snapshot>>| {
@@ -521,6 +584,9 @@ impl Scheduler {
         }
     }
 
+    /// Event handler for the completion of get snapshot.
+    ///
+    /// Delivers the command along with the snapshot to a worker thread to execute.
     fn on_snapshot_finished(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
         debug!("receive snapshot finish msg for cid={}", cid);
         match snapshot {
@@ -529,6 +595,10 @@ impl Scheduler {
         }
     }
 
+    /// Event handler for the success of read.
+    ///
+    /// If a next command is present, continues to execute; otherwise, delivers the result to the
+    /// callback.
     fn on_read_finished(&mut self, cid: u64, pr: ProcessResult) {
         debug!("read command(cid={}) finished", cid);
 
@@ -540,8 +610,14 @@ impl Scheduler {
         } else {
             execute_callback(cb, pr);
         }
+
+        self.release_lock(&ctx.lock, cid);
     }
 
+    /// Event handler for the failure of write prepare.
+    ///
+    /// Write prepare failure typically means conflicting transactions are detected. Delivers the
+    /// error to the callback, and releases the latches.
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
         debug!("write command(cid={}) failed at prewrite.", cid);
 
@@ -554,6 +630,10 @@ impl Scheduler {
         self.release_lock(&ctx.lock, cid);
     }
 
+    /// Event handler for the success of write prepare.
+    ///
+    /// Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
+    /// message when it finishes.
     fn on_write_prepare_finished(&mut self,
                                  cid: u64,
                                  cmd: Command,
@@ -572,6 +652,7 @@ impl Scheduler {
         }
     }
 
+    /// Event handler for the success of write.
     fn on_write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
         debug!("write finished for command, cid={}", cid);
         let mut ctx = self.cmd_ctxs.remove(&cid).unwrap();
@@ -590,6 +671,7 @@ impl Scheduler {
         self.release_lock(&ctx.lock, cid);
     }
 
+    /// Releases all the latches held by a command.
     fn release_lock(&mut self, lock: &Lock, cid: u64) {
         let wakeup_list = self.latches.release(lock, cid);
         for wcid in wakeup_list {
@@ -597,18 +679,21 @@ impl Scheduler {
         }
     }
 
+    /// Wakes up the next command for execution.
     fn wakeup_cmd(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);
         }
     }
 
+    /// Shuts down the event loop.
     fn shutdown(&mut self, event_loop: &mut EventLoop<Self>) {
         info!("receive shutdown command");
         event_loop.shutdown();
     }
 }
 
+/// Registers a timer.
 fn register_timer(event_loop: &mut EventLoop<Scheduler>,
                   tick: Tick,
                   delay: u64)
@@ -617,16 +702,19 @@ fn register_timer(event_loop: &mut EventLoop<Scheduler>,
         .map_err(|e| box_err!("register timer err: {:?}", e))
 }
 
+/// Handler of the scheduler event loop.
 impl mio::Handler for Scheduler {
     type Timeout = Tick;
     type Message = Msg;
 
+    /// Handler for timeout events.
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
         match timeout {
             Tick::ReportStatistic => self.on_report_staticstic_tick(event_loop),
         }
     }
 
+    /// Event handler for message events.
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => self.shutdown(event_loop),
@@ -641,6 +729,7 @@ impl mio::Handler for Scheduler {
         }
     }
 
+    /// Handler for tick events.
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
             // stop work threads if has

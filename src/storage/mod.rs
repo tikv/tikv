@@ -40,7 +40,7 @@ pub const CF_LOCK: CfName = "lock";
 pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 pub const CF_BINLOG: CfName = "binlog";
-pub const DEFAULT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, CF_BINLOG];
+pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, CF_BINLOG];
 
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -246,7 +246,7 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let engine = try!(engine::new_engine(Dsn::RocksDBPath(&config.path), DEFAULT_CFS));
+        let engine = try!(engine::new_engine(Dsn::RocksDBPath(&config.path), ALL_CFS));
         Storage::from_engine(engine, config)
     }
 
