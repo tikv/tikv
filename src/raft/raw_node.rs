@@ -52,8 +52,7 @@ fn is_local_msg(m: &Message) -> bool {
         MessageType::MsgBeat |
         MessageType::MsgUnreachable |
         MessageType::MsgSnapStatus |
-        MessageType::MsgCheckQuorum |
-        MessageType::MsgTransferLeader => true,
+        MessageType::MsgCheckQuorum => true,
         _ => false,
     }
 }
