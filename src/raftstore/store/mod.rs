@@ -17,14 +17,15 @@ pub mod msg;
 pub mod config;
 pub mod transport;
 pub mod bootstrap;
-
 pub mod cmd_resp;
+pub mod util;
+
 mod store;
 mod peer;
 mod peer_storage;
 mod snap;
-pub mod util;
 mod worker;
+mod metrics;
 
 pub use self::msg::{Msg, Callback, Tick};
 pub use self::store::{Store, create_event_loop};

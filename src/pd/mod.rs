@@ -13,9 +13,11 @@
 
 use std::vec::Vec;
 
-pub mod errors;
 mod client;
 mod protocol;
+mod metrics;
+
+pub mod errors;
 pub use self::errors::{Result, Error};
 pub use self::client::RpcClient;
 

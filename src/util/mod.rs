@@ -18,18 +18,16 @@ use std::{slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
 use std::collections::hash_map::Entry;
-use time;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use time;
 use rand::{self, ThreadRng};
 use protobuf::Message;
-
-pub use log::LogLevelFilter;
+use prometheus::{self, Encoder, TextEncoder};
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 #[macro_use]
 pub mod macros;
-#[macro_use]
-pub mod metric;
 pub mod logger;
 pub mod panic_hook;
 pub mod worker;
@@ -47,6 +45,7 @@ pub mod time_monitor;
 pub mod file_log;
 
 pub use self::fs::{DiskStat, get_disk_stat};
+pub use log::LogLevelFilter;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
     log::set_logger(|filter| {
@@ -384,6 +383,28 @@ pub fn print_tikv_info() {
     info!("Version:");
     info!("Git Commit Hash: {}", hash);
     info!("UTC Build Time:  {}", date);
+}
+
+/// `run_prometheus` runs a background prometheus client.
+pub fn run_prometheus(interval: Duration) -> Option<thread::JoinHandle<()>> {
+    if interval == Duration::from_secs(0) {
+        return None;
+    }
+
+    Some(thread::spawn(move || {
+        let encoder = TextEncoder::new();
+        let mut buffer = Vec::<u8>::new();
+        loop {
+            let metric_familys = prometheus::gather();
+            encoder.encode(&metric_familys, &mut buffer).unwrap();
+
+            // Output to the standard output.
+            info!("{}", String::from_utf8(buffer.clone()).unwrap());
+
+            buffer.clear();
+            thread::sleep(interval);
+        }
+    }))
 }
 
 #[cfg(test)]

@@ -13,7 +13,6 @@
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
-use std::time::Instant;
 
 use rocksdb::DB;
 
@@ -23,6 +22,8 @@ use raftstore::store::engine::Iterable;
 use util::escape;
 use util::transport::SendCh;
 use util::worker::Runnable;
+
+use super::metrics::*;
 
 /// Split checking task.
 pub struct Task {
@@ -72,10 +73,12 @@ impl Runnable<Task> for Runner {
         debug!("executing task {} {}",
                escape(&task.start_key),
                escape(&task.end_key));
-        metric_incr!("raftstore.check_split");
+        CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
+
         let mut size = 0;
         let mut split_key = vec![];
-        let ts = Instant::now();
+        let timer = CHECK_SPILT_HISTOGRAM.start_timer();
+
         let res = task.engine.scan(&task.start_key,
                                    &task.end_key,
                                    &mut |k, v| {
@@ -92,10 +95,12 @@ impl Runnable<Task> for Runner {
                    e);
             return;
         }
-        metric_time!("raftstore.check_split.cost", ts.elapsed());
+
+        timer.observe_duration();
 
         if size < self.region_max_size {
-            metric_incr!("raftstore.check_split.ignore");
+            CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
+
             debug!("no need to send for {} < {}", size, self.region_max_size);
             return;
         }
@@ -103,7 +108,8 @@ impl Runnable<Task> for Runner {
         if let Err(e) = res {
             warn!("failed to send check result of {}: {}", task.region_id, e);
         }
-        metric_incr!("raftstore.check_split.success");
+
+        CHECK_SPILT_COUNTER_VEC.with_label_values(&["success"]).inc();
     }
 }
 
