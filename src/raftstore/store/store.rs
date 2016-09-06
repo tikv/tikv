@@ -563,7 +563,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let pending_count = ids.len();
 
         let mut apply_wb = WriteBatch::new();
-        let mut results: HashMap<u64, Option<ReadyResult>> = HashMap::new();
+        let mut results: Vec<(u64, Option<ReadyResult>)> = vec![];
         for region_id in ids {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 match peer.handle_raft_ready(&self.trans, &mut apply_wb) {
@@ -571,7 +571,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         panic!("{} handle raft ready err: {:?}", peer.tag, e);
                     }
                     Ok(ready) => {
-                        results.insert(region_id, ready);
+                        results.push((region_id, ready));
                     }
                 }
             }
@@ -585,7 +585,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         // handle results
-        for (region_id, result) in results.drain() {
+        for (region_id, result) in results.drain(..) {
             if let Some(ready_result) = result {
                 if let Err(e) = self.on_ready_result(region_id, ready_result) {
                     error!("[region {}] handle raft ready result err: {:?}",

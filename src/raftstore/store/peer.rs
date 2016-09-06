@@ -771,20 +771,21 @@ impl Peer {
         let mut term: u64 = 0;
         for entry in committed_entries {
             // Entries with different term need apply in different on_raft_ready round.
-            // We call callback before write apply_wb to engine for performance reason, think
-            // about the situation as follows:
-            //   raft group A is consist of node 1, 2, 3 and we assume node 1 is leader at beginning,
-            //   when node 1 apply a put command on key "a", if we response to client(call cb), it is
-            //   means that if client raise a get "a" command after the response of put command, we
-            //   must return the value we just putted, if there is no leader transfer happened, we can
-            //   guarantee this, because the get command is run after store.on_raft_ready finished
-            //   regardless of if it is local read or not, but if there is a leader transfer happened,
-            //   we will resend a get command to the new leader(assume node 2), the get command will
-            //   use raft read if the applied index's term is not equal read command's term, and the
-            //   front put command and the get command may apply in the same store.on_raft_ready round
-            //   in node 2, and the get command may get nothing cause we have not write the value to
-            //   engine, so we need apply the put command and get command in different on_raft_ready
-            //   round.
+            // We call callback before write apply_wb to engine for performance reason,
+            // think about the situation as follows:
+            //   raft group A consists of node 1, 2, 3 and we assume node 1 is leader at
+            //   beginning, when node 1 apply a put command on key "a", if we response to
+            //   client(call cb), it means that if client raise a get "a" command after the
+            //   response of put command, we must return the value we just putted, if there
+            //   is no leader transfer happened, we can guarantee this, because the get
+            //   command is run after store.on_raft_ready finished regardless of if it is
+            //   local read or not, but if there is a leader transfer happened, we will resend
+            //   a get command to the new leader(assume node 2), the get command will use raft
+            //   read if the applied index's term is not equal read command's term, and the
+            //   front put command and the get command may apply in the same store.on_raft_ready
+            //   round in node 2, and the get command may get nothing cause we have not write
+            //   the value to engine, so we need to apply the put command and get command in
+            //   different on_raft_ready round.
             if term == 0 {
                 term = entry.get_term();
             } else if entry.get_term() != term {
