@@ -273,7 +273,7 @@ pub fn eval_arith<F>(left: Datum, right: Datum, f: F) -> Result<Datum>
     let left = try!(left.into_arith());
     let right = try!(right.into_arith());
 
-    let (left, right) = Datum::coerce(left, right);
+    let (left, right) = try!(Datum::coerce(left, right));
     if left == Datum::Null || right == Datum::Null {
         return Ok(Datum::Null);
     }
@@ -513,6 +513,8 @@ mod test {
         (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Plus), Datum::F64(1.0)),
         (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Plus),
          Datum::Dec("2.3".parse().unwrap())),
+        (bin_expr(Datum::F64(2.0), Datum::Dec("3.3".parse().unwrap()), ExprType::Plus),
+         Datum::F64(5.3)),
         (bin_expr(Datum::I64(2), Datum::Dur(Duration::parse(b"21 00:02", 0).unwrap()),
          ExprType::Plus), Datum::Dec(Decimal::from_f64(5040202.000000).unwrap())),
         (bin_expr(Datum::I64(2), Datum::Dur(Duration::parse(b"21 00:02:00.321", 2).unwrap()),

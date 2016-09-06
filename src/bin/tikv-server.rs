@@ -21,7 +21,6 @@ extern crate log;
 extern crate rocksdb;
 extern crate mio;
 extern crate toml;
-extern crate cadence;
 extern crate libc;
 extern crate fs2;
 
@@ -30,18 +29,15 @@ use std::fs::{self, File};
 use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
-use std::net::UdpSocket;
 use std::time::Duration;
 
 use getopts::{Options, Matches};
 use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use fs2::FileExt;
-use cadence::{StatsdClient, NopMetricSink};
 
-use tikv::storage::{Storage, TEMP_DIR, DEFAULT_CFS};
+use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
-use tikv::util::metric::{self, BufferedUdpMetricSink};
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage, Msg};
@@ -138,39 +134,6 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
         util::init_log(logger::get_level_by_string(&level)).unwrap();
     } else {
         file_log::init(&level, &log_file_path).unwrap();
-    }
-}
-
-fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>) {
-    let host = get_string_value("",
-                                "metric.addr",
-                                matches,
-                                config,
-                                Some("".to_owned()),
-                                |v| v.as_str().map(|s| s.to_owned()));
-    let mut prefix = get_string_value("",
-                                      "metric.prefix",
-                                      matches,
-                                      config,
-                                      Some("tikv".to_owned()),
-                                      |v| v.as_str().map(|s| s.to_owned()));
-    if let Some(node_id) = node_id {
-        prefix.push_str(&format!(".{}", node_id));
-    }
-
-    if !host.is_empty() {
-        // We only need a unique UDP bind, so 0.0.0.0:0 is enough.
-        let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
-        let sink = BufferedUdpMetricSink::from(&*host, socket, Duration::from_millis(100)).unwrap();
-        let client = StatsdClient::from_sink(&prefix, sink);
-        if let Err(r) = metric::set_metric_client(Box::new(client)) {
-            error!("{}", r);
-        }
-    } else {
-        let client = StatsdClient::from_sink(&prefix, NopMetricSink);
-        if let Err(r) = metric::set_metric_client(Box::new(client)) {
-            error!("{}", r);
-        }
     }
 }
 
@@ -586,11 +549,9 @@ fn build_raftkv(matches: &Matches,
                         get_rocksdb_binlog_cf_option()];
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine = Arc::new(rocksdb_util::new_engine_opt(opts,
-                                                       db_path.to_str().unwrap(),
-                                                       DEFAULT_CFS,
-                                                       cfs_opts)
-        .unwrap());
+    let engine =
+        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), ALL_CFS, cfs_opts)
+            .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
     let mut node = Node::new(&mut event_loop, cfg, pd_client);
@@ -672,8 +633,6 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     let (mut node, mut store, raft_router, snap_mgr) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
-    initial_metric(matches, config, Some(node.id()));
-
     info!("start storage");
     if let Err(e) = store.start(&cfg.storage) {
         panic!("failed to start storage, error = {:?}", e);
@@ -750,6 +709,15 @@ fn main() {
     // Print version information.
     util::print_tikv_info();
 
+    // Run prometheus client.
+    let report_interval = get_integer_value("",
+                                            "metric.report-interval",
+                                            &matches,
+                                            &config,
+                                            Some(300_000),
+                                            |v| v.as_integer());
+    util::run_prometheus(Duration::from_millis(report_interval as u64));
+
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,
@@ -779,7 +747,6 @@ fn main() {
     cfg.storage.path = get_store_path(&matches, &config);
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
-            initial_metric(&matches, &config, None);
             run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {

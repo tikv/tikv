@@ -42,6 +42,8 @@ use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
 use util::get_disk_stat;
+use util::rocksdb;
+use storage::ALL_CFS;
 use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
@@ -53,6 +55,7 @@ use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
+use super::metrics::*;
 
 type Key = Vec<u8>;
 
@@ -1031,8 +1034,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        metric_gauge!("raftstore.leader_count", leader_count);
-        metric_gauge!("raftstore.region_count", self.region_peers.len() as u64);
+        STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["leader"]).set(leader_count as f64);
+        STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["region"])
+            .set(self.region_peers.len() as f64);
 
         self.register_pd_heartbeat_tick(event_loop);
     }
@@ -1061,9 +1065,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_capacity(capacity);
 
         // Must get the total SST file size here.
-        let used_size = self.engine
-            .get_property_int(ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
-            .expect("rocksdb is too old, missing total-sst-files-size property");
+        let mut used_size: u64 = 0;
+        for cf in ALL_CFS {
+            let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+            let cf_used_size = self.engine
+                .get_property_int_cf(*handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
+                .expect("rocksdb is too old, missing total-sst-files-size property");
+
+            used_size += cf_used_size;
+        }
 
         let mut available = if capacity > used_size {
             capacity - used_size
@@ -1086,12 +1096,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
 
-        metric_gauge!("raftstore.capacity", capacity);
-        metric_gauge!("raftstore.available", available);
-        metric_gauge!("raftstore.snapshot.sending",
-                      snap_stats.sending_count as u64);
-        metric_gauge!("raftstore.snapshot.receiving",
-                      snap_stats.receiving_count as u64);
+        STORE_SIZE_GAUGE_VEC.with_label_values(&["capacity"]).set(capacity as f64);
+        STORE_SIZE_GAUGE_VEC.with_label_values(&["available"]).set(available as f64);
+
+        STORE_SNAPSHOT_TAFFIC_GAUGE_VEC.with_label_values(&["sending"])
+            .set(snap_stats.sending_count as f64);
+        STORE_SNAPSHOT_TAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
+            .set(snap_stats.sending_count as f64);
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("failed to notify pd: {}", e);

@@ -11,13 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod snap;
-mod split_check;
-mod compact;
-mod pd;
-mod metrics;
+use prometheus::{Histogram, exponential_buckets};
 
-pub use self::snap::{Task as SnapTask, Runner as SnapRunner, MsgSender};
-pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
-pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
-pub use self::pd::{Task as PdTask, Runner as PdRunner};
+lazy_static! {
+    pub static ref PD_SEND_MSG_HISTOGRAM: Histogram =
+        register_histogram!(
+            histogram_opts!{
+                "tikv_pd_msg_send_duration_seconds",
+                "Bucketed histogram of PD message send duration",
+                [ exponential_buckets(0.0005, 10.0, 7).unwrap() ]
+            }
+        ).unwrap();
+}

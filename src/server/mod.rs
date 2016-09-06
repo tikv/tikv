@@ -21,12 +21,13 @@ use mio::Token;
 use kvproto::msgpb::{self, MessageType};
 use util::codec::rpc;
 use kvproto::eraftpb::MessageType as RaftMessageType;
+mod conn;
+mod kv;
+mod metrics;
 
 pub mod config;
 pub mod errors;
 pub mod server;
-mod conn;
-mod kv;
 pub mod coprocessor;
 pub mod transport;
 pub mod node;

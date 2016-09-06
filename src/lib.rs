@@ -45,7 +45,6 @@ extern crate time;
 extern crate tipb;
 extern crate threadpool;
 extern crate num;
-extern crate cadence;
 extern crate libc;
 extern crate crc;
 extern crate rustc_serialize;
@@ -53,6 +52,10 @@ extern crate rustc_serialize;
 extern crate nix;
 extern crate alloc;
 extern crate chrono;
+#[macro_use]
+extern crate prometheus;
+#[macro_use]
+extern crate lazy_static;
 
 #[macro_use]
 pub mod util;

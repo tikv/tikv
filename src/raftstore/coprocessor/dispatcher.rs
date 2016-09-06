@@ -139,7 +139,7 @@ mod test {
     use std::sync::*;
     use std::fmt::Debug;
     use protobuf::RepeatedField;
-    use storage::DEFAULT_CFS;
+    use storage::ALL_CFS;
 
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response, RaftCmdRequest,
@@ -215,8 +215,7 @@ mod test {
     }
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), DEFAULT_CFS)
-            .unwrap());
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
         PeerStorage::new(engine,
                          &Region::new(),
                          worker::dummy_scheduler(),

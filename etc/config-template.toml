@@ -30,11 +30,8 @@ end-point-concurrency = 8
 # capacity = 0 # 0 is unlimited.
 
 [metric]
-# if host applied then `udp` will be activated.
-# remote statsd server address.
-addr = ""
-# metric prefix.
-prefix = "tikv"
+# prometheus client report interval, set 0s to disable prometheus.
+report-interval = "5m"
 
 [raftstore]
 # notify capacity, 40960 is suitable for about 7000 regions.
