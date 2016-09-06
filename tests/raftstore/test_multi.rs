@@ -371,6 +371,16 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // guarantee peer 1 is leader
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
+    // if 2 is unreachable, leader will not send MsgAppend to 2, and will send MsgAppend
+    // with committed information to 2 later, and 2 will apply the entry regardless of we
+    // add an filter.
+    let (k_warm, v_warm) = (b"k_warm", b"v_warm");
+    cluster.must_put(k_warm, v_warm);
+
+    must_get_equal(&cluster.get_engine(1), k_warm, v_warm);
+    must_get_equal(&cluster.get_engine(2), k_warm, v_warm);
+    must_get_equal(&cluster.get_engine(3), k_warm, v_warm);
+
     // hack: first MsgAppend will append log, second MsgAppend will set commit index,
     // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
     cluster.add_send_filter(IsolateRegionStore::new(1, 2)
