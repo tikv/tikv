@@ -218,6 +218,9 @@ impl Storage for MemStorage {
         if idx < offset {
             return Err(Error::Store(StorageError::Compacted));
         }
+        if idx - offset >= core.entries.len() as u64 {
+            return Err(Error::Store(StorageError::Unavailable));
+        }
         Ok(core.entries[(idx - offset) as usize].get_term())
     }
 
