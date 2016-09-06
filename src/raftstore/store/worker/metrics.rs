@@ -18,7 +18,7 @@ lazy_static! {
         register_counter_vec!(
             "tikv_raftstore_pd_request_sent_total",
             "Total number of pd client request sent.",
-            &["type", "stauts"]
+            &["type", "status"]
         ).unwrap();
 
     pub static ref PD_HEARTBEAT_COUNTER_VEC: CounterVec =
@@ -32,7 +32,7 @@ lazy_static! {
         register_counter_vec!(
             "tikv_raftstore_snapshot_total",
             "Total number of raftstore snapshot processed.",
-            &["type", "stauts"]
+            &["type", "status"]
         ).unwrap();
 
     pub static ref CHECK_SPILT_COUNTER_VEC: CounterVec =
