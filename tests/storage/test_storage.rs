@@ -404,6 +404,8 @@ fn test_txn_store_resolve_lock() {
 #[test]
 fn test_txn_store_gc() {
     let store = new_assertion_storage();
+    store.gc_ok(1);
+
     store.put_ok(b"k", b"v1", 5, 10);
     store.put_ok(b"k", b"v2", 15, 20);
     store.gc_ok(30);
