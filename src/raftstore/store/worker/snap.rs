@@ -124,7 +124,7 @@ impl<T: MsgSender> Runner<T> {
     }
 
     fn apply_snap(&self, region_id: u64) -> Result<(), Error> {
-        info!("begin apply snap data for {}", region_id);
+        info!("[region {}] begin apply snap data", region_id);
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState = match box_try!(self.db.get_msg(&region_key)) {
             Some(state) => state,
@@ -188,7 +188,9 @@ impl<T: MsgSender> Runner<T> {
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));
         snap_file.delete();
-        info!("apply new data takes {:?}", timer.elapsed());
+        info!("[region {}] apply new data takes {:?}",
+              region_id,
+              timer.elapsed());
         Ok(())
     }
 

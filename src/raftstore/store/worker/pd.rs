@@ -107,9 +107,9 @@ impl<T: PdClient> Runner<T> {
             request: req,
             callback: cb,
         }) {
-            error!("send {:?} request to region {} err {:?}",
-                   cmd_type,
+            error!("[region {}] send {:?} request err {:?}",
                    region_id,
+                   cmd_type,
                    e);
         }
     }
@@ -119,17 +119,18 @@ impl<T: PdClient> Runner<T> {
 
         match self.pd_client.ask_split(region.clone()) {
             Ok(mut resp) => {
-                PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "success"]).inc();
-
-                info!("try to split with new region id {} for region {:?}",
+                info!("[region {}] try to split with new region id {} for region {:?}",
+                      region.get_id(),
                       resp.get_new_region_id(),
                       region);
+                PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "success"]).inc();
+
                 let req = new_split_region_request(split_key,
                                                    resp.get_new_region_id(),
                                                    resp.take_new_peer_ids());
                 self.send_admin_request(region, peer, req);
             }
-            Err(e) => debug!("failed to ask split: {:?}", e),
+            Err(e) => debug!("[region {}] failed to ask split: {:?}", region.get_id(), e),
         }
     }
 
@@ -148,7 +149,8 @@ impl<T: PdClient> Runner<T> {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]);
 
                     let mut change_peer = resp.take_change_peer();
-                    info!("try to change peer {:?} {:?} for region {:?}",
+                    info!("[region {}] try to change peer {:?} {:?} for region {:?}",
+                          region.get_id(),
                           change_peer.get_change_type(),
                           change_peer.get_peer(),
                           region);
@@ -159,14 +161,19 @@ impl<T: PdClient> Runner<T> {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["transfer leader"]);
 
                     let mut transfer_leader = resp.take_transfer_leader();
-                    info!("try to transfer leader from {:?} to {:?}",
+                    info!("[region {}] try to transfer leader from {:?} to {:?}",
+                          region.get_id(),
                           peer,
                           transfer_leader.get_peer());
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     self.send_admin_request(region, peer, req)
                 }
             }
-            Err(e) => debug!("failed to send heartbeat: {:?}", e),
+            Err(e) => {
+                debug!("[region {}] failed to send heartbeat: {:?}",
+                       region.get_id(),
+                       e)
+            }
         }
     }
 
