@@ -31,7 +31,7 @@ use raft::Storage;
 use protobuf::{self, RepeatedField};
 use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType, ConfChange,
                        ConfChangeType, ConfState};
-use raft::raft::{Config, Raft, SoftState, INVALID_ID};
+use raft::raft::{Config, Raft, SoftState, ReadState, INVALID_ID};
 use raft::Status;
 
 #[derive(Debug, Default)]
@@ -86,6 +86,12 @@ pub struct Ready {
     // HardState will be equal to empty state if there is no update.
     pub hs: Option<HardState>,
 
+    // Readstate can be used for node to serve linearizable read requests locally
+    // when its applied index is greater than the index in ReadState.
+    // Note that the read_state will be returned when raft receives MsgReadIndex.
+    // The returned is only valid for the request that requested to read.
+    pub read_state: Option<ReadState>,
+
     // Entries specifies entries to be saved to stable storage BEFORE
     // Messages are sent.
     pub entries: Vec<Entry>,
@@ -123,6 +129,9 @@ impl Ready {
         }
         if raft.raft_log.get_unstable().snapshot.is_some() {
             rd.snapshot = raft.raft_log.get_unstable().snapshot.clone().unwrap();
+        }
+        if raft.read_state.index != 0 {
+            rd.read_state = Some(raft.read_state.clone());
         }
         rd
     }

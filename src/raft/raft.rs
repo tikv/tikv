@@ -142,7 +142,7 @@ pub struct SoftState {
 // this state from ready. It's also caller's duty to differentiate if this
 // state is what it requests through request_ctx, e.g. given a unique id as
 // request_ctx.
-#[derive(Default, PartialEq, Debug)]
+#[derive(Default, PartialEq, Debug, Clone)]
 pub struct ReadState {
     pub index: u64,
     pub request_ctx: Vec<u8>,
