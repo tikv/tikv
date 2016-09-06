@@ -716,7 +716,7 @@ fn main() {
                                             "metric.report-interval",
                                             &matches,
                                             &config,
-                                            Some(1_000),
+                                            Some(300_000),
                                             |v| v.as_integer());
     util::run_prometheus(Duration::from_millis(report_interval as u64));
 
