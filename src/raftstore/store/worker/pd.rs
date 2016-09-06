@@ -105,9 +105,9 @@ impl<T: PdClient> Runner<T> {
             request: req,
             callback: cb,
         }) {
-            error!("send {:?} request to region {} err {:?}",
-                   cmd_type,
+            error!("[region {}] send {:?} request err {:?}",
                    region_id,
+                   cmd_type,
                    e);
         }
     }
@@ -117,7 +117,8 @@ impl<T: PdClient> Runner<T> {
         match self.pd_client.ask_split(region.clone()) {
             Ok(mut resp) => {
                 metric_incr!("pd.ask_split.success");
-                info!("try to split with new region id {} for region {:?}",
+                info!("[region {}] try to split with new region id {} for region {:?}",
+                      region.get_id(),
                       resp.get_new_region_id(),
                       region);
                 let req = new_split_region_request(split_key,
@@ -125,7 +126,7 @@ impl<T: PdClient> Runner<T> {
                                                    resp.take_new_peer_ids());
                 self.send_admin_request(region, peer, req);
             }
-            Err(e) => debug!("failed to ask split: {:?}", e),
+            Err(e) => debug!("[region {}] failed to ask split: {:?}", region.get_id(), e),
         }
     }
 
@@ -141,7 +142,8 @@ impl<T: PdClient> Runner<T> {
                 if resp.has_change_peer() {
                     metric_incr!("pd.heartbeat.change_peer");
                     let mut change_peer = resp.take_change_peer();
-                    info!("try to change peer {:?} {:?} for region {:?}",
+                    info!("[region {}] try to change peer {:?} {:?} for region {:?}",
+                          region.get_id(),
                           change_peer.get_change_type(),
                           change_peer.get_peer(),
                           region);
@@ -151,14 +153,19 @@ impl<T: PdClient> Runner<T> {
                 } else if resp.has_transfer_leader() {
                     metric_incr!("pd.heartbeat.transfer_leader");
                     let mut transfer_leader = resp.take_transfer_leader();
-                    info!("try to transfer leader from {:?} to {:?}",
+                    info!("[region {}] try to transfer leader from {:?} to {:?}",
+                          region.get_id(),
                           peer,
                           transfer_leader.get_peer());
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     self.send_admin_request(region, peer, req)
                 }
             }
-            Err(e) => debug!("failed to send heartbeat: {:?}", e),
+            Err(e) => {
+                debug!("[region {}] failed to send heartbeat: {:?}",
+                       region.get_id(),
+                       e)
+            }
         }
     }
 
