@@ -534,7 +534,7 @@ impl PeerStorage {
         }
     }
 
-    pub fn cancle_applying_snap(&mut self) {
+    pub fn cancel_applying_snap(&mut self) {
         if let SnapState::Applying(ref abort) = *self.snap_state.borrow() {
             abort.store(true, Ordering::Relaxed);
         }

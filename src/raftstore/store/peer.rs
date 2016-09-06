@@ -418,7 +418,7 @@ impl Peer {
                 if !self.get_store().is_canceling_snap() {
                     warn!("receiving a new snap {:?} when applying the old one, try to abort.",
                           ready.snapshot);
-                    self.mut_store().cancle_applying_snap();
+                    self.mut_store().cancel_applying_snap();
                 }
                 return Ok(None);
             }
