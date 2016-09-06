@@ -51,7 +51,7 @@ use super::latch::{Latches, Lock};
 const REPORT_STATISTIC_INTERVAL: u64 = 60000; // 60 seconds
 
 // TODO: make it configurable.
-const GC_BATCH_SIZE: usize = 512;
+pub const GC_BATCH_SIZE: usize = 512;
 
 pub enum Tick {
     ReportStatistic,
