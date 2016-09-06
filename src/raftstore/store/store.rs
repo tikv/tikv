@@ -563,7 +563,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let pending_count = ids.len();
 
         let mut apply_wb = WriteBatch::new();
-        let mut results: Vec<(u64, Option<ReadyResult>)> = vec![];
+        let mut results: Vec<(u64, Option<ReadyResult>)> = Vec::with_capacity(ids.len());
         for region_id in ids {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 match peer.handle_raft_ready(&self.trans, &mut apply_wb) {
