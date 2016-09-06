@@ -62,6 +62,7 @@ git = "https://github.com/pingcap/kvproto"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
+branch = "coocood/update-select-response"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio.git"
