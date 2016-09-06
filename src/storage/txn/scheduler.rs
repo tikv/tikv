@@ -51,7 +51,7 @@ use super::latch::{Latches, Lock};
 const REPORT_STATISTIC_INTERVAL: u64 = 60000; // 60 seconds
 
 // TODO: make it configurable.
-const GC_BATCH_SIZE: usize = 512;
+pub const GC_BATCH_SIZE: usize = 512;
 
 pub enum Tick {
     ReportStatistic,
@@ -328,15 +328,20 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
-                    Ok(Command::Gc {
-                        ctx: ctx.clone(),
-                        safe_point: safe_point,
-                        scan_key: next_start,
-                        keys: keys,
-                    })
+                    if keys.len() == 0 {
+                        Ok(None)
+                    } else {
+                        Ok(Some(Command::Gc {
+                            ctx: ctx.clone(),
+                            safe_point: safe_point,
+                            scan_key: next_start,
+                            keys: keys,
+                        }))
+                    }
                 });
             match res {
-                Ok(cmd) => ProcessResult::NextCommand { cmd: cmd },
+                Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
+                Ok(None) => ProcessResult::Res,
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
