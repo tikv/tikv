@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ascii;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io::{self, Write};
@@ -159,6 +160,8 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
 }
 
 /// A function to escape a byte array to a readable ascii string.
+/// escape rules follow golang/protobuf.
+/// https://github.com/golang/protobuf/blob/master/proto/text.go#L578
 ///
 /// # Examples
 ///
@@ -174,18 +177,16 @@ pub fn escape(data: &[u8]) -> String {
     let mut escaped = Vec::with_capacity(data.len() * 4);
     for &c in data {
         match c {
-            b'\n' => escaped.extend_from_slice(br"\n"),
-            b'\r' => escaped.extend_from_slice(br"\r"),
-            b'\t' => escaped.extend_from_slice(br"\t"),
             b'"' => escaped.extend_from_slice(b"\\\""),
             b'\\' => escaped.extend_from_slice(br"\\"),
-            b'\x20'...b'\x7e' => escaped.push(c),
-            _ => {
+            b'\'' => escaped.push(b'\''),
+            _ if c > b'\x7e' => {
                 escaped.push(b'\\');
                 escaped.push(b'0' + (c >> 6));
                 escaped.push(b'0' + ((c >> 3) & 7));
                 escaped.push(b'0' + (c & 7));
             }
+            _ => escaped.extend(ascii::escape_default(c)),
         }
     }
     escaped.shrink_to_fit();
