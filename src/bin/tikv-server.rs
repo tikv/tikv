@@ -23,6 +23,9 @@ extern crate mio;
 extern crate toml;
 extern crate libc;
 extern crate fs2;
+extern crate simple_signal;
+extern crate prometheus;
+
 
 use std::env;
 use std::fs::{self, File};
@@ -46,6 +49,8 @@ use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
+use prometheus::{Encoder, TextEncoder};
+use simple_signal::{Signals, Signal};
 
 const ROCKSDB_DSN: &'static str = "rocksdb";
 const RAFTKV_DSN: &'static str = "raftkv";
@@ -650,7 +655,22 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     node.stop().unwrap();
 }
 
+fn reg_metrics_sig_handler() {
+    // sometimes we need to dump the metrics one by one, and compare those metrics.
+    // to flush metrics to stdout immediately, run:
+    // pkill --signal INT tikv-server
+    // or kill --s INT pid
+    Signals::set_handler(&[Signal::Int], move |_signals| {
+        let mut buffer = vec![];
+        let metric_familys = prometheus::gather();
+        let encoder = TextEncoder::new();
+        encoder.encode(&metric_familys, &mut buffer).unwrap();
+        info!("{}", String::from_utf8(buffer.clone()).unwrap());
+    });
+}
+
 fn main() {
+    reg_metrics_sig_handler();
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
     let mut opts = Options::new();
