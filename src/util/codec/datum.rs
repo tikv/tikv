@@ -409,11 +409,11 @@ impl Datum {
     pub fn checked_div(self, d: Datum) -> Result<Datum> {
         match (self, d) {
             (Datum::F64(f), d) => {
-                match d.coerce_to_f64() {
-                    Datum::F64(0f64) => Ok(Datum::Null),
-                    Datum::F64(f2) => Ok(Datum::F64(f / f2)),
-                    d => Err(box_err!("failed to convert {} to f64", d)),
+                let f2 = try!(d.into_f64());
+                if f2 == 0f64 {
+                    return Ok(Datum::Null);
                 }
+                Ok(Datum::F64(f / f2))
             }
             (a, b) => {
                 let a = try!(a.into_dec());
