@@ -372,8 +372,8 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // if peer 2 is unreachable, leader will not send MsgAppend to peer 2, and will send MsgAppend
-    // with committed information to peer 2 later, and peer 2 will apply the entry regardless of we
-    // add an filter.
+    // with committed information to peer 2 after network recovered, and peer 2 will apply the
+    // entry regardless of we add an filter.
     let (k_warm, v_warm) = (b"k_warm", b"v_warm");
     cluster.must_put(k_warm, v_warm);
 
