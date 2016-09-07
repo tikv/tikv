@@ -146,7 +146,7 @@ impl<T: PdClient> Runner<T> {
                 PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
 
                 if resp.has_change_peer() {
-                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]);
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]).inc();
 
                     let mut change_peer = resp.take_change_peer();
                     info!("[region {}] try to change peer {:?} {:?} for region {:?}",
@@ -158,7 +158,7 @@ impl<T: PdClient> Runner<T> {
                                                       change_peer.take_peer());
                     self.send_admin_request(region, peer, req);
                 } else if resp.has_transfer_leader() {
-                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["transfer leader"]);
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["transfer leader"]).inc();
 
                     let mut transfer_leader = resp.take_transfer_leader();
                     info!("[region {}] try to transfer leader from {:?} to {:?}",
