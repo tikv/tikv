@@ -24,7 +24,7 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
+use kvproto::eraftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -324,8 +324,8 @@ impl Peer {
         self.raft_group.mut_store()
     }
 
-    pub fn is_applying_snap(&self) -> bool {
-        self.get_store().is_applying_snap()
+    pub fn is_applying(&self) -> bool {
+        self.get_store().is_applying()
     }
 
     fn send_ready_metric(&self, ready: &Ready) {
@@ -414,9 +414,16 @@ impl Peer {
         let mut ready = self.raft_group.ready();
         let is_applying = self.get_store().is_applying_snap();
         if is_applying {
-            // skip apply and snapshot
+            if !raft::is_empty_snap(&ready.snapshot) {
+                if !self.get_store().is_canceling_snap() {
+                    warn!("receiving a new snap {:?} when applying the old one, try to abort.",
+                          ready.snapshot);
+                    self.mut_store().cancel_applying_snap();
+                }
+                return Ok(None);
+            }
+            // skip apply
             ready.committed_entries = vec![];
-            ready.snapshot = RaftSnapshot::new();
         }
 
         let t = SlowTimer::new();
