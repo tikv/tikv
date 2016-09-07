@@ -46,8 +46,8 @@ pub enum SnapshotStatus {
     Failure,
 }
 
-fn is_local_msg(m: &Message) -> bool {
-    match m.get_msg_type() {
+pub fn is_local_msg(t: MessageType) -> bool {
+    match t {
         MessageType::MsgHup |
         MessageType::MsgBeat |
         MessageType::MsgUnreachable |
@@ -57,8 +57,8 @@ fn is_local_msg(m: &Message) -> bool {
     }
 }
 
-fn is_response_msg(m: &Message) -> bool {
-    match m.get_msg_type() {
+fn is_response_msg(t: MessageType) -> bool {
+    match t {
         MessageType::MsgAppendResponse |
         MessageType::MsgRequestVoteResponse |
         MessageType::MsgHeartbeatResponse |
@@ -268,10 +268,10 @@ impl<T: Storage> RawNode<T> {
     // Step advances the state machine using the given message.
     pub fn step(&mut self, m: Message) -> Result<()> {
         // ignore unexpected local messages receiving over network
-        if is_local_msg(&m) {
+        if is_local_msg(m.get_msg_type()) {
             return Err(Error::StepLocalMsg);
         }
-        if self.raft.prs.contains_key(&m.get_from()) || !is_response_msg(&m) {
+        if self.raft.prs.contains_key(&m.get_from()) || !is_response_msg(m.get_msg_type()) {
             return self.raft.step(m);
         }
         Err(Error::StepPeerNotFound)
