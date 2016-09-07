@@ -31,7 +31,7 @@ use raft::Storage;
 use protobuf::{self, RepeatedField};
 use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType, ConfChange,
                        ConfChangeType, ConfState};
-use raft::raft::{Config, Raft, SoftState, ReadState, INVALID_ID};
+use raft::raft::{Config, Raft, SoftState, ReadState, INVALID_ID, INVALID_INDEX};
 use raft::Status;
 
 #[derive(Debug, Default)]
@@ -219,6 +219,9 @@ impl<T: Storage> RawNode<T> {
         if rd.snapshot != Snapshot::new() {
             self.raft.raft_log.stable_snap_to(rd.snapshot.get_metadata().get_index());
         }
+        if let Some(_) = rd.read_state {
+            self.raft.read_state = Default::default();
+        }
     }
 
     // Tick advances the internal logical clock by a single tick.
@@ -307,6 +310,9 @@ impl<T: Storage> RawNode<T> {
         }
         if !raft.msgs.is_empty() || raft.raft_log.unstable_entries().is_some() ||
            raft.raft_log.has_next_entries() {
+            return true;
+        }
+        if raft.read_state.index != INVALID_INDEX {
             return true;
         }
         false

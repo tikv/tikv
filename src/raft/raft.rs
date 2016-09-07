@@ -52,7 +52,10 @@ impl Default for StateRole {
     }
 }
 
+// A constant represents invalid id of raft.
 pub const INVALID_ID: u64 = 0;
+// A constant represents invalid index of raft log.
+pub const INVALID_INDEX: u64 = 0;
 
 /// Config contains the parameters to start a raft.
 #[derive(Default)]
@@ -1057,15 +1060,14 @@ impl<T: Storage> Raft<T> {
                 return;
             }
             MessageType::MsgReadIndex => {
-                let mut read_index = 0;
+                let mut read_index = INVALID_INDEX;
                 if self.check_quorum {
                     read_index = self.raft_log.committed
                 }
-                if m.get_from() == 0 || m.get_from() == self.id {
+                if m.get_from() == INVALID_ID || m.get_from() == self.id {
                     // from local member
                     self.read_state.index = read_index;
-                    self.read_state.request_ctx =
-                        m.mut_entries().as_mut_slice().first_mut().unwrap().take_data()
+                    self.read_state.request_ctx = m.take_entries()[0].take_data()
                 } else {
                     let mut to_send = Message::new();
                     to_send.set_to(m.get_from());
@@ -1221,8 +1223,7 @@ impl<T: Storage> Raft<T> {
                     return;
                 }
                 self.read_state.index = m.get_index();
-                self.read_state.request_ctx =
-                    m.mut_entries().as_mut_slice().first_mut().unwrap().take_data();
+                self.read_state.request_ctx = m.take_entries()[0].take_data();
             }
             _ => {}
         }
