@@ -246,7 +246,7 @@ fn test_is_local_msg() {
         (MessageType::MsgReadIndex, false),
         (MessageType::MsgReadIndexResp, false),
     ];
-    for &(msg_type, result) in tests.iter() {
+    for &(msg_type, result) in &tests {
         assert_eq!(raw_node::is_local_msg(msg_type), result);
     }
 }
