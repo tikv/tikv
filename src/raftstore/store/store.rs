@@ -564,11 +564,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
-        let mut apply_wb = WriteBatch::new();
+        let mut wb = WriteBatch::new();
         let mut results: Vec<(u64, Option<ReadyResult>)> = Vec::with_capacity(ids.len());
         for region_id in ids {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans, &mut apply_wb) {
+                match peer.handle_raft_ready(&self.trans, &mut wb) {
                     Err(e) => {
                         panic!("{} handle raft ready err: {:?}", peer.tag, e);
                     }
@@ -579,9 +579,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        // write apply write batch, write must success
-        if !apply_wb.is_empty() {
-            if let Err(e) = self.engine.write(apply_wb) {
+        // Batch write to engine, the write must success or panic.
+        if !wb.is_empty() {
+            if let Err(e) = self.engine.write(wb) {
                 panic!("write apply write batch failed, err {:?}", e);
             }
         }
