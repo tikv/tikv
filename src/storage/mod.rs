@@ -138,58 +138,77 @@ pub enum Command {
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Command::Get { ref key, start_ts, .. } => {
-                write!(f, "kv::command::get {} @ {}", key, start_ts)
+            Command::Get { ref ctx, ref key, start_ts, .. } => {
+                write!(f, "kv::command::get {} @ {} | {:?}", key, start_ts, ctx)
             }
-            Command::BatchGet { ref keys, start_ts, .. } => {
-                write!(f, "kv::command_batch_get {} @ {}", keys.len(), start_ts)
-            }
-            Command::Scan { ref start_key, limit, start_ts, .. } => {
+            Command::BatchGet { ref ctx, ref keys, start_ts, .. } => {
                 write!(f,
-                       "kv::command::scan {}({}) @ {}",
+                       "kv::command_batch_get {} @ {} | {:?}",
+                       keys.len(),
+                       start_ts,
+                       ctx)
+            }
+            Command::Scan { ref ctx, ref start_key, limit, start_ts, .. } => {
+                write!(f,
+                       "kv::command::scan {}({}) @ {} | {:?}",
                        start_key,
                        limit,
-                       start_ts)
+                       start_ts,
+                       ctx)
             }
-            Command::Prewrite { ref mutations, start_ts, .. } => {
+            Command::Prewrite { ref ctx, ref mutations, start_ts, .. } => {
                 write!(f,
-                       "kv::command::prewrite mutations({}) @ {}",
+                       "kv::command::prewrite mutations({}) @ {} | {:?}",
                        mutations.len(),
-                       start_ts)
+                       start_ts,
+                       ctx)
             }
-            Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
+            Command::Commit { ref ctx, ref keys, lock_ts, commit_ts, .. } => {
                 write!(f,
-                       "kv::command::commit {} {} -> {}",
+                       "kv::command::commit {} {} -> {} | {:?}",
                        keys.len(),
                        lock_ts,
-                       commit_ts)
+                       commit_ts,
+                       ctx)
             }
-            Command::CommitThenGet { ref key, lock_ts, commit_ts, get_ts, .. } => {
+            Command::CommitThenGet { ref ctx, ref key, lock_ts, commit_ts, get_ts, .. } => {
                 write!(f,
-                       "kv::command::commit_then_get {:?} {} -> {} @ {}",
+                       "kv::command::commit_then_get {:?} {} -> {} @ {} | {:?}",
                        key,
                        lock_ts,
                        commit_ts,
-                       get_ts)
+                       get_ts,
+                       ctx)
             }
-            Command::Cleanup { ref key, start_ts, .. } => {
-                write!(f, "kv::command::cleanup {} @ {}", key, start_ts)
+            Command::Cleanup { ref ctx, ref key, start_ts, .. } => {
+                write!(f, "kv::command::cleanup {} @ {} | {:?}", key, start_ts, ctx)
             }
-            Command::Rollback { ref keys, start_ts, .. } => {
+            Command::Rollback { ref ctx, ref keys, start_ts, .. } => {
                 write!(f,
-                       "kv::command::rollback keys({}) @ {}",
+                       "kv::command::rollback keys({}) @ {} | {:?}",
                        keys.len(),
-                       start_ts)
+                       start_ts,
+                       ctx)
             }
-            Command::RollbackThenGet { ref key, lock_ts, .. } => {
-                write!(f, "kv::rollback_then_get {} @ {}", key, lock_ts)
+            Command::RollbackThenGet { ref ctx, ref key, lock_ts, .. } => {
+                write!(f, "kv::rollback_then_get {} @ {} | {:?}", key, lock_ts, ctx)
             }
-            Command::ScanLock { max_ts, .. } => write!(f, "kv::scan_lock {}", max_ts),
-            Command::ResolveLock { start_ts, commit_ts, .. } => {
-                write!(f, "kv::resolve_txn {} -> {:?}", start_ts, commit_ts)
+            Command::ScanLock { ref ctx, max_ts, .. } => {
+                write!(f, "kv::scan_lock {} | {:?}", max_ts, ctx)
             }
-            Command::Gc { safe_point, ref scan_key, .. } => {
-                write!(f, "kv::command::gc scan {:?} @{}", scan_key, safe_point)
+            Command::ResolveLock { ref ctx, start_ts, commit_ts, .. } => {
+                write!(f,
+                       "kv::resolve_txn {} -> {:?} | {:?}",
+                       start_ts,
+                       commit_ts,
+                       ctx)
+            }
+            Command::Gc { ref ctx, safe_point, ref scan_key, .. } => {
+                write!(f,
+                       "kv::command::gc scan {:?} @ {} | {:?}",
+                       scan_key,
+                       safe_point,
+                       ctx)
             }
         }
     }
