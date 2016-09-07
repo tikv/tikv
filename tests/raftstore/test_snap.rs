@@ -13,6 +13,8 @@
 
 
 use std::fs;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
@@ -27,6 +29,8 @@ use super::util::*;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
+    cluster.cfg.raft_store.raft_log_gc_limit = 15;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = 10;
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
@@ -54,6 +58,25 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let key = format!("{:01024}", 0);
     let value = format!("{:01024}", 0);
     must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
+    let stale = Arc::new(AtomicBool::new(false));
+    cluster.sim.wl().add_recv_filter(3, box FilterLeadingDuplicatedSnap::new(stale.clone()));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    let mut i = 2 * 1024;
+    loop {
+        i += 1;
+        let key = format!("{:01024}", i);
+        let value = format!("{:01024}", i);
+        cluster.must_put(key.as_bytes(), value.as_bytes());
+        if stale.load(Ordering::Relaxed) {
+            break;
+        }
+        if i > 10 * 1024 {
+            panic!("snapshot should be sent twice after {} kvs", i);
+        }
+    }
+    cluster.must_put(b"k3", b"v3");
+    let engine_3 = cluster.get_engine(3);
+    must_get_equal(&engine_3, b"k3", b"v3");
 
     // TODO: add more tests.
 }
