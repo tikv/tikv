@@ -774,7 +774,7 @@ impl Peer {
             // We call callback before write apply_wb to engine for performance reason,
             // think about the situation as follows:
             //   raft group A consists of node 1, 2, 3 and we assume node 1 is leader at
-            //   beginning, when node 1 apply a put command on key "a", if we response to
+            //   beginning, when node 1 applied a put command on key "a", if we response to
             //   client(call cb), it means that if client raises a get "a" command after the
             //   response of put command, we must return the value we just put, if there
             //   is no leader transfer happened, we can guarantee this, because the get
@@ -783,7 +783,7 @@ impl Peer {
             //   a get command to the new leader(assume node 2), the get command will use raft
             //   read if the applied index's term is not equal to the read command's term,
             //   and the front put command and the get command may be applied in the same
-            //   on_raft_ready round in node 2, and the get command may get nothing cause
+            //   on_raft_ready round in node 2, and the get command may get nothing because
             //   we have not written the value to engine, so we need to apply the put command
             //   and get command in different on_raft_ready round.
             if term == 0 {
