@@ -16,6 +16,7 @@ use std::fmt::{self, Formatter, Display};
 use std::error;
 use std::fs::File;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use std::str;
 
@@ -27,16 +28,21 @@ use util::codec::bytes::CompactBytesDecoder;
 use util::{escape, HandyRwLock, rocksdb};
 use util::transport::SendCh;
 use raftstore;
-use raftstore::store::engine::{Mutable, Snapshot, delete_all_in_range};
+use raftstore::store::engine::{Mutable, Snapshot, Iterable};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
 use storage::CF_RAFT;
+
+use super::metrics::*;
 
 const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 
 /// Snapshot related task.
 pub enum Task {
     Gen { region_id: u64 },
-    Apply { region_id: u64 },
+    Apply {
+        region_id: u64,
+        abort: Arc<AtomicBool>,
+    },
 }
 
 impl Display for Task {
@@ -51,6 +57,10 @@ impl Display for Task {
 quick_error! {
     #[derive(Debug)]
     enum Error {
+        Abort {
+            description("abort")
+            display("abort")
+        }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -68,6 +78,58 @@ impl MsgSender for SendCh<Msg> {
     fn send(&self, msg: Msg) -> raftstore::Result<()> {
         SendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
     }
+}
+
+#[inline]
+fn check_abort(abort: &AtomicBool) -> Result<(), Error> {
+    if abort.load(Ordering::Relaxed) {
+        return Err(Error::Abort);
+    }
+    Ok(())
+}
+
+fn delete_all_in_range(db: &DB,
+                       start_key: &[u8],
+                       end_key: &[u8],
+                       abort: &AtomicBool)
+                       -> Result<(), Error> {
+    for cf in db.cf_names() {
+        try!(check_abort(&abort));
+        let handle = box_try!(rocksdb::get_cf_handle(db, cf));
+        box_try!(db.delete_file_in_range_cf(*handle, start_key, end_key));
+
+        let mut it = box_try!(db.new_iterator_cf(cf));
+
+        let mut wb = WriteBatch::new();
+        try!(check_abort(&abort));
+        it.seek(start_key.into());
+        while it.valid() {
+            {
+                let key = it.key();
+                if key >= end_key {
+                    break;
+                }
+
+                box_try!(wb.delete_cf(*handle, key));
+                if wb.count() == BATCH_SIZE {
+                    // Can't use write_without_wal here.
+                    // Otherwise it may cause dirty data when applying snapshot.
+                    box_try!(db.write(wb));
+                    wb = WriteBatch::new();
+                }
+            };
+            try!(check_abort(&abort));
+            if !it.next() {
+                break;
+            }
+        }
+
+        if wb.count() > 0 {
+            box_try!(db.write(wb));
+        }
+    }
+
+    Ok(())
 }
 
 // TODO: seperate snap generate and apply to different thread.
@@ -102,8 +164,10 @@ impl<T: MsgSender> Runner<T> {
     }
 
     fn handle_gen(&self, region_id: u64) {
-        metric_incr!("raftstore.generate_snap");
-        let ts = Instant::now();
+        SNAP_COUNTER_VEC.with_label_values(&["generate", "all"]).inc();
+        let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
+        let timer = gen_histogram.start_timer();
+
         if let Err(e) = self.generate_snap(region_id) {
             if let Err(e) = self.ch.send(Msg::SnapGenRes {
                 region_id: region_id,
@@ -114,12 +178,14 @@ impl<T: MsgSender> Runner<T> {
             error!("failed to generate snap: {:?}!!!", e);
             return;
         }
-        metric_incr!("raftstore.generate_snap.success");
-        metric_time!("raftstore.generate_snap.cost", ts.elapsed());
+
+        SNAP_COUNTER_VEC.with_label_values(&["generate", "success"]).inc();
+        timer.observe_duration();
     }
 
-    fn apply_snap(&self, region_id: u64) -> Result<(), Error> {
-        info!("begin apply snap data for {}", region_id);
+    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicBool>) -> Result<(), Error> {
+        info!("[region {}] begin apply snap data", region_id);
+        try!(check_abort(&abort));
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState = match box_try!(self.db.get_msg(&region_key)) {
             Some(state) => state,
@@ -129,7 +195,7 @@ impl<T: MsgSender> Runner<T> {
         // clear up origin data.
         let start_key = keys::enc_start_key(region_state.get_region());
         let end_key = keys::enc_end_key(region_state.get_region());
-        box_try!(delete_all_in_range(self.db.as_ref(), &start_key, &end_key));
+        box_try!(delete_all_in_range(self.db.as_ref(), &start_key, &end_key, &abort));
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match box_try!(self.db.get_msg_cf(CF_RAFT, &state_key)) {
@@ -147,6 +213,7 @@ impl<T: MsgSender> Runner<T> {
         if !snap_file.exists() {
             return Err(box_err!("missing snap file {}", snap_file.path().display()));
         }
+        try!(check_abort(&abort));
         box_try!(snap_file.validate());
         let mut reader = box_try!(File::open(snap_file.path()));
 
@@ -154,6 +221,7 @@ impl<T: MsgSender> Runner<T> {
         // Write the snapshot into the region.
         loop {
             // TODO: avoid too many allocation
+            try!(check_abort(&abort));
             let cf = box_try!(reader.decode_compact_bytes());
             if cf.is_empty() {
                 break;
@@ -163,6 +231,7 @@ impl<T: MsgSender> Runner<T> {
             let mut wb = WriteBatch::new();
             let mut batch_size = 0;
             loop {
+                try!(check_abort(&abort));
                 let key = box_try!(reader.decode_compact_bytes());
                 if key.is_empty() {
                     box_try!(self.db.write(wb));
@@ -183,29 +252,47 @@ impl<T: MsgSender> Runner<T> {
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));
         snap_file.delete();
-        info!("apply new data takes {:?}", timer.elapsed());
+        info!("[region {}] apply new data takes {:?}",
+              region_id,
+              timer.elapsed());
         Ok(())
     }
 
-    fn handle_apply(&self, region_id: u64) {
-        metric_incr!("raftstore.apply_snap");
-        let ts = Instant::now();
-        let mut is_success = true;
-        if let Err(e) = self.apply_snap(region_id) {
-            is_success = false;
-            error!("failed to apply snap: {:?}!!!", e);
-        }
+    fn handle_apply(&self, region_id: u64, abort: Arc<AtomicBool>) {
+        SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
+        let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
+        let timer = apply_histogram.start_timer();
+
+        let (is_success, is_aborted) = match self.apply_snap(region_id, abort) {
+            Ok(()) => (true, false),
+            Err(Error::Abort) => {
+                warn!("applying snapshot for region {} is aborted.", region_id);
+                (false, true)
+            }
+            Err(e) => {
+                error!("failed to apply snap: {:?}!!!", e);
+                (false, false)
+            }
+        };
         let msg = Msg::SnapApplyRes {
             region_id: region_id,
             is_success: is_success,
+            is_aborted: is_aborted,
         };
         if let Err(e) = self.ch.send(msg) {
             panic!("failed to notify snap apply result of {}: {:?}",
                    region_id,
                    e);
         }
-        metric_incr!("raftstore.apply_snap.success");
-        metric_time!("raftstore.apply_snap.cost", ts.elapsed());
+
+        if is_aborted {
+            SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"]).inc();
+        } else if is_success {
+            SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
+        } else {
+            SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
+        }
+        timer.observe_duration();
     }
 }
 
@@ -213,7 +300,7 @@ impl<T: MsgSender> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Gen { region_id } => self.handle_gen(region_id),
-            Task::Apply { region_id } => self.handle_apply(region_id),
+            Task::Apply { region_id, abort } => self.handle_apply(region_id, abort),
         }
     }
 }

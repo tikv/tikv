@@ -23,6 +23,7 @@ use std::time::{Instant, Duration};
 use threadpool::ThreadPool;
 use mio::Token;
 
+use super::metrics::*;
 use super::{Result, ConnData, Msg};
 use super::transport::RaftStoreRouter;
 use raftstore::store::{SnapFile, SnapManager, SnapKey, SnapEntry};
@@ -79,6 +80,8 @@ impl Display for Task {
 fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     assert!(data.is_snapshot());
     let timer = Instant::now();
+    let send_timer = SEND_SNAP_HISTOGRAM.start_timer();
+
     let snap = data.msg.get_raft().get_message().get_snapshot();
     let key = try!(SnapKey::from_snap(&snap));
     mgr.wl().register(key.clone(), SnapEntry::Sending);
@@ -109,7 +112,8 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
                meta.len(),
                timer.elapsed());
     }
-    metric_time!("server.send_snap", timer.elapsed());
+
+    send_timer.observe_duration();
     res
 }
 

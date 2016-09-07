@@ -419,3 +419,65 @@ impl Filter<StoreMsg> for PauseFirstSnap {
         }
     }
 }
+
+/// Filter leading duplicated Snap.
+///
+/// It will pause the first snapshot and fiter out all the snapshot that
+/// are same as first snapshot msg until the first different snapshot shows up.
+pub struct FilterLeadingDuplicatedSnap {
+    dropped: AtomicBool,
+    stale: Arc<AtomicBool>,
+    last_msg: Mutex<Option<RaftMessage>>,
+}
+
+impl FilterLeadingDuplicatedSnap {
+    pub fn new(stale: Arc<AtomicBool>) -> FilterLeadingDuplicatedSnap {
+        FilterLeadingDuplicatedSnap {
+            dropped: AtomicBool::new(false),
+            stale: stale,
+            last_msg: Mutex::new(None),
+        }
+    }
+}
+
+impl Filter<StoreMsg> for FilterLeadingDuplicatedSnap {
+    fn before(&self, msgs: &mut Vec<StoreMsg>) {
+        let mut last_msg = self.last_msg.lock().unwrap();
+        let mut stale = self.stale.load(Ordering::Relaxed);
+        if stale {
+            if last_msg.is_some() {
+                msgs.push(StoreMsg::RaftMessage(last_msg.take().unwrap()));
+            }
+            return;
+        }
+        let mut to_send = vec![];
+        for m in msgs.drain(..) {
+            match m {
+                StoreMsg::RaftMessage(msg) => {
+                    if msg.get_message().get_msg_type() == MessageType::MsgSnapshot && !stale {
+                        if last_msg.as_ref().map_or(false, |l| l != &msg) {
+                            to_send.push(StoreMsg::RaftMessage(last_msg.take().unwrap()));
+                            *last_msg = Some(msg);
+                            stale = true;
+                        } else {
+                            self.dropped.store(true, Ordering::Relaxed);
+                            *last_msg = Some(msg);
+                        }
+                    } else {
+                        to_send.push(StoreMsg::RaftMessage(msg));
+                    }
+                }
+                _ => {
+                    to_send.push(m);
+                }
+            }
+        }
+        self.stale.store(stale, Ordering::Relaxed);
+        msgs.extend(to_send);
+    }
+
+    fn after(&self, res: Result<()>) -> Result<()> {
+        let dropped = self.dropped.compare_and_swap(true, false, Ordering::Relaxed);
+        if res.is_err() && dropped { Ok(()) } else { res }
+    }
+}

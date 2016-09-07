@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::option::Option;
@@ -54,6 +55,7 @@ use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
+use super::metrics::*;
 
 type Key = Vec<u8>;
 
@@ -173,8 +175,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("region {:?} is applying in store {}",
                       local_state.get_region(),
                       self.store_id());
-                peer.mut_store().set_snap_state(SnapState::Applying);
-                box_try!(self.snap_worker.schedule(SnapTask::Apply { region_id: region_id }));
+                let abort = Arc::new(AtomicBool::new(false));
+                peer.mut_store().set_snap_state(SnapState::Applying(abort.clone()));
+                box_try!(self.snap_worker.schedule(SnapTask::Apply {
+                    region_id: region_id,
+                    abort: abort,
+                }));
             }
 
             self.region_ranges.insert(enc_end_key(region), region_id);
@@ -284,7 +290,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
-            if !peer.get_store().is_applying_snap() {
+            if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
                 self.pending_raft_groups.insert(region_id);
             }
@@ -302,7 +308,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             has_peer = true;
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
-                if p.is_applying_snap() {
+                if p.is_applying() {
                     // to remove the applying peer, we should find a reliable way to abort
                     // the apply process.
                     warn!("Stale peer {} is applying snapshot, will destroy next time.",
@@ -545,7 +551,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         for region in &self.pending_regions {
             if enc_start_key(region) < enc_end_key(&snap_region) &&
-               enc_end_key(region) > enc_start_key(&snap_region) {
+               enc_end_key(region) > enc_start_key(&snap_region) &&
+               // Same region can overlap, we will apply the latest version of snapshot.
+               region.get_id() != snap_region.get_id() {
                 warn!("pending region overlapped {:?}, {:?}", region, snap_region);
                 return Ok(true);
             }
@@ -609,7 +617,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Can we destroy it in another thread later?
         let mut p = self.region_peers.remove(&region_id).unwrap();
         // We can't destroy a peer which is applying snapshot.
-        assert!(!p.is_applying_snap());
+        assert!(!p.is_applying());
 
         let is_initialized = p.is_initialized();
         let end_key = enc_end_key(p.region());
@@ -1037,8 +1045,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        metric_gauge!("raftstore.leader_count", leader_count);
-        metric_gauge!("raftstore.region_count", self.region_peers.len() as u64);
+        STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["leader"]).set(leader_count as f64);
+        STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["region"])
+            .set(self.region_peers.len() as f64);
 
         self.register_pd_heartbeat_tick(event_loop);
     }
@@ -1098,12 +1107,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
 
-        metric_gauge!("raftstore.capacity", capacity);
-        metric_gauge!("raftstore.available", available);
-        metric_gauge!("raftstore.snapshot.sending",
-                      snap_stats.sending_count as u64);
-        metric_gauge!("raftstore.snapshot.receiving",
-                      snap_stats.receiving_count as u64);
+        STORE_SIZE_GAUGE_VEC.with_label_values(&["capacity"]).set(capacity as f64);
+        STORE_SIZE_GAUGE_VEC.with_label_values(&["available"]).set(available as f64);
+
+        STORE_SNAPSHOT_TAFFIC_GAUGE_VEC.with_label_values(&["sending"])
+            .set(snap_stats.sending_count as f64);
+        STORE_SNAPSHOT_TAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
+            .set(snap_stats.sending_count as f64);
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("failed to notify pd: {}", e);
@@ -1140,7 +1150,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         let s = peer.get_store();
                         compacted_idx = s.truncated_index();
                         compacted_term = s.truncated_term();
-                        is_applying_snap = s.is_applying_snap();
+                        is_applying_snap = s.is_applying();
                     }
                 };
             }
@@ -1240,16 +1250,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool) {
+    fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool, is_aborted: bool) {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         let mut storage = peer.mut_store();
-        assert!(storage.is_snap_state(SnapState::Applying),
+        assert!(storage.is_applying_snap(),
                 "snap state should not change during applying");
-        if !is_success {
-            // TODO: cleanup region and treat it as tombstone.
-            panic!("applying snapshot to {} failed", region_id);
+        if is_success {
+            storage.set_snap_state(SnapState::Relax);
+        } else {
+            if !is_aborted {
+                // TODO: cleanup region and treat it as tombstone.
+                panic!("applying snapshot to {} failed", region_id);
+            }
+            self.pending_raft_groups.insert(region_id);
+            storage.set_snap_state(SnapState::ApplyAborted);
         }
-        storage.set_snap_state(SnapState::Relax);
     }
 }
 
@@ -1313,8 +1328,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_unreachable(region_id, to_peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
-            Msg::SnapApplyRes { region_id, is_success } => {
-                self.on_snap_apply_res(region_id, is_success);
+            Msg::SnapApplyRes { region_id, is_success, is_aborted } => {
+                self.on_snap_apply_res(region_id, is_success, is_aborted);
             }
             Msg::SnapGenRes { region_id, snap } => {
                 self.on_snap_gen_res(region_id, snap);

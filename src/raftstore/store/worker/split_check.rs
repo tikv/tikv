@@ -13,7 +13,6 @@
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
-use std::time::Instant;
 
 use rocksdb::DB;
 
@@ -23,6 +22,8 @@ use raftstore::store::engine::Iterable;
 use util::escape;
 use util::transport::SendCh;
 use util::worker::Runnable;
+
+use super::metrics::*;
 
 /// Split checking task.
 pub struct Task {
@@ -69,13 +70,16 @@ impl Runner {
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
-        debug!("executing task {} {}",
+        debug!("[region {}] executing task {} {}",
+               task.region_id,
                escape(&task.start_key),
                escape(&task.end_key));
-        metric_incr!("raftstore.check_split");
+        CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
+
         let mut size = 0;
         let mut split_key = vec![];
-        let ts = Instant::now();
+        let timer = CHECK_SPILT_HISTOGRAM.start_timer();
+
         let res = task.engine.scan(&task.start_key,
                                    &task.end_key,
                                    &mut |k, v| {
@@ -92,18 +96,26 @@ impl Runnable<Task> for Runner {
                    e);
             return;
         }
-        metric_time!("raftstore.check_split.cost", ts.elapsed());
+
+        timer.observe_duration();
 
         if size < self.region_max_size {
-            metric_incr!("raftstore.check_split.ignore");
-            debug!("no need to send for {} < {}", size, self.region_max_size);
+            debug!("[region {}] no need to send for {} < {}",
+                   task.region_id,
+                   size,
+                   self.region_max_size);
+
+            CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
             return;
         }
         let res = self.ch.send(new_split_check_result(task.region_id, task.epoch, split_key));
         if let Err(e) = res {
-            warn!("failed to send check result of {}: {}", task.region_id, e);
+            warn!("[region {}] failed to send check result, err {:?}",
+                  task.region_id,
+                  e);
         }
-        metric_incr!("raftstore.check_split.success");
+
+        CHECK_SPILT_COUNTER_VEC.with_label_values(&["success"]).inc();
     }
 }
 

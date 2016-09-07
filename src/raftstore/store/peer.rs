@@ -24,7 +24,7 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, Snapshot as RaftSnapshot};
+use kvproto::eraftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -46,6 +46,7 @@ use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
+use super::metrics::*;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -323,26 +324,31 @@ impl Peer {
         self.raft_group.mut_store()
     }
 
-    pub fn is_applying_snap(&self) -> bool {
-        self.get_store().is_applying_snap()
+    pub fn is_applying(&self) -> bool {
+        self.get_store().is_applying()
     }
 
     fn send_ready_metric(&self, ready: &Ready) {
         if !ready.messages.is_empty() {
-            metric_count!("raftstore.send_raft_message", ready.messages.len() as i64);
+            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["message"])
+                .inc_by(ready.messages.len() as f64)
+                .unwrap();
         }
 
         if !ready.committed_entries.is_empty() {
-            metric_count!("raftstore.handle_raft_commit_entries",
-                          ready.committed_entries.len() as i64);
+            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["commit"])
+                .inc_by(ready.committed_entries.len() as f64)
+                .unwrap();
         }
 
         if !ready.entries.is_empty() {
-            metric_count!("raftstore.append_entries", ready.entries.len() as i64);
+            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["append"])
+                .inc_by(ready.committed_entries.len() as f64)
+                .unwrap();
         }
 
         if !raft::is_empty_snap(&ready.snapshot) {
-            metric_incr!("raftstore.apply_snapshot");
+            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"]).inc();
         }
     }
 
@@ -411,9 +417,16 @@ impl Peer {
         let mut ready = self.raft_group.ready();
         let is_applying = self.get_store().is_applying_snap();
         if is_applying {
-            // skip apply and snapshot
+            if !raft::is_empty_snap(&ready.snapshot) {
+                if !self.get_store().is_canceling_snap() {
+                    warn!("receiving a new snap {:?} when applying the old one, try to abort.",
+                          ready.snapshot);
+                    self.mut_store().cancel_applying_snap();
+                }
+                return Ok(None);
+            }
+            // skip apply
             ready.committed_entries = vec![];
-            ready.snapshot = RaftSnapshot::new();
         }
 
         let t = SlowTimer::new();
@@ -472,7 +485,7 @@ impl Peer {
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
-        metric_incr!("raftstore.propose");
+        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all", "all"]).inc();
 
         if let Err(e) = self.check_epoch(&req) {
             cmd_resp::bind_error(&mut err_resp, e);
@@ -539,7 +552,8 @@ impl Peer {
             self.pending_cmds.append_normal(cmd);
         }
 
-        metric_incr!("raftstore.propose.success");
+        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all", "success"]).inc();
+
         Ok(())
     }
 
@@ -590,7 +604,7 @@ impl Peer {
     }
 
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
-        metric_incr!("raftstore.transfer_leader");
+        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["transfer_leader", "all"]).inc();
 
         info!("{} transfer leader to {:?}", self.tag, peer);
 
@@ -616,7 +630,8 @@ impl Peer {
     }
 
     fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
-        metric_incr!("raftstore.propose.conf_change");
+        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["conf_change", "all"]).inc();
+
         let data = try!(cmd.write_to_bytes());
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
 
@@ -875,7 +890,7 @@ impl Peer {
         };
 
         self.raft_group.apply_conf_change(conf_change);
-        metric_incr!("raftstore.handle_raft_entry_conf_change");
+        PEER_ENTRY_CONF_CHANGE_COUNTER.inc();
 
         res
     }
@@ -1105,7 +1120,8 @@ impl Peer {
 
         match change_type {
             eraftpb::ConfChangeType::AddNode => {
-                metric_incr!("raftstore.add_peer");
+                PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["add_peer", "all"]).inc();
+
                 if exists {
                     error!("{} can't add duplicated peer {:?} to region {:?}",
                            self.tag,
@@ -1122,7 +1138,7 @@ impl Peer {
                 self.peer_heartbeats.insert(peer.get_id(), Instant::now());
                 region.mut_peers().push(peer.clone());
 
-                metric_incr!("raftstore.add_peer.success");
+                PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["add_peer", "success"]).inc();
 
                 warn!("{} add peer {:?} to region {:?}",
                       self.tag,
@@ -1130,7 +1146,8 @@ impl Peer {
                       self.region());
             }
             eraftpb::ConfChangeType::RemoveNode => {
-                metric_incr!("raftstore.remove_peer");
+                PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["remove_peer", "all"]).inc();
+
                 if !exists {
                     error!("{} remove missing peer {:?} from region {:?}",
                            self.tag,
@@ -1150,7 +1167,8 @@ impl Peer {
                 self.peer_heartbeats.remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
-                metric_incr!("raftstore.remove_peer.success");
+                PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["remove_peer", "success"]).inc();
+
                 warn!("{} remove {} from region:{:?}",
                       self.tag,
                       peer.get_id(),
@@ -1177,7 +1195,8 @@ impl Peer {
                   ctx: &ExecContext,
                   req: &AdminRequest)
                   -> Result<(AdminResponse, Option<ExecResult>)> {
-        metric_incr!("raftstore.split");
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
+
         let split_req = req.get_split();
         if !split_req.has_split_key() {
             return Err(box_err!("missing split key"));
@@ -1237,6 +1256,8 @@ impl Peer {
 
         self.size_diff_hint = 0;
 
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
+
         Ok((resp,
             Some(ExecResult::SplitRegion {
             left: region,
@@ -1248,7 +1269,8 @@ impl Peer {
                         ctx: &mut ExecContext,
                         req: &AdminRequest)
                         -> Result<(AdminResponse, Option<ExecResult>)> {
-        metric_incr!("raftstore.compact");
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
+
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::new();
 
@@ -1262,6 +1284,9 @@ impl Peer {
         }
 
         try!(self.get_store().compact(&mut ctx.apply_state, compact_index));
+
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
+
         Ok((resp,
             Some(ExecResult::CompactLog { state: ctx.apply_state.get_truncated_state().clone() })))
     }
