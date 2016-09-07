@@ -416,15 +416,14 @@ fn test_txn_store_gc_multiple_keys(n: usize) {
     let store = new_assertion_storage();
     for i in 0..n {
         let key = format!("k{}", i);
-        store.put_ok(&key.as_bytes(), b"value", 5, 10);
+        store.put_ok(key.as_bytes(), b"value", 5, 10);
     }
     store.gc_ok(20);
 }
 
 #[test]
 fn test_txn_store_gc2() {
-    for &i in [0, 1, GC_BATCH_SIZE - 1, GC_BATCH_SIZE, GC_BATCH_SIZE + 1, GC_BATCH_SIZE * 2]
-        .iter() {
+    for &i in &[0, 1, GC_BATCH_SIZE - 1, GC_BATCH_SIZE, GC_BATCH_SIZE + 1, GC_BATCH_SIZE * 2] {
         test_txn_store_gc_multiple_keys(i);
     }
 }

@@ -328,7 +328,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
-                    if keys.len() == 0 {
+                    if keys.is_empty() {
                         Ok(None)
                     } else {
                         Ok(Some(Command::Gc {
