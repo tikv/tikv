@@ -2135,8 +2135,9 @@ fn test_leader_transfer_to_uptodate_node() {
 
 // test_leader_transfer_to_uptodate_node_from_follower verifies transferring should succeed
 // if the transferee has the most up-to-date log entries when transfer starts.
-// Not like test_leader_transfer_to_uptodate_node, in this tast case every leader transfer
-// message is sent to the follower first.
+// Not like test_leader_transfer_to_uptodate_node, where the leader transfer message
+// is sent to the leader, in this test case every leader transfer message is sent
+// to the follower.
 #[test]
 fn test_leader_transfer_to_uptodate_node_from_follower() {
     let mut nt = Network::new(vec![None, None, None]);
