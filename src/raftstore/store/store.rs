@@ -50,7 +50,7 @@ use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult};
+use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState};
 use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -294,7 +294,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
 
-                let mut to_be_destroyed = false;
                 // If this peer detects the leader is missing for a long long time,
                 // it should consider itself as a stale peer which is removed from
                 // the original cluster.
@@ -316,16 +315,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // In this case, peer B would notice that the leader is missing for a long time,
                 // and it's an uninitialized peer without any data. It would destroy itself as
                 // a stale peer directly.
-                let duration = peer.since_leader_missing();
-                if duration >= self.cfg.max_leader_missing_duration {
-                    info!("{} detects leader missing for a long time. To check with pd whether \
-                           it's still valid",
-                          peer.tag);
-                    // reset the leader missing time to avoid sending the same tasks to
-                    // PD worker continuously on everytime raft ready event triggers
-                    peer.reset_leader_missing_time();
-                    if peer.is_initialized() {
+                match peer.check_stale_state(self.cfg.max_leader_missing_duration) {
+                    StaleState::Valid => {
+                        self.pending_raft_groups.insert(region_id);
+                    }
+                    StaleState::ToValidate => {
                         // for peer B in case 1 above
+                        info!("{} detects leader missing for a long time. To check with pd \
+                               whether it's still valid",
+                              peer.tag);
                         let task = PdTask::ValidatePeer {
                             peer: peer.peer.clone(),
                             region: peer.region().clone(),
@@ -333,18 +331,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         if let Err(e) = self.pd_worker.schedule(task) {
                             error!("{} failed to notify pd: {}", peer.tag, e)
                         }
-                    } else {
+
+                        self.pending_raft_groups.insert(region_id);
+                    }
+                    StaleState::Stale => {
+                        info!("{} detects peer stale, to be destroyed", peer.tag);
                         // for peer B in case 2 above
                         // directly destroy peer without data since it doesn't have region range,
                         // so that it doesn't have the correct region start_key to
                         // validate peer with PD
-                        to_be_destroyed = true;
                         region_to_be_destroyed.push((region_id, peer.peer.clone()));
                     }
-                }
-
-                if !to_be_destroyed {
-                    self.pending_raft_groups.insert(region_id);
                 }
             }
         }

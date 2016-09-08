@@ -50,6 +50,14 @@ use super::metrics::*;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
+/// The return states of checking whether a peer is stale.
+#[derive(Debug)]
+pub enum StaleState {
+    Valid,
+    ToValidate,
+    Stale,
+}
+
 pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
@@ -407,6 +415,40 @@ impl Peer {
         down_peers
     }
 
+    pub fn check_stale_state(&mut self, d: Duration) -> StaleState {
+        // update leader_missing_time according to current state
+        if self.leader_id() == raft::INVALID_ID {
+            if self.leader_missing_time.is_none() {
+                self.leader_missing_time = Some(Instant::now())
+            }
+        } else if self.is_initialized() {
+            // When a peer is not initialized, it has no data at storage.
+            // Even if a leader sends heartbeats to it, we consider it as
+            // in the `leader missing` state. That is because if it's isolated from the leader
+            // before it could successfully receive snapshot from the leader and
+            // apply that snapshot, no raft ready event will be triggered,
+            // so that we could not detect the leader is missing for it at here.
+            self.leader_missing_time = None
+        }
+
+        // check whether current peer is stale
+        let duration = match self.leader_missing_time {
+            Some(t) => t.elapsed(),
+            None => Duration::new(0, 0),
+        };
+        if duration >= d {
+            // reset the leader missing time to avoid sending the same tasks to
+            // PD worker continuously on leader missing timeout
+            self.leader_missing_time = None;
+            if self.is_initialized() {
+                return StaleState::ToValidate;
+            } else {
+                return StaleState::Stale;
+            }
+        }
+        StaleState::Valid
+    }
+
     pub fn handle_raft_ready<T: Transport>(&mut self, trans: &T) -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
             return Ok(None);
@@ -462,38 +504,11 @@ impl Peer {
             ready.hs.take();
         }
 
-        if let Some(ref soft_state) = ready.ss {
-            if soft_state.leader_id == raft::INVALID_ID {
-                if self.leader_missing_time.is_none() {
-                    self.leader_missing_time = Some(Instant::now())
-                }
-            } else if self.is_initialized() {
-                // When a peer is not initialized, it has no data at storage.
-                // Even if a leader sends heartbeats to it, we consider it as
-                // in the `leader missing` state. That is because if it's isolated from the leader
-                // before it could successfully receive snapshot from the leader and
-                // apply that snapshot, no raft ready event will be triggered,
-                // so that we could not detect the leader is missing for it at here.
-                self.leader_missing_time = None
-            }
-        }
-
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
             apply_snap_result: apply_result,
             exec_results: exec_results,
         }))
-    }
-
-    pub fn since_leader_missing(&self) -> Duration {
-        match self.leader_missing_time {
-            Some(t) => t.elapsed(),
-            None => Duration::new(0, 0),
-        }
-    }
-
-    pub fn reset_leader_missing_time(&mut self) {
-        self.leader_missing_time = None;
     }
 
     pub fn propose(&mut self,
