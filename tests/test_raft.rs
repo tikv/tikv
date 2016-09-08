@@ -2123,16 +2123,13 @@ fn test_leader_transfer_to_uptodate_node() {
     let lead_id = nt.peers[&1].leader_id;
     assert_eq!(lead_id, 1);
 
-    // Transfer leadership to 2.
+    // Transfer leadership to peer 2.
     nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
-
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
 
-    // After some log replication, transfer leadership back to 1.
+    // After some log replication, transfer leadership back to peer 1.
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
-
     nt.send(vec![new_message(1, 2, MessageType::MsgTransferLeader, 0)]);
-
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
@@ -2148,16 +2145,13 @@ fn test_leader_transfer_to_uptodate_node_from_follower() {
     let lead_id = nt.peers[&1].leader_id;
     assert_eq!(lead_id, 1);
 
-    // transfer leadership to 2.
+    // transfer leadership to peer 2.
     nt.send(vec![new_message(2, 2, MessageType::MsgTransferLeader, 0)]);
-
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
 
-    // After some log replication, transfer leadership back to 1.
+    // After some log replication, transfer leadership back to peer 1.
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
-
     nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
-
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 
