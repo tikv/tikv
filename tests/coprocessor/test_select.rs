@@ -58,29 +58,26 @@ impl Iterator for ChunkSpliter {
 
     fn next(&mut self) -> Option<Row> {
         loop {
-            match self.chunk.first() {
-                None => return None,
-                Some(chk) => {
-                    match chk.get_rows_meta().get(self.idx) {
-                        Some(meta) => {
-                            let data_len = meta.get_length();
-                            let row = Row {
-                                handle: meta.get_handle(),
-                                data: chk.get_rows_data()[self.readed..self.readed +
-                                                                       data_len as usize]
-                                    .to_vec(),
-                            };
-                            self.readed += data_len as usize;
-                            self.idx += 1;
-                            return Some(row);
-                        }
-                        None => assert_eq!(self.readed, chk.get_rows_data().len()),
-                    }
-                }
+            if self.chunk.is_empty() {
+                return None;
             }
-            self.idx = 0;
-            self.readed = 0;
-            self.chunk.swap_remove(0);
+            if self.idx == self.chunk[0].get_rows_meta().len() {
+                assert_eq!(self.readed, self.chunk[0].get_rows_data().len());
+                self.idx = 0;
+                self.readed = 0;
+                self.chunk.swap_remove(0);
+                continue;
+            }
+            let metas = self.chunk[0].get_rows_meta();
+            let data = self.chunk[0].get_rows_data();
+            let data_len = metas[self.idx].get_length();
+            let row = Row {
+                handle: metas[self.idx].get_handle(),
+                data: data[self.readed..self.readed + data_len as usize].to_vec(),
+            };
+            self.readed += data_len as usize;
+            self.idx += 1;
+            return Some(row);
         }
     }
 }
