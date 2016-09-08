@@ -1557,7 +1557,7 @@ fn test_read_index_with_check_quorum() {
         (3, 10, 41, "ctx4"),
     ];
 
-    for &(id, proposals, expected_index, expected_ctx) in tests.iter() {
+    for (id, proposals, expected_index, expected_ctx) in tests {
         for _ in 0..proposals {
             nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
         }
@@ -1565,7 +1565,7 @@ fn test_read_index_with_check_quorum() {
         let e = new_entry(0, 0, Some(expected_ctx));
         nt.send(vec![new_message_with_entries(id, id, MessageType::MsgReadIndex, vec![e])]);
 
-        let ref read_state = nt.peers.get(&id).unwrap().read_state;
+        let read_state = &nt.peers.get(&id).unwrap().read_state;
         assert_eq!(read_state.index, expected_index);
         assert_eq!(read_state.request_ctx, expected_ctx.as_bytes().to_vec());
     }
@@ -1585,7 +1585,7 @@ fn test_read_index_without_check_quorum() {
     let e = new_entry(0, 0, Some(ctx));
     nt.send(vec![new_message_with_entries(2, 2, MessageType::MsgReadIndex, vec![e])]);
 
-    let ref read_state = nt.peers.get(&2).unwrap().read_state;
+    let read_state = &nt.peers.get(&2).unwrap().read_state;
     assert_eq!(read_state.index, 0);
     assert_eq!(read_state.request_ctx, ctx.as_bytes().to_vec());
 }
