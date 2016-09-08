@@ -406,7 +406,7 @@ impl Peer {
 
     pub fn handle_raft_ready<T: Transport>(&mut self,
                                            trans: &T,
-                                           mut apply_wb: &mut WriteBatch)
+                                           wb: &mut WriteBatch)
                                            -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
             return Ok(None);
@@ -446,7 +446,7 @@ impl Peer {
         }
 
         let (apply_index, exec_results) =
-            try!(self.handle_raft_commit_entries(&ready.committed_entries, &mut apply_wb));
+            try!(self.handle_raft_commit_entries(&ready.committed_entries, wb));
 
         slow_log!(t,
                   "{} handle ready, entries {}, committed entries {}, messages \
