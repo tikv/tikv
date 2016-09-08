@@ -857,7 +857,7 @@ impl Peer {
         }
 
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data));
-        // no need to return error here.
+        // there is no need to return error here.
         self.process_raft_cmd(index, term, cmd, wb).or_else(|e| {
             error!("{} process raft command at index {} err: {:?}",
                    self.tag,
@@ -869,14 +869,14 @@ impl Peer {
 
     fn handle_raft_entry_conf_change(&mut self,
                                      entry: &eraftpb::Entry,
-                                     mut apply_wb: &mut WriteBatch)
+                                     wb: &mut WriteBatch)
                                      -> Result<Option<ExecResult>> {
         let index = entry.get_index();
         let term = entry.get_term();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<eraftpb::ConfChange>(entry.get_data()));
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
-        let res = match self.process_raft_cmd(index, term, cmd, &mut apply_wb) {
+        let res = match self.process_raft_cmd(index, term, cmd, wb) {
             a @ Ok(Some(_)) => a,
             e => {
                 error!("{} process raft command at index {} err: {:?}",

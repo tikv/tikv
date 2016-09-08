@@ -594,7 +594,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        // handle results
+        // handle the results.
         for (region_id, result) in results.drain(..) {
             if let Some(ready_result) = result {
                 if let Err(e) = self.on_ready_result(region_id, ready_result) {
