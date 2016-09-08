@@ -24,6 +24,7 @@ use kvproto::errorpb::Error as ErrorHeader;
 
 mod rocksdb;
 pub mod raftkv;
+mod metrics;
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &'static str = "";

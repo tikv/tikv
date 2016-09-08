@@ -33,6 +33,7 @@ use protobuf::RepeatedField;
 use storage::engine;
 use super::{Engine, Modify, Cursor, Snapshot, Callback};
 use storage::{Key, Value, CfName, CF_DEFAULT};
+use super::metrics::*;
 
 quick_error! {
     #[derive(Debug)]
@@ -204,11 +205,20 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             }
             reqs.push(req);
         }
+
+        RAFTKV_REQUEST_COUNTER_VEC.with_label_values(&["write", "all"]).inc();
+        let req_timer = RAFTKV_REQUEST_DURATIONS_VEC.with_label_values(&["write"]).start_timer();
+
         try!(self.exec_requests(ctx,
                                 reqs,
                                 box move |res| {
             match res {
-                Ok(CmdRes::Resp(_)) => cb(Ok(())),
+                Ok(CmdRes::Resp(_)) => {
+                    req_timer.observe_duration();
+                    RAFTKV_REQUEST_COUNTER_VEC.with_label_values(&["write", "success"]).inc();
+
+                    cb(Ok(()))
+                }
                 Ok(CmdRes::Snap(_)) => {
                     cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
                 }
@@ -221,6 +231,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     fn async_snapshot(&self, ctx: &Context, cb: Callback<Box<Snapshot>>) -> engine::Result<()> {
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Snap);
+
+        RAFTKV_REQUEST_COUNTER_VEC.with_label_values(&["snapshot", "all"]).inc();
+        let req_timer = RAFTKV_REQUEST_DURATIONS_VEC.with_label_values(&["snapshot"]).start_timer();
+
         try!(self.exec_requests(ctx,
                                 vec![req],
                                 box move |res| {
@@ -228,7 +242,12 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 Ok(CmdRes::Resp(r)) => {
                     cb(Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()))
                 }
-                Ok(CmdRes::Snap(s)) => cb(Ok(box s)),
+                Ok(CmdRes::Snap(s)) => {
+                    req_timer.observe_duration();
+                    RAFTKV_REQUEST_COUNTER_VEC.with_label_values(&["snapshot", "success"]).inc();
+
+                    cb(Ok(box s))
+                }
                 Err(e) => cb(Err(e)),
             }
         }));
