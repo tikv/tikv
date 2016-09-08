@@ -206,8 +206,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             reqs.push(req);
         }
 
-        RAFTKV_REQUEST_COUNTER_VEC.with_label_values(&["write", "all"]).inc();
-        let req_timer = RAFTKV_REQUEST_DURATIONS_VEC.with_label_values(&["write"]).start_timer();
+        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "all"]).inc();
+        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["write"]).start_timer();
 
         try!(self.exec_requests(ctx,
                                 reqs,
@@ -215,14 +215,17 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             match res {
                 Ok(CmdRes::Resp(_)) => {
                     req_timer.observe_duration();
-                    RAFTKV_REQUEST_COUNTER_VEC.with_label_values(&["write", "success"]).inc();
+                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "success"]).inc();
 
                     cb(Ok(()))
                 }
                 Ok(CmdRes::Snap(_)) => {
                     cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
                 }
-                Err(e) => cb(Err(e)),
+                Err(e) => {
+                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "failed"]).inc();
+                    cb(Err(e))
+                }
             }
         }));
         Ok(())
@@ -232,8 +235,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Snap);
 
-        RAFTKV_REQUEST_COUNTER_VEC.with_label_values(&["snapshot", "all"]).inc();
-        let req_timer = RAFTKV_REQUEST_DURATIONS_VEC.with_label_values(&["snapshot"]).start_timer();
+        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "all"]).inc();
+        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["snapshot"]).start_timer();
 
         try!(self.exec_requests(ctx,
                                 vec![req],
@@ -244,11 +247,13 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 }
                 Ok(CmdRes::Snap(s)) => {
                     req_timer.observe_duration();
-                    RAFTKV_REQUEST_COUNTER_VEC.with_label_values(&["snapshot", "success"]).inc();
-
+                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"]).inc();
                     cb(Ok(box s))
                 }
-                Err(e) => cb(Err(e)),
+                Err(e) => {
+                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "failed"]).inc();
+                    cb(Err(e))
+                }
             }
         }));
         Ok(())
@@ -261,36 +266,50 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
 impl Snapshot for RegionSnapshot {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
+        SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["get", "default"]).inc();
+
         let v = box_try!(self.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
+        SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["get", cf]).inc();
+
         let v = box_try!(self.get_value_cf(cf, key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     #[allow(needless_lifetimes)]
     fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
+        SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["iter", "default"]).inc();
+
         Ok(box RegionSnapshot::iter(self))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self, cf: CfName) -> engine::Result<Box<Cursor + 'b>> {
+        SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["iter", cf]).inc();
+
         Ok(box try!(RegionSnapshot::iter_cf(self, cf)))
     }
 }
 
 impl<'a> Cursor for RegionIterator<'a> {
     fn next(&mut self) -> bool {
+        CURSOR_OP_COUNTER_VEC.with_label_values(&["next"]).inc();
+
         RegionIterator::next(self)
     }
 
     fn prev(&mut self) -> bool {
+        CURSOR_OP_COUNTER_VEC.with_label_values(&["prev"]).inc();
+
         RegionIterator::prev(self)
     }
 
     fn seek(&mut self, key: &Key) -> engine::Result<bool> {
+        CURSOR_OP_COUNTER_VEC.with_label_values(&["seek"]).inc();
+
         RegionIterator::seek(self, key.encoded()).map_err(|e| {
             let pb = e.into();
             engine::Error::Request(pb)
@@ -298,10 +317,14 @@ impl<'a> Cursor for RegionIterator<'a> {
     }
 
     fn seek_to_first(&mut self) -> bool {
+        CURSOR_OP_COUNTER_VEC.with_label_values(&["seek to first"]).inc();
+
         RegionIterator::seek_to_first(self)
     }
 
     fn seek_to_last(&mut self) -> bool {
+        CURSOR_OP_COUNTER_VEC.with_label_values(&["seek to last"]).inc();
+
         RegionIterator::seek_to_last(self)
     }
 
