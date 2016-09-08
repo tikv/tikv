@@ -813,6 +813,7 @@ impl Peer {
             if term == 0 {
                 term = entry.get_term();
             } else if entry.get_term() != term {
+                PEER_COMMIT_ENTRIES_TERM_NOT_EQUAL_COUNTER.inc();
                 break;
             }
             apply_index = entry.get_index();

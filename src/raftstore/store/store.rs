@@ -589,6 +589,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // Batch write to engine, the write must success or panic.
         if !wb.is_empty() {
+            STORE_ENGINE_WRITE_COUNTER.inc();
             if let Err(e) = self.engine.write(wb) {
                 panic!("write apply write batch failed, err {:?}", e);
             }
