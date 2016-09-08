@@ -606,11 +606,11 @@ impl<'a> SelectContext<'a> {
                 break;
             }
             let timer = Instant::now();
-            let handle_cnt = try!(self.get_rows_from_range(ran, limit, desc));
-            debug!("fetch {} chunks takes {} ms",
-                   handle_cnt,
+            let row_cnt = try!(self.get_rows_from_range(ran, limit, desc));
+            debug!("fetch {} rows takes {} ms",
+                   row_cnt,
                    duration_to_ms(timer.elapsed()));
-            collected += handle_cnt;
+            collected += row_cnt;
         }
         if self.core.aggr {
             self.core.aggr_rows()
