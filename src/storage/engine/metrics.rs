@@ -37,7 +37,6 @@ lazy_static! {
             &["type", "cf"]
         ).unwrap();
 
-
     pub static ref SNAPSHOT_OP_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_storage_engine_snapshot_op_total",
