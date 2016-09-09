@@ -106,8 +106,10 @@ impl<T: Storage> RaftLog<T> {
             Some(term) => Ok(term),
             _ => {
                 self.store.term(idx).map_err(|e| {
-                    if e != Error::Store(StorageError::Compacted) {
-                        panic!("unexpected error: {:?}", e);
+                    match e {
+                        Error::Store(StorageError::Compacted) |
+                        Error::Store(StorageError::Unavailable) => {}
+                        _ => panic!("unexpected error: {:?}", e),
                     }
                     e
                 })
