@@ -46,7 +46,7 @@ pub enum SnapshotStatus {
     Failure,
 }
 
-pub fn is_local_msg(t: MessageType) -> bool {
+fn is_local_msg(t: MessageType) -> bool {
     match t {
         MessageType::MsgHup |
         MessageType::MsgBeat |
@@ -355,5 +355,37 @@ impl<T: Storage> RawNode<T> {
     #[inline]
     pub fn mut_store(&mut self) -> &mut T {
         self.raft.mut_store()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use kvproto::eraftpb::MessageType;
+    use super::is_local_msg;
+
+    #[test]
+    fn test_is_local_msg() {
+        let tests = vec![
+        (MessageType::MsgHup, true),
+        (MessageType::MsgBeat, true),
+        (MessageType::MsgUnreachable, true),
+        (MessageType::MsgSnapStatus, true),
+        (MessageType::MsgCheckQuorum, true),
+        (MessageType::MsgPropose, false),
+        (MessageType::MsgAppend, false),
+        (MessageType::MsgAppendResponse, false),
+        (MessageType::MsgRequestVote, false),
+        (MessageType::MsgRequestVoteResponse, false),
+        (MessageType::MsgSnapshot, false),
+        (MessageType::MsgHeartbeat, false),
+        (MessageType::MsgHeartbeatResponse, false),
+        (MessageType::MsgTransferLeader, false),
+        (MessageType::MsgTimeoutNow, false),
+        (MessageType::MsgReadIndex, false),
+        (MessageType::MsgReadIndexResp, false),
+    ];
+        for (msg_type, result) in tests {
+            assert_eq!(is_local_msg(msg_type), result);
+        }
     }
 }
