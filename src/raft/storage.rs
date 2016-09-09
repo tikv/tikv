@@ -356,7 +356,7 @@ mod test {
             panic!("want {:?}, got {:?}", wresult, result);
         }
 
-        storage.wl().append(&vec![new_entry(6, 5)]).expect("append failed");
+        storage.wl().append(&[new_entry(6, 5)]).expect("append failed");
         let wresult = Ok(6);
         let result = storage.last_index();
         if result != wresult {
