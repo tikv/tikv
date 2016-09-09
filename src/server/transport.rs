@@ -21,11 +21,15 @@ use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use raft::SnapshotStatus;
 use super::{Msg, ConnData};
-use util::transport::SendCh;
+use util::transport::{SendCh, MAX_SEND_RETRY_CNT};
 
 
 pub trait RaftStoreRouter: Send + Clone {
+    /// Send StoreMsg.
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
+
+    /// Send StoreMsg, retry if failed.
+    fn send_with_retry(&self, msg: StoreMsg, try_times: usize) -> RaftStoreResult<()>;
 
     // Send RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
@@ -46,11 +50,12 @@ pub trait RaftStoreRouter: Send + Clone {
                        to_peer_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()> {
-        self.send(StoreMsg::ReportSnapshot {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-            status: status,
-        })
+        self.send_with_retry(StoreMsg::ReportSnapshot {
+                                 region_id: region_id,
+                                 to_peer_id: to_peer_id,
+                                 status: status,
+                             },
+                             MAX_SEND_RETRY_CNT)
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
@@ -75,6 +80,11 @@ impl ServerRaftStoreRouter {
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
         box_try!(self.ch.send(msg));
+        Ok(())
+    }
+
+    fn send_with_retry(&self, msg: StoreMsg, try_times: usize) -> RaftStoreResult<()> {
+        box_try!(self.ch.send_with_retry(msg, try_times));
         Ok(())
     }
 }
@@ -123,6 +133,10 @@ pub struct MockRaftStoreRouter;
 
 impl RaftStoreRouter for MockRaftStoreRouter {
     fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        unimplemented!();
+    }
+
+    fn send_with_retry(&self, _: StoreMsg, _: usize) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }

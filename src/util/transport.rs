@@ -12,22 +12,40 @@
 // limitations under the License.
 
 
-use std::{thread, error};
+use std::thread;
+use std::io;
 use std::fmt::Debug;
 use std::time::Duration;
 
 use mio::{Sender, NotifyError};
 
-const MAX_SEND_RETRY_CNT: usize = 5;
+pub const MAX_SEND_RETRY_CNT: usize = 5;
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Other(err: Box<error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
+        Discard(reason: String) {
+            description("message is discard")
+            display("{}", reason)
+        }
+        Io(err: io::Error) {
+            from(err)
+            cause(err)
             description(err.description())
-            display("unknown error {:?}", err)
+            display("io error {:?}", err)
+        }
+    }
+}
+
+impl<T: Debug> From<NotifyError<T>> for Error {
+    fn from(e: NotifyError<T>) -> Error {
+        match e {
+            // ALLERT!! make cause sensitive data leak.
+            NotifyError::Closed(m) => {
+                Error::Discard(format!("Failed to send {:?} due to closed", m))
+            }
+            NotifyError::Full(m) => Error::Discard(format!("Failed to send {:?} due to full", m)),
+            NotifyError::Io(e) => Error::Io(e),
         }
     }
 }
@@ -41,25 +59,28 @@ impl<T: Debug> SendCh<T> {
         SendCh { ch: ch }
     }
 
-    pub fn send(&self, mut t: T) -> Result<(), Error> {
-        let mut try_cnt = 0;
-        while let Err(e) = self.ch.send(t) {
-            t = match e {
-                NotifyError::Full(m) => m,
-                _ => return Err(box_err!("{:?}", e)),
+    pub fn send(&self, t: T) -> Result<(), Error> {
+        self.send_with_retry(t, 1)
+    }
+
+    pub fn send_with_retry(&self, mut t: T, mut try_times: usize) -> Result<(), Error> {
+        loop {
+            t = match self.ch.send(t) {
+                Ok(_) => return Ok(()),
+                Err(NotifyError::Full(m)) => {
+                    if try_times <= 1 {
+                        return Err(NotifyError::Full(m).into());
+                    }
+                    try_times -= 1;
+                    m
+                }
+                Err(e) => return Err(e.into()),
             };
 
             // ALLERT!! make cause sensitive data leak.
             warn!("notify queue is full, sleep and retry sending {:?}", t);
-            try_cnt += 1;
-            if try_cnt >= MAX_SEND_RETRY_CNT {
-                return Err(box_err!("failed to send msg {:?} after {} tries",
-                                    t,
-                                    MAX_SEND_RETRY_CNT));
-            }
             thread::sleep(Duration::from_millis(100));
         }
-        Ok(())
     }
 }
 
@@ -129,10 +150,10 @@ mod tests {
             event_loop.run(&mut sender).unwrap();
         });
 
-        ch.send(Msg::Sleep(1000)).unwrap();
-        ch.send(Msg::Stop).unwrap();
-        ch.send(Msg::Stop).unwrap();
-        assert!(ch.send(Msg::Stop).is_err());
+        ch.send_with_retry(Msg::Sleep(1000), MAX_SEND_RETRY_CNT).unwrap();
+        ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
+        ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
+        assert!(ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT).is_err());
 
         h.join().unwrap();
     }

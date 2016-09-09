@@ -21,7 +21,7 @@ use rocksdb::DB;
 use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
-use util::transport::SendCh;
+use util::transport::{SendCh, MAX_SEND_RETRY_CNT};
 use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
                        SnapManager};
 use super::Result;
@@ -253,7 +253,7 @@ impl<C> Node<C>
             Some(h) => h,
         };
 
-        box_try!(self.ch.send(Msg::Quit));
+        box_try!(self.ch.send_with_retry(Msg::Quit, MAX_SEND_RETRY_CNT));
         if let Err(e) = h.join() {
             return Err(box_err!("join store {} thread err {:?}", store_id, e));
         }

@@ -41,7 +41,7 @@ use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError};
 use storage::{Key, Value, KvPair};
 use std::collections::HashMap;
 use mio::{self, EventLoop};
-use util::transport::SendCh;
+use util::transport::{SendCh, MAX_SEND_RETRY_CNT};
 use storage::engine::{Result as EngineResult, Callback as EngineCallback, Modify};
 use super::Result;
 use super::Error;
@@ -174,12 +174,13 @@ impl RunningCtx {
 /// Creates a callback to receive async results of write prepare from the storage engine.
 fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallback<()> {
     Box::new(move |result: EngineResult<()>| {
-        if let Err(e) = ch.send(Msg::WriteFinished {
-            cid: cid,
-            pr: pr,
-            result: result,
-        }) {
-            error!("send write finished to scheduler failed cid={}, err:{:?}",
+        if let Err(e) = ch.send_with_retry(Msg::WriteFinished {
+                                               cid: cid,
+                                               pr: pr,
+                                               result: result,
+                                           },
+                                           MAX_SEND_RETRY_CNT) {
+            panic!("send write finished to scheduler failed cid={}, err:{:?}",
                    cid,
                    e);
         }
@@ -350,9 +351,9 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         _ => panic!("unsupported read command"),
     };
 
-    if let Err(e) = ch.send(Msg::ReadFinished { cid: cid, pr: pr }) {
+    if let Err(e) = ch.send_with_retry(Msg::ReadFinished { cid: cid, pr: pr }, MAX_SEND_RETRY_CNT) {
         // Todo: if this happens we need to clean up command's context
-        error!("send read finished failed, cid={}, err={:?}", cid, e);
+        panic!("send read finished failed, cid={}, err={:?}", cid, e);
     }
 }
 
@@ -361,7 +362,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
 fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     SCHED_WORKER_COUNTER_VEC.with_label_values(&[cmd.tag(), "write"]).inc();
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref()) {
-        if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
+        if let Err(err) = ch.send_with_retry(Msg::WritePrepareFailed { cid: cid, err: e },
+                                             MAX_SEND_RETRY_CNT) {
             // Todo: if this happens, lock will hold for ever
             panic!("send WritePrepareFailed message to channel failed. cid={}, err={:?}",
                    cid,
@@ -437,12 +439,13 @@ fn process_write_impl(cid: u64,
         _ => panic!("unsupported write command"),
     };
 
-    box_try!(ch.send(Msg::WritePrepareFinished {
-        cid: cid,
-        cmd: cmd,
-        pr: pr,
-        to_be_write: modifies,
-    }));
+    box_try!(ch.send_with_retry(Msg::WritePrepareFinished {
+                                    cid: cid,
+                                    cmd: cmd,
+                                    pr: pr,
+                                    to_be_write: modifies,
+                                },
+                                MAX_SEND_RETRY_CNT));
 
     Ok(())
 }
@@ -586,11 +589,12 @@ impl Scheduler {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot"]).inc();
         let ch = self.schedch.clone();
         let cb = box move |snapshot: EngineResult<Box<Snapshot>>| {
-            if let Err(e) = ch.send(Msg::SnapshotFinished {
-                cid: cid,
-                snapshot: snapshot,
-            }) {
-                error!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e);
+            if let Err(e) = ch.send_with_retry(Msg::SnapshotFinished {
+                                                   cid: cid,
+                                                   snapshot: snapshot,
+                                               },
+                                               MAX_SEND_RETRY_CNT) {
+                panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e);
             }
         };
 

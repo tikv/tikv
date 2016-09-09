@@ -26,7 +26,7 @@ use super::{Msg, ConnData};
 use super::conn::Conn;
 use super::{Result, OnResponse, Config};
 use util::worker::{Stopped, Worker};
-use util::transport::SendCh;
+use util::transport::{SendCh, MAX_SEND_RETRY_CNT};
 use storage::Storage;
 use raftstore::store::SnapManager;
 use super::kv::StoreHandler;
@@ -377,11 +377,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn resolve_store(&mut self, store_id: u64, data: ConnData) {
         let ch = self.sendch.clone();
         let cb = box move |r| {
-            if let Err(e) = ch.send(Msg::ResolveResult {
-                store_id: store_id,
-                sock_addr: r,
-                data: data,
-            }) {
+            if let Err(e) = ch.send_with_retry(Msg::ResolveResult {
+                                                   store_id: store_id,
+                                                   sock_addr: r,
+                                                   data: data,
+                                               },
+                                               MAX_SEND_RETRY_CNT) {
                 error!("send store sock msg err {:?}", e);
             }
         };
@@ -508,10 +509,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let ch = self.sendch.clone();
         box move |res: Message| {
             let tp = res.get_msg_type();
-            if let Err(e) = ch.send(Msg::WriteData {
-                token: token,
-                data: ConnData::new(msg_id, res),
-            }) {
+            if let Err(e) = ch.send_with_retry(Msg::WriteData {
+                                                   token: token,
+                                                   data: ConnData::new(msg_id, res),
+                                               },
+                                               MAX_SEND_RETRY_CNT) {
                 error!("send {:?} resp failed with token {:?}, msg id {}, err {:?}",
                        tp,
                        token,
@@ -649,6 +651,11 @@ mod tests {
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
+        fn send_with_retry(&self, _: StoreMsg, _: usize) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+
         fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())

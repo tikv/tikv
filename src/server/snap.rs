@@ -31,7 +31,7 @@ use util::worker::Runnable;
 use util::codec::rpc;
 use util::buf::PipeBuffer;
 use util::HandyRwLock;
-use util::transport::SendCh;
+use util::transport::{SendCh, MAX_SEND_RETRY_CNT};
 
 use kvproto::raft_serverpb::RaftMessage;
 
@@ -137,7 +137,8 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
     }
 
     pub fn close(&self, token: Token) {
-        if let Err(e) = self.ch.send(Msg::CloseConn { token: token }) {
+        if let Err(e) = self.ch
+            .send_with_retry(Msg::CloseConn { token: token }, MAX_SEND_RETRY_CNT) {
             error!("failed to close connection {:?}: {:?}", token, e);
         }
     }
