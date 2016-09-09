@@ -38,12 +38,12 @@ lazy_static! {
         register_counter_vec!(
             "tikv_scheduler_worker_command_total",
             "Total number of commands executed by worker pool.",
-            &["type", "read/write"]
+            &["type", "rw_type"]
         ).unwrap();
 
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
-            "tikv_scheduler_command_duration",
+            "tikv_scheduler_command_duration_seconds",
             "Bucketed histogram of command execution",
             &["type"]
         ).unwrap();
