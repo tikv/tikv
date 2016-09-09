@@ -19,12 +19,14 @@ use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
 use kvproto::kvrpcpb::LockInfo;
 use mio::{EventLoop, EventLoopBuilder};
+use self::metrics::*;
 
 pub mod engine;
 pub mod mvcc;
 pub mod txn;
 pub mod config;
 mod types;
+mod metrics;
 
 pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Cursor,
@@ -232,6 +234,23 @@ impl Command {
             _ => false,
         }
     }
+
+    pub fn tag(&self) -> &'static str {
+        match *self {
+            Command::Get { .. } => "get",
+            Command::BatchGet { .. } => "batch_get",
+            Command::Scan { .. } => "scan",
+            Command::Prewrite { .. } => "prewrite",
+            Command::Commit { .. } => "commit",
+            Command::CommitThenGet { .. } => "commit_then_get",
+            Command::Cleanup { .. } => "cleanup",
+            Command::Rollback { .. } => "rollback",
+            Command::RollbackThenGet { .. } => "rollback_then_get",
+            Command::ScanLock { .. } => "scan_lock",
+            Command::ResolveLock { .. } => "resolve_lock",
+            Command::Gc { .. } => "gc",
+        }
+    }
 }
 
 use util::transport::SendCh;
@@ -333,7 +352,9 @@ impl Storage {
             key: key,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::SingleValue(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -348,7 +369,9 @@ impl Storage {
             keys: keys,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -365,7 +388,9 @@ impl Storage {
             limit: limit,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -382,7 +407,9 @@ impl Storage {
             primary: primary,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Booleans(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -399,7 +426,9 @@ impl Storage {
             lock_ts: lock_ts,
             commit_ts: commit_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -418,7 +447,9 @@ impl Storage {
             commit_ts: commit_ts,
             get_ts: get_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::SingleValue(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -433,7 +464,9 @@ impl Storage {
             key: key,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -448,7 +481,9 @@ impl Storage {
             keys: keys,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -463,7 +498,9 @@ impl Storage {
             key: key,
             lock_ts: lock_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::SingleValue(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -476,7 +513,9 @@ impl Storage {
             ctx: ctx,
             max_ts: max_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Locks(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -491,7 +530,9 @@ impl Storage {
             start_ts: start_ts,
             commit_ts: commit_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -502,7 +543,9 @@ impl Storage {
             scan_key: None,
             keys: vec![],
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 }
