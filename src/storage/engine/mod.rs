@@ -46,14 +46,14 @@ pub trait Engine: Send + Debug {
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
-        ENGINE_OP_COUNTER_VEC.with_label_values(&["write", ""]);
+        ENGINE_OP_COUNTER_VEC.with_label_values(&["write", ""]).inc();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         wait_event!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout)
             .unwrap_or_else(|| Err(Error::Timeout(timeout)))
     }
 
     fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
-        ENGINE_OP_COUNTER_VEC.with_label_values(&["snapshot", ""]);
+        ENGINE_OP_COUNTER_VEC.with_label_values(&["snapshot", ""]).inc();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         wait_event!(|cb| self.async_snapshot(ctx, cb).unwrap(), timeout)
             .unwrap_or_else(|| Err(Error::Timeout(timeout)))
@@ -64,7 +64,7 @@ pub trait Engine: Send + Debug {
     }
 
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
-        ENGINE_OP_COUNTER_VEC.with_label_values(&["put", cf]);
+        ENGINE_OP_COUNTER_VEC.with_label_values(&["put", cf]).inc();
         self.write(ctx, vec![Modify::Put(cf, key, value)])
     }
 
@@ -73,7 +73,7 @@ pub trait Engine: Send + Debug {
     }
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
-        ENGINE_OP_COUNTER_VEC.with_label_values(&["delete", cf]);
+        ENGINE_OP_COUNTER_VEC.with_label_values(&["delete", cf]).inc();
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
 
