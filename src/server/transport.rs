@@ -79,12 +79,12 @@ impl ServerRaftStoreRouter {
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        box_try!(self.ch.send(msg));
+        try!(self.ch.send(msg));
         Ok(())
     }
 
     fn send_with_retry(&self, msg: StoreMsg, try_times: usize) -> RaftStoreResult<()> {
-        box_try!(self.ch.send_with_retry(msg, try_times));
+        try!(self.ch.send_with_retry(msg, try_times));
         Ok(())
     }
 }
@@ -116,12 +116,10 @@ impl Transport for ServerTransport {
         req.set_msg_type(MessageType::Raft);
         req.set_raft(msg);
 
-        if let Err(e) = self.ch.send(Msg::SendStore {
+        try!(self.ch.send(Msg::SendStore {
             store_id: to_store_id,
             data: ConnData::new(self.alloc_msg_id(), req),
-        }) {
-            return Err(box_err!("send data to store {} err {:?}", to_store_id, e));
-        }
+        }));
         Ok(())
     }
 }

@@ -12,8 +12,7 @@
 // limitations under the License.
 
 
-use std::thread;
-use std::io;
+use std::{thread, error};
 use std::fmt::Debug;
 use std::time::Duration;
 
@@ -28,11 +27,11 @@ quick_error! {
             description("message is discard")
             display("{}", reason)
         }
-        Io(err: io::Error) {
-            from(err)
-            cause(err)
+        Other(err: Box<error::Error + Send + Sync>) {
+            from()
+            cause(err.as_ref())
             description(err.description())
-            display("io error {:?}", err)
+            display("unknown error {:?}", err)
         }
     }
 }
@@ -41,11 +40,8 @@ impl<T: Debug> From<NotifyError<T>> for Error {
     fn from(e: NotifyError<T>) -> Error {
         match e {
             // ALLERT!! make cause sensitive data leak.
-            NotifyError::Closed(m) => {
-                Error::Discard(format!("Failed to send {:?} due to closed", m))
-            }
             NotifyError::Full(m) => Error::Discard(format!("Failed to send {:?} due to full", m)),
-            NotifyError::Io(e) => Error::Io(e),
+            _ => box_err!("{:?}", e),
         }
     }
 }
@@ -153,7 +149,10 @@ mod tests {
         ch.send_with_retry(Msg::Sleep(1000), MAX_SEND_RETRY_CNT).unwrap();
         ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
         ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
-        assert!(ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT).is_err());
+        match ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT) {
+            Err(Error::Discard(_)) => {}
+            res => panic!("expect discard error, but found: {:?}", res),
+        }
 
         h.join().unwrap();
     }
