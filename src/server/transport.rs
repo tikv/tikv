@@ -29,7 +29,7 @@ pub trait RaftStoreRouter: Send + Clone {
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
 
     /// Send StoreMsg, retry if failed.
-    fn send_with_retry(&self, msg: StoreMsg, try_times: usize) -> RaftStoreResult<()>;
+    fn try_send(&self, msg: StoreMsg, try_times: usize) -> RaftStoreResult<()>;
 
     // Send RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
@@ -50,12 +50,12 @@ pub trait RaftStoreRouter: Send + Clone {
                        to_peer_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()> {
-        self.send_with_retry(StoreMsg::ReportSnapshot {
-                                 region_id: region_id,
-                                 to_peer_id: to_peer_id,
-                                 status: status,
-                             },
-                             MAX_SEND_RETRY_CNT)
+        self.try_send(StoreMsg::ReportSnapshot {
+                          region_id: region_id,
+                          to_peer_id: to_peer_id,
+                          status: status,
+                      },
+                      MAX_SEND_RETRY_CNT)
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
@@ -83,8 +83,8 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         Ok(())
     }
 
-    fn send_with_retry(&self, msg: StoreMsg, try_times: usize) -> RaftStoreResult<()> {
-        try!(self.ch.send_with_retry(msg, try_times));
+    fn try_send(&self, msg: StoreMsg, try_times: usize) -> RaftStoreResult<()> {
+        try!(self.ch.try_send(msg, try_times));
         Ok(())
     }
 }
@@ -134,7 +134,7 @@ impl RaftStoreRouter for MockRaftStoreRouter {
         unimplemented!();
     }
 
-    fn send_with_retry(&self, _: StoreMsg, _: usize) -> RaftStoreResult<()> {
+    fn try_send(&self, _: StoreMsg, _: usize) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }

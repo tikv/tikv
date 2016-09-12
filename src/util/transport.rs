@@ -56,10 +56,10 @@ impl<T: Debug> SendCh<T> {
     }
 
     pub fn send(&self, t: T) -> Result<(), Error> {
-        self.send_with_retry(t, 1)
+        self.try_send(t, 1)
     }
 
-    pub fn send_with_retry(&self, mut t: T, mut try_times: usize) -> Result<(), Error> {
+    pub fn try_send(&self, mut t: T, mut try_times: usize) -> Result<(), Error> {
         loop {
             t = match self.ch.send(t) {
                 Ok(_) => return Ok(()),
@@ -146,10 +146,10 @@ mod tests {
             event_loop.run(&mut sender).unwrap();
         });
 
-        ch.send_with_retry(Msg::Sleep(1000), MAX_SEND_RETRY_CNT).unwrap();
-        ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
-        ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
-        match ch.send_with_retry(Msg::Stop, MAX_SEND_RETRY_CNT) {
+        ch.try_send(Msg::Sleep(1000), MAX_SEND_RETRY_CNT).unwrap();
+        ch.try_send(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
+        ch.try_send(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
+        match ch.try_send(Msg::Stop, MAX_SEND_RETRY_CNT) {
             Err(Error::Discard(_)) => {}
             res => panic!("expect discard error, but found: {:?}", res),
         }

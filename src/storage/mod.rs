@@ -318,7 +318,7 @@ impl Storage {
             return Ok(());
         }
 
-        if let Err(e) = self.sendch.send_with_retry(Msg::Quit, MAX_SEND_RETRY_CNT) {
+        if let Err(e) = self.sendch.try_send(Msg::Quit, MAX_SEND_RETRY_CNT) {
             error!("send quit cmd to scheduler failed, error:{:?}", e);
             return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }

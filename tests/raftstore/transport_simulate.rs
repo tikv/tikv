@@ -147,7 +147,7 @@ impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {
         Channel::send(self, m)
     }
 
-    fn send_with_retry(&self, m: StoreMsg, _: usize) -> Result<()> {
+    fn try_send(&self, m: StoreMsg, _: usize) -> Result<()> {
         Channel::send(self, m)
     }
 }

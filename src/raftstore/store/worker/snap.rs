@@ -76,7 +76,7 @@ pub trait MsgSender {
 
 impl MsgSender for SendCh<Msg> {
     fn send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::send_with_retry(self, msg, MAX_SEND_RETRY_CNT).map_err(|e| box_err!("{:?}", e))
+        SendCh::try_send(self, msg, MAX_SEND_RETRY_CNT).map_err(|e| box_err!("{:?}", e))
     }
 }
 
