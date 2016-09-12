@@ -2114,7 +2114,7 @@ fn test_commit_after_remove_node() {
 }
 
 // test_leader_transfer_to_uptodate_node verifies transferring should succeed
-// if the transferee has the most up-to-date log entires when transfer starts.
+// if the transferee has the most up-to-date log entries when transfer starts.
 #[test]
 fn test_leader_transfer_to_uptodate_node() {
     let mut nt = Network::new(vec![None, None, None]);
@@ -2123,16 +2123,36 @@ fn test_leader_transfer_to_uptodate_node() {
     let lead_id = nt.peers[&1].leader_id;
     assert_eq!(lead_id, 1);
 
-    // Transfer leadership to 2.
+    // Transfer leadership to peer 2.
     nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
-
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
 
-    // After some log replication, transfer leadership back to 1.
+    // After some log replication, transfer leadership back to peer 1.
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
-
     nt.send(vec![new_message(1, 2, MessageType::MsgTransferLeader, 0)]);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+}
 
+// test_leader_transfer_to_uptodate_node_from_follower verifies transferring should succeed
+// if the transferee has the most up-to-date log entries when transfer starts.
+// Not like test_leader_transfer_to_uptodate_node, where the leader transfer message
+// is sent to the leader, in this test case every leader transfer message is sent
+// to the follower.
+#[test]
+fn test_leader_transfer_to_uptodate_node_from_follower() {
+    let mut nt = Network::new(vec![None, None, None]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    let lead_id = nt.peers[&1].leader_id;
+    assert_eq!(lead_id, 1);
+
+    // transfer leadership to peer 2.
+    nt.send(vec![new_message(2, 2, MessageType::MsgTransferLeader, 0)]);
+    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+
+    // After some log replication, transfer leadership back to peer 1.
+    nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
     check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
 }
 

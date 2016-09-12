@@ -693,13 +693,6 @@ impl<T: Storage> Raft<T> {
             }
             return Ok(());
         }
-        if m.get_msg_type() == MessageType::MsgTransferLeader && self.state != StateRole::Leader {
-            debug!("{} [term {} state {:?}] ignoring MsgTransferLeader to {}",
-                   self.tag,
-                   self.term,
-                   self.state,
-                   m.get_from());
-        }
 
         if m.get_term() == 0 {
             // local message
@@ -1159,6 +1152,16 @@ impl<T: Storage> Raft<T> {
                     to_send.set_reject(true);
                     self.send(to_send);
                 }
+            }
+            MessageType::MsgTransferLeader => {
+                if self.leader_id == INVALID_ID {
+                    info!("{} no leader at term {}; dropping leader transfer msg",
+                          self.tag,
+                          self.term);
+                    return;
+                }
+                m.set_to(self.leader_id);
+                self.send(m);
             }
             MessageType::MsgTimeoutNow => {
                 info!("{} [term {}] received MsgTimeoutNow from {} and starts an election to \
