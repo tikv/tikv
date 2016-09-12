@@ -50,7 +50,7 @@ use super::metrics::*;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
-/// The return states of checking whether a peer is stale.
+/// The returned states of the peer after checking whether it is stale
 #[derive(Debug)]
 pub enum StaleState {
     Valid,
@@ -416,29 +416,29 @@ impl Peer {
     }
 
     pub fn check_stale_state(&mut self, d: Duration) -> StaleState {
-        // update leader_missing_time according to current state
+        // Updates the `leader_missing_time` according to the current state.
         if self.leader_id() == raft::INVALID_ID {
             if self.leader_missing_time.is_none() {
                 self.leader_missing_time = Some(Instant::now())
             }
         } else if self.is_initialized() {
-            // When a peer is not initialized, it has no data at storage.
-            // Even if a leader sends heartbeats to it, we consider it as
-            // in the `leader missing` state. That is because if it's isolated from the leader
-            // before it could successfully receive snapshot from the leader and
-            // apply that snapshot, no raft ready event will be triggered,
-            // so that we could not detect the leader is missing for it at here.
+            // A peer is considered as in the leader missing state if it's uninitialized or
+            // if it's initialized but is isolated from its leader.
+            // For an uninitialized peer, even if its leader sends heartbeats to it,
+            // it cannot successfully receive the snapshot from the leader and apply the snapshot.
+            // The raft state machine cannot work in an uninitialized peer to detect
+            // if the leader is working.
             self.leader_missing_time = None
         }
 
-        // check whether current peer is stale
+        // Checks whether the current peer is stale.
         let duration = match self.leader_missing_time {
             Some(t) => t.elapsed(),
             None => Duration::new(0, 0),
         };
         if duration >= d {
-            // reset the leader missing time to avoid sending the same tasks to
-            // PD worker continuously on leader missing timeout
+            // Resets the `leader_missing_time` to avoid sending the same tasks to
+            // PD worker continuously during the leader missing timeout.
             self.leader_missing_time = None;
             if self.is_initialized() {
                 return StaleState::ToValidate;
