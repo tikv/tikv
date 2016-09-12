@@ -23,8 +23,12 @@ extern crate mio;
 extern crate toml;
 extern crate libc;
 extern crate fs2;
+#[cfg(unix)]
+extern crate signal;
+#[cfg(unix)]
+extern crate nix;
 
-use std::env;
+use std::{env, thread};
 use std::fs::{self, File};
 use std::path::Path;
 use std::sync::Arc;
@@ -589,6 +593,31 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
+#[cfg(unix)]
+fn handle_signal(ch: SendCh<Msg>) {
+    use signal::trap::Trap;
+    use nix::sys::signal::{SIGTERM, SIGINT};
+    let trap = Trap::trap(&[SIGTERM, SIGINT]);
+    thread::Builder::new()
+        .name("signal handler".to_owned())
+        .spawn(move || {
+            for sig in trap {
+                match sig {
+                    SIGTERM | SIGINT => {
+                        ch.send(Msg::Quit).unwrap();
+                        break;
+                    }
+                    // TODO: handle more signal
+                    _ => debug!("ignore signal: {}", sig),
+                }
+            }
+        })
+        .unwrap();
+}
+
+#[cfg(not(unix))]
+fn handle_signal(ch: SendCh<Msg>) {}
+
 fn run_local_server(listener: TcpListener, config: &Config) {
     let mut event_loop = create_event_loop(config).unwrap();
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
@@ -606,6 +635,7 @@ fn run_local_server(listener: TcpListener, config: &Config) {
                               MockStoreAddrResolver,
                               snap_mgr)
         .unwrap();
+    handle_signal(svr.get_sendch());
     svr.run(&mut event_loop).unwrap();
 }
 
@@ -646,6 +676,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                               resolver,
                               snap_mgr)
         .unwrap();
+    handle_signal(svr.get_sendch());
     svr.run(&mut event_loop).unwrap();
     node.stop().unwrap();
 }
