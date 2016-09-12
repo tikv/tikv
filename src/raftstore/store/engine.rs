@@ -127,17 +127,14 @@ pub trait Iterable {
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(self.new_iterator(Some(end_key)), start_key, end_key, f)
+        scan_impl(self.new_iterator(Some(end_key)), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
     fn scan_cf<F>(&self, cf: &str, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(try!(self.new_iterator_cf(cf, Some(end_key))),
-                  start_key,
-                  end_key,
-                  f)
+        scan_impl(try!(self.new_iterator_cf(cf, Some(end_key))), start_key, f)
     }
 
     // Seek the first key >= given key, if no found, return None.
@@ -155,19 +152,12 @@ pub trait Iterable {
     }
 }
 
-fn scan_impl<F>(mut it: DBIterator, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
+fn scan_impl<F>(mut it: DBIterator, start_key: &[u8], f: &mut F) -> Result<()>
     where F: FnMut(&[u8], &[u8]) -> Result<bool>
 {
     it.seek(start_key.into());
     while it.valid() {
-        let r = {
-            let key = it.key();
-            if key >= end_key {
-                break;
-            }
-
-            try!(f(key, it.value()))
-        };
+        let r = try!(f(it.key(), it.value()));
 
         if !r || !it.next() {
             break;

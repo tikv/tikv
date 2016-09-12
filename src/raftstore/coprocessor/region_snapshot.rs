@@ -63,37 +63,28 @@ impl RegionSnapshot {
     pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(self.iter(Some(end_key)), start_key, end_key, f)
+        self.scan_impl(self.iter(Some(end_key)), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
     pub fn scan_cf<F>(&self, cf: &str, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(try!(self.iter_cf(cf, Some(end_key))), start_key, end_key, f)
+        self.scan_impl(try!(self.iter_cf(cf, Some(end_key))), start_key, f)
     }
 
-    fn scan_impl<F>(&self,
-                    mut it: RegionIterator,
-                    start_key: &[u8],
-                    end_key: &[u8],
-                    f: &mut F)
-                    -> Result<()>
+    fn scan_impl<F>(&self, mut it: RegionIterator, start_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
         if !try!(it.seek(start_key)) {
             return Ok(());
         }
-        let mut r = true;
-        while r && it.valid() {
-            r = {
-                let key = it.key();
-                if !end_key.is_empty() && key >= end_key {
-                    break;
-                }
-                try!(f(key, it.value()))
-            };
-            it.next();
+        while it.valid() {
+            let r = try!(f(it.key(), it.value()));
+
+            if !r || !it.next() {
+                break;
+            }
         }
 
         Ok(())
