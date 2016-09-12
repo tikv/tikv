@@ -283,14 +283,14 @@ impl Snapshot for RegionSnapshot {
     fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
         SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["iter", "default"]).inc();
 
-        Ok(box RegionSnapshot::iter(self))
+        Ok(box RegionSnapshot::iter(self, None))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self, cf: CfName) -> engine::Result<Box<Cursor + 'b>> {
         SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["iter", cf]).inc();
 
-        Ok(box try!(RegionSnapshot::iter_cf(self, cf)))
+        Ok(box try!(RegionSnapshot::iter_cf(self, cf, None)))
     }
 }
 

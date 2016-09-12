@@ -168,13 +168,13 @@ impl Snapshot for RocksSnapshot {
     #[allow(needless_lifetimes)]
     fn iter<'b>(&'b self) -> Result<Box<Cursor + 'b>> {
         trace!("RocksSnapshot: create iterator");
-        Ok(box self.new_iterator())
+        Ok(box self.new_iterator(None))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self, cf: CfName) -> Result<Box<Cursor + 'b>> {
         trace!("RocksSnapshot: create cf iterator");
-        Ok(box try!(self.new_iterator_cf(cf)))
+        Ok(box try!(self.new_iterator_cf(cf, None)))
     }
 }
 

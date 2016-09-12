@@ -119,34 +119,37 @@ pub trait Peekable {
 
 // TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
-    fn new_iterator(&self) -> DBIterator;
-    fn new_iterator_cf(&self, &str) -> Result<DBIterator>;
+    fn new_iterator(&self, Option<&[u8]>) -> DBIterator;
+    fn new_iterator_cf(&self, &str, Option<&[u8]>) -> Result<DBIterator>;
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(self.new_iterator(), start_key, end_key, f)
+        scan_impl(self.new_iterator(Some(end_key)), start_key, end_key, f)
     }
 
     // like `scan`, only on a specific column family.
     fn scan_cf<F>(&self, cf: &str, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(try!(self.new_iterator_cf(cf)), start_key, end_key, f)
+        scan_impl(try!(self.new_iterator_cf(cf, Some(end_key))),
+                  start_key,
+                  end_key,
+                  f)
     }
 
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = self.new_iterator();
+        let mut iter = self.new_iterator(None);
         iter.seek(key.into());
         Ok(iter.kv())
     }
 
     // Seek the first key >= given key, if no found, return None.
     fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = try!(self.new_iterator_cf(cf));
+        let mut iter = try!(self.new_iterator_cf(cf, None));
         iter.seek(key.into());
         Ok(iter.kv())
     }
@@ -188,13 +191,27 @@ impl Peekable for DB {
 }
 
 impl Iterable for DB {
-    fn new_iterator(&self) -> DBIterator {
-        self.iter()
+    fn new_iterator(&self, upper_bound: Option<&[u8]>) -> DBIterator {
+        match upper_bound {
+            Some(key) => {
+                let mut readopts = ReadOptions::new();
+                readopts.set_iterate_upper_bound(key);
+                self.iter_opt(readopts)
+            }
+            None => self.iter(),
+        }
     }
 
-    fn new_iterator_cf(&self, cf: &str) -> Result<DBIterator> {
+    fn new_iterator_cf(&self, cf: &str, upper_bound: Option<&[u8]>) -> Result<DBIterator> {
         let handle = try!(rocksdb::get_cf_handle(self, cf));
-        Ok(self.iter_cf(*handle))
+        match upper_bound {
+            Some(key) => {
+                let mut readopts = ReadOptions::new();
+                readopts.set_iterate_upper_bound(key);
+                Ok(DBIterator::new_cf(self, *handle, readopts))
+            }
+            None => Ok(self.iter_cf(*handle)),
+        }
     }
 }
 
@@ -220,21 +237,27 @@ impl Peekable for Snapshot {
 }
 
 impl Iterable for Snapshot {
-    fn new_iterator(&self) -> DBIterator {
+    fn new_iterator(&self, upper_bound: Option<&[u8]>) -> DBIterator {
         let mut opt = ReadOptions::new();
+        if let Some(key) = upper_bound {
+            opt.set_iterate_upper_bound(key);
+        }
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        DBIterator::new(&self.db, &opt)
+        DBIterator::new(&self.db, opt)
     }
 
-    fn new_iterator_cf(&self, cf: &str) -> Result<DBIterator> {
+    fn new_iterator_cf(&self, cf: &str, upper_bound: Option<&[u8]>) -> Result<DBIterator> {
         let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
         let mut opt = ReadOptions::new();
+        if let Some(key) = upper_bound {
+            opt.set_iterate_upper_bound(key);
+        }
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        Ok(DBIterator::new_cf(&self.db, *handle, &opt))
+        Ok(DBIterator::new_cf(&self.db, *handle, opt))
     }
 }
 
@@ -299,7 +322,7 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
     let handle = try!(rocksdb::get_cf_handle(db, cf));
     try!(db.delete_file_in_range_cf(*handle, start_key, end_key));
 
-    let mut it = try!(db.new_iterator_cf(cf));
+    let mut it = try!(db.new_iterator_cf(cf, Some(end_key)));
 
     let mut wb = WriteBatch::new();
     it.seek(start_key.into());

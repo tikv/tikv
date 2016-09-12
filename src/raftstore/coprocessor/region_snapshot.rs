@@ -49,12 +49,13 @@ impl RegionSnapshot {
         &self.region
     }
 
-    pub fn iter(&self) -> RegionIterator {
-        RegionIterator::new(self.snap.new_iterator(), self.region.clone())
+    pub fn iter(&self, upper_bound: Option<&[u8]>) -> RegionIterator {
+        RegionIterator::new(self.snap.new_iterator(upper_bound), self.region.clone())
     }
 
-    pub fn iter_cf(&self, cf: &str) -> Result<RegionIterator> {
-        Ok(RegionIterator::new(try!(self.snap.new_iterator_cf(cf)), self.region.clone()))
+    pub fn iter_cf(&self, cf: &str, upper_bound: Option<&[u8]>) -> Result<RegionIterator> {
+        Ok(RegionIterator::new(try!(self.snap.new_iterator_cf(cf, upper_bound)),
+                               self.region.clone()))
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -62,14 +63,14 @@ impl RegionSnapshot {
     pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(self.iter(), start_key, end_key, f)
+        self.scan_impl(self.iter(Some(end_key)), start_key, end_key, f)
     }
 
     // like `scan`, only on a specific column family.
     pub fn scan_cf<F>(&self, cf: &str, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(try!(self.iter_cf(cf)), start_key, end_key, f)
+        self.scan_impl(try!(self.iter_cf(cf, Some(end_key))), start_key, end_key, f)
     }
 
     fn scan_impl<F>(&self,
@@ -324,7 +325,7 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
-        let mut iter = snap.iter();
+        let mut iter = snap.iter(None);
         assert!(iter.seek(b"a1").is_err());
         assert!(iter.seek(b"a2").unwrap());
         assert_eq!(iter.key(), b"a3");
@@ -369,7 +370,7 @@ mod tests {
         assert_eq!(data.len(), 4);
         assert_eq!(data, base_data);
 
-        let mut iter = snap.iter();
+        let mut iter = snap.iter(None);
         assert!(iter.seek(b"a1").unwrap());
 
         assert!(iter.seek_to_first());
@@ -390,7 +391,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter();
+        let mut iter = snap.iter(None);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())).unwrap());
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
@@ -417,7 +418,7 @@ mod tests {
         // test last region
         let store = new_peer_storage(engine.clone(), &Region::new());
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter();
+        let mut iter = snap.iter(None);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         let pair = (iter.key().to_vec(), iter.value().to_vec());
