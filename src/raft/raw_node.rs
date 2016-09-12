@@ -366,24 +366,24 @@ mod test {
     #[test]
     fn test_is_local_msg() {
         let tests = vec![
-        (MessageType::MsgHup, true),
-        (MessageType::MsgBeat, true),
-        (MessageType::MsgUnreachable, true),
-        (MessageType::MsgSnapStatus, true),
-        (MessageType::MsgCheckQuorum, true),
-        (MessageType::MsgPropose, false),
-        (MessageType::MsgAppend, false),
-        (MessageType::MsgAppendResponse, false),
-        (MessageType::MsgRequestVote, false),
-        (MessageType::MsgRequestVoteResponse, false),
-        (MessageType::MsgSnapshot, false),
-        (MessageType::MsgHeartbeat, false),
-        (MessageType::MsgHeartbeatResponse, false),
-        (MessageType::MsgTransferLeader, false),
-        (MessageType::MsgTimeoutNow, false),
-        (MessageType::MsgReadIndex, false),
-        (MessageType::MsgReadIndexResp, false),
-    ];
+            (MessageType::MsgHup, true),
+            (MessageType::MsgBeat, true),
+            (MessageType::MsgUnreachable, true),
+            (MessageType::MsgSnapStatus, true),
+            (MessageType::MsgCheckQuorum, true),
+            (MessageType::MsgPropose, false),
+            (MessageType::MsgAppend, false),
+            (MessageType::MsgAppendResponse, false),
+            (MessageType::MsgRequestVote, false),
+            (MessageType::MsgRequestVoteResponse, false),
+            (MessageType::MsgSnapshot, false),
+            (MessageType::MsgHeartbeat, false),
+            (MessageType::MsgHeartbeatResponse, false),
+            (MessageType::MsgTransferLeader, false),
+            (MessageType::MsgTimeoutNow, false),
+            (MessageType::MsgReadIndex, false),
+            (MessageType::MsgReadIndexResp, false),
+        ];
         for (msg_type, result) in tests {
             assert_eq!(is_local_msg(msg_type), result);
         }
