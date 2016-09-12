@@ -22,7 +22,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use rocksdb::DB;
+use rocksdb::{DB, WriteBatch};
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use uuid::Uuid;
@@ -572,20 +572,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
+        let mut wb = WriteBatch::new();
+        let mut results: Vec<(u64, Option<ReadyResult>)> = Vec::with_capacity(ids.len());
         for region_id in ids {
-            let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans) {
+                match peer.handle_raft_ready(&self.trans, &mut wb) {
                     Err(e) => {
-                        // TODO: should we panic or shutdown the store?
-                        error!("{} handle raft ready err: {:?}", peer.tag, e);
-                        return Err(e);
+                        panic!("{} handle raft ready err: {:?}", peer.tag, e);
                     }
-                    Ok(ready) => ready_result = ready,
+                    Ok(ready) => {
+                        results.push((region_id, ready));
+                    }
                 }
             }
+        }
 
-            if let Some(ready_result) = ready_result {
+        // Batch write to engine, the write must success or panic.
+        if !wb.is_empty() {
+            STORE_ENGINE_WRITE_COUNTER.inc();
+            if let Err(e) = self.engine.write(wb) {
+                panic!("write apply write batch failed, err {:?}", e);
+            }
+        }
+
+        // handle the results.
+        for (region_id, result) in results.drain(..) {
+            if let Some(ready_result) = result {
                 if let Err(e) = self.on_ready_result(region_id, ready_result) {
                     error!("[region {}] handle raft ready result err: {:?}",
                            region_id,

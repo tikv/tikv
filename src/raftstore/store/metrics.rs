@@ -61,4 +61,16 @@ lazy_static! {
             "Total number of raftstore snapshot traffic.",
             &["type"]
         ).unwrap();
+
+    pub static ref PEER_COMMIT_ENTRIES_TERM_NOT_EQUAL_COUNTER: Counter =
+        register_counter!(
+            "tikv_raftstore_handle_raft_commit_entries_term_not_equal_total",
+            "Times of commit entries' terms not equal has occurred."
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_WRITE_COUNTER: Counter =
+        register_counter!(
+            "tikv_raftstore_engine_write_total",
+            "Total times of engine.write called."
+        ).unwrap();
 }

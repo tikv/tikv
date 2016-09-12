@@ -404,7 +404,10 @@ impl Peer {
         down_peers
     }
 
-    pub fn handle_raft_ready<T: Transport>(&mut self, trans: &T) -> Result<Option<ReadyResult>> {
+    pub fn handle_raft_ready<T: Transport>(&mut self,
+                                           trans: &T,
+                                           wb: &mut WriteBatch)
+                                           -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
             return Ok(None);
         }
@@ -442,7 +445,8 @@ impl Peer {
             try!(self.send(trans, &ready.messages));
         }
 
-        let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
+        let (apply_index, exec_results) =
+            try!(self.handle_raft_commit_entries(&ready.committed_entries, wb));
 
         slow_log!(t,
                   "{} handle ready, entries {}, committed entries {}, messages \
@@ -455,8 +459,12 @@ impl Peer {
                   ready.hs.is_some());
 
         if is_applying {
-            // remove hard state so raft won't change the apply index.
+            // Remove the hard state so Raft won't change the apply index.
             ready.hs.take();
+        } else if apply_index != 0 {
+            if let Some(ref mut hs) = ready.hs {
+                hs.set_commit(apply_index);
+            }
         }
 
         self.raft_group.advance(ready);
@@ -486,13 +494,14 @@ impl Peer {
 
         let local_read = self.is_local_read(&req);
         if local_read {
-            // for read-only, if we don't care stale read, we can
-            // execute these commands immediately in leader.
+            // For the read-only commands, if we don't care about stale read, we can
+            // execute these commands directly in the leader.
             let engine = self.engine.clone();
+            let mut wb = WriteBatch::new();
             let mut ctx = ExecContext {
                 snap: Snapshot::new(engine),
                 apply_state: self.get_store().apply_state.clone(),
-                wb: WriteBatch::new(),
+                wb: &mut wb,
                 req: &req,
             };
             let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
@@ -764,18 +773,56 @@ impl Peer {
     }
 
     fn handle_raft_commit_entries(&mut self,
-                                  committed_entries: &[eraftpb::Entry])
-                                  -> Result<Vec<ExecResult>> {
+                                  committed_entries: &[eraftpb::Entry],
+                                  wb: &mut WriteBatch)
+                                  -> Result<(u64, Vec<ExecResult>)> {
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
-        // others will be saved as a normal entry with no data, so we must re-propose these
+        // the others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         let t = SlowTimer::new();
         let mut results = vec![];
         let committed_count = committed_entries.len();
+        let mut apply_index = 0u64;
+        let mut term = 0u64;
         for entry in committed_entries {
+            // The callback is called before writing apply_wb to the engine to improve the
+            // performance. Entries with different terms need to be applied in different
+            // on_raft_ready rounds. For more details, see the following example:
+            //
+            //   The raft group A consists of three nodes: Node 1, Node 2, and Node 3.
+            //   Node 1 is the leader at the beginning. If there is no leader transfer,
+            //   the process is:
+            //    1. Node 1 applies the put command on the "a" key.
+            //    2. Node 1 sends a response to a client (call cb).
+            //    3. The client raises a get "a" command.
+            //    4. Node 1 returns the value ("a") from the put command to the client.
+            //   The client can get the value from the put command because the get command
+            //   is run after store.on_raft_ready is finished.
+            //
+            //   However, if the leader is
+            //   transferred from Node 1 to Node 2, the process is:
+            //    1. Node 1 applies the put command on the "a" key.
+            //    2. Node 1 sends a response to a client (call cb).
+            //    3. The client sends a get command to the new leader (Node 2).
+            //    4. The get command uses Raft read because of the leader transfer.
+            //   In this case, the put command and the get command from the client may be applied
+            //   in the same on_raft_ready round on Node 2. Because the "a" value from the put
+            //   command is not written to the engine, the get command cannot get the value ("a").
+            //   So the put command and get command must be applied in different on_raft_ready
+            //   rounds.
+            if term == 0 {
+                term = entry.get_term();
+            } else if entry.get_term() != term {
+                PEER_COMMIT_ENTRIES_TERM_NOT_EQUAL_COUNTER.inc();
+                break;
+            }
+            apply_index = entry.get_index();
+
             let res = try!(match entry.get_entry_type() {
-                eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
-                eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
+                eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry, wb),
+                eraftpb::EntryType::EntryConfChange => {
+                    self.handle_raft_entry_conf_change(entry, wb)
+                }
             });
 
             if let Some(res) = res {
@@ -787,31 +834,32 @@ impl Peer {
                   "{} handle {} committed entries",
                   self.tag,
                   committed_count);
-        Ok(results)
+        Ok((apply_index, results))
     }
 
-    fn handle_raft_entry_normal(&mut self, entry: &eraftpb::Entry) -> Result<Option<ExecResult>> {
+    fn handle_raft_entry_normal(&mut self,
+                                entry: &eraftpb::Entry,
+                                wb: &mut WriteBatch)
+                                -> Result<Option<ExecResult>> {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
 
         if data.is_empty() {
-            // when a peer become leader, it will send an empty entry.
-            let wb = WriteBatch::new();
+            // When a peer becomes the leader, it will send an empty entry.
             let mut state = self.get_store().apply_state.clone();
             state.set_applied_index(index);
             let engine = self.engine.clone();
             let raft_cf = try!(rocksdb::get_cf_handle(engine.as_ref(), CF_RAFT));
             try!(wb.put_msg_cf(*raft_cf, &keys::apply_state_key(self.region_id), &state));
-            try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
             self.mut_store().applied_index_term = term;
             return Ok(None);
         }
 
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data));
-        // no need to return error here.
-        self.process_raft_cmd(index, term, cmd).or_else(|e| {
+        // there is no need to return error here.
+        self.process_raft_cmd(index, term, cmd, wb).or_else(|e| {
             error!("{} process raft command at index {} err: {:?}",
                    self.tag,
                    index,
@@ -821,14 +869,15 @@ impl Peer {
     }
 
     fn handle_raft_entry_conf_change(&mut self,
-                                     entry: &eraftpb::Entry)
+                                     entry: &eraftpb::Entry,
+                                     wb: &mut WriteBatch)
                                      -> Result<Option<ExecResult>> {
         let index = entry.get_index();
         let term = entry.get_term();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<eraftpb::ConfChange>(entry.get_data()));
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
-        let res = match self.process_raft_cmd(index, term, cmd) {
+        let res = match self.process_raft_cmd(index, term, cmd, wb) {
             a @ Ok(Some(_)) => a,
             e => {
                 error!("{} process raft command at index {} err: {:?}",
@@ -873,7 +922,8 @@ impl Peer {
     fn process_raft_cmd(&mut self,
                         index: u64,
                         term: u64,
-                        cmd: RaftCmdRequest)
+                        cmd: RaftCmdRequest,
+                        wb: &mut WriteBatch)
                         -> Result<Option<ExecResult>> {
         if index == 0 {
             return Err(box_err!("processing raft command needs a none zero index"));
@@ -881,10 +931,11 @@ impl Peer {
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cb = self.find_cb(uuid, term, &cmd);
-        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd).unwrap_or_else(|e| {
-            error!("{} apply raft command err {:?}", self.tag, e);
-            (cmd_resp::new_error(e), None)
-        });
+        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd, wb)
+            .unwrap_or_else(|e| {
+                error!("{} apply raft command err {:?}", self.tag, e);
+                (cmd_resp::new_error(e), None)
+            });
 
         debug!("{} applied command with uuid {:?}: {:?}",
                self.tag,
@@ -916,7 +967,8 @@ impl Peer {
     fn apply_raft_cmd(&mut self,
                       index: u64,
                       term: u64,
-                      req: &RaftCmdRequest)
+                      req: &RaftCmdRequest,
+                      wb: &mut WriteBatch)
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         if self.pending_remove {
             let region_not_found = Error::RegionNotFound(self.region_id);
@@ -938,10 +990,10 @@ impl Peer {
         let mut ctx = ExecContext {
             snap: Snapshot::new(engine),
             apply_state: self.get_store().apply_state.clone(),
-            wb: WriteBatch::new(),
+            wb: wb,
             req: req,
         };
-        let (mut resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
+        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             error!("{} execute raft command err: {:?}", self.tag, e);
             (cmd_resp::new_error(e), None)
         });
@@ -949,28 +1001,20 @@ impl Peer {
         ctx.apply_state.set_applied_index(index);
         ctx.save(self.region_id).expect("save state must not fail");
 
-        // Commit write and change storage fields atomically.
+        // assume engine.write will always success or panic
         let mut storage = self.mut_store();
-        match storage.engine.write(ctx.wb) {
-            Ok(_) => {
-                storage.apply_state = ctx.apply_state;
-                storage.applied_index_term = term;
+        storage.apply_state = ctx.apply_state;
+        storage.applied_index_term = term;
 
-                if let Some(ref exec_result) = exec_result {
-                    match *exec_result {
-                        ExecResult::ChangePeer { ref region, .. } => {
-                            storage.region = region.clone();
-                        }
-                        ExecResult::CompactLog { .. } => {}
-                        ExecResult::SplitRegion { ref left, .. } => {
-                            storage.region = left.clone();
-                        }
-                    }
-                };
-            }
-            Err(e) => {
-                error!("{} commit batch failed err {:?}", storage.tag, e);
-                resp = cmd_resp::message_error(e);
+        if let Some(ref exec_result) = exec_result {
+            match *exec_result {
+                ExecResult::ChangePeer { ref region, .. } => {
+                    storage.region = region.clone();
+                }
+                ExecResult::CompactLog { .. } => {}
+                ExecResult::SplitRegion { ref left, .. } => {
+                    storage.region = left.clone();
+                }
             }
         };
 
@@ -1005,7 +1049,7 @@ fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 struct ExecContext<'a> {
     pub snap: Snapshot,
     pub apply_state: RaftApplyState,
-    pub wb: WriteBatch,
+    pub wb: &'a mut WriteBatch,
     pub req: &'a RaftCmdRequest,
 }
 
@@ -1203,9 +1247,9 @@ impl Peer {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        try!(write_peer_state(&ctx.wb, &region, PeerState::Normal));
-        try!(write_peer_state(&ctx.wb, &new_region, PeerState::Normal));
-        try!(write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()));
+        try!(write_peer_state(ctx.wb, &region, PeerState::Normal));
+        try!(write_peer_state(ctx.wb, &new_region, PeerState::Normal));
+        try!(write_initial_state(self.engine.as_ref(), ctx.wb, new_region.get_id()));
 
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());
