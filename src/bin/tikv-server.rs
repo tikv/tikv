@@ -604,6 +604,7 @@ fn handle_signal(ch: SendCh<Msg>) {
             for sig in trap {
                 match sig {
                     SIGTERM | SIGINT => {
+                        info!("receive signal {}, stopping server...", sig);
                         ch.send(Msg::Quit).unwrap();
                         break;
                     }
