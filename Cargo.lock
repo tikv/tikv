@@ -22,6 +22,7 @@ dependencies = [
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
  "rustc-serialize 0.3.19 (registry+https://github.com/rust-lang/crates.io-index)",
+ "simple-signal 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "threadpool 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -388,6 +389,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "simple-signal"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "lazy_static 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "slab"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -526,6 +536,7 @@ dependencies = [
 "checksum rustc_version 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "c5f5376ea5e30ce23c03eb77cbe4962b988deead10910c372b226388b594c084"
 "checksum semver 0.1.20 (registry+https://github.com/rust-lang/crates.io-index)" = "d4f410fedcf71af0345d7607d246e7ad15faaadd49d240ee3b24e5dc21a820ac"
 "checksum semver 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "2d5b7638a1f03815d94e88cb3b3c08e87f0db4d683ef499d1836aaf70a45623f"
+"checksum simple-signal 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)" = "2873201dda62b00216e0104de61438e93fb730a514cb381ff0e9a9e10c675c6b"
 "checksum slab 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = "d807fd58c4181bbabed77cb3b891ba9748241a552bcc5be698faaebefc54f46e"
 "checksum tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)" = "0b62933a3f96cd559700662c34f8bab881d9e3540289fb4f368419c7f13a5aa9"
 "checksum threadpool 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "da22aa6bfa1bac2ac0bbccdd6b757ee68dac88ef1ddc2b02e97967f6f0ded004"

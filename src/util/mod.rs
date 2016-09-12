@@ -394,7 +394,7 @@ pub fn run_prometheus(interval: Duration) -> Option<thread::JoinHandle<()>> {
 
     Some(thread::spawn(move || {
         let encoder = TextEncoder::new();
-        let mut buffer = Vec::<u8>::new();
+        let mut buffer = vec![];
         loop {
             let metric_familys = prometheus::gather();
             encoder.encode(&metric_familys, &mut buffer).unwrap();
