@@ -608,7 +608,7 @@ fn handle_signal(ch: SendCh<Msg>) {
                         break;
                     }
                     // TODO: handle more signal
-                    _ => debug!("ignore signal: {}", sig),
+                    _ => unreachable!(),
                 }
             }
         })
