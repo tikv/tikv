@@ -50,6 +50,14 @@ use super::metrics::*;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
+/// The returned states of the peer after checking whether it is stale
+#[derive(Debug)]
+pub enum StaleState {
+    Valid,
+    ToValidate,
+    Stale,
+}
+
 pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
@@ -161,6 +169,8 @@ pub struct Peer {
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
 
+    leader_missing_time: Option<Instant>,
+
     pub tag: String,
 }
 
@@ -243,6 +253,7 @@ impl Peer {
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             pending_remove: false,
+            leader_missing_time: Some(Instant::now()),
             tag: tag,
         };
 
@@ -402,6 +413,40 @@ impl Peer {
             }
         }
         down_peers
+    }
+
+    pub fn check_stale_state(&mut self, d: Duration) -> StaleState {
+        // Updates the `leader_missing_time` according to the current state.
+        if self.leader_id() == raft::INVALID_ID {
+            if self.leader_missing_time.is_none() {
+                self.leader_missing_time = Some(Instant::now())
+            }
+        } else if self.is_initialized() {
+            // A peer is considered as in the leader missing state if it's uninitialized or
+            // if it's initialized but is isolated from its leader.
+            // For an uninitialized peer, even if its leader sends heartbeats to it,
+            // it cannot successfully receive the snapshot from the leader and apply the snapshot.
+            // The raft state machine cannot work in an uninitialized peer to detect
+            // if the leader is working.
+            self.leader_missing_time = None
+        }
+
+        // Checks whether the current peer is stale.
+        let duration = match self.leader_missing_time {
+            Some(t) => t.elapsed(),
+            None => Duration::new(0, 0),
+        };
+        if duration >= d {
+            // Resets the `leader_missing_time` to avoid sending the same tasks to
+            // PD worker continuously during the leader missing timeout.
+            self.leader_missing_time = None;
+            if self.is_initialized() {
+                return StaleState::ToValidate;
+            } else {
+                return StaleState::Stale;
+            }
+        }
+        StaleState::Valid
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self, trans: &T) -> Result<Option<ReadyResult>> {
