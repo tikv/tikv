@@ -28,6 +28,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref PD_VALIDATE_PEER_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_pd_validate_peer_total",
+            "Total number of raftstore pd worker validate peer task.",
+            &["type"]
+        ).unwrap();
+
     pub static ref SNAP_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_raftstore_snapshot_total",
