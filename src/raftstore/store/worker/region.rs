@@ -47,9 +47,20 @@ pub enum Task {
     ///
     /// The deletion may and may not succeed.
     Destroy {
+        region_id: u64,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+}
+
+impl Task {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
+        Task::Destroy {
+            region_id: region_id,
+            start_key: start_key,
+            end_key: end_key,
+        }
+    }
 }
 
 impl Display for Task {
@@ -57,8 +68,12 @@ impl Display for Task {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
-            Task::Destroy { ref start_key, ref end_key } => {
-                write!(f, "Destroy [{}, {})", escape(&start_key), escape(&end_key))
+            Task::Destroy { region_id, ref start_key, ref end_key } => {
+                write!(f,
+                       "Destroy {} [{}, {})",
+                       region_id,
+                       escape(&start_key),
+                       escape(&end_key))
             }
         }
     }
@@ -305,8 +320,9 @@ impl<T: MsgSender> Runner<T> {
         timer.observe_duration();
     }
 
-    fn handle_destroy(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) {
-        info!("deleting data in [{}, {})",
+    fn handle_destroy(&mut self, region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
+        info!("[region {}] deleting data in [{}, {}) of",
+              region_id,
               escape(&start_key),
               escape(&end_key));
         if let Err(e) = engine::delete_all_in_range(&self.db, &start_key, &end_key) {
@@ -323,7 +339,9 @@ impl<T: MsgSender> Runnable<Task> for Runner<T> {
         match task {
             Task::Gen { region_id } => self.handle_gen(region_id),
             Task::Apply { region_id, abort } => self.handle_apply(region_id, abort),
-            Task::Destroy { start_key, end_key } => self.handle_destroy(start_key, end_key),
+            Task::Destroy { region_id, start_key, end_key } => {
+                self.handle_destroy(region_id, start_key, end_key)
+            }
         }
     }
 }

@@ -496,10 +496,8 @@ impl PeerStorage {
     pub fn clear_data(&self) -> Result<()> {
         let (start_key, end_key) = (enc_start_key(self.get_region()),
                                     enc_end_key(self.get_region()));
-        box_try!(self.region_sched.schedule(RegionTask::Destroy {
-            start_key: start_key,
-            end_key: end_key,
-        }));
+        let region_id = self.get_region_id();
+        box_try!(self.region_sched.schedule(RegionTask::destroy(region_id, start_key, end_key)));
         Ok(())
     }
 
@@ -508,17 +506,14 @@ impl PeerStorage {
         let (old_start_key, old_end_key) = (enc_start_key(self.get_region()),
                                             enc_end_key(self.get_region()));
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
+        let region_id = new_region.get_id();
         if old_start_key < new_start_key {
-            box_try!(self.region_sched.schedule(RegionTask::Destroy {
-                start_key: old_start_key,
-                end_key: new_start_key,
-            }));
+            box_try!(self.region_sched
+                .schedule(RegionTask::destroy(region_id, old_start_key, new_start_key)));
         }
         if new_end_key < old_end_key {
-            box_try!(self.region_sched.schedule(RegionTask::Destroy {
-                start_key: new_end_key,
-                end_key: old_end_key,
-            }));
+            box_try!(self.region_sched
+                .schedule(RegionTask::destroy(region_id, new_end_key, old_end_key)));
         }
         Ok(())
     }
