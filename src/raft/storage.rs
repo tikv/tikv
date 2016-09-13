@@ -38,12 +38,35 @@ pub struct RaftState {
     pub conf_state: ConfState,
 }
 
+/// Storage is an trait that may be implemented by the application
+/// to retrieve log entries from storage.
+///
+/// If any Storage method returns an error, the raft instance will
+/// become inoperable and refuse to paticipate in elections; the
+/// application is responsible for cleanup and recovery in this case.
 pub trait Storage {
+    /// initial_state returns the RaftState information
     fn initial_state(&self) -> Result<RaftState>;
+    /// entries returns a slice of log entries in the range [lo,hi).
+    /// max_size limits the total size of the log entries returned, but
+    /// entries returns at least one entry if any.
     fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>>;
+    /// term returns the term of entry idx, which must be in the range
+    /// [first_index()-1, last_index()]. The term of the entry before
+    /// first_index is retained for matching purpose even though the
+    /// rest of that entry may not be available.
     fn term(&self, idx: u64) -> Result<u64>;
+    /// first_index returns the index of the first log entry that is
+    /// possible available via entries (older entries have been incorporated
+    /// into the latest snapshot; if storage only contains the dummy entry the
+    /// first log entry is not available).
     fn first_index(&self) -> Result<u64>;
+    /// last_index returns the index of the last entry in the log.
     fn last_index(&self) -> Result<u64>;
+    /// snapshot returns the most recent snapshot.
+    /// If snapshot is temporarily unavailable, it should return SnapshotTemporarilyUnavailable,
+    /// so raft state machine could know that Storage needs some time to prepare
+    /// snapshot and call snapshot later.
     fn snapshot(&self) -> Result<Snapshot>;
 }
 
@@ -51,6 +74,7 @@ pub struct MemStorageCore {
     hard_state: HardState,
     snapshot: Snapshot,
     // TODO: maybe vec_deque
+    // entries[i] has raft log position i+snapshot.get_metadata().get_index()
     entries: Vec<Entry>,
 }
 
@@ -66,6 +90,7 @@ impl Default for MemStorageCore {
 }
 
 impl MemStorageCore {
+    /// set_hardstate saves the current HardState.
     pub fn set_hardstate(&mut self, hs: HardState) {
         self.hard_state = hs;
     }
@@ -74,6 +99,8 @@ impl MemStorageCore {
         self.entries[0].get_index() + self.entries.len() as u64 - 1
     }
 
+    /// apply_snapshot overwrites the contents of this Storage object with
+    /// those of the given snapshot.
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<()> {
         // handle check for old snapshot being applied
         let index = self.snapshot.get_metadata().get_index();
@@ -90,6 +117,10 @@ impl MemStorageCore {
         Ok(())
     }
 
+    /// create_snapshot makes a snapshot which can be retrieved with snapshot() and
+    /// can be used to reconstruct the state at that point.
+    /// If any configuration changes have been made since the last compaction,
+    /// the result of the last apply_conf_change must be passed in.
     pub fn create_snapshot(&mut self,
                            idx: u64,
                            cs: Option<ConfState>,
@@ -114,6 +145,9 @@ impl MemStorageCore {
         Ok(&self.snapshot)
     }
 
+    /// compact discards all log entries prior to compact_index.
+    /// It is the application's responsibility to not attempt to compact an index
+    /// greater than RaftLog.applied.
     pub fn compact(&mut self, compact_index: u64) -> Result<()> {
         let offset = self.entries[0].get_index();
         if compact_index <= offset {
@@ -131,6 +165,9 @@ impl MemStorageCore {
         Ok(())
     }
 
+    /// Append the new entries to storage.
+    /// TODO: ensure the entries are continuous and
+    /// entries[0].get_index() > self.entries[0].get_index()
     pub fn append(&mut self, ents: &[Entry]) -> Result<()> {
         if ents.is_empty() {
             return Ok(());
@@ -168,13 +205,13 @@ impl MemStorageCore {
     }
 }
 
+/// `MemStorage` is a thread-safe implementation of Storage trait.
+/// It is mainly used for test purpose.
 #[derive(Clone, Default)]
 pub struct MemStorage {
     core: Arc<RwLock<MemStorageCore>>,
 }
 
-/// A thread-safe in-memory storage implementation.
-/// Mainly for tests purpose.
 impl MemStorage {
     pub fn new() -> MemStorage {
         MemStorage { ..Default::default() }
@@ -190,6 +227,7 @@ impl MemStorage {
 }
 
 impl Storage for MemStorage {
+    /// initial_state implements the Storage trait.
     fn initial_state(&self) -> Result<RaftState> {
         let core = self.rl();
         Ok(RaftState {
@@ -198,6 +236,7 @@ impl Storage for MemStorage {
         })
     }
 
+    /// entries implements the Storage trait.
     fn entries(&self, low: u64, high: u64, max_size: u64) -> Result<Vec<Entry>> {
         let core = self.rl();
         let offset = core.entries[0].get_index();
@@ -219,6 +258,7 @@ impl Storage for MemStorage {
         Ok(util::limit_size(ents, max_size))
     }
 
+    /// term implements the Storage trait.
     fn term(&self, idx: u64) -> Result<u64> {
         let core = self.rl();
         let offset = core.entries[0].get_index();
@@ -231,16 +271,19 @@ impl Storage for MemStorage {
         Ok(core.entries[(idx - offset) as usize].get_term())
     }
 
+    /// first_index implements the Storage trait.
     fn first_index(&self) -> Result<u64> {
         let core = self.rl();
         Ok(core.entries[0].get_index() + 1)
     }
 
+    /// last_index implements the Storage trait.
     fn last_index(&self) -> Result<u64> {
         let core = self.rl();
         Ok(core.inner_last_index())
     }
 
+    /// snapshot implements the Storage trait.
     fn snapshot(&self) -> Result<Snapshot> {
         let core = self.rl();
         Ok(core.snapshot.clone())
