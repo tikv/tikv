@@ -24,7 +24,7 @@ if [ $? -eq 0 ]; then
     export PD_ENDPOINTS=127.0.0.1:2379
 fi
 
-export ENABLE_FEATURES=default
+export ENABLE_FEATURES=dev
 export LOG_FILE=tests.log
 export RUST_TEST_THREADS=1
 export RUSTFLAGS=-Dwarnings

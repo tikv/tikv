@@ -106,8 +106,10 @@ impl<T: Storage> RaftLog<T> {
             Some(term) => Ok(term),
             _ => {
                 self.store.term(idx).map_err(|e| {
-                    if e != Error::Store(StorageError::Compacted) {
-                        panic!("unexpected error: {:?}", e);
+                    match e {
+                        Error::Store(StorageError::Compacted) |
+                        Error::Store(StorageError::Unavailable) => {}
+                        _ => panic!("unexpected error: {:?}", e),
                     }
                     e
                 })
@@ -172,7 +174,7 @@ impl<T: Storage> RaftLog<T> {
         if self.match_term(idx, term) {
             let conflict_idx = self.find_conflict(ents);
             if conflict_idx == 0 {
-            } else if conflict_idx < self.committed {
+            } else if conflict_idx <= self.committed {
                 panic!("entry {} conflict with committed entry {}",
                        conflict_idx,
                        self.committed)

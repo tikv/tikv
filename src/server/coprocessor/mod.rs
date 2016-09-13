@@ -13,7 +13,7 @@
 
 mod endpoint;
 mod aggregate;
-
+mod metrics;
 
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;

@@ -21,6 +21,7 @@ use super::Result;
 use util::{self, TryInsertWith};
 use util::worker::{Runnable, Worker};
 use pd::PdClient;
+use kvproto::metapb;
 
 pub type Callback = Box<FnBox(Result<SocketAddr>) + Send>;
 
@@ -65,6 +66,9 @@ impl<T: PdClient> Runner<T> {
         let s = try!(self.store_addrs.entry(store_id).or_try_insert_with(|| {
             pd_client.get_store(store_id)
                 .and_then(|s| {
+                    if s.get_state() == metapb::StoreState::Tombstone {
+                        return Err(box_err!("store {} has been removed", store_id));
+                    }
                     let addr = s.get_address().to_owned();
                     // In some tests, we use empty address for store first,
                     // so we should ignore here.
@@ -131,5 +135,92 @@ pub struct MockStoreAddrResolver;
 impl StoreAddrResolver for MockStoreAddrResolver {
     fn resolve(&self, _: u64, _: Callback) -> Result<()> {
         unimplemented!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::collections::HashMap;
+
+    use kvproto::pdpb;
+    use kvproto::metapb;
+    use pd::{PdClient, Result};
+
+    struct MockPdClient {
+        store: metapb::Store,
+    }
+
+    impl PdClient for MockPdClient {
+        fn bootstrap_cluster(&self, _: metapb::Store, _: metapb::Region) -> Result<()> {
+            unimplemented!();
+        }
+        fn is_cluster_bootstrapped(&self) -> Result<bool> {
+            unimplemented!();
+        }
+        fn alloc_id(&self) -> Result<u64> {
+            unimplemented!();
+        }
+        fn put_store(&self, _: metapb::Store) -> Result<()> {
+            unimplemented!();
+        }
+        fn get_store(&self, _: u64) -> Result<metapb::Store> {
+            Ok(self.store.clone())
+        }
+        fn get_cluster_config(&self) -> Result<metapb::Cluster> {
+            unimplemented!();
+        }
+        fn get_region(&self, _: &[u8]) -> Result<metapb::Region> {
+            unimplemented!();
+        }
+        fn region_heartbeat(&self,
+                            _: metapb::Region,
+                            _: metapb::Peer,
+                            _: Vec<pdpb::PeerStats>)
+                            -> Result<pdpb::RegionHeartbeatResponse> {
+            unimplemented!();
+        }
+        fn ask_split(&self, _: metapb::Region) -> Result<pdpb::AskSplitResponse> {
+            unimplemented!();
+        }
+        fn store_heartbeat(&self, _: pdpb::StoreStats) -> Result<()> {
+            unimplemented!();
+        }
+        fn report_split(&self, _: metapb::Region, _: metapb::Region) -> Result<()> {
+            unimplemented!();
+        }
+    }
+
+    fn new_runner(addr: &str, state: metapb::StoreState) -> Runner<MockPdClient> {
+        let mut store = metapb::Store::new();
+        store.set_state(state);
+        store.set_address(addr.into());
+        let client = MockPdClient { store: store };
+        Runner {
+            pd_client: Arc::new(client),
+            store_addrs: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_resolve_store_state_up() {
+        let addr = "127.0.0.1";
+        let mut runner = new_runner(addr, metapb::StoreState::Up);
+        assert_eq!(runner.get_address(0).unwrap(), addr);
+    }
+
+    #[test]
+    fn test_resolve_store_state_offline() {
+        let addr = "127.0.0.1";
+        let mut runner = new_runner(addr, metapb::StoreState::Offline);
+        assert_eq!(runner.get_address(0).unwrap(), addr);
+    }
+
+    #[test]
+    fn test_resolve_store_state_tombstone() {
+        let addr = "127.0.0.1";
+        let mut runner = new_runner(addr, metapb::StoreState::Tombstone);
+        assert!(runner.get_address(0).is_err());
     }
 }

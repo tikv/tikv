@@ -31,17 +31,32 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     let node = cluster.leader_of_region(1).unwrap();
     let node_id = node.get_id();
     cluster.add_send_filter(Isolate::new(node_id));
+    debug!("node: {:?}", node);
 
     // Kill another node.
     let next_id = if node_id < count { node_id + 1 } else { 1 };
     cluster.stop_node(next_id);
 
+    // Wait other node to become leader.
+    let begin = Instant::now();
+    for _ in 1..100 {
+        cluster.reset_leader_of_region(1);
+        if let Some(peer) = cluster.leader_of_region(1) {
+            if peer.get_id() != node_id {
+                break;
+            }
+        }
+        sleep(Duration::from_millis(100));
+    }
+    assert!(node_id != cluster.leader_of_region(1).unwrap().get_id());
+    wait_down_peers(cluster, 2);
+
     // Check node and another are down.
-    let secs = wait_down_peers(cluster, 2);
+    let down_secs = begin.elapsed().as_secs();
     let down_peers = cluster.get_down_peers();
-    debug!("down_peers: {:?}", down_peers);
-    check_down_seconds(down_peers.get(&node_id).unwrap(), secs);
-    check_down_seconds(down_peers.get(&next_id).unwrap(), secs);
+    debug!("down_secs: {} down_peers: {:?}", down_secs, down_peers);
+    check_down_seconds(down_peers.get(&node_id).unwrap(), down_secs);
+    check_down_seconds(down_peers.get(&next_id).unwrap(), down_secs);
 
     // Restart node and sleep a few seconds.
     let sleep_secs = 3;
@@ -50,7 +65,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     sleep(Duration::from_secs(sleep_secs));
 
     // Wait node to become leader again.
-    loop {
+    for _ in 1..100 {
         cluster.transfer_leader(1, node.clone());
         if let Some(peer) = cluster.leader_of_region(1) {
             if peer.get_id() == node_id {
@@ -59,6 +74,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
         }
         sleep(Duration::from_millis(100));
     }
+    assert!(node_id == cluster.leader_of_region(1).unwrap().get_id());
     wait_down_peers(cluster, 1);
 
     // Ensure that node will not reuse the previous peer heartbeats.

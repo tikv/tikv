@@ -19,6 +19,7 @@ use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::{Mutation, Key, KvPair, make_key};
+use tikv::storage::txn::GC_BATCH_SIZE;
 
 #[derive(Clone)]
 struct AssertionStorage(SyncStorage);
@@ -409,6 +410,22 @@ fn test_txn_store_gc() {
     store.gc_ok(30);
     store.get_none(b"k", 15);
     store.get_ok(b"k", 25, b"v2");
+}
+
+fn test_txn_store_gc_multiple_keys(n: usize) {
+    let store = new_assertion_storage();
+    for i in 0..n {
+        let key = format!("k{}", i);
+        store.put_ok(key.as_bytes(), b"value", 5, 10);
+    }
+    store.gc_ok(20);
+}
+
+#[test]
+fn test_txn_store_gc2() {
+    for &i in &[0, 1, GC_BATCH_SIZE - 1, GC_BATCH_SIZE, GC_BATCH_SIZE + 1, GC_BATCH_SIZE * 2] {
+        test_txn_store_gc_multiple_keys(i);
+    }
 }
 
 struct Oracle {

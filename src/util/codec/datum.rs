@@ -24,7 +24,7 @@ use util::escape;
 use super::{number, Result, bytes, convert};
 use super::number::NumberDecoder;
 use super::bytes::BytesEncoder;
-use super::mysql::{self, Duration, MAX_FSP, Res, Decimal, DecimalEncoder, DecimalDecoder, Time};
+use super::mysql::{self, Duration, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder, Time};
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -276,6 +276,27 @@ impl Datum {
         Ok(s)
     }
 
+    /// `into_f64` converts self into f64.
+    /// source function name is `ToFloat64`.
+    pub fn into_f64(self) -> Result<f64> {
+        match self {
+            Datum::I64(i) => Ok(i as f64),
+            Datum::U64(u) => Ok(u as f64),
+            Datum::F64(f) => Ok(f),
+            Datum::Bytes(bs) => convert::bytes_to_f64(&bs),
+            Datum::Time(t) => {
+                let d = try!(t.to_decimal());
+                d.as_f64()
+            }
+            Datum::Dur(d) => {
+                let d = try!(d.to_decimal());
+                d.as_f64()
+            }
+            Datum::Dec(d) => d.as_f64(),
+            _ => Err(box_err!("failed to convert {} to f64", self)),
+        }
+    }
+
     /// Keep compatible with TiDB's `GetFloat64` function.
     pub fn f64(&self) -> f64 {
         let i = self.i64();
@@ -330,7 +351,7 @@ impl Datum {
             Datum::Time(t) => t.to_decimal().map_err(From::from),
             Datum::Dur(d) => d.to_decimal().map_err(From::from),
             d => {
-                match d.coerce_to_dec() {
+                match try!(d.coerce_to_dec()) {
                     Datum::Dec(d) => Ok(d),
                     d => Err(box_err!("failed to conver {} to decimal", d)),
                 }
@@ -340,39 +361,71 @@ impl Datum {
 
     /// Try its best effort to convert into a decimal datum.
     /// source function name is `ConvertDatumToDecimal`.
-    fn coerce_to_dec(self) -> Datum {
-        let dec_opt = match self {
-            Datum::I64(i) => Some(i.into()),
-            Datum::U64(u) => Some(u.into()),
-            Datum::F64(f) => Decimal::from_f64(f).ok(),
-            Datum::Bytes(ref bs) => str::from_utf8(bs).ok().and_then(|s| s.parse().ok()),
-            _ => None,
+    fn coerce_to_dec(self) -> Result<Datum> {
+        let dec = match self {
+            Datum::I64(i) => i.into(),
+            Datum::U64(u) => u.into(),
+            Datum::F64(f) => try!(Decimal::from_f64(f)),
+            Datum::Bytes(ref bs) => {
+                let s = box_try!(str::from_utf8(bs));
+                try!(Decimal::from_str(s))
+            }
+            d @ Datum::Dec(_) => return Ok(d),
+            _ => return Err(box_err!("failed to convert {} to decimal", self)),
         };
-        dec_opt.map_or(self, Datum::Dec)
+        Ok(Datum::Dec(dec))
     }
 
     /// Try its best effort to convert into a f64 datum.
-    fn coerce_to_f64(self) -> Datum {
+    fn coerce_to_f64(self) -> Result<Datum> {
         match self {
-            Datum::I64(i) => Datum::F64(i as f64),
-            Datum::U64(u) => Datum::F64(u as f64),
-            a => a,
+            Datum::I64(i) => Ok(Datum::F64(i as f64)),
+            Datum::U64(u) => Ok(Datum::F64(u as f64)),
+            Datum::Dec(d) => {
+                let f = try!(d.as_f64());
+                Ok(Datum::F64(f))
+            }
+            a => Ok(a),
         }
     }
 
     /// `coerce` changes type.
-    /// If left or right is Decimal, changes the both to Decimal.
-    /// Else if left or right is Float, changes the both to Float.
+    /// If left or right is F64, changes the both to F64.
+    /// Else if left or right is Decimal, changes the both to Decimal.
     /// Keep compatible with TiDB's `CoerceDatum` function.
-    pub fn coerce(left: Datum, right: Datum) -> (Datum, Datum) {
-        match (left, right) {
+    pub fn coerce(left: Datum, right: Datum) -> Result<(Datum, Datum)> {
+        let res = match (left, right) {
             a @ (Datum::Dec(_), Datum::Dec(_)) |
             a @ (Datum::F64(_), Datum::F64(_)) => a,
-            (l @ Datum::Dec(_), r) => (l, r.coerce_to_dec()),
-            (l, r @ Datum::Dec(_)) => (l.coerce_to_dec(), r),
-            (l @ Datum::F64(_), r) => (l, r.coerce_to_f64()),
-            (l, r @ Datum::F64(_)) => (l.coerce_to_f64(), r),
+            (l @ Datum::F64(_), r) => (l, try!(r.coerce_to_f64())),
+            (l, r @ Datum::F64(_)) => (try!(l.coerce_to_f64()), r),
+            (l @ Datum::Dec(_), r) => (l, try!(r.coerce_to_dec())),
+            (l, r @ Datum::Dec(_)) => (try!(l.coerce_to_dec()), r),
             p => p,
+        };
+        Ok(res)
+    }
+
+    pub fn checked_div(self, d: Datum) -> Result<Datum> {
+        match (self, d) {
+            (Datum::F64(f), d) => {
+                let f2 = try!(d.into_f64());
+                if f2 == 0f64 {
+                    return Ok(Datum::Null);
+                }
+                Ok(Datum::F64(f / f2))
+            }
+            (a, b) => {
+                let a = try!(a.into_dec());
+                let b = try!(b.into_dec());
+                match a / b {
+                    None => Ok(Datum::Null),
+                    Some(res) => {
+                        let d = try!(res.into_result());
+                        Ok(Datum::Dec(d))
+                    }
+                }
+            }
         }
     }
 
@@ -392,10 +445,8 @@ impl Datum {
                 }
             }
             (Datum::Dec(l), Datum::Dec(r)) => {
-                match l + r {
-                    Res::Ok(d) => Datum::Dec(d),
-                    _ => Datum::Null,
-                }
+                let dec = try!((l + r).into_result());
+                return Ok(Datum::Dec(dec));
             }
             (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
         };
@@ -1009,6 +1060,23 @@ mod test {
                 buf = rem;
             }
             assert!(buf.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_coerce_datum() {
+        let cases = vec![
+            (Datum::I64(1), Datum::I64(1), Datum::I64(1), Datum::I64(1)),
+            (Datum::U64(1), Datum::I64(1), Datum::U64(1), Datum::I64(1)),
+            (Datum::U64(1), Datum::Dec(1.into()), Datum::Dec(1.into()), Datum::Dec(1.into())),
+            (Datum::F64(1.0), Datum::Dec(1.into()), Datum::F64(1.0), Datum::F64(1.0)),
+            (Datum::F64(1.0), Datum::F64(1.0), Datum::F64(1.0), Datum::F64(1.0)),
+        ];
+
+        for (x, y, exp_x, exp_y) in cases {
+            let (res_x, res_y) = Datum::coerce(x, y).unwrap();
+            assert_eq!(res_x, exp_x);
+            assert_eq!(res_y, exp_y);
         }
     }
 }

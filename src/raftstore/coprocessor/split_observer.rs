@@ -117,11 +117,10 @@ mod test {
     use util::worker;
     use util::rocksdb;
     use byteorder::{BigEndian, WriteBytesExt};
-    use storage::DEFAULT_CFS;
+    use storage::ALL_CFS;
 
     fn new_peer_storage(path: &TempDir) -> PeerStorage {
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), DEFAULT_CFS)
-            .unwrap());
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
         PeerStorage::new(engine,
                          &Region::new(),
                          worker::dummy_scheduler(),
@@ -163,8 +162,7 @@ mod test {
         let region_start_key = new_row_key(256, 1, 0, 0);
         let key = new_row_key(256, 2, 1, 0);
         let path = TempDir::new("test-split").unwrap();
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), DEFAULT_CFS)
-            .unwrap());
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
         let mut r = Region::new();
         r.set_id(10);
         r.set_start_key(region_start_key);

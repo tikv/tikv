@@ -19,12 +19,14 @@ use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
 use kvproto::kvrpcpb::LockInfo;
 use mio::{EventLoop, EventLoopBuilder};
+use self::metrics::*;
 
 pub mod engine;
 pub mod mvcc;
 pub mod txn;
 pub mod config;
 mod types;
+mod metrics;
 
 pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Cursor,
@@ -40,7 +42,7 @@ pub const CF_LOCK: CfName = "lock";
 pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 pub const CF_BINLOG: CfName = "binlog";
-pub const DEFAULT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, CF_BINLOG];
+pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, CF_BINLOG];
 
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -138,58 +140,77 @@ pub enum Command {
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Command::Get { ref key, start_ts, .. } => {
-                write!(f, "kv::command::get {} @ {}", key, start_ts)
+            Command::Get { ref ctx, ref key, start_ts, .. } => {
+                write!(f, "kv::command::get {} @ {} | {:?}", key, start_ts, ctx)
             }
-            Command::BatchGet { ref keys, start_ts, .. } => {
-                write!(f, "kv::command_batch_get {} @ {}", keys.len(), start_ts)
-            }
-            Command::Scan { ref start_key, limit, start_ts, .. } => {
+            Command::BatchGet { ref ctx, ref keys, start_ts, .. } => {
                 write!(f,
-                       "kv::command::scan {}({}) @ {}",
+                       "kv::command_batch_get {} @ {} | {:?}",
+                       keys.len(),
+                       start_ts,
+                       ctx)
+            }
+            Command::Scan { ref ctx, ref start_key, limit, start_ts, .. } => {
+                write!(f,
+                       "kv::command::scan {}({}) @ {} | {:?}",
                        start_key,
                        limit,
-                       start_ts)
+                       start_ts,
+                       ctx)
             }
-            Command::Prewrite { ref mutations, start_ts, .. } => {
+            Command::Prewrite { ref ctx, ref mutations, start_ts, .. } => {
                 write!(f,
-                       "kv::command::prewrite mutations({}) @ {}",
+                       "kv::command::prewrite mutations({}) @ {} | {:?}",
                        mutations.len(),
-                       start_ts)
+                       start_ts,
+                       ctx)
             }
-            Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
+            Command::Commit { ref ctx, ref keys, lock_ts, commit_ts, .. } => {
                 write!(f,
-                       "kv::command::commit {} {} -> {}",
+                       "kv::command::commit {} {} -> {} | {:?}",
                        keys.len(),
                        lock_ts,
-                       commit_ts)
+                       commit_ts,
+                       ctx)
             }
-            Command::CommitThenGet { ref key, lock_ts, commit_ts, get_ts, .. } => {
+            Command::CommitThenGet { ref ctx, ref key, lock_ts, commit_ts, get_ts, .. } => {
                 write!(f,
-                       "kv::command::commit_then_get {:?} {} -> {} @ {}",
+                       "kv::command::commit_then_get {:?} {} -> {} @ {} | {:?}",
                        key,
                        lock_ts,
                        commit_ts,
-                       get_ts)
+                       get_ts,
+                       ctx)
             }
-            Command::Cleanup { ref key, start_ts, .. } => {
-                write!(f, "kv::command::cleanup {} @ {}", key, start_ts)
+            Command::Cleanup { ref ctx, ref key, start_ts, .. } => {
+                write!(f, "kv::command::cleanup {} @ {} | {:?}", key, start_ts, ctx)
             }
-            Command::Rollback { ref keys, start_ts, .. } => {
+            Command::Rollback { ref ctx, ref keys, start_ts, .. } => {
                 write!(f,
-                       "kv::command::rollback keys({}) @ {}",
+                       "kv::command::rollback keys({}) @ {} | {:?}",
                        keys.len(),
-                       start_ts)
+                       start_ts,
+                       ctx)
             }
-            Command::RollbackThenGet { ref key, lock_ts, .. } => {
-                write!(f, "kv::rollback_then_get {} @ {}", key, lock_ts)
+            Command::RollbackThenGet { ref ctx, ref key, lock_ts, .. } => {
+                write!(f, "kv::rollback_then_get {} @ {} | {:?}", key, lock_ts, ctx)
             }
-            Command::ScanLock { max_ts, .. } => write!(f, "kv::scan_lock {}", max_ts),
-            Command::ResolveLock { start_ts, commit_ts, .. } => {
-                write!(f, "kv::resolve_txn {} -> {:?}", start_ts, commit_ts)
+            Command::ScanLock { ref ctx, max_ts, .. } => {
+                write!(f, "kv::scan_lock {} | {:?}", max_ts, ctx)
             }
-            Command::Gc { safe_point, ref scan_key, .. } => {
-                write!(f, "kv::command::gc scan {:?} @{}", scan_key, safe_point)
+            Command::ResolveLock { ref ctx, start_ts, commit_ts, .. } => {
+                write!(f,
+                       "kv::resolve_txn {} -> {:?} | {:?}",
+                       start_ts,
+                       commit_ts,
+                       ctx)
+            }
+            Command::Gc { ref ctx, safe_point, ref scan_key, .. } => {
+                write!(f,
+                       "kv::command::gc scan {:?} @ {} | {:?}",
+                       scan_key,
+                       safe_point,
+                       ctx)
             }
         }
     }
@@ -211,6 +232,23 @@ impl Command {
             Command::ResolveLock { .. } => true,
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
+        }
+    }
+
+    pub fn tag(&self) -> &'static str {
+        match *self {
+            Command::Get { .. } => "get",
+            Command::BatchGet { .. } => "batch_get",
+            Command::Scan { .. } => "scan",
+            Command::Prewrite { .. } => "prewrite",
+            Command::Commit { .. } => "commit",
+            Command::CommitThenGet { .. } => "commit_then_get",
+            Command::Cleanup { .. } => "cleanup",
+            Command::Rollback { .. } => "rollback",
+            Command::RollbackThenGet { .. } => "rollback_then_get",
+            Command::ScanLock { .. } => "scan_lock",
+            Command::ResolveLock { .. } => "resolve_lock",
+            Command::Gc { .. } => "gc",
         }
     }
 }
@@ -246,7 +284,7 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let engine = try!(engine::new_engine(Dsn::RocksDBPath(&config.path), DEFAULT_CFS));
+        let engine = try!(engine::new_engine(Dsn::RocksDBPath(&config.path), ALL_CFS));
         Storage::from_engine(engine, config)
     }
 
@@ -314,7 +352,9 @@ impl Storage {
             key: key,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::SingleValue(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -329,7 +369,9 @@ impl Storage {
             keys: keys,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -346,7 +388,9 @@ impl Storage {
             limit: limit,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -363,7 +407,9 @@ impl Storage {
             primary: primary,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Booleans(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -380,7 +426,9 @@ impl Storage {
             lock_ts: lock_ts,
             commit_ts: commit_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -399,7 +447,9 @@ impl Storage {
             commit_ts: commit_ts,
             get_ts: get_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::SingleValue(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -414,7 +464,9 @@ impl Storage {
             key: key,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -429,7 +481,9 @@ impl Storage {
             keys: keys,
             start_ts: start_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -444,7 +498,9 @@ impl Storage {
             key: key,
             lock_ts: lock_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::SingleValue(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -457,7 +513,9 @@ impl Storage {
             ctx: ctx,
             max_ts: max_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Locks(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -472,7 +530,9 @@ impl Storage {
             start_ts: start_ts,
             commit_ts: commit_ts,
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
@@ -483,7 +543,9 @@ impl Storage {
             scan_key: None,
             keys: vec![],
         };
+        let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 }

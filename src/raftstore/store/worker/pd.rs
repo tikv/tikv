@@ -19,6 +19,7 @@ use uuid::Uuid;
 use kvproto::metapb;
 use kvproto::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, AdminRequest, AdminCmdType};
+use kvproto::raft_serverpb::RaftMessage;
 use kvproto::pdpb;
 
 use util::worker::Runnable;
@@ -27,6 +28,9 @@ use util::transport::SendCh;
 use pd::PdClient;
 use raftstore::store::Msg;
 use raftstore::Result;
+use raftstore::store::util::{check_key_in_region, is_epoch_stale};
+
+use super::metrics::*;
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
@@ -44,6 +48,10 @@ pub enum Task {
     ReportSplit {
         left: metapb::Region,
         right: metapb::Region,
+    },
+    ValidatePeer {
+        region: metapb::Region,
+        peer: metapb::Peer,
     },
 }
 
@@ -66,6 +74,9 @@ impl Display for Task {
             Task::StoreHeartbeat { ref stats } => write!(f, "store heartbeat stats: {:?}", stats),
             Task::ReportSplit { ref left, ref right } => {
                 write!(f, "report split left {:?}, right {:?}", left, right)
+            }
+            Task::ValidatePeer { ref region, ref peer } => {
+                write!(f, "validate peer {:?} with region {:?}", peer, region)
             }
         }
     }
@@ -105,27 +116,30 @@ impl<T: PdClient> Runner<T> {
             request: req,
             callback: cb,
         }) {
-            error!("send {:?} request to region {} err {:?}",
-                   cmd_type,
+            error!("[region {}] send {:?} request err {:?}",
                    region_id,
+                   cmd_type,
                    e);
         }
     }
 
     fn handle_ask_split(&self, region: metapb::Region, split_key: Vec<u8>, peer: metapb::Peer) {
-        metric_incr!("pd.ask_split");
+        PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "all"]).inc();
+
         match self.pd_client.ask_split(region.clone()) {
             Ok(mut resp) => {
-                metric_incr!("pd.ask_split.success");
-                info!("try to split with new region id {} for region {:?}",
+                info!("[region {}] try to split with new region id {} for region {:?}",
+                      region.get_id(),
                       resp.get_new_region_id(),
                       region);
+                PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "success"]).inc();
+
                 let req = new_split_region_request(split_key,
                                                    resp.get_new_region_id(),
                                                    resp.take_new_peer_ids());
                 self.send_admin_request(region, peer, req);
             }
-            Err(e) => debug!("failed to ask split: {:?}", e),
+            Err(e) => debug!("[region {}] failed to ask split: {:?}", region.get_id(), e),
         }
     }
 
@@ -133,15 +147,19 @@ impl<T: PdClient> Runner<T> {
                         region: metapb::Region,
                         peer: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>) {
-        metric_incr!("pd.heartbeat");
+        PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
+
         // Now we use put region protocol for heartbeat.
         match self.pd_client.region_heartbeat(region.clone(), peer.clone(), down_peers) {
             Ok(mut resp) => {
-                metric_incr!("pd.heartbeat.success");
+                PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
+
                 if resp.has_change_peer() {
-                    metric_incr!("pd.heartbeat.change_peer");
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]).inc();
+
                     let mut change_peer = resp.take_change_peer();
-                    info!("try to change peer {:?} {:?} for region {:?}",
+                    info!("[region {}] try to change peer {:?} {:?} for region {:?}",
+                          region.get_id(),
                           change_peer.get_change_type(),
                           change_peer.get_peer(),
                           region);
@@ -149,16 +167,22 @@ impl<T: PdClient> Runner<T> {
                                                       change_peer.take_peer());
                     self.send_admin_request(region, peer, req);
                 } else if resp.has_transfer_leader() {
-                    metric_incr!("pd.heartbeat.transfer_leader");
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["transfer leader"]).inc();
+
                     let mut transfer_leader = resp.take_transfer_leader();
-                    info!("try to transfer leader from {:?} to {:?}",
+                    info!("[region {}] try to transfer leader from {:?} to {:?}",
+                          region.get_id(),
                           peer,
                           transfer_leader.get_peer());
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     self.send_admin_request(region, peer, req)
                 }
             }
-            Err(e) => debug!("failed to send heartbeat: {:?}", e),
+            Err(e) => {
+                debug!("[region {}] failed to send heartbeat: {:?}",
+                       region.get_id(),
+                       e)
+            }
         }
     }
 
@@ -169,9 +193,99 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_report_split(&self, left: metapb::Region, right: metapb::Region) {
-        metric_incr!("pd.report_split");
+        PD_REQ_COUNTER_VEC.with_label_values(&["report split", "all"]).inc();
+
         if let Err(e) = self.pd_client.report_split(left, right) {
             error!("report split failed {:?}", e);
+        }
+        PD_REQ_COUNTER_VEC.with_label_values(&["report split", "success"]).inc();
+    }
+
+    // send a raft message to destroy the specified stale peer
+    fn send_destroy_peer_message(&self,
+                                 local_region: metapb::Region,
+                                 peer: metapb::Peer,
+                                 pd_region: metapb::Region) {
+        let mut message = RaftMessage::new();
+        message.set_region_id(local_region.get_id());
+        message.set_from_peer(peer.clone());
+        message.set_to_peer(peer.clone());
+        message.set_region_epoch(pd_region.get_region_epoch().clone());
+        message.set_is_tombstone(true);
+        if let Err(e) = self.ch.send(Msg::RaftMessage(message)) {
+            error!("send gc peer request to region {} err {:?}",
+                   local_region.get_id(),
+                   e)
+        }
+    }
+
+    fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
+        PD_REQ_COUNTER_VEC.with_label_values(&["get region", "all"]).inc();
+        match self.pd_client.get_region(local_region.get_start_key()) {
+            Ok(pd_region) => {
+                PD_REQ_COUNTER_VEC.with_label_values(&["get region", "success"]).inc();
+                if let Err(_) = check_key_in_region(local_region.get_start_key(), &pd_region) {
+                    // The region [start_key, ...) is missing in pd currently. It's probably
+                    // that a pending region split is happenning right now and that region
+                    // doesn't report it's heartbeat(with updated region info) yet.
+                    // We should sit tight and try another get_region task later.
+                    warn!("[region {}] {} fails to get region info from pd with start key: {:?}, \
+                           retry later",
+                          local_region.get_id(),
+                          peer.get_id(),
+                          local_region.get_start_key());
+                    PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region info missing"]).inc();
+                    return;
+                }
+                if pd_region.get_id() != local_region.get_id() {
+                    // The region range is covered by another region(different region id).
+                    // Local peer must be obsolete.
+                    info!("[region {}] {} the region has change its id to {}, this peer must be \
+                           stale and destroyed later",
+                          local_region.get_id(),
+                          peer.get_id(),
+                          pd_region.get_id());
+                    PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region id changed"]).inc();
+                    self.send_destroy_peer_message(local_region, peer, pd_region);
+                    return;
+                }
+
+                if is_epoch_stale(pd_region.get_region_epoch(),
+                                  local_region.get_region_epoch()) {
+                    // The local region epoch is fresher than region epoch in PD
+                    // This means the region info in PD is not updated to the latest even
+                    // after max_leader_missing_duration. Something is wrong in the system.
+                    // Just add a log here for this situation.
+                    error!("[region {}] {} the local region epoch: {:?} is greater the region \
+                            epoch in PD: {:?}. Something is wrong!",
+                           local_region.get_id(),
+                           peer.get_id(),
+                           local_region.get_region_epoch(),
+                           pd_region.get_region_epoch());
+                    PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region epoch error"]).inc();
+                    return;
+                }
+
+                let valid = pd_region.get_peers().into_iter().any(|p| p.to_owned() == peer);
+                if !valid {
+                    // Peer is not a member of this region anymore. Probably it's removed out.
+                    // Send it a raft massage to destroy it since it's obsolete.
+                    info!("[region {}] {} is not a valid member of region {:?}. To be destroyed \
+                           soon.",
+                          local_region.get_id(),
+                          peer.get_id(),
+                          pd_region);
+                    PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["peer stale"]).inc();
+                    self.send_destroy_peer_message(local_region, peer, pd_region);
+                    return;
+                }
+                info!("[region {}] {} is still valid in region {:?}",
+                      local_region.get_id(),
+                      peer.get_id(),
+                      pd_region);
+                PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["peer valid"]).inc();
+            }
+            Err(e) => error!("get region failed {:?}", e),
         }
     }
 }
@@ -189,6 +303,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             }
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
             Task::ReportSplit { left, right } => self.handle_report_split(left, right),
+            Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
         };
     }
 }

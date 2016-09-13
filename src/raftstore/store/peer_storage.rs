@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::{self, Arc};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering, AtomicBool};
 use std::cell::RefCell;
 use std::error;
 use std::time::Instant;
@@ -45,13 +45,30 @@ const MAX_SNAP_TRY_CNT: usize = 5;
 
 pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
-#[derive(PartialEq, Debug)]
+#[derive(Debug)]
 pub enum SnapState {
     Relax,
     Generating,
     Snap(Snapshot),
-    Applying,
+    Applying(Arc<AtomicBool>),
+    ApplyAborted,
     Failed,
+}
+
+impl PartialEq for SnapState {
+    fn eq(&self, other: &SnapState) -> bool {
+        match (self, other) {
+            (&SnapState::Relax, &SnapState::Relax) |
+            (&SnapState::Generating, &SnapState::Generating) |
+            (&SnapState::Failed, &SnapState::Failed) |
+            (&SnapState::ApplyAborted, &SnapState::ApplyAborted) => true,
+            (&SnapState::Snap(ref s1), &SnapState::Snap(ref s2)) => s1 == s2,
+            (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
+                b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
+            }
+            _ => false,
+        }
+    }
 }
 
 pub struct PeerStorage {
@@ -486,13 +503,53 @@ impl PeerStorage {
         Ok(())
     }
 
+    /// Delete all data that is not covered by `new_region`.
+    fn clear_extra_data(&self, new_region: &metapb::Region) -> Result<()> {
+        let timer = Instant::now();
+        let (old_start_key, old_end_key) = (enc_start_key(self.get_region()),
+                                            enc_end_key(self.get_region()));
+        let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
+        try!(delete_all_in_range(&self.engine, &old_start_key, &new_start_key));
+        try!(delete_all_in_range(&self.engine, &new_end_key, &old_end_key));
+        info!("{} clear extra data takes {:?}", self.tag, timer.elapsed());
+        Ok(())
+    }
+
     pub fn get_engine(&self) -> Arc<DB> {
         self.engine.clone()
     }
 
+    /// Check whether the storage has finished applying snapshot.
+    #[inline]
+    pub fn is_applying(&self) -> bool {
+        match *self.snap_state.borrow() {
+            SnapState::Applying(_) |
+            SnapState::ApplyAborted => true,
+            _ => false,
+        }
+    }
+
+    /// Check if the storage is applying a snapshot.
     #[inline]
     pub fn is_applying_snap(&self) -> bool {
-        self.is_snap_state(SnapState::Applying)
+        match *self.snap_state.borrow() {
+            SnapState::Applying(_) => true,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    pub fn is_canceling_snap(&self) -> bool {
+        match *self.snap_state.borrow() {
+            SnapState::Applying(ref abort) => abort.load(Ordering::Relaxed),
+            _ => false,
+        }
+    }
+
+    pub fn cancel_applying_snap(&mut self) {
+        if let SnapState::Applying(ref abort) = *self.snap_state.borrow() {
+            abort.store(true, Ordering::Relaxed);
+        }
     }
 
     #[inline]
@@ -545,11 +602,12 @@ impl PeerStorage {
         self.apply_state = ctx.apply_state;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
-            self.set_snap_state(SnapState::Applying);
+            let abort = Arc::new(AtomicBool::new(false));
+            self.set_snap_state(SnapState::Applying(abort.clone()));
 
             // cleanup data before schedule apply task
             if self.is_initialized() {
-                if let Err(e) = self.clear_data() {
+                if let Err(e) = self.clear_extra_data(&res.region) {
                     // No need panic here, when applying snapshot, the deletion will be tried
                     // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                     // [b, c) will be kept in rocksdb until a covered snapshot is applied or
@@ -560,7 +618,10 @@ impl PeerStorage {
                 }
             }
 
-            let task = SnapTask::Apply { region_id: region_id };
+            let task = SnapTask::Apply {
+                region_id: region_id,
+                abort: abort,
+            };
             // TODO: gracefully remove region instead.
             self.snap_sched.schedule(task).expect("snap apply job should not fail");
             self.region = res.region.clone();

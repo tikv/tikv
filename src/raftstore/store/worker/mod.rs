@@ -15,6 +15,7 @@ mod snap;
 mod split_check;
 mod compact;
 mod pd;
+mod metrics;
 
 pub use self::snap::{Task as SnapTask, Runner as SnapRunner, MsgSender};
 pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};

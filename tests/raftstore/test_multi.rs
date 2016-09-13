@@ -12,7 +12,9 @@
 // limitations under the License.
 
 use tikv::raftstore::store::*;
+use tikv::raftstore::{Error, Result};
 use kvproto::eraftpb::MessageType;
+use kvproto::raft_cmdpb::RaftCmdResponse;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
@@ -369,28 +371,29 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // guarantee peer 1 is leader
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
+    // if peer 2 is unreachable, leader will not send MsgAppend to peer 2, and the leader will
+    // send MsgAppend with committed information to peer 2 after network recovered, and peer 2
+    // will apply the entry regardless of we add an filter, so we put k0/v0 to make sure the
+    // network is reachable.
+    let (k0, v0) = (b"k0", b"v0");
+    cluster.must_put(k0, v0);
+
+    for i in 1..4 {
+        must_get_equal(&cluster.get_engine(i), k0, v0);
+    }
+
     // hack: first MsgAppend will append log, second MsgAppend will set commit index,
     // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
     cluster.add_send_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv)
         .allow(1));
-    // Make peer 2 have no way to know the uncommitted entries can be applied
-    // when it becomes leader.
-    cluster.add_send_filter(IsolateRegionStore::new(1, 1)
-        .msg_type(MessageType::MsgHeartbeatResponse)
-        .direction(Direction::Send));
-    cluster.add_send_filter(IsolateRegionStore::new(1, 3)
-        .msg_type(MessageType::MsgHeartbeatResponse)
-        .direction(Direction::Send));
+
     // Make peer 2's msg won't be replicated when it becomes leader,
     // so the uncommitted entries won't be applied immediatly.
-    cluster.add_send_filter(IsolateRegionStore::new(1, 1)
+    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
         .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Recv));
-    cluster.add_send_filter(IsolateRegionStore::new(1, 3)
-        .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Recv));
+        .direction(Direction::Send));
 
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
@@ -410,9 +413,32 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // in this situation we need use raft read
     must_get_none(&cluster.get_engine(2), k);
 
+    // internal read will use raft read no matter read_quorum is false or true, cause applied
+    // index's term not equal leader's term, and will failed with timeout
+    if let Err(Error::Timeout(_)) = get_with_timeout(cluster, k, false, Duration::from_secs(10)) {
+        debug!("raft read failed with timeout");
+    } else {
+        panic!("read didn't use raft, beyond exceptions");
+    }
+
+    // recover network
     cluster.clear_send_filters();
 
     assert_eq!(cluster.get(k).unwrap(), v);
+}
+
+fn get_with_timeout<T: Simulator>(cluster: &mut Cluster<T>,
+                                  key: &[u8],
+                                  read_quorum: bool,
+                                  timeout: Duration)
+                                  -> Result<RaftCmdResponse> {
+    let mut region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let req = new_request(region_id,
+                          region.take_region_epoch(),
+                          vec![new_get_cmd(key)],
+                          read_quorum);
+    cluster.call_command_on_leader(req, timeout)
 }
 
 #[test]

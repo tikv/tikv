@@ -71,7 +71,7 @@ impl Runner {
             first_idx = box_try!(keys::raft_log_index(&k));
         }
         if first_idx >= task.compact_idx {
-            info!("no need to compact");
+            info!("[region {}] no need to compact", task.region_id);
             return Ok(0);
         }
         let wb = WriteBatch::new();
@@ -89,15 +89,13 @@ impl Runner {
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
-        debug!("executing task {}", task);
+        debug!("[region {}] execute compacting log to {}",
+               task.region_id,
+               task.compact_idx);
         let region_id = task.region_id;
         match self.compact(task) {
-            Err(e) => error!("failed to compact: {:?}", e),
-            Ok(n) => {
-                info!("{} log entries have been compacted for region {}",
-                      n,
-                      region_id)
-            }
+            Err(e) => error!("[region {}] failed to compact: {:?}", region_id, e),
+            Ok(n) => info!("[region {}] compact {} log entries", region_id, n),
         }
     }
 }
