@@ -22,9 +22,9 @@ use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use time;
+use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
-use prometheus::{self, Encoder, TextEncoder};
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 #[macro_use]
@@ -387,22 +387,28 @@ pub fn print_tikv_info() {
 }
 
 /// `run_prometheus` runs a background prometheus client.
-pub fn run_prometheus(interval: Duration) -> Option<thread::JoinHandle<()>> {
+pub fn run_prometheus(interval: Duration,
+                      address: &str,
+                      job: &str)
+                      -> Option<thread::JoinHandle<()>> {
     if interval == Duration::from_secs(0) {
         return None;
     }
 
+    let job = job.to_owned();
+    let address = address.to_owned();
     Some(thread::spawn(move || {
-        let encoder = TextEncoder::new();
-        let mut buffer = Vec::<u8>::new();
         loop {
             let metric_familys = prometheus::gather();
-            encoder.encode(&metric_familys, &mut buffer).unwrap();
 
-            // Output to the standard output.
-            info!("{}", String::from_utf8(buffer.clone()).unwrap());
+            let res = prometheus::push_metrics(&job,
+                                               prometheus::hostname_grouping_key(),
+                                               &address,
+                                               metric_familys);
+            if let Err(e) = res {
+                error!("fail to push metrics: {}", e);
+            }
 
-            buffer.clear();
             thread::sleep(interval);
         }
     }))
