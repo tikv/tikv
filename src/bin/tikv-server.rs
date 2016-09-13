@@ -23,8 +23,12 @@ extern crate mio;
 extern crate toml;
 extern crate libc;
 extern crate fs2;
+#[cfg(unix)]
+extern crate signal;
+#[cfg(unix)]
+extern crate nix;
 
-use std::env;
+use std::{env, thread};
 use std::fs::{self, File};
 use std::path::Path;
 use std::sync::Arc;
@@ -34,6 +38,7 @@ use std::time::Duration;
 use getopts::{Options, Matches};
 use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
+use mio::EventLoop;
 use fs2::FileExt;
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
@@ -42,7 +47,8 @@ use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_event_loop,
                    create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
-use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver};
+use tikv::server::transport::RaftStoreRouter;
+use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
@@ -589,6 +595,42 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
+fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>)
+    where T: RaftStoreRouter,
+          S: StoreAddrResolver + Send + 'static
+{
+    let ch = server.get_sendch();
+    let h = thread::Builder::new()
+        .name("tikv-server".to_owned())
+        .spawn(move || {
+            server.run(&mut el).unwrap();
+        })
+        .unwrap();
+    handle_signal(ch);
+    h.join().unwrap();
+}
+
+#[cfg(unix)]
+fn handle_signal(ch: SendCh<Msg>) {
+    use signal::trap::Trap;
+    use nix::sys::signal::{SIGTERM, SIGINT};
+    let trap = Trap::trap(&[SIGTERM, SIGINT]);
+    for sig in trap {
+        match sig {
+            SIGTERM | SIGINT => {
+                info!("receive signal {}, stopping server...", sig);
+                ch.send(Msg::Quit).unwrap();
+                break;
+            }
+            // TODO: handle more signal
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn handle_signal(ch: SendCh<Msg>) {}
+
 fn run_local_server(listener: TcpListener, config: &Config) {
     let mut event_loop = create_event_loop(config).unwrap();
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
@@ -598,15 +640,15 @@ fn run_local_server(listener: TcpListener, config: &Config) {
         panic!("failed to start storage, error = {:?}", e);
     }
 
-    let mut svr = Server::new(&mut event_loop,
-                              config,
-                              listener,
-                              store,
-                              MockRaftStoreRouter,
-                              MockStoreAddrResolver,
-                              snap_mgr)
+    let svr = Server::new(&mut event_loop,
+                          config,
+                          listener,
+                          store,
+                          MockRaftStoreRouter,
+                          MockStoreAddrResolver,
+                          snap_mgr)
         .unwrap();
-    svr.run(&mut event_loop).unwrap();
+    start_server(svr, event_loop);
 }
 
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
@@ -638,15 +680,15 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
         panic!("failed to start storage, error = {:?}", e);
     }
 
-    let mut svr = Server::new(&mut event_loop,
-                              cfg,
-                              listener,
-                              store,
-                              raft_router,
-                              resolver,
-                              snap_mgr)
+    let svr = Server::new(&mut event_loop,
+                          cfg,
+                          listener,
+                          store,
+                          raft_router,
+                          resolver,
+                          snap_mgr)
         .unwrap();
-    svr.run(&mut event_loop).unwrap();
+    start_server(svr, event_loop);
     node.stop().unwrap();
 }
 
