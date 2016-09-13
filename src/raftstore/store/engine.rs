@@ -284,6 +284,10 @@ const MAX_DELETE_KEYS_COUNT: usize = 10000;
 /// finishes successfully but commit following `WriteBatch` failed, some keys are really deleted
 /// and can't be recovered.
 pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    if start_key >= end_key {
+        return Ok(());
+    }
+
     for cf in db.cf_names() {
         try!(delete_in_range_cf(db, cf, start_key, end_key));
     }
