@@ -503,6 +503,18 @@ impl PeerStorage {
         Ok(())
     }
 
+    /// Delete all data that is not covered by `new_region`.
+    fn clear_extra_data(&self, new_region: &metapb::Region) -> Result<()> {
+        let timer = Instant::now();
+        let (old_start_key, old_end_key) = (enc_start_key(self.get_region()),
+                                            enc_end_key(self.get_region()));
+        let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
+        try!(delete_all_in_range(&self.engine, &old_start_key, &new_start_key));
+        try!(delete_all_in_range(&self.engine, &new_end_key, &old_end_key));
+        info!("{} clear extra data takes {:?}", self.tag, timer.elapsed());
+        Ok(())
+    }
+
     pub fn get_engine(&self) -> Arc<DB> {
         self.engine.clone()
     }
@@ -595,7 +607,7 @@ impl PeerStorage {
 
             // cleanup data before schedule apply task
             if self.is_initialized() {
-                if let Err(e) = self.clear_data() {
+                if let Err(e) = self.clear_extra_data(&res.region) {
                     // No need panic here, when applying snapshot, the deletion will be tried
                     // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                     // [b, c) will be kept in rocksdb until a covered snapshot is applied or
