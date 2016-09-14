@@ -32,8 +32,8 @@ end-point-concurrency = 8
 [metric]
 # prometheus client push interval, set 0s to disable prometheus.
 push-interval = "15s"
-# prometheus pushgateway address.
-address = "127.0.0.1:9091"
+# prometheus pushgateway address, leaves it empty will disable prometheus.
+address = ""
 # prometheus client push job name.
 job = "tikv"
 

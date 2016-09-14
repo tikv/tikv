@@ -160,6 +160,10 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
                                         config,
                                         None,
                                         |v| v.as_str().map(|s| s.to_owned()));
+    if push_address.is_empty() {
+        return;
+    }
+
     let mut push_job = get_string_value("",
                                         "metric.job",
                                         matches,
