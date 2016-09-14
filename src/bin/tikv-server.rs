@@ -145,7 +145,7 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
 
 fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>) {
     let push_interval = get_integer_value("",
-                                          "metric.push-interval",
+                                          "metric.interval",
                                           matches,
                                           config,
                                           Some(0),
