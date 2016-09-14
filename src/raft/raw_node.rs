@@ -31,8 +31,9 @@ use raft::Storage;
 use protobuf::{self, RepeatedField};
 use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType, ConfChange,
                        ConfChangeType, ConfState};
-use raft::raft::{Config, Raft, SoftState, ReadState, INVALID_ID, INVALID_INDEX};
+use raft::raft::{Config, Raft, SoftState, INVALID_ID};
 use raft::Status;
+use raft::read_only::ReadState;
 
 #[derive(Debug, Default)]
 pub struct Peer {
@@ -86,11 +87,11 @@ pub struct Ready {
     // HardState will be equal to empty state if there is no update.
     pub hs: Option<HardState>,
 
-    // Readstate can be used for node to serve linearizable read requests locally
+    // read_states states can be used for node to serve linearizable read requests locally
     // when its applied index is greater than the index in ReadState.
     // Note that the read_state will be returned when raft receives MsgReadIndex.
     // The returned is only valid for the request that requested to read.
-    pub read_state: Option<ReadState>,
+    pub read_states: Vec<ReadState>,
 
     // Entries specifies entries to be saved to stable storage BEFORE
     // Messages are sent.
@@ -130,8 +131,8 @@ impl Ready {
         if raft.raft_log.get_unstable().snapshot.is_some() {
             rd.snapshot = raft.raft_log.get_unstable().snapshot.clone().unwrap();
         }
-        if raft.read_state.index != 0 {
-            rd.read_state = Some(raft.read_state.clone());
+        if !raft.read_states.is_empty() {
+            rd.read_states = raft.read_states.drain(..).collect();
         }
         rd
     }
@@ -218,9 +219,6 @@ impl<T: Storage> RawNode<T> {
         }
         if rd.snapshot != Snapshot::new() {
             self.raft.raft_log.stable_snap_to(rd.snapshot.get_metadata().get_index());
-        }
-        if let Some(_) = rd.read_state {
-            self.raft.read_state = Default::default();
         }
     }
 
@@ -312,7 +310,7 @@ impl<T: Storage> RawNode<T> {
            raft.raft_log.has_next_entries() {
             return true;
         }
-        if raft.read_state.index != INVALID_INDEX {
+        if !raft.read_states.is_empty() {
             return true;
         }
         false
@@ -359,6 +357,19 @@ impl<T: Storage> RawNode<T> {
         let mut m = Message::new();
         m.set_msg_type(MessageType::MsgTransferLeader);
         m.set_from(transferee);
+        self.raft.step(m).is_ok();
+    }
+
+    // ReadIndex requests a read state. The read state will be set in ready.
+    // Read State has a read index. Once the application advances further than the read
+    // index, any linearizable read requests issued before the read request can be
+    // processed safely. The read state will have the same rctx attched.
+    pub fn read_index(&mut self, rctx: Vec<u8>) {
+        let mut m = Message::new();
+        m.set_msg_type(MessageType::MsgReadIndex);
+        let mut e = Entry::new();
+        e.set_data(rctx);
+        m.set_entries(RepeatedField::from_vec(vec![e]));
         self.raft.step(m).is_ok();
     }
 
