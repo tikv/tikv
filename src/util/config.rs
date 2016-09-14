@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::DBCompressionType;
+use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 quick_error! {
     #[derive(Debug)]
@@ -50,6 +50,16 @@ pub fn parse_rocksdb_per_level_compression(tp: &str)
     }
 
     Ok(result)
+}
+
+pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ParseConfigError> {
+    match mode {
+        0 => Ok(DBRecoveryMode::TolerateCorruptedTailRecords),
+        1 => Ok(DBRecoveryMode::AbsoluteConsistency),
+        2 => Ok(DBRecoveryMode::PointInTime),
+        3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
+        _ => Err(ParseConfigError::RocksDB),
+    }
 }
 
 fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
