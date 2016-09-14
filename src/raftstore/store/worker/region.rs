@@ -321,7 +321,7 @@ impl<T: MsgSender> Runner<T> {
     }
 
     fn handle_destroy(&mut self, region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
-        info!("[region {}] deleting data in [{}, {}) of",
+        info!("[region {}] deleting data in [{}, {})",
               region_id,
               escape(&start_key),
               escape(&end_key));
