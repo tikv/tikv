@@ -80,6 +80,7 @@ impl Display for Task {
 fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     assert!(data.is_snapshot());
     let timer = Instant::now();
+
     let send_timer = SEND_SNAP_HISTOGRAM.start_timer();
 
     let snap = data.msg.get_raft().get_message().get_snapshot();
@@ -147,6 +148,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Register(token, meta) => {
+                SNAP_TASK_COUNTER.with_label_values(&["register"]).inc();
                 let mgr = self.snap_mgr.clone();
                 match SnapKey::from_snap(meta.get_message().get_snapshot())
                     .and_then(|key| mgr.rl().get_snap_file(&key, false).map(|r| (r, key))) {
@@ -168,6 +170,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 }
             }
             Task::Write(token, mut data) => {
+                SNAP_TASK_COUNTER.with_label_values(&["write"]).inc();
                 let mut should_close = false;
                 match self.files.entry(token) {
                     Entry::Occupied(mut e) => {
@@ -186,6 +189,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 }
             }
             Task::Close(token) => {
+                SNAP_TASK_COUNTER.with_label_values(&["close"]).inc();
                 match self.files.remove(&token) {
                     Some((mut writer, msg)) => {
                         let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
@@ -206,6 +210,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 }
             }
             Task::Discard(token) => {
+                SNAP_TASK_COUNTER.with_label_values(&["discard"]).inc();
                 if let Some((_, msg)) = self.files.remove(&token) {
                     debug!("discard snapshot: {:?}", msg);
                     // because token is inserted, following can't panic.
@@ -214,6 +219,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 }
             }
             Task::SendTo { addr, data, cb } => {
+                SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
                 let mgr = self.snap_mgr.clone();
                 self.pool.execute(move || {
                     let res = send_snap(mgr, addr, data);
