@@ -1157,7 +1157,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["sending"])
             .set(snap_stats.sending_count as f64);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
-            .set(snap_stats.sending_count as f64);
+            .set(snap_stats.receiving_count as f64);
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("failed to notify pd: {}", e);
