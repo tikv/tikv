@@ -625,11 +625,12 @@ fn handle_signal(ch: SendCh<Msg>) {
                 break;
             }
             SIGUSR1 => {
+                // Use SIGUSR1 to log metrics.
                 let mut buffer = vec![];
                 let metric_familys = prometheus::gather();
                 let encoder = TextEncoder::new();
                 encoder.encode(&metric_familys, &mut buffer).unwrap();
-                info!("{}", String::from_utf8(buffer.clone()).unwrap());
+                info!("{}", String::from_utf8(buffer).unwrap());
             }
             // TODO: handle more signal
             _ => unreachable!(),
