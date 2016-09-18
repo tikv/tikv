@@ -590,7 +590,7 @@ impl<T: Simulator> Cluster<T> {
         // directly to send the AskSplit request.
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let ch = self.sim.rl().get_store_sendch(leader.get_store_id()).unwrap();
-        ch.send(Msg::SplitCheckResult {
+        ch.try_send(Msg::SplitCheckResult {
                 region_id: region.get_id(),
                 epoch: region.get_region_epoch().clone(),
                 split_key: data_key(split_key),

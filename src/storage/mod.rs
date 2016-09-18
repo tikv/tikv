@@ -337,7 +337,7 @@ impl Storage {
     }
 
     fn send(&self, cmd: Command, cb: StorageCb) -> Result<()> {
-        box_try!(self.sendch.send(Msg::RawCmd { cmd: cmd, cb: cb }));
+        box_try!(self.sendch.try_send(Msg::RawCmd { cmd: cmd, cb: cb }));
         Ok(())
     }
 
