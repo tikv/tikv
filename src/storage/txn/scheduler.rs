@@ -656,10 +656,11 @@ impl Scheduler {
                                  pr: ProcessResult,
                                  to_be_write: Vec<Modify>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "write"]).inc();
-        if let Err(e) = {
-            let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
-            self.engine.async_write(extract_ctx(&cmd), to_be_write, engine_cb)
-        } {
+        if to_be_write.is_empty() {
+            return self.on_write_finished(cid, pr, Ok(()));
+        }
+        let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
+        if let Err(e) = self.engine.async_write(extract_ctx(&cmd), to_be_write, engine_cb) {
             let mut ctx = self.remove_ctx(cid);
             let cb = ctx.callback.take().unwrap();
             execute_callback(cb, ProcessResult::Failed { err: StorageError::from(e) });
