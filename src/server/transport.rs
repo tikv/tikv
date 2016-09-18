@@ -21,15 +21,15 @@ use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use raft::SnapshotStatus;
 use super::{Msg, ConnData};
-use util::transport::{SendCh, MAX_SEND_RETRY_CNT};
+use util::transport::SendCh;
 
 
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg.
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
 
-    /// Send StoreMsg, retry if failed.
-    fn try_send(&self, msg: StoreMsg, try_times: usize) -> RaftStoreResult<()>;
+    /// Send StoreMsg, retry if failed. Try times may vary from implementation.
+    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
 
     // Send RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
@@ -51,11 +51,10 @@ pub trait RaftStoreRouter: Send + Clone {
                        status: SnapshotStatus)
                        -> RaftStoreResult<()> {
         self.try_send(StoreMsg::ReportSnapshot {
-                          region_id: region_id,
-                          to_peer_id: to_peer_id,
-                          status: status,
-                      },
-                      MAX_SEND_RETRY_CNT)
+            region_id: region_id,
+            to_peer_id: to_peer_id,
+            status: status,
+        })
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
@@ -83,8 +82,8 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         Ok(())
     }
 
-    fn try_send(&self, msg: StoreMsg, try_times: usize) -> RaftStoreResult<()> {
-        try!(self.ch.try_send(msg, try_times));
+    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        try!(self.ch.try_send(msg));
         Ok(())
     }
 }
@@ -134,7 +133,7 @@ impl RaftStoreRouter for MockRaftStoreRouter {
         unimplemented!();
     }
 
-    fn try_send(&self, _: StoreMsg, _: usize) -> RaftStoreResult<()> {
+    fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use mio::{Sender, NotifyError};
 
-pub const MAX_SEND_RETRY_CNT: usize = 5;
+const MAX_SEND_RETRY_CNT: usize = 5;
 
 quick_error! {
     #[derive(Debug)]
@@ -56,10 +56,15 @@ impl<T: Debug> SendCh<T> {
     }
 
     pub fn send(&self, t: T) -> Result<(), Error> {
-        self.try_send(t, 1)
+        self.send_with_try_times(t, 1)
     }
 
-    pub fn try_send(&self, mut t: T, mut try_times: usize) -> Result<(), Error> {
+    /// Try send t with default try times.
+    pub fn try_send(&self, t: T) -> Result<(), Error> {
+        self.send_with_try_times(t, MAX_SEND_RETRY_CNT)
+    }
+
+    fn send_with_try_times(&self, mut t: T, mut try_times: usize) -> Result<(), Error> {
         loop {
             t = match self.ch.send(t) {
                 Ok(_) => return Ok(()),
@@ -146,10 +151,10 @@ mod tests {
             event_loop.run(&mut sender).unwrap();
         });
 
-        ch.try_send(Msg::Sleep(1000), MAX_SEND_RETRY_CNT).unwrap();
-        ch.try_send(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
-        ch.try_send(Msg::Stop, MAX_SEND_RETRY_CNT).unwrap();
-        match ch.try_send(Msg::Stop, MAX_SEND_RETRY_CNT) {
+        ch.try_send(Msg::Sleep(1000)).unwrap();
+        ch.try_send(Msg::Stop).unwrap();
+        ch.try_send(Msg::Stop).unwrap();
+        match ch.try_send(Msg::Stop) {
             Err(Error::Discard(_)) => {}
             res => panic!("expect discard error, but found: {:?}", res),
         }

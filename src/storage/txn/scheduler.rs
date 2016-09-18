@@ -41,7 +41,7 @@ use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError};
 use storage::{Key, Value, KvPair};
 use std::collections::HashMap;
 use mio::{self, EventLoop};
-use util::transport::{SendCh, MAX_SEND_RETRY_CNT};
+use util::transport::SendCh;
 use storage::engine::{Result as EngineResult, Callback as EngineCallback, Modify};
 use super::Result;
 use super::Error;
@@ -175,11 +175,10 @@ impl RunningCtx {
 fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallback<()> {
     Box::new(move |result: EngineResult<()>| {
         if let Err(e) = ch.try_send(Msg::WriteFinished {
-                                        cid: cid,
-                                        pr: pr,
-                                        result: result,
-                                    },
-                                    MAX_SEND_RETRY_CNT) {
+            cid: cid,
+            pr: pr,
+            result: result,
+        }) {
             panic!("send write finished to scheduler failed cid={}, err:{:?}",
                    cid,
                    e);
@@ -351,7 +350,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         _ => panic!("unsupported read command"),
     };
 
-    if let Err(e) = ch.try_send(Msg::ReadFinished { cid: cid, pr: pr }, MAX_SEND_RETRY_CNT) {
+    if let Err(e) = ch.try_send(Msg::ReadFinished { cid: cid, pr: pr }) {
         // Todo: if this happens we need to clean up command's context
         panic!("send read finished failed, cid={}, err={:?}", cid, e);
     }
@@ -362,8 +361,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
 fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     SCHED_WORKER_COUNTER_VEC.with_label_values(&[cmd.tag(), "write"]).inc();
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref()) {
-        if let Err(err) = ch.try_send(Msg::WritePrepareFailed { cid: cid, err: e },
-                                      MAX_SEND_RETRY_CNT) {
+        if let Err(err) = ch.try_send(Msg::WritePrepareFailed { cid: cid, err: e }) {
             // Todo: if this happens, lock will hold for ever
             panic!("send WritePrepareFailed message to channel failed. cid={}, err={:?}",
                    cid,
@@ -440,12 +438,11 @@ fn process_write_impl(cid: u64,
     };
 
     box_try!(ch.try_send(Msg::WritePrepareFinished {
-                             cid: cid,
-                             cmd: cmd,
-                             pr: pr,
-                             to_be_write: modifies,
-                         },
-                         MAX_SEND_RETRY_CNT));
+        cid: cid,
+        cmd: cmd,
+        pr: pr,
+        to_be_write: modifies,
+    }));
 
     Ok(())
 }
@@ -590,10 +587,9 @@ impl Scheduler {
         let ch = self.schedch.clone();
         let cb = box move |snapshot: EngineResult<Box<Snapshot>>| {
             if let Err(e) = ch.try_send(Msg::SnapshotFinished {
-                                            cid: cid,
-                                            snapshot: snapshot,
-                                        },
-                                        MAX_SEND_RETRY_CNT) {
+                cid: cid,
+                snapshot: snapshot,
+            }) {
                 panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e);
             }
         };

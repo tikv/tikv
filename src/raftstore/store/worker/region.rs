@@ -26,7 +26,7 @@ use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 use util::worker::Runnable;
 use util::codec::bytes::CompactBytesDecoder;
 use util::{escape, HandyRwLock, rocksdb};
-use util::transport::{SendCh, MAX_SEND_RETRY_CNT};
+use util::transport::SendCh;
 use raftstore;
 use raftstore::store::engine::{self, Mutable, Snapshot, Iterable};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
@@ -101,7 +101,7 @@ pub trait MsgSender {
 
 impl MsgSender for SendCh<Msg> {
     fn send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::try_send(self, msg, MAX_SEND_RETRY_CNT).map_err(|e| box_err!("{:?}", e))
+        SendCh::try_send(self, msg).map_err(|e| box_err!("{:?}", e))
     }
 }
 
