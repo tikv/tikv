@@ -24,7 +24,7 @@ quick_error! {
     #[derive(Debug)]
     pub enum Error {
         Discard(reason: String) {
-            description("message is discard")
+            description("message is discarded")
             display("{}", reason)
         }
         Other(err: Box<error::Error + Send + Sync>) {
@@ -39,7 +39,7 @@ quick_error! {
 impl<T: Debug> From<NotifyError<T>> for Error {
     fn from(e: NotifyError<T>) -> Error {
         match e {
-            // ALLERT!! make cause sensitive data leak.
+            // ALLERT!! May cause sensitive data leak.
             NotifyError::Full(m) => Error::Discard(format!("Failed to send {:?} due to full", m)),
             _ => box_err!("{:?}", e),
         }
