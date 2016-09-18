@@ -27,6 +27,7 @@ extern crate fs2;
 extern crate signal;
 #[cfg(unix)]
 extern crate nix;
+extern crate prometheus;
 
 use std::{env, thread};
 use std::fs::{self, File};
@@ -40,6 +41,7 @@ use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use mio::EventLoop;
 use fs2::FileExt;
+use prometheus::{Encoder, TextEncoder};
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
@@ -623,14 +625,22 @@ fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>)
 #[cfg(unix)]
 fn handle_signal(ch: SendCh<Msg>) {
     use signal::trap::Trap;
-    use nix::sys::signal::{SIGTERM, SIGINT};
-    let trap = Trap::trap(&[SIGTERM, SIGINT]);
+    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1};
+    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1]);
     for sig in trap {
         match sig {
             SIGTERM | SIGINT => {
                 info!("receive signal {}, stopping server...", sig);
                 ch.send(Msg::Quit).unwrap();
                 break;
+            }
+            SIGUSR1 => {
+                // Use SIGUSR1 to log metrics.
+                let mut buffer = vec![];
+                let metric_familys = prometheus::gather();
+                let encoder = TextEncoder::new();
+                encoder.encode(&metric_familys, &mut buffer).unwrap();
+                info!("{}", String::from_utf8(buffer).unwrap());
             }
             // TODO: handle more signal
             _ => unreachable!(),
