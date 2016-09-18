@@ -112,7 +112,7 @@ impl<T: PdClient> Runner<T> {
 
         let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
-        if let Err(e) = self.ch.send(Msg::RaftCmd {
+        if let Err(e) = self.ch.try_send(Msg::RaftCmd {
             request: req,
             callback: cb,
         }) {
@@ -212,7 +212,7 @@ impl<T: PdClient> Runner<T> {
         message.set_to_peer(peer.clone());
         message.set_region_epoch(pd_region.get_region_epoch().clone());
         message.set_is_tombstone(true);
-        if let Err(e) = self.ch.send(Msg::RaftMessage(message)) {
+        if let Err(e) = self.ch.try_send(Msg::RaftMessage(message)) {
             error!("send gc peer request to region {} err {:?}",
                    local_region.get_id(),
                    e)

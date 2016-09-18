@@ -973,7 +973,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
-            if let Err(e) = self.sendch.send(Msg::RaftCmd {
+            if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
                 callback: cb,
             }) {

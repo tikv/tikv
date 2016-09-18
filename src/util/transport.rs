@@ -23,11 +23,25 @@ const MAX_SEND_RETRY_CNT: usize = 5;
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Other(err: Box<error::Error + Sync + Send>) {
+        Discard(reason: String) {
+            description("message is discarded")
+            display("{}", reason)
+        }
+        Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())
             display("unknown error {:?}", err)
+        }
+    }
+}
+
+impl<T: Debug> From<NotifyError<T>> for Error {
+    fn from(e: NotifyError<T>) -> Error {
+        match e {
+            // ALLERT!! May cause sensitive data leak.
+            NotifyError::Full(m) => Error::Discard(format!("Failed to send {:?} due to full", m)),
+            _ => box_err!("{:?}", e),
         }
     }
 }
@@ -41,25 +55,33 @@ impl<T: Debug> SendCh<T> {
         SendCh { ch: ch }
     }
 
-    pub fn send(&self, mut t: T) -> Result<(), Error> {
-        let mut try_cnt = 0;
-        while let Err(e) = self.ch.send(t) {
-            t = match e {
-                NotifyError::Full(m) => m,
-                _ => return Err(box_err!("{:?}", e)),
+    /// Try send t with default try times.
+    pub fn send(&self, t: T) -> Result<(), Error> {
+        self.send_with_try_times(t, MAX_SEND_RETRY_CNT)
+    }
+
+    pub fn try_send(&self, t: T) -> Result<(), Error> {
+        self.send_with_try_times(t, 1)
+    }
+
+    fn send_with_try_times(&self, mut t: T, mut try_times: usize) -> Result<(), Error> {
+        loop {
+            t = match self.ch.send(t) {
+                Ok(_) => return Ok(()),
+                Err(NotifyError::Full(m)) => {
+                    if try_times <= 1 {
+                        return Err(NotifyError::Full(m).into());
+                    }
+                    try_times -= 1;
+                    m
+                }
+                Err(e) => return Err(e.into()),
             };
 
             // ALLERT!! make cause sensitive data leak.
             warn!("notify queue is full, sleep and retry sending {:?}", t);
-            try_cnt += 1;
-            if try_cnt >= MAX_SEND_RETRY_CNT {
-                return Err(box_err!("failed to send msg {:?} after {} tries",
-                                    t,
-                                    MAX_SEND_RETRY_CNT));
-            }
             thread::sleep(Duration::from_millis(100));
         }
-        Ok(())
     }
 }
 
@@ -96,7 +118,7 @@ mod tests {
         fn notify(&mut self, event_loop: &mut EventLoop<SenderHandler>, msg: Msg) {
             match msg {
                 Msg::Quit => event_loop.shutdown(),
-                Msg::Stop => self.ch.send(Msg::Quit).unwrap(),
+                Msg::Stop => self.ch.try_send(Msg::Quit).unwrap(),
                 Msg::Sleep(millis) => thread::sleep(Duration::from_millis(millis)),
             }
         }
@@ -112,7 +134,7 @@ mod tests {
             event_loop.run(&mut sender).unwrap();
         });
 
-        ch.send(Msg::Stop).unwrap();
+        ch.try_send(Msg::Stop).unwrap();
 
         h.join().unwrap();
     }
@@ -132,7 +154,10 @@ mod tests {
         ch.send(Msg::Sleep(1000)).unwrap();
         ch.send(Msg::Stop).unwrap();
         ch.send(Msg::Stop).unwrap();
-        assert!(ch.send(Msg::Stop).is_err());
+        match ch.send(Msg::Stop) {
+            Err(Error::Discard(_)) => {}
+            res => panic!("expect discard error, but found: {:?}", res),
+        }
 
         h.join().unwrap();
     }

@@ -670,6 +670,11 @@ mod tests {
             Ok(())
         }
 
+        fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
+            Ok(())
+        }
+
         fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) -> RaftStoreResult<()> {
             unimplemented!();
         }
@@ -708,7 +713,7 @@ mod tests {
         let mut msg = Message::new();
         msg.set_msg_type(MessageType::Raft);
 
-        ch.send(Msg::SendStore {
+        ch.try_send(Msg::SendStore {
                 store_id: 1,
                 data: ConnData::new(0, msg),
             })
@@ -716,7 +721,7 @@ mod tests {
 
         rx.recv().unwrap();
 
-        ch.send(Msg::Quit).unwrap();
+        ch.try_send(Msg::Quit).unwrap();
         h.join().unwrap();
     }
 }

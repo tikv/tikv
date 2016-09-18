@@ -179,7 +179,7 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallbac
             pr: pr,
             result: result,
         }) {
-            error!("send write finished to scheduler failed cid={}, err:{:?}",
+            panic!("send write finished to scheduler failed cid={}, err:{:?}",
                    cid,
                    e);
         }
@@ -352,7 +352,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
 
     if let Err(e) = ch.send(Msg::ReadFinished { cid: cid, pr: pr }) {
         // Todo: if this happens we need to clean up command's context
-        error!("send read finished failed, cid={}, err={:?}", cid, e);
+        panic!("send read finished failed, cid={}, err={:?}", cid, e);
     }
 }
 
@@ -590,7 +590,7 @@ impl Scheduler {
                 cid: cid,
                 snapshot: snapshot,
             }) {
-                error!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e);
+                panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e);
             }
         };
 

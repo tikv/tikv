@@ -39,7 +39,7 @@ impl Channel<RaftMessage> for ServerTransport {
 
 impl Channel<StoreMsg> for ServerRaftStoreRouter {
     fn send(&self, m: StoreMsg) -> Result<()> {
-        RaftStoreRouter::send(self, m)
+        RaftStoreRouter::try_send(self, m)
     }
 }
 
@@ -144,6 +144,10 @@ impl<C: Channel<RaftMessage>> Transport for SimulateTransport<RaftMessage, C> {
 
 impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {
     fn send(&self, m: StoreMsg) -> Result<()> {
+        Channel::send(self, m)
+    }
+
+    fn try_send(&self, m: StoreMsg) -> Result<()> {
         Channel::send(self, m)
     }
 }

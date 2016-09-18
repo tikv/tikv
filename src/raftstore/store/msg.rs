@@ -126,7 +126,7 @@ mod tests {
                     timeout: Duration)
                     -> Result<RaftCmdResponse, Error> {
         wait_event!(|cb: Box<Fn(RaftCmdResponse) + 'static + Send>| {
-            sendch.send(Msg::RaftCmd {
+            sendch.try_send(Msg::RaftCmd {
                     request: request,
                     callback: box move |resp| {
                         cb(resp);
@@ -178,7 +178,7 @@ mod tests {
             _ => panic!("should failed with timeout"),
         }
 
-        sendch.send(Msg::Quit).unwrap();
+        sendch.try_send(Msg::Quit).unwrap();
 
         t.join().unwrap();
     }
