@@ -40,8 +40,8 @@ impl<'a> MvccTxn<'a> {
         }
     }
 
-    pub fn modifies(&mut self) -> Vec<Modify> {
-        self.writes.drain(..).collect()
+    pub fn modifies(self) -> Vec<Modify> {
+        self.writes
     }
 
     fn lock_key(&mut self, key: Key, lock_type: LockType, primary: Vec<u8>) {
