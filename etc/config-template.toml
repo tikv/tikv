@@ -34,7 +34,7 @@ end-point-concurrency = 8
 interval = "15s"
 # prometheus pushgateway address, leaves it empty will disable prometheus.
 address = ""
-# prometheus client push job name.
+# prometheus client push job name. Notice: A node id will automatically appends, e.g., "tikv_1".
 job = "tikv"
 
 [raftstore]
