@@ -31,9 +31,9 @@ use util::worker::Scheduler;
 use util::rocksdb;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
-use super::worker::SnapTask;
+use super::worker::RegionTask;
 use super::keys::{self, enc_start_key, enc_end_key};
-use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable, delete_all_in_range};
+use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 use storage::CF_RAFT;
 
@@ -80,7 +80,7 @@ pub struct PeerStorage {
     pub applied_index_term: u64,
 
     snap_state: RefCell<SnapState>,
-    snap_sched: Scheduler<SnapTask>,
+    region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: AtomicUsize,
 
     pub tag: String,
@@ -145,7 +145,7 @@ impl InvokeContext {
 impl PeerStorage {
     pub fn new(engine: Arc<DB>,
                region: &metapb::Region,
-               snap_sched: Scheduler<SnapTask>,
+               region_sched: Scheduler<RegionTask>,
                tag: String)
                -> Result<PeerStorage> {
         debug!("creating storage on {} for {:?}", engine.path(), region);
@@ -181,7 +181,7 @@ impl PeerStorage {
             raft_state: raft_state,
             apply_state: apply_state,
             snap_state: RefCell::new(SnapState::Relax),
-            snap_sched: snap_sched,
+            region_sched: region_sched,
             snap_tried_cnt: AtomicUsize::new(0),
             tag: tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
@@ -348,8 +348,8 @@ impl PeerStorage {
         } else {
             return Err(raft::Error::Store(raft::StorageError::SnapshotTemporarilyUnavailable));
         }
-        let task = SnapTask::Gen { region_id: self.get_region_id() };
-        if let Err(e) = self.snap_sched.schedule(task) {
+        let task = RegionTask::Gen { region_id: self.get_region_id() };
+        if let Err(e) = self.region_sched.schedule(task) {
             error!("{} failed to schedule task snap generation: {:?}",
                    self.tag,
                    e);
@@ -494,24 +494,27 @@ impl PeerStorage {
     /// Delete all data belong to the region.
     /// If return Err, data may get partial deleted.
     pub fn clear_data(&self) -> Result<()> {
-        let timer = Instant::now();
         let (start_key, end_key) = (enc_start_key(self.get_region()),
                                     enc_end_key(self.get_region()));
-
-        try!(delete_all_in_range(&self.engine, &start_key, &end_key));
-        info!("{} clear peer data, takes {:?}", self.tag, timer.elapsed());
+        let region_id = self.get_region_id();
+        box_try!(self.region_sched.schedule(RegionTask::destroy(region_id, start_key, end_key)));
         Ok(())
     }
 
     /// Delete all data that is not covered by `new_region`.
     fn clear_extra_data(&self, new_region: &metapb::Region) -> Result<()> {
-        let timer = Instant::now();
         let (old_start_key, old_end_key) = (enc_start_key(self.get_region()),
                                             enc_end_key(self.get_region()));
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
-        try!(delete_all_in_range(&self.engine, &old_start_key, &new_start_key));
-        try!(delete_all_in_range(&self.engine, &new_end_key, &old_end_key));
-        info!("{} clear extra data takes {:?}", self.tag, timer.elapsed());
+        let region_id = new_region.get_id();
+        if old_start_key < new_start_key {
+            box_try!(self.region_sched
+                .schedule(RegionTask::destroy(region_id, old_start_key, new_start_key)));
+        }
+        if new_end_key < old_end_key {
+            box_try!(self.region_sched
+                .schedule(RegionTask::destroy(region_id, new_end_key, old_end_key)));
+        }
         Ok(())
     }
 
@@ -618,12 +621,12 @@ impl PeerStorage {
                 }
             }
 
-            let task = SnapTask::Apply {
+            let task = RegionTask::Apply {
                 region_id: region_id,
                 abort: abort,
             };
             // TODO: gracefully remove region instead.
-            self.snap_sched.schedule(task).expect("snap apply job should not fail");
+            self.region_sched.schedule(task).expect("snap apply job should not fail");
             self.region = res.region.clone();
             return Ok(Some(res));
         }
@@ -817,9 +820,9 @@ mod test {
     use protobuf;
     use raftstore;
     use raftstore::store::*;
-    use raftstore::store::worker::{SnapRunner, MsgSender};
+    use raftstore::store::worker::{RegionRunner, MsgSender};
     use util::codec::number::NumberEncoder;
-    use raftstore::store::worker::SnapTask;
+    use raftstore::store::worker::RegionTask;
     use util::worker::{Worker, Scheduler};
     use util::HandyRwLock;
     use util::rocksdb::new_engine;
@@ -834,7 +837,7 @@ mod test {
         }
     }
 
-    fn new_storage(sched: Scheduler<SnapTask>, path: &TempDir) -> PeerStorage {
+    fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
         let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
@@ -842,7 +845,7 @@ mod test {
         PeerStorage::new(db, &region, sched, "".to_owned()).unwrap()
     }
 
-    fn new_storage_from_ents(sched: Scheduler<SnapTask>,
+    fn new_storage_from_ents(sched: Scheduler<RegionTask>,
                              path: &TempDir,
                              ents: &[Entry])
                              -> PeerStorage {
@@ -974,7 +977,7 @@ mod test {
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
         let (tx, rx) = channel();
-        let runner = SnapRunner::new(s.engine.clone(), tx, mgr);
+        let runner = RegionRunner::new(s.engine.clone(), tx, mgr);
         worker.start(runner).unwrap();
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -1060,7 +1063,7 @@ mod test {
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let (tx, rx) = channel();
-        let runner = SnapRunner::new(s1.engine.clone(), tx, mgr.clone());
+        let runner = RegionRunner::new(s1.engine.clone(), tx, mgr.clone());
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());
         let snap1 = match rx.recv().unwrap() {
