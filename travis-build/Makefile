@@ -15,9 +15,9 @@ ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/lib/librocksdb.so:
 	export CPLUS_INCLUDE_PATH="${CPLUS_INCLUDE_PATH}:${LOCAL_DIR}/include" && \
 	export CXX=${COMPILER} && \
 	cd /tmp && \
-	curl -L https://github.com/facebook/rocksdb/archive/rocksdb-4.9.tar.gz -o rocksdb.tar.gz && \
+	curl -L https://github.com/facebook/rocksdb/archive/4.12.fb.tar.gz -o rocksdb.tar.gz && \
 	tar xf rocksdb.tar.gz && \
-	cd rocksdb-rocksdb-4.9 && \
+	cd rocksdb-4.12.fb && \
 	INSTALL_PATH=${LOCAL_DIR} make install-shared
 
 # TODO: use offical archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
