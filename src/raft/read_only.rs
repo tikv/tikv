@@ -26,7 +26,7 @@
 // limitations under the License.
 
 use kvproto::eraftpb::Message;
-use std::collections::{HashSet, HashMap};
+use std::collections::{VecDeque, HashSet, HashMap};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ReadOnlyOption {
@@ -69,7 +69,7 @@ pub struct ReadIndexStatus {
 pub struct ReadOnly {
     pub option: ReadOnlyOption,
     pub pending_read_index: HashMap<Vec<u8>, ReadIndexStatus>,
-    pub read_index_queue: Vec<Vec<u8>>,
+    pub read_index_queue: VecDeque<Vec<u8>>,
 }
 
 impl ReadOnly {
@@ -77,7 +77,7 @@ impl ReadOnly {
         ReadOnly {
             option: option,
             pending_read_index: HashMap::new(),
-            read_index_queue: vec![],
+            read_index_queue: VecDeque::new(),
         }
     }
 
@@ -96,14 +96,14 @@ impl ReadOnly {
             acks: HashSet::new(),
         };
         self.pending_read_index.insert(ctx.clone(), status);
-        self.read_index_queue.push(ctx);
+        self.read_index_queue.push_back(ctx);
     }
 
     /// rev_ack notifies the ReadOnly struct that the raft state machine received
     /// an acknowledgment of the heartbeat that attached with the read only request
     /// context.
     pub fn recv_ack(&mut self, m: &Message) -> usize {
-        match self.pending_read_index.get_mut(&m.get_context().to_vec()) {
+        match self.pending_read_index.get_mut(m.get_context()) {
             None => 0,
             Some(rs) => {
                 rs.acks.insert(m.get_from());
@@ -117,28 +117,17 @@ impl ReadOnly {
     /// It dequeues the requests until it finds the read only request that has
     /// the same context as the given `m`.
     pub fn advance(&mut self, m: &Message) -> Vec<ReadIndexStatus> {
-        let mut i = 0;
-        let mut found = false;
-        let ctx = m.get_context().to_vec();
-
-        for c in &self.read_index_queue {
-            i += 1;
-            if !self.pending_read_index.contains_key(c) {
+        let mut rss = vec![];
+        if let Some(i) = self.read_index_queue.iter().position(|x| {
+            if !self.pending_read_index.contains_key(x) {
                 panic!("cannot find correspond read state from pending map");
             }
-            if *c == ctx {
-                found = true;
-                break;
-            }
-        }
-
-        let mut rss = vec![];
-        if found {
-            let to_keep = self.read_index_queue.split_off(i);
+            *x == m.get_context()
+        }) {
+            let to_keep = self.read_index_queue.split_off(i + 1);
             for rs in &self.read_index_queue {
-                match self.pending_read_index.remove(rs) {
-                    Some(status) => rss.push(status),
-                    None => panic!("cannot find correspond read state from pending map"),
+                if let Some(status) = self.pending_read_index.remove(rs) {
+                    rss.push(status)
                 }
             }
             self.read_index_queue = to_keep;
@@ -149,9 +138,6 @@ impl ReadOnly {
     /// last_pending_request_ctx returns the context of the last pending read only
     /// request in ReadOnly struct.
     pub fn last_pending_request_ctx(&self) -> Option<Vec<u8>> {
-        match self.read_index_queue.last() {
-            None => None,
-            Some(ctx) => Some(ctx.clone()),
-        }
+        self.read_index_queue.back().cloned()
     }
 }
