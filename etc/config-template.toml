@@ -30,9 +30,9 @@ end-point-concurrency = 8
 # capacity = 0 # 0 is unlimited.
 
 [metric]
-# prometheus client push interval, set 0s to disable prometheus.
+# prometheus client push interval, set 0s to disable prometheus from pushing.
 interval = "15s"
-# prometheus pushgateway address, leaves it empty will disable prometheus.
+# prometheus pushgateway address, leaves it empty will disable prometheus from pushing.
 address = ""
 # prometheus client push job name. Notice: A node id will automatically appends, e.g., "tikv_1".
 job = "tikv"
