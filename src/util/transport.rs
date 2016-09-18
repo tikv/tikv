@@ -55,13 +55,13 @@ impl<T: Debug> SendCh<T> {
         SendCh { ch: ch }
     }
 
-    pub fn try_send(&self, t: T) -> Result<(), Error> {
-        self.send_with_try_times(t, 1)
-    }
-
     /// Try send t with default try times.
     pub fn send(&self, t: T) -> Result<(), Error> {
         self.send_with_try_times(t, MAX_SEND_RETRY_CNT)
+    }
+
+    pub fn try_send(&self, t: T) -> Result<(), Error> {
+        self.send_with_try_times(t, 1)
     }
 
     fn send_with_try_times(&self, mut t: T, mut try_times: usize) -> Result<(), Error> {

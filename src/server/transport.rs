@@ -25,11 +25,11 @@ use util::transport::SendCh;
 
 
 pub trait RaftStoreRouter: Send + Clone {
-    /// Send StoreMsg.
-    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
-
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
+
+    /// Send StoreMsg.
+    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
 
     // Send RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
@@ -129,11 +129,11 @@ impl Transport for ServerTransport {
 pub struct MockRaftStoreRouter;
 
 impl RaftStoreRouter for MockRaftStoreRouter {
-    fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
         unimplemented!();
     }
 
-    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+    fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }
