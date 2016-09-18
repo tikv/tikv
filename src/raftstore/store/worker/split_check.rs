@@ -108,7 +108,7 @@ impl Runnable<Task> for Runner {
             CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
             return;
         }
-        let res = self.ch.send(new_split_check_result(task.region_id, task.epoch, split_key));
+        let res = self.ch.try_send(new_split_check_result(task.region_id, task.epoch, split_key));
         if let Err(e) = res {
             warn!("[region {}] failed to send check result, err {:?}",
                   task.region_id,

@@ -318,7 +318,7 @@ impl Storage {
             return Ok(());
         }
 
-        if let Err(e) = self.sendch.try_send(Msg::Quit) {
+        if let Err(e) = self.sendch.send(Msg::Quit) {
             error!("send quit cmd to scheduler failed, error:{:?}", e);
             return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }
@@ -337,7 +337,7 @@ impl Storage {
     }
 
     fn send(&self, cmd: Command, cb: StorageCb) -> Result<()> {
-        box_try!(self.sendch.send(Msg::RawCmd { cmd: cmd, cb: cb }));
+        box_try!(self.sendch.try_send(Msg::RawCmd { cmd: cmd, cb: cb }));
         Ok(())
     }
 

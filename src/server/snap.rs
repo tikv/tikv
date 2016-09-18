@@ -138,7 +138,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
     }
 
     pub fn close(&self, token: Token) {
-        if let Err(e) = self.ch.try_send(Msg::CloseConn { token: token }) {
+        if let Err(e) = self.ch.send(Msg::CloseConn { token: token }) {
             error!("failed to close connection {:?}: {:?}", token, e);
         }
     }

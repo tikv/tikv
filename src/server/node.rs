@@ -253,7 +253,7 @@ impl<C> Node<C>
             Some(h) => h,
         };
 
-        box_try!(self.ch.try_send(Msg::Quit));
+        box_try!(self.ch.send(Msg::Quit));
         if let Err(e) = h.join() {
             return Err(box_err!("join store {} thread err {:?}", store_id, e));
         }

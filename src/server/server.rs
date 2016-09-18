@@ -388,7 +388,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn resolve_store(&mut self, store_id: u64, data: ConnData) {
         let ch = self.sendch.clone();
         let cb = box move |r| {
-            if let Err(e) = ch.try_send(Msg::ResolveResult {
+            if let Err(e) = ch.send(Msg::ResolveResult {
                 store_id: store_id,
                 sock_addr: r,
                 data: data,
@@ -524,7 +524,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let ch = self.sendch.clone();
         box move |res: Message| {
             let tp = res.get_msg_type();
-            if let Err(e) = ch.try_send(Msg::WriteData {
+            if let Err(e) = ch.send(Msg::WriteData {
                 token: token,
                 data: ConnData::new(msg_id, res),
             }) {
@@ -665,12 +665,12 @@ mod tests {
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
-        fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
 
-        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -713,7 +713,7 @@ mod tests {
         let mut msg = Message::new();
         msg.set_msg_type(MessageType::Raft);
 
-        ch.send(Msg::SendStore {
+        ch.try_send(Msg::SendStore {
                 store_id: 1,
                 data: ConnData::new(0, msg),
             })
@@ -721,7 +721,7 @@ mod tests {
 
         rx.recv().unwrap();
 
-        ch.send(Msg::Quit).unwrap();
+        ch.try_send(Msg::Quit).unwrap();
         h.join().unwrap();
     }
 }

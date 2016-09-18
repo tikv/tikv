@@ -26,19 +26,19 @@ use util::transport::SendCh;
 
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg.
-    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
+    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
 
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.
-    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
+    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
 
     // Send RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        self.send(StoreMsg::RaftMessage(msg))
+        self.try_send(StoreMsg::RaftMessage(msg))
     }
 
     // Send RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        self.send(StoreMsg::RaftCmd {
+        self.try_send(StoreMsg::RaftCmd {
             request: req,
             callback: cb,
         })
@@ -50,7 +50,7 @@ pub trait RaftStoreRouter: Send + Clone {
                        to_peer_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::ReportSnapshot {
+        self.send(StoreMsg::ReportSnapshot {
             region_id: region_id,
             to_peer_id: to_peer_id,
             status: status,
@@ -58,7 +58,7 @@ pub trait RaftStoreRouter: Send + Clone {
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        self.send(StoreMsg::ReportUnreachable {
+        self.try_send(StoreMsg::ReportUnreachable {
             region_id: region_id,
             to_peer_id: to_peer_id,
         })
@@ -77,13 +77,13 @@ impl ServerRaftStoreRouter {
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
-    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        try!(self.ch.send(msg));
+    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        try!(self.ch.try_send(msg));
         Ok(())
     }
 
-    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        try!(self.ch.try_send(msg));
+    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        try!(self.ch.send(msg));
         Ok(())
     }
 }
@@ -115,7 +115,7 @@ impl Transport for ServerTransport {
         req.set_msg_type(MessageType::Raft);
         req.set_raft(msg);
 
-        try!(self.ch.send(Msg::SendStore {
+        try!(self.ch.try_send(Msg::SendStore {
             store_id: to_store_id,
             data: ConnData::new(self.alloc_msg_id(), req),
         }));
@@ -129,11 +129,11 @@ impl Transport for ServerTransport {
 pub struct MockRaftStoreRouter;
 
 impl RaftStoreRouter for MockRaftStoreRouter {
-    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+    fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
         unimplemented!();
     }
 
-    fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
         unimplemented!();
     }
 }

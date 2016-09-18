@@ -55,12 +55,12 @@ impl<T: Debug> SendCh<T> {
         SendCh { ch: ch }
     }
 
-    pub fn send(&self, t: T) -> Result<(), Error> {
+    pub fn try_send(&self, t: T) -> Result<(), Error> {
         self.send_with_try_times(t, 1)
     }
 
     /// Try send t with default try times.
-    pub fn try_send(&self, t: T) -> Result<(), Error> {
+    pub fn send(&self, t: T) -> Result<(), Error> {
         self.send_with_try_times(t, MAX_SEND_RETRY_CNT)
     }
 
@@ -118,7 +118,7 @@ mod tests {
         fn notify(&mut self, event_loop: &mut EventLoop<SenderHandler>, msg: Msg) {
             match msg {
                 Msg::Quit => event_loop.shutdown(),
-                Msg::Stop => self.ch.send(Msg::Quit).unwrap(),
+                Msg::Stop => self.ch.try_send(Msg::Quit).unwrap(),
                 Msg::Sleep(millis) => thread::sleep(Duration::from_millis(millis)),
             }
         }
@@ -134,7 +134,7 @@ mod tests {
             event_loop.run(&mut sender).unwrap();
         });
 
-        ch.send(Msg::Stop).unwrap();
+        ch.try_send(Msg::Stop).unwrap();
 
         h.join().unwrap();
     }
@@ -151,10 +151,10 @@ mod tests {
             event_loop.run(&mut sender).unwrap();
         });
 
-        ch.try_send(Msg::Sleep(1000)).unwrap();
-        ch.try_send(Msg::Stop).unwrap();
-        ch.try_send(Msg::Stop).unwrap();
-        match ch.try_send(Msg::Stop) {
+        ch.send(Msg::Sleep(1000)).unwrap();
+        ch.send(Msg::Stop).unwrap();
+        ch.send(Msg::Stop).unwrap();
+        match ch.send(Msg::Stop) {
             Err(Error::Discard(_)) => {}
             res => panic!("expect discard error, but found: {:?}", res),
         }

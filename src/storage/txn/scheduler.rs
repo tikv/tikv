@@ -174,7 +174,7 @@ impl RunningCtx {
 /// Creates a callback to receive async results of write prepare from the storage engine.
 fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallback<()> {
     Box::new(move |result: EngineResult<()>| {
-        if let Err(e) = ch.try_send(Msg::WriteFinished {
+        if let Err(e) = ch.send(Msg::WriteFinished {
             cid: cid,
             pr: pr,
             result: result,
@@ -350,7 +350,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         _ => panic!("unsupported read command"),
     };
 
-    if let Err(e) = ch.try_send(Msg::ReadFinished { cid: cid, pr: pr }) {
+    if let Err(e) = ch.send(Msg::ReadFinished { cid: cid, pr: pr }) {
         // Todo: if this happens we need to clean up command's context
         panic!("send read finished failed, cid={}, err={:?}", cid, e);
     }
@@ -361,7 +361,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
 fn process_write(cid: u64, cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     SCHED_WORKER_COUNTER_VEC.with_label_values(&[cmd.tag(), "write"]).inc();
     if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot.as_ref()) {
-        if let Err(err) = ch.try_send(Msg::WritePrepareFailed { cid: cid, err: e }) {
+        if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
             // Todo: if this happens, lock will hold for ever
             panic!("send WritePrepareFailed message to channel failed. cid={}, err={:?}",
                    cid,
@@ -437,7 +437,7 @@ fn process_write_impl(cid: u64,
         _ => panic!("unsupported write command"),
     };
 
-    box_try!(ch.try_send(Msg::WritePrepareFinished {
+    box_try!(ch.send(Msg::WritePrepareFinished {
         cid: cid,
         cmd: cmd,
         pr: pr,
@@ -586,7 +586,7 @@ impl Scheduler {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot"]).inc();
         let ch = self.schedch.clone();
         let cb = box move |snapshot: EngineResult<Box<Snapshot>>| {
-            if let Err(e) = ch.try_send(Msg::SnapshotFinished {
+            if let Err(e) = ch.send(Msg::SnapshotFinished {
                 cid: cid,
                 snapshot: snapshot,
             }) {

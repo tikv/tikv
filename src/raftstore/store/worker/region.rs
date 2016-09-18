@@ -101,7 +101,7 @@ pub trait MsgSender {
 
 impl MsgSender for SendCh<Msg> {
     fn send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::try_send(self, msg).map_err(|e| box_err!("{:?}", e))
+        SendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
     }
 }
 
