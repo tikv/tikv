@@ -925,7 +925,7 @@ impl<T: Storage> Raft<T> {
 
     /// check message's progress to decide which action should be taken.
     fn check_message_with_progress(&mut self,
-                                   m: &Message,
+                                   m: &mut Message,
                                    send_append: &mut bool,
                                    old_paused: &mut bool,
                                    maybe_commit: &mut bool) {
@@ -967,7 +967,7 @@ impl<T: Storage> Raft<T> {
                         // from local member
                         let rs = ReadState {
                             index: self.raft_log.committed,
-                            request_ctx: req.get_entries()[0].get_data().to_vec(),
+                            request_ctx: req.take_entries()[0].take_data(),
                         };
                         self.read_states.push(rs);
                     } else {
@@ -1137,7 +1137,10 @@ impl<T: Storage> Raft<T> {
         let mut send_append = false;
         let mut maybe_commit = false;
         let mut old_paused = false;
-        self.check_message_with_progress(&m, &mut send_append, &mut old_paused, &mut maybe_commit);
+        self.check_message_with_progress(&mut m,
+                                         &mut send_append,
+                                         &mut old_paused,
+                                         &mut maybe_commit);
         if maybe_commit {
             if self.maybe_commit() {
                 self.bcast_append();
