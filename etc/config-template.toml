@@ -30,8 +30,12 @@ end-point-concurrency = 8
 # capacity = 0 # 0 is unlimited.
 
 [metric]
-# prometheus client report interval, set 0s to disable prometheus.
-report-interval = "5m"
+# the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
+interval = "15s"
+# the Prometheus pushgateway address. Leaving it empty stops Prometheus client from pushing.
+address = ""
+# the Prometheus client push job name. Note: A node id will automatically append, e.g., "tikv_1".
+job = "tikv"
 
 [raftstore]
 # notify capacity, 40960 is suitable for about 7000 regions.
