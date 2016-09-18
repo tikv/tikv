@@ -144,7 +144,17 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
 }
 
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_default_cf_option(matches, config)
+    let mut opts = get_rocksdb_default_cf_option(matches, config);
+    let rmode = get_integer_value("",
+                                  "rocksdb.wal-recovery-mode",
+                                  matches,
+                                  config,
+                                  Some(2),
+                                  |v| v.as_integer());
+    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
+    opts.set_wal_recovery_mode(wal_recovery_mode);
+
+    opts
 }
 
 fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
@@ -186,15 +196,6 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                |v| v.as_str().map(|s| s.to_owned()));
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
-
-    let rmode = get_integer_value("",
-                                  "rocksdb.wal-recovery-mode",
-                                  matches,
-                                  config,
-                                  Some(2),
-                                  |v| v.as_integer());
-    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
-    opts.set_wal_recovery_mode(wal_recovery_mode);
 
     let write_buffer_size = get_integer_value("",
                                               "rocksdb.write-buffer-size",

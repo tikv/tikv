@@ -120,6 +120,7 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use rocksdb::DBRecoveryMode;
 
     #[test]
     fn test_parse_readable_int() {
@@ -176,5 +177,17 @@ mod test {
 
         assert!(parse_readable_int("1").is_err());
         assert!(parse_readable_int("foo").is_err());
+    }
+
+    #[test]
+    fn test_parse_rocksdb_wal_recovery_mode() {
+        assert!(DBRecoveryMode::TolerateCorruptedTailRecords ==
+                parse_rocksdb_wal_recovery_mode(0).unwrap());
+        assert!(DBRecoveryMode::AbsoluteConsistency == parse_rocksdb_wal_recovery_mode(1).unwrap());
+        assert!(DBRecoveryMode::PointInTime == parse_rocksdb_wal_recovery_mode(2).unwrap());
+        assert!(DBRecoveryMode::SkipAnyCorruptedRecords ==
+                parse_rocksdb_wal_recovery_mode(3).unwrap());
+
+        assert!(parse_rocksdb_wal_recovery_mode(4).is_err());
     }
 }
