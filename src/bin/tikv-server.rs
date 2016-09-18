@@ -145,6 +145,44 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     }
 }
 
+fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>) {
+    let push_interval = get_integer_value("",
+                                          "metric.interval",
+                                          matches,
+                                          config,
+                                          Some(0),
+                                          |v| v.as_integer());
+    if push_interval == 0 {
+        return;
+    }
+
+    let push_address = get_string_value("",
+                                        "metric.address",
+                                        matches,
+                                        config,
+                                        None,
+                                        |v| v.as_str().map(|s| s.to_owned()));
+    if push_address.is_empty() {
+        return;
+    }
+
+    let mut push_job = get_string_value("",
+                                        "metric.job",
+                                        matches,
+                                        config,
+                                        None,
+                                        |v| v.as_str().map(|s| s.to_owned()));
+    if let Some(id) = node_id {
+        push_job.push_str(&format!("_{}", id));
+    }
+
+    info!("start prometheus client");
+
+    util::run_prometheus(Duration::from_millis(push_interval as u64),
+                         &push_address,
+                         &push_job);
+}
+
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
     get_rocksdb_default_cf_option(matches, config)
 }
@@ -685,6 +723,9 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     let (mut node, mut store, raft_router, snap_mgr) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
+
+    initial_metric(matches, config, Some(node.id()));
+
     info!("start storage");
     if let Err(e) = store.start(&cfg.storage) {
         panic!("failed to start storage, error = {:?}", e);
@@ -761,15 +802,6 @@ fn main() {
     // Print version information.
     util::print_tikv_info();
 
-    // Run prometheus client.
-    let report_interval = get_integer_value("",
-                                            "metric.report-interval",
-                                            &matches,
-                                            &config,
-                                            Some(300_000),
-                                            |v| v.as_integer());
-    util::run_prometheus(Duration::from_millis(report_interval as u64));
-
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,
@@ -799,6 +831,7 @@ fn main() {
     cfg.storage.path = get_store_path(&matches, &config);
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
+            initial_metric(&matches, &config, None);
             run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {
