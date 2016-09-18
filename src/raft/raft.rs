@@ -928,7 +928,8 @@ impl<T: Storage> Raft<T> {
                                    m: &mut Message,
                                    send_append: &mut bool,
                                    old_paused: &mut bool,
-                                   maybe_commit: &mut bool) {
+                                   maybe_commit: &mut bool,
+                                   more_to_send: &mut Option<Message>) {
         if !self.prs.contains_key(&m.get_from()) {
             debug!("{} no progress available for {}", self.tag, m.get_from());
             return;
@@ -976,7 +977,7 @@ impl<T: Storage> Raft<T> {
                         to_send.set_msg_type(MessageType::MsgReadIndexResp);
                         to_send.set_index(rs.index);
                         to_send.set_entries(req.take_entries());
-                        self.send(to_send);
+                        *more_to_send = Some(to_send);
                     }
                 }
             }
@@ -1137,10 +1138,12 @@ impl<T: Storage> Raft<T> {
         let mut send_append = false;
         let mut maybe_commit = false;
         let mut old_paused = false;
+        let mut more_to_send = None;
         self.check_message_with_progress(&mut m,
                                          &mut send_append,
                                          &mut old_paused,
-                                         &mut maybe_commit);
+                                         &mut maybe_commit,
+                                         &mut more_to_send);
         if maybe_commit {
             if self.maybe_commit() {
                 self.bcast_append();
@@ -1153,6 +1156,9 @@ impl<T: Storage> Raft<T> {
 
         if send_append {
             self.send_append(m.get_from());
+        }
+        if let Some(to_send) = more_to_send {
+            self.send(to_send)
         }
     }
 
