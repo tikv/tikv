@@ -39,15 +39,18 @@ pub struct Unstable {
     // all entries that have not yet been written to storage.
     pub entries: Vec<Entry>,
     pub offset: u64,
+
+    pub tag: String,
 }
 
 
 impl Unstable {
-    pub fn new(offset: u64) -> Unstable {
+    pub fn new(offset: u64, tag: String) -> Unstable {
         Unstable {
             offset: offset,
             snapshot: None,
             entries: vec![],
+            tag: tag,
         }
     }
     // maybe_first_index returns the index of the first possible entry in entries
@@ -152,11 +155,12 @@ impl Unstable {
 
     pub fn must_check_outofbounds(&self, lo: u64, hi: u64) {
         if lo > hi {
-            panic!("invalid unstable.slice {} > {}", lo, hi)
+            panic!("{} invalid unstable.slice {} > {}", self.tag, lo, hi)
         }
         let upper = self.offset + self.entries.len() as u64;
         if lo < self.offset || hi > upper {
-            panic!("unstable.slice[{}, {}] out of bound[{}, {}]",
+            panic!("{} unstable.slice[{}, {}] out of bound[{}, {}]",
+                   self.tag,
                    lo,
                    hi,
                    self.offset,
@@ -205,6 +209,7 @@ mod test {
                 entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
                 snapshot: snapshot,
+                ..Default::default()
             };
             let index = u.maybe_first_index();
             match index {
@@ -231,6 +236,7 @@ mod test {
                 entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
                 snapshot: snapshot,
+                ..Default::default()
             };
             let index = u.maybe_last_index();
             match index {
@@ -262,6 +268,7 @@ mod test {
                 entries: entries.map_or(vec![], |entry| vec![entry]),
                 offset: offset,
                 snapshot: snapshot,
+                ..Default::default()
             };
             let term = u.maybe_term(index);
             match term {
@@ -278,6 +285,7 @@ mod test {
             entries: vec![new_entry(5, 1)],
             offset: 5,
             snapshot: Some(new_snapshot(4, 1)),
+            ..Default::default()
         };
 
         let s = new_snapshot(6, 2);
@@ -319,6 +327,7 @@ mod test {
                 entries: entries,
                 offset: offset,
                 snapshot: snapshot,
+                ..Default::default()
             };
             u.stable_to(index, term);
             assert_eq!(u.offset, woffset);
@@ -360,6 +369,7 @@ mod test {
                 entries: entries,
                 offset: offset,
                 snapshot: snapshot,
+                ..Default::default()
             };
             u.truncate_and_append(&to_append);
             assert_eq!(u.offset, woffset);
