@@ -130,6 +130,7 @@ impl<'a> RegionIterator<'a> {
                region: Region,
                upper_bound: Option<&[u8]>)
                -> RegionIterator<'a> {
+        let upper_bound = RegionIterator::adjust_upper_bound(upper_bound);
         let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
         let iter = snap.new_iterator(Some(encoded_upper.as_slice()));
         RegionIterator {
@@ -146,6 +147,7 @@ impl<'a> RegionIterator<'a> {
                   upper_bound: Option<&[u8]>,
                   cf: &str)
                   -> RegionIterator<'a> {
+        let upper_bound = RegionIterator::adjust_upper_bound(upper_bound);
         let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
         let iter = snap.new_iterator_cf(cf, Some(encoded_upper.as_slice())).unwrap();
         RegionIterator {
@@ -154,6 +156,14 @@ impl<'a> RegionIterator<'a> {
             start_key: keys::enc_start_key(&region),
             end_key: keys::enc_end_key(&region),
             region: region,
+        }
+    }
+
+    fn adjust_upper_bound(upper_bound: Option<&[u8]>) -> Option<&[u8]> {
+        if let Some(k) = upper_bound {
+            if k.is_empty() { None } else { Some(k) }
+        } else {
+            None
         }
     }
 
@@ -406,8 +416,7 @@ mod tests {
                 break;
             }
         }
-        let expected_res = vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a3".to_vec(), b"v3".to_vec())];
-        assert_eq!(res, expected_res);
+        assert_eq!(res, base_data[0..2].to_vec());
     }
 
     #[test]
