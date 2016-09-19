@@ -131,8 +131,7 @@ impl<'a> RegionIterator<'a> {
                upper_bound: Option<&[u8]>,
                cf: &str)
                -> RegionIterator<'a> {
-        let encoded_upper =
-            upper_bound.map_or_else(|| keys::enc_end_key(&region), |v| keys::data_key(v));
+        let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
         let iter = if cf == "default" {
             snap.new_iterator(Some(encoded_upper.as_slice()))
         } else {
