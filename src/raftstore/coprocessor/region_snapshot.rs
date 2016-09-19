@@ -123,6 +123,14 @@ pub struct RegionIterator<'a> {
     end_key: Vec<u8>,
 }
 
+fn adjust_upper_bound(upper_bound: Option<&[u8]>) -> Option<&[u8]> {
+    if let Some(k) = upper_bound {
+        if k.is_empty() { None } else { Some(k) }
+    } else {
+        None
+    }
+}
+
 // we use rocksdb's style iterator, so omit the warning.
 #[allow(should_implement_trait)]
 impl<'a> RegionIterator<'a> {
@@ -130,7 +138,7 @@ impl<'a> RegionIterator<'a> {
                region: Region,
                upper_bound: Option<&[u8]>)
                -> RegionIterator<'a> {
-        let upper_bound = RegionIterator::adjust_upper_bound(upper_bound);
+        let upper_bound = adjust_upper_bound(upper_bound);
         let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
         let iter = snap.new_iterator(Some(encoded_upper.as_slice()));
         RegionIterator {
@@ -147,7 +155,7 @@ impl<'a> RegionIterator<'a> {
                   upper_bound: Option<&[u8]>,
                   cf: &str)
                   -> RegionIterator<'a> {
-        let upper_bound = RegionIterator::adjust_upper_bound(upper_bound);
+        let upper_bound = adjust_upper_bound(upper_bound);
         let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
         let iter = snap.new_iterator_cf(cf, Some(encoded_upper.as_slice())).unwrap();
         RegionIterator {
@@ -156,14 +164,6 @@ impl<'a> RegionIterator<'a> {
             start_key: keys::enc_start_key(&region),
             end_key: keys::enc_end_key(&region),
             region: region,
-        }
-    }
-
-    fn adjust_upper_bound(upper_bound: Option<&[u8]>) -> Option<&[u8]> {
-        if let Some(k) = upper_bound {
-            if k.is_empty() { None } else { Some(k) }
-        } else {
-            None
         }
     }
 
