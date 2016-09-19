@@ -384,6 +384,21 @@ mod tests {
             }
         }
         assert_eq!(res, base_data);
+
+        // test iterator with upper bound
+        let store = new_peer_storage(engine.clone(), &Region::new());
+        let snap = RegionSnapshot::new(&store);
+        let mut iter = snap.iter(Some(b"a5"));
+        assert!(iter.seek_to_first());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.next() {
+                break;
+            }
+        }
+        let expected_res = vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a3".to_vec(), b"v3".to_vec())];
+        assert_eq!(res, expected_res);
     }
 
     #[test]
