@@ -50,11 +50,11 @@ impl RegionSnapshot {
     }
 
     pub fn iter(&self, upper_bound: Option<&[u8]>) -> RegionIterator {
-        RegionIterator::new(&self.snap, self.region.clone(), upper_bound, "default")
+        RegionIterator::new(&self.snap, self.region.clone(), upper_bound)
     }
 
     pub fn iter_cf(&self, cf: &str, upper_bound: Option<&[u8]>) -> Result<RegionIterator> {
-        Ok(RegionIterator::new(&self.snap, self.region.clone(), upper_bound, cf))
+        Ok(RegionIterator::new_cf(&self.snap, self.region.clone(), upper_bound, cf))
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -128,16 +128,26 @@ pub struct RegionIterator<'a> {
 impl<'a> RegionIterator<'a> {
     pub fn new(snap: &'a Snapshot,
                region: Region,
-               upper_bound: Option<&[u8]>,
-               cf: &str)
+               upper_bound: Option<&[u8]>)
                -> RegionIterator<'a> {
         let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
-        let iter = if cf == "default" {
-            snap.new_iterator(Some(encoded_upper.as_slice()))
-        } else {
-            snap.new_iterator_cf(cf, Some(encoded_upper.as_slice())).unwrap()
-        };
+        let iter = snap.new_iterator(Some(encoded_upper.as_slice()));
+        RegionIterator {
+            iter: iter,
+            valid: false,
+            start_key: keys::enc_start_key(&region),
+            end_key: keys::enc_end_key(&region),
+            region: region,
+        }
+    }
 
+    pub fn new_cf(snap: &'a Snapshot,
+                  region: Region,
+                  upper_bound: Option<&[u8]>,
+                  cf: &str)
+                  -> RegionIterator<'a> {
+        let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
+        let iter = snap.new_iterator_cf(cf, Some(encoded_upper.as_slice())).unwrap();
         RegionIterator {
             iter: iter,
             valid: false,
