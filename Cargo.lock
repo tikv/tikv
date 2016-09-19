@@ -405,7 +405,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.2.6"
-source = "git+https://github.com/pingcap/rust-prometheus.git#f8621d2433dcc55a1d0a5d533190de3eaa08a02a"
+source = "git+https://github.com/pingcap/rust-prometheus.git#5c25c6762949626375a3fba4f87c2bfba7c5c40d"
 dependencies = [
  "fnv 1.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)",
