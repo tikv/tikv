@@ -1543,7 +1543,7 @@ fn test_read_only_option_safe() {
     }
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-    assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
 
     let mut tests = vec![
         (2, 10, 11, "ctx1"),
@@ -1604,7 +1604,7 @@ fn test_read_only_option_lease() {
     }
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-    assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
 
     let mut tests = vec![
         (2, 10, 11, "ctx1"),
@@ -1656,7 +1656,7 @@ fn test_read_only_option_lease_without_check_quorum() {
     let e = new_entry(0, 0, Some(ctx));
     nt.send(vec![new_message_with_entries(2, 2, MessageType::MsgReadIndex, vec![e])]);
 
-    let read_states = &nt.peers.get(&2).unwrap().read_states;
+    let read_states = &nt.peers[&2].read_states;
     if read_states.is_empty() {
         panic!("read_states is empty, want non-empty");
     }

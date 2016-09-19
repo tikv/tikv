@@ -124,12 +124,11 @@ impl ReadOnly {
             }
             *x == m.get_context()
         }) {
-            let to_keep = self.read_index_queue.split_off(i + 1);
-            for rs in &self.read_index_queue {
-                let status = self.pending_read_index.remove(rs).unwrap();
+            for _ in 0..i + 1 {
+                let rs = self.read_index_queue.pop_front().unwrap();
+                let status = self.pending_read_index.remove(&rs).unwrap();
                 rss.push(status);
             }
-            self.read_index_queue = to_keep;
         }
         rss
     }
