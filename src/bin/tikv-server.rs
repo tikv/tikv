@@ -196,14 +196,14 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                        config,
                                        Some(64 * 1024),
                                        |v| v.as_integer());
-    block_base_opts.set_block_size(block_size as u64);
+    block_base_opts.set_block_size(block_size as usize);
     let block_cache_size = get_integer_value("",
                                              "rocksdb.block-based-table.block-cache-size",
                                              matches,
                                              config,
                                              Some(1024 * 1024 * 1024),
                                              |v| v.as_integer());
-    block_base_opts.set_lru_cache(block_cache_size as u64);
+    block_base_opts.set_lru_cache(block_cache_size as usize);
     let bloom_bits_per_key = get_integer_value("",
                                                "rocksdb.block-based-table.\
                                                 bloom-filter-bits-per-key",
@@ -271,6 +271,15 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                                      Some(64 * 1024 * 1024),
                                                      |v| v.as_integer());
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
+
+    let max_manifest_file_size = get_integer_value("",
+                                                   "rocksdb.max-manifest-file-size",
+                                                   matches,
+                                                   config,
+                                                   Some(20 * 1024 * 1024),
+                                                   |v| v.as_integer());
+    opts.set_max_manifest_file_size(max_manifest_file_size as u64);
+
 
     let target_file_size_base = get_integer_value("",
                                                   "rocksdb.target-file-size-base",
@@ -342,7 +351,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
                                              config,
                                              Some(1024 * 1024 * 1024),
                                              |v| v.as_integer());
-    let write_cf_block_cache_size: u64 = block_cache_size as u64 / 4;
+    let write_cf_block_cache_size: usize = block_cache_size as usize / 4;
     block_base_opts.set_lru_cache(write_cf_block_cache_size);
     opts.set_block_based_table_factory(&block_base_opts);
 
