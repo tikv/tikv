@@ -50,25 +50,11 @@ impl RegionSnapshot {
     }
 
     pub fn iter(&self, upper_bound: Option<&[u8]>) -> RegionIterator {
-        if upper_bound.is_none() {
-            RegionIterator::new(self.snap.new_iterator(Some(keys::enc_end_key(self.get_region())
-                                    .as_slice())),
-                                self.region.clone())
-        } else {
-            RegionIterator::new(self.snap.new_iterator(upper_bound), self.region.clone())
-        }
+        RegionIterator::new(&self.snap, self.region.clone(), upper_bound, "default")
     }
 
     pub fn iter_cf(&self, cf: &str, upper_bound: Option<&[u8]>) -> Result<RegionIterator> {
-        if upper_bound.is_none() {
-            Ok(RegionIterator::new(try!(self.snap.new_iterator_cf(
-                    cf, Some(keys::enc_end_key(self.get_region()).as_slice()))
-                ),
-                                   self.region.clone()))
-        } else {
-            Ok(RegionIterator::new(try!(self.snap.new_iterator_cf(cf, upper_bound)),
-                                   self.region.clone()))
-        }
+        Ok(RegionIterator::new(&self.snap, self.region.clone(), upper_bound, cf))
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -140,7 +126,19 @@ pub struct RegionIterator<'a> {
 // we use rocksdb's style iterator, so omit the warning.
 #[allow(should_implement_trait)]
 impl<'a> RegionIterator<'a> {
-    pub fn new(iter: DBIterator<'a>, region: Region) -> RegionIterator<'a> {
+    pub fn new(snap: &'a Snapshot,
+               region: Region,
+               upper_bound: Option<&[u8]>,
+               cf: &str)
+               -> RegionIterator<'a> {
+        let encoded_upper =
+            upper_bound.map_or_else(|| keys::enc_end_key(&region), |v| keys::data_key(v));
+        let iter = if cf == "default" {
+            snap.new_iterator(Some(encoded_upper.as_slice()))
+        } else {
+            snap.new_iterator_cf(cf, Some(encoded_upper.as_slice())).unwrap()
+        };
+
         RegionIterator {
             iter: iter,
             valid: false,
