@@ -225,7 +225,7 @@ impl Iterable for Snapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        DBIterator::new(&self.db, &opt)
+        DBIterator::new(&self.db, opt)
     }
 
     fn new_iterator_cf(&self, cf: &str) -> Result<DBIterator> {
@@ -234,7 +234,7 @@ impl Iterable for Snapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        Ok(DBIterator::new_cf(&self.db, *handle, &opt))
+        Ok(DBIterator::new_cf(&self.db, *handle, opt))
     }
 }
 

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::DBCompressionType;
+use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 quick_error! {
     #[derive(Debug)]
@@ -50,6 +50,16 @@ pub fn parse_rocksdb_per_level_compression(tp: &str)
     }
 
     Ok(result)
+}
+
+pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ParseConfigError> {
+    match mode {
+        0 => Ok(DBRecoveryMode::TolerateCorruptedTailRecords),
+        1 => Ok(DBRecoveryMode::AbsoluteConsistency),
+        2 => Ok(DBRecoveryMode::PointInTime),
+        3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
+        _ => Err(ParseConfigError::RocksDB),
+    }
 }
 
 fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
@@ -110,6 +120,7 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use rocksdb::DBRecoveryMode;
 
     #[test]
     fn test_parse_readable_int() {
@@ -166,5 +177,17 @@ mod test {
 
         assert!(parse_readable_int("1").is_err());
         assert!(parse_readable_int("foo").is_err());
+    }
+
+    #[test]
+    fn test_parse_rocksdb_wal_recovery_mode() {
+        assert!(DBRecoveryMode::TolerateCorruptedTailRecords ==
+                parse_rocksdb_wal_recovery_mode(0).unwrap());
+        assert!(DBRecoveryMode::AbsoluteConsistency == parse_rocksdb_wal_recovery_mode(1).unwrap());
+        assert!(DBRecoveryMode::PointInTime == parse_rocksdb_wal_recovery_mode(2).unwrap());
+        assert!(DBRecoveryMode::SkipAnyCorruptedRecords ==
+                parse_rocksdb_wal_recovery_mode(3).unwrap());
+
+        assert!(parse_rocksdb_wal_recovery_mode(4).is_err());
     }
 }
