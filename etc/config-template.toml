@@ -96,7 +96,7 @@ min-write-buffer-number-to-merge = 1
 
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
-max-background-compactions = 4
+max-background-compactions = 6
 
 # Control maximum total data size for base level (level 1).
 max-bytes-for-level-base = "64MB"
@@ -112,6 +112,13 @@ level0-slowdown-writes-trigger = 12
 
 # Maximum number of level-0 files.  We stop writes at this point.
 level0-stop-writes-trigger = 16
+
+# rocksdb wal recovery mode
+# 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
+# 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;
+# 2 : PointInTimeRecovery, Recover to point-in-time consistency;
+# 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
+wal-recovery-mode = 2
 
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/table.h
 [rocksdb.block-based-table]
