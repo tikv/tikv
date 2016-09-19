@@ -50,12 +50,25 @@ impl RegionSnapshot {
     }
 
     pub fn iter(&self, upper_bound: Option<&[u8]>) -> RegionIterator {
-        RegionIterator::new(self.snap.new_iterator(upper_bound), self.region.clone())
+        if upper_bound.is_none() {
+            RegionIterator::new(self.snap.new_iterator(Some(keys::enc_end_key(self.get_region())
+                                    .as_slice())),
+                                self.region.clone())
+        } else {
+            RegionIterator::new(self.snap.new_iterator(upper_bound), self.region.clone())
+        }
     }
 
     pub fn iter_cf(&self, cf: &str, upper_bound: Option<&[u8]>) -> Result<RegionIterator> {
-        Ok(RegionIterator::new(try!(self.snap.new_iterator_cf(cf, upper_bound)),
-                               self.region.clone()))
+        if upper_bound.is_none() {
+            Ok(RegionIterator::new(try!(self.snap.new_iterator_cf(
+                    cf, Some(keys::enc_end_key(self.get_region()).as_slice()))
+                ),
+                                   self.region.clone()))
+        } else {
+            Ok(RegionIterator::new(try!(self.snap.new_iterator_cf(cf, upper_bound)),
+                                   self.region.clone()))
+        }
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for

@@ -22,7 +22,6 @@ pub struct MvccReader<'a> {
     // cursors are used for speeding up scans.
     data_cursor: Option<Box<Cursor + 'a>>,
     lock_cursor: Option<Box<Cursor + 'a>>,
-    write_cursor: Option<Box<Cursor + 'a>>,
 }
 
 impl<'a> MvccReader<'a> {
@@ -31,7 +30,6 @@ impl<'a> MvccReader<'a> {
             snapshot: snapshot,
             data_cursor: None,
             lock_cursor: None,
-            write_cursor: None,
         }
     }
 
@@ -71,10 +69,9 @@ impl<'a> MvccReader<'a> {
                        ts: u64,
                        reverse: bool)
                        -> Result<Option<(u64, Write)>> {
-        if self.write_cursor.is_none() {
-            self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE)));
-        }
-        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let upper_bound_key = key.append_ts(0u64);
+        let upper_bound = upper_bound_key.encoded().as_slice();
+        let mut cursor = try!(self.snapshot.iter_cf(CF_WRITE, Some(upper_bound)));
         let ok = if reverse {
             try!(cursor.near_reverse_seek(&key.append_ts(ts)))
         } else {
@@ -135,7 +132,7 @@ impl<'a> MvccReader<'a> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            self.data_cursor = Some(try!(self.snapshot.iter()));
+            self.data_cursor = Some(try!(self.snapshot.iter(None)));
         }
         Ok(())
     }
@@ -179,7 +176,7 @@ impl<'a> MvccReader<'a> {
         where F: Fn(&Lock) -> bool
     {
         if self.lock_cursor.is_none() {
-            self.lock_cursor = Some(try!(self.snapshot.iter_cf(CF_LOCK)));
+            self.lock_cursor = Some(try!(self.snapshot.iter_cf(CF_LOCK, None)));
         }
         let mut cursor = self.lock_cursor.as_mut().unwrap();
         cursor.seek_to_first();
@@ -199,10 +196,7 @@ impl<'a> MvccReader<'a> {
                      mut start: Option<Key>,
                      limit: usize)
                      -> Result<(Vec<Key>, Option<Key>)> {
-        if self.write_cursor.is_none() {
-            self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE)));
-        }
-        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let mut cursor = try!(self.snapshot.iter_cf(CF_WRITE, None));
         let mut keys = vec![];
         loop {
             let ok = match start {

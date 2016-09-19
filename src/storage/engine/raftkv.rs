@@ -16,6 +16,7 @@ use server::transport::RaftStoreRouter;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
+use raftstore::store::keys;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
@@ -280,17 +281,32 @@ impl Snapshot for RegionSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self) -> engine::Result<Box<Cursor + 'b>> {
+    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>) -> engine::Result<Box<Cursor + 'b>> {
         SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["iter", "default"]).inc();
 
-        Ok(box RegionSnapshot::iter(self, None))
+        if upper_bound.is_none() {
+            Ok(box RegionSnapshot::iter(self,
+                                        Some(keys::enc_end_key(self.get_region()).as_slice())))
+        } else {
+            Ok(box RegionSnapshot::iter(self, upper_bound))
+        }
     }
 
     #[allow(needless_lifetimes)]
-    fn iter_cf<'b>(&'b self, cf: CfName) -> engine::Result<Box<Cursor + 'b>> {
+    fn iter_cf<'b>(&'b self,
+                   cf: CfName,
+                   upper_bound: Option<&[u8]>)
+                   -> engine::Result<Box<Cursor + 'b>> {
         SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["iter", cf]).inc();
 
-        Ok(box try!(RegionSnapshot::iter_cf(self, cf, None)))
+        if upper_bound.is_none() {
+            Ok(box try!(RegionSnapshot::iter_cf(self,
+                                                cf,
+                                                Some(keys::enc_end_key(self.get_region())
+                                                    .as_slice()))))
+        } else {
+            Ok(box try!(RegionSnapshot::iter_cf(self, cf, upper_bound)))
+        }
     }
 }
 
