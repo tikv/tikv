@@ -967,7 +967,7 @@ impl<T: Storage> Raft<T> {
                     if req.get_from() == INVALID_ID || m.get_from() == self.id {
                         // from local member
                         let rs = ReadState {
-                            index: self.raft_log.committed,
+                            index: rs.index,
                             request_ctx: req.take_entries()[0].take_data(),
                         };
                         self.read_states.push(rs);

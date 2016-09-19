@@ -126,9 +126,8 @@ impl ReadOnly {
         }) {
             let to_keep = self.read_index_queue.split_off(i + 1);
             for rs in &self.read_index_queue {
-                if let Some(status) = self.pending_read_index.remove(rs) {
-                    rss.push(status)
-                }
+                let status = self.pending_read_index.remove(rs).unwrap();
+                rss.push(status);
             }
             self.read_index_queue = to_keep;
         }
