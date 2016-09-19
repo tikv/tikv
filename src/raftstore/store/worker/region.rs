@@ -123,7 +123,7 @@ fn delete_all_in_range(db: &DB,
         let handle = box_try!(rocksdb::get_cf_handle(db, cf));
         box_try!(db.delete_file_in_range_cf(*handle, start_key, end_key));
 
-        let mut it = box_try!(db.new_iterator_cf(cf));
+        let mut it = box_try!(db.new_iterator_cf(cf, Some(end_key)));
 
         let mut wb = WriteBatch::new();
         try!(check_abort(&abort));
