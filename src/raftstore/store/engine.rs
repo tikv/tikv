@@ -15,7 +15,7 @@ use std::option::Option;
 use std::sync::Arc;
 
 use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions};
-use rocksdb::rocksdb::UnsafeSnap;
+use rocksdb::rocksdb_options::UnsafeSnap;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
 use util::rocksdb;
