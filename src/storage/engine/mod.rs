@@ -85,9 +85,9 @@ pub trait Snapshot: Send {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
-    fn iter<'a>(&'a self) -> Result<Box<Cursor + 'a>>;
+    fn iter<'a>(&'a self, upper_bound: Option<&[u8]>) -> Result<Box<Cursor + 'a>>;
     #[allow(needless_lifetimes)]
-    fn iter_cf<'a>(&'a self, cf: CfName) -> Result<Box<Cursor + 'a>>;
+    fn iter_cf<'a>(&'a self, cf: CfName, upper_bound: Option<&[u8]>) -> Result<Box<Cursor + 'a>>;
 }
 
 pub trait Cursor {
@@ -311,7 +311,7 @@ mod tests {
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter().unwrap();
+        let mut iter = snapshot.iter(None).unwrap();
         iter.seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -362,7 +362,7 @@ mod tests {
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter().unwrap();
+        let mut iter = snapshot.iter(None).unwrap();
         assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
@@ -372,7 +372,7 @@ mod tests {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter().unwrap();
+        let mut cursor = snapshot.iter(None).unwrap();
         let cursor_mut = cursor.as_mut();
         assert_near_seek(cursor_mut, b"x", (b"x", b"1"));
         assert_near_seek(cursor_mut, b"a", (b"x", b"1"));

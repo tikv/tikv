@@ -184,7 +184,17 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
 }
 
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_default_cf_option(matches, config)
+    let mut opts = get_rocksdb_default_cf_option(matches, config);
+    let rmode = get_integer_value("",
+                                  "rocksdb.wal-recovery-mode",
+                                  matches,
+                                  config,
+                                  Some(2),
+                                  |v| v.as_integer());
+    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
+    opts.set_wal_recovery_mode(wal_recovery_mode);
+
+    opts
 }
 
 fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
@@ -351,7 +361,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
                                              config,
                                              Some(1024 * 1024 * 1024),
                                              |v| v.as_integer());
-    let write_cf_block_cache_size: usize = block_cache_size as usize / 4;
+    let write_cf_block_cache_size = block_cache_size as usize / 4;
     block_base_opts.set_lru_cache(write_cf_block_cache_size);
     opts.set_block_based_table_factory(&block_base_opts);
 

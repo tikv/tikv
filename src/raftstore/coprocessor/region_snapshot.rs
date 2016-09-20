@@ -49,12 +49,12 @@ impl RegionSnapshot {
         &self.region
     }
 
-    pub fn iter(&self) -> RegionIterator {
-        RegionIterator::new(self.snap.new_iterator(), self.region.clone())
+    pub fn iter(&self, upper_bound: Option<&[u8]>) -> RegionIterator {
+        RegionIterator::new(&self.snap, self.region.clone(), upper_bound)
     }
 
-    pub fn iter_cf(&self, cf: &str) -> Result<RegionIterator> {
-        Ok(RegionIterator::new(try!(self.snap.new_iterator_cf(cf)), self.region.clone()))
+    pub fn iter_cf(&self, cf: &str, upper_bound: Option<&[u8]>) -> Result<RegionIterator> {
+        Ok(RegionIterator::new_cf(&self.snap, self.region.clone(), upper_bound, cf))
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -62,37 +62,28 @@ impl RegionSnapshot {
     pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(self.iter(), start_key, end_key, f)
+        self.scan_impl(self.iter(Some(end_key)), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
     pub fn scan_cf<F>(&self, cf: &str, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(try!(self.iter_cf(cf)), start_key, end_key, f)
+        self.scan_impl(try!(self.iter_cf(cf, Some(end_key))), start_key, f)
     }
 
-    fn scan_impl<F>(&self,
-                    mut it: RegionIterator,
-                    start_key: &[u8],
-                    end_key: &[u8],
-                    f: &mut F)
-                    -> Result<()>
+    fn scan_impl<F>(&self, mut it: RegionIterator, start_key: &[u8], f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
         if !try!(it.seek(start_key)) {
             return Ok(());
         }
-        let mut r = true;
-        while r && it.valid() {
-            r = {
-                let key = it.key();
-                if !end_key.is_empty() && key >= end_key {
-                    break;
-                }
-                try!(f(key, it.value()))
-            };
-            it.next();
+        while it.valid() {
+            let r = try!(f(it.key(), it.value()));
+
+            if !r || !it.next() {
+                break;
+            }
         }
 
         Ok(())
@@ -132,10 +123,41 @@ pub struct RegionIterator<'a> {
     end_key: Vec<u8>,
 }
 
+fn adjust_upper_bound(upper_bound: Option<&[u8]>) -> Option<&[u8]> {
+    if let Some(k) = upper_bound {
+        if k.is_empty() { None } else { Some(k) }
+    } else {
+        None
+    }
+}
+
 // we use rocksdb's style iterator, so omit the warning.
 #[allow(should_implement_trait)]
 impl<'a> RegionIterator<'a> {
-    pub fn new(iter: DBIterator<'a>, region: Region) -> RegionIterator<'a> {
+    pub fn new(snap: &'a Snapshot,
+               region: Region,
+               upper_bound: Option<&[u8]>)
+               -> RegionIterator<'a> {
+        let upper_bound = adjust_upper_bound(upper_bound);
+        let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
+        let iter = snap.new_iterator(Some(encoded_upper.as_slice()));
+        RegionIterator {
+            iter: iter,
+            valid: false,
+            start_key: keys::enc_start_key(&region),
+            end_key: keys::enc_end_key(&region),
+            region: region,
+        }
+    }
+
+    pub fn new_cf(snap: &'a Snapshot,
+                  region: Region,
+                  upper_bound: Option<&[u8]>,
+                  cf: &str)
+                  -> RegionIterator<'a> {
+        let upper_bound = adjust_upper_bound(upper_bound);
+        let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
+        let iter = snap.new_iterator_cf(cf, Some(encoded_upper.as_slice())).unwrap();
         RegionIterator {
             iter: iter,
             valid: false,
@@ -324,7 +346,7 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
-        let mut iter = snap.iter();
+        let mut iter = snap.iter(None);
         assert!(iter.seek(b"a1").is_err());
         assert!(iter.seek(b"a2").unwrap());
         assert_eq!(iter.key(), b"a3");
@@ -369,7 +391,7 @@ mod tests {
         assert_eq!(data.len(), 4);
         assert_eq!(data, base_data);
 
-        let mut iter = snap.iter();
+        let mut iter = snap.iter(None);
         assert!(iter.seek(b"a1").unwrap());
 
         assert!(iter.seek_to_first());
@@ -381,6 +403,20 @@ mod tests {
             }
         }
         assert_eq!(res, base_data);
+
+        // test iterator with upper bound
+        let store = new_peer_storage(engine.clone(), &Region::new());
+        let snap = RegionSnapshot::new(&store);
+        let mut iter = snap.iter(Some(b"a5"));
+        assert!(iter.seek_to_first());
+        let mut res = vec![];
+        loop {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            if !iter.next() {
+                break;
+            }
+        }
+        assert_eq!(res, base_data[0..2].to_vec());
     }
 
     #[test]
@@ -390,7 +426,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter();
+        let mut iter = snap.iter(None);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())).unwrap());
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
@@ -417,7 +453,7 @@ mod tests {
         // test last region
         let store = new_peer_storage(engine.clone(), &Region::new());
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter();
+        let mut iter = snap.iter(None);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         let pair = (iter.key().to_vec(), iter.value().to_vec());
