@@ -30,13 +30,13 @@ impl<'a> SnapshotStore<'a> {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let mut reader = MvccReader::new(self.snapshot);
+        let mut reader = MvccReader::new(self.snapshot, false);
         let v = try!(reader.get(key, self.start_ts));
         Ok(v)
     }
 
     pub fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
-        let mut reader = MvccReader::new(self.snapshot);
+        let mut reader = MvccReader::new(self.snapshot, false);
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
             results.push(reader.get(k, self.start_ts).map_err(Error::from));
@@ -46,7 +46,7 @@ impl<'a> SnapshotStore<'a> {
 
     pub fn scanner(&self) -> Result<StoreScanner> {
         Ok(StoreScanner {
-            reader: MvccReader::new(self.snapshot),
+            reader: MvccReader::new(self.snapshot, true),
             start_ts: self.start_ts,
         })
     }
