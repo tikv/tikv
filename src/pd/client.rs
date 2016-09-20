@@ -156,7 +156,7 @@ impl RpcClient {
     }
 
     pub fn send(&self, req: &Request) -> Result<Response> {
-        let msg_id = self.alloc_msg_id();;
+        let msg_id = self.alloc_msg_id();
         let resp = try!(self.core.lock().unwrap().send(msg_id, req));
         Ok(resp)
     }

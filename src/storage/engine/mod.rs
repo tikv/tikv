@@ -317,6 +317,14 @@ mod tests {
                    (&*bytes::encode_bytes(pair.0), pair.1));
     }
 
+    fn assert_reverse_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut iter = snapshot.iter(None).unwrap();
+        iter.reverse_seek(&make_key(key)).unwrap();
+        assert_eq!((iter.key(), iter.value()),
+                   (&*bytes::encode_bytes(pair.0), pair.1));
+    }
+
     fn assert_near_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
         assert!(cursor.near_seek(&make_key(key)).unwrap(), escape(key));
         assert_eq!((cursor.key(), cursor.value()),
@@ -358,12 +366,16 @@ mod tests {
         must_put(engine, b"x", b"1");
         assert_seek(engine, b"x", (b"x", b"1"));
         assert_seek(engine, b"a", (b"x", b"1"));
+        assert_reverse_seek(engine, b"x1", (b"x", b"1"));
         must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
+        assert_reverse_seek(engine, b"y", (b"x", b"1"));
+        assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot.iter(None).unwrap();
         assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
+        assert!(!iter.reverse_seek(&make_key(b"x")).unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
@@ -381,8 +393,22 @@ mod tests {
         assert_near_seek(cursor_mut, b"y", (b"z", b"2"));
         assert_near_seek(cursor_mut, b"x\x00", (b"z", b"2"));
         assert!(!cursor_mut.near_seek(&make_key(b"z\x00")).unwrap());
+        for i in 0..100 {
+            let key = format!("y{}", i);
+            must_put(engine, &key.as_bytes(), b"3");
+        }
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cursor = snapshot.iter(None).unwrap();
+        let cursor_mut = cursor.as_mut();
+        assert_near_seek(cursor_mut, b"x", (b"x", b"1"));
+        assert_near_seek(cursor_mut, b"z", (b"z", b"2"));
+
         must_delete(engine, b"x");
         must_delete(engine, b"z");
+        for i in 0..100 {
+            let key = format!("y{}", i);
+            must_delete(engine, &key.as_bytes());
+        }
     }
 
     fn test_cf(engine: &Engine) {
