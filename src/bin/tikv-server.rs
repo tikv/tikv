@@ -282,6 +282,15 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                                      |v| v.as_integer());
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
 
+    let max_manifest_file_size = get_integer_value("",
+                                                   "rocksdb.max-manifest-file-size",
+                                                   matches,
+                                                   config,
+                                                   Some(20 * 1024 * 1024),
+                                                   |v| v.as_integer());
+    opts.set_max_manifest_file_size(max_manifest_file_size as u64);
+
+
     let target_file_size_base = get_integer_value("",
                                                   "rocksdb.target-file-size-base",
                                                   matches,
