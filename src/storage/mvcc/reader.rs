@@ -22,14 +22,21 @@ pub struct MvccReader<'a> {
     // cursors are used for speeding up scans.
     data_cursor: Option<Box<Cursor + 'a>>,
     lock_cursor: Option<Box<Cursor + 'a>>,
+    write_cursor: Option<Box<Cursor + 'a>>,
+
+    // true: the reader mainly used for scanning,
+    // false: the reader mainly used for point get.
+    used_for_scan: bool,
 }
 
 impl<'a> MvccReader<'a> {
-    pub fn new(snapshot: &Snapshot) -> MvccReader {
+    pub fn new(snapshot: &Snapshot, used_for_scan: bool) -> MvccReader {
         MvccReader {
             snapshot: snapshot,
             data_cursor: None,
             lock_cursor: None,
+            write_cursor: None,
+            used_for_scan: used_for_scan,
         }
     }
 
@@ -69,9 +76,17 @@ impl<'a> MvccReader<'a> {
                        ts: u64,
                        reverse: bool)
                        -> Result<Option<(u64, Write)>> {
-        let upper_bound_key = key.append_ts(0u64);
-        let upper_bound = upper_bound_key.encoded().as_slice();
-        let mut cursor = try!(self.snapshot.iter_cf(CF_WRITE, Some(upper_bound)));
+        if self.used_for_scan {
+            if self.write_cursor.is_none() {
+                self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE, None)));
+            }
+        } else {
+            let upper_bound_key = key.append_ts(0u64);
+            let upper_bound = upper_bound_key.encoded().as_slice();
+            self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE, Some(upper_bound))));
+        }
+
+        let mut cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
             try!(cursor.near_reverse_seek(&key.append_ts(ts)))
         } else {
