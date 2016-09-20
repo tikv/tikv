@@ -200,7 +200,11 @@ fn test_txn_store_batch_get() {
     store.put_ok(b"x", b"x1", 5, 10);
     store.put_ok(b"y", b"y1", 15, 20);
     store.put_ok(b"z", b"z1", 25, 30);
-    store.batch_get_ok(&[b"x", b"y", b"z"], 20, vec![b"x1", b"y1"]);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 15, vec![b"x1"]);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 16, vec![b"x1"]);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 19, vec![b"x1"]);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 20, vec![b"x1", b"y1"]);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 21, vec![b"x1", b"y1"]);
 }
 
 #[test]

@@ -395,7 +395,7 @@ mod tests {
         assert!(!cursor_mut.near_seek(&make_key(b"z\x00")).unwrap());
         for i in 0..100 {
             let key = format!("y{}", i);
-            must_put(engine, &key.as_bytes(), b"3");
+            must_put(engine, key.as_bytes(), b"3");
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut cursor = snapshot.iter(None).unwrap();
@@ -407,7 +407,7 @@ mod tests {
         must_delete(engine, b"z");
         for i in 0..100 {
             let key = format!("y{}", i);
-            must_delete(engine, &key.as_bytes());
+            must_delete(engine, key.as_bytes());
         }
     }
 
