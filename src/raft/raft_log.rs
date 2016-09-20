@@ -61,12 +61,11 @@ impl<T> ToString for RaftLog<T>
     where T: Storage
 {
     fn to_string(&self) -> String {
-        format!("committed={}, applied={}, unstable.offset={}, unstable.entries.len()={}, tag={}",
+        format!("committed={}, applied={}, unstable.offset={}, unstable.entries.len()={}",
                 self.committed,
                 self.applied,
                 self.unstable.offset,
-                self.unstable.entries.len(),
-                self.tag)
+                self.unstable.entries.len())
     }
 }
 
@@ -152,7 +151,8 @@ impl<T: Storage> RaftLog<T> {
         for e in ents {
             if !self.match_term(e.get_index(), e.get_term()) {
                 if e.get_index() <= self.last_index() {
-                    info!("found conflict at index {}, [existing term:{}, conflicting term:{}]",
+                    info!("{} found conflict at index {}, [existing term:{}, conflicting term:{}]",
+                          self.tag,
                           e.get_index(),
                           self.term(e.get_index()).unwrap_or(0),
                           e.get_term());
@@ -395,7 +395,8 @@ impl<T: Storage> RaftLog<T> {
     }
 
     pub fn restore(&mut self, snapshot: Snapshot) {
-        info!("log [{}] starts to restore snapshot [index: {}, term: {}]",
+        info!("{} log [{}] starts to restore snapshot [index: {}, term: {}]",
+              self.tag,
               self.to_string(),
               snapshot.get_metadata().get_index(),
               snapshot.get_metadata().get_term());
