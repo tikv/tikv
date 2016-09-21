@@ -171,7 +171,7 @@ fn unflatten(datum: Datum, col: &ColumnInfo) -> Result<Datum> {
         types::STRING |
         types::NEW_DECIMAL => Ok(datum),
         types::DATE | types::DATETIME | types::TIMESTAMP => {
-            let fsp = col.get_decimal() as u8;
+            let fsp = col.get_decimal() as i8;
             let t = try!(Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp));
             Ok(Datum::Time(t))
         }

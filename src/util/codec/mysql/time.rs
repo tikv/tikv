@@ -109,11 +109,11 @@ pub struct Time {
 }
 
 impl Time {
-    pub fn new(time: NaiveDateTime, tp: u8, fsp: u8) -> Result<Time> {
+    pub fn new(time: NaiveDateTime, tp: u8, fsp: i8) -> Result<Time> {
         Ok(Time {
             time: time,
             tp: tp,
-            fsp: fsp,
+            fsp: try!(check_fsp(fsp)),
         })
     }
 
@@ -170,8 +170,8 @@ impl Time {
         }
     }
 
-    pub fn parse_datetime(s: &str, fsp: u8) -> Result<Time> {
-        try!(check_fsp(fsp));
+    pub fn parse_datetime(s: &str, fsp: i8) -> Result<Time> {
+        let fsp = try!(check_fsp(fsp));
         let mut frac_str = "";
         let mut need_adjust = false;
         let parts = Time::parse_datetime_format(s);
@@ -236,13 +236,14 @@ impl Time {
             return Err(box_err!("unsupport year: {}", y));
         }
         let t = try!(ymd_hms_nanos(y, m, d, h, minute, sec, frac * TEN_POW[9 - fsp as usize]));
-        Time::new(t, types::DATETIME as u8, fsp)
+        Time::new(t, types::DATETIME as u8, fsp as i8)
     }
 
-    pub fn from_packed_u64(t: u64, tp: u8, fsp: u8) -> Result<Time> {
+    pub fn from_packed_u64(t: u64, tp: u8, fsp: i8) -> Result<Time> {
         if t == 0 {
             return Time::new(zero_time(), tp, fsp);
         }
+        let fsp = try!(mysql::check_fsp(fsp));
         let ymdhms = t >> 24;
         let ymd = ymdhms >> 17;
         let day = (ymd & ((1 << 5) - 1)) as u32;
@@ -255,7 +256,7 @@ impl Time {
         let hour = (hms >> 12) as u32;
         let nanosec = ((t & ((1 << 24) - 1)) * 1000) as u32;
         let t = try!(ymd_hms_nanos(year, month, day, hour, minute, second, nanosec));
-        Time::new(t, tp, fsp)
+        Time::new(t, tp, fsp as i8)
     }
 
     pub fn to_packed_u64(&self) -> u64 {
@@ -337,7 +338,7 @@ mod test {
 
     use std::cmp::Ordering;
 
-    use util::codec::mysql::{MAX_FSP, types};
+    use util::codec::mysql::{MAX_FSP, UN_SPECIFIED_FSP, types};
 
     #[test]
     fn test_parse_datetime() {
@@ -360,7 +361,7 @@ mod test {
         ];
 
         for (input, exp) in ok_tables {
-            let t = Time::parse_datetime(input, 0).unwrap();
+            let t = Time::parse_datetime(input, UN_SPECIFIED_FSP).unwrap();
             assert_eq!(format!("{}", t), exp);
         }
 
@@ -396,6 +397,7 @@ mod test {
         let cases = vec![
             ("2010-10-10 10:11:11", 0),
             ("0001-01-01 00:00:00", 0),
+            ("0001-01-01 00:00:00", UN_SPECIFIED_FSP),
             ("2000-01-01 00:00:00.000000", MAX_FSP),
             ("2000-01-01 00:00:00.123456", MAX_FSP),
             ("0001-01-01 00:00:00.123456", MAX_FSP),
