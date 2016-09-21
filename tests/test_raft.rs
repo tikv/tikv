@@ -223,6 +223,10 @@ fn new_raft_log(ents: Vec<Entry>, offset: u64, committed: u64) -> RaftLog<MemSto
     }
 }
 
+fn new_raft_log_with_storage(s: MemStorage) -> RaftLog<MemStorage> {
+    RaftLog::new(s, String::from(""))
+}
+
 pub fn new_snapshot(index: u64, term: u64, nodes: Vec<u64>) -> Snapshot {
     let mut s = Snapshot::new();
     s.mut_metadata().set_index(index);
@@ -713,7 +717,7 @@ fn test_dueling_candidates() {
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
     let wlog = new_raft_log(vec![empty_entry(1, 1)], 2, 1);
-    let wlog2 = RaftLog::new(new_storage());
+    let wlog2 = new_raft_log_with_storage(new_storage());
     let tests = vec![
         (StateRole::Follower, 2, &wlog),
         (StateRole::Follower, 2, &wlog),
@@ -833,7 +837,7 @@ fn test_proposal() {
         let want_log = if success {
             new_raft_log(vec![empty_entry(1, 1), new_entry(1, 2, SOME_DATA)], 3, 2)
         } else {
-            RaftLog::new(new_storage())
+            new_raft_log_with_storage(new_storage())
         };
         let base = ltoa(&want_log);
         for (id, p) in &nw.peers {

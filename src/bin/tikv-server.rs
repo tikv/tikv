@@ -27,6 +27,7 @@ extern crate fs2;
 extern crate signal;
 #[cfg(unix)]
 extern crate nix;
+extern crate prometheus;
 
 use std::{env, thread};
 use std::fs::{self, File};
@@ -40,6 +41,7 @@ use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use mio::EventLoop;
 use fs2::FileExt;
+use prometheus::{Encoder, TextEncoder};
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
@@ -143,8 +145,56 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     }
 }
 
+fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>) {
+    let push_interval = get_integer_value("",
+                                          "metric.interval",
+                                          matches,
+                                          config,
+                                          Some(0),
+                                          |v| v.as_integer());
+    if push_interval == 0 {
+        return;
+    }
+
+    let push_address = get_string_value("",
+                                        "metric.address",
+                                        matches,
+                                        config,
+                                        None,
+                                        |v| v.as_str().map(|s| s.to_owned()));
+    if push_address.is_empty() {
+        return;
+    }
+
+    let mut push_job = get_string_value("",
+                                        "metric.job",
+                                        matches,
+                                        config,
+                                        None,
+                                        |v| v.as_str().map(|s| s.to_owned()));
+    if let Some(id) = node_id {
+        push_job.push_str(&format!("_{}", id));
+    }
+
+    info!("start prometheus client");
+
+    util::run_prometheus(Duration::from_millis(push_interval as u64),
+                         &push_address,
+                         &push_job);
+}
+
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_default_cf_option(matches, config)
+    let mut opts = get_rocksdb_default_cf_option(matches, config);
+    let rmode = get_integer_value("",
+                                  "rocksdb.wal-recovery-mode",
+                                  matches,
+                                  config,
+                                  Some(2),
+                                  |v| v.as_integer());
+    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
+    opts.set_wal_recovery_mode(wal_recovery_mode);
+
+    opts
 }
 
 fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
@@ -156,14 +206,14 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                        config,
                                        Some(64 * 1024),
                                        |v| v.as_integer());
-    block_base_opts.set_block_size(block_size as u64);
+    block_base_opts.set_block_size(block_size as usize);
     let block_cache_size = get_integer_value("",
                                              "rocksdb.block-based-table.block-cache-size",
                                              matches,
                                              config,
                                              Some(1024 * 1024 * 1024),
                                              |v| v.as_integer());
-    block_base_opts.set_lru_cache(block_cache_size as u64);
+    block_base_opts.set_lru_cache(block_cache_size as usize);
     let bloom_bits_per_key = get_integer_value("",
                                                "rocksdb.block-based-table.\
                                                 bloom-filter-bits-per-key",
@@ -231,6 +281,15 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                                      Some(64 * 1024 * 1024),
                                                      |v| v.as_integer());
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
+
+    let max_manifest_file_size = get_integer_value("",
+                                                   "rocksdb.max-manifest-file-size",
+                                                   matches,
+                                                   config,
+                                                   Some(20 * 1024 * 1024),
+                                                   |v| v.as_integer());
+    opts.set_max_manifest_file_size(max_manifest_file_size as u64);
+
 
     let target_file_size_base = get_integer_value("",
                                                   "rocksdb.target-file-size-base",
@@ -302,7 +361,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
                                              config,
                                              Some(1024 * 1024 * 1024),
                                              |v| v.as_integer());
-    let write_cf_block_cache_size: u64 = block_cache_size as u64 / 4;
+    let write_cf_block_cache_size = block_cache_size as usize / 4;
     block_base_opts.set_lru_cache(write_cf_block_cache_size);
     opts.set_block_based_table_factory(&block_base_opts);
 
@@ -613,14 +672,22 @@ fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>)
 #[cfg(unix)]
 fn handle_signal(ch: SendCh<Msg>) {
     use signal::trap::Trap;
-    use nix::sys::signal::{SIGTERM, SIGINT};
-    let trap = Trap::trap(&[SIGTERM, SIGINT]);
+    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1};
+    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1]);
     for sig in trap {
         match sig {
             SIGTERM | SIGINT => {
                 info!("receive signal {}, stopping server...", sig);
                 ch.send(Msg::Quit).unwrap();
                 break;
+            }
+            SIGUSR1 => {
+                // Use SIGUSR1 to log metrics.
+                let mut buffer = vec![];
+                let metric_familys = prometheus::gather();
+                let encoder = TextEncoder::new();
+                encoder.encode(&metric_familys, &mut buffer).unwrap();
+                info!("{}", String::from_utf8(buffer).unwrap());
             }
             // TODO: handle more signal
             _ => unreachable!(),
@@ -675,6 +742,9 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     let (mut node, mut store, raft_router, snap_mgr) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
+
+    initial_metric(matches, config, Some(node.id()));
+
     info!("start storage");
     if let Err(e) = store.start(&cfg.storage) {
         panic!("failed to start storage, error = {:?}", e);
@@ -751,15 +821,6 @@ fn main() {
     // Print version information.
     util::print_tikv_info();
 
-    // Run prometheus client.
-    let report_interval = get_integer_value("",
-                                            "metric.report-interval",
-                                            &matches,
-                                            &config,
-                                            Some(300_000),
-                                            |v| v.as_integer());
-    util::run_prometheus(Duration::from_millis(report_interval as u64));
-
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,
@@ -789,6 +850,7 @@ fn main() {
     cfg.storage.path = get_store_path(&matches, &config);
     match dsn_name.as_ref() {
         ROCKSDB_DSN => {
+            initial_metric(&matches, &config, None);
             run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {

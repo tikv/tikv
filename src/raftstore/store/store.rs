@@ -44,7 +44,7 @@ use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
 use storage::ALL_CFS;
-use super::worker::{SplitCheckRunner, SplitCheckTask, SnapTask, SnapRunner, CompactTask,
+use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
@@ -74,7 +74,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
-    snap_worker: Worker<SnapTask>,
+    region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
 
@@ -122,7 +122,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker"),
-            snap_worker: Worker::new("snapshot worker"),
+            region_worker: Worker::new("snapshot worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
@@ -177,7 +177,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                       self.store_id());
                 let abort = Arc::new(AtomicBool::new(false));
                 peer.mut_store().set_snap_state(SnapState::Applying(abort.clone()));
-                box_try!(self.snap_worker.schedule(SnapTask::Apply {
+                box_try!(self.region_worker.schedule(RegionTask::Apply {
                     region_id: region_id,
                     abort: abort,
                 }));
@@ -237,10 +237,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        let runner = SnapRunner::new(self.engine.clone(),
-                                     self.get_sendch(),
-                                     self.snap_mgr.clone());
-        box_try!(self.snap_worker.start(runner));
+        let runner = RegionRunner::new(self.engine.clone(),
+                                       self.get_sendch(),
+                                       self.snap_mgr.clone());
+        box_try!(self.region_worker.start(runner));
 
         box_try!(self.compact_worker.start(CompactRunner));
 
@@ -260,8 +260,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.snap_mgr.clone()
     }
 
-    pub fn snap_scheduler(&self) -> Scheduler<SnapTask> {
-        self.snap_worker.scheduler()
+    pub fn snap_scheduler(&self) -> Scheduler<RegionTask> {
+        self.region_worker.scheduler()
     }
 
     pub fn engine(&self) -> Arc<DB> {
@@ -909,6 +909,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             uuid: uuid,
             term: term,
             cb: cb,
+            _timer: PEER_DO_COMMAND_HISTOGRAM.start_timer(),
         };
         try!(peer.propose(pending_cmd, msg, resp));
 
@@ -973,7 +974,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
 
-            if let Err(e) = self.sendch.send(Msg::RaftCmd {
+            if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
                 callback: cb,
             }) {
@@ -1154,10 +1155,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         STORE_SIZE_GAUGE_VEC.with_label_values(&["capacity"]).set(capacity as f64);
         STORE_SIZE_GAUGE_VEC.with_label_values(&["available"]).set(available as f64);
 
-        STORE_SNAPSHOT_TAFFIC_GAUGE_VEC.with_label_values(&["sending"])
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["sending"])
             .set(snap_stats.sending_count as f64);
-        STORE_SNAPSHOT_TAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
-            .set(snap_stats.sending_count as f64);
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
+            .set(snap_stats.receiving_count as f64);
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("failed to notify pd: {}", e);
@@ -1399,7 +1400,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         if !event_loop.is_running() {
             for (handle, name) in vec![(self.split_check_worker.stop(),
                                         self.split_check_worker.name()),
-                                       (self.snap_worker.stop(), self.snap_worker.name()),
+                                       (self.region_worker.stop(), self.region_worker.name()),
                                        (self.compact_worker.stop(), self.compact_worker.name()),
                                        (self.pd_worker.stop(), self.pd_worker.name())] {
                 if let Some(Err(e)) = handle.map(|h| h.join()) {

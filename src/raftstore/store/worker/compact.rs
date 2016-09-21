@@ -80,9 +80,8 @@ impl Runner {
             let key = keys::raft_log_key(task.region_id, idx);
             box_try!(wb.delete_cf(*handle, &key));
         }
-        // It is safe to disable WAL here. If crashed, we can still
-        // compact the log after restart.
-        box_try!(task.engine.write_without_wal(wb));
+        // It's not safe to disable WAL here. We may lost data after crashed for unknown reason.
+        box_try!(task.engine.write(wb));
         Ok(task.compact_idx - first_idx)
     }
 }

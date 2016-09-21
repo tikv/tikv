@@ -26,7 +26,7 @@ use raft;
 use kvproto::{errorpb, metapb};
 
 use super::coprocessor::Error as CopError;
-use util::escape;
+use util::{escape, transport};
 
 quick_error!{
     #[derive(Debug)]
@@ -116,6 +116,12 @@ quick_error!{
             description(err.description())
             display("Coprocessor {}", err)
         }
+        Transport(err: transport::Error) {
+            from()
+            cause(err)
+            description(err.description())
+            display("Transport {}", err)
+        }
     }
 }
 
@@ -145,6 +151,9 @@ impl Into<errorpb::Error> for Error {
             }
             Error::StaleEpoch(_) => {
                 errorpb.set_stale_epoch(errorpb::StaleEpoch::new());
+            }
+            Error::Transport(transport::Error::Discard(_)) => {
+                errorpb.set_server_is_busy(errorpb::ServerIsBusy::new());
             }
             _ => {}
         };

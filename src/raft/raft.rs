@@ -229,14 +229,15 @@ impl<T: Storage> Raft<T> {
     pub fn new(c: &Config, store: T) -> Raft<T> {
         c.validate().expect("configuration is invalid");
         let rs = store.initial_state().expect("");
-        let raft_log = RaftLog::new(store);
+        let raft_log = RaftLog::new(store, c.tag.clone());
         let mut peers: &[u64] = &c.peers;
         if !rs.conf_state.get_nodes().is_empty() {
             if !peers.is_empty() {
                 // TODO: the peers argument is always nil except in
                 // tests; the argument should be removed and these tests should be
                 // updated to specify their nodes through a snap
-                panic!("cannot specify both new(peers) and ConfState.Nodes")
+                panic!("{} cannot specify both new(peers) and ConfState.Nodes",
+                       c.tag)
             }
             peers = rs.conf_state.get_nodes();
         }
@@ -377,11 +378,11 @@ impl<T: Storage> Raft<T> {
                        to);
                 return false;
             }
-            panic!("unexpected error: {:?}", e);
+            panic!("{} unexpected error: {:?}", self.tag, e);
         }
         let snapshot = snapshot_r.unwrap();
         if snapshot.get_metadata().get_index() == 0 {
-            panic!("need non-empty snapshot");
+            panic!("{} need non-empty snapshot", self.tag);
         }
         let (sindex, sterm) = (snapshot.get_metadata().get_index(),
                                snapshot.get_metadata().get_term());
@@ -631,7 +632,7 @@ impl<T: Storage> Raft<T> {
             .expect("unexpected error getting uncommitted entries");
         let nconf = self.num_pending_conf(&ents);
         if nconf > 1 {
-            panic!("unexpected double uncommitted config entry");
+            panic!("{} unexpected double uncommitted config entry", self.tag);
         }
 
         if nconf == 1 {

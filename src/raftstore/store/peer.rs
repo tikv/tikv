@@ -22,6 +22,7 @@ use std::time::{Instant, Duration};
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
 use uuid::Uuid;
+use prometheus::HistogramTimer;
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType};
@@ -62,6 +63,7 @@ pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
     pub cb: Callback,
+    pub _timer: HistogramTimer,
 }
 
 #[derive(Debug)]
@@ -523,7 +525,7 @@ impl Peer {
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all", "all"]).inc();
+        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
 
         if let Err(e) = self.check_epoch(&req) {
             cmd_resp::bind_error(&mut err_resp, e);
@@ -532,6 +534,8 @@ impl Peer {
 
         let local_read = self.is_local_read(&req);
         if local_read {
+            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"]).inc();
+
             // for read-only, if we don't care stale read, we can
             // execute these commands immediately in leader.
             let engine = self.engine.clone();
@@ -589,8 +593,6 @@ impl Peer {
             self.pending_cmds.append_normal(cmd);
         }
 
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all", "success"]).inc();
-
         Ok(())
     }
 
@@ -633,6 +635,8 @@ impl Peer {
     }
 
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
+        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["normal"]).inc();
+
         // TODO: validate request for unexpected changes.
         try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
@@ -641,7 +645,7 @@ impl Peer {
     }
 
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["transfer_leader", "all"]).inc();
+        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["transfer_leader"]).inc();
 
         info!("{} transfer leader to {:?}", self.tag, peer);
 
@@ -667,7 +671,7 @@ impl Peer {
     }
 
     fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["conf_change", "all"]).inc();
+        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["conf_change"]).inc();
 
         let data = try!(cmd.write_to_bytes());
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
@@ -927,15 +931,17 @@ impl Peer {
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cb = self.find_cb(uuid, term, &cmd);
+        let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
         let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd).unwrap_or_else(|e| {
             error!("{} apply raft command err {:?}", self.tag, e);
             (cmd_resp::new_error(e), None)
         });
+        timer.observe_duration();
 
-        debug!("{} applied command with uuid {:?}: {:?}",
+        debug!("{} applied command with uuid {:?} at log index {}",
                self.tag,
                uuid,
-               resp.get_header());
+               index);
 
         if cb.is_none() {
             return Ok(exec_result);

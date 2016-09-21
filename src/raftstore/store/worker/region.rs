@@ -28,7 +28,7 @@ use util::codec::bytes::CompactBytesDecoder;
 use util::{escape, HandyRwLock, rocksdb};
 use util::transport::SendCh;
 use raftstore;
-use raftstore::store::engine::{Mutable, Snapshot, Iterable};
+use raftstore::store::engine::{self, Mutable, Snapshot, Iterable};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
 use storage::CF_RAFT;
 
@@ -36,13 +36,31 @@ use super::metrics::*;
 
 const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 
-/// Snapshot related task.
+/// region related task.
 pub enum Task {
     Gen { region_id: u64 },
     Apply {
         region_id: u64,
         abort: Arc<AtomicBool>,
     },
+    /// Destroy data between [start_key, end_key).
+    ///
+    /// The deletion may and may not succeed.
+    Destroy {
+        region_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    },
+}
+
+impl Task {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
+        Task::Destroy {
+            region_id: region_id,
+            start_key: start_key,
+            end_key: end_key,
+        }
+    }
 }
 
 impl Display for Task {
@@ -50,6 +68,13 @@ impl Display for Task {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
+            Task::Destroy { region_id, ref start_key, ref end_key } => {
+                write!(f,
+                       "Destroy {} [{}, {})",
+                       region_id,
+                       escape(&start_key),
+                       escape(&end_key))
+            }
         }
     }
 }
@@ -98,7 +123,7 @@ fn delete_all_in_range(db: &DB,
         let handle = box_try!(rocksdb::get_cf_handle(db, cf));
         box_try!(db.delete_file_in_range_cf(*handle, start_key, end_key));
 
-        let mut it = box_try!(db.new_iterator_cf(cf));
+        let mut it = box_try!(db.new_iterator_cf(cf, Some(end_key)));
 
         let mut wb = WriteBatch::new();
         try!(check_abort(&abort));
@@ -132,7 +157,7 @@ fn delete_all_in_range(db: &DB,
     Ok(())
 }
 
-// TODO: seperate snap generate and apply to different thread.
+// TODO: use threadpool to do task concurrently
 pub struct Runner<T: MsgSender> {
     db: Arc<DB>,
     ch: T,
@@ -294,6 +319,19 @@ impl<T: MsgSender> Runner<T> {
         }
         timer.observe_duration();
     }
+
+    fn handle_destroy(&mut self, region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
+        info!("[region {}] deleting data in [{}, {})",
+              region_id,
+              escape(&start_key),
+              escape(&end_key));
+        if let Err(e) = engine::delete_all_in_range(&self.db, &start_key, &end_key) {
+            error!("failed to delete data in [{}, {}): {:?}",
+                   escape(&start_key),
+                   escape(&end_key),
+                   e);
+        }
+    }
 }
 
 impl<T: MsgSender> Runnable<Task> for Runner<T> {
@@ -301,6 +339,9 @@ impl<T: MsgSender> Runnable<Task> for Runner<T> {
         match task {
             Task::Gen { region_id } => self.handle_gen(region_id),
             Task::Apply { region_id, abort } => self.handle_apply(region_id, abort),
+            Task::Destroy { region_id, start_key, end_key } => {
+                self.handle_destroy(region_id, start_key, end_key)
+            }
         }
     }
 }

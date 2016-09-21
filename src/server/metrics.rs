@@ -11,12 +11,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::Histogram;
+use prometheus::{Gauge, CounterVec, Histogram};
 
 lazy_static! {
     pub static ref SEND_SNAP_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_server_send_snapshot_duration_seconds",
             "Bucketed histogram of server send snapshots duration"
+        ).unwrap();
+
+    pub static ref SNAP_TASK_COUNTER: CounterVec =
+        register_counter_vec!(
+            "tikv_server_snapshot_task_total",
+            "Total number of snapshot task",
+            &["type"]
+        ).unwrap();
+
+    pub static ref RECV_MSG_COUNTER: CounterVec =
+        register_counter_vec!(
+            "tikv_server_receive_msg_total",
+            "Total number of receiving messages",
+            &["type"]
+        ).unwrap();
+
+    pub static ref RESOLVE_STORE_COUNTER: CounterVec =
+        register_counter_vec!(
+            "tikv_server_resolve_store_total",
+            "Total number of resolving store",
+            &["type"]
+        ).unwrap();
+
+    pub static ref CONNECTION_GAUGE: Gauge =
+        register_gauge!(
+            "tikv_server_connection_total",
+            "Total number of connection"
         ).unwrap();
 }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, Counter, GaugeVec};
+use prometheus::{CounterVec, Counter, GaugeVec, Histogram};
 
 lazy_static! {
     pub static ref PEER_RAFT_READY_COUNTER_VEC: CounterVec =
@@ -25,7 +25,7 @@ lazy_static! {
         register_counter_vec!(
             "tikv_raftstore_proposal_total",
             "Total number of proposal made.",
-            &["type", "status"]
+            &["type"]
         ).unwrap();
 
     pub static ref PEER_ADMIN_CMD_COUNTER_VEC: CounterVec =
@@ -39,6 +39,18 @@ lazy_static! {
         register_counter!(
             "tikv_raftstore_handle_raft_entry_conf_change_total",
             "Total number of raft entry conf change handled."
+        ).unwrap();
+
+    pub static ref PEER_DO_COMMAND_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_do_command_duration_seconds",
+            "Bucketed histogram of peer doing command duration"
+        ).unwrap();
+
+    pub static ref PEER_APPLY_LOG_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_log_duration_seconds",
+            "Bucketed histogram of peer applying log duration"
         ).unwrap();
 
     pub static ref STORE_PD_HEARTBEAT_GAUGE_VEC: GaugeVec =
@@ -55,7 +67,7 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_SNAPSHOT_TAFFIC_GAUGE_VEC: GaugeVec =
+    pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_raftstore_snapshot_traffic_total",
             "Total number of raftstore snapshot traffic.",

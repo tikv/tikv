@@ -30,8 +30,12 @@ end-point-concurrency = 8
 # capacity = 0 # 0 is unlimited.
 
 [metric]
-# prometheus client report interval, set 0s to disable prometheus.
-report-interval = "5m"
+# the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
+interval = "15s"
+# the Prometheus pushgateway address. Leaving it empty stops Prometheus client from pushing.
+address = ""
+# the Prometheus client push job name. Note: A node id will automatically append, e.g., "tikv_1".
+job = "tikv"
 
 [raftstore]
 # notify capacity, 40960 is suitable for about 7000 regions.
@@ -92,7 +96,7 @@ min-write-buffer-number-to-merge = 1
 
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
-max-background-compactions = 4
+max-background-compactions = 6
 
 # Control maximum total data size for base level (level 1).
 max-bytes-for-level-base = "64MB"
@@ -108,6 +112,13 @@ level0-slowdown-writes-trigger = 12
 
 # Maximum number of level-0 files.  We stop writes at this point.
 level0-stop-writes-trigger = 16
+
+# rocksdb wal recovery mode
+# 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
+# 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;
+# 2 : PointInTimeRecovery, Recover to point-in-time consistency;
+# 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
+wal-recovery-mode = 2
 
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/table.h
 [rocksdb.block-based-table]

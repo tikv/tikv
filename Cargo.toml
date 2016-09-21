@@ -68,7 +68,9 @@ git = "https://github.com/pingcap/tipb.git"
 git = "https://github.com/carllerche/mio.git"
 
 [dependencies.prometheus]
-git = "https://github.com/pingcap/rust-prometheus"
+git = "https://github.com/pingcap/rust-prometheus.git"
+default-features = false
+features = ["nightly"]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

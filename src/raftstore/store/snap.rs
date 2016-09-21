@@ -334,7 +334,7 @@ impl SnapManagerCore {
 
     fn notify_stats(&self) {
         if let Some(ref ch) = self.ch {
-            if let Err(e) = ch.send(Msg::SnapshotStats) {
+            if let Err(e) = ch.try_send(Msg::SnapshotStats) {
                 error!("notify snapshot stats failed {:?}", e)
             }
         }

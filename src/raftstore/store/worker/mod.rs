@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod snap;
+mod region;
 mod split_check;
 mod compact;
 mod pd;
 mod metrics;
 
-pub use self::snap::{Task as SnapTask, Runner as SnapRunner, MsgSender};
+pub use self::region::{Task as RegionTask, Runner as RegionRunner, MsgSender};
 pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
 pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
 pub use self::pd::{Task as PdTask, Runner as PdRunner};

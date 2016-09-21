@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ascii;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::io::{self, Write};
@@ -22,9 +21,9 @@ use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use time;
+use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
-use prometheus::{self, Encoder, TextEncoder};
 use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 #[macro_use]
@@ -170,6 +169,7 @@ pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
 ///
 /// assert_eq!(r"ab", escape(b"ab"));
 /// assert_eq!(r"a\\023", escape(b"a\\023"));
+/// assert_eq!(r"a\000", escape(b"a\0"));
 /// assert_eq!("a\\r\\n\\t '\\\"\\\\", escape(b"a\r\n\t '\"\\"));
 /// assert_eq!(r"\342\235\244\360\237\220\267", escape("❤🐷".as_bytes()));
 /// ```
@@ -177,16 +177,22 @@ pub fn escape(data: &[u8]) -> String {
     let mut escaped = Vec::with_capacity(data.len() * 4);
     for &c in data {
         match c {
+            b'\n' => escaped.extend_from_slice(br"\n"),
+            b'\r' => escaped.extend_from_slice(br"\r"),
+            b'\t' => escaped.extend_from_slice(br"\t"),
             b'"' => escaped.extend_from_slice(b"\\\""),
             b'\\' => escaped.extend_from_slice(br"\\"),
-            b'\'' => escaped.push(b'\''),
-            _ if c > b'\x7e' => {
-                escaped.push(b'\\');
-                escaped.push(b'0' + (c >> 6));
-                escaped.push(b'0' + ((c >> 3) & 7));
-                escaped.push(b'0' + (c & 7));
+            _ => {
+                if c >= 0x20 && c < 0x7f {
+                    // c is printable
+                    escaped.push(c);
+                } else {
+                    escaped.push(b'\\');
+                    escaped.push(b'0' + (c >> 6));
+                    escaped.push(b'0' + ((c >> 3) & 7));
+                    escaped.push(b'0' + (c & 7));
+                }
             }
-            _ => escaped.extend(ascii::escape_default(c)),
         }
     }
     escaped.shrink_to_fit();
@@ -206,6 +212,7 @@ pub fn escape(data: &[u8]) -> String {
 ///
 /// assert_eq!(unescape(r"ab"), b"ab");
 /// assert_eq!(unescape(r"a\\023"), b"a\\023");
+/// assert_eq!(unescape(r"a\000"), b"a\0");
 /// assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
 /// assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
 /// ```
@@ -387,22 +394,28 @@ pub fn print_tikv_info() {
 }
 
 /// `run_prometheus` runs a background prometheus client.
-pub fn run_prometheus(interval: Duration) -> Option<thread::JoinHandle<()>> {
+pub fn run_prometheus(interval: Duration,
+                      address: &str,
+                      job: &str)
+                      -> Option<thread::JoinHandle<()>> {
     if interval == Duration::from_secs(0) {
         return None;
     }
 
+    let job = job.to_owned();
+    let address = address.to_owned();
     Some(thread::spawn(move || {
-        let encoder = TextEncoder::new();
-        let mut buffer = Vec::<u8>::new();
         loop {
             let metric_familys = prometheus::gather();
-            encoder.encode(&metric_familys, &mut buffer).unwrap();
 
-            // Output to the standard output.
-            info!("{}", String::from_utf8(buffer.clone()).unwrap());
+            let res = prometheus::push_metrics(&job,
+                                               prometheus::hostname_grouping_key(),
+                                               &address,
+                                               metric_familys);
+            if let Err(e) = res {
+                error!("fail to push metrics: {}", e);
+            }
 
-            buffer.clear();
             thread::sleep(interval);
         }
     }))
