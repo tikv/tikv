@@ -194,6 +194,21 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
+    let enable_statistics = config.lookup("rocksdb.enable-statistics")
+        .unwrap_or(&toml::Value::Boolean(false))
+        .as_bool()
+        .unwrap_or(false);
+    if enable_statistics {
+        opts.enable_statistics();
+    }
+    let stats_dump_period_sec = get_integer_value("",
+                                                  "rocksdb.stats-dump-period-sec",
+                                                  matches,
+                                                  config,
+                                                  Some(60),
+                                                  |v| v.as_integer());
+    opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
+
     opts
 }
 

@@ -120,6 +120,12 @@ level0-stop-writes-trigger = 16
 # 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 wal-recovery-mode = 2
 
+# Rocksdb Statistics provides cumulative stats over time.
+enable-statistics = false
+
+# Dump statistics periodically in information logs.
+stats-dump-period-sec = 300
+
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/table.h
 [rocksdb.block-based-table]
 # Approximate size of user data packed per block.  Note that the 
