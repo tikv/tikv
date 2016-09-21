@@ -962,7 +962,9 @@ fn test_pass_election_timeout() {
 #[test]
 fn test_step_ignore_old_term_msg() {
     let mut sm = new_test_raft(1, vec![1], 10, 1, new_storage());
-    sm.allow_step = false;
+    let panic_before_step_state =
+        Box::new(|_: &Message| panic!("before step state function hook called unexpectedly"));
+    sm.before_step_state = Some(panic_before_step_state);
     sm.term = 2;
     let mut m = new_message(0, 0, MessageType::MsgAppend, 0);
     m.set_term(1);
@@ -1526,6 +1528,146 @@ fn test_non_promotable_voter_wich_check_quorum() {
     assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
     assert_eq!(nt.peers.get(&2).unwrap().state, StateRole::Follower);
     assert_eq!(nt.peers.get(&2).unwrap().leader_id, 1);
+}
+
+#[test]
+fn test_read_only_option_safe() {
+    let a = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let b = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let c = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+
+    // we can not let system choose the value of randomizedElectionTimeout
+    // otherwise it will introduce some uncertainty into this test case
+    // we need to ensure randomizedElectionTimeout > electionTimeout here
+    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
+
+    for _ in 0..b_election_timeout {
+        nt.peers.get_mut(&2).unwrap().tick();
+    }
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+
+    let mut tests = vec![
+        (2, 10, 11, "ctx1"),
+        (3, 10, 21, "ctx2"),
+        (2, 10, 31, "ctx3"),
+        (3, 10, 41, "ctx4"),
+    ];
+
+    for (i, (id, proposals, wri, wctx)) in tests.drain(..).enumerate() {
+        for _ in 0..proposals {
+            nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+        }
+
+        let e = new_entry(0, 0, Some(wctx));
+        nt.send(vec![new_message_with_entries(id, id, MessageType::MsgReadIndex, vec![e])]);
+
+        let read_states: Vec<ReadState> =
+            nt.peers.get_mut(&id).unwrap().read_states.drain(..).collect();
+        if read_states.is_empty() {
+            panic!("#{}: read_states is empty, want non-empty", i);
+        }
+        let rs = &read_states[0];
+        if rs.index != wri {
+            panic!("#{}: read_index = {}, want {}", i, rs.index, wri)
+        }
+        let vec_wctx = wctx.as_bytes().to_vec();
+        if rs.request_ctx != vec_wctx {
+            panic!("#{}: request_ctx = {:?}, want {:?}",
+                   i,
+                   rs.request_ctx,
+                   vec_wctx)
+        }
+    }
+}
+
+#[test]
+fn test_read_only_option_lease() {
+    let mut a = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let mut b = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let mut c = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+    a.read_only.option = ReadOnlyOption::LeaseBased;
+    b.read_only.option = ReadOnlyOption::LeaseBased;
+    c.read_only.option = ReadOnlyOption::LeaseBased;
+    a.check_quorum = true;
+    b.check_quorum = true;
+    c.check_quorum = true;
+
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+
+    // we can not let system choose the value of randomizedElectionTimeout
+    // otherwise it will introduce some uncertainty into this test case
+    // we need to ensure randomizedElectionTimeout > electionTimeout here
+    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
+
+    for _ in 0..b_election_timeout {
+        nt.peers.get_mut(&2).unwrap().tick();
+    }
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+
+    let mut tests = vec![
+        (2, 10, 11, "ctx1"),
+        (3, 10, 21, "ctx2"),
+        (2, 10, 31, "ctx3"),
+        (3, 10, 41, "ctx4"),
+    ];
+
+    for (i, (id, proposals, wri, wctx)) in tests.drain(..).enumerate() {
+        for _ in 0..proposals {
+            nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+        }
+
+        let e = new_entry(0, 0, Some(wctx));
+        nt.send(vec![new_message_with_entries(id, id, MessageType::MsgReadIndex, vec![e])]);
+
+        let read_states: Vec<ReadState> =
+            nt.peers.get_mut(&id).unwrap().read_states.drain(..).collect();
+        if read_states.is_empty() {
+            panic!("#{}: read_states is empty, want non-empty", i);
+        }
+        let rs = &read_states[0];
+        if rs.index != wri {
+            panic!("#{}: read_index = {}, want {}", i, rs.index, wri);
+        }
+        let vec_wctx = wctx.as_bytes().to_vec();
+        if rs.request_ctx != vec_wctx {
+            panic!("#{}: request_ctx = {:?}, want {:?}",
+                   i,
+                   rs.request_ctx,
+                   vec_wctx);
+        }
+    }
+}
+
+#[test]
+fn test_read_only_option_lease_without_check_quorum() {
+    let mut a = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let mut b = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let mut c = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+    a.read_only.option = ReadOnlyOption::LeaseBased;
+    b.read_only.option = ReadOnlyOption::LeaseBased;
+    c.read_only.option = ReadOnlyOption::LeaseBased;
+
+    let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    let ctx = "ctx1";
+    let e = new_entry(0, 0, Some(ctx));
+    nt.send(vec![new_message_with_entries(2, 2, MessageType::MsgReadIndex, vec![e])]);
+
+    let read_states = &nt.peers[&2].read_states;
+    assert!(!read_states.is_empty());
+    let rs = &read_states[0];
+    assert_eq!(rs.index, INVALID_ID);
+    let vec_ctx = ctx.as_bytes().to_vec();
+    assert_eq!(rs.request_ctx, vec_ctx);
 }
 
 #[test]

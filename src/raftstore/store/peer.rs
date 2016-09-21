@@ -240,6 +240,7 @@ impl Peer {
             applied: applied_index,
             check_quorum: true,
             tag: tag.clone(),
+            ..Default::default()
         };
 
         let raft_group = try!(RawNode::new(&raft_cfg, ps, &[]));

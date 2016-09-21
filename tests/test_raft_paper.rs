@@ -113,7 +113,9 @@ fn test_update_term_from_message(state: StateRole) {
 #[test]
 fn test_reject_stale_term_message() {
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
-    r.allow_step = false;
+    let panic_before_step_state =
+        Box::new(|_: &Message| panic!("before step state function hook called unexpectedly"));
+    r.before_step_state = Some(panic_before_step_state);
     r.load_state(hard_state(2, 0, 0));
 
     let mut m = new_message(0, 0, MessageType::MsgAppend, 0);
@@ -861,17 +863,17 @@ fn test_vote_request() {
 fn test_voter() {
     let mut tests = vec![
         // same logterm
-		(vec![empty_entry(1, 1)], 1, 1, false),
-		(vec![empty_entry(1, 1)], 1, 2, false),
+        (vec![empty_entry(1, 1)], 1, 1, false),
+        (vec![empty_entry(1, 1)], 1, 2, false),
         (vec![empty_entry(1, 1), empty_entry(1, 2)], 1, 1, true),
-		// candidate higher logterm
-		(vec![empty_entry(1, 1)], 2, 1, false),
-		(vec![empty_entry(1, 1)], 2, 2, false),
-		(vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 1, false),
-		// voter higher logterm
-		(vec![empty_entry(2, 1)], 1, 1, true),
-		(vec![empty_entry(2, 1)], 1, 2, true),
-		(vec![empty_entry(2, 1), empty_entry(1, 2)], 1, 1, true),
+        // candidate higher logterm
+        (vec![empty_entry(1, 1)], 2, 1, false),
+        (vec![empty_entry(1, 1)], 2, 2, false),
+        (vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 1, false),
+        // voter higher logterm
+        (vec![empty_entry(2, 1)], 1, 1, true),
+        (vec![empty_entry(2, 1)], 1, 2, true),
+        (vec![empty_entry(2, 1), empty_entry(1, 2)], 1, 1, true),
     ];
     for (i, (ents, log_term, index, wreject)) in tests.drain(..).enumerate() {
         let s = new_storage();
