@@ -14,17 +14,24 @@
 use util::codec::Result;
 use util::escape;
 
+/// `UN_SPECIFIED_FSP` is the unspecified fractional seconds part.
+const UN_SPECIFIED_FSP: i8 = -1;
 /// `MAX_FSP` is the maximum digit of fractional seconds part.
-pub const MAX_FSP: u8 = 6;
+pub const MAX_FSP: i8 = 6;
+/// `MIN_FSP` is the minimum digit of fractional seconds part.
+pub const MIN_FSP: i8 = 0;
 /// `DEFAULT_FSP` is the default digit of fractional seconds part.
 /// `MySQL` use 0 as the default Fsp.
-pub const DEFAULT_FSP: u8 = 0;
+pub const DEFAULT_FSP: i8 = 0;
 
-fn check_fsp(fsp: u8) -> Result<()> {
-    if fsp > MAX_FSP {
+fn check_fsp(fsp: i8) -> Result<u8> {
+    if fsp == UN_SPECIFIED_FSP {
+        return Ok(DEFAULT_FSP as u8);
+    }
+    if fsp > MAX_FSP || fsp < MIN_FSP {
         return Err(invalid_type!("Invalid fsp {}", fsp));
     }
-    Ok(())
+    Ok(fsp as u8)
 }
 
 /// Parse string as if it's a fraction part of a number and keep

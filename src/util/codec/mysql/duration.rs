@@ -94,35 +94,29 @@ impl Duration {
         if self.neg { -nanos } else { nanos }
     }
 
-    pub fn from_nanos(nanos: i64, fsp: u8) -> Result<Duration> {
+    pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
         let neg = nanos < 0;
         let nanos = nanos.abs();
 
         let dur = StdDuration::new((nanos / NANOS_PER_SEC) as u64,
                                    (nanos % NANOS_PER_SEC) as u32);
-        try!(check_dur(&dur));
-
-        Ok(Duration {
-            dur: dur,
-            neg: neg,
-            fsp: fsp,
-        })
+        Duration::new(dur, neg, fsp)
     }
 
-    pub fn new(dur: StdDuration, neg: bool, fsp: u8) -> Result<Duration> {
+    pub fn new(dur: StdDuration, neg: bool, fsp: i8) -> Result<Duration> {
         try!(check_dur(&dur));
         Ok(Duration {
             dur: dur,
             neg: neg,
-            fsp: fsp,
+            fsp: try!(check_fsp(fsp)),
         })
     }
 
     // `parse` parses the time form a formatted string with a fractional seconds part,
     // returns the duration type Time value.
     // See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    pub fn parse(mut s: &[u8], fsp: u8) -> Result<Duration> {
-        try!(check_fsp(fsp));
+    pub fn parse(mut s: &[u8], fsp: i8) -> Result<Duration> {
+        let fsp = try!(check_fsp(fsp));
 
         let (mut neg, mut day, mut frac) = (false, None, 0);
 
@@ -182,13 +176,7 @@ impl Duration {
         }
 
         let dur = StdDuration::new(secs, frac);
-        try!(check_dur(&dur));
-
-        Ok(Duration {
-            dur: dur,
-            neg: neg,
-            fsp: fsp,
-        })
+        Duration::new(dur, neg, fsp as i8)
     }
 
     pub fn to_decimal(&self) -> Result<Decimal> {
@@ -262,7 +250,7 @@ mod test {
 
     #[test]
     fn test_parse() {
-        let cases: Vec<(&'static [u8], u8, Option<&'static str>)> = vec![
+        let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
             (b"10:11:12", 0, Some("10:11:12")),
             (b"101112", 0, Some("10:11:12")),
             (b"10:11", 0, Some("10:11:00")),
