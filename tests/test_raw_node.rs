@@ -162,21 +162,13 @@ fn test_raw_node_read_index() {
     let mut raw_node = new_raw_node(1, vec![], 10, 1, s.clone(), vec![new_peer(1)]);
     raw_node.raft.read_states = wrs.clone();
     // ensure the read_states can be read out
-    let has_ready = raw_node.has_ready();
-    if has_ready != true {
-        panic!("has_ready() returns {}, want {}", has_ready, true);
-    }
+    assert!(raw_node.has_ready());
     let rd = raw_node.ready();
-    if rd.read_states != wrs {
-        panic!("read_states = {:?}, want {:?}", rd.read_states, wrs);
-    }
+    assert_eq!(rd.read_states, wrs);
     s.wl().append(&rd.entries).expect("");
     raw_node.advance(rd);
     // ensure raft.read_states is reset after advance
-    if !raw_node.raft.read_states.is_empty() {
-        panic!("read_states = {:?}, want a empty vector",
-               raw_node.raft.read_states);
-    }
+    assert!(raw_node.raft.read_states.is_empty());
 
     let wrequest_ctx = b"somedata2".to_vec();
     raw_node.campaign().expect("");
@@ -195,19 +187,9 @@ fn test_raw_node_read_index() {
     }
     // ensure that MsgReadIndex message is sent to the underlying raft
     let msgs = a.borrow();
-    if msgs.len() != 1 {
-        panic!("len(msgs) = {}, want {}", msgs.len(), 1)
-    }
-    if msgs[0].get_msg_type() != MessageType::MsgReadIndex {
-        panic!("msg type = {:?}, want {:?}",
-               msgs[0].get_msg_type(),
-               MessageType::MsgReadIndex)
-    }
-    if wrequest_ctx != msgs[0].get_entries()[0].get_data() {
-        panic!("data = {:?}, want {:?}",
-               msgs[0].get_entries()[0].get_data(),
-               wrequest_ctx)
-    }
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgReadIndex);
+    assert_eq!(wrequest_ctx, msgs[0].get_entries()[0].get_data());
 }
 
 

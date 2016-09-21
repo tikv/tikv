@@ -1663,17 +1663,11 @@ fn test_read_only_option_lease_without_check_quorum() {
     nt.send(vec![new_message_with_entries(2, 2, MessageType::MsgReadIndex, vec![e])]);
 
     let read_states = &nt.peers[&2].read_states;
-    if read_states.is_empty() {
-        panic!("read_states is empty, want non-empty");
-    }
+    assert!(!read_states.is_empty());
     let rs = &read_states[0];
-    if rs.index != INVALID_ID {
-        panic!("read_index = {}, want {}", rs.index, INVALID_ID);
-    }
+    assert_eq!(rs.index, INVALID_ID);
     let vec_ctx = ctx.as_bytes().to_vec();
-    if rs.request_ctx != vec_ctx {
-        panic!("request_ctx = {:?}, want {:?}", rs.request_ctx, vec_ctx);
-    }
+    assert_eq!(rs.request_ctx, vec_ctx);
 }
 
 #[test]
