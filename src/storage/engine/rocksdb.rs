@@ -109,7 +109,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                 } else {
                     trace!("EngineRocksdb: delete_cf {} {}", cf, k);
                     let handle = try!(rocksdb::get_cf_handle(db, cf));
-                    wb.delete_cf(*handle, k.encoded())
+                    wb.delete_cf(handle, k.encoded())
                 }
             }
             Modify::Put(cf, k, v) => {
@@ -119,7 +119,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                 } else {
                     trace!("EngineRocksdb: put_cf {}, {}, {}", cf, k, escape(&v));
                     let handle = try!(rocksdb::get_cf_handle(db, cf));
-                    wb.put_cf(*handle, k.encoded(), &v)
+                    wb.put_cf(handle, k.encoded(), &v)
                 }
             }
         };

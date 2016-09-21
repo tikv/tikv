@@ -12,9 +12,9 @@
 // limitations under the License.
 
 use rocksdb::{DB, Options};
-pub use rocksdb::rocksdb_ffi::DBCFHandle;
+pub use rocksdb::CFHandle;
 
-pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a DBCFHandle, String> {
+pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
     db.cf_handle(cf)
         .ok_or_else(|| format!("cf {} not found.", cf))
 }

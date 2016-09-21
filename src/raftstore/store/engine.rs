@@ -14,7 +14,7 @@
 use std::option::Option;
 use std::sync::Arc;
 
-use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions};
+use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions, CFHandle};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use protobuf;
 use byteorder::{ByteOrder, BigEndian};
@@ -46,7 +46,7 @@ impl Snapshot {
         self.db.cf_names()
     }
 
-    pub fn cf_handle<'a>(&'a self, cf: &str) -> Result<&'a rocksdb::DBCFHandle> {
+    pub fn cf_handle(&self, cf: &str) -> Result<&CFHandle> {
         rocksdb::get_cf_handle(&self.db, cf).map_err(Error::from)
     }
 }
@@ -175,7 +175,7 @@ impl Peekable for DB {
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
         let handle = try!(rocksdb::get_cf_handle(self, cf));
-        let v = try!(self.get_cf(*handle, key));
+        let v = try!(self.get_cf(handle, key));
         Ok(v)
     }
 }
@@ -198,9 +198,9 @@ impl Iterable for DB {
             Some(key) => {
                 let mut readopts = ReadOptions::new();
                 readopts.set_iterate_upper_bound(key);
-                Ok(DBIterator::new_cf(self, *handle, readopts))
+                Ok(DBIterator::new_cf(self, handle, readopts))
             }
-            None => Ok(self.iter_cf(*handle)),
+            None => Ok(self.iter_cf(handle)),
         }
     }
 }
@@ -221,7 +221,7 @@ impl Peekable for Snapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        let v = try!(self.db.get_cf_opt(*handle, key, &opt));
+        let v = try!(self.db.get_cf_opt(handle, key, &opt));
         Ok(v)
     }
 }
@@ -247,7 +247,7 @@ impl Iterable for Snapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        Ok(DBIterator::new_cf(&self.db, *handle, opt))
+        Ok(DBIterator::new_cf(&self.db, handle, opt))
     }
 }
 
@@ -258,11 +258,7 @@ pub trait Mutable: Writable {
         Ok(())
     }
 
-    fn put_msg_cf<M: protobuf::Message>(&self,
-                                        cf: rocksdb::DBCFHandle,
-                                        key: &[u8],
-                                        m: &M)
-                                        -> Result<()> {
+    fn put_msg_cf<M: protobuf::Message>(&self, cf: &CFHandle, key: &[u8], m: &M) -> Result<()> {
         let value = try!(m.write_to_bytes());
         try!(self.put_cf(cf, key, &value));
         Ok(())
@@ -310,7 +306,7 @@ pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<
 
 pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
     let handle = try!(rocksdb::get_cf_handle(db, cf));
-    try!(db.delete_file_in_range_cf(*handle, start_key, end_key));
+    try!(db.delete_file_in_range_cf(handle, start_key, end_key));
 
     let mut it = try!(db.new_iterator_cf(cf, Some(end_key)));
 
@@ -323,7 +319,7 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
                 break;
             }
 
-            try!(wb.delete_cf(*handle, key));
+            try!(wb.delete_cf(handle, key));
             if wb.count() == MAX_DELETE_KEYS_COUNT {
                 // Can't use write_without_wal here.
                 // Otherwise it may cause dirty data when applying snapshot.
@@ -366,7 +362,7 @@ mod tests {
         let key = b"key";
         let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
         engine.put_msg(key, &r).unwrap();
-        engine.put_msg_cf(*handle, key, &r).unwrap();
+        engine.put_msg_cf(handle, key, &r).unwrap();
 
         let snap = Snapshot::new(engine.clone());
 
@@ -410,7 +406,7 @@ mod tests {
 
         engine.put(b"k1", b"v1").unwrap();
         let handle = engine.cf_handle("cf").unwrap();
-        engine.put_cf(*handle, b"k1", b"v2").unwrap();
+        engine.put_cf(handle, b"k1", b"v2").unwrap();
 
         assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
         assert!(engine.get_value_cf("foo", b"k1").is_err());
@@ -426,8 +422,8 @@ mod tests {
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();
-        engine.put_cf(*handle, b"a1", b"v1").unwrap();
-        engine.put_cf(*handle, b"a2", b"v22").unwrap();
+        engine.put_cf(handle, b"a1", b"v1").unwrap();
+        engine.put_cf(handle, b"a2", b"v22").unwrap();
 
         let mut data = vec![];
         engine.scan(b"",

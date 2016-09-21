@@ -121,7 +121,7 @@ fn delete_all_in_range(db: &DB,
     for cf in db.cf_names() {
         try!(check_abort(&abort));
         let handle = box_try!(rocksdb::get_cf_handle(db, cf));
-        box_try!(db.delete_file_in_range_cf(*handle, start_key, end_key));
+        box_try!(db.delete_file_in_range_cf(handle, start_key, end_key));
 
         let mut it = box_try!(db.new_iterator_cf(cf, Some(end_key)));
 
@@ -135,7 +135,7 @@ fn delete_all_in_range(db: &DB,
                     break;
                 }
 
-                box_try!(wb.delete_cf(*handle, key));
+                box_try!(wb.delete_cf(handle, key));
                 if wb.count() == BATCH_SIZE {
                     // Can't use write_without_wal here.
                     // Otherwise it may cause dirty data when applying snapshot.
@@ -265,7 +265,7 @@ impl<T: MsgSender> Runner<T> {
                 batch_size += key.len();
                 let value = box_try!(reader.decode_compact_bytes());
                 batch_size += value.len();
-                box_try!(wb.put_cf(*handle, &key, &value));
+                box_try!(wb.put_cf(handle, &key, &value));
                 if batch_size > BATCH_SIZE {
                     box_try!(self.db.write(wb));
                     wb = WriteBatch::new();
