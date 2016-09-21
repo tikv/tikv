@@ -25,6 +25,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use kvproto::eraftpb::*;
 use protobuf::{self, ProtobufEnum};
 use tikv::raft::*;
@@ -145,32 +147,21 @@ fn test_raw_node_propose_and_conf_change() {
 // to the underlying raft. It also ensures that ReadState can be read out.
 #[test]
 fn test_raw_node_read_index() {
+    let a = Rc::new(RefCell::new(Vec::new()));
+    let b = a.clone();
+    let before_step_state = Box::new(move |m: &Message| {
+        b.borrow_mut().push(m.clone());
+        true
+    });
     let wrequest_ctx = b"somedata".to_vec();
     let wrs = vec![
-        ReadState {index: 2u64, request_ctx: wrequest_ctx.clone()},
+        ReadState {index: 1u64, request_ctx: wrequest_ctx.clone()},
     ];
 
     let s = new_storage();
     let mut raw_node = new_raw_node(1, vec![], 10, 1, s.clone(), vec![new_peer(1)]);
-    let rd = raw_node.ready();
-    s.wl().append(&rd.entries).expect("");
-    raw_node.advance(rd);
-
-    raw_node.campaign().expect("");
-    loop {
-        let rd = raw_node.ready();
-        s.wl().append(&rd.entries).expect("");
-        if rd.ss.is_some() && rd.ss.as_ref().unwrap().leader_id == raw_node.raft.id {
-            raw_node.advance(rd);
-
-            // Once we are the leader, issue a read index request
-            raw_node.read_index(wrequest_ctx.clone());
-            break;
-        }
-        raw_node.advance(rd);
-    }
-    // ensure that MsgReadIndex message is sent to the underlying raft and
-    // the read states can be read out
+    raw_node.raft.read_states = wrs.clone();
+    // ensure the read_states can be read out
     let has_ready = raw_node.has_ready();
     if has_ready != true {
         panic!("has_ready() returns {}, want {}", has_ready, true);
@@ -182,11 +173,40 @@ fn test_raw_node_read_index() {
     s.wl().append(&rd.entries).expect("");
     raw_node.advance(rd);
     // ensure raft.read_states is reset after advance
-    let wrs = vec![];
-    if raw_node.raft.read_states != wrs {
-        panic!("read states = {:?}, want {:?}",
-               raw_node.raft.read_states,
-               wrs);
+    if !raw_node.raft.read_states.is_empty() {
+        panic!("read_states = {:?}, want a empty vector",
+               raw_node.raft.read_states);
+    }
+
+    let wrequest_ctx = b"somedata2".to_vec();
+    raw_node.campaign().expect("");
+    loop {
+        let rd = raw_node.ready();
+        s.wl().append(&rd.entries).expect("");
+        if rd.ss.is_some() && rd.ss.as_ref().unwrap().leader_id == raw_node.raft.id {
+            raw_node.advance(rd);
+
+            // Once we are the leader, issue a read index request
+            raw_node.raft.before_step_state = Some(before_step_state);
+            raw_node.read_index(wrequest_ctx.clone());
+            break;
+        }
+        raw_node.advance(rd);
+    }
+    // ensure that MsgReadIndex message is sent to the underlying raft
+    let msgs = a.borrow();
+    if msgs.len() != 1 {
+        panic!("len(msgs) = {}, want {}", msgs.len(), 1)
+    }
+    if msgs[0].get_msg_type() != MessageType::MsgReadIndex {
+        panic!("msg type = {:?}, want {:?}",
+               msgs[0].get_msg_type(),
+               MessageType::MsgReadIndex)
+    }
+    if wrequest_ctx != msgs[0].get_entries()[0].get_data() {
+        panic!("data = {:?}, want {:?}",
+               msgs[0].get_entries()[0].get_data(),
+               wrequest_ctx)
     }
 }
 

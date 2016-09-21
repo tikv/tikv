@@ -132,7 +132,7 @@ impl Ready {
             rd.snapshot = raft.raft_log.get_unstable().snapshot.clone().unwrap();
         }
         if !raft.read_states.is_empty() {
-            rd.read_states = raft.read_states.drain(..).collect();
+            rd.read_states = raft.read_states.clone();
         }
         rd
     }
@@ -219,6 +219,9 @@ impl<T: Storage> RawNode<T> {
         }
         if rd.snapshot != Snapshot::new() {
             self.raft.raft_log.stable_snap_to(rd.snapshot.get_metadata().get_index());
+        }
+        if !rd.read_states.is_empty() {
+            self.raft.read_states.clear();
         }
     }
 

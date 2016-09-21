@@ -958,7 +958,9 @@ fn test_pass_election_timeout() {
 #[test]
 fn test_step_ignore_old_term_msg() {
     let mut sm = new_test_raft(1, vec![1], 10, 1, new_storage());
-    sm.allow_step = false;
+    let panic_before_step_state =
+        Box::new(|_: &Message| panic!("before step state function hook called unexpectedly"));
+    sm.before_step_state = Some(panic_before_step_state);
     sm.term = 2;
     let mut m = new_message(0, 0, MessageType::MsgAppend, 0);
     m.set_term(1);

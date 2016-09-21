@@ -27,6 +27,7 @@
 
 
 use std::cmp;
+use std::boxed::Box;
 use raft::storage::Storage;
 use rand::{self, Rng};
 use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
@@ -200,7 +201,7 @@ pub struct Raft<T: Storage> {
 
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
-    pub allow_step: bool,
+    pub before_step_state: Option<Box<FnMut(&Message) -> bool>>,
 
     /// tag is only used for logging
     tag: String,
@@ -258,7 +259,7 @@ impl<T: Storage> Raft<T> {
             term: Default::default(),
             election_elapsed: Default::default(),
             pending_conf: Default::default(),
-            allow_step: true,
+            before_step_state: None,
             vote: Default::default(),
             heartbeat_elapsed: Default::default(),
             randomized_election_timeout: 0,
@@ -784,7 +785,12 @@ impl<T: Storage> Raft<T> {
             return Ok(());
         }
 
-        assert!(self.allow_step);
+        if let Some(ref mut f) = self.before_step_state {
+            if !f(&m) {
+                // skip step**
+                return Ok(());
+            }
+        }
         match self.state {
             StateRole::Candidate => self.step_candidate(m),
             StateRole::Follower => self.step_follower(m),
