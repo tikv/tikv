@@ -70,6 +70,7 @@ fn drop_discared_cfs(path: &str, used_cfs: &[&str]) -> Result<(), String> {
     }
     let mut discarded_cfs = vec![];
     for cf in &cfs_list {
+        // Can't drop default column family
         if !all_cfs_set.contains(&cf.as_str()) && cf != "default" {
             discarded_cfs.push(cf.clone());
         }
