@@ -70,7 +70,7 @@ fn drop_discared_cfs(path: &str, used_cfs: &[&str]) -> Result<(), String> {
     }
     let mut discarded_cfs = vec![];
     for cf in &cfs_list {
-        if !all_cfs_set.contains(cf.as_str()) && cf != "default" {
+        if !all_cfs_set.contains(&cf.as_str()) && cf != "default" {
             discarded_cfs.push(cf.clone());
         }
     }
@@ -152,5 +152,8 @@ mod tests {
 
         // drop cf1.
         drop_discared_cfs(path_str, &["default"]).unwrap();
+
+        // never drop default cf
+        drop_discared_cfs(path_str, &[]).unwrap();
     }
 }
