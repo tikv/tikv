@@ -124,7 +124,7 @@ wal-recovery-mode = 2
 enable-statistics = false
 
 # Dump statistics periodically in information logs.
-stats-dump-period-sec = 300
+stats-dump-period-sec = 60
 
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/table.h
 [rocksdb.block-based-table]
