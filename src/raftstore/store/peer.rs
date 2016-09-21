@@ -22,6 +22,7 @@ use std::time::{Instant, Duration};
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
 use uuid::Uuid;
+use prometheus::HistogramTimer;
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType};
@@ -62,6 +63,7 @@ pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
     pub cb: Callback,
+    pub _timer: HistogramTimer,
 }
 
 #[derive(Debug)]
