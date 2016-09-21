@@ -27,6 +27,7 @@
 
 
 use std::cmp;
+use std::boxed::Box;
 use raft::storage::Storage;
 use rand::{self, Rng};
 use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
@@ -35,6 +36,7 @@ use raft::progress::{Progress, Inflights, ProgressState};
 use raft::errors::{Result, Error, StorageError};
 use std::collections::HashMap;
 use raft::raft_log::{self, RaftLog};
+use raft::read_only::{ReadOnlyOption, ReadState, ReadOnly};
 
 const CAMPAIGN_ELECTION: &'static [u8] = b"CampaignElection";
 const CAMPAIGN_TRANSFER: &'static [u8] = b"CampaignTransfer";
@@ -52,7 +54,10 @@ impl Default for StateRole {
     }
 }
 
+// A constant represents invalid id of raft.
 pub const INVALID_ID: u64 = 0;
+// A constant represents invalid index of raft log.
+pub const INVALID_INDEX: u64 = 0;
 
 /// Config contains the parameters to start a raft.
 #[derive(Default)]
@@ -101,6 +106,9 @@ pub struct Config {
     /// quorum is not active for an electionTimeout.
     pub check_quorum: bool,
 
+    /// read_only_option specifies how the read only request is processed.
+    pub read_only_option: ReadOnlyOption,
+
     /// tag is only used for logging
     pub tag: String,
 }
@@ -144,6 +152,8 @@ pub struct Raft<T: Storage> {
 
     pub id: u64,
 
+    pub read_states: Vec<ReadState>,
+
     /// the log
     pub raft_log: RaftLog<T>,
 
@@ -167,6 +177,8 @@ pub struct Raft<T: Storage> {
     /// New configuration is ignored if there exists unapplied configuration.
     pub pending_conf: bool,
 
+    pub read_only: ReadOnly,
+
     /// number of ticks since it reached last electionTimeout when it is leader
     /// or candidate.
     /// number of ticks since it reached last electionTimeout or received a
@@ -189,7 +201,7 @@ pub struct Raft<T: Storage> {
 
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
-    pub allow_step: bool,
+    pub before_step_state: Option<Box<FnMut(&Message) -> bool>>,
 
     /// tag is only used for logging
     tag: String,
@@ -231,12 +243,14 @@ impl<T: Storage> Raft<T> {
         }
         let mut r = Raft {
             id: c.id,
+            read_states: Default::default(),
             raft_log: raft_log,
             max_inflight: c.max_inflight_msgs,
             max_msg_size: c.max_size_per_msg,
             prs: HashMap::with_capacity(peers.len()),
             state: StateRole::Follower,
             check_quorum: c.check_quorum,
+            read_only: ReadOnly::new(c.read_only_option),
             heartbeat_timeout: c.heartbeat_tick,
             election_timeout: c.election_tick,
             votes: Default::default(),
@@ -246,7 +260,7 @@ impl<T: Storage> Raft<T> {
             term: Default::default(),
             election_elapsed: Default::default(),
             pending_conf: Default::default(),
-            allow_step: true,
+            before_step_state: None,
             vote: Default::default(),
             heartbeat_elapsed: Default::default(),
             randomized_election_timeout: 0,
@@ -438,7 +452,7 @@ impl<T: Storage> Raft<T> {
     }
 
     // send_heartbeat sends an empty MsgAppend
-    fn send_heartbeat(&mut self, to: u64) {
+    fn send_heartbeat(&mut self, to: u64, ctx: Option<Vec<u8>>) {
         // Attach the commit as min(to.matched, self.raft_log.committed).
         // When the leader sends out heartbeat message,
         // the receiver(follower) might not be matched with the leader
@@ -450,6 +464,9 @@ impl<T: Storage> Raft<T> {
         m.set_msg_type(MessageType::MsgHeartbeat);
         let commit = cmp::min(self.prs.get(&to).unwrap().matched, self.raft_log.committed);
         m.set_commit(commit);
+        if let Some(context) = ctx {
+            m.set_context(context);
+        }
         self.send(m);
     }
 
@@ -468,13 +485,18 @@ impl<T: Storage> Raft<T> {
 
     // bcast_heartbeat sends RPC, without entries to all the peers.
     pub fn bcast_heartbeat(&mut self) {
+        let ctx = self.read_only.last_pending_request_ctx();
+        self.bcast_heartbeat_with_ctx(ctx)
+    }
+
+    pub fn bcast_heartbeat_with_ctx(&mut self, ctx: Option<Vec<u8>>) {
         // TODO: avoid copy
         let ids: Vec<_> = self.prs.keys().cloned().collect();
         for id in ids {
             if id == self.id {
                 continue;
             }
-            self.send_heartbeat(id);
+            self.send_heartbeat(id, ctx.clone());
             self.prs.get_mut(&id).unwrap().resume()
         }
     }
@@ -517,6 +539,7 @@ impl<T: Storage> Raft<T> {
             }
         }
         self.pending_conf = false;
+        self.read_only = ReadOnly::new(self.read_only.option);
     }
 
     pub fn append_entry(&mut self, es: &mut [Entry]) {
@@ -763,7 +786,12 @@ impl<T: Storage> Raft<T> {
             return Ok(());
         }
 
-        assert!(self.allow_step);
+        if let Some(ref mut f) = self.before_step_state {
+            if !f(&m) {
+                // skip step**
+                return Ok(());
+            }
+        }
         match self.state {
             StateRole::Candidate => self.step_candidate(m),
             StateRole::Follower => self.step_follower(m),
@@ -904,10 +932,11 @@ impl<T: Storage> Raft<T> {
 
     /// check message's progress to decide which action should be taken.
     fn check_message_with_progress(&mut self,
-                                   m: &Message,
+                                   m: &mut Message,
                                    send_append: &mut bool,
                                    old_paused: &mut bool,
-                                   maybe_commit: &mut bool) {
+                                   maybe_commit: &mut bool,
+                                   more_to_send: &mut Option<Message>) {
         if !self.prs.contains_key(&m.get_from()) {
             debug!("{} no progress available for {}", self.tag, m.get_from());
             return;
@@ -917,15 +946,46 @@ impl<T: Storage> Raft<T> {
                 self.handle_append_response(m, old_paused, send_append, maybe_commit);
             }
             MessageType::MsgHeartbeatResponse => {
-                let pr = self.prs.get_mut(&m.get_from()).unwrap();
-                pr.recent_active = true;
+                {
+                    let pr = self.prs.get_mut(&m.get_from()).unwrap();
+                    pr.recent_active = true;
 
-                // free one slot for the full inflights window to allow progress.
-                if pr.state == ProgressState::Replicate && pr.ins.full() {
-                    pr.ins.free_first_one();
+                    // free one slot for the full inflights window to allow progress.
+                    if pr.state == ProgressState::Replicate && pr.ins.full() {
+                        pr.ins.free_first_one();
+                    }
+                    if pr.matched < self.raft_log.last_index() {
+                        *send_append = true;
+                    }
                 }
-                if pr.matched < self.raft_log.last_index() {
-                    *send_append = true;
+
+                if self.read_only.option != ReadOnlyOption::Safe || m.get_context().is_empty() {
+                    return;
+                }
+
+                let ack_count = self.read_only.recv_ack(m);
+                if ack_count < self.quorum() {
+                    return;
+                }
+
+                let rss = self.read_only.advance(m);
+                for rs in rss {
+                    let mut req = rs.req;
+                    if req.get_from() == INVALID_ID || m.get_from() == self.id {
+                        // from local member
+                        let rs = ReadState {
+                            index: rs.index,
+                            request_ctx: req.take_entries()[0].take_data(),
+                        };
+                        self.read_states.push(rs);
+                    } else {
+                        let mut to_send = Message::new();
+                        to_send.set_to(req.get_from());
+                        to_send.set_msg_type(MessageType::MsgReadIndexResp);
+                        to_send.set_index(rs.index);
+                        to_send.set_entries(req.take_entries());
+                        *more_to_send = Some(to_send);
+                    }
                 }
             }
             MessageType::MsgSnapStatus => {
@@ -1036,13 +1096,61 @@ impl<T: Storage> Raft<T> {
                 self.send(to_sent);
                 return;
             }
+            MessageType::MsgReadIndex => {
+                if self.quorum() > 1 {
+                    // thinking: use an interally defined context instead of the user given context.
+                    // We can express this in terms of the term and index instead of
+                    // a user-supplied value.
+                    // This would allow multiple reads to piggyback on the same message.
+                    match self.read_only.option {
+                        ReadOnlyOption::Safe => {
+                            let ctx = m.get_entries()[0].get_data().to_vec();
+                            self.read_only.add_request(self.raft_log.committed, m);
+                            self.bcast_heartbeat_with_ctx(Some(ctx));
+                        }
+                        ReadOnlyOption::LeaseBased => {
+                            let mut read_index = INVALID_INDEX;
+                            if self.check_quorum {
+                                read_index = self.raft_log.committed
+                            }
+                            if m.get_from() == INVALID_ID || m.get_from() == self.id {
+                                // from local member
+                                let rs = ReadState {
+                                    index: self.raft_log.committed,
+                                    request_ctx: m.take_entries()[0].take_data(),
+                                };
+                                self.read_states.push(rs);
+                            } else {
+                                let mut to_send = Message::new();
+                                to_send.set_to(m.get_from());
+                                to_send.set_msg_type(MessageType::MsgReadIndexResp);
+                                to_send.set_index(read_index);
+                                to_send.set_entries(m.take_entries());
+                                self.send(to_send);
+                            }
+                        }
+                    }
+                } else {
+                    let rs = ReadState {
+                        index: self.raft_log.committed,
+                        request_ctx: m.take_entries()[0].take_data(),
+                    };
+                    self.read_states.push(rs);
+                }
+                return;
+            }
             _ => {}
         }
 
         let mut send_append = false;
         let mut maybe_commit = false;
         let mut old_paused = false;
-        self.check_message_with_progress(&m, &mut send_append, &mut old_paused, &mut maybe_commit);
+        let mut more_to_send = None;
+        self.check_message_with_progress(&mut m,
+                                         &mut send_append,
+                                         &mut old_paused,
+                                         &mut maybe_commit,
+                                         &mut more_to_send);
         if maybe_commit {
             if self.maybe_commit() {
                 self.bcast_append();
@@ -1055,6 +1163,9 @@ impl<T: Storage> Raft<T> {
 
         if send_append {
             self.send_append(m.get_from());
+        }
+        if let Some(to_send) = more_to_send {
+            self.send(to_send)
         }
     }
 
@@ -1172,6 +1283,30 @@ impl<T: Storage> Raft<T> {
                       m.get_from());
                 self.campaign(CAMPAIGN_TRANSFER);
             }
+            MessageType::MsgReadIndex => {
+                if self.leader_id == INVALID_ID {
+                    info!("{} no leader at term {}; dropping index reading msg",
+                          self.tag,
+                          self.term);
+                    return;
+                }
+                m.set_to(self.leader_id);
+                self.send(m);
+            }
+            MessageType::MsgReadIndexResp => {
+                if m.get_entries().len() != 1 {
+                    error!("{} invalid format of MsgReadIndexResp from {}, entries count: {}",
+                           self.tag,
+                           m.get_from(),
+                           m.get_entries().len());
+                    return;
+                }
+                let rs = ReadState {
+                    index: m.get_index(),
+                    request_ctx: m.take_entries()[0].take_data(),
+                };
+                self.read_states.push(rs);
+            }
             _ => {}
         }
     }
@@ -1215,11 +1350,12 @@ impl<T: Storage> Raft<T> {
     }
 
     // TODO: revoke pub when there is a better way to test.
-    pub fn handle_heartbeat(&mut self, m: Message) {
+    pub fn handle_heartbeat(&mut self, mut m: Message) {
         self.raft_log.commit_to(m.get_commit());
         let mut to_send = Message::new();
         to_send.set_to(m.get_from());
         to_send.set_msg_type(MessageType::MsgHeartbeatResponse);
+        to_send.set_context(m.take_context());
         self.send(to_send);
     }
 

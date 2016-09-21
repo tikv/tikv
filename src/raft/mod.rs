@@ -33,6 +33,7 @@ mod errors;
 mod log_unstable;
 mod status;
 pub mod raw_node;
+mod read_only;
 
 pub use self::storage::{RaftState, Storage};
 pub use self::errors::{Result, Error, StorageError};
@@ -42,3 +43,4 @@ pub use self::raw_node::{Ready, RawNode, Peer, is_empty_snap, SnapshotStatus};
 pub use self::status::Status;
 pub use self::log_unstable::Unstable;
 pub use self::progress::{Inflights, Progress, ProgressState};
+pub use self::read_only::{ReadOnlyOption, ReadState};
