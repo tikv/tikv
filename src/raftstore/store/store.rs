@@ -909,6 +909,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             uuid: uuid,
             term: term,
             cb: cb,
+            _timer: PEER_DO_COMMAND_HISTOGRAM.start_timer(),
         };
         try!(peer.propose(pending_cmd, msg, resp));
 

@@ -41,6 +41,12 @@ lazy_static! {
             "Total number of raft entry conf change handled."
         ).unwrap();
 
+    pub static ref PEER_DO_COMMAND_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_do_command_duration_seconds",
+            "Bucketed histogram of peer doing command duration"
+        ).unwrap();
+
     pub static ref PEER_APPLY_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_log_duration_seconds",

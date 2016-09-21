@@ -46,14 +46,12 @@ pub trait Engine: Send + Debug {
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
-        ENGINE_OP_COUNTER_VEC.with_label_values(&["write", ""]).inc();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         wait_event!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout)
             .unwrap_or_else(|| Err(Error::Timeout(timeout)))
     }
 
     fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
-        ENGINE_OP_COUNTER_VEC.with_label_values(&["snapshot", ""]).inc();
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         wait_event!(|cb| self.async_snapshot(ctx, cb).unwrap(), timeout)
             .unwrap_or_else(|| Err(Error::Timeout(timeout)))
@@ -64,7 +62,6 @@ pub trait Engine: Send + Debug {
     }
 
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
-        ENGINE_OP_COUNTER_VEC.with_label_values(&["put", cf]).inc();
         self.write(ctx, vec![Modify::Put(cf, key, value)])
     }
 
@@ -73,7 +70,6 @@ pub trait Engine: Send + Debug {
     }
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
-        ENGINE_OP_COUNTER_VEC.with_label_values(&["delete", cf]).inc();
         self.write(ctx, vec![Modify::Delete(cf, key)])
     }
 
@@ -106,8 +102,6 @@ pub trait Cursor {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
     fn near_seek(&mut self, key: &Key) -> Result<bool> {
-        CURSOR_OP_COUNTER_VEC.with_label_values(&["near seek"]).inc();
-
         if !self.valid() {
             return self.seek(key);
         }
@@ -123,7 +117,7 @@ pub trait Cursor {
         while self.key().cmp(key.encoded()) == ord && nav(self) {
             cnt += 1;
             if cnt >= SEEK_BOUND {
-                CURSOR_OP_COUNTER_VEC.with_label_values(&["over seek bound"]).inc();
+                CURSOR_OVER_SEEK_BOUND_COUNTER.inc();
 
                 return self.seek(key);
             }
@@ -146,8 +140,6 @@ pub trait Cursor {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should `seek` first.
     fn get(&mut self, key: &Key) -> Result<Option<&[u8]>> {
-        CURSOR_OP_COUNTER_VEC.with_label_values(&["get"]).inc();
-
         if try!(self.near_seek(key)) && self.key() == &**key.encoded() {
             Ok(Some(self.value()))
         } else {
@@ -156,8 +148,6 @@ pub trait Cursor {
     }
 
     fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
-        CURSOR_OP_COUNTER_VEC.with_label_values(&["reverse seek"]).inc();
-
         if !try!(self.seek(key)) && !self.seek_to_last() {
             return Ok(false);
         }
@@ -173,8 +163,6 @@ pub trait Cursor {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
     fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
-        CURSOR_OP_COUNTER_VEC.with_label_values(&["near reverse seek"]).inc();
-
         if !try!(self.near_seek(key)) && !self.seek_to_last() {
             return Ok(false);
         }

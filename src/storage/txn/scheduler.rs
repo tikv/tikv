@@ -273,7 +273,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         }
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock { max_ts, .. } => {
-            let mut reader = MvccReader::new(snapshot.as_ref());
+            let mut reader = MvccReader::new(snapshot.as_ref(), true);
             let res = reader.scan_lock(|lock| lock.ts <= max_ts)
                 .map_err(Error::from)
                 .and_then(|v| {
@@ -295,7 +295,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         // Gets the lock with timestamp `start_ts`, then sends either a `Commit` command if the
         // lock has commit timestamp populated or a `Rollback` command otherwise.
         Command::ResolveLock { ref ctx, start_ts, commit_ts } => {
-            let mut reader = MvccReader::new(snapshot.as_ref());
+            let mut reader = MvccReader::new(snapshot.as_ref(), true);
             let res = reader.scan_lock(|lock| lock.ts == start_ts)
                 .map_err(Error::from)
                 .and_then(|v| {
@@ -326,7 +326,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         }
         // Collects garbage.
         Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
-            let mut reader = MvccReader::new(snapshot.as_ref());
+            let mut reader = MvccReader::new(snapshot.as_ref(), true);
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
@@ -377,7 +377,7 @@ fn process_write_impl(cid: u64,
                       -> Result<()> {
     let (pr, modifies) = match cmd {
         Command::Prewrite { ref mutations, ref primary, start_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, start_ts);
+            let mut txn = MvccTxn::new(snapshot, start_ts, false);
             let mut results = vec![];
             for m in mutations {
                 match txn.prewrite(m.clone(), primary) {
@@ -391,7 +391,7 @@ fn process_write_impl(cid: u64,
             (pr, txn.modifies())
         }
         Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, lock_ts);
+            let mut txn = MvccTxn::new(snapshot, lock_ts, false);
             for k in keys {
                 try!(txn.commit(&k, commit_ts));
             }
@@ -400,14 +400,14 @@ fn process_write_impl(cid: u64,
             (pr, txn.modifies())
         }
         Command::Cleanup { ref key, start_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, start_ts);
+            let mut txn = MvccTxn::new(snapshot, start_ts, false);
             try!(txn.rollback(&key));
 
             let pr = ProcessResult::Res;
             (pr, txn.modifies())
         }
         Command::Rollback { ref keys, start_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, start_ts);
+            let mut txn = MvccTxn::new(snapshot, start_ts, false);
             for k in keys {
                 try!(txn.rollback(&k));
             }
@@ -416,7 +416,7 @@ fn process_write_impl(cid: u64,
             (pr, txn.modifies())
         }
         Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
-            let mut txn = MvccTxn::new(snapshot, 0);
+            let mut txn = MvccTxn::new(snapshot, 0, true);
             for k in keys {
                 try!(txn.gc(k, safe_point));
             }

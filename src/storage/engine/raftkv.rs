@@ -266,23 +266,17 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
 impl Snapshot for RegionSnapshot {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
-        SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["get", "default"]).inc();
-
         let v = box_try!(self.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
-        SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["get", cf]).inc();
-
         let v = box_try!(self.get_value_cf(cf, key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     #[allow(needless_lifetimes)]
     fn iter<'b>(&'b self, upper_bound: Option<&[u8]>) -> engine::Result<Box<Cursor + 'b>> {
-        SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["iter", "default"]).inc();
-
         Ok(box RegionSnapshot::iter(self, upper_bound))
     }
 
@@ -291,28 +285,20 @@ impl Snapshot for RegionSnapshot {
                    cf: CfName,
                    upper_bound: Option<&[u8]>)
                    -> engine::Result<Box<Cursor + 'b>> {
-        SNAPSHOT_OP_COUNTER_VEC.with_label_values(&["iter", cf]).inc();
-
         Ok(box try!(RegionSnapshot::iter_cf(self, cf, upper_bound)))
     }
 }
 
 impl<'a> Cursor for RegionIterator<'a> {
     fn next(&mut self) -> bool {
-        CURSOR_OP_COUNTER_VEC.with_label_values(&["next"]).inc();
-
         RegionIterator::next(self)
     }
 
     fn prev(&mut self) -> bool {
-        CURSOR_OP_COUNTER_VEC.with_label_values(&["prev"]).inc();
-
         RegionIterator::prev(self)
     }
 
     fn seek(&mut self, key: &Key) -> engine::Result<bool> {
-        CURSOR_OP_COUNTER_VEC.with_label_values(&["seek"]).inc();
-
         RegionIterator::seek(self, key.encoded()).map_err(|e| {
             let pb = e.into();
             engine::Error::Request(pb)
@@ -320,14 +306,10 @@ impl<'a> Cursor for RegionIterator<'a> {
     }
 
     fn seek_to_first(&mut self) -> bool {
-        CURSOR_OP_COUNTER_VEC.with_label_values(&["seek to first"]).inc();
-
         RegionIterator::seek_to_first(self)
     }
 
     fn seek_to_last(&mut self) -> bool {
-        CURSOR_OP_COUNTER_VEC.with_label_values(&["seek to last"]).inc();
-
         RegionIterator::seek_to_last(self)
     }
 
