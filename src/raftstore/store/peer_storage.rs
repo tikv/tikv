@@ -129,13 +129,13 @@ impl InvokeContext {
 
     pub fn save_raft(&self, region_id: u64) -> Result<()> {
         let raft_cf = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
-        try!(self.wb.put_msg_cf(*raft_cf, &keys::raft_state_key(region_id), &self.raft_state));
+        try!(self.wb.put_msg_cf(raft_cf, &keys::raft_state_key(region_id), &self.raft_state));
         Ok(())
     }
 
     pub fn save_apply(&self, region_id: u64) -> Result<()> {
         let raft_cf = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
-        try!(self.wb.put_msg_cf(*raft_cf,
+        try!(self.wb.put_msg_cf(raft_cf,
                                 &keys::apply_state_key(region_id),
                                 &self.apply_state));
         Ok(())
@@ -370,7 +370,7 @@ impl PeerStorage {
 
         let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
         for entry in entries {
-            try!(ctx.wb.put_msg_cf(*handle,
+            try!(ctx.wb.put_msg_cf(handle,
                                    &keys::raft_log_key(self.get_region_id(), entry.get_index()),
                                    entry));
         }
@@ -379,7 +379,7 @@ impl PeerStorage {
 
         // Delete any previously appended log entries which never committed.
         for i in (last_index + 1)..(prev_last_index + 1) {
-            try!(ctx.wb.delete_cf(*handle, &keys::raft_log_key(self.get_region_id(), i)));
+            try!(ctx.wb.delete_cf(handle, &keys::raft_log_key(self.get_region_id(), i)));
         }
 
         ctx.raft_state.set_last_index(last_index);
@@ -479,7 +479,7 @@ impl PeerStorage {
                                  &raft_start,
                                  &raft_end,
                                  &mut |key, _| {
-                                     try!(wb.delete_cf(*handle, key));
+                                     try!(wb.delete_cf(handle, key));
                                      raft_count += 1;
                                      Ok(true)
                                  }));
@@ -763,8 +763,8 @@ pub fn write_initial_state<T: Mutable>(engine: &DB, w: &T, region_id: u64) -> Re
     apply_state.mut_truncated_state().set_term(RAFT_INIT_LOG_TERM);
 
     let raft_cf = try!(rocksdb::get_cf_handle(engine, CF_RAFT));
-    try!(w.put_msg_cf(*raft_cf, &keys::raft_state_key(region_id), &raft_state));
-    try!(w.put_msg_cf(*raft_cf, &keys::apply_state_key(region_id), &apply_state));
+    try!(w.put_msg_cf(raft_cf, &keys::raft_state_key(region_id), &raft_state));
+    try!(w.put_msg_cf(raft_cf, &keys::apply_state_key(region_id), &apply_state));
 
     Ok(())
 }
