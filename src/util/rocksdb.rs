@@ -13,6 +13,7 @@
 
 use rocksdb::{DB, Options};
 pub use rocksdb::CFHandle;
+use std::collections::HashSet;
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
     db.cf_handle(cf)
@@ -47,7 +48,7 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     new_engine_opt(opts, path, cfs, cfs_opts)
 }
 
-fn drop_discared_cfs(path: &str, used_cfs: &[&str]) -> Result<(), String>{
+fn drop_discared_cfs(path: &str, used_cfs: &[&str]) -> Result<(), String> {
     // List all column families in current db, if db not exist, it will return Err("IO error,
     // XXXX/CURRENT: No such file or directory").
     let mut opts = Options::new();
@@ -59,15 +60,17 @@ fn drop_discared_cfs(path: &str, used_cfs: &[&str]) -> Result<(), String>{
                 return Ok(());
             }
             return Err(e);
-        },
+        }
     };
 
     // Collect discarded column families.
     let mut all_cfs_set = HashSet::new();
-    used_cfs.iter().map(|cf| all_cfs_set.insert(cf));
+    for cf in used_cfs {
+        all_cfs_set.insert(cf);
+    }
     let mut discarded_cfs = vec![];
-    for ref cf in cfs_list {
-        if !all_cfs_set.contains(&cf.as_str()) {
+    for cf in &cfs_list {
+        if !all_cfs_set.contains(cf.as_str()) && cf != "default" {
             discarded_cfs.push(cf.clone());
         }
     }
@@ -84,7 +87,7 @@ fn drop_discared_cfs(path: &str, used_cfs: &[&str]) -> Result<(), String>{
     let cfs_list_str: Vec<&str> = cfs_list.iter().map(|cf| cf.as_str()).collect();
     let mut db = DB::open_cf(&opts, path, &cfs_list_str, &cfs_ref_opts).unwrap();
     for cf in discarded_cfs {
-        try!(db.drop_cf(cf));
+        try!(db.drop_cf(&cf));
     }
 
     Ok(())
