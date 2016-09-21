@@ -1125,7 +1125,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for cf in ALL_CFS {
             let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
             let cf_used_size = self.engine
-                .get_property_int_cf(*handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
+                .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
                 .expect("rocksdb is too old, missing total-sst-files-size property");
 
             used_size += cf_used_size;

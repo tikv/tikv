@@ -78,7 +78,7 @@ impl Runner {
         let handle = box_try!(rocksdb::get_cf_handle(&task.engine, CF_RAFT));
         for idx in first_idx..task.compact_idx {
             let key = keys::raft_log_key(task.region_id, idx);
-            box_try!(wb.delete_cf(*handle, &key));
+            box_try!(wb.delete_cf(handle, &key));
         }
         // It's not safe to disable WAL here. We may lost data after crashed for unknown reason.
         box_try!(task.engine.write(wb));

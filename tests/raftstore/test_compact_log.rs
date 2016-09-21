@@ -68,7 +68,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         let handle = get_cf_handle(engine, CF_RAFT).unwrap();
         for i in 0..idx {
             let key = keys::raft_log_key(1, i);
-            assert!(engine.get_cf(*handle, &key).unwrap().is_none());
+            assert!(engine.get_cf(handle, &key).unwrap().is_none());
         }
     }
 }
@@ -139,7 +139,7 @@ fn test_compact_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         let handle = get_cf_handle(engine, CF_RAFT).unwrap();
         for i in 0..idx {
             let key = keys::raft_log_key(1, i);
-            assert!(engine.get_cf(*handle, &key).unwrap().is_none());
+            assert!(engine.get_cf(handle, &key).unwrap().is_none());
         }
     }
 }

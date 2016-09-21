@@ -851,7 +851,7 @@ impl Peer {
             state.set_applied_index(index);
             let engine = self.engine.clone();
             let raft_cf = try!(rocksdb::get_cf_handle(engine.as_ref(), CF_RAFT));
-            try!(wb.put_msg_cf(*raft_cf, &keys::apply_state_key(self.region_id), &state));
+            try!(wb.put_msg_cf(raft_cf, &keys::apply_state_key(self.region_id), &state));
             try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
             self.mut_store().applied_index_term = term;
@@ -1063,7 +1063,7 @@ struct ExecContext<'a> {
 impl<'a> ExecContext<'a> {
     fn save(&self, region_id: u64) -> Result<()> {
         let raft_cf = try!(self.snap.cf_handle(CF_RAFT));
-        try!(self.wb.put_msg_cf(*raft_cf,
+        try!(self.wb.put_msg_cf(raft_cf,
                                 &keys::apply_state_key(region_id),
                                 &self.apply_state));
         Ok(())
@@ -1366,7 +1366,7 @@ impl Peer {
         if req.get_put().has_cf() {
             let cf = req.get_put().get_cf();
             let handle = try!(rocksdb::get_cf_handle(&self.engine, cf));
-            try!(ctx.wb.put_cf(*handle, &key, value));
+            try!(ctx.wb.put_cf(handle, &key, value));
         } else {
             try!(ctx.wb.put(&key, value));
         }
@@ -1389,7 +1389,7 @@ impl Peer {
         if req.get_delete().has_cf() {
             let cf = req.get_delete().get_cf();
             let handle = try!(rocksdb::get_cf_handle(&self.engine, cf));
-            try!(ctx.wb.delete_cf(*handle, &key));
+            try!(ctx.wb.delete_cf(handle, &key));
         } else {
             try!(ctx.wb.delete(&key));
         }
