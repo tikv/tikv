@@ -15,6 +15,7 @@ use rocksdb::{DB, Options};
 pub use rocksdb::CFHandle;
 use std::collections::HashSet;
 use std::path::Path;
+use std::fs;
 use storage::CF_DEFAULT;
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
@@ -50,21 +51,18 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     new_engine_opt(opts, path, cfs, cfs_opts)
 }
 
-fn check_column_families(path: &str, used_cfs: &[&str]) -> Result<(), String> {
+fn check_column_families(opts: &Options, path: &str, needed_cfs: &[&str]) -> Result<(), String> {
     if !db_exist(path) {
         return Ok(());
     }
 
     // List all column families in current db.
-    let mut opts = Options::new();
-    opts.create_if_missing(false);
-    let cfs_list = match DB::list_column_families(&opts, path) {
-        Ok(cfs) => cfs,
-        Err(e) => return Err(e),
-    };
-
+    let cfs_list = try!(DB::list_column_families(&opts, path));
     let existed: HashSet<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
-    let needed: HashSet<&str> = used_cfs.iter().map(|v| *v).collect();
+    let needed: HashSet<&str> = needed_cfs.iter().map(|v| *v).collect();
+    if existed == needed {
+        return Ok(());
+    }
 
     // Open db.
     let mut cfs_opts: Vec<Options> = vec![];
@@ -73,7 +71,7 @@ fn check_column_families(path: &str, used_cfs: &[&str]) -> Result<(), String> {
     }
     let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
     let cfs_list_str: Vec<&str> = cfs_list.iter().map(|cf| cf.as_str()).collect();
-    let mut db = DB::open_cf(&opts, path, &cfs_list_str, &cfs_ref_opts).unwrap();
+    let mut db = DB::open_cf(opts, path, &cfs_list_str, &cfs_ref_opts).unwrap();
 
     // Drop discarded column families.
     for cf in existed.difference(&needed) {
@@ -85,7 +83,6 @@ fn check_column_families(path: &str, used_cfs: &[&str]) -> Result<(), String> {
 
     // Create needed column families not existed yet.
     for cf in needed.difference(&existed) {
-        let opts = Options::new();
         try!(db.create_cf(cf, &opts));
     }
 
@@ -100,10 +97,10 @@ pub fn new_engine_opt(mut opts: Options,
     // Currently we support 1) Create new db. 2) Open a db with CFs we want. 3) Open db with no
     // CF.
     // TODO: Support open db with incomplete CFs.
-    try!(check_column_families(path, cfs));
+    opts.create_if_missing(false);
+    try!(check_column_families(&opts, path, cfs));
 
     // opts is used as Rocksdb's DBOptions when call DB::open_cf
-    opts.create_if_missing(false);
     let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
     if let Ok(db) = DB::open_cf(&opts, path, cfs, &cfs_ref_opts) {
         return Ok(db);
@@ -128,8 +125,19 @@ pub fn new_engine_opt(mut opts: Options,
 }
 
 fn db_exist(path: &str) -> bool {
-    let current_file = format!("{}/CURRENT", path);
-    Path::new(&current_file).exists()
+    let path = Path::new(path);
+    if !path.exists() || !path.is_dir() {
+        return false;
+    }
+
+    // If path is not an empty directory, we say db exists. If path is not an empty directory
+    // but db has not been created, DB::list_column_families will failed and we can cleanup
+    // the directory by this indication.
+    for _ in fs::read_dir(&path).unwrap() {
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -143,7 +151,9 @@ mod tests {
         // db not existed.
         let path = TempDir::new("_util_rocksdb_test_check_column_families").expect("");
         let path_str = path.path().to_str().unwrap();
-        check_column_families(path_str, &["default"]).unwrap();
+        let mut opts = Options::new();
+        opts.create_if_missing(false);
+        check_column_families(&opts, path_str, &["default"]).unwrap();
 
         // no discarded column families.
         {
@@ -152,25 +162,24 @@ mod tests {
             let mut db = DB::open(&opts, path_str).unwrap();
             db.create_cf("cf1", &opts).unwrap();
         }
-        check_column_families(path_str, &["default", "cf1"]).unwrap();
-        column_families_must_eq(path_str, &["default", "cf1"]);
+        check_column_families(&opts, path_str, &["default", "cf1"]).unwrap();
+        column_families_must_eq(&opts, path_str, &["default", "cf1"]);
 
         // drop cf1.
-        check_column_families(path_str, &["default"]).unwrap();
-        column_families_must_eq(path_str, &["default"]);
+        check_column_families(&opts, path_str, &["default"]).unwrap();
+        column_families_must_eq(&opts, path_str, &["default"]);
 
         // never drop default cf
-        check_column_families(path_str, &[]).unwrap();
-        column_families_must_eq(path_str, &["default"]);
+        check_column_families(&opts, path_str, &[]).unwrap();
+        column_families_must_eq(&opts, path_str, &["default"]);
 
         // create cf2.
-        check_column_families(path_str, &["cf2"]).unwrap();
-        column_families_must_eq(path_str, &["default", "cf2"]);
+        check_column_families(&opts, path_str, &["cf2"]).unwrap();
+        column_families_must_eq(&opts, path_str, &["default", "cf2"]);
     }
 
-    fn column_families_must_eq(path: &str, excepted: &[&str]) {
-        let opts = Options::new();
-        let cfs_list = DB::list_column_families(&opts, path).unwrap();
+    fn column_families_must_eq(opts: &Options, path: &str, excepted: &[&str]) {
+        let cfs_list = DB::list_column_families(opts, path).unwrap();
 
         let mut cfs_existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
         let mut cfs_excepted: Vec<&str> = excepted.iter().map(|v| *v).collect();
