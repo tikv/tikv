@@ -205,7 +205,7 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                                   "rocksdb.stats-dump-period-sec",
                                                   matches,
                                                   config,
-                                                  Some(60),
+                                                  Some(600),
                                                   |v| v.as_integer());
     opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
 
