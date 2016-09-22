@@ -88,6 +88,30 @@ fn get_string_value<F>(short: &str,
         .expect(&format!("please specify {}", long))
 }
 
+fn get_boolean_value<F>(short: &str,
+                        long: &str,
+                        matches: &Matches,
+                        config: &toml::Value,
+                        default: Option<bool>,
+                        f: F)
+                        -> bool
+    where F: Fn(&toml::Value) -> Option<bool>
+{
+    let b = if matches.opt_defined(short) {
+        matches.opt_str(short).map(|x| x.parse::<bool>().unwrap())
+    } else {
+        None
+    };
+
+    b.or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("{}, use default {:?}", long, default);
+                default
+            })
+        })
+        .expect(&format!("please specify {}", long))
+}
+
 fn get_integer_value<F>(short: &str,
                         long: &str,
                         matches: &Matches,
@@ -193,6 +217,23 @@ fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions
                                   |v| v.as_integer());
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
+
+    let enable_statistics = get_boolean_value("",
+                                              "rocksdb.enable-statistics",
+                                              matches,
+                                              config,
+                                              Some(false),
+                                              |v| v.as_bool());
+    if enable_statistics {
+        opts.enable_statistics();
+    }
+    let stats_dump_period_sec = get_integer_value("",
+                                                  "rocksdb.stats-dump-period-sec",
+                                                  matches,
+                                                  config,
+                                                  Some(600),
+                                                  |v| v.as_integer());
+    opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
 
     opts
 }
