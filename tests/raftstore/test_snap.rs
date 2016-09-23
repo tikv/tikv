@@ -114,8 +114,10 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // isolate node 3 for region 1, but keep the heartbeat to make
     // 3 not vote after filters are cleared.
-    cluster.add_send_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgSnapshot));
-    cluster.add_send_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
+    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 3)
+        .msg_type(MessageType::MsgSnapshot)));
+    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 3)
+        .msg_type(MessageType::MsgAppend)));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
@@ -197,9 +199,9 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
     // peer 2 can't step to leader.
-    cluster.add_send_filter(IsolateRegionStore::new(r1, 2)
+    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(r1, 2)
         .msg_type(MessageType::MsgRequestVote)
-        .direction(Direction::Send));
+        .direction(Direction::Send)));
     cluster.must_transfer_leader(r1, new_peer(1, 1));
     cluster.must_put(b"k3", b"v3");
     // Now peer 1 can't send snapshot to peer 2

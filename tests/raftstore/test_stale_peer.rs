@@ -23,7 +23,7 @@ use tikv::raftstore::store::{keys, Peekable};
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use super::transport_simulate::{Isolate, IsolateRegionStore};
+use super::transport_simulate::*;
 use super::util::*;
 
 /// A helper function for testing the behaviour of the gc of stale peer
@@ -131,7 +131,8 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let r1 = cluster.run_conf_change();
     // block peer (2, 2) at receiving snapshot, but not the heartbeat
-    cluster.add_send_filter(IsolateRegionStore::new(1, 2).msg_type(MessageType::MsgSnapshot));
+    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+        .msg_type(MessageType::MsgSnapshot)));
 
     pd_client.must_add_peer(r1, new_peer(2, 2));
 

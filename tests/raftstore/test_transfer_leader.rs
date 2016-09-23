@@ -132,11 +132,11 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
 
     // hook transport and drop all snapshot packet, so follower's status
     // will stay at snapshot.
-    cluster.add_send_filter(DropSnapshot);
+    cluster.add_send_filter(DefaultFilterFactory::<SnapshotFilter>::default());
     // don't allow leader transfer succeed if it is actually triggered.
-    cluster.add_send_filter(IsolateRegionStore::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
         .msg_type(MessageType::MsgTimeoutNow)
-        .direction(Direction::Recv));
+        .direction(Direction::Recv)));
 
     pd_client.must_add_peer(r1, new_peer(3, 3));
     // a just added peer needs wait a couple of ticks, it'll communicate with leader

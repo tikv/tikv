@@ -25,7 +25,7 @@ use super::util;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
-use super::transport_simulate::IsolateRegionStore;
+use super::transport_simulate::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -271,7 +271,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
     // isolate node 3 for region 1.
-    cluster.add_send_filter(IsolateRegionStore::new(1, 3));
+    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 3)));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
@@ -327,7 +327,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
 
     // isolate node 3 for region 1.
-    cluster.add_send_filter(IsolateRegionStore::new(1, 3));
+    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 3)));
     cluster.must_put(b"k1", b"v1");
 
     let region = pd_client.get_region(b"").unwrap();
@@ -400,7 +400,8 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // isolate node 3 for region 1.
     // only filter MsgAppend to avoid election when recover.
-    cluster.add_send_filter(IsolateRegionStore::new(1, 3).msg_type(MessageType::MsgAppend));
+    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 3)
+        .msg_type(MessageType::MsgAppend)));
 
     let region = pd_client.get_region(b"").unwrap();
 
