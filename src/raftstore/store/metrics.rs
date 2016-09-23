@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, Counter, GaugeVec, Histogram};
+use prometheus::{CounterVec, GaugeVec, Histogram};
 
 lazy_static! {
     pub static ref PEER_RAFT_READY_COUNTER_VEC: CounterVec =
@@ -33,12 +33,6 @@ lazy_static! {
             "tikv_raftstore_admin_cmd_total",
             "Total number of admin cmd processed.",
             &["type", "status"]
-        ).unwrap();
-
-    pub static ref PEER_ENTRY_CONF_CHANGE_COUNTER: Counter =
-        register_counter!(
-            "tikv_raftstore_handle_raft_entry_conf_change_total",
-            "Total number of raft entry conf change handled."
         ).unwrap();
 
     pub static ref PEER_APPLY_LOG_HISTOGRAM: Histogram =
