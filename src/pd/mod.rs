@@ -78,6 +78,9 @@ pub trait PdClient: Send + Sync {
     // Get region which the key belong to.
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
 
+    // Get region by region id.
+    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region>;
+
     // Leader for a region will use this to heartbeat Pd.
     fn region_heartbeat(&self,
                         region: metapb::Region,

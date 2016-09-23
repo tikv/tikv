@@ -345,10 +345,6 @@ impl TestPdClient {
         Ok(self.cluster.rl().get_stores())
     }
 
-    pub fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
-        self.cluster.rl().get_region_by_id(region_id)
-    }
-
     fn check_bootstrap(&self) -> Result<()> {
         if !self.is_cluster_bootstrapped().unwrap() {
             return Err(Error::ClusterNotBootstrapped(self.cluster_id));
@@ -514,6 +510,11 @@ impl PdClient for TestPdClient {
         }
 
         Err(box_err!("no region contains key {:?}", escape(key)))
+    }
+
+    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
+        try!(self.check_bootstrap());
+        self.cluster.rl().get_region_by_id(region_id)
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
