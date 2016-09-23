@@ -481,10 +481,6 @@ fn get_rocksdb_raftlog_cf_option() -> RocksdbOptions {
     opts
 }
 
-fn get_rocksdb_binlog_cf_option() -> RocksdbOptions {
-    RocksdbOptions::new()
-}
-
 // TODO: merge this function with Config::new
 // Currently, to add a new option, we will define three default value
 // in config.rs, this file and config-template.toml respectively. It may be more
@@ -651,8 +647,7 @@ fn build_raftkv(matches: &Matches,
     let cfs_opts = vec![get_rocksdb_default_cf_option(matches, config),
                         get_rocksdb_lock_cf_option(),
                         get_rocksdb_write_cf_option(matches, config),
-                        get_rocksdb_raftlog_cf_option(),
-                        get_rocksdb_binlog_cf_option()];
+                        get_rocksdb_raftlog_cf_option()];
     let mut db_path = path.clone();
     db_path.push("db");
     let engine =
