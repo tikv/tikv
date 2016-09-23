@@ -13,12 +13,13 @@
 
 
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
-use kvproto::eraftpb::MessageType;
+use kvproto::eraftpb::{Message, MessageType};
+use kvproto::raft_serverpb::RaftMessage;
 
 use super::transport_simulate::*;
 use super::cluster::{Cluster, Simulator};
@@ -276,4 +277,65 @@ fn test_node_cf_snapshot() {
 fn test_server_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
     test_cf_snapshot(&mut cluster);
+}
+
+// replace content of all the snapshots with the first snapshot it received.
+#[derive(Default)]
+struct StaleSnap {
+    first_snap: RwLock<Option<Message>>,
+}
+
+impl Filter<RaftMessage> for StaleSnap {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+        let mut res = Vec::with_capacity(msgs.len());
+        for mut m in msgs.drain(..) {
+            if m.get_message().get_msg_type() == MessageType::MsgSnapshot &&
+               m.get_to_peer().get_store_id() == 3 {
+                if self.first_snap.rl().is_none() {
+                    *self.first_snap.wl() = Some(m.take_message());
+                    continue;
+                } else {
+                    let from = m.get_message().get_from();
+                    let to = m.get_message().get_to();
+                    m.set_message(self.first_snap.rl().as_ref().unwrap().clone());
+                    m.mut_message().set_from(from);
+                    m.mut_message().set_to(to);
+                }
+            }
+            res.push(m);
+        }
+        *msgs = res;
+    }
+}
+
+#[test]
+fn test_node_stale_snap() {
+    let mut cluster = new_node_cluster(0, 4);
+    // disable compact log to make snapshot only be sent when peer is first added.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.raft_log_gc_limit = 1000;
+
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_rule();
+
+    let r1 = cluster.run_conf_change();
+    // add peer (2,2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    cluster.add_send_filter(DefaultFilterFactory::<StaleSnap>::default());
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    must_get_none(&cluster.get_engine(3), b"k2");
+    pd_client.must_add_peer(r1, new_peer(3, 4));
+
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+    pd_client.must_add_peer(r1, new_peer(4, 5));
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(4), b"k3", b"v3");
 }
