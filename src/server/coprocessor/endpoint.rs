@@ -256,7 +256,6 @@ impl TiDbEndPoint {
         };
 
         select_timer.observe_duration();
-        let compose_timer = COPR_COMPOSE_HISTOGRAM.start_timer();
 
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
@@ -277,7 +276,6 @@ impl TiDbEndPoint {
         let data = box_try!(sel_resp.write_to_bytes());
         resp.set_data(data);
 
-        compose_timer.observe_duration();
         Ok(resp)
     }
 }
