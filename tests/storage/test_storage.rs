@@ -41,6 +41,18 @@ impl AssertionStorage {
                    expect);
     }
 
+    fn batch_get_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
+        let keys: Vec<Key> = keys.into_iter().map(|x| make_key(x)).collect();
+        let result: Vec<Vec<u8>> = self.0
+            .batch_get(Context::new(), &keys, ts)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap().1)
+            .collect();
+        let expect: Vec<Vec<u8>> = expect.into_iter().map(|x| x.to_vec()).collect();
+        assert_eq!(result, expect);
+    }
+
     fn put_ok(&self, key: &[u8], value: &[u8], start_ts: u64, commit_ts: u64) {
         self.0
             .prewrite(Context::new(),
@@ -180,6 +192,19 @@ fn test_txn_store_cleanup_commit() {
     store.get_err(b"secondary", 12);
     store.commit_ok(vec![b"primary"], 5, 10);
     store.rollback_err(vec![b"primary"], 5);
+}
+
+#[test]
+fn test_txn_store_batch_get() {
+    let store = new_assertion_storage();
+    store.put_ok(b"x", b"x1", 5, 10);
+    store.put_ok(b"y", b"y1", 15, 20);
+    store.put_ok(b"z", b"z1", 25, 30);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 15, vec![b"x1"]);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 16, vec![b"x1"]);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 19, vec![b"x1"]);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 20, vec![b"x1", b"y1"]);
+    store.batch_get_ok(&[b"x", b"y", b"z", b"w"], 21, vec![b"x1", b"y1"]);
 }
 
 #[test]
@@ -374,6 +399,11 @@ fn test_txn_store_scan_lock() {
                            Mutation::Put((make_key(b"s3"), b"v20".to_vec()))],
                       b"p3",
                       20);
+    // scan should return locks.
+    store.scan_ok(b"",
+                  10,
+                  15,
+                  vec![Some((b"k1", b"v1")), None, None, None, None]);
     store.scan_lock_ok(10,
                        vec![lock(b"p1", b"p1", 5),
                             lock(b"p2", b"p2", 10),

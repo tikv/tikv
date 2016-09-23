@@ -398,6 +398,26 @@ mod tests {
         must_get_commit_ts(engine.as_ref(), b"x", 25, 30);
     }
 
+    #[test]
+    fn test_scan_keys() {
+        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        must_prewrite_put(engine.as_ref(), b"a", b"a", b"a", 1);
+        must_commit(engine.as_ref(), b"a", 1, 10);
+        must_prewrite_lock(engine.as_ref(), b"c", b"c", 1);
+        must_commit(engine.as_ref(), b"c", 1, 5);
+        must_prewrite_delete(engine.as_ref(), b"e", b"e", 1);
+        must_commit(engine.as_ref(), b"e", 1, 20);
+        must_prewrite_put(engine.as_ref(), b"b", b"b", b"b", 1);
+        must_prewrite_lock(engine.as_ref(), b"d", b"d", 10);
+        must_prewrite_delete(engine.as_ref(), b"f", b"f", 5);
+
+        // Keys are ["a", "c", "e"].
+        must_scan_keys(engine.as_ref(), None, 100, vec![b"a", b"c", b"e"], None);
+        must_scan_keys(engine.as_ref(), None, 3, vec![b"a", b"c", b"e"], None);
+        must_scan_keys(engine.as_ref(), None, 2, vec![b"a", b"c"], Some(b"c"));
+        must_scan_keys(engine.as_ref(), Some(b"c"), 1, vec![b"c"], Some(b"c"));
+    }
+
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -561,5 +581,18 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot.as_ref(), false);
         assert!(reader.get_txn_commit_ts(&make_key(key), start_ts).unwrap().is_none());
+    }
+
+    fn must_scan_keys(engine: &Engine,
+                      start: Option<&[u8]>,
+                      limit: usize,
+                      keys: Vec<&[u8]>,
+                      next_start: Option<&[u8]>) {
+        let expect = (keys.into_iter().map(make_key).collect(),
+                      next_start.map(|x| make_key(x).append_ts(0)));
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut reader = MvccReader::new(snapshot.as_ref(), true);
+        assert_eq!(reader.scan_keys(start.map(make_key), limit).unwrap(),
+                   expect);
     }
 }
