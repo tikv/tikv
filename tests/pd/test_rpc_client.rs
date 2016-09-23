@@ -13,6 +13,8 @@
 
 use std::env;
 
+use kvproto::metapb;
+
 use tikv::pd::{PdClient, RpcClient};
 
 #[test]
@@ -23,12 +25,38 @@ fn test_rpc_client() {
         Err(_) => return,
     };
 
-    let mut id = 0;
+    let client = RpcClient::new(&endpoints, 0).unwrap();
 
+    let store_id = client.alloc_id().unwrap();
+    let mut store = metapb::Store::new();
+    store.set_id(store_id);
+    debug!("bootstrap store {:?}", store);
+
+    let peer_id = client.alloc_id().unwrap();
+    let mut peer = metapb::Peer::new();
+    peer.set_id(peer_id);
+    peer.set_store_id(store_id);
+
+    let region_id = client.alloc_id().unwrap();
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.mut_peers().push(peer.clone());
+    debug!("bootstrap region {:?}", region);
+
+    client.bootstrap_cluster(store.clone(), region.clone()).unwrap();
+    assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
+
+    let tmp_store = client.get_store(store_id).unwrap();
+    assert_eq!(tmp_store.get_id(), store.get_id());
+
+    let tmp_region = client.get_region_by_id(region_id).unwrap();
+    assert_eq!(tmp_region.get_id(), region.get_id());
+
+    let mut prev_id = 0;
     for _ in 0..100 {
         let client = RpcClient::new(&endpoints, 0).unwrap();
         let alloc_id = client.alloc_id().unwrap();
-        assert!(alloc_id > id);
-        id = alloc_id;
+        assert!(alloc_id > prev_id);
+        prev_id = alloc_id;
     }
 }
