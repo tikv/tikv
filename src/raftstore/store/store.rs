@@ -379,6 +379,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         if let Some(p) = stale_peer {
+            info!("[region {}] destroying stale peer {:?}", region_id, p);
             self.destroy_peer(region_id, p);
             has_peer = false;
         }
@@ -415,7 +416,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if try!(self.check_snapshot_overlapped(&msg)) {
+        if !try!(self.check_snap(&msg)) {
             return Ok(());
         }
 
@@ -582,26 +583,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn check_snapshot_overlapped(&mut self, msg: &RaftMessage) -> Result<bool> {
+    fn check_snap(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
         if self.region_peers[&region_id].get_store().is_initialized() ||
            !msg.get_message().has_snapshot() {
-            return Ok(false);
+            return Ok(true);
         }
 
         let snap = msg.get_message().get_snapshot();
         let mut snap_data = RaftSnapshotData::new();
         try!(snap_data.merge_from_bytes(snap.get_data()));
         let snap_region = snap_data.take_region();
+        let peer_id = msg.get_to_peer().get_id();
+        if snap_region.get_peers().into_iter().all(|p| p.get_id() != peer_id) {
+            warn!("region {:?} doesn't contain peer {:?}, skip.",
+                  snap_region,
+                  msg.get_to_peer());
+            return Ok(false);
+        }
         if let Some((_, &exist_region_id)) = self.region_ranges
             .range(Excluded(&enc_start_key(&snap_region)), Unbounded::<&Key>)
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < enc_end_key(&snap_region) {
                 warn!("region overlapped {:?}, {:?}", exist_region, snap_region);
-                return Ok(true);
+                return Ok(false);
             }
         }
         for region in &self.pending_regions {
@@ -610,12 +618,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                // Same region can overlap, we will apply the latest version of snapshot.
                region.get_id() != snap_region.get_id() {
                 warn!("pending region overlapped {:?}, {:?}", region, snap_region);
-                return Ok(true);
+                return Ok(false);
             }
         }
         self.pending_regions.push(snap_region);
 
-        Ok(false)
+        Ok(true)
     }
 
     fn insert_peer_cache(&mut self, peer: metapb::Peer) {
@@ -688,6 +696,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             region_id: u64,
                             change_type: ConfChangeType,
                             peer: metapb::Peer) {
+        let mut peer_id = 0;
         if let Some(p) = self.region_peers.get(&region_id) {
             if p.is_leader() {
                 // Notify pd immediately.
@@ -696,12 +705,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                       p.region());
                 self.heartbeat_pd(p);
             }
+            peer_id = p.peer_id();
         }
 
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
-            // The remove peer is in the same store.
-            self.destroy_peer(region_id, peer)
+            if peer_id == peer.get_id() {
+                self.destroy_peer(region_id, peer)
+            } else {
+                panic!("trying to remove unknown peer {:?}", peer);
+            }
         }
     }
 
@@ -731,7 +744,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         match Peer::create(self, &right) {
             Err(e) => {
-                error!("create new split region {:?} err {:?}", right, e);
+                // peer informaction is already written into db, can't recover.
+                // there is probably a bug.
+                panic!("create new split region {:?} err {:?}", right, e);
             }
             Ok(mut new_peer) => {
                 // If the peer for the region before split is leader,
