@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{HistogramVec, Histogram};
+use prometheus::{HistogramVec};
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec =
@@ -26,11 +26,5 @@ lazy_static! {
             "tikv_coprocessor_select_duration_seconds",
             "Bucketed histogram of coprocessor handle select duration",
             &["number"]
-        ).unwrap();
-
-    pub static ref COPR_COMPOSE_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_coprocessor_compose_resp_duration_seconds",
-            "Bucketed histogram of coprocessor compose responses duration"
         ).unwrap();
 }
