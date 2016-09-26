@@ -382,7 +382,7 @@ mod tests {
         assert_near_seek(cursor_mut, b"x\x00", (b"z", b"2"));
         assert!(!cursor_mut.near_seek(&make_key(b"z\x00")).unwrap());
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
-        for i in 0..super::SEEK_BOUND{
+        for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
             must_put(engine, key.as_bytes(), b"3");
         }
@@ -394,7 +394,7 @@ mod tests {
 
         must_delete(engine, b"x");
         must_delete(engine, b"z");
-        for i in 0..super::SEEK_BOUND{
+        for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
             must_delete(engine, key.as_bytes());
         }

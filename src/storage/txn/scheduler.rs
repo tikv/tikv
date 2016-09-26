@@ -455,10 +455,8 @@ fn extract_ctx(cmd: &Command) -> &Context {
         Command::Scan { ref ctx, .. } |
         Command::Prewrite { ref ctx, .. } |
         Command::Commit { ref ctx, .. } |
-        Command::CommitThenGet { ref ctx, .. } |
         Command::Cleanup { ref ctx, .. } |
         Command::Rollback { ref ctx, .. } |
-        Command::RollbackThenGet { ref ctx, .. } |
         Command::ScanLock { ref ctx, .. } |
         Command::ResolveLock { ref ctx, .. } |
         Command::Gc { ref ctx, .. } => ctx,
@@ -504,9 +502,7 @@ impl Scheduler {
             }
             Command::Commit { ref keys, .. } |
             Command::Rollback { ref keys, .. } => self.latches.gen_lock(keys),
-            Command::CommitThenGet { ref key, .. } |
-            Command::Cleanup { ref key, .. } |
-            Command::RollbackThenGet { ref key, .. } => self.latches.gen_lock(&[key]),
+            Command::Cleanup { ref key, .. } => self.latches.gen_lock(&[key]),
             _ => Lock::new(vec![]),
         }
     }

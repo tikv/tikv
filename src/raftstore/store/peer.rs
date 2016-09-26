@@ -890,7 +890,7 @@ impl Peer {
         };
 
         self.raft_group.apply_conf_change(conf_change);
-        
+
         res
     }
 
