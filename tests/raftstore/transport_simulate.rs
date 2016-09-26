@@ -21,6 +21,7 @@ use tikv::util::HandyRwLock;
 
 use rand;
 use std::sync::{Arc, RwLock, Mutex};
+use std::marker::PhantomData;
 use std::time;
 use std::usize;
 use std::thread;
@@ -55,12 +56,26 @@ pub trait Filter<M>: Send + Sync {
 pub type SendFilter = Box<Filter<RaftMessage>>;
 pub type RecvFilter = Box<Filter<StoreMsg>>;
 
-struct FilterDropPacket {
+#[derive(Clone)]
+pub struct FilterDropPacket {
     rate: u32,
 }
 
-struct FilterDelay {
+impl FilterDropPacket {
+    pub fn new(rate: u32) -> FilterDropPacket {
+        FilterDropPacket { rate: rate }
+    }
+}
+
+#[derive(Clone)]
+pub struct FilterDelay {
     duration: time::Duration,
+}
+
+impl FilterDelay {
+    pub fn new(duration: time::Duration) -> FilterDelay {
+        FilterDelay { duration: duration }
+    }
 }
 
 impl<M> Filter<M> for FilterDropPacket {
@@ -156,35 +171,20 @@ pub trait FilterFactory {
     fn generate(&self, node_id: u64) -> Vec<SendFilter>;
 }
 
-pub struct DropPacket {
-    rate: u32,
-}
+#[derive(Default)]
+pub struct DefaultFilterFactory<F: Filter<RaftMessage> + Default>(PhantomData<F>);
 
-impl DropPacket {
-    pub fn new(rate: u32) -> DropPacket {
-        DropPacket { rate: rate }
-    }
-}
-
-impl FilterFactory for DropPacket {
+impl<F: Filter<RaftMessage> + Default + 'static> FilterFactory for DefaultFilterFactory<F> {
     fn generate(&self, _: u64) -> Vec<SendFilter> {
-        vec![box FilterDropPacket { rate: self.rate }]
+        vec![Box::new(F::default())]
     }
 }
 
-pub struct Delay {
-    duration: time::Duration,
-}
+pub struct CloneFilterFactory<F: Filter<RaftMessage> + Clone>(pub F);
 
-impl Delay {
-    pub fn new(duration: time::Duration) -> Delay {
-        Delay { duration: duration }
-    }
-}
-
-impl FilterFactory for Delay {
+impl<F: Filter<RaftMessage> + Clone + 'static> FilterFactory for CloneFilterFactory<F> {
     fn generate(&self, _: u64) -> Vec<SendFilter> {
-        vec![box FilterDelay { duration: self.duration }]
+        vec![Box::new(self.0.clone())]
     }
 }
 
@@ -263,11 +263,12 @@ impl Direction {
 /// Drop specified messages for the store with special region.
 ///
 /// If `msg_type` is None, all message will be filtered.
+#[derive(Clone)]
 pub struct FilterRegionPacket {
     region_id: u64,
     store_id: u64,
     direction: Direction,
-    allow: AtomicUsize,
+    allow: Arc<AtomicUsize>,
     msg_type: Option<MessageType>,
 }
 
@@ -293,54 +294,35 @@ impl Filter<RaftMessage> for FilterRegionPacket {
     }
 }
 
-pub struct IsolateRegionStore {
-    region_id: u64,
-    store_id: u64,
-    direction: Direction,
-    allow: usize,
-    msg_type: Option<MessageType>,
-}
-
-impl IsolateRegionStore {
-    pub fn new(region_id: u64, store_id: u64) -> IsolateRegionStore {
-        IsolateRegionStore {
+impl FilterRegionPacket {
+    pub fn new(region_id: u64, store_id: u64) -> FilterRegionPacket {
+        FilterRegionPacket {
             region_id: region_id,
             store_id: store_id,
             direction: Direction::Both,
             msg_type: None,
-            allow: 0,
+            allow: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    pub fn direction(mut self, direction: Direction) -> IsolateRegionStore {
+    pub fn direction(mut self, direction: Direction) -> FilterRegionPacket {
         self.direction = direction;
         self
     }
 
-    pub fn msg_type(mut self, m_type: MessageType) -> IsolateRegionStore {
+    pub fn msg_type(mut self, m_type: MessageType) -> FilterRegionPacket {
         self.msg_type = Some(m_type);
         self
     }
 
-    pub fn allow(mut self, number: usize) -> IsolateRegionStore {
-        self.allow = number;
+    pub fn allow(mut self, number: usize) -> FilterRegionPacket {
+        self.allow = Arc::new(AtomicUsize::new(number));
         self
     }
 }
 
-impl FilterFactory for IsolateRegionStore {
-    fn generate(&self, _: u64) -> Vec<Box<Filter<RaftMessage>>> {
-        vec![box FilterRegionPacket {
-                 region_id: self.region_id,
-                 store_id: self.store_id,
-                 direction: self.direction,
-                 msg_type: self.msg_type.clone(),
-                 allow: AtomicUsize::new(self.allow),
-             }]
-    }
-}
-
-struct SnapshotFilter {
+#[derive(Default)]
+pub struct SnapshotFilter {
     drop: AtomicBool,
 }
 
@@ -356,14 +338,6 @@ impl Filter<RaftMessage> for SnapshotFilter {
         } else {
             x
         }
-    }
-}
-
-pub struct DropSnapshot;
-
-impl FilterFactory for DropSnapshot {
-    fn generate(&self, _: u64) -> Vec<SendFilter> {
-        vec![box SnapshotFilter { drop: AtomicBool::new(false) }]
     }
 }
 
