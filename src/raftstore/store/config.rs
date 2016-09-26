@@ -39,6 +39,7 @@ const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
 // If the leader missing for over 2 hours,
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
+const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -87,6 +88,8 @@ pub struct Config {
     /// the peer would ask pd to confirm whether it is valid in any region.
     /// If the peer is stale and is not valid in any region, it will destroy itself.
     pub max_leader_missing_duration: Duration,
+
+    pub snap_apply_batch_size: usize,
 }
 
 impl Default for Config {
@@ -113,6 +116,7 @@ impl Default for Config {
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
+            snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
         }
     }
 }
