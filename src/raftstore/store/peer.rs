@@ -347,18 +347,6 @@ impl Peer {
                 .unwrap();
         }
 
-
-        let count = ready.messages.iter().fold(0, |acc, msg| {
-            if msg.get_msg_type() == MessageType::MsgRequestVote {
-                acc + 1
-            } else {
-                acc
-            }
-        });
-        PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["request_vote"])
-            .inc_by(count as f64)
-            .unwrap();
-
         if !ready.committed_entries.is_empty() {
             PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["commit"])
                 .inc_by(ready.committed_entries.len() as f64)
@@ -381,6 +369,10 @@ impl Peer {
         where T: Transport
     {
         for msg in msgs {
+            if msg.get_msg_type() == MessageType::MsgRequestVote {
+                PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["request_vote"]).inc();
+            }
+
             try!(self.send_raft_message(msg, trans));
         }
         Ok(())
