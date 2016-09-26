@@ -24,7 +24,7 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType};
+use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -369,6 +369,10 @@ impl Peer {
         where T: Transport
     {
         for msg in msgs {
+            if msg.get_msg_type() == MessageType::MsgRequestVote {
+                PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["request_vote"]).inc();
+            }
+
             try!(self.send_raft_message(msg, trans));
         }
         Ok(())
