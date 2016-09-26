@@ -100,13 +100,6 @@ pub enum Command {
         lock_ts: u64,
         commit_ts: u64,
     },
-    CommitThenGet {
-        ctx: Context,
-        key: Key,
-        lock_ts: u64,
-        commit_ts: u64,
-        get_ts: u64,
-    },
     Cleanup {
         ctx: Context,
         key: Key,
@@ -116,11 +109,6 @@ pub enum Command {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
-    },
-    RollbackThenGet {
-        ctx: Context,
-        key: Key,
-        lock_ts: u64,
     },
     ScanLock { ctx: Context, max_ts: u64 },
     ResolveLock {
@@ -172,15 +160,6 @@ impl Display for Command {
                        commit_ts,
                        ctx)
             }
-            Command::CommitThenGet { ref ctx, ref key, lock_ts, commit_ts, get_ts, .. } => {
-                write!(f,
-                       "kv::command::commit_then_get {:?} {} -> {} @ {} | {:?}",
-                       key,
-                       lock_ts,
-                       commit_ts,
-                       get_ts,
-                       ctx)
-            }
             Command::Cleanup { ref ctx, ref key, start_ts, .. } => {
                 write!(f, "kv::command::cleanup {} @ {} | {:?}", key, start_ts, ctx)
             }
@@ -190,9 +169,6 @@ impl Display for Command {
                        keys.len(),
                        start_ts,
                        ctx)
-            }
-            Command::RollbackThenGet { ref ctx, ref key, lock_ts, .. } => {
-                write!(f, "kv::rollback_then_get {} @ {} | {:?}", key, lock_ts, ctx)
             }
             Command::ScanLock { ref ctx, max_ts, .. } => {
                 write!(f, "kv::scan_lock {} | {:?}", max_ts, ctx)
@@ -241,10 +217,8 @@ impl Command {
             Command::Scan { .. } => "scan",
             Command::Prewrite { .. } => "prewrite",
             Command::Commit { .. } => "commit",
-            Command::CommitThenGet { .. } => "commit_then_get",
             Command::Cleanup { .. } => "cleanup",
             Command::Rollback { .. } => "rollback",
-            Command::RollbackThenGet { .. } => "rollback_then_get",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => "gc",
@@ -431,27 +405,6 @@ impl Storage {
         Ok(())
     }
 
-    pub fn async_commit_then_get(&self,
-                                 ctx: Context,
-                                 key: Key,
-                                 lock_ts: u64,
-                                 commit_ts: u64,
-                                 get_ts: u64,
-                                 callback: Callback<Option<Value>>)
-                                 -> Result<()> {
-        let cmd = Command::CommitThenGet {
-            ctx: ctx,
-            key: key,
-            lock_ts: lock_ts,
-            commit_ts: commit_ts,
-            get_ts: get_ts,
-        };
-        let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::SingleValue(callback)));
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
-        Ok(())
-    }
-
     pub fn async_cleanup(&self,
                          ctx: Context,
                          key: Key,
@@ -482,23 +435,6 @@ impl Storage {
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
-        Ok(())
-    }
-
-    pub fn async_rollback_then_get(&self,
-                                   ctx: Context,
-                                   key: Key,
-                                   lock_ts: u64,
-                                   callback: Callback<Option<Value>>)
-                                   -> Result<()> {
-        let cmd = Command::RollbackThenGet {
-            ctx: ctx,
-            key: key,
-            lock_ts: lock_ts,
-        };
-        let tag = cmd.tag();
-        try!(self.send(cmd, StorageCb::SingleValue(callback)));
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }

@@ -16,10 +16,9 @@ use std::boxed::Box;
 use protobuf::RepeatedField;
 
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
-                       CmdBatchRollbackResponse, CmdCleanupResponse, CmdRollbackThenGetResponse,
-                       CmdCommitThenGetResponse, CmdBatchGetResponse, CmdScanLockResponse,
-                       CmdResolveLockResponse, CmdGCResponse, Request, Response, MessageType,
-                       KvPair as RpcKvPair, KeyError, LockInfo, Op};
+                       CmdBatchRollbackResponse, CmdCleanupResponse, CmdBatchGetResponse,
+                       CmdScanLockResponse, CmdResolveLockResponse, CmdGCResponse, Request,
+                       Response, MessageType, KvPair as RpcKvPair, KeyError, LockInfo, Op};
 use kvproto::msgpb;
 use kvproto::errorpb::Error as RegionError;
 use storage::{Engine, Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
@@ -136,36 +135,6 @@ impl StoreHandler {
                            Key::from_raw(req.get_key()),
                            req.get_start_version(),
                            cb)
-            .map_err(Error::Storage)
-    }
-
-    fn on_commit_then_get(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
-        if !msg.has_cmd_commit_get_req() {
-            return Err(box_err!("msg doesn't contain a CmdCommitThenGetRequest"));
-        }
-        let cb = self.make_cb(StoreHandler::cmd_commit_get_done, on_resp);
-        let req = msg.take_cmd_commit_get_req();
-        self.store
-            .async_commit_then_get(msg.take_context(),
-                                   Key::from_raw(req.get_key()),
-                                   req.get_lock_version(),
-                                   req.get_commit_version(),
-                                   req.get_get_version(),
-                                   cb)
-            .map_err(Error::Storage)
-    }
-
-    fn on_rollback_then_get(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
-        if !msg.has_cmd_rb_get_req() {
-            return Err(box_err!("msg doesn't contain a CmdRollbackThenGetRequest"));
-        }
-        let req = msg.take_cmd_rb_get_req();
-        let cb = self.make_cb(StoreHandler::cmd_rollback_get_done, on_resp);
-        self.store
-            .async_rollback_then_get(msg.take_context(),
-                                     Key::from_raw(req.get_key()),
-                                     req.get_lock_version(),
-                                     cb)
             .map_err(Error::Storage)
     }
 
@@ -299,28 +268,6 @@ impl StoreHandler {
         resp.set_cmd_cleanup_resp(cmd_cleanup_resp);
     }
 
-    fn cmd_commit_get_done(r: StorageResult<Option<Value>>, resp: &mut Response) {
-        resp.set_field_type(MessageType::CmdCommitThenGet);
-        let mut commit_get = CmdCommitThenGetResponse::new();
-        match r {
-            Ok(Some(val)) => commit_get.set_value(val),
-            Ok(None) => commit_get.set_value(vec![]),
-            Err(e) => commit_get.set_error(extract_key_error(&e)),
-        }
-        resp.set_cmd_commit_get_resp(commit_get);
-    }
-
-    fn cmd_rollback_get_done(r: StorageResult<Option<Value>>, resp: &mut Response) {
-        resp.set_field_type(MessageType::CmdRollbackThenGet);
-        let mut rollback_get = CmdRollbackThenGetResponse::new();
-        match r {
-            Ok(Some(val)) => rollback_get.set_value(val),
-            Ok(None) => rollback_get.set_value(vec![]),
-            Err(e) => rollback_get.set_error(extract_key_error(&e)),
-        }
-        resp.set_cmd_rb_get_resp(rollback_get);
-    }
-
     fn cmd_scan_lock_done(r: StorageResult<Vec<LockInfo>>, resp: &mut Response) {
         resp.set_field_type(MessageType::CmdScanLock);
         let mut scan_lock = CmdScanLockResponse::new();
@@ -356,8 +303,6 @@ impl StoreHandler {
             MessageType::CmdPrewrite => self.on_prewrite(req, on_resp),
             MessageType::CmdCommit => self.on_commit(req, on_resp),
             MessageType::CmdCleanup => self.on_cleanup(req, on_resp),
-            MessageType::CmdCommitThenGet => self.on_commit_then_get(req, on_resp),
-            MessageType::CmdRollbackThenGet => self.on_rollback_then_get(req, on_resp),
             MessageType::CmdBatchGet => self.on_batch_get(req, on_resp),
             MessageType::CmdBatchRollback => self.on_batch_rollback(req, on_resp),
             MessageType::CmdScanLock => self.on_scan_lock(req, on_resp),
