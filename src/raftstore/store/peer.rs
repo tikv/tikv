@@ -24,7 +24,7 @@ use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType};
+use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -345,6 +345,12 @@ impl Peer {
             PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["message"])
                 .inc_by(ready.messages.len() as f64)
                 .unwrap();
+        }
+
+        for msg in &ready.messages {
+            if msg.get_msg_type() == MessageType::MsgRequestVote {
+                PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["vote"]).inc();
+            }
         }
 
         if !ready.committed_entries.is_empty() {
@@ -890,7 +896,7 @@ impl Peer {
         };
 
         self.raft_group.apply_conf_change(conf_change);
-        
+
         res
     }
 
