@@ -977,7 +977,7 @@ mod test {
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
         let (tx, rx) = channel();
-        let runner = RegionRunner::new(s.engine.clone(), tx, mgr);
+        let runner = RegionRunner::new(s.engine.clone(), tx, mgr, 0);
         worker.start(runner).unwrap();
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -1063,7 +1063,7 @@ mod test {
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let (tx, rx) = channel();
-        let runner = RegionRunner::new(s1.engine.clone(), tx, mgr.clone());
+        let runner = RegionRunner::new(s1.engine.clone(), tx, mgr.clone(), 0);
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());
         let snap1 = match rx.recv().unwrap() {

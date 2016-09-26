@@ -31,6 +31,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
     cluster.cfg.raft_store.raft_log_gc_limit = 15;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 10;
+    cluster.cfg.raft_store.snap_apply_batch_size = 500;
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
