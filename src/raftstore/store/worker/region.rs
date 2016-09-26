@@ -34,8 +34,6 @@ use storage::CF_RAFT;
 
 use super::metrics::*;
 
-const BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
-
 /// region related task.
 pub enum Task {
     Gen { region_id: u64 },
@@ -113,63 +111,21 @@ fn check_abort(abort: &AtomicBool) -> Result<(), Error> {
     Ok(())
 }
 
-fn delete_all_in_range(db: &DB,
-                       start_key: &[u8],
-                       end_key: &[u8],
-                       abort: &AtomicBool)
-                       -> Result<(), Error> {
-    for cf in db.cf_names() {
-        try!(check_abort(&abort));
-        let handle = box_try!(rocksdb::get_cf_handle(db, cf));
-        box_try!(db.delete_file_in_range_cf(handle, start_key, end_key));
-
-        let mut it = box_try!(db.new_iterator_cf(cf, Some(end_key)));
-
-        let mut wb = WriteBatch::new();
-        try!(check_abort(&abort));
-        it.seek(start_key.into());
-        while it.valid() {
-            {
-                let key = it.key();
-                if key >= end_key {
-                    break;
-                }
-
-                box_try!(wb.delete_cf(handle, key));
-                if wb.count() == BATCH_SIZE {
-                    // Can't use write_without_wal here.
-                    // Otherwise it may cause dirty data when applying snapshot.
-                    box_try!(db.write(wb));
-                    wb = WriteBatch::new();
-                }
-            };
-            try!(check_abort(&abort));
-            if !it.next() {
-                break;
-            }
-        }
-
-        if wb.count() > 0 {
-            box_try!(db.write(wb));
-        }
-    }
-
-    Ok(())
-}
-
 // TODO: use threadpool to do task concurrently
 pub struct Runner<T: MsgSender> {
     db: Arc<DB>,
+    batch_size: usize,
     ch: T,
     mgr: SnapManager,
 }
 
 impl<T: MsgSender> Runner<T> {
-    pub fn new(db: Arc<DB>, ch: T, mgr: SnapManager) -> Runner<T> {
+    pub fn new(db: Arc<DB>, ch: T, mgr: SnapManager, batch_size: usize) -> Runner<T> {
         Runner {
             db: db,
             ch: ch,
             mgr: mgr,
+            batch_size: batch_size,
         }
     }
 
@@ -208,6 +164,51 @@ impl<T: MsgSender> Runner<T> {
         timer.observe_duration();
     }
 
+    fn delete_all_in_range(&self,
+                           start_key: &[u8],
+                           end_key: &[u8],
+                           abort: &AtomicBool)
+                           -> Result<(), Error> {
+        let mut wb = WriteBatch::new();
+        let mut size_cnt = 0;
+        for cf in self.db.cf_names() {
+            try!(check_abort(&abort));
+            let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
+            box_try!(self.db.delete_file_in_range_cf(handle, start_key, end_key));
+
+            let mut it = box_try!(self.db.new_iterator_cf(cf, Some(end_key)));
+
+            try!(check_abort(&abort));
+            it.seek(start_key.into());
+            while it.valid() {
+                {
+                    let key = it.key();
+                    if key >= end_key {
+                        break;
+                    }
+
+                    box_try!(wb.delete_cf(handle, key));
+                    size_cnt += key.len();
+                    if size_cnt >= self.batch_size {
+                        // Can't use write_without_wal here.
+                        // Otherwise it may cause dirty data when applying snapshot.
+                        box_try!(self.db.write(wb));
+                        wb = WriteBatch::new();
+                    }
+                };
+                try!(check_abort(&abort));
+                if !it.next() {
+                    break;
+                }
+            }
+        }
+
+        if wb.count() > 0 {
+            box_try!(self.db.write(wb));
+        }
+        Ok(())
+    }
+
     fn apply_snap(&self, region_id: u64, abort: Arc<AtomicBool>) -> Result<(), Error> {
         info!("[region {}] begin apply snap data", region_id);
         try!(check_abort(&abort));
@@ -220,7 +221,7 @@ impl<T: MsgSender> Runner<T> {
         // clear up origin data.
         let start_key = keys::enc_start_key(region_state.get_region());
         let end_key = keys::enc_end_key(region_state.get_region());
-        box_try!(delete_all_in_range(self.db.as_ref(), &start_key, &end_key, &abort));
+        box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match box_try!(self.db.get_msg_cf(CF_RAFT, &state_key)) {
@@ -266,7 +267,7 @@ impl<T: MsgSender> Runner<T> {
                 let value = box_try!(reader.decode_compact_bytes());
                 batch_size += value.len();
                 box_try!(wb.put_cf(handle, &key, &value));
-                if batch_size > BATCH_SIZE {
+                if batch_size >= self.batch_size {
                     box_try!(self.db.write(wb));
                     wb = WriteBatch::new();
                     batch_size = 0;
