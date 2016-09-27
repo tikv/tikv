@@ -332,7 +332,7 @@ impl PeerStorage {
 
         let mut snap_data = RaftSnapshotData::new();
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
-            error!("{} decode snapshot fail, it maybe corrupted: {:?}",
+            error!("{} decode snapshot fail, it may be corrupted: {:?}",
                    self.tag,
                    e);
             return false;
