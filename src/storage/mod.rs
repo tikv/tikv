@@ -581,6 +581,19 @@ mod tests {
         })
     }
 
+    fn expect_batch_get_vals(done: Sender<i32>,
+                             pairs: Vec<Option<KvPair>>)
+                             -> Callback<Vec<Result<KvPair>>> {
+        Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
+            let rlt: Vec<Option<KvPair>> = rlt.unwrap()
+                .into_iter()
+                .map(Result::ok)
+                .collect();
+            assert_eq!(rlt, pairs);
+            done.send(1).unwrap()
+        })
+    }
+
     #[test]
     fn test_get_put() {
         let config = Config::new();
@@ -621,6 +634,29 @@ mod tests {
         rx.recv().unwrap();
         storage.stop().unwrap();
     }
+
+    #[test]
+    fn test_put_with_err() {
+        let config = Config::new();
+        // New engine lack of some column families.
+        let engine = engine::new_engine(Dsn::RocksDBPath(&config.path), &["default"]).unwrap();
+        let mut storage = Storage::from_engine(engine, &config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        storage.async_prewrite(Context::new(),
+                            vec![
+            Mutation::Put((make_key(b"a"), b"aa".to_vec())),
+            Mutation::Put((make_key(b"b"), b"bb".to_vec())),
+            Mutation::Put((make_key(b"c"), b"cc".to_vec())),
+            ],
+                            b"a".to_vec(),
+                            1,
+                            expect_fail(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
     #[test]
     fn test_scan() {
         let config = Config::new();
@@ -651,6 +687,44 @@ mod tests {
                         5,
                         expect_scan(tx.clone(),
                                     vec![
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+            ]))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_batch_get() {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        storage.async_prewrite(Context::new(),
+                            vec![
+            Mutation::Put((make_key(b"a"), b"aa".to_vec())),
+            Mutation::Put((make_key(b"b"), b"bb".to_vec())),
+            Mutation::Put((make_key(b"c"), b"cc".to_vec())),
+            ],
+                            b"a".to_vec(),
+                            1,
+                            expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_commit(Context::new(),
+                          vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
+                          1,
+                          2,
+                          expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_batch_get(Context::new(),
+                             vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
+                             5,
+                             expect_batch_get_vals(tx.clone(),
+                                                   vec![
             Some((b"a".to_vec(), b"aa".to_vec())),
             Some((b"b".to_vec(), b"bb".to_vec())),
             Some((b"c".to_vec(), b"cc".to_vec())),
