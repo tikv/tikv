@@ -416,7 +416,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if !try!(self.check_snap(&msg)) {
+        if !try!(self.check_snapshot(&msg)) {
             return Ok(());
         }
 
@@ -583,7 +583,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn check_snap(&mut self, msg: &RaftMessage) -> Result<bool> {
+    fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
@@ -744,7 +744,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         match Peer::create(self, &right) {
             Err(e) => {
-                // peer informaction is already written into db, can't recover.
+                // peer information is already written into db, can't recover.
                 // there is probably a bug.
                 panic!("create new split region {:?} err {:?}", right, e);
             }
