@@ -43,7 +43,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
             if value.is_none() && res.is_none() {
                 return;
             }
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(20));
         }
     }
     debug!("last try to get {}", escape(key));
