@@ -319,12 +319,47 @@ impl PeerStorage {
         DbSnapshot::new(self.engine.clone())
     }
 
+    fn validate_snap(&self, snap: &Snapshot) -> bool {
+        let idx = snap.get_metadata().get_index();
+        if idx < self.truncated_index() {
+            // stale snapshot, should generate again.
+            info!("{} snapshot {} < {} is stale, generate again.",
+                  self.tag,
+                  idx,
+                  self.truncated_index());
+            return false;
+        }
+
+        let mut snap_data = RaftSnapshotData::new();
+        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
+            error!("{} decode snapshot fail, it may be corrupted: {:?}",
+                   self.tag,
+                   e);
+            return false;
+        }
+        let snap_epoch = snap_data.get_region().get_region_epoch();
+        let latest_epoch = self.get_region().get_region_epoch();
+        if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
+            info!("{} snapshot epoch {:?} < {:?}, generate again.",
+                  self.tag,
+                  snap_epoch,
+                  latest_epoch);
+            return false;
+        }
+
+        true
+    }
+
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
 
         if let SnapState::Snap(_) = *snap_state {
             match mem::replace(&mut *snap_state, SnapState::Relax) {
-                SnapState::Snap(s) => return Ok(s),
+                SnapState::Snap(s) => {
+                    if self.validate_snap(&s) {
+                        return Ok(s);
+                    }
+                }
                 _ => unreachable!(),
             }
         }
@@ -827,6 +862,7 @@ mod test {
     use util::HandyRwLock;
     use util::rocksdb::new_engine;
     use storage::{CF_DEFAULT, CF_RAFT};
+    use kvproto::eraftpb::HardState;
 
     use super::InvokeContext;
 
@@ -998,7 +1034,30 @@ mod test {
         assert_eq!(data.get_region().get_peers().len(), 1);
 
         s.set_snap_state(SnapState::Snap(snap.clone()));
-        assert_eq!(s.snapshot(), Ok(snap));
+        assert_eq!(s.snapshot(), Ok(snap.clone()));
+
+        let mut ctx = InvokeContext::new(&s);
+        s.append(&mut ctx, &[new_entry(6, 5), new_entry(7, 5)]).unwrap();
+        let mut hs = HardState::new();
+        hs.set_commit(7);
+        hs.set_term(5);
+        ctx.raft_state.set_hard_state(hs);
+        ctx.raft_state.set_last_index(7);
+        ctx.apply_state.set_applied_index(7);
+        ctx.save_apply(1).unwrap();
+        ctx.save_raft(1).unwrap();
+        s.get_engine().write(ctx.wb).unwrap();
+        s.apply_state = ctx.apply_state;
+        s.raft_state = ctx.raft_state;
+        ctx = InvokeContext::new(&s);
+        s.compact(&mut ctx.apply_state, 7).unwrap();
+        ctx.save_apply(1).unwrap();
+        s.get_engine().write(ctx.wb).unwrap();
+        s.apply_state = ctx.apply_state;
+        s.set_snap_state(SnapState::Snap(snap));
+        // stale snapshot should be abandoned.
+        assert_eq!(s.snapshot().unwrap_err(), unavailable);
+        rx.recv().unwrap();
     }
 
     #[test]
