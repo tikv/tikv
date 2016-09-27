@@ -41,6 +41,10 @@ impl<'a> MvccReader<'a> {
     }
 
     pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
+        if self.used_for_scan {
+            try!(self.create_data_cursor());
+        }
+
         let k = key.append_ts(ts);
         if let Some(ref mut cursor) = self.data_cursor {
             cursor.get(&k).map(|x| x.map(|x| x.to_vec())).map_err(Error::from)
@@ -50,6 +54,10 @@ impl<'a> MvccReader<'a> {
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+        if self.used_for_scan && self.lock_cursor.is_none() {
+            self.lock_cursor = Some(try!(self.snapshot.iter_cf(CF_LOCK, None)));
+        }
+
         if let Some(ref mut cursor) = self.lock_cursor {
             match try!(cursor.get(&key)) {
                 Some(v) => Ok(Some(try!(Lock::parse(v)))),
