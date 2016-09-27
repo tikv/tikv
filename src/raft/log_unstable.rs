@@ -258,7 +258,7 @@ mod test {
             (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 6, false, 0),
             // term from snapshot
             (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 4, true, 1),
-            (Some(new_entry(5, 1)), 5, Some(new_snapshot(4,1)), 3, false, 0),
+            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 3, false, 0),
             (None, 5, Some(new_snapshot(4,1)), 5, false, 0),
             (None, 5, Some(new_snapshot(4,1)), 4, true, 1),
             (None, 0, None, 5, false, 0),
