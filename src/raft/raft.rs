@@ -971,7 +971,7 @@ impl<T: Storage> Raft<T> {
                 let rss = self.read_only.advance(m);
                 for rs in rss {
                     let mut req = rs.req;
-                    if req.get_from() == INVALID_ID || m.get_from() == self.id {
+                    if req.get_from() == INVALID_ID || req.get_from() == self.id {
                         // from local member
                         let rs = ReadState {
                             index: rs.index,
