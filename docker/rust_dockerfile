@@ -17,11 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* && apt-get clean
 
 RUN cd / && \
-    curl -L https://github.com/facebook/rocksdb/archive/v4.5.1.tar.gz | tar xz && \
-    cd rocksdb-4.5.1 && \
+    curl -L https://github.com/facebook/rocksdb/archive/4.12.fb.tar.gz -o rocksdb.tar.gz && \
+    tar xzf rocksdb.tar.gz && \
+    cd rocksdb-4.12.fb && \
     PORTABLE=1 make shared_lib && \
     make install && \
     cd / && \
-    rm -rf /rocksdb-4.5.1
+    rm -rf /rocksdb-4.12.fb /rocksdb.tar.gz
 
-RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s  -- --disable-sudo -y --channel=nightly
+RUN curl -sSf https://static.rust-lang.org/rustup.sh | sh -s  -- --date=2016-09-05 --disable-sudo -y --channel=nightly
