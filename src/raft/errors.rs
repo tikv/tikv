@@ -109,23 +109,32 @@ mod tests {
     #[test]
     fn test_error_equal() {
         assert_eq!(Error::StepPeerNotFound, Error::StepPeerNotFound);
-        assert!(Error::StepPeerNotFound != Error::Store(StorageError::Compacted));
         assert_eq!(Error::Store(StorageError::Compacted),
                    Error::Store(StorageError::Compacted));
+        assert_eq!(Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "oh no!")),
+                   Error::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "oh yes!")));
+        assert!(Error::Io(io::Error::new(io::ErrorKind::NotFound, "error")) !=
+                Error::Io(io::Error::new(io::ErrorKind::BrokenPipe, "error")));
         assert_eq!(Error::StepLocalMsg, Error::StepLocalMsg);
+        assert_eq!(Error::ConfigInvalid(String::from("config error")),
+                   Error::ConfigInvalid(String::from("config error")));
+        assert!(Error::ConfigInvalid(String::from("config error")) !=
+                Error::ConfigInvalid(String::from("other error")));
         assert_eq!(Error::from(io::Error::new(io::ErrorKind::Other, "oh no!")),
                    Error::from(io::Error::new(io::ErrorKind::Other, "oh yes!")));
+        assert!(Error::StepPeerNotFound != Error::Store(StorageError::Compacted));
+        assert!(Error::Other(box Error::StepLocalMsg) != Error::StepLocalMsg);
     }
 
     #[test]
     fn test_storage_error_equal() {
         assert_eq!(StorageError::Compacted, StorageError::Compacted);
-        assert!(StorageError::Compacted != StorageError::Unavailable);
         assert_eq!(StorageError::Unavailable, StorageError::Unavailable);
         assert_eq!(StorageError::SnapshotOutOfDate,
                    StorageError::SnapshotOutOfDate);
         assert_eq!(StorageError::SnapshotTemporarilyUnavailable,
                    StorageError::SnapshotTemporarilyUnavailable);
-        assert!(StorageError::Other(box Error::StepLocalMsg) != StorageError::Unavailable);
+        assert!(StorageError::Compacted != StorageError::Unavailable);
+        assert!(StorageError::Other(box StorageError::Unavailable) != StorageError::Unavailable);
     }
 }
