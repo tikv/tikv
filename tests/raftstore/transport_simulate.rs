@@ -459,3 +459,68 @@ impl Filter<StoreMsg> for FilterLeadingDuplicatedSnap {
         if res.is_err() && dropped { Ok(()) } else { res }
     }
 }
+
+/// `RandomLatencyFilter` is a transport filter to simulate randomized network latency.
+/// Based on a randomized rate, `RandomLatencyFilter` will decide whether to delay
+/// the sending of any message. It's could be used to simulate the message sending
+/// in a network with random latency, where messages could be delayed, disordered or lost.
+pub struct RandomLatencyFilter {
+    delay_rate: u32,
+    delayed_msgs: Mutex<Vec<RaftMessage>>,
+}
+
+impl RandomLatencyFilter {
+    pub fn new(rate: u32) -> RandomLatencyFilter {
+        RandomLatencyFilter {
+            delay_rate: rate,
+            delayed_msgs: Mutex::new(vec![]),
+        }
+    }
+
+    fn will_delay(&self, _: &RaftMessage) -> bool {
+        rand::random::<u32>() % 100u32 >= self.delay_rate
+    }
+}
+
+impl Filter<RaftMessage> for RandomLatencyFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+        let mut to_send = vec![];
+        let mut to_delay = vec![];
+        let mut delayed_msgs = self.delayed_msgs.lock().unwrap();
+        // check whether to send those messages which are delayed previouly
+        for m in delayed_msgs.drain(..) {
+            if self.will_delay(&m) {
+                to_delay.push(m);
+            } else {
+                to_send.push(m);
+            }
+        }
+        // check whether to send any newly incoming message if they are not delayed
+        for m in msgs.drain(..) {
+            if self.will_delay(&m) {
+                to_delay.push(m)
+            } else {
+                to_send.push(m);
+            }
+        }
+        delayed_msgs.extend(to_delay);
+        msgs.extend(to_send);
+    }
+}
+
+
+pub struct RandomLatencyFilterFactory {
+    delay_rate: u32,
+}
+
+impl RandomLatencyFilterFactory {
+    pub fn new(rate: u32) -> RandomLatencyFilterFactory {
+        RandomLatencyFilterFactory { delay_rate: rate }
+    }
+}
+
+impl FilterFactory for RandomLatencyFilterFactory {
+    fn generate(&self, _: u64) -> Vec<SendFilter> {
+        vec![box RandomLatencyFilter::new(self.delay_rate)]
+    }
+}
