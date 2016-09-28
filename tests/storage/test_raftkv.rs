@@ -198,14 +198,13 @@ fn near_seek(ctx: &Context, engine: &Engine) {
     must_put(ctx, engine, b"z", b"2");
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut cursor = snapshot.iter(None).unwrap();
-    let cursor_mut = cursor.as_mut();
-    assert_near_seek(cursor_mut, b"x", (b"x", b"1"));
-    assert_near_seek(cursor_mut, b"a", (b"x", b"1"));
-    assert_near_reverse_seek(cursor_mut, b"z1", (b"z", b"2"));
-    assert_near_reverse_seek(cursor_mut, b"x1", (b"x", b"1"));
-    assert_near_seek(cursor_mut, b"y", (b"z", b"2"));
-    assert_near_seek(cursor_mut, b"x\x00", (b"z", b"2"));
-    assert!(!cursor_mut.near_seek(&make_key(b"z\x00")).unwrap());
+    assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
+    assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
+    assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
+    assert_near_reverse_seek(&mut cursor, b"x1", (b"x", b"1"));
+    assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
+    assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
+    assert!(!cursor.near_seek(&make_key(b"z\x00")).unwrap());
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
 }

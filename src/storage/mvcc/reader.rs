@@ -20,9 +20,9 @@ use super::write::{Write, WriteType};
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
     // cursors are used for speeding up scans.
-    data_cursor: Option<Box<Cursor + 'a>>,
-    lock_cursor: Option<Box<Cursor + 'a>>,
-    write_cursor: Option<Box<Cursor + 'a>>,
+    data_cursor: Option<Cursor<'a>>,
+    lock_cursor: Option<Cursor<'a>>,
+    write_cursor: Option<Cursor<'a>>,
 
     // true: the reader mainly used for scanning,
     // false: the reader mainly used for point get.

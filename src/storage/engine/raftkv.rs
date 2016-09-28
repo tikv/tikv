@@ -31,7 +31,7 @@ use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
-use super::{Engine, Modify, Cursor, Snapshot, Callback};
+use super::{Engine, Modify, Cursor, Snapshot, Callback, Iterator as EngineIterator};
 use storage::{Key, Value, CfName, CF_DEFAULT};
 use super::metrics::*;
 
@@ -276,20 +276,20 @@ impl Snapshot for RegionSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>) -> engine::Result<Box<Cursor + 'b>> {
-        Ok(box RegionSnapshot::iter(self, upper_bound))
+    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>) -> engine::Result<Cursor<'b>> {
+        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound)))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self,
                    cf: CfName,
                    upper_bound: Option<&[u8]>)
-                   -> engine::Result<Box<Cursor + 'b>> {
-        Ok(box try!(RegionSnapshot::iter_cf(self, cf, upper_bound)))
+                   -> engine::Result<Cursor<'b>> {
+        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound))))
     }
 }
 
-impl<'a> Cursor for RegionIterator<'a> {
+impl<'a> EngineIterator for RegionIterator<'a> {
     fn next(&mut self) -> bool {
         RegionIterator::next(self)
     }

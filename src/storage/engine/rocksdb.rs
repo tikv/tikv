@@ -20,7 +20,7 @@ use raftstore::store::engine::{Snapshot as RocksSnapshot, Peekable, Iterable};
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
-use super::{Engine, Snapshot, Modify, Cursor, Callback, TEMP_DIR, Result, Error};
+use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, TEMP_DIR, Result, Error};
 use tempdir::TempDir;
 
 enum Task {
@@ -166,19 +166,19 @@ impl Snapshot for RocksSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>) -> Result<Box<Cursor + 'b>> {
+    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>) -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create iterator");
-        Ok(box self.new_iterator(upper_bound))
+        Ok(Cursor::new(self.new_iterator(upper_bound)))
     }
 
     #[allow(needless_lifetimes)]
-    fn iter_cf<'b>(&'b self, cf: CfName, upper_bound: Option<&[u8]>) -> Result<Box<Cursor + 'b>> {
+    fn iter_cf<'b>(&'b self, cf: CfName, upper_bound: Option<&[u8]>) -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create cf iterator");
-        Ok(box try!(self.new_iterator_cf(cf, upper_bound)))
+        Ok(Cursor::new(try!(self.new_iterator_cf(cf, upper_bound))))
     }
 }
 
-impl<'a> Cursor for DBIterator<'a> {
+impl<'a> EngineIterator for DBIterator<'a> {
     fn next(&mut self) -> bool {
         DBIterator::next(self)
     }

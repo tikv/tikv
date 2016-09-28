@@ -81,12 +81,12 @@ pub trait Snapshot: Send {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
-    fn iter<'a>(&'a self, upper_bound: Option<&[u8]>) -> Result<Box<Cursor + 'a>>;
+    fn iter<'a>(&'a self, upper_bound: Option<&[u8]>) -> Result<Cursor<'a>>;
     #[allow(needless_lifetimes)]
-    fn iter_cf<'a>(&'a self, cf: CfName, upper_bound: Option<&[u8]>) -> Result<Box<Cursor + 'a>>;
+    fn iter_cf<'a>(&'a self, cf: CfName, upper_bound: Option<&[u8]>) -> Result<Cursor<'a>>;
 }
 
-pub trait Cursor {
+pub trait Iterator {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn seek(&mut self, key: &Key) -> Result<bool>;
@@ -96,25 +96,56 @@ pub trait Cursor {
 
     fn key(&self) -> &[u8];
     fn value(&self) -> &[u8];
+}
+
+pub struct Cursor<'a> {
+    iter: Box<Iterator + 'a>,
+    upper: Option<Vec<u8>>,
+    lower: Option<Vec<u8>>,
+}
+
+impl<'a> Cursor<'a> {
+    pub fn new<T: Iterator + 'a>(iter: T) -> Cursor<'a> {
+        Cursor {
+            iter: Box::new(iter),
+            upper: None,
+            lower: None,
+        }
+    }
+
+    pub fn seek(&mut self, key: &Key) -> Result<bool> {
+        if self.lower.as_ref().map_or(false, |k| k <= key.encoded()) {
+            return Ok(false);
+        }
+
+        if !try!(self.iter.seek(key)) {
+            self.lower = Some(key.encoded().to_owned());
+            return Ok(false);
+        }
+        Ok(true)
+    }
 
     /// Seek the specified key.
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
-    fn near_seek(&mut self, key: &Key) -> Result<bool> {
-        if !self.valid() {
+    pub fn near_seek(&mut self, key: &Key) -> Result<bool> {
+        if !self.iter.valid() {
             return self.seek(key);
         }
-        if self.key() == &**key.encoded() {
+        if self.iter.key() == &**key.encoded() {
             return Ok(true);
         }
-        let (nav, ord): (fn(&mut _) -> bool, Ordering) = if self.key() > &**key.encoded() {
-            (Cursor::prev, Ordering::Greater)
+        if self.lower.as_ref().map_or(false, |k| k <= key.encoded()) {
+            return Ok(false);
+        }
+        let (nav, ord): (fn(&mut _) -> bool, Ordering) = if self.iter.key() > &**key.encoded() {
+            (Iterator::prev, Ordering::Greater)
         } else {
-            (Cursor::next, Ordering::Less)
+            (Iterator::next, Ordering::Less)
         };
         let mut cnt = 0;
-        while self.key().cmp(key.encoded()) == ord && nav(self) {
+        while self.iter.key().cmp(key.encoded()) == ord && nav(self.iter.as_mut()) {
             cnt += 1;
             if cnt >= SEEK_BOUND {
                 CURSOR_OVER_SEEK_BOUND_COUNTER.inc();
@@ -123,54 +154,110 @@ pub trait Cursor {
             }
         }
         if ord == Ordering::Greater {
-            if self.valid() {
-                if self.key() < &**key.encoded() {
-                    self.next();
+            if self.iter.valid() {
+                if self.iter.key() < &**key.encoded() {
+                    self.iter.next();
                 }
             } else {
-                self.seek_to_first();
+                self.iter.seek_to_first();
             }
         }
         // TODO: check region range.
-        Ok(self.valid())
+        if !self.iter.valid() {
+            self.lower = Some(key.encoded().to_owned());
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// Get the value of specified key.
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should `seek` first.
-    fn get(&mut self, key: &Key) -> Result<Option<&[u8]>> {
-        if try!(self.near_seek(key)) && self.key() == &**key.encoded() {
-            Ok(Some(self.value()))
+    pub fn get(&mut self, key: &Key) -> Result<Option<&[u8]>> {
+        if try!(self.near_seek(key)) && self.iter.key() == &**key.encoded() {
+            Ok(Some(self.iter.value()))
         } else {
             Ok(None)
         }
     }
 
-    fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
-        if !try!(self.seek(key)) && !self.seek_to_last() {
+    pub fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
+        if self.upper.as_ref().map_or(false, |k| k >= key.encoded()) {
+            return Ok(false);
+        }
+        if !try!(self.seek(key)) && !self.iter.seek_to_last() {
+            self.upper = Some(key.encoded().to_owned());
             return Ok(false);
         }
 
-        while self.key() >= key.encoded().as_slice() && self.prev() {
+        while self.iter.key() >= key.encoded().as_slice() && self.iter.prev() {
         }
 
-        Ok(self.valid())
+        if !self.iter.valid() {
+            self.upper = Some(key.encoded().to_owned());
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// Reverse seek the specified key.
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
-    fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
-        if !try!(self.near_seek(key)) && !self.seek_to_last() {
+    pub fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
+        if self.upper.as_ref().map_or(false, |k| k >= key.encoded()) {
+            return Ok(false);
+        }
+        
+        if !try!(self.near_seek(key)) && !self.iter.seek_to_last() {
+            self.upper = Some(key.encoded().to_owned());
             return Ok(false);
         }
 
-        while self.key() >= key.encoded().as_slice() && self.prev() {
+        while self.iter.key() >= key.encoded().as_slice() && self.iter.prev() {
         }
 
-        Ok(self.valid())
+        if !self.iter.valid() {
+            self.upper = Some(key.encoded().to_owned());
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    #[inline]
+    pub fn key(&self) -> &[u8] {
+        self.iter.key()
+    }
+
+    #[inline]
+    pub fn value(&self) -> &[u8] {
+        self.iter.value()
+    }
+
+    #[inline]
+    pub fn seek_to_first(&mut self) -> bool {
+        self.iter.seek_to_first()
+    }
+
+    #[inline]
+    pub fn seek_to_last(&mut self) -> bool {
+        self.iter.seek_to_last()
+    }
+
+    #[inline]
+    pub fn next(&mut self) -> bool {
+        self.iter.next()
+    }
+
+    #[inline]
+    pub fn prev(&mut self) -> bool {
+        self.iter.prev()
+    }
+
+    #[inline]
+    pub fn valid(&self) -> bool {
+        self.iter.valid()
     }
 }
 
@@ -373,14 +460,13 @@ mod tests {
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut cursor = snapshot.iter(None).unwrap();
-        let cursor_mut = cursor.as_mut();
-        assert_near_seek(cursor_mut, b"x", (b"x", b"1"));
-        assert_near_seek(cursor_mut, b"a", (b"x", b"1"));
-        assert_near_reverse_seek(cursor_mut, b"z1", (b"z", b"2"));
-        assert_near_reverse_seek(cursor_mut, b"x1", (b"x", b"1"));
-        assert_near_seek(cursor_mut, b"y", (b"z", b"2"));
-        assert_near_seek(cursor_mut, b"x\x00", (b"z", b"2"));
-        assert!(!cursor_mut.near_seek(&make_key(b"z\x00")).unwrap());
+        assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
+        assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
+        assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
+        assert_near_reverse_seek(&mut cursor, b"x1", (b"x", b"1"));
+        assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
+        assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
+        assert!(!cursor.near_seek(&make_key(b"z\x00")).unwrap());
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
@@ -388,9 +474,8 @@ mod tests {
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut cursor = snapshot.iter(None).unwrap();
-        let cursor_mut = cursor.as_mut();
-        assert_near_seek(cursor_mut, b"x", (b"x", b"1"));
-        assert_near_seek(cursor_mut, b"z", (b"z", b"2"));
+        assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
+        assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
 
         must_delete(engine, b"x");
         must_delete(engine, b"z");
