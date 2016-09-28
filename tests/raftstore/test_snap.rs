@@ -62,7 +62,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let value = format!("{:01024}", 0);
     must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
     let stale = Arc::new(AtomicBool::new(false));
-    cluster.sim.wl().add_recv_filter(3, box FilterLeadingDuplicatedSnap::new(stale.clone()));
+    cluster.sim.wl().add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(stale.clone()));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
     loop {
@@ -117,9 +117,9 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // isolate node 3 for region 1, but keep the heartbeat to make
     // 3 not vote after filters are cleared.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 3)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
         .msg_type(MessageType::MsgSnapshot)));
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 3)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
         .msg_type(MessageType::MsgAppend)));
     cluster.must_put(b"k1", b"v1");
 
@@ -202,14 +202,14 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
     // peer 2 can't step to leader.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(r1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(r1, 2)
         .msg_type(MessageType::MsgRequestVote)
         .direction(Direction::Send)));
     cluster.must_transfer_leader(r1, new_peer(1, 1));
     cluster.must_put(b"k3", b"v3");
     // Now peer 1 can't send snapshot to peer 2
-    cluster.sim.wl().add_recv_filter(3, box PauseFirstSnap::new());
-    cluster.sim.wl().add_recv_filter(1, box PauseFirstSnap::new());
+    cluster.sim.wl().add_recv_filter(3, box PauseFirstSnapshotFilter::new());
+    cluster.sim.wl().add_recv_filter(1, box PauseFirstSnapshotFilter::new());
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let region = cluster.get_region(b"k1");
     // TODO: should check whether snapshot has been sent before split.
@@ -248,7 +248,7 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_cf_equal(&engine1, cf, b"k2", b"v2");
 
     // Isolate node 1.
-    cluster.add_send_filter(Isolate::new(1));
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
 
     // Write some data to trigger snapshot.
     for i in 100..110 {
