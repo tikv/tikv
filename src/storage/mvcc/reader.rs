@@ -55,7 +55,7 @@ impl<'a> MvccReader<'a> {
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.used_for_scan && self.lock_cursor.is_none() {
-            self.lock_cursor = Some(try!(self.snapshot.iter_cf(CF_LOCK, None)));
+            self.lock_cursor = Some(try!(self.snapshot.iter_cf(CF_LOCK, None, true)));
         }
 
         if let Some(ref mut cursor) = self.lock_cursor {
@@ -86,12 +86,13 @@ impl<'a> MvccReader<'a> {
                        -> Result<Option<(u64, Write)>> {
         if self.used_for_scan {
             if self.write_cursor.is_none() {
-                self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE, None)));
+                self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE, None, false)));
             }
         } else {
             let upper_bound_key = key.append_ts(0u64);
             let upper_bound = upper_bound_key.encoded().as_slice();
-            self.write_cursor = Some(try!(self.snapshot.iter_cf(CF_WRITE, Some(upper_bound))));
+            self.write_cursor = Some(try!(self.snapshot
+                .iter_cf(CF_WRITE, Some(upper_bound), false)));
         }
 
         let mut cursor = self.write_cursor.as_mut().unwrap();
@@ -155,7 +156,7 @@ impl<'a> MvccReader<'a> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            self.data_cursor = Some(try!(self.snapshot.iter(None)));
+            self.data_cursor = Some(try!(self.snapshot.iter(None, false)));
         }
         Ok(())
     }
@@ -199,7 +200,7 @@ impl<'a> MvccReader<'a> {
         where F: Fn(&Lock) -> bool
     {
         if self.lock_cursor.is_none() {
-            self.lock_cursor = Some(try!(self.snapshot.iter_cf(CF_LOCK, None)));
+            self.lock_cursor = Some(try!(self.snapshot.iter_cf(CF_LOCK, None, false)));
         }
         let mut cursor = self.lock_cursor.as_mut().unwrap();
         cursor.seek_to_first();
@@ -219,7 +220,7 @@ impl<'a> MvccReader<'a> {
                      mut start: Option<Key>,
                      limit: usize)
                      -> Result<(Vec<Key>, Option<Key>)> {
-        let mut cursor = try!(self.snapshot.iter_cf(CF_WRITE, None));
+        let mut cursor = try!(self.snapshot.iter_cf(CF_WRITE, None, false));
         let mut keys = vec![];
         loop {
             let ok = match start {

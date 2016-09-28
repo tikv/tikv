@@ -136,7 +136,7 @@ fn assert_none_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8]) {
 
 fn assert_seek(ctx: &Context, engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot.iter(None).unwrap();
+    let mut iter = snapshot.iter(None, false).unwrap();
     iter.seek(&make_key(key)).unwrap();
     assert_eq!((iter.key(), iter.value()),
                (&*bytes::encode_bytes(pair.0), pair.1));
@@ -187,7 +187,7 @@ fn seek(ctx: &Context, engine: &Engine) {
     assert_seek(ctx, engine, b"y", (b"z", b"2"));
     assert_seek(ctx, engine, b"x\x00", (b"z", b"2"));
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot.iter(None).unwrap();
+    let mut iter = snapshot.iter(None, false).unwrap();
     assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
@@ -197,7 +197,7 @@ fn near_seek(ctx: &Context, engine: &Engine) {
     must_put(ctx, engine, b"x", b"1");
     must_put(ctx, engine, b"z", b"2");
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut cursor = snapshot.iter(None).unwrap();
+    let mut cursor = snapshot.iter(None, false).unwrap();
     assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
     assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
     assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));

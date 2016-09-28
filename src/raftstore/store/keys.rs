@@ -147,14 +147,8 @@ pub fn region_state_key(region_id: u64) -> Vec<u8> {
     make_region_meta_key(region_id, REGION_STATE_SUFFIX)
 }
 
-pub fn validate_data_key(key: &[u8]) -> Result<()> {
-    if !key.starts_with(DATA_PREFIX_KEY) {
-        return Err(box_err!("invalid data key {}, must start with {}",
-                            escape(key),
-                            DATA_PREFIX));
-    }
-
-    Ok(())
+pub fn validate_data_key(key: &[u8]) -> bool {
+    key.starts_with(DATA_PREFIX_KEY)
 }
 
 pub fn data_key(key: &[u8]) -> Vec<u8> {
@@ -165,7 +159,7 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
 }
 
 pub fn origin_key(key: &[u8]) -> &[u8] {
-    validate_data_key(key).expect("");
+    assert!(validate_data_key(key));
     &key[DATA_PREFIX_KEY.len()..]
 }
 
@@ -268,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_data_key() {
-        validate_data_key(&data_key(b"abc")).unwrap();
-        validate_data_key(b"abc").unwrap_err();
+        assert!(validate_data_key(&data_key(b"abc")));
+        assert!(!validate_data_key(b"abc"));
     }
 }

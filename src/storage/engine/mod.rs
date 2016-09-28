@@ -81,9 +81,13 @@ pub trait Snapshot: Send {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
-    fn iter<'a>(&'a self, upper_bound: Option<&[u8]>) -> Result<Cursor<'a>>;
+    fn iter<'a>(&'a self, upper_bound: Option<&[u8]>, linear: bool) -> Result<Cursor<'a>>;
     #[allow(needless_lifetimes)]
-    fn iter_cf<'a>(&'a self, cf: CfName, upper_bound: Option<&[u8]>) -> Result<Cursor<'a>>;
+    fn iter_cf<'a>(&'a self,
+                   cf: CfName,
+                   upper_bound: Option<&[u8]>,
+                   linear: bool)
+                   -> Result<Cursor<'a>>;
 }
 
 pub trait Iterator {
@@ -94,20 +98,27 @@ pub trait Iterator {
     fn seek_to_last(&mut self) -> bool;
     fn valid(&self) -> bool;
 
+    fn validate_key(&self, _: &Key) -> Result<()> {
+        Ok(())
+    }
+
     fn key(&self) -> &[u8];
     fn value(&self) -> &[u8];
 }
 
 pub struct Cursor<'a> {
     iter: Box<Iterator + 'a>,
+    /// Indicate whether the cursor will always be seek forward or always be seek backward.
+    linear: bool,
     upper: Option<Vec<u8>>,
     lower: Option<Vec<u8>>,
 }
 
 impl<'a> Cursor<'a> {
-    pub fn new<T: Iterator + 'a>(iter: T) -> Cursor<'a> {
+    pub fn new<T: Iterator + 'a>(iter: T, linear: bool) -> Cursor<'a> {
         Cursor {
             iter: Box::new(iter),
+            linear: linear,
             upper: None,
             lower: None,
         }
@@ -115,7 +126,13 @@ impl<'a> Cursor<'a> {
 
     pub fn seek(&mut self, key: &Key) -> Result<bool> {
         if self.lower.as_ref().map_or(false, |k| k <= key.encoded()) {
+            try!(self.iter.validate_key(key));
             return Ok(false);
+        }
+
+        if self.linear && self.valid() && self.iter.key() >= key.encoded() {
+            // should we check if the iterator is actually linear?
+            return Ok(true);
         }
 
         if !try!(self.iter.seek(key)) {
@@ -133,19 +150,21 @@ impl<'a> Cursor<'a> {
         if !self.iter.valid() {
             return self.seek(key);
         }
-        if self.iter.key() == &**key.encoded() {
+        let ord = self.iter.key().cmp(key.encoded());
+        if ord == Ordering::Equal || (self.linear && ord == Ordering::Greater) {
             return Ok(true);
         }
         if self.lower.as_ref().map_or(false, |k| k <= key.encoded()) {
+            try!(self.iter.validate_key(key));
             return Ok(false);
         }
-        let (nav, ord): (fn(&mut _) -> bool, Ordering) = if self.iter.key() > &**key.encoded() {
-            (Iterator::prev, Ordering::Greater)
+        let nav: fn(&mut _) -> bool = if ord == Ordering::Greater {
+            Iterator::prev
         } else {
-            (Iterator::next, Ordering::Less)
+            Iterator::next
         };
         let mut cnt = 0;
-        while self.iter.key().cmp(key.encoded()) == ord && nav(self.iter.as_mut()) {
+        while nav(self.iter.as_mut()) && self.iter.key().cmp(key.encoded()) == ord {
             cnt += 1;
             if cnt >= SEEK_BOUND {
                 CURSOR_OVER_SEEK_BOUND_COUNTER.inc();
@@ -184,7 +203,11 @@ impl<'a> Cursor<'a> {
 
     pub fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
         if self.upper.as_ref().map_or(false, |k| k >= key.encoded()) {
+            try!(self.iter.validate_key(key));
             return Ok(false);
+        }
+        if self.linear && self.valid() && self.iter.key() < key.encoded() {
+            return Ok(true);
         }
         if !try!(self.seek(key)) && !self.iter.seek_to_last() {
             self.upper = Some(key.encoded().to_owned());
@@ -207,9 +230,14 @@ impl<'a> Cursor<'a> {
     /// around `key`, otherwise you should use `reverse_seek` instead.
     pub fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
         if self.upper.as_ref().map_or(false, |k| k >= key.encoded()) {
+            try!(self.iter.validate_key(key));
             return Ok(false);
         }
-        
+
+        if self.linear && self.valid() && self.iter.key() < key.encoded() {
+            return Ok(true);
+        }
+
         if !try!(self.near_seek(key)) && !self.iter.seek_to_last() {
             self.upper = Some(key.encoded().to_owned());
             return Ok(false);
@@ -246,6 +274,7 @@ impl<'a> Cursor<'a> {
     }
 
     #[inline]
+    #[allow(should_implement_trait)]
     pub fn next(&mut self) -> bool {
         self.iter.next()
     }
@@ -386,7 +415,7 @@ mod tests {
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None).unwrap();
+        let mut iter = snapshot.iter(None, false).unwrap();
         iter.seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -394,7 +423,7 @@ mod tests {
 
     fn assert_reverse_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None).unwrap();
+        let mut iter = snapshot.iter(None, false).unwrap();
         iter.reverse_seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -448,7 +477,7 @@ mod tests {
         assert_reverse_seek(engine, b"y", (b"x", b"1"));
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None).unwrap();
+        let mut iter = snapshot.iter(None, false).unwrap();
         assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
         assert!(!iter.reverse_seek(&make_key(b"x")).unwrap());
         must_delete(engine, b"x");
@@ -459,7 +488,7 @@ mod tests {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None).unwrap();
+        let mut cursor = snapshot.iter(None, false).unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
         assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
@@ -473,7 +502,7 @@ mod tests {
             must_put(engine, key.as_bytes(), b"3");
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None).unwrap();
+        let mut cursor = snapshot.iter(None, false).unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
 
@@ -482,6 +511,80 @@ mod tests {
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
             must_delete(engine, key.as_bytes());
+        }
+    }
+
+    // TODO: refactor engine tests
+    #[test]
+    fn test_leaner_seek() {
+        let dir = TempDir::new("rocksdb_test").unwrap();
+        let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
+                           TEST_ENGINE_CFS)
+            .unwrap();
+        for i in 50..100 {
+            let key = format!("key_{}", i * 2);
+            let value = format!("value_{}", i);
+            must_put(e.as_ref(), key.as_bytes(), value.as_bytes());
+        }
+        let snapshot = e.snapshot(&Context::new()).unwrap();
+
+        let mut cursor = snapshot.iter(None, true).unwrap();
+        let mut near_cursor = snapshot.iter(None, true).unwrap();
+        let mut reverse_cursor = snapshot.iter(None, true).unwrap();
+        let mut reverse_near_cursor = snapshot.iter(None, true).unwrap();
+
+        for mut i in 0..100 * 2 - 1 {
+            let mut key = format!("key_{:03}", i);
+
+            let exp_kv = if i <= 100 {
+                Some(("key_100".to_owned(), "value_50".to_owned()))
+            } else if i <= 198 {
+                Some((format!("key_{}", (i + 1) / 2 * 2), format!("value_{}", (i + 1) / 2)))
+            } else {
+                None
+            };
+            match exp_kv {
+                Some((k, v)) => {
+                    assert!(cursor.seek(&make_key(key.as_bytes())).unwrap(), key);
+                    assert_eq!((cursor.key().to_vec(), cursor.value()),
+                               (bytes::encode_bytes(k.as_bytes()), v.as_bytes()));
+                    assert_near_seek(&mut near_cursor,
+                                     key.as_bytes(),
+                                     (k.as_bytes(), v.as_bytes()));
+                }
+                None => {
+                    let seek_key = make_key(key.as_bytes());
+                    assert!(!cursor.seek(&seek_key).unwrap(), key);
+                    assert!(!near_cursor.near_seek(&seek_key).unwrap(), key);
+                }
+            }
+
+            i = 199 - i;
+            key = format!("key_{:03}", i);
+            let exp_reverse_kv = if i <= 100 {
+                None
+            } else if i <= 198 {
+                Some((format!("key_{}", (i - 1) / 2 * 2), format!("value_{}", (i - 1) / 2)))
+            } else {
+                Some(("key_198".to_owned(), "value_99".to_owned()))
+            };
+            match exp_reverse_kv {
+                Some((k, v)) => {
+                    assert!(reverse_cursor.reverse_seek(&make_key(key.as_bytes())).unwrap(),
+                            key);
+                    assert_eq!((reverse_cursor.key().to_vec(), reverse_cursor.value()),
+                               (bytes::encode_bytes(k.as_bytes()), v.as_bytes()));
+                    assert_near_reverse_seek(&mut reverse_near_cursor,
+                                             key.as_bytes(),
+                                             (k.as_bytes(), v.as_bytes()));
+                }
+                None => {
+                    let seek_key = make_key(key.as_bytes());
+                    assert!(!reverse_cursor.reverse_seek(&seek_key).unwrap(), key);
+                    assert!(!reverse_near_cursor.near_reverse_seek(&seek_key).unwrap(),
+                            key);
+                }
+            }
         }
     }
 

@@ -20,7 +20,8 @@ use raftstore::store::engine::{Snapshot as RocksSnapshot, Peekable, Iterable};
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
-use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, TEMP_DIR, Result, Error};
+use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, TEMP_DIR,
+            Result, Error};
 use tempdir::TempDir;
 
 enum Task {
@@ -166,15 +167,19 @@ impl Snapshot for RocksSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>) -> Result<Cursor<'b>> {
+    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>, linear: bool) -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create iterator");
-        Ok(Cursor::new(self.new_iterator(upper_bound)))
+        Ok(Cursor::new(self.new_iterator(upper_bound), linear))
     }
 
     #[allow(needless_lifetimes)]
-    fn iter_cf<'b>(&'b self, cf: CfName, upper_bound: Option<&[u8]>) -> Result<Cursor<'b>> {
+    fn iter_cf<'b>(&'b self,
+                   cf: CfName,
+                   upper_bound: Option<&[u8]>,
+                   linear: bool)
+                   -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create cf iterator");
-        Ok(Cursor::new(try!(self.new_iterator_cf(cf, upper_bound))))
+        Ok(Cursor::new(try!(self.new_iterator_cf(cf, upper_bound)), linear))
     }
 }
 

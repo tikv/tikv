@@ -276,16 +276,17 @@ impl Snapshot for RegionSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>) -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound)))
+    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>, linear: bool) -> engine::Result<Cursor<'b>> {
+        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound), linear))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self,
                    cf: CfName,
-                   upper_bound: Option<&[u8]>)
+                   upper_bound: Option<&[u8]>,
+                   linear: bool)
                    -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound))))
+        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound)), linear))
     }
 }
 
@@ -299,10 +300,7 @@ impl<'a> EngineIterator for RegionIterator<'a> {
     }
 
     fn seek(&mut self, key: &Key) -> engine::Result<bool> {
-        RegionIterator::seek(self, key.encoded()).map_err(|e| {
-            let pb = e.into();
-            engine::Error::Request(pb)
-        })
+        RegionIterator::seek(self, key.encoded()).map_err(From::from)
     }
 
     fn seek_to_first(&mut self) -> bool {
@@ -323,5 +321,9 @@ impl<'a> EngineIterator for RegionIterator<'a> {
 
     fn value(&self) -> &[u8] {
         RegionIterator::value(self)
+    }
+
+    fn validate_key(&self, key: &Key) -> engine::Result<()> {
+        self.should_seekable(key.encoded()).map_err(From::from)
     }
 }
