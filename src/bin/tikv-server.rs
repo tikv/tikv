@@ -37,7 +37,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use getopts::{Options, Matches};
-use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
+use rocksdb::{Options as RocksdbOptions, BlockBasedOptions, DBCompactionStyle};
 use mio::tcp::TcpListener;
 use mio::EventLoop;
 use fs2::FileExt;
@@ -386,6 +386,8 @@ fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
     // set level0_file_num_compaction_trigger = 1 is very important,
     // this will result in fewer sst files in lock cf.
     opts.set_level_zero_file_num_compaction_trigger(1);
+
+    opts.set_compaction_style(DBCompactionStyle::DBUniversal);
 
     opts
 }
