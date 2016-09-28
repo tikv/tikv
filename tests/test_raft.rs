@@ -1615,10 +1615,12 @@ fn test_read_only_option_lease() {
     assert_eq!(nt.peers[&1].state, StateRole::Leader);
 
     let mut tests = vec![
-        (2, 10, 11, "ctx1"),
-        (3, 10, 21, "ctx2"),
-        (2, 10, 31, "ctx3"),
-        (3, 10, 41, "ctx4"),
+        (1, 10, 11, "ctx1"),
+        (2, 10, 21, "ctx2"),
+        (3, 10, 31, "ctx3"),
+        (1, 10, 41, "ctx4"),
+        (2, 10, 51, "ctx5"),
+        (3, 10, 61, "ctx6"),
     ];
 
     for (i, (id, proposals, wri, wctx)) in tests.drain(..).enumerate() {
