@@ -63,7 +63,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, key, value);
 
     // isolate peer 2 from other part of the cluster
-    cluster.add_send_filter(Isolate::new(2));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     // add peer [(4, 4), (5, 5), (6, 6)]
     pd_client.must_add_peer(r1, new_peer(4, 4));
@@ -131,7 +131,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let r1 = cluster.run_conf_change();
     // block peer (2, 2) at receiving snapshot, but not the heartbeat
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgSnapshot)));
 
     pd_client.must_add_peer(r1, new_peer(2, 2));
@@ -140,7 +140,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(Duration::from_millis(60));
 
     // and then isolate peer (2, 2) from peer (1, 1)
-    cluster.add_send_filter(Isolate::new(2));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     // wait for max_leader_missing_duration to timeout
     thread::sleep(max_leader_missing_duration);

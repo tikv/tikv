@@ -7,7 +7,7 @@ use kvproto::pdpb;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::cluster::{Cluster, Simulator};
-use super::transport_simulate::Isolate;
+use super::transport_simulate::IsolationFilterFactory;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
     let begin = Instant::now();
@@ -30,7 +30,7 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     // Isolate node.
     let node = cluster.leader_of_region(1).unwrap();
     let node_id = node.get_id();
-    cluster.add_send_filter(Isolate::new(node_id));
+    cluster.add_send_filter(IsolationFilterFactory::new(node_id));
     debug!("node: {:?}", node);
 
     // Kill another node.

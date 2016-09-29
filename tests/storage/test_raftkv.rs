@@ -4,7 +4,7 @@ use tikv::storage::{Key, CfName, CF_DEFAULT, CF_RAFT};
 use tikv::util::codec::bytes;
 use tikv::util::escape;
 use kvproto::kvrpcpb::Context;
-use raftstore::transport_simulate::Isolate;
+use raftstore::transport_simulate::IsolationFilterFactory;
 use raftstore::server::new_server_cluster_with_cfs;
 
 fn test_raftkv(read_quorum: bool) {
@@ -80,7 +80,7 @@ fn test_read_leader_in_lease(read_quorum: bool) {
     must_put(&ctx, storage.as_ref(), k2, v2);
 
     // isolate leader
-    cluster.add_send_filter(Isolate::new(leader.get_store_id()));
+    cluster.add_send_filter(IsolationFilterFactory::new(leader.get_store_id()));
 
     // leader still in lease, check if can read on leader
     assert_eq!(can_read(&ctx, storage.as_ref(), k2, v2), !read_quorum);

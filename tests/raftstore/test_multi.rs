@@ -165,7 +165,7 @@ fn test_multi_node_base() {
 
 fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(FilterDropPacket::new(30)));
+    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
     test_multi_base_after_bootstrap(cluster);
 }
 
@@ -193,7 +193,7 @@ fn test_multi_server_base() {
 
 fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(FilterDelay::new(Duration::from_millis(30))));
+    cluster.add_send_filter(CloneFilterFactory(DelayFilter::new(Duration::from_millis(30))));
     test_multi_base_after_bootstrap(cluster);
 }
 
@@ -304,7 +304,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // So peer 3 won't replicate any message of the region but still can vote.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 3)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
         .msg_type(MessageType::MsgAppend)));
     cluster.must_put(b"k1", b"v1");
 
@@ -321,23 +321,23 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
     // hack: first MsgAppend will append log, second MsgAppend will set commit index,
     // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv)
         .allow(1)));
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it becomes leader.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 1)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
         .msg_type(MessageType::MsgHeartbeatResponse)
         .direction(Direction::Send)));
     // Make peer 2's msg won't be replicated when it becomes leader,
     // so the uncommitted entries won't be applied immediatly.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 1)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv)));
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgHeartbeat)
         .direction(Direction::Recv)));
     debug!("putting k2");
@@ -405,20 +405,20 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // hack: first MsgAppend will append log, second MsgAppend will set commit index,
     // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv)
         .allow(1)));
 
     // Make peer 2's msg won't be replicated when it becomes leader,
     // so the uncommitted entries won't be applied immediatly.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Send)));
 
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgHeartbeat)
         .direction(Direction::Recv)));
 
@@ -487,11 +487,11 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // stop peer 2 replicate messages.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgAppend)
         .direction(Direction::Recv)));
     // peer 2 can't step to leader.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgRequestVote)
         .direction(Direction::Send)));
 
