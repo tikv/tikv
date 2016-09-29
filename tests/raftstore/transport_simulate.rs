@@ -57,34 +57,34 @@ pub type SendFilter = Box<Filter<RaftMessage>>;
 pub type RecvFilter = Box<Filter<StoreMsg>>;
 
 #[derive(Clone)]
-pub struct FilterDropPacket {
+pub struct DropPacketFilter {
     rate: u32,
 }
 
-impl FilterDropPacket {
-    pub fn new(rate: u32) -> FilterDropPacket {
-        FilterDropPacket { rate: rate }
+impl DropPacketFilter {
+    pub fn new(rate: u32) -> DropPacketFilter {
+        DropPacketFilter { rate: rate }
     }
 }
 
-#[derive(Clone)]
-pub struct FilterDelay {
-    duration: time::Duration,
-}
-
-impl FilterDelay {
-    pub fn new(duration: time::Duration) -> FilterDelay {
-        FilterDelay { duration: duration }
-    }
-}
-
-impl<M> Filter<M> for FilterDropPacket {
+impl<M> Filter<M> for DropPacketFilter {
     fn before(&self, msgs: &mut Vec<M>) {
         msgs.retain(|_| rand::random::<u32>() % 100u32 >= self.rate)
     }
 }
 
-impl<M> Filter<M> for FilterDelay {
+#[derive(Clone)]
+pub struct DelayFilter {
+    duration: time::Duration,
+}
+
+impl DelayFilter {
+    pub fn new(duration: time::Duration) -> DelayFilter {
+        DelayFilter { duration: duration }
+    }
+}
+
+impl<M> Filter<M> for DelayFilter {
     fn before(&self, _: &mut Vec<M>) {
         thread::sleep(self.duration);
     }
@@ -198,18 +198,18 @@ impl Filter<RaftMessage> for PartitionFilter {
     }
 }
 
-pub struct Partition {
+pub struct PartitionFilterFactory {
     s1: Vec<u64>,
     s2: Vec<u64>,
 }
 
-impl Partition {
-    pub fn new(s1: Vec<u64>, s2: Vec<u64>) -> Partition {
-        Partition { s1: s1, s2: s2 }
+impl PartitionFilterFactory {
+    pub fn new(s1: Vec<u64>, s2: Vec<u64>) -> PartitionFilterFactory {
+        PartitionFilterFactory { s1: s1, s2: s2 }
     }
 }
 
-impl FilterFactory for Partition {
+impl FilterFactory for PartitionFilterFactory {
     fn generate(&self, node_id: u64) -> Vec<SendFilter> {
         if self.s1.contains(&node_id) {
             return vec![box PartitionFilter { node_ids: self.s2.clone() }];
@@ -218,20 +218,20 @@ impl FilterFactory for Partition {
     }
 }
 
-pub struct Isolate {
+pub struct IsolationFilterFactory {
     node_id: u64,
 }
 
-impl Isolate {
-    pub fn new(node_id: u64) -> Isolate {
-        Isolate { node_id: node_id }
+impl IsolationFilterFactory {
+    pub fn new(node_id: u64) -> IsolationFilterFactory {
+        IsolationFilterFactory { node_id: node_id }
     }
 }
 
-impl FilterFactory for Isolate {
+impl FilterFactory for IsolationFilterFactory {
     fn generate(&self, node_id: u64) -> Vec<SendFilter> {
         if node_id == self.node_id {
-            return vec![box FilterDropPacket { rate: 100 }];
+            return vec![box DropPacketFilter { rate: 100 }];
         }
         vec![box PartitionFilter { node_ids: vec![self.node_id] }]
     }
@@ -264,7 +264,7 @@ impl Direction {
 ///
 /// If `msg_type` is None, all message will be filtered.
 #[derive(Clone)]
-pub struct FilterRegionPacket {
+pub struct RegionPacketFilter {
     region_id: u64,
     store_id: u64,
     direction: Direction,
@@ -272,7 +272,7 @@ pub struct FilterRegionPacket {
     msg_type: Option<MessageType>,
 }
 
-impl Filter<RaftMessage> for FilterRegionPacket {
+impl Filter<RaftMessage> for RegionPacketFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) {
         msgs.retain(|m| {
             let region_id = m.get_region_id();
@@ -294,9 +294,9 @@ impl Filter<RaftMessage> for FilterRegionPacket {
     }
 }
 
-impl FilterRegionPacket {
-    pub fn new(region_id: u64, store_id: u64) -> FilterRegionPacket {
-        FilterRegionPacket {
+impl RegionPacketFilter {
+    pub fn new(region_id: u64, store_id: u64) -> RegionPacketFilter {
+        RegionPacketFilter {
             region_id: region_id,
             store_id: store_id,
             direction: Direction::Both,
@@ -305,17 +305,17 @@ impl FilterRegionPacket {
         }
     }
 
-    pub fn direction(mut self, direction: Direction) -> FilterRegionPacket {
+    pub fn direction(mut self, direction: Direction) -> RegionPacketFilter {
         self.direction = direction;
         self
     }
 
-    pub fn msg_type(mut self, m_type: MessageType) -> FilterRegionPacket {
+    pub fn msg_type(mut self, m_type: MessageType) -> RegionPacketFilter {
         self.msg_type = Some(m_type);
         self
     }
 
-    pub fn allow(mut self, number: usize) -> FilterRegionPacket {
+    pub fn allow(mut self, number: usize) -> RegionPacketFilter {
         self.allow = Arc::new(AtomicUsize::new(number));
         self
     }
@@ -342,15 +342,15 @@ impl Filter<RaftMessage> for SnapshotFilter {
 }
 
 /// Pause Snap
-pub struct PauseFirstSnap {
+pub struct PauseFirstSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
     pending_msg: Mutex<Vec<StoreMsg>>,
 }
 
-impl PauseFirstSnap {
-    pub fn new() -> PauseFirstSnap {
-        PauseFirstSnap {
+impl PauseFirstSnapshotFilter {
+    pub fn new() -> PauseFirstSnapshotFilter {
+        PauseFirstSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale: AtomicBool::new(false),
             pending_msg: Mutex::new(vec![]),
@@ -358,7 +358,7 @@ impl PauseFirstSnap {
     }
 }
 
-impl Filter<StoreMsg> for PauseFirstSnap {
+impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
     fn before(&self, msgs: &mut Vec<StoreMsg>) {
         if self.stale.load(Ordering::Relaxed) {
             return;
@@ -402,15 +402,15 @@ impl Filter<StoreMsg> for PauseFirstSnap {
 ///
 /// It will pause the first snapshot and fiter out all the snapshot that
 /// are same as first snapshot msg until the first different snapshot shows up.
-pub struct FilterLeadingDuplicatedSnap {
+pub struct LeadingDuplicatedSnapshotFilter {
     dropped: AtomicBool,
     stale: Arc<AtomicBool>,
     last_msg: Mutex<Option<RaftMessage>>,
 }
 
-impl FilterLeadingDuplicatedSnap {
-    pub fn new(stale: Arc<AtomicBool>) -> FilterLeadingDuplicatedSnap {
-        FilterLeadingDuplicatedSnap {
+impl LeadingDuplicatedSnapshotFilter {
+    pub fn new(stale: Arc<AtomicBool>) -> LeadingDuplicatedSnapshotFilter {
+        LeadingDuplicatedSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale: stale,
             last_msg: Mutex::new(None),
@@ -418,7 +418,7 @@ impl FilterLeadingDuplicatedSnap {
     }
 }
 
-impl Filter<StoreMsg> for FilterLeadingDuplicatedSnap {
+impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
     fn before(&self, msgs: &mut Vec<StoreMsg>) {
         let mut last_msg = self.last_msg.lock().unwrap();
         let mut stale = self.stale.load(Ordering::Relaxed);

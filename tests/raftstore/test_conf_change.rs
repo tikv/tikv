@@ -414,7 +414,7 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // leader isolation
     cluster.must_transfer_leader(r1, new_peer(1, 1));
-    cluster.add_send_filter(Isolate::new(1));
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
 
     // refresh region info, maybe no need
     cluster.must_put(b"k1", b"v1");
