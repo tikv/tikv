@@ -288,7 +288,7 @@ struct StaleSnap {
 }
 
 impl Filter<RaftMessage> for Arc<StaleSnap> {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> FilterResult {
         let mut res = Vec::with_capacity(msgs.len());
         for mut m in msgs.drain(..) {
             if m.get_message().get_msg_type() == MessageType::MsgSnapshot &&
@@ -308,6 +308,7 @@ impl Filter<RaftMessage> for Arc<StaleSnap> {
             res.push(m);
         }
         *msgs = res;
+        FilterResult::default()
     }
 }
 
