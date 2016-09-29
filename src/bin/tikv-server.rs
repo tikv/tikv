@@ -37,7 +37,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use getopts::{Options, Matches};
-use rocksdb::{Options as RocksdbOptions, BlockBasedOptions, DBCompactionStyle};
+use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use mio::EventLoop;
 use fs2::FileExt;

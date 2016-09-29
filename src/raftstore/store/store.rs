@@ -1260,8 +1260,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
-        // Create a compact lock cf task and schedule directly.
-        let task = CompactTask::CompactLockCF { engine: self.engine.clone() };
+        // Create a compact lock cf task(compact whole range) and schedule directly.
+        let task = CompactTask::CompactLockCF {
+            engine: self.engine.clone(),
+            start_key: vec![],
+            end_key: vec![],
+        };
         if let Err(e) = self.compact_worker.schedule(task) {
             error!("failed to schedule compact lock cf task: {}", e);
         }

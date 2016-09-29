@@ -22,11 +22,12 @@ use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
 
-const LOCK_CF_START: &'static str = "";
-const LOCK_CF_END: &'static str = "";
-
 pub enum Task {
-    CompactLockCF { engine: Arc<DB> },
+    CompactLockCF {
+        engine: Arc<DB>,
+        start_key: Vec<u8>, // empty vec means smallest key
+        end_key: Vec<u8>, // empty vec means largest key
+    },
     CompactRaftLog {
         engine: Arc<DB>,
         region_id: u64,
@@ -43,7 +44,9 @@ impl Display for Task {
                        region_id,
                        compact_idx)
             }
-            Task::CompactLockCF { .. } => write!(f, "Compact Lock CF"),
+            Task::CompactLockCF { ref start_key, ref end_key, .. } => {
+                write!(f, "Compact Lock CF, range[{:?}, {:?}]", start_key, end_key)
+            }
         }
     }
 }
@@ -89,9 +92,13 @@ impl Runner {
         Ok(compact_idx - first_idx)
     }
 
-    fn compact_lock_cf(&mut self, engine: Arc<DB>) -> Result<(), Error> {
+    fn compact_lock_cf(&mut self,
+                       engine: Arc<DB>,
+                       start_key: &[u8],
+                       end_key: &[u8])
+                       -> Result<(), Error> {
         let cf_handle = box_try!(rocksdb::get_cf_handle(&engine, CF_LOCK));
-        engine.compact_range_cf(cf_handle, LOCK_CF_START.as_bytes(), LOCK_CF_END.as_bytes());
+        engine.compact_range_cf(cf_handle, start_key, end_key);
         Ok(())
     }
 }
@@ -108,9 +115,9 @@ impl Runnable<Task> for Runner {
                     Ok(n) => info!("[region {}] compact {} log entries", region_id, n),
                 }
             }
-            Task::CompactLockCF { engine } => {
+            Task::CompactLockCF { engine, start_key, end_key } => {
                 debug!("execute compact lock cf");
-                if let Err(e) = self.compact_lock_cf(engine.clone()) {
+                if let Err(e) = self.compact_lock_cf(engine, &start_key, &end_key) {
                     error!("execute compact lock cf failed, err {}", e);
                 }
             }
