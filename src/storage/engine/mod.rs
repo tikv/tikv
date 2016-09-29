@@ -152,7 +152,6 @@ impl<'a> Cursor<'a> {
         }
 
         if self.scan_mode == ScanMode::Forward && self.valid() && self.iter.key() >= key.encoded() {
-            // should we check if the iterator is actually linear?
             return Ok(true);
         }
 
@@ -532,9 +531,58 @@ mod tests {
         }
     }
 
+    macro_rules! assert_seek {
+        ($cursor:ident, $func:ident, $k:expr, $res:ident) => ({
+            assert!($cursor.$func(&$k).unwrap() == $res.is_some(), format!("{}", $k));
+            if let Some((ref k, ref v)) = $res {
+                assert_eq!($cursor.key(), bytes::encode_bytes(k.as_bytes()).as_slice());
+                assert_eq!($cursor.value(), v.as_bytes());
+            }
+        })
+    }
+
+    // use step to controll the distance between target key and current key in cursor.
+    fn test_linear_seek(snapshot: &Snapshot, mode: ScanMode, reverse: bool, step: usize) {
+        let mut cursor = snapshot.iter(None, mode).unwrap();
+        let mut near_cursor = snapshot.iter(None, mode).unwrap();
+
+        for (_, mut i) in (0..100 * 2 - 1).enumerate().filter(|&(i, _)| i % step == 0) {
+            if reverse {
+                i = 199 - i;
+            }
+            let key = format!("key_{:03}", i);
+            let seek_key = make_key(key.as_bytes());
+            let exp_kv = if i <= 100 {
+                if reverse {
+                    None
+                } else {
+                    Some(("key_100".to_owned(), "value_50".to_owned()))
+                }
+            } else if i <= 198 {
+                if reverse {
+                    Some((format!("key_{}", (i - 1) / 2 * 2), format!("value_{}", (i - 1) / 2)))
+                } else {
+                    Some((format!("key_{}", (i + 1) / 2 * 2), format!("value_{}", (i + 1) / 2)))
+                }
+            } else if reverse {
+                Some(("key_198".to_owned(), "value_99".to_owned()))
+            } else {
+                None
+            };
+
+            if reverse {
+                assert_seek!(cursor, reverse_seek, seek_key, exp_kv);
+                assert_seek!(near_cursor, near_reverse_seek, seek_key, exp_kv);
+            } else {
+                assert_seek!(cursor, seek, seek_key, exp_kv);
+                assert_seek!(near_cursor, near_seek, seek_key, exp_kv);
+            }
+        }
+    }
+
     // TODO: refactor engine tests
     #[test]
-    fn test_leaner_seek() {
+    fn test_linear() {
         let dir = TempDir::new("rocksdb_test").unwrap();
         let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
                            TEST_ENGINE_CFS)
@@ -546,62 +594,12 @@ mod tests {
         }
         let snapshot = e.snapshot(&Context::new()).unwrap();
 
-        let mut cursor = snapshot.iter(None, ScanMode::Forward).unwrap();
-        let mut near_cursor = snapshot.iter(None, ScanMode::Forward).unwrap();
-        let mut reverse_cursor = snapshot.iter(None, ScanMode::Mixed).unwrap();
-        let mut reverse_near_cursor = snapshot.iter(None, ScanMode::Mixed).unwrap();
-
-        for mut i in 0..100 * 2 - 1 {
-            let mut key = format!("key_{:03}", i);
-
-            let exp_kv = if i <= 100 {
-                Some(("key_100".to_owned(), "value_50".to_owned()))
-            } else if i <= 198 {
-                Some((format!("key_{}", (i + 1) / 2 * 2), format!("value_{}", (i + 1) / 2)))
-            } else {
-                None
-            };
-            match exp_kv {
-                Some((k, v)) => {
-                    assert!(cursor.seek(&make_key(key.as_bytes())).unwrap(), key);
-                    assert_eq!((cursor.key().to_vec(), cursor.value()),
-                               (bytes::encode_bytes(k.as_bytes()), v.as_bytes()));
-                    assert_near_seek(&mut near_cursor,
-                                     key.as_bytes(),
-                                     (k.as_bytes(), v.as_bytes()));
-                }
-                None => {
-                    let seek_key = make_key(key.as_bytes());
-                    assert!(!cursor.seek(&seek_key).unwrap(), key);
-                    assert!(!near_cursor.near_seek(&seek_key).unwrap(), key);
-                }
-            }
-
-            i = 199 - i;
-            key = format!("key_{:03}", i);
-            let exp_reverse_kv = if i <= 100 {
-                None
-            } else if i <= 198 {
-                Some((format!("key_{}", (i - 1) / 2 * 2), format!("value_{}", (i - 1) / 2)))
-            } else {
-                Some(("key_198".to_owned(), "value_99".to_owned()))
-            };
-            match exp_reverse_kv {
-                Some((k, v)) => {
-                    assert!(reverse_cursor.reverse_seek(&make_key(key.as_bytes())).unwrap(),
-                            key);
-                    assert_eq!((reverse_cursor.key().to_vec(), reverse_cursor.value()),
-                               (bytes::encode_bytes(k.as_bytes()), v.as_bytes()));
-                    assert_near_reverse_seek(&mut reverse_near_cursor,
-                                             key.as_bytes(),
-                                             (k.as_bytes(), v.as_bytes()));
-                }
-                None => {
-                    let seek_key = make_key(key.as_bytes());
-                    assert!(!reverse_cursor.reverse_seek(&seek_key).unwrap(), key);
-                    assert!(!reverse_near_cursor.near_reverse_seek(&seek_key).unwrap(),
-                            key);
-                }
+        for step in 1..10 {
+            test_linear_seek(snapshot.as_ref(), ScanMode::Forward, false, step);
+        }
+        for &reverse in &[true, false] {
+            for step in 1..10 {
+                test_linear_seek(snapshot.as_ref(), ScanMode::Mixed, reverse, step);
             }
         }
     }
