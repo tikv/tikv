@@ -134,7 +134,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     // will stay at snapshot.
     cluster.add_send_filter(DefaultFilterFactory::<SnapshotFilter>::default());
     // don't allow leader transfer succeed if it is actually triggered.
-    cluster.add_send_filter(CloneFilterFactory(FilterRegionPacket::new(1, 2)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgTimeoutNow)
         .direction(Direction::Recv)));
 

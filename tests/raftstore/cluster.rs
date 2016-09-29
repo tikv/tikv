@@ -625,7 +625,7 @@ impl<T: Simulator> Cluster<T> {
 
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
-        self.add_send_filter(Partition::new(s1, s2));
+        self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
 }
 

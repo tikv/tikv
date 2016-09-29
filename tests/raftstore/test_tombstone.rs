@@ -167,7 +167,7 @@ fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_3 = cluster.get_engine(3);
     must_get_equal(&engine_3, b"k1", b"v1");
 
-    cluster.add_send_filter(Isolate::new(2));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     // Remove peer (2, 2) from region 1.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
