@@ -25,8 +25,8 @@ use std::error;
 pub enum Task {
     CompactLockCF {
         engine: Arc<DB>,
-        start_key: Vec<u8>, // empty vec means smallest key
-        end_key: Vec<u8>, // empty vec means largest key
+        start_key: Option<Vec<u8>>, // None means smallest key
+        end_key: Option<Vec<u8>>, // None means largest key
     },
     CompactRaftLog {
         engine: Arc<DB>,
@@ -94,11 +94,13 @@ impl Runner {
 
     fn compact_lock_cf(&mut self,
                        engine: Arc<DB>,
-                       start_key: &[u8],
-                       end_key: &[u8])
+                       start_key: Option<Vec<u8>>,
+                       end_key: Option<Vec<u8>>)
                        -> Result<(), Error> {
         let cf_handle = box_try!(rocksdb::get_cf_handle(&engine, CF_LOCK));
-        engine.compact_range_cf(cf_handle, start_key, end_key);
+        engine.compact_range_cf(cf_handle,
+                                start_key.as_ref().map(Vec::as_slice),
+                                end_key.as_ref().map(Vec::as_slice));
         Ok(())
     }
 }
@@ -117,7 +119,7 @@ impl Runnable<Task> for Runner {
             }
             Task::CompactLockCF { engine, start_key, end_key } => {
                 debug!("execute compact lock cf");
-                if let Err(e) = self.compact_lock_cf(engine, &start_key, &end_key) {
+                if let Err(e) = self.compact_lock_cf(engine, start_key, end_key) {
                     error!("execute compact lock cf failed, err {}", e);
                 }
             }

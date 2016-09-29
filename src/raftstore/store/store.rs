@@ -1262,8 +1262,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Create a compact lock cf task(compact whole range) and schedule directly.
         let task = CompactTask::CompactLockCF {
             engine: self.engine.clone(),
-            start_key: vec![],
-            end_key: vec![],
+            start_key: None,
+            end_key: None,
         };
         if let Err(e) = self.compact_worker.schedule(task) {
             error!("failed to schedule compact lock cf task: {}", e);
