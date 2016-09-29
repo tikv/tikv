@@ -30,7 +30,7 @@ mod metrics;
 
 pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Cursor,
-                       Error as EngineError};
+                       Error as EngineError, ScanMode};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg};
 pub use self::types::{Key, Value, KvPair, make_key};

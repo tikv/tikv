@@ -259,7 +259,7 @@ mod tests {
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
-    use storage::{Cursor, Key, ALL_CFS};
+    use storage::{Cursor, Key, ALL_CFS, ScanMode};
     use util::{worker, rocksdb};
 
     use super::*;
@@ -427,7 +427,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(snap.iter(None), false);
+        let mut iter = Cursor::new(snap.iter(None), ScanMode::Mixed);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())).unwrap());
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
@@ -454,7 +454,7 @@ mod tests {
         // test last region
         let store = new_peer_storage(engine.clone(), &Region::new());
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(snap.iter(None), false);
+        let mut iter = Cursor::new(snap.iter(None), ScanMode::Mixed);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         let pair = (iter.key().to_vec(), iter.value().to_vec());
