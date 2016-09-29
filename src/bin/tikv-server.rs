@@ -387,8 +387,6 @@ fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
     // this will result in fewer sst files in lock cf.
     opts.set_level_zero_file_num_compaction_trigger(1);
 
-    opts.set_compaction_style(DBCompactionStyle::DBUniversal);
-
     opts
 }
 
