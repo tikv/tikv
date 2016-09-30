@@ -43,7 +43,7 @@ use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
-use storage::ALL_CFS;
+use storage::{ALL_CFS, CF_LOCK};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
@@ -1260,8 +1260,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
-        let task = CompactTask::CompactLockCF {
+        let task = CompactTask::CompactRangeForCF {
             engine: self.engine.clone(),
+            cf_name: String::from(CF_LOCK),
             start_key: None,
             end_key: None,
         };
@@ -1291,7 +1292,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_compact_lock_cf_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactLockCf,
-                                       self.cfg.lock_cf_compact_interval) {
+                                       self.cfg.lock_cf_compact_interval_secs * 1000) {
             error!("register snap mgr gc tick err: {:?}", e);
         }
     }

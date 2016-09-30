@@ -15,7 +15,7 @@ use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
 use util::rocksdb;
-use storage::{CF_RAFT, CF_LOCK};
+use storage::CF_RAFT;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use std::sync::Arc;
@@ -23,8 +23,9 @@ use std::fmt::{self, Formatter, Display};
 use std::error;
 
 pub enum Task {
-    CompactLockCF {
+    CompactRangeForCF {
         engine: Arc<DB>,
+        cf_name: String,
         start_key: Option<Vec<u8>>, // None means smallest key
         end_key: Option<Vec<u8>>, // None means largest key
     },
@@ -44,8 +45,12 @@ impl Display for Task {
                        region_id,
                        compact_idx)
             }
-            Task::CompactLockCF { ref start_key, ref end_key, .. } => {
-                write!(f, "Compact Lock CF, range[{:?}, {:?}]", start_key, end_key)
+            Task::CompactRangeForCF { ref cf_name, ref start_key, ref end_key, .. } => {
+                write!(f,
+                       "Compact for CF[{}], range[{:?}, {:?}]",
+                       cf_name,
+                       start_key,
+                       end_key)
             }
         }
     }
@@ -92,12 +97,13 @@ impl Runner {
         Ok(compact_idx - first_idx)
     }
 
-    fn compact_lock_cf(&mut self,
-                       engine: Arc<DB>,
-                       start_key: Option<Vec<u8>>,
-                       end_key: Option<Vec<u8>>)
-                       -> Result<(), Error> {
-        let cf_handle = box_try!(rocksdb::get_cf_handle(&engine, CF_LOCK));
+    fn compact_range_for_cf(&mut self,
+                            engine: Arc<DB>,
+                            cf_name: String,
+                            start_key: Option<Vec<u8>>,
+                            end_key: Option<Vec<u8>>)
+                            -> Result<(), Error> {
+        let cf_handle = box_try!(rocksdb::get_cf_handle(&engine, &cf_name));
         engine.compact_range_cf(cf_handle,
                                 start_key.as_ref().map(Vec::as_slice),
                                 end_key.as_ref().map(Vec::as_slice));
@@ -112,14 +118,14 @@ impl Runnable<Task> for Runner {
                 debug!("[region {}] execute compacting log to {}",
                        region_id,
                        compact_idx);
-                match self.compact_raft_log(engine.clone(), region_id, compact_idx) {
+                match self.compact_raft_log(engine, region_id, compact_idx) {
                     Err(e) => error!("[region {}] failed to compact: {:?}", region_id, e),
                     Ok(n) => info!("[region {}] compact {} log entries", region_id, n),
                 }
             }
-            Task::CompactLockCF { engine, start_key, end_key } => {
-                debug!("execute compact lock cf");
-                if let Err(e) = self.compact_lock_cf(engine, start_key, end_key) {
+            Task::CompactRangeForCF { engine, cf_name, start_key, end_key } => {
+                debug!("execute compact range for cf {}", cf_name.clone());
+                if let Err(e) = self.compact_range_for_cf(engine, cf_name, start_key, end_key) {
                     error!("execute compact lock cf failed, err {}", e);
                 }
             }
