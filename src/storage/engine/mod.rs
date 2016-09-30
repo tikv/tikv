@@ -376,6 +376,7 @@ mod tests {
 
         test_get_put(e.as_ref());
         test_batch(e.as_ref());
+        test_empty_seek(e.as_ref());
         test_seek(e.as_ref());
         test_near_seek(e.as_ref());
         test_cf(e.as_ref());
@@ -534,6 +535,17 @@ mod tests {
             let key = format!("y{}", i);
             must_delete(engine, key.as_bytes());
         }
+    }
+
+    fn test_empty_seek(engine: &Engine) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cursor = snapshot.iter(None, ScanMode::Mixed).unwrap();
+        assert!(!cursor.near_reverse_seek(&make_key(b"x")).unwrap());
+        assert!(!cursor.near_reverse_seek(&make_key(b"z")).unwrap());
+        assert!(!cursor.near_reverse_seek(&make_key(b"w")).unwrap());
+        assert!(!cursor.near_seek(&make_key(b"x")).unwrap());
+        assert!(!cursor.near_seek(&make_key(b"z")).unwrap());
+        assert!(!cursor.near_seek(&make_key(b"w")).unwrap());
     }
 
     macro_rules! assert_seek {
