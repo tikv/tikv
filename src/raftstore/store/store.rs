@@ -244,7 +244,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
-        box_try!(self.compact_worker.start(CompactRunner));
+        let compact_runner = CompactRunner::new(self.engine.clone());
+        box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
         box_try!(self.pd_worker.start(pd_runner));
@@ -1261,7 +1262,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
         let task = CompactTask::CompactRangeForCF {
-            engine: self.engine.clone(),
             cf_name: String::from(CF_LOCK),
             start_key: None,
             end_key: None,
