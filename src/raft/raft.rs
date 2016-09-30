@@ -197,7 +197,7 @@ pub struct Raft<T: Storage> {
     // randomized_election_timeout is a random number between
     // [election_timeout, 2 * election_timeout - 1]. It gets reset
     // when raft changes its state to follower or candidate.
-    randomized_election_timeout: usize,
+    pub randomized_election_timeout: usize,
 
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
