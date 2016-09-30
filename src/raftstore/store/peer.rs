@@ -171,6 +171,8 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
 
+    election_timeout_clock_drift_bound_percentage: f64,
+
     pub tag: String,
 }
 
@@ -255,6 +257,8 @@ impl Peer {
             size_diff_hint: 0,
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
+            election_timeout_clock_drift_bound_percentage:
+                cfg.election_timeout_clock_drift_bound_percentage,
             tag: tag,
         };
 
@@ -598,9 +602,26 @@ impl Peer {
         Ok(())
     }
 
+    fn has_leader_lease(&self) -> bool {
+        // check whether current peer is raft leader in its lease
+        if !self.raft_group.raft.in_lease() {
+            return false;
+        }
+        // check the clock time against clock drift bound
+        let lower_clock_drift_bound =
+            (self.raft_group.raft.randomized_election_timeout as f64 *
+             (1.0 - self.election_timeout_clock_drift_bound_percentage)) as usize;
+        self.raft_group.raft.election_elapsed < lower_clock_drift_bound
+    }
+
     fn is_local_read(&self, req: &RaftCmdRequest) -> bool {
         if (req.has_header() && req.get_header().get_read_quorum()) ||
-           !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
+           req.get_requests().len() == 0 {
+            return false;
+        }
+
+        // check whether local peer is raft leader and has valid lease for local read
+        if !self.has_leader_lease() {
             return false;
         }
 

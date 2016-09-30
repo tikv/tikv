@@ -39,6 +39,7 @@ const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
 // If the leader missing for over 2 hours,
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
+const DEFAULT_ELECTION_TIMEOUT_CLOCK_DRIFT_BOUND_PERCENTAGE: f64 = 0.1;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 
 #[derive(Debug, Clone)]
@@ -89,6 +90,23 @@ pub struct Config {
     /// If the peer is stale and is not valid in any region, it will destroy itself.
     pub max_leader_missing_duration: Duration,
 
+    /// `election_timeout_clock_drift_bound_ticks` specifies the clock drift bound in
+    /// a percentage of one election timeout.
+    ///
+    /// Given these definitions:
+    /// 1. election_timeout: the election timeout parameter for raft protocol.
+    ///    election_timeout = raft_base_tick_interval * raft_election_timeout_ticks
+    /// 3. clock_drift_bound: the clock drift bound for a election_timeout is assumed to
+    ///    be impossible to exceed the range
+    ///      [-clock_drift_bound, -clock_drift_bound]
+    ///    when
+    ///      clock_drift_bound = election_timeout * election_timeout_clock_drift_bound_percentage
+    ///
+    /// When the clock time of a raft leader peer does not go beyond the lower clock_drift_bound,
+    /// it is assumed that the lease of this leader peer is still valid. So the lease read
+    /// could still be performed on this leader peer.
+    pub election_timeout_clock_drift_bound_percentage: f64,
+
     pub snap_apply_batch_size: usize,
 }
 
@@ -116,6 +134,8 @@ impl Default for Config {
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
+            election_timeout_clock_drift_bound_percentage:
+                DEFAULT_ELECTION_TIMEOUT_CLOCK_DRIFT_BOUND_PERCENTAGE,
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
         }
     }
