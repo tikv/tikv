@@ -185,14 +185,9 @@ impl<'a> Cursor<'a> {
                 if self.iter.key() < key.encoded() {
                     self.iter.next();
                 }
-            } else if self.iter.seek_to_first() {
-                return Ok(true);
             } else {
-                self.max_key = Some(key.encoded().to_owned());
-                if self.min_key.as_ref().map_or(true, |k| k > key.encoded()) {
-                    self.min_key = Some(key.encoded().to_owned());
-                }
-                return Ok(false);
+                assert!(self.iter.seek_to_first());
+                return Ok(true);
             }
         } else {
             // ord == Less
@@ -226,7 +221,7 @@ impl<'a> Cursor<'a> {
         }
         if !try!(self.iter.seek(key)) && !self.iter.seek_to_last() {
             self.min_key = Some(key.encoded().to_owned());
-            if self.max_key.as_ref().map_or(true, |k| k < key.encoded()) {
+            if self.max_key.as_ref().map_or(true, |k| k > key.encoded()) {
                 self.max_key = Some(key.encoded().to_owned());
             }
             return Ok(false);
@@ -264,7 +259,8 @@ impl<'a> Cursor<'a> {
             if self.iter.valid() {
                 self.iter.prev();
             } else {
-                self.iter.seek_to_last();
+                assert!(self.iter.seek_to_last());
+                return Ok(true);
             }
         } else {
             near_loop!(self.iter.prev() && self.iter.key() >= key.encoded(),
