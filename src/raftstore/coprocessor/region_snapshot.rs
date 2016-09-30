@@ -248,7 +248,7 @@ impl<'a> RegionIterator<'a> {
 
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
-        util::check_key_in_region_closed(key, &self.region)
+        util::check_key_in_region_inclusive(key, &self.region)
     }
 }
 

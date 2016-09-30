@@ -128,7 +128,6 @@ pub enum ScanMode {
 
 pub struct Cursor<'a> {
     iter: Box<Iterator + 'a>,
-    /// Indicate whether the cursor will always be seek forward or always be seek backward.
     scan_mode: ScanMode,
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
@@ -186,8 +185,14 @@ impl<'a> Cursor<'a> {
                 if self.iter.key() < key.encoded() {
                     self.iter.next();
                 }
+            } else if self.iter.seek_to_first() {
+                return Ok(true);
             } else {
-                self.iter.seek_to_first();
+                self.max_key = Some(key.encoded().to_owned());
+                if self.min_key.as_ref().map_or(true, |k| k > key.encoded()) {
+                    self.min_key = Some(key.encoded().to_owned());
+                }
+                return Ok(false);
             }
         } else {
             // ord == Less
@@ -221,6 +226,9 @@ impl<'a> Cursor<'a> {
         }
         if !try!(self.iter.seek(key)) && !self.iter.seek_to_last() {
             self.min_key = Some(key.encoded().to_owned());
+            if self.max_key.as_ref().map_or(true, |k| k < key.encoded()) {
+                self.max_key = Some(key.encoded().to_owned());
+            }
             return Ok(false);
         }
 
@@ -252,7 +260,7 @@ impl<'a> Cursor<'a> {
 
         if ord == Ordering::Less {
             near_loop!(self.iter.next() && self.iter.key() < key.encoded(),
-                       self.near_seek(key));
+                       self.reverse_seek(key));
             if self.iter.valid() {
                 self.iter.prev();
             } else {
@@ -260,7 +268,7 @@ impl<'a> Cursor<'a> {
             }
         } else {
             near_loop!(self.iter.prev() && self.iter.key() >= key.encoded(),
-                       self.near_seek(key));
+                       self.reverse_seek(key));
         }
 
         if !self.iter.valid() {
@@ -354,6 +362,7 @@ pub type Result<T> = result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::SEEK_BOUND;
     use tempdir::TempDir;
     use storage::{CfName, CF_DEFAULT, make_key};
     use util::codec::bytes;
@@ -533,7 +542,8 @@ mod tests {
 
     macro_rules! assert_seek {
         ($cursor:ident, $func:ident, $k:expr, $res:ident) => ({
-            assert!($cursor.$func(&$k).unwrap() == $res.is_some(), format!("{}", $k));
+            let msg = format!("assert_seek {} failed exp {:?}", $k, $res);
+            assert!($cursor.$func(&$k).unwrap() == $res.is_some(), msg);
             if let Some((ref k, ref v)) = $res {
                 assert_eq!($cursor.key(), bytes::encode_bytes(k.as_bytes()).as_slice());
                 assert_eq!($cursor.value(), v.as_bytes());
@@ -545,10 +555,11 @@ mod tests {
     fn test_linear_seek(snapshot: &Snapshot, mode: ScanMode, reverse: bool, step: usize) {
         let mut cursor = snapshot.iter(None, mode).unwrap();
         let mut near_cursor = snapshot.iter(None, mode).unwrap();
+        let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
 
-        for (_, mut i) in (0..100 * 2 - 1).enumerate().filter(|&(i, _)| i % step == 0) {
+        for (_, mut i) in (0..SEEK_BOUND * 30).enumerate().filter(|&(i, _)| i % step == 0) {
             if reverse {
-                i = 199 - i;
+                i = SEEK_BOUND * 30 - 1 - i;
             }
             let key = format!("key_{:03}", i);
             let seek_key = make_key(key.as_bytes());
@@ -558,14 +569,14 @@ mod tests {
                 } else {
                     Some(("key_100".to_owned(), "value_50".to_owned()))
                 }
-            } else if i <= 198 {
+            } else if i <= limit {
                 if reverse {
                     Some((format!("key_{}", (i - 1) / 2 * 2), format!("value_{}", (i - 1) / 2)))
                 } else {
                     Some((format!("key_{}", (i + 1) / 2 * 2), format!("value_{}", (i + 1) / 2)))
                 }
             } else if reverse {
-                Some(("key_198".to_owned(), "value_99".to_owned()))
+                Some((format!("key_{:03}", limit), format!("value_{:03}", limit / 2)))
             } else {
                 None
             };
@@ -587,18 +598,18 @@ mod tests {
         let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
                            TEST_ENGINE_CFS)
             .unwrap();
-        for i in 50..100 {
+        for i in 50..50 + SEEK_BOUND * 10 {
             let key = format!("key_{}", i * 2);
             let value = format!("value_{}", i);
             must_put(e.as_ref(), key.as_bytes(), value.as_bytes());
         }
         let snapshot = e.snapshot(&Context::new()).unwrap();
 
-        for step in 1..10 {
+        for step in 1..SEEK_BOUND * 3 {
             test_linear_seek(snapshot.as_ref(), ScanMode::Forward, false, step);
         }
         for &reverse in &[true, false] {
-            for step in 1..10 {
+            for step in 1..SEEK_BOUND * 3 {
                 test_linear_seek(snapshot.as_ref(), ScanMode::Mixed, reverse, step);
             }
         }
