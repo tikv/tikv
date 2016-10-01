@@ -17,7 +17,7 @@ use kvproto::metapb::Region;
 
 use raftstore::store::engine::{Snapshot, Peekable, Iterable};
 use raftstore::store::{keys, util, PeerStorage};
-use raftstore::{Error, Result};
+use raftstore::Result;
 
 
 type Kv<'a> = (&'a [u8], &'a [u8]);
@@ -170,14 +170,18 @@ impl<'a> RegionIterator<'a> {
     pub fn seek_to_first(&mut self) -> bool {
         self.valid = self.iter.seek(self.start_key.as_slice().into());
 
-        self.update_valid()
+        self.update_valid(true)
     }
 
     #[inline]
-    fn update_valid(&mut self) -> bool {
+    fn update_valid(&mut self, forward: bool) -> bool {
         if self.valid {
             let key = self.iter.key();
-            self.valid = key >= &self.start_key && key < &self.end_key;
+            self.valid = if forward {
+                key < &self.end_key
+            } else {
+                key >= &self.start_key
+            };
         }
         self.valid
     }
@@ -192,18 +196,19 @@ impl<'a> RegionIterator<'a> {
         }
 
         self.valid = self.iter.valid();
-        self.update_valid()
+        self.update_valid(false)
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
-        let key = try!(self.should_seekable(key));
+        try!(self.should_seekable(key));
+        let key = keys::data_key(key);
         if key == self.end_key {
             self.valid = false;
         } else {
             self.valid = self.iter.seek(key.as_slice().into());
         }
 
-        Ok(self.update_valid())
+        Ok(self.update_valid(true))
     }
 
     pub fn prev(&mut self) -> bool {
@@ -212,7 +217,7 @@ impl<'a> RegionIterator<'a> {
         }
         self.valid = self.iter.prev();
 
-        self.update_valid()
+        self.update_valid(false)
     }
 
     pub fn next(&mut self) -> bool {
@@ -221,7 +226,7 @@ impl<'a> RegionIterator<'a> {
         }
         self.valid = self.iter.next();
 
-        self.update_valid()
+        self.update_valid(true)
     }
 
     #[inline]
@@ -242,12 +247,8 @@ impl<'a> RegionIterator<'a> {
     }
 
     #[inline]
-    fn should_seekable(&self, key: &[u8]) -> Result<Vec<u8>> {
-        let key = keys::data_key(key);
-        if key < self.start_key || key > self.end_key {
-            return Err(Error::KeyNotInRegion(key.to_vec(), self.region.clone()));
-        }
-        Ok(key)
+    pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
+        util::check_key_in_region_inclusive(key, &self.region)
     }
 }
 
@@ -258,7 +259,7 @@ mod tests {
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
-    use storage::{Cursor, Key, ALL_CFS};
+    use storage::{Cursor, Key, ALL_CFS, ScanMode};
     use util::{worker, rocksdb};
 
     use super::*;
@@ -426,7 +427,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter(None);
+        let mut iter = Cursor::new(snap.iter(None), ScanMode::Mixed);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())).unwrap());
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
@@ -453,7 +454,7 @@ mod tests {
         // test last region
         let store = new_peer_storage(engine.clone(), &Region::new());
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter(None);
+        let mut iter = Cursor::new(snap.iter(None), ScanMode::Mixed);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         let pair = (iter.key().to_vec(), iter.value().to_vec());
