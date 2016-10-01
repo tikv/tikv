@@ -29,7 +29,7 @@ use threadpool::ThreadPool;
 use storage::{Engine, SnapshotStore};
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
-use storage::{engine, Snapshot, Key};
+use storage::{engine, Snapshot, Key, ScanMode};
 use util::codec::table::TableDecoder;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
@@ -636,7 +636,11 @@ impl<'a> SelectContext<'a> {
             } else {
                 range.get_start().to_vec()
             };
-            let mut scanner = try!(self.snap.scanner());
+            let mut scanner = try!(self.snap.scanner(if desc {
+                ScanMode::Mixed
+            } else {
+                ScanMode::Forward
+            }));
             while limit > row_count {
                 let kv = if desc {
                     try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
@@ -692,7 +696,11 @@ impl<'a> SelectContext<'a> {
         } else {
             r.get_start().to_vec()
         };
-        let mut scanner = try!(self.snap.scanner());
+        let mut scanner = try!(self.snap.scanner(if desc {
+            ScanMode::Mixed
+        } else {
+            ScanMode::Forward
+        }));
         while row_cnt < limit {
             let nk = if desc {
                 try!(scanner.reverse_seek(Key::from_raw(&seek_key)))

@@ -199,7 +199,7 @@ pub trait TableDecoder: DatumDecoder {
     fn decode_row(&mut self, cols: &HashMap<i64, ColumnInfo>) -> Result<HashMap<i64, Datum>> {
         let mut values = try!(self.decode());
         if values.get(0).map_or(true, |d| *d == Datum::Null) {
-            return Ok(map![]);
+            return Ok(HashMap::new());
         }
         if values.len() & 1 == 1 {
             return Err(box_err!("decoded row values' length should be even!"));
@@ -225,6 +225,10 @@ impl<T: BytesDecoder> TableDecoder for T {}
 // `cut_row` cut encoded row into byte slices and return interested columns' byte slice.
 // Row layout: colID1, value1, colID2, value2, .....
 pub fn cut_row<'a>(mut data: &'a [u8], cols: &HashSet<i64>) -> Result<ValDict<'a>> {
+    // hack: HashMap will still allocate memeory when capacity is 0, need to use new instead.
+    if cols.is_empty() {
+        return Ok(HashMap::new());
+    }
     let mut res = HashMap::with_capacity(cols.len());
     if data.is_empty() || data.len() == 1 && data[0] == datum::NIL_FLAG {
         return Ok(res);
@@ -245,6 +249,9 @@ pub type ValDict<'a> = HashMap<i64, &'a [u8]>;
 // `cut_idx_key` cuts encoded index key into colIDs to bytes slices map.
 pub fn cut_idx_key<'a>(mut key: &'a [u8], col_ids: &[i64]) -> Result<(ValDict<'a>, &'a [u8])> {
     key = &key[PREFIX_LEN + ID_LEN..];
+    if col_ids.is_empty() {
+        return Ok((HashMap::new(), key));
+    }
     let mut values = HashMap::with_capacity(col_ids.len());
     for &id in col_ids {
         let (val, rem) = try!(datum::split_datum(key, false));

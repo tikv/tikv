@@ -49,6 +49,18 @@ pub fn get_uuid_from_req(cmd: &RaftCmdRequest) -> Option<Uuid> {
     Uuid::from_bytes(cmd.get_header().get_uuid())
 }
 
+/// Check if key in region range [`start_key`, `end_key`].
+pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
+    let end_key = region.get_end_key();
+    let start_key = region.get_start_key();
+    if key >= start_key && (end_key.is_empty() || key <= end_key) {
+        Ok(())
+    } else {
+        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
+}
+
+/// Check if key in region range [`start_key`, `end_key`).
 pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     let end_key = region.get_end_key();
     let start_key = region.get_start_key();
@@ -84,20 +96,23 @@ mod tests {
     // Tests the util function `check_key_in_region`.
     #[test]
     fn test_check_key_in_region() {
-        let test_cases = vec![("", "", "", true),
-                              ("", "", "6", true),
-                              ("", "3", "6", false),
-                              ("4", "3", "6", true),
-                              ("4", "3", "", true),
-                              ("2", "3", "6", false),
-                              ("", "3", "6", false),
-                              ("", "3", "", false)];
-        for (key, start_key, end_key, is_in_region) in test_cases {
+        let test_cases = vec![("", "", "", true, true),
+                              ("", "", "6", true, true),
+                              ("", "3", "6", false, false),
+                              ("4", "3", "6", true, true),
+                              ("4", "3", "", true, true),
+                              ("2", "3", "6", false, false),
+                              ("", "3", "6", false, false),
+                              ("", "3", "", false, false),
+                              ("6", "3", "6", false, true)];
+        for (key, start_key, end_key, is_in_region, is_in_region_inclusive) in test_cases {
             let mut region = metapb::Region::new();
             region.set_start_key(start_key.as_bytes().to_vec());
             region.set_end_key(end_key.as_bytes().to_vec());
-            let result = check_key_in_region(key.as_bytes(), &region);
+            let mut result = check_key_in_region(key.as_bytes(), &region);
             assert_eq!(result.is_ok(), is_in_region);
+            result = check_key_in_region_inclusive(key.as_bytes(), &region);
+            assert_eq!(result.is_ok(), is_in_region_inclusive)
         }
     }
 
