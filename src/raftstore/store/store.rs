@@ -1261,7 +1261,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
-        let task = CompactTask::CompactRangeForCF {
+        let task = CompactTask::CompactRangeCF {
             cf_name: String::from(CF_LOCK),
             start_key: None,
             end_key: None,

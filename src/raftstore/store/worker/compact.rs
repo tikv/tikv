@@ -24,7 +24,7 @@ use std::error;
 use super::metrics::COMPACT_RANGE_FOR_CF;
 
 pub enum Task {
-    CompactRangeForCF {
+    CompactRangeCF {
         cf_name: String,
         start_key: Option<Vec<u8>>, // None means smallest key
         end_key: Option<Vec<u8>>, // None means largest key
@@ -45,7 +45,7 @@ impl Display for Task {
                        region_id,
                        compact_idx)
             }
-            Task::CompactRangeForCF { ref cf_name, ref start_key, ref end_key } => {
+            Task::CompactRangeCF { ref cf_name, ref start_key, ref end_key } => {
                 write!(f,
                        "Compact for CF[{}], range[{:?}, {:?}]",
                        cf_name,
@@ -134,7 +134,7 @@ impl Runnable<Task> for Runner {
                     Ok(n) => info!("[region {}] compact {} log entries", region_id, n),
                 }
             }
-            Task::CompactRangeForCF { cf_name, start_key, end_key } => {
+            Task::CompactRangeCF { cf_name, start_key, end_key } => {
                 debug!("execute compact range for cf {}", cf_name.clone());
                 if let Err(e) = self.compact_range_for_cf(cf_name, start_key, end_key) {
                     error!("execute compact lock cf failed, err {}", e);
