@@ -18,6 +18,7 @@ use tikv::raftstore::store::{Msg as StoreMsg, Transport};
 use tikv::server::transport::*;
 use tikv::raft::SnapshotStatus;
 use tikv::util::HandyRwLock;
+use tikv::util::transport;
 
 use rand;
 use std::sync::{Arc, RwLock, Mutex};
@@ -44,26 +45,18 @@ impl Channel<StoreMsg> for ServerRaftStoreRouter {
     }
 }
 
-/// The result type of a filter method.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum FilterResult {
-    /// `ReportMessageDroppedError` indicates SimulateTransport to
-    /// report an "messages dropped" error when the messages is dropped by a filter.
-    ReportMessageDroppedError,
-    /// `IgnoreMessageDroppedError` indicates SimulateTransport to ignore the error
-    /// when the massage is dropped by a filter.
-    IgnoreMessageDroppedError,
-}
-
-impl Default for FilterResult {
-    fn default() -> FilterResult {
-        FilterResult::ReportMessageDroppedError
+pub fn check_messages<M>(msgs: &[M]) -> Result<()> {
+    if msgs.is_empty() {
+        Err(Error::Transport(transport::Error::Discard(String::from("messages dropped by \
+                                                                 SimulateTransport Filter"))))
+    } else {
+        Ok(())
     }
 }
 
 pub trait Filter<M>: Send + Sync {
     /// `before` is run before sending the messages.
-    fn before(&self, msgs: &mut Vec<M>) -> FilterResult;
+    fn before(&self, msgs: &mut Vec<M>) -> Result<()>;
     /// `after` is run after sending the messages,
     /// so that the returned value could be changed if necessary.
     fn after(&self, res: Result<()>) -> Result<()> {
@@ -86,9 +79,9 @@ impl DropPacketFilter {
 }
 
 impl<M> Filter<M> for DropPacketFilter {
-    fn before(&self, msgs: &mut Vec<M>) -> FilterResult {
+    fn before(&self, msgs: &mut Vec<M>) -> Result<()> {
         msgs.retain(|_| rand::random::<u32>() % 100u32 >= self.rate);
-        FilterResult::default()
+        check_messages(msgs)
     }
 }
 
@@ -104,9 +97,9 @@ impl DelayFilter {
 }
 
 impl<M> Filter<M> for DelayFilter {
-    fn before(&self, _: &mut Vec<M>) -> FilterResult {
+    fn before(&self, _: &mut Vec<M>) -> Result<()> {
         thread::sleep(self.duration);
-        FilterResult::default()
+        Ok(())
     }
 }
 
@@ -136,26 +129,19 @@ impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
     fn send(&self, msg: M) -> Result<()> {
         let mut taken = 0;
         let mut msgs = vec![msg];
-        let mut r = FilterResult::default();
         let filters = self.filters.rl();
+        let mut res = Ok(());
         for filter in filters.iter() {
-            r = filter.before(&mut msgs);
             taken += 1;
-            if msgs.is_empty() {
+            res = filter.before(&mut msgs);
+            if res.is_err() {
                 break;
             }
         }
-        let mut res = Ok(());
-        if msgs.is_empty() {
-            if r == FilterResult::ReportMessageDroppedError {
-                res = Err(Error::Timeout("drop by in SimulateTransport".to_owned()))
-            }
-        } else {
-            for msg in msgs {
-                res = self.ch.send(msg);
-                if res.is_err() {
-                    break;
-                }
+        for msg in msgs {
+            res = self.ch.send(msg);
+            if res.is_err() {
+                break;
             }
         }
         for filter in filters[..taken].iter().rev() {
@@ -216,9 +202,9 @@ struct PartitionFilter {
 }
 
 impl Filter<RaftMessage> for PartitionFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) -> FilterResult {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| !self.node_ids.contains(&m.get_to_peer().get_store_id()));
-        FilterResult::default()
+        check_messages(msgs)
     }
 }
 
@@ -297,7 +283,7 @@ pub struct RegionPacketFilter {
 }
 
 impl Filter<RaftMessage> for RegionPacketFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) -> FilterResult {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| {
             let region_id = m.get_region_id();
             let from_store_id = m.get_from_peer().get_store_id();
@@ -315,7 +301,7 @@ impl Filter<RaftMessage> for RegionPacketFilter {
             }
             true
         });
-        FilterResult::default()
+        check_messages(msgs)
     }
 }
 
@@ -352,10 +338,10 @@ pub struct SnapshotFilter {
 }
 
 impl Filter<RaftMessage> for SnapshotFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) -> FilterResult {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
         self.drop.store(msgs.is_empty(), Ordering::Relaxed);
-        FilterResult::default()
+        check_messages(msgs)
     }
 
     fn after(&self, x: Result<()>) -> Result<()> {
@@ -385,9 +371,9 @@ impl PauseFirstSnapshotFilter {
 }
 
 impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
-    fn before(&self, msgs: &mut Vec<StoreMsg>) -> FilterResult {
+    fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
-            return FilterResult::default();
+            return check_messages(msgs);
         }
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
@@ -412,7 +398,7 @@ impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
             self.stale.compare_and_swap(false, true, Ordering::Relaxed);
         }
         msgs.extend(to_send);
-        FilterResult::default()
+        check_messages(msgs)
     }
 
     fn after(&self, res: Result<()>) -> Result<()> {
@@ -446,14 +432,14 @@ impl LeadingDuplicatedSnapshotFilter {
 }
 
 impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
-    fn before(&self, msgs: &mut Vec<StoreMsg>) -> FilterResult {
+    fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         let mut last_msg = self.last_msg.lock().unwrap();
         let mut stale = self.stale.load(Ordering::Relaxed);
         if stale {
             if last_msg.is_some() {
                 msgs.push(StoreMsg::RaftMessage(last_msg.take().unwrap()));
             }
-            return FilterResult::default();
+            return check_messages(msgs);
         }
         let mut to_send = vec![];
         for m in msgs.drain(..) {
@@ -479,7 +465,7 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
         }
         self.stale.store(stale, Ordering::Relaxed);
         msgs.extend(to_send);
-        FilterResult::default()
+        check_messages(msgs)
     }
 
     fn after(&self, res: Result<()>) -> Result<()> {
@@ -511,7 +497,7 @@ impl RandomLatencyFilter {
 }
 
 impl Filter<RaftMessage> for RandomLatencyFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) -> FilterResult {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut to_send = vec![];
         let mut to_delay = vec![];
         let mut delayed_msgs = self.delayed_msgs.lock().unwrap();
@@ -533,7 +519,7 @@ impl Filter<RaftMessage> for RandomLatencyFilter {
         }
         delayed_msgs.extend(to_delay);
         msgs.extend(to_send);
-        FilterResult::IgnoreMessageDroppedError
+        Ok(())
     }
 }
 
