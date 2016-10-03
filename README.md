@@ -41,9 +41,9 @@ When a node starts, the metadata of the Node, Store and Region are registered in
 
 TiKV is a component in the TiDB project, you must build and run it with TiDB and PD together.
 
-If you want to use TiDB in your project, see [user build guide](https://github.com/pingcap/docs/blob/master/op-guide/build.md) to build the TiDB project first.
+If you want to use TiDB in production, see [deployment build guide](https://github.com/pingcap/docs/blob/master/dev-guide/deployment.md) to build the TiDB project first.
 
-If you want to dive into TiDB, see [dev build guide](https://github.com/pingcap/docs/blob/master/dev-guide/build.md) on how to build the TiDB project.
+If you want to dive into TiDB, see [development build guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md) on how to build the TiDB project.
 
 ### Next steps
 
