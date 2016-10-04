@@ -138,10 +138,12 @@ impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
                 break;
             }
         }
-        for msg in msgs {
-            res = self.ch.send(msg);
-            if res.is_err() {
-                break;
+        if res.is_ok() {
+            for msg in msgs {
+                res = self.ch.send(msg);
+                if res.is_err() {
+                    break;
+                }
             }
         }
         for filter in filters[..taken].iter().rev() {
