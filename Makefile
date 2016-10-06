@@ -25,10 +25,15 @@ release:
 	cp -f ./target/release/tikv-server ./bin
 
 test:
-	# Default Mac OSX `ulimit -n` is 256, too small. 
-	ulimit -n 2000 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test --features ${ENABLE_FEATURES} -- --nocapture
-	# TODO: remove following target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
-	ulimit -n 2000 && LOG_LEVEL=DEBUG RUST_BACKTRACE=1 cargo test --features ${ENABLE_FEATURES} --bench benches -- --nocapture 
+	# Default Mac OSX `ulimit -n` is 256, too small. When SIP is enabled, DYLD_LIBRARY_PATH will not work
+	# in subshell, so we have to set it again here.
+	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
+	export LOG_LEVEL=DEBUG && \
+	export RUST_BACKTRACE=1 && \
+	ulimit -n 2000 && \
+	cargo test --features ${ENABLE_FEATURES} -- --nocapture && \
+	cargo test --features ${ENABLE_FEATURES} --bench benches -- --nocapture 
+	# TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
 
 bench:
 	# Default Mac OSX `ulimit -n` is 256, too small. 
