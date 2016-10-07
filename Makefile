@@ -26,7 +26,7 @@ release:
 
 test:
 	# Default Mac OSX `ulimit -n` is 256, too small. When SIP is enabled, DYLD_LIBRARY_PATH will not work
-	# in subshell, so we have to set it again here.
+	# in subshell, so we have to set it again here. LOCAL_DIR is defined in .travis.yml.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
