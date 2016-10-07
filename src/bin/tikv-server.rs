@@ -872,13 +872,12 @@ fn main() {
                                     Some(ROCKSDB_DSN.to_owned()),
                                     |v| v.as_str().map(|s| s.to_owned()));
     panic_hook::set_exit_hook();
-    let id = get_string_value("I",
-                              "raft.cluster-id",
-                              &matches,
-                              &config,
-                              Some(DEFAULT_CLUSTER_ID.to_string()),
-                              |v| v.as_integer().map(|i| i.to_string()));
-    let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
+    let cluster_id = get_integer_value("I",
+                                       "raft.cluster-id",
+                                       &matches,
+                                       &config,
+                                       Some(DEFAULT_CLUSTER_ID as i64),
+                                       |v| v.as_integer()) as u64;
     let mut cfg = build_cfg(&matches,
                             &config,
                             cluster_id,
