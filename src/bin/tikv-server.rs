@@ -46,8 +46,8 @@ use prometheus::{Encoder, TextEncoder};
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::transport::SendCh;
-use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_event_loop,
-                   create_raft_storage, Msg};
+use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config, bind,
+                   create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver, StoreAddrResolver};
@@ -876,7 +876,7 @@ fn main() {
                               "raft.cluster-id",
                               &matches,
                               &config,
-                              None,
+                              Some(DEFAULT_CLUSTER_ID.to_string()),
                               |v| v.as_integer().map(|i| i.to_string()));
     let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
     let mut cfg = build_cfg(&matches,
