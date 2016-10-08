@@ -832,7 +832,10 @@ fn main() {
                 "dsn",
                 "set which dsn to use, warning: default is rocksdb without persistent",
                 "dsn: rocksdb, raftkv");
-    opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
+    opts.optopt("I",
+                "cluster-id",
+                "set cluster id",
+                "in raftkv, must greater than 0; in rocksdb, 0 will be the default");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
@@ -889,6 +892,9 @@ fn main() {
             run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {
+            if cluster_id == DEFAULT_CLUSTER_ID {
+                panic!("in raftkv, cluster_id must greater than 0");
+            }
             let _m = TimeMonitor::default();
             run_raft_server(listener, &matches, &config, &cfg);
         }
