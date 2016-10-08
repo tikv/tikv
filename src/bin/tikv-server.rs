@@ -835,7 +835,7 @@ fn main() {
     opts.optopt("I",
                 "cluster-id",
                 "set cluster id",
-                "in raftkv, must greater than 0; in rocksdb, 0 will be the default");
+                "in raftkv, must greater than 0; in rocksdb, it will be ignored.");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
