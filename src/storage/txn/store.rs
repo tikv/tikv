@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::{Key, Value, KvPair};
-use storage::Snapshot;
+use storage::{Key, Value, KvPair, Snapshot, ScanMode};
 use storage::mvcc::{MvccReader, Error as MvccError};
 use super::{Error, Result};
 
@@ -30,13 +29,14 @@ impl<'a> SnapshotStore<'a> {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let mut reader = MvccReader::new(self.snapshot, false);
+        let mut reader = MvccReader::new(self.snapshot, None);
         let v = try!(reader.get(key, self.start_ts));
         Ok(v)
     }
 
     pub fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
-        let mut reader = MvccReader::new(self.snapshot, false);
+        // TODO: sort the keys and use ScanMode::Forward
+        let mut reader = MvccReader::new(self.snapshot, None);
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
             results.push(reader.get(k, self.start_ts).map_err(Error::from));
@@ -44,9 +44,9 @@ impl<'a> SnapshotStore<'a> {
         Ok(results)
     }
 
-    pub fn scanner(&self) -> Result<StoreScanner> {
+    pub fn scanner(&self, mode: ScanMode) -> Result<StoreScanner> {
         Ok(StoreScanner {
-            reader: MvccReader::new(self.snapshot, true),
+            reader: MvccReader::new(self.snapshot, Some(mode)),
             start_ts: self.start_ts,
         })
     }

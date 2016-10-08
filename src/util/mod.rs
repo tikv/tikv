@@ -316,10 +316,19 @@ impl<'a, T: 'a, V: 'a, E> TryInsertWith<'a, V, E> for Entry<'a, T, V> {
 }
 
 /// Convert Duration to milliseconds.
+#[inline]
 pub fn duration_to_ms(d: Duration) -> u64 {
     let nanos = d.subsec_nanos() as u64;
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000 + (nanos / 1_000_000)
+}
+
+/// Convert Duration to nanoseconds.
+#[inline]
+pub fn duration_to_nanos(d: Duration) -> u64 {
+    let nanos = d.subsec_nanos() as u64;
+    // Most of case, we can't have so large Duration, so here just panic if overflow now.
+    d.as_secs() * 1_000_000_000 + nanos
 }
 
 pub fn get_tag_from_thread_name() -> Option<String> {
@@ -455,11 +464,12 @@ mod tests {
     }
 
     #[test]
-    fn test_duration_to_ms() {
+    fn test_duration_to() {
         let tbl = vec![0, 100, 1_000, 5_000, 9999, 1_000_000, 1_000_000_000];
         for ms in tbl {
             let d = Duration::from_millis(ms);
             assert_eq!(ms, duration_to_ms(d));
+            assert_eq!(ms * 1_000_000, duration_to_nanos(d));
         }
     }
 

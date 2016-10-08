@@ -28,7 +28,7 @@ use util::codec::bytes::CompactBytesDecoder;
 use util::{escape, HandyRwLock, rocksdb};
 use util::transport::SendCh;
 use raftstore;
-use raftstore::store::engine::{self, Mutable, Snapshot, Iterable};
+use raftstore::store::engine::{Mutable, Snapshot, Iterable};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
 use storage::CF_RAFT;
 
@@ -174,7 +174,6 @@ impl<T: MsgSender> Runner<T> {
         for cf in self.db.cf_names() {
             try!(check_abort(&abort));
             let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
-            box_try!(self.db.delete_file_in_range_cf(handle, start_key, end_key));
 
             let mut it = box_try!(self.db.new_iterator_cf(cf, Some(end_key)));
 
@@ -326,7 +325,7 @@ impl<T: MsgSender> Runner<T> {
               region_id,
               escape(&start_key),
               escape(&end_key));
-        if let Err(e) = engine::delete_all_in_range(&self.db, &start_key, &end_key) {
+        if let Err(e) = self.delete_all_in_range(&start_key, &end_key, &AtomicBool::new(false)) {
             error!("failed to delete data in [{}, {}): {:?}",
                    escape(&start_key),
                    escape(&end_key),

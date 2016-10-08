@@ -31,7 +31,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer};
+use util::{HandyRwLock, SlowTimer, duration_to_nanos};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -290,6 +290,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let t = Instant::now();
         let mut region_to_be_destroyed = vec![];
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.get_store().is_applying() {
@@ -351,6 +352,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for (region_id, peer) in region_to_be_destroyed {
             self.destroy_peer(region_id, peer);
         }
+
+        PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
+            .inc_by(duration_to_nanos(t.elapsed()) as f64)
+            .unwrap();
 
         self.register_raft_base_tick(event_loop);
     }
@@ -659,6 +664,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
+        PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
+            .inc_by(duration_to_nanos(t.elapsed()) as f64)
+            .unwrap();
         slow_log!(t, "on {} regions raft ready", pending_count);
 
         Ok(())

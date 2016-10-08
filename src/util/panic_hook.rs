@@ -15,7 +15,10 @@
 use std::panic::{self, PanicInfo};
 use std::cell::RefCell;
 use std::sync::{Once, ONCE_INIT};
-use std::process;
+use std::{process, thread};
+
+use backtrace::Backtrace;
+use log::LogLevel;
 
 
 /// A simple panic hook that allows skiping printing stacktrace conditionaly.
@@ -65,7 +68,28 @@ fn track_hook(p: &PanicInfo) {
 pub fn set_exit_hook() {
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &PanicInfo| {
-        orig_hook(info);
+        if log_enabled!(LogLevel::Error) {
+            let msg = match info.payload().downcast_ref::<&'static str>() {
+                Some(s) => *s,
+                None => {
+                    match info.payload().downcast_ref::<String>() {
+                        Some(s) => &s[..],
+                        None => "Box<Any>",
+                    }
+                }
+            };
+            let thread = thread::current();
+            let name = thread.name().unwrap_or("<unnamed>");
+            let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line()));
+            let bt = Backtrace::new();
+            error!("thread '{}' panicked '{}' at {:?}\n{:?}",
+                   name,
+                   msg,
+                   loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                   bt);
+        } else {
+            orig_hook(info);
+        }
         process::exit(1);
     })
 }
