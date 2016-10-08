@@ -206,7 +206,7 @@ fn test_multi_server_latency() {
 
 fn test_multi_random_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.add_send_filter(RandomLatencyFilterFactory::new(50));
+    cluster.add_send_filter(CloneFilterFactory(RandomLatencyFilter::new(50)));
     test_multi_base_after_bootstrap(cluster);
 }
 

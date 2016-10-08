@@ -375,7 +375,7 @@ impl PauseFirstSnapshotFilter {
 impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
     fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
-            return check_messages(msgs);
+            return Ok(());
         }
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
@@ -504,17 +504,10 @@ impl Filter<RaftMessage> for RandomLatencyFilter {
         let mut to_delay = vec![];
         let mut delayed_msgs = self.delayed_msgs.lock().unwrap();
         // check whether to send those messages which are delayed previouly
-        for m in delayed_msgs.drain(..) {
+        // and check whether to send any newly incoming message if they are not delayed
+        for m in delayed_msgs.drain(..).chain(msgs.drain(..)) {
             if self.will_delay(&m) {
                 to_delay.push(m);
-            } else {
-                to_send.push(m);
-            }
-        }
-        // check whether to send any newly incoming message if they are not delayed
-        for m in msgs.drain(..) {
-            if self.will_delay(&m) {
-                to_delay.push(m)
             } else {
                 to_send.push(m);
             }
@@ -525,19 +518,12 @@ impl Filter<RaftMessage> for RandomLatencyFilter {
     }
 }
 
-
-pub struct RandomLatencyFilterFactory {
-    delay_rate: u32,
-}
-
-impl RandomLatencyFilterFactory {
-    pub fn new(rate: u32) -> RandomLatencyFilterFactory {
-        RandomLatencyFilterFactory { delay_rate: rate }
-    }
-}
-
-impl FilterFactory for RandomLatencyFilterFactory {
-    fn generate(&self, _: u64) -> Vec<SendFilter> {
-        vec![box RandomLatencyFilter::new(self.delay_rate)]
+impl Clone for RandomLatencyFilter {
+    fn clone(&self) -> RandomLatencyFilter {
+        let delayed_msgs = self.delayed_msgs.lock().unwrap();
+        RandomLatencyFilter {
+            delay_rate: self.delay_rate,
+            delayed_msgs: Mutex::new(delayed_msgs.clone()),
+        }
     }
 }
