@@ -13,7 +13,8 @@
 
 
 use std::collections::VecDeque;
-use std::hash::{Hash, SipHasher, Hasher};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use std::usize;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
@@ -145,7 +146,7 @@ impl Latches {
     fn calc_slot<H>(&self, key: &H) -> usize
         where H: Hash
     {
-        let mut s = SipHasher::new();
+        let mut s = DefaultHasher::new();
         key.hash(&mut s);
         (s.finish() as usize) & (self.size - 1)
     }
