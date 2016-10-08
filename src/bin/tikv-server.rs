@@ -46,8 +46,8 @@ use prometheus::{Encoder, TextEncoder};
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::transport::SendCh;
-use tikv::server::{DEFAULT_LISTENING_ADDR, Server, Node, Config, bind, create_event_loop,
-                   create_raft_storage, Msg};
+use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config, bind,
+                   create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver, StoreAddrResolver};
@@ -832,7 +832,10 @@ fn main() {
                 "dsn",
                 "set which dsn to use, warning: default is rocksdb without persistent",
                 "dsn: rocksdb, raftkv");
-    opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0.");
+    opts.optopt("I",
+                "cluster-id",
+                "set cluster id",
+                "in raftkv, must greater than 0; in rocksdb, it will be ignored.");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
@@ -872,13 +875,12 @@ fn main() {
                                     Some(ROCKSDB_DSN.to_owned()),
                                     |v| v.as_str().map(|s| s.to_owned()));
     panic_hook::set_exit_hook();
-    let id = get_string_value("I",
-                              "raft.cluster-id",
-                              &matches,
-                              &config,
-                              None,
-                              |v| v.as_integer().map(|i| i.to_string()));
-    let cluster_id = u64::from_str_radix(&id, 10).expect("invalid cluster id");
+    let cluster_id = get_integer_value("I",
+                                       "raft.cluster-id",
+                                       &matches,
+                                       &config,
+                                       Some(DEFAULT_CLUSTER_ID as i64),
+                                       |v| v.as_integer()) as u64;
     let mut cfg = build_cfg(&matches,
                             &config,
                             cluster_id,
@@ -890,6 +892,9 @@ fn main() {
             run_local_server(listener, &cfg);
         }
         RAFTKV_DSN => {
+            if cluster_id == DEFAULT_CLUSTER_ID {
+                panic!("in raftkv, cluster_id must greater than 0");
+            }
             let _m = TimeMonitor::default();
             run_raft_server(listener, &matches, &config, &cfg);
         }

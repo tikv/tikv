@@ -15,7 +15,7 @@ pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;
 use super::Result;
 
-const DEFAULT_CLUSTER_ID: u64 = 0;
+pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
