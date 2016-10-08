@@ -204,6 +204,26 @@ fn test_multi_server_latency() {
     test_multi_latency(&mut cluster);
 }
 
+fn test_multi_random_latency<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+    cluster.add_send_filter(CloneFilterFactory(RandomLatencyFilter::new(50)));
+    test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_random_latency() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_random_latency(&mut cluster);
+}
+
+#[test]
+fn test_multi_server_random_latency() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_multi_random_latency(&mut cluster);
+}
+
 #[test]
 fn test_multi_server_drop_packet() {
     let count = 5;
