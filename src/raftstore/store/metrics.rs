@@ -61,4 +61,11 @@ lazy_static! {
             "Total number of raftstore snapshot traffic.",
             &["type"]
         ).unwrap();
+
+    pub static ref PEER_RAFT_PROCESS_NANOS_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_raft_process_nanos_total",
+            "Total nanoseconds spent in raft processing.",
+            &["type"]
+        ).unwrap();
 }
