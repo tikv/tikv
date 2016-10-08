@@ -355,7 +355,7 @@ impl Peer {
 
         if !ready.entries.is_empty() {
             PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["append"])
-                .inc_by(ready.committed_entries.len() as f64)
+                .inc_by(ready.entries.len() as f64)
                 .unwrap();
         }
 
@@ -369,8 +369,39 @@ impl Peer {
         where T: Transport
     {
         for msg in msgs {
-            if msg.get_msg_type() == MessageType::MsgRequestVote {
-                PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["request_vote"]).inc();
+            match msg.get_msg_type() {
+                MessageType::MsgAppend => {
+                    PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append"]).inc()
+                }
+                MessageType::MsgAppendResponse => {
+                    PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append_resp"])
+                        .inc()
+                }
+                MessageType::MsgRequestVote => {
+                    PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote"]).inc()
+                }
+                MessageType::MsgRequestVoteResponse => {
+                    PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote_resp"]).inc()
+                }
+                MessageType::MsgSnapshot => {
+                    PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["snapshot"]).inc()
+                }
+                MessageType::MsgHeartbeat => {
+                    PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat"]).inc()
+                }
+                MessageType::MsgHeartbeatResponse => {
+                    PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat_resp"])
+                        .inc()
+                }
+                MessageType::MsgTransferLeader => {
+                    PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["transfer_leader"])
+                        .inc()
+                }
+                MessageType::MsgTimeoutNow => {
+                    PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["timeout_now"])
+                        .inc()
+                }
+                _ => {}
             }
 
             try!(self.send_raft_message(msg, trans));

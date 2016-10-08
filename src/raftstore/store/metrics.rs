@@ -21,6 +21,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_raft_ready_sent_message_total",
+            "Total number of raft ready sent messages.",
+            &["type"]
+        ).unwrap();
+
     pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_raftstore_proposal_total",
