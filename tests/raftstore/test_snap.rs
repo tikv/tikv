@@ -18,6 +18,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tikv::pd::PdClient;
+use tikv::raftstore::Result;
 use tikv::util::HandyRwLock;
 use kvproto::eraftpb::{Message, MessageType};
 use kvproto::raft_serverpb::RaftMessage;
@@ -288,7 +289,7 @@ struct StaleSnap {
 }
 
 impl Filter<RaftMessage> for Arc<StaleSnap> {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut res = Vec::with_capacity(msgs.len());
         for mut m in msgs.drain(..) {
             if m.get_message().get_msg_type() == MessageType::MsgSnapshot &&
@@ -308,6 +309,7 @@ impl Filter<RaftMessage> for Arc<StaleSnap> {
             res.push(m);
         }
         *msgs = res;
+        check_messages(msgs)
     }
 }
 

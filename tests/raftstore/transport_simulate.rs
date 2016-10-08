@@ -18,6 +18,7 @@ use tikv::raftstore::store::{Msg as StoreMsg, Transport};
 use tikv::server::transport::*;
 use tikv::raft::SnapshotStatus;
 use tikv::util::HandyRwLock;
+use tikv::util::transport;
 
 use rand;
 use std::sync::{Arc, RwLock, Mutex};
@@ -44,10 +45,20 @@ impl Channel<StoreMsg> for ServerRaftStoreRouter {
     }
 }
 
+pub fn check_messages<M>(msgs: &[M]) -> Result<()> {
+    if msgs.is_empty() {
+        Err(Error::Transport(transport::Error::Discard(String::from("messages dropped by \
+                                                                 SimulateTransport Filter"))))
+    } else {
+        Ok(())
+    }
+}
+
 pub trait Filter<M>: Send + Sync {
-    // in a SimulateTransport, if any filter's before return true, msg will be discard
-    fn before(&self, _: &mut Vec<M>);
-    // with after provided, one can change the return value arbitrarily
+    /// `before` is run before sending the messages.
+    fn before(&self, msgs: &mut Vec<M>) -> Result<()>;
+    /// `after` is run after sending the messages,
+    /// so that the returned value could be changed if necessary.
     fn after(&self, res: Result<()>) -> Result<()> {
         res
     }
@@ -68,8 +79,9 @@ impl DropPacketFilter {
 }
 
 impl<M> Filter<M> for DropPacketFilter {
-    fn before(&self, msgs: &mut Vec<M>) {
-        msgs.retain(|_| rand::random::<u32>() % 100u32 >= self.rate)
+    fn before(&self, msgs: &mut Vec<M>) -> Result<()> {
+        msgs.retain(|_| rand::random::<u32>() % 100u32 >= self.rate);
+        check_messages(msgs)
     }
 }
 
@@ -85,8 +97,9 @@ impl DelayFilter {
 }
 
 impl<M> Filter<M> for DelayFilter {
-    fn before(&self, _: &mut Vec<M>) {
+    fn before(&self, _: &mut Vec<M>) -> Result<()> {
         thread::sleep(self.duration);
+        Ok(())
     }
 }
 
@@ -117,17 +130,15 @@ impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
         let mut taken = 0;
         let mut msgs = vec![msg];
         let filters = self.filters.rl();
+        let mut res = Ok(());
         for filter in filters.iter() {
-            filter.before(&mut msgs);
             taken += 1;
-            if msgs.is_empty() {
+            res = filter.before(&mut msgs);
+            if res.is_err() {
                 break;
             }
         }
-        let mut res = Ok(());
-        if msgs.is_empty() {
-            res = Err(Error::Timeout("drop by in SimulateTransport".to_owned()))
-        } else {
+        if res.is_ok() {
             for msg in msgs {
                 res = self.ch.send(msg);
                 if res.is_err() {
@@ -193,8 +204,9 @@ struct PartitionFilter {
 }
 
 impl Filter<RaftMessage> for PartitionFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| !self.node_ids.contains(&m.get_to_peer().get_store_id()));
+        check_messages(msgs)
     }
 }
 
@@ -273,7 +285,7 @@ pub struct RegionPacketFilter {
 }
 
 impl Filter<RaftMessage> for RegionPacketFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| {
             let region_id = m.get_region_id();
             let from_store_id = m.get_from_peer().get_store_id();
@@ -291,6 +303,7 @@ impl Filter<RaftMessage> for RegionPacketFilter {
             }
             true
         });
+        check_messages(msgs)
     }
 }
 
@@ -327,9 +340,10 @@ pub struct SnapshotFilter {
 }
 
 impl Filter<RaftMessage> for SnapshotFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
         self.drop.store(msgs.is_empty(), Ordering::Relaxed);
+        check_messages(msgs)
     }
 
     fn after(&self, x: Result<()>) -> Result<()> {
@@ -359,9 +373,9 @@ impl PauseFirstSnapshotFilter {
 }
 
 impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
-    fn before(&self, msgs: &mut Vec<StoreMsg>) {
+    fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
-            return;
+            return Ok(());
         }
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
@@ -386,6 +400,7 @@ impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
             self.stale.compare_and_swap(false, true, Ordering::Relaxed);
         }
         msgs.extend(to_send);
+        check_messages(msgs)
     }
 
     fn after(&self, res: Result<()>) -> Result<()> {
@@ -419,14 +434,14 @@ impl LeadingDuplicatedSnapshotFilter {
 }
 
 impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
-    fn before(&self, msgs: &mut Vec<StoreMsg>) {
+    fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         let mut last_msg = self.last_msg.lock().unwrap();
         let mut stale = self.stale.load(Ordering::Relaxed);
         if stale {
             if last_msg.is_some() {
                 msgs.push(StoreMsg::RaftMessage(last_msg.take().unwrap()));
             }
-            return;
+            return check_messages(msgs);
         }
         let mut to_send = vec![];
         for m in msgs.drain(..) {
@@ -452,10 +467,63 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
         }
         self.stale.store(stale, Ordering::Relaxed);
         msgs.extend(to_send);
+        check_messages(msgs)
     }
 
     fn after(&self, res: Result<()>) -> Result<()> {
         let dropped = self.dropped.compare_and_swap(true, false, Ordering::Relaxed);
         if res.is_err() && dropped { Ok(()) } else { res }
+    }
+}
+
+/// `RandomLatencyFilter` is a transport filter to simulate randomized network latency.
+/// Based on a randomized rate, `RandomLatencyFilter` will decide whether to delay
+/// the sending of any message. It's could be used to simulate the message sending
+/// in a network with random latency, where messages could be delayed, disordered or lost.
+pub struct RandomLatencyFilter {
+    delay_rate: u32,
+    delayed_msgs: Mutex<Vec<RaftMessage>>,
+}
+
+impl RandomLatencyFilter {
+    pub fn new(rate: u32) -> RandomLatencyFilter {
+        RandomLatencyFilter {
+            delay_rate: rate,
+            delayed_msgs: Mutex::new(vec![]),
+        }
+    }
+
+    fn will_delay(&self, _: &RaftMessage) -> bool {
+        rand::random::<u32>() % 100u32 >= self.delay_rate
+    }
+}
+
+impl Filter<RaftMessage> for RandomLatencyFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        let mut to_send = vec![];
+        let mut to_delay = vec![];
+        let mut delayed_msgs = self.delayed_msgs.lock().unwrap();
+        // check whether to send those messages which are delayed previouly
+        // and check whether to send any newly incoming message if they are not delayed
+        for m in delayed_msgs.drain(..).chain(msgs.drain(..)) {
+            if self.will_delay(&m) {
+                to_delay.push(m);
+            } else {
+                to_send.push(m);
+            }
+        }
+        delayed_msgs.extend(to_delay);
+        msgs.extend(to_send);
+        Ok(())
+    }
+}
+
+impl Clone for RandomLatencyFilter {
+    fn clone(&self) -> RandomLatencyFilter {
+        let delayed_msgs = self.delayed_msgs.lock().unwrap();
+        RandomLatencyFilter {
+            delay_rate: self.delay_rate,
+            delayed_msgs: Mutex::new(delayed_msgs.clone()),
+        }
     }
 }
