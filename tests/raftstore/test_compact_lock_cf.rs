@@ -39,9 +39,10 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     // wait compact lock cf
     sleep_ms(2000);
 
-    for (_, engine) in &cluster.engines {
-        let cf_handle = get_cf_handle(&engine, CF_LOCK).unwrap();
-        let approximate_size = engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
+    for engine in cluster.engines.values() {
+        let cf_handle = get_cf_handle(engine, CF_LOCK).unwrap();
+        let approximate_size =
+            engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
         println!("new size: {}", approximate_size);
         assert_eq!(approximate_size, 0);
     }
