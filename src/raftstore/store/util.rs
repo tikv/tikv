@@ -46,7 +46,7 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
 }
 
 pub fn get_uuid_from_req(cmd: &RaftCmdRequest) -> Option<Uuid> {
-    Uuid::from_bytes(cmd.get_header().get_uuid())
+    Uuid::from_bytes(cmd.get_header().get_uuid()).ok()
 }
 
 /// Check if key in region range [`start_key`, `end_key`].
