@@ -21,7 +21,7 @@ use rocksdb::{DB, WriteBatch, Writable};
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
-use super::metrics::COMPACT_RANGE_FOR_CF;
+use super::metrics::COMPACT_RANGE_CF;
 
 pub enum Task {
     CompactRangeCF {
@@ -103,14 +103,14 @@ impl Runner {
         Ok(compact_idx - first_idx)
     }
 
-    fn compact_range_for_cf(&mut self,
-                            cf_name: String,
-                            start_key: Option<Vec<u8>>,
-                            end_key: Option<Vec<u8>>)
-                            -> Result<(), Error> {
+    fn compact_range_cf(&mut self,
+                        cf_name: String,
+                        start_key: Option<Vec<u8>>,
+                        end_key: Option<Vec<u8>>)
+                        -> Result<(), Error> {
         let cf_handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
 
-        let compact_range_timer = COMPACT_RANGE_FOR_CF.with_label_values(&[&cf_name])
+        let compact_range_timer = COMPACT_RANGE_CF.with_label_values(&[&cf_name])
             .start_timer();
         self.engine.compact_range_cf(cf_handle,
                                      start_key.as_ref().map(Vec::as_slice),
@@ -137,7 +137,7 @@ impl Runnable<Task> for Runner {
             Task::CompactRangeCF { cf_name, start_key, end_key } => {
                 let cf = cf_name.clone();
                 debug!("execute compact range for cf {}", &cf);
-                if let Err(e) = self.compact_range_for_cf(cf_name, start_key, end_key) {
+                if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
                     error!("execute compact range for cf {} failed, err {}", &cf, e);
                 } else {
                     info!("compact range for cf {} finished", &cf)
