@@ -735,7 +735,8 @@ mod test {
             (&Datum::Min, &Datum::Min) |
             (&Datum::Bytes(_), &Datum::Bytes(_)) |
             (&Datum::Dur(_), &Datum::Dur(_)) |
-            (&Datum::Null, &Datum::Null) => true,
+            (&Datum::Null, &Datum::Null) |
+            (&Datum::Time(_), &Datum::Time(_)) => true,
             (&Datum::Dec(ref d1), &Datum::Dec(ref d2)) => d1.prec_and_frac() == d2.prec_and_frac(),
             _ => false,
         }
@@ -786,6 +787,8 @@ mod test {
     #[test]
     fn test_datum_cmp() {
         let tests = vec![
+            (Datum::F64(-1.0), Datum::Min, Ordering::Greater),
+            (Datum::F64(1.0), Datum::Max, Ordering::Less),
             (Datum::F64(1.0), Datum::F64(1.0), Ordering::Equal),
             (Datum::F64(1.0), b"1".as_ref().into(), Ordering::Equal),
             (Datum::I64(1), Datum::I64(1), Ordering::Equal),
@@ -858,9 +861,14 @@ mod test {
             (Duration::new(StdDuration::from_millis(34), false, 2).unwrap().into(),
              Duration::new(StdDuration::from_millis(34), true, 2).unwrap().into(),
              Ordering::Greater),
+            (Duration::new(StdDuration::from_millis(34), true, 2).unwrap().into(),
+             b"-00.34".as_ref().into(), Ordering::Greater),
 
             (Time::parse_datetime("2011-10-10 00:00:00", 0).unwrap().into(),
              Time::parse_datetime("2000-12-12 11:11:11", 0).unwrap().into(),
+             Ordering::Greater),
+            (Time::parse_datetime("2011-10-10 00:00:00", 0).unwrap().into(),
+             b"2000-12-12 11:11:11".as_ref().into(),
              Ordering::Greater),
             (Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
              Time::parse_datetime("2001-10-10 00:00:00", 0).unwrap().into(),
@@ -971,7 +979,13 @@ mod test {
 
             (b"abc".as_ref().into(), b"ab".as_ref().into(), Ordering::Greater),
             (b"123".as_ref().into(), Datum::I64(1234), Ordering::Less),
+            (b"1".as_ref().into(), Datum::Max, Ordering::Less),
             (b"".as_ref().into(), Datum::Null, Ordering::Greater),
+
+            (Datum::Max, Datum::Max, Ordering::Equal),
+            (Datum::Max, Datum::Min, Ordering::Greater),
+            (Datum::Null, Datum::Min, Ordering::Less),
+            (Datum::Min, Datum::Min, Ordering::Equal),
         ];
 
         for (lhs, rhs, ret) in tests {
@@ -991,6 +1005,12 @@ mod test {
 
                 if ret != lhs_bs.cmp(&rhs_bs) {
                     panic!("{:?} should be {:?} to {:?} when encoded", lhs, ret, rhs);
+                }
+
+                let lhs_str = format!("{:?}", lhs);
+                let rhs_str = format!("{:?}", rhs);
+                if ret == Ordering::Equal {
+                    assert_eq!(lhs_str, rhs_str);
                 }
             }
         }
