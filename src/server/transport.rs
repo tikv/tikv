@@ -79,28 +79,39 @@ impl ServerRaftStoreRouter {
         }
     }
 
-    fn validate_msg(&self, msg: &StoreMsg) -> RaftStoreResult<()> {
-        if let StoreMsg::RaftMessage(ref m) = *msg {
-            let to_store_id = m.get_to_peer().get_store_id();
-            if to_store_id != self.store_id {
-                return Err(RaftStoreError::StoreNotMatch(to_store_id, self.store_id));
-            }
+    fn validate_store_id(&self, store_id: u64) -> RaftStoreResult<()> {
+        if store_id != self.store_id {
+            Err(RaftStoreError::StoreNotMatch(store_id, self.store_id))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        try!(self.validate_msg(&msg));
         try!(self.ch.try_send(msg));
         Ok(())
     }
 
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        try!(self.validate_msg(&msg));
         try!(self.ch.send(msg));
         Ok(())
+    }
+
+    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+        let store_id = msg.get_to_peer().get_store_id();
+        try!(self.validate_store_id(store_id));
+        self.try_send(StoreMsg::RaftMessage(msg))
+    }
+
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
+        let store_id = req.get_header().get_peer().get_store_id();
+        try!(self.validate_store_id(store_id));
+        self.try_send(StoreMsg::RaftCmd {
+            request: req,
+            callback: cb,
+        })
     }
 }
 
@@ -163,6 +174,7 @@ mod tests {
     use util::transport::SendCh;
     use kvproto::metapb::Peer;
     use kvproto::raft_serverpb::RaftMessage;
+    use kvproto::raft_cmdpb::{RaftRequestHeader, RaftCmdRequest};
     use mio::{EventLoop, Handler};
 
     struct FooHandler;
@@ -172,12 +184,22 @@ mod tests {
         type Message = Msg;
     }
 
-    fn new_msg(store_id: u64) -> Msg {
+    fn new_raft_msg(store_id: u64) -> RaftMessage {
         let mut peer = Peer::new();
         peer.set_store_id(store_id);
         let mut msg = RaftMessage::new();
         msg.set_to_peer(peer);
-        Msg::RaftMessage(msg)
+        msg
+    }
+
+    fn new_raft_cmd(store_id: u64) -> RaftCmdRequest {
+        let mut peer = Peer::new();
+        peer.set_store_id(store_id);
+        let mut header = RaftRequestHeader::new();
+        header.set_peer(peer);
+        let mut msg = RaftCmdRequest::new();
+        msg.set_header(header);
+        msg
     }
 
     #[test]
@@ -189,10 +211,14 @@ mod tests {
         let sendch = SendCh::new(evloop.channel());
         let router = ServerRaftStoreRouter::new(sendch, store_id);
 
-        assert!(router.send(new_msg(store_id)).is_ok());
-        assert!(router.try_send(new_msg(store_id)).is_ok());
+        let msg = new_raft_msg(store_id);
+        let cmd = new_raft_cmd(store_id);
+        assert!(router.send_raft_msg(msg).is_ok());
+        assert!(router.send_command(cmd, box |_| Ok(())).is_ok());
 
-        assert!(router.send(new_msg(invalid_store_id)).is_err());
-        assert!(router.try_send(new_msg(invalid_store_id)).is_err());
+        let msg = new_raft_msg(invalid_store_id);
+        let cmd = new_raft_cmd(invalid_store_id);
+        assert!(router.send_raft_msg(msg).is_err());
+        assert!(router.send_command(cmd, box |_| Ok(())).is_err());
     }
 }
