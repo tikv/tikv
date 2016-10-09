@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use raftstore::store::{Msg as StoreMsg, Transport, Callback};
-use raftstore::Result as RaftStoreResult;
+use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -68,21 +68,37 @@ pub trait RaftStoreRouter: Send + Clone {
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
     pub ch: SendCh<StoreMsg>,
+    store_id: u64,
 }
 
 impl ServerRaftStoreRouter {
-    pub fn new(ch: SendCh<StoreMsg>) -> ServerRaftStoreRouter {
-        ServerRaftStoreRouter { ch: ch }
+    pub fn new(ch: SendCh<StoreMsg>, store_id: u64) -> ServerRaftStoreRouter {
+        ServerRaftStoreRouter {
+            ch: ch,
+            store_id: store_id,
+        }
+    }
+
+    fn validate_msg(&self, msg: &StoreMsg) -> RaftStoreResult<()> {
+        if let StoreMsg::RaftMessage(ref m) = *msg {
+            let to_store_id = m.get_to_peer().get_store_id();
+            if to_store_id != self.store_id {
+                return Err(RaftStoreError::StoreNotMatch(to_store_id, self.store_id));
+            }
+        }
+        Ok(())
     }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        try!(self.validate_msg(&msg));
         try!(self.ch.try_send(msg));
         Ok(())
     }
 
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        try!(self.validate_msg(&msg));
         try!(self.ch.send(msg));
         Ok(())
     }
@@ -135,5 +151,48 @@ impl RaftStoreRouter for MockRaftStoreRouter {
 
     fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
         unimplemented!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate mio;
+
+    use super::*;
+    use raftstore::store::Msg;
+    use util::transport::SendCh;
+    use kvproto::metapb::Peer;
+    use kvproto::raft_serverpb::RaftMessage;
+    use mio::{EventLoop, Handler};
+
+    struct FooHandler;
+
+    impl Handler for FooHandler {
+        type Timeout = ();
+        type Message = Msg;
+    }
+
+    fn new_msg(store_id: u64) -> Msg {
+        let mut peer = Peer::new();
+        peer.set_store_id(store_id);
+        let mut msg = RaftMessage::new();
+        msg.set_to_peer(peer);
+        Msg::RaftMessage(msg)
+    }
+
+    #[test]
+    fn test_store_not_match() {
+        let store_id = 1;
+        let invalid_store_id = store_id + 1;
+
+        let evloop = EventLoop::<FooHandler>::new().unwrap();
+        let sendch = SendCh::new(evloop.channel());
+        let router = ServerRaftStoreRouter::new(sendch, store_id);
+
+        assert!(router.send(new_msg(store_id)).is_ok());
+        assert!(router.try_send(new_msg(store_id)).is_ok());
+
+        assert!(router.send(new_msg(invalid_store_id)).is_err());
+        assert!(router.try_send(new_msg(invalid_store_id)).is_err());
     }
 }

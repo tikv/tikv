@@ -31,6 +31,10 @@ use util::{escape, transport};
 quick_error!{
     #[derive(Debug)]
     pub enum Error {
+        StoreNotMatch(to_store_id: u64, my_store_id: u64) {
+            description("store is not match")
+            display("to store id {}, mine {}", to_store_id, my_store_id)
+        }
         RegionNotFound(region_id: u64) {
             description("region is not found")
             display("region {} not found", region_id)
