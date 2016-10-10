@@ -16,13 +16,16 @@ use std::boxed::{Box, FnBox};
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
 use std::collections::HashMap;
+use std::time::Instant;
 
 use super::Result;
-use util::{self, TryInsertWith};
+use util;
 use util::worker::{Runnable, Worker};
 use pd::PdClient;
 use kvproto::metapb;
 use super::metrics::*;
+
+const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
 pub type Callback = Box<FnBox(Result<SocketAddr>) + Send>;
 
@@ -44,45 +47,53 @@ impl Display for Task {
     }
 }
 
+struct StoreAddr {
+    sock: SocketAddr,
+    last_update: Instant,
+}
+
 pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
-    store_addrs: HashMap<u64, String>,
+    store_addrs: HashMap<u64, StoreAddr>,
 }
 
 impl<T: PdClient> Runner<T> {
     fn resolve(&mut self, store_id: u64) -> Result<SocketAddr> {
-        let addr = try!(self.get_address(store_id));
+        if let Some(s) = self.store_addrs.get(&store_id) {
+            let now = Instant::now();
+            let elasped = now.duration_since(s.last_update);
+            if elasped.as_secs() < STORE_ADDRESS_REFRESH_SECONDS {
+                return Ok(s.sock);
+            }
+        }
 
-        // If we use docker and use host for store address, the real IP
-        // may be changed after service restarts, so here we just cache
-        // pd result and use to_socket_addr to get real socket address.
-        let sock = try!(util::to_socket_addr(addr));
+        let addr = try!(self.get_address(store_id));
+        let sock = try!(util::to_socket_addr(addr.as_str()));
+
+        let cache = StoreAddr {
+            sock: sock,
+            last_update: Instant::now(),
+        };
+        self.store_addrs.insert(store_id, cache);
+
         Ok(sock)
     }
 
-    fn get_address(&mut self, store_id: u64) -> Result<&str> {
-        // TODO: do we need re-update the cache sometimes?
-        // Store address may be changed?
+    fn get_address(&mut self, store_id: u64) -> Result<String> {
         let pd_client = self.pd_client.clone();
-        let s = try!(self.store_addrs.entry(store_id).or_try_insert_with(|| {
-            pd_client.get_store(store_id)
-                .and_then(|s| {
-                    if s.get_state() == metapb::StoreState::Tombstone {
-                        RESOLVE_STORE_COUNTER.with_label_values(&["tombstone"]).inc();
-                        return Err(box_err!("store {} has been removed", store_id));
-                    }
-                    let addr = s.get_address().to_owned();
-                    // In some tests, we use empty address for store first,
-                    // so we should ignore here.
-                    // TODO: we may remove this check after we refactor the test.
-                    if addr.len() == 0 {
-                        return Err(box_err!("invalid empty address for store {}", store_id));
-                    }
-                    Ok(addr)
-                })
-        }));
-
-        Ok(s)
+        let s = box_try!(pd_client.get_store(store_id));
+        if s.get_state() == metapb::StoreState::Tombstone {
+            RESOLVE_STORE_COUNTER.with_label_values(&["tombstone"]).inc();
+            return Err(box_err!("store {} has been removed", store_id));
+        }
+        let addr = s.get_address().to_owned();
+        // In some tests, we use empty address for store first,
+        // so we should ignore here.
+        // TODO: we may remove this check after we refactor the test.
+        if addr.is_empty() {
+            return Err(box_err!("invalid empty address for store {}", store_id));
+        }
+        Ok(addr)
     }
 }
 
@@ -145,12 +156,21 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::collections::HashMap;
+    use std::time::{Instant, Duration};
+    use std::ops::Sub;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+    use std::thread;
 
     use kvproto::pdpb;
     use kvproto::metapb;
     use pd::{PdClient, Result};
+    use util;
+
+    const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
     struct MockPdClient {
+        start: Instant,
         store: metapb::Store,
     }
 
@@ -168,7 +188,12 @@ mod tests {
             unimplemented!();
         }
         fn get_store(&self, _: u64) -> Result<metapb::Store> {
-            Ok(self.store.clone())
+            // The store address will be changed every millisecond.
+            let mut store = self.store.clone();
+            let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
+            sock.set_port(util::duration_to_ms(self.start.elapsed()) as u16);
+            store.set_address(format!("{}:{}", sock.ip(), sock.port()));
+            Ok(store)
         }
         fn get_cluster_config(&self) -> Result<metapb::Cluster> {
             unimplemented!();
@@ -197,35 +222,80 @@ mod tests {
         }
     }
 
-    fn new_runner(addr: &str, state: metapb::StoreState) -> Runner<MockPdClient> {
+    fn new_store(addr: &str, state: metapb::StoreState) -> metapb::Store {
         let mut store = metapb::Store::new();
+        store.set_id(1);
         store.set_state(state);
         store.set_address(addr.into());
-        let client = MockPdClient { store: store };
+        store
+    }
+
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient> {
+        let client = MockPdClient {
+            start: Instant::now(),
+            store: store,
+        };
         Runner {
             pd_client: Arc::new(client),
             store_addrs: HashMap::new(),
         }
     }
 
+    const STORE_ADDR: &'static str = "127.0.0.1:12345";
+
     #[test]
     fn test_resolve_store_state_up() {
-        let addr = "127.0.0.1";
-        let mut runner = new_runner(addr, metapb::StoreState::Up);
-        assert_eq!(runner.get_address(0).unwrap(), addr);
+        let store = new_store(STORE_ADDR, metapb::StoreState::Up);
+        let mut runner = new_runner(store);
+        assert!(runner.get_address(0).is_ok());
     }
 
     #[test]
     fn test_resolve_store_state_offline() {
-        let addr = "127.0.0.1";
-        let mut runner = new_runner(addr, metapb::StoreState::Offline);
-        assert_eq!(runner.get_address(0).unwrap(), addr);
+        let store = new_store(STORE_ADDR, metapb::StoreState::Offline);
+        let mut runner = new_runner(store);
+        assert!(runner.get_address(0).is_ok());
     }
 
     #[test]
     fn test_resolve_store_state_tombstone() {
-        let addr = "127.0.0.1";
-        let mut runner = new_runner(addr, metapb::StoreState::Tombstone);
+        let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
+        let mut runner = new_runner(store);
         assert!(runner.get_address(0).is_err());
+    }
+
+    #[test]
+    fn test_store_address_refresh() {
+        let store = new_store(STORE_ADDR, metapb::StoreState::Up);
+        let store_id = store.get_id();
+        let mut runner = new_runner(store);
+
+        let interval = Duration::from_millis(2);
+
+        let sock = runner.resolve(store_id).unwrap();
+        let port = sock.port();
+
+        thread::sleep(interval);
+        // Expire the cache, and the address will be refreshed.
+        {
+            let mut s = runner.store_addrs.get_mut(&store_id).unwrap();
+            let now = Instant::now();
+            s.last_update = now.sub(Duration::from_secs(STORE_ADDRESS_REFRESH_SECONDS + 1));
+        }
+        let sock = runner.resolve(store_id).unwrap();
+        assert!(sock.port() > port);
+        let port = sock.port();
+
+        thread::sleep(interval);
+        // Remove the cache, and the address will be refreshed.
+        runner.store_addrs.remove(&store_id);
+        let sock = runner.resolve(store_id).unwrap();
+        assert!(sock.port() > port);
+        let port = sock.port();
+
+        thread::sleep(interval);
+        // Otherwise, the address will not be refreshed.
+        let sock = runner.resolve(store_id).unwrap();
+        assert_eq!(sock.port(), port);
     }
 }
