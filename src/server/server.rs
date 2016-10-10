@@ -439,7 +439,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             return;
         }
 
-        info!("begin to resolve store {} address", store_id);
+        debug!("begin to resolve store {} address", store_id);
         RESOLVE_STORE_COUNTER.with_label_values(&["store"]).inc();
         self.store_resolving.insert(store_id);
         self.resolve_store(store_id, data);
@@ -447,7 +447,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn on_resolve_failed(&mut self, store_id: u64, sock_addr: Result<SocketAddr>, data: ConnData) {
         let e = sock_addr.unwrap_err();
-        warn!("resolve store {} address failed {:?}", store_id, e);
+        debug!("resolve store {} address failed {:?}", store_id, e);
 
         self.report_unreachable(data)
     }

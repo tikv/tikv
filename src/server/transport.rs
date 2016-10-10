@@ -22,7 +22,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use raft::SnapshotStatus;
 use super::{Msg, ConnData};
 use util::transport::SendCh;
-
+use super::metrics::*;
 
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.
@@ -81,6 +81,7 @@ impl ServerRaftStoreRouter {
 
     fn validate_store_id(&self, store_id: u64) -> RaftStoreResult<()> {
         if store_id != self.store_id {
+            RAFT_STORE_MSG_COUNTER.with_label_values(&["store_not_match"]).inc();
             Err(RaftStoreError::StoreNotMatch(store_id, self.store_id))
         } else {
             Ok(())
@@ -111,6 +112,31 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         self.try_send(StoreMsg::RaftCmd {
             request: req,
             callback: cb,
+        })
+    }
+
+    fn report_snapshot(&self,
+                       region_id: u64,
+                       to_peer_id: u64,
+                       status: SnapshotStatus)
+                       -> RaftStoreResult<()> {
+        let label = match status {
+            SnapshotStatus::Finish => "snapshot_finish",
+            SnapshotStatus::Failure => "snapshot_failure",
+        };
+        RAFT_STORE_MSG_COUNTER.with_label_values(&[label]).inc();
+        self.send(StoreMsg::ReportSnapshot {
+            region_id: region_id,
+            to_peer_id: to_peer_id,
+            status: status,
+        })
+    }
+
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
+        RAFT_STORE_MSG_COUNTER.with_label_values(&["unreachable"]).inc();
+        self.try_send(StoreMsg::ReportUnreachable {
+            region_id: region_id,
+            to_peer_id: to_peer_id,
         })
     }
 }
