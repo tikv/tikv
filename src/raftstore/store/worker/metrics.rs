@@ -65,7 +65,7 @@ lazy_static! {
 
     pub static ref COMPACT_RANGE_CF: HistogramVec =
         register_histogram_vec!(
-            "tikv_compact_range_for_cf_duration_seconds",
+            "tikv_compact_range_cf_duration_seconds",
             "Bucketed histogram of compact range for cf execution",
             &["cf"]
         ).unwrap();
