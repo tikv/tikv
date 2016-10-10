@@ -173,6 +173,10 @@ mod tests {
         store: metapb::Store,
     }
 
+    fn duration_as_millis(d: Duration) -> u64 {
+        d.as_secs() * 1000 + d.subsec_nanos() as u64 / 1000000
+    }
+
     impl PdClient for MockPdClient {
         fn bootstrap_cluster(&self, _: metapb::Store, _: metapb::Region) -> Result<()> {
             unimplemented!();
@@ -187,10 +191,10 @@ mod tests {
             unimplemented!();
         }
         fn get_store(&self, _: u64) -> Result<metapb::Store> {
-            // The store address will changed every second.
+            // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
-            sock.set_port(self.start.elapsed().as_secs() as u16);
+            sock.set_port(duration_as_millis(self.start.elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
         }
@@ -229,14 +233,11 @@ mod tests {
         store
     }
 
-    fn new_client(store: metapb::Store) -> MockPdClient {
-        MockPdClient {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient> {
+        let client = MockPdClient {
             start: Instant::now(),
             store: store,
-        }
-    }
-
-    fn new_runner(client: MockPdClient) -> Runner<MockPdClient> {
+        };
         Runner {
             pd_client: Arc::new(client),
             store_addrs: HashMap::new(),
@@ -248,21 +249,21 @@ mod tests {
     #[test]
     fn test_resolve_store_state_up() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Up);
-        let mut runner = new_runner(new_client(store));
+        let mut runner = new_runner(store);
         assert!(runner.get_address(0).is_ok());
     }
 
     #[test]
     fn test_resolve_store_state_offline() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Offline);
-        let mut runner = new_runner(new_client(store));
+        let mut runner = new_runner(store);
         assert!(runner.get_address(0).is_ok());
     }
 
     #[test]
     fn test_resolve_store_state_tombstone() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
-        let mut runner = new_runner(new_client(store));
+        let mut runner = new_runner(store);
         assert!(runner.get_address(0).is_err());
     }
 
@@ -270,35 +271,34 @@ mod tests {
     fn test_store_address_refresh() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Up);
         let store_id = store.get_id();
-        let mut runner = new_runner(new_client(store));
+        let mut runner = new_runner(store);
 
-        let one_second = Duration::from_secs(1);
-        for _ in 0..3 {
-            let sock = runner.resolve(store_id).unwrap();
-            let port = sock.port();
+        let interval = Duration::from_millis(2);
 
-            thread::sleep(one_second);
-            // Expire the cache, and the address will be refreshed.
-            {
-                let mut s = runner.store_addrs.get_mut(&store_id).unwrap();
-                let now = Instant::now();
-                s.last_update = now.sub(Duration::from_secs(STORE_ADDRESS_REFRESH_SECONDS + 1));
-            }
-            let sock = runner.resolve(store_id).unwrap();
-            assert!(sock.port() > port);
-            let port = sock.port();
+        let sock = runner.resolve(store_id).unwrap();
+        let port = sock.port();
 
-            thread::sleep(one_second);
-            // Remove the cache, and the address will be refreshed.
-            runner.store_addrs.remove(&store_id);
-            let sock = runner.resolve(store_id).unwrap();
-            assert!(sock.port() > port);
-            let port = sock.port();
-
-            thread::sleep(one_second);
-            // Otherwise, the address will not be refreshed.
-            let sock = runner.resolve(store_id).unwrap();
-            assert_eq!(sock.port(), port);
+        thread::sleep(interval);
+        // Expire the cache, and the address will be refreshed.
+        {
+            let mut s = runner.store_addrs.get_mut(&store_id).unwrap();
+            let now = Instant::now();
+            s.last_update = now.sub(Duration::from_secs(STORE_ADDRESS_REFRESH_SECONDS + 1));
         }
+        let sock = runner.resolve(store_id).unwrap();
+        assert!(sock.port() > port);
+        let port = sock.port();
+
+        thread::sleep(interval);
+        // Remove the cache, and the address will be refreshed.
+        runner.store_addrs.remove(&store_id);
+        let sock = runner.resolve(store_id).unwrap();
+        assert!(sock.port() > port);
+        let port = sock.port();
+
+        thread::sleep(interval);
+        // Otherwise, the address will not be refreshed.
+        let sock = runner.resolve(store_id).unwrap();
+        assert_eq!(sock.port(), port);
     }
 }
