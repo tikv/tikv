@@ -12,8 +12,10 @@
 // limitations under the License.
 
 #![feature(plugin)]
+#![feature(alloc_system)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 
+extern crate alloc_system;
 extern crate tikv;
 extern crate getopts;
 #[macro_use]
