@@ -384,14 +384,10 @@ impl<T: Storage> RaftLog<T> {
         if high > self.unstable.offset {
             let offset = self.unstable.offset;
             let unstable = self.unstable.slice(cmp::max(low, offset), high);
-            if ents.is_empty() {
-                ents = unstable.to_vec();
-            } else {
-                ents.extend_from_slice(unstable);
-            }
+            ents.extend_from_slice(unstable);
         }
-
-        Ok(util::limit_size(&ents, max_size))
+        util::limit_size(&mut ents, max_size);
+        Ok(ents)
     }
 
     pub fn restore(&mut self, snapshot: Snapshot) {
