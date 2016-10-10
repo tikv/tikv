@@ -56,6 +56,7 @@ use super::super::metrics::*;
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
 pub const INIT_WRITE_STATS: u64 = 16;
+const U8_MAX: u64 = 255;
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -585,11 +586,19 @@ impl Scheduler {
             return true;
         }
 
+        // We schedule GC command based on the history write of the region. If there are
+        // a lot of writes for a region after previous GC command executed, it is probably
+        // that the region need GC.
+        // We use the following steps to simulate probabilistic execution of GC command.
+        // 1) we generate a number(pro) between [0, 255] based on the history write of the
+        // region, the more data has written the larger the number generated.
+        // 2) and then we generate an random number(x) between [0, 255].
+        // 3) compare the numbers generate in 1) and 2), if pro > x we schedule the GC command.
         let region_id = ctx.get_region_id();
         let mut history_write = self.write_stats.get_history(region_id);
-        history_write >>= 4;
-        let pro: u8 = if history_write >= 255 {
-            255
+        history_write /= INIT_WRITE_STATS;
+        let pro: u8 = if history_write >= U8_MAX {
+            U8_MAX as u8
         } else {
             history_write as u8
         };
