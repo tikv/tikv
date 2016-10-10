@@ -814,6 +814,7 @@ impl Scheduler {
 
         // The gc command maybe execute for a region that has no write for a long time, the
         // probability of execution for this kinds of regions increasing as time passing by.
+        // This is useful for the situation that store crash down and the statistics data lose.
         self.write_stats.incr_foreach(INIT_WRITE_STATS);
 
         self.register_roll_stats_tick(event_loop);
