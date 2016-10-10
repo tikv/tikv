@@ -173,7 +173,7 @@ impl Simulator for NodeCluster {
         }
 
         let node_id = node.id();
-        let router = ServerRaftStoreRouter::new(node.get_sendch());
+        let router = ServerRaftStoreRouter::new(node.get_sendch(), node_id);
         self.trans.wl().routers.insert(node_id, SimulateTransport::new(router));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);

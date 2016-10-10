@@ -161,7 +161,7 @@ impl Simulator for ServerCluster {
                    simulate_trans.clone(),
                    snap_mgr.clone())
             .unwrap();
-        let router = ServerRaftStoreRouter::new(node.get_sendch());
+        let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
         let sim_router = SimulateTransport::new(router);
 
         assert!(node_id == 0 || node_id == node.id());
