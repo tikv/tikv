@@ -78,3 +78,25 @@ impl RegionsWriteStats {
         self.stats.get(&region_id).map_or(0, |s| s.history)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RegionsWriteStats;
+
+    #[test]
+    fn test_regions_write_stats() {
+        let mut stats = RegionsWriteStats::new();
+
+        stats.incr(1, 100);
+        assert_eq!(stats.get_history(1), 0);
+        stats.roll();
+        assert_eq!(stats.get_history(1), 100);
+        stats.clear_history(1);
+        assert_eq!(stats.get_history(1), 0);
+
+        stats.incr_foreach(100);
+        assert_eq!(stats.get_history(1), 0);
+        stats.roll();
+        assert_eq!(stats.get_history(1), 100);
+    }
+}
