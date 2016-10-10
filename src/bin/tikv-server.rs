@@ -663,7 +663,7 @@ fn build_raftkv(matches: &Matches,
     let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
 
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
-    let router = ServerRaftStoreRouter::new(node.get_sendch());
+    let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
 
     (node, create_raft_storage(router.clone(), engine, cfg).unwrap(), router, snap_mgr)
 }
