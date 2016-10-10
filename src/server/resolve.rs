@@ -165,16 +165,13 @@ mod tests {
     use kvproto::pdpb;
     use kvproto::metapb;
     use pd::{PdClient, Result};
+    use util;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
     struct MockPdClient {
         start: Instant,
         store: metapb::Store,
-    }
-
-    fn duration_as_millis(d: Duration) -> u64 {
-        d.as_secs() * 1000 + d.subsec_nanos() as u64 / 1000000
     }
 
     impl PdClient for MockPdClient {
@@ -194,7 +191,7 @@ mod tests {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
-            sock.set_port(duration_as_millis(self.start.elapsed()) as u16);
+            sock.set_port(util::duration_to_ms(self.start.elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
         }
