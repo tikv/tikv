@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicBool;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::option::Option;
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::{HashMap, HashSet, BTreeMap, VecDeque};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
@@ -61,6 +61,8 @@ type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 
+const SPLIT_HISTORY_MAX_LEN: usize = 3;
+
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
@@ -84,6 +86,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
 
     snap_mgr: SnapManager,
+
+    split_history: VecDeque<(metapb::Region, metapb::Region, metapb::Region)>, // (old,left,right)
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -131,6 +135,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_client: pd_client,
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
+            split_history: VecDeque::new(),
         };
         try!(s.init());
         Ok(s)
@@ -739,6 +744,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_ready_split_region(&mut self,
                              region_id: u64,
+                             old: metapb::Region,
                              left: metapb::Region,
                              right: metapb::Region) {
         let new_region_id = right.get_id();
@@ -791,6 +797,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 new_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 self.region_peers.insert(new_region_id, new_peer);
+
+                if is_leader {
+                    self.split_history.push_back((old, left, right));
+                    if self.split_history.len() > SPLIT_HISTORY_MAX_LEN {
+                        self.split_history.pop_front();
+                    }
+                }
             }
         }
     }
@@ -856,8 +869,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     self.on_ready_change_peer(region_id, change_type, peer)
                 }
                 ExecResult::CompactLog { state } => self.on_ready_compact_log(region_id, state),
-                ExecResult::SplitRegion { left, right } => {
-                    self.on_ready_split_region(region_id, left, right)
+                ExecResult::SplitRegion { old, left, right } => {
+                    self.on_ready_split_region(region_id, old, left, right)
                 }
             }
         }
@@ -906,6 +919,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             Some(peer) => peer,
         };
+
+        for &(ref old, ref left, ref right) in &self.split_history {
+            if msg.get_header().get_region_id() == old.get_id() &&
+               msg.get_header().get_region_epoch() == old.get_region_epoch() {
+                bind_error(&mut resp,
+                           Error::StaleEpoch(format!("region {} has splitted recently.",
+                                                     old.get_id()),
+                                             vec![left.to_owned(), right.to_owned()]));
+                return cb.call_box((resp,));
+            }
+        }
 
         let term = peer.term();
         bind_term(&mut resp, term);

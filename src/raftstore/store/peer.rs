@@ -73,6 +73,7 @@ pub enum ExecResult {
     },
     CompactLog { state: RaftTruncatedState },
     SplitRegion {
+        old: metapb::Region,
         left: metapb::Region,
         right: metapb::Region,
     },
@@ -732,7 +733,8 @@ impl Peer {
                                                   sent {:?}",
                                                  self.region_id,
                                                  latest_epoch,
-                                                 from_epoch)));
+                                                 from_epoch),
+                                         vec![]));
         }
 
         Ok(())
@@ -1214,6 +1216,7 @@ impl Peer {
 
         let split_key = split_req.get_split_key();
         let mut region = self.region().clone();
+        let old = region.clone();
         if split_key <= region.get_start_key() {
             return Err(box_err!("invalid split request: {:?}", split_req));
         }
@@ -1270,6 +1273,7 @@ impl Peer {
 
         Ok((resp,
             Some(ExecResult::SplitRegion {
+            old: old,
             left: region,
             right: new_region,
         })))
