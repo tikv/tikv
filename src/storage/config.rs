@@ -26,6 +26,7 @@ pub struct Config {
     pub sched_concurrency: usize,
     pub sched_worker_pool_size: usize,
     pub sched_too_busy_threshold: usize,
+    pub sched_pro_exec_gc: bool,
 }
 
 impl Default for Config {
@@ -37,6 +38,7 @@ impl Default for Config {
             sched_concurrency: DEFAULT_SCHED_CONCURRENCY,
             sched_worker_pool_size: DEFAULT_SCHED_WORKER_POOL_SIZE,
             sched_too_busy_threshold: DEFAULT_SCHED_TOO_BUSY_THRESHOLD,
+            sched_pro_exec_gc: true,
         }
     }
 }

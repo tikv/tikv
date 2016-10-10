@@ -14,6 +14,7 @@
 mod store;
 mod scheduler;
 mod latch;
+mod statistics;
 
 use std::error;
 use std::io::Error as IoError;

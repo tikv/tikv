@@ -31,7 +31,9 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
+use rand;
 use std::boxed::Box;
+use std::time::Duration;
 use std::fmt::{self, Formatter, Debug};
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
@@ -48,10 +50,12 @@ use super::Result;
 use super::Error;
 use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
+use super::statistics::{RegionsWriteStats, ROLL_INTERVAL_SECS};
 use super::super::metrics::*;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
+pub const INIT_WRITE_STATS: u64 = 16;
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -62,6 +66,10 @@ pub enum ProcessResult {
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
+}
+
+pub enum Tick {
+    RollStats,
 }
 
 /// Message types for the scheduler event loop.
@@ -204,6 +212,12 @@ pub struct Scheduler {
     // write concurrency control
     latches: Latches,
 
+    // write statistics
+    write_stats: RegionsWriteStats,
+
+    // probabilistic execute gc command base on write_stats
+    pro_exec_gc: bool,
+
     sched_too_busy_threshold: usize,
 
     // worker pool
@@ -215,6 +229,8 @@ impl Scheduler {
     pub fn new(engine: Box<Engine>,
                schedch: SendCh<Msg>,
                concurrency: usize,
+               pro_exec_gc: bool,
+               worker_pool_size: usize)
                worker_pool_size: usize,
                sched_too_busy_threshold: usize)
                -> Scheduler {
@@ -225,6 +241,8 @@ impl Scheduler {
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_too_busy_threshold: sched_too_busy_threshold,
+            write_stats: RegionsWriteStats::new(),
+            pro_exec_gc: pro_exec_gc,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
         }
@@ -552,6 +570,59 @@ impl Scheduler {
         extract_ctx(ctx.cmd.as_ref().unwrap())
     }
 
+    fn statistic(&mut self, cmd: &Command) {
+        match *cmd {
+            Command::Prewrite { ref ctx, ref mutations, .. } => {
+                let region_id = ctx.get_region_id();
+                self.write_stats.incr(region_id, mutations.len() as u64);
+            }
+            _ => debug!("don't need statistic for command {:?}", cmd),
+        }
+    }
+
+    fn should_schedule_gc(&mut self, ctx: &Context) -> bool {
+        if !self.pro_exec_gc {
+            return true;
+        }
+
+        let region_id = ctx.get_region_id();
+        let mut history_write = self.write_stats.get_history(region_id);
+        history_write >>= 4;
+        let pro: u8 = if history_write >= 255 {
+            255
+        } else {
+            history_write as u8
+        };
+
+        let x = rand::random::<u8>();
+        let res = pro > x;
+        if res {
+            self.write_stats.clear_history(region_id);
+        }
+
+        res
+    }
+
+    fn should_schedule(&mut self, cmd: &Command) -> bool {
+        match *cmd {
+            Command::Gc { ref ctx, .. } => self.should_schedule_gc(ctx),
+            _ => true,
+        }
+    }
+
+    fn on_reveive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
+        // Do statistics before schedule command.
+        self.statistic(&cmd);
+
+        // Gc command execute with probability
+        let should_schedule = self.should_schedule(&cmd);
+        if should_schedule {
+            self.schedule_cmd(cmd, callback);
+        } else {
+            execute_callback(callback, ProcessResult::Res);
+        }
+    }
+
     /// Event handler for new command.
     ///
     /// This method will try to acquire all the necessary latches. If all the necessary latches are
@@ -731,18 +802,42 @@ impl Scheduler {
         info!("receive shutdown command");
         event_loop.shutdown();
     }
+
+    fn register_roll_stats_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop, Tick::RollStats, ROLL_INTERVAL_SECS * 1000) {
+            error!("register roll statistics tick err: {:?}", e);
+        };
+    }
+
+    fn on_roll_stats_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        self.write_stats.roll();
+
+        // The gc command maybe execute for a region that has no write for a long time, the
+        // probability of execution for this kinds of regions increasing as time passing by.
+        self.write_stats.incr_foreach(INIT_WRITE_STATS);
+
+        self.register_roll_stats_tick(event_loop);
+    }
+}
+
+fn register_timer(event_loop: &mut EventLoop<Scheduler>,
+                  tick: Tick,
+                  delay: u64)
+                  -> Result<mio::Timeout> {
+    event_loop.timeout(tick, Duration::from_millis(delay))
+        .map_err(|e| box_err!("register timer err: {:?}", e))
 }
 
 /// Handler of the scheduler event loop.
 impl mio::Handler for Scheduler {
-    type Timeout = ();
+    type Timeout = Tick;
     type Message = Msg;
 
     /// Event handler for message events.
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => self.shutdown(event_loop),
-            Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
+            Msg::RawCmd { cmd, cb } => self.on_reveive_new_cmd(cmd, cb),
             Msg::SnapshotFinished { cid, snapshot } => self.on_snapshot_finished(cid, snapshot),
             Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
             Msg::WritePrepareFinished { cid, cmd, pr, to_be_write } => {
@@ -757,6 +852,13 @@ impl mio::Handler for Scheduler {
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
             // stop work threads if has
+        }
+    }
+
+    /// Handler for timeout events
+    fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
+        match timeout {
+            Tick::RollStats => self.on_roll_stats_tick(event_loop),
         }
     }
 }
