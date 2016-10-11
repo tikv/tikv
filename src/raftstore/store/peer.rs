@@ -73,7 +73,6 @@ pub enum ExecResult {
     },
     CompactLog { state: RaftTruncatedState },
     SplitRegion {
-        old: metapb::Region,
         left: metapb::Region,
         right: metapb::Region,
     },
@@ -692,7 +691,7 @@ impl Peer {
         self.raft_group.propose_conf_change(cc).map_err(From::from)
     }
 
-    fn check_epoch(&self, req: &RaftCmdRequest) -> Result<()> {
+    pub fn check_epoch(&self, req: &RaftCmdRequest) -> Result<()> {
         let (mut check_ver, mut check_conf_ver) = (false, false);
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
@@ -734,7 +733,7 @@ impl Peer {
                                                  self.region_id,
                                                  latest_epoch,
                                                  from_epoch),
-                                         vec![]));
+                                         vec![self.region().to_owned()]));
         }
 
         Ok(())
@@ -1216,7 +1215,6 @@ impl Peer {
 
         let split_key = split_req.get_split_key();
         let mut region = self.region().clone();
-        let old = region.clone();
         if split_key <= region.get_start_key() {
             return Err(box_err!("invalid split request: {:?}", split_req));
         }
@@ -1273,7 +1271,6 @@ impl Peer {
 
         Ok((resp,
             Some(ExecResult::SplitRegion {
-            old: old,
             left: region,
             right: new_region,
         })))
