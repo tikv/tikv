@@ -78,6 +78,7 @@ pub struct PeerStorage {
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
+    pub last_term: u64,
 
     snap_state: RefCell<SnapState>,
     region_sched: Scheduler<RegionTask>,
@@ -114,6 +115,7 @@ pub struct InvokeContext {
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
     pub wb: WriteBatch,
+    last_term: u64,
     engine: Arc<DB>,
 }
 
@@ -123,6 +125,7 @@ impl InvokeContext {
             raft_state: store.raft_state.clone(),
             apply_state: store.apply_state.clone(),
             wb: WriteBatch::new(),
+            last_term: store.last_term,
             engine: store.engine.clone(),
         }
     }
@@ -160,6 +163,16 @@ impl PeerStorage {
                     raft_state
                 }
             };
+        let last_term = match raft_state.get_last_index() {
+            0 => 0,
+            RAFT_INIT_LOG_INDEX => RAFT_INIT_LOG_TERM,
+            idx => {
+                let e: Entry =
+                    try!(engine.get_msg_cf(CF_RAFT, &keys::raft_log_key(region.get_id(), idx)))
+                        .unwrap();
+                e.get_term()
+            }
+        };
         let apply_state =
             match try!(engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))) {
                 Some(s) => s,
@@ -185,6 +198,7 @@ impl PeerStorage {
             snap_tried_cnt: AtomicUsize::new(0),
             tag: tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
+            last_term: last_term,
         })
     }
 
@@ -279,6 +293,9 @@ impl PeerStorage {
             return Ok(self.truncated_term());
         }
         try!(self.check_range(idx, idx + 1));
+        if self.truncated_term() == self.last_term || idx == self.last_index() {
+            return Ok(self.last_term);
+        }
         let key = keys::raft_log_key(self.get_region_id(), idx);
         match try!(self.engine.get_msg_cf::<Entry>(CF_RAFT, &key)) {
             Some(entry) => Ok(entry.get_term()),
@@ -410,7 +427,9 @@ impl PeerStorage {
                                    entry));
         }
 
-        let last_index = entries[entries.len() - 1].get_index();
+        let e = entries.last().unwrap();
+        let last_index = e.get_index();
+        let last_term = e.get_term();
 
         // Delete any previously appended log entries which never committed.
         for i in (last_index + 1)..(prev_last_index + 1) {
@@ -418,6 +437,7 @@ impl PeerStorage {
         }
 
         ctx.raft_state.set_last_index(last_index);
+        ctx.last_term = last_term;
 
         Ok(last_index)
     }
@@ -449,6 +469,7 @@ impl PeerStorage {
         let last_index = snap.get_metadata().get_index();
 
         ctx.raft_state.set_last_index(last_index);
+        ctx.last_term = snap.get_metadata().get_term();
         ctx.apply_state.set_applied_index(last_index);
 
         // The snapshot only contains log which index > applied index, so
@@ -638,6 +659,7 @@ impl PeerStorage {
 
         self.raft_state = ctx.raft_state;
         self.apply_state = ctx.apply_state;
+        self.last_term = ctx.last_term;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
             let abort = Arc::new(AtomicBool::new(false));
@@ -1111,7 +1133,7 @@ mod test {
 
     #[test]
     fn test_storage_apply_snapshot() {
-        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
@@ -1144,11 +1166,13 @@ mod test {
         let s2 = new_storage(sched, &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
+        assert!(ctx.last_term != snap1.get_metadata().get_term());
         s2.apply_snapshot(&mut ctx, &snap1).unwrap();
-        assert_eq!(ctx.apply_state.get_applied_index(), 5);
-        assert_eq!(ctx.raft_state.get_last_index(), 5);
-        assert_eq!(ctx.apply_state.get_truncated_state().get_index(), 5);
-        assert_eq!(ctx.apply_state.get_truncated_state().get_term(), 5);
+        assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
+        assert_eq!(ctx.apply_state.get_applied_index(), 6);
+        assert_eq!(ctx.raft_state.get_last_index(), 6);
+        assert_eq!(ctx.apply_state.get_truncated_state().get_index(), 6);
+        assert_eq!(ctx.apply_state.get_truncated_state().get_term(), 6);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
     }
 }
