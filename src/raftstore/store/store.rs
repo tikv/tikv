@@ -946,13 +946,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // but it doesn't matter, if the peer is not leader, the proposing command
         // log entry can't be committed.
 
-
+        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let pending_cmd = PendingCmd {
             uuid: uuid,
-            term: resp.get_header().get_current_term(),
+            term: peer.term(),
             cb: cb,
         };
-        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         try!(peer.propose(pending_cmd, msg, resp));
 
         self.pending_raft_groups.insert(region_id);
