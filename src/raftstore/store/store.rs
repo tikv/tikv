@@ -61,6 +61,85 @@ type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 
+/// The buffered metric counters for raft message.
+#[derive(Debug, Default, Clone)]
+pub struct RaftMessageMetrics {
+    pub append: u64,
+    pub append_resp: u64,
+    pub vote: u64,
+    pub vote_resp: u64,
+    pub snapshot: u64,
+    pub heartbeat: u64,
+    pub heartbeat_resp: u64,
+    pub transfer_leader: u64,
+    pub timeout_now: u64,
+}
+
+impl RaftMessageMetrics {
+    /// Resets all metric counters
+    fn reset(&mut self) {
+        self.append = 0u64;
+        self.append_resp = 0u64;
+        self.vote = 0u64;
+        self.vote_resp = 0u64;
+        self.snapshot = 0u64;
+        self.heartbeat = 0u64;
+        self.heartbeat_resp = 0u64;
+        self.transfer_leader = 0u64;
+        self.timeout_now = 0u64;
+    }
+}
+
+fn add_raft_metrics(m: &mut RaftMessageMetrics) {
+    if m.append > 0 {
+        PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append"])
+            .inc_by(m.append as f64)
+            .unwrap();
+    }
+    if m.append_resp > 0 {
+        PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append_resp"])
+            .inc_by(m.append_resp as f64)
+            .unwrap();
+    }
+    if m.vote > 0 {
+        PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote"])
+            .inc_by(m.vote as f64)
+            .unwrap();
+    }
+    if m.vote_resp > 0 {
+        PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote_resp"])
+            .inc_by(m.vote as f64)
+            .unwrap();
+    }
+    if m.snapshot > 0 {
+        PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["snapshot"])
+            .inc_by(m.snapshot as f64)
+            .unwrap();
+    }
+    if m.heartbeat > 0 {
+        PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat"])
+            .inc_by(m.heartbeat as f64)
+            .unwrap();
+    }
+    if m.heartbeat_resp > 0 {
+        PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat_resp"])
+            .inc_by(m.heartbeat_resp as f64)
+            .unwrap();
+    }
+    if m.transfer_leader > 0 {
+        PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["transfer_leader"])
+            .inc_by(m.transfer_leader as f64)
+            .unwrap();
+    }
+    if m.timeout_now > 0 {
+        PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["timeout_now"])
+            .inc_by(m.timeout_now as f64)
+            .unwrap();
+    }
+    // reset all buffered metrics once they have been added
+    m.reset()
+}
+
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
@@ -84,6 +163,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
 
     snap_mgr: SnapManager,
+
+    raft_metrics: RaftMessageMetrics,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -131,6 +212,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_client: pd_client,
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
+            raft_metrics: RaftMessageMetrics::default(),
         };
         try!(s.init());
         Ok(s)
@@ -356,6 +438,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
             .inc_by(duration_to_nanos(t.elapsed()) as f64)
             .unwrap();
+
+        add_raft_metrics(&mut self.raft_metrics);
 
         self.register_raft_base_tick(event_loop);
     }
@@ -644,7 +728,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for region_id in ids {
             let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans) {
+                match peer.handle_raft_ready(&self.trans, &mut self.raft_metrics) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
                         error!("{} handle raft ready err: {:?}", peer.tag, e);
