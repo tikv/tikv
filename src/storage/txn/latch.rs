@@ -13,8 +13,7 @@
 
 
 use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, SipHasher as DefaultHasher, Hasher};
 use std::usize;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
