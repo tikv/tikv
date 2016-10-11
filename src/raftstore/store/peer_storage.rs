@@ -469,6 +469,7 @@ impl PeerStorage {
         let last_index = snap.get_metadata().get_index();
 
         ctx.raft_state.set_last_index(last_index);
+        ctx.last_term = snap.get_metadata().get_term();
         ctx.apply_state.set_applied_index(last_index);
 
         // The snapshot only contains log which index > applied index, so
@@ -1132,7 +1133,7 @@ mod test {
 
     #[test]
     fn test_storage_apply_snapshot() {
-        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
@@ -1165,11 +1166,13 @@ mod test {
         let s2 = new_storage(sched, &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
+        assert!(ctx.last_term != snap1.get_metadata().get_term());
         s2.apply_snapshot(&mut ctx, &snap1).unwrap();
-        assert_eq!(ctx.apply_state.get_applied_index(), 5);
-        assert_eq!(ctx.raft_state.get_last_index(), 5);
-        assert_eq!(ctx.apply_state.get_truncated_state().get_index(), 5);
-        assert_eq!(ctx.apply_state.get_truncated_state().get_term(), 5);
+        assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
+        assert_eq!(ctx.apply_state.get_applied_index(), 6);
+        assert_eq!(ctx.raft_state.get_last_index(), 6);
+        assert_eq!(ctx.apply_state.get_truncated_state().get_index(), 6);
+        assert_eq!(ctx.apply_state.get_truncated_state().get_term(), 6);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
     }
 }
