@@ -898,7 +898,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return cb.call_box((resp,));
         }
 
-        if let Err(e) = self.check_propose(&msg) {
+        if let Err(e) = self.validate_region(&msg) {
             bind_error(&mut resp, e);
             return cb.call_box((resp,));
         }
@@ -927,7 +927,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn check_propose(&self, msg: &RaftCmdRequest) -> Result<()> {
+    fn validate_region(&self, msg: &RaftCmdRequest) -> Result<()> {
         let region_id = msg.get_header().get_region_id();
         let peer_id = msg.get_header().get_peer().get_id();
 
