@@ -254,8 +254,9 @@ impl Storage for MemStorage {
 
         let lo = (low - offset) as usize;
         let hi = (high - offset) as usize;
-        let ents: &[Entry] = &core.entries[lo..hi];
-        Ok(util::limit_size(ents, max_size))
+        let mut ents = core.entries[lo..hi].to_vec();
+        util::limit_size(&mut ents, max_size);
+        Ok(ents)
     }
 
     /// term implements the Storage trait.
