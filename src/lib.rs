@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![crate_type = "lib"]
-#![feature(alloc_system)]
 #![feature(test)]
 #![feature(optin_builtin_traits)]
 #![feature(btree_range, collections_bound)]
@@ -28,7 +27,6 @@
 
 #![allow(module_inception)]
 
-extern crate alloc_system;
 #[macro_use]
 extern crate log;
 #[macro_use]
