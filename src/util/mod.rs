@@ -79,9 +79,9 @@ impl Log for DefaultLogger {
     }
 }
 
-pub fn limit_size<T: Message + Clone>(entries: &[T], max: u64) -> Vec<T> {
-    if entries.len() == 0 {
-        return entries.to_vec();
+pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
+    if entries.is_empty() {
+        return;
     }
 
     let mut size = Message::compute_size(&entries[0]) as u64;
@@ -93,7 +93,7 @@ pub fn limit_size<T: Message + Clone>(entries: &[T], max: u64) -> Vec<T> {
         }
         limit += 1;
     }
-    entries[..limit].to_vec()
+    entries.truncate(limit);
 }
 
 pub struct DefaultRng {
