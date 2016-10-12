@@ -903,10 +903,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return cb.call_box((resp,));
         }
 
-        // Notice:
-        // Here means the peer is leader, it can still step down to follower later,
-        // but it doesn't matter, if the peer is not leader, the proposing command
-        // log entry can't be committed.
+        // Note:
+        // The peer that is being checked is a leader. It might step down to be a follower later. It
+        // doesn't matter whether the peer is a leader or not. If it's not a leader, the proposing
+        // command log entry can't be committed.
 
         let region_id = msg.get_header().get_region_id();
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
@@ -944,9 +944,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let res = peer.check_epoch(msg);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
-            // Attach next region, which may be splitted from current region.
-            // It won't matter even if next region is not actually splitted from current region.
-            // Whenever tikv driver receives a region meta newer than it caches, it can be updated.
+            // Attach the next region which might be split from the current region. But it doesn't
+            // matter if the next region is not split from the current region. If the region meta
+            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
+            // updated.
             if let Some((_, &next_region_id)) = self.region_ranges
                 .range(Excluded(&enc_end_key(peer.region())), Unbounded::<&Key>)
                 .next() {
