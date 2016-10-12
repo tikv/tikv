@@ -898,37 +898,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return cb.call_box((resp,));
         }
 
-        let region_id = msg.get_header().get_region_id();
-        let mut peer = match self.region_peers.get_mut(&region_id) {
-            None => {
-                bind_error(&mut resp, Error::RegionNotFound(region_id));
-                return cb.call_box((resp,));
-            }
-            Some(peer) => peer,
-        };
+        if let Err(e) = self.validate_region(&msg) {
+            bind_error(&mut resp, e);
+            return cb.call_box((resp,));
+        }
 
+        // Note:
+        // The peer that is being checked is a leader. It might step down to be a follower later. It
+        // doesn't matter whether the peer is a leader or not. If it's not a leader, the proposing
+        // command log entry can't be committed.
+
+        let region_id = msg.get_header().get_region_id();
+        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
         bind_term(&mut resp, term);
-
-        if !peer.is_leader() {
-            bind_error(&mut resp,
-                       Error::NotLeader(region_id, peer.get_peer_from_cache(peer.leader_id())));
-            return cb.call_box((resp,));
-        }
-
-        let peer_id = msg.get_header().get_peer().get_id();
-        if peer.peer_id() != peer_id {
-            bind_error(&mut resp,
-                       box_err!("mismatch peer id {} != {}", peer.peer_id(), peer_id));
-            return cb.call_box((resp,));
-        }
-
-        // Notice:
-        // Here means the peer is leader, it can still step down to follower later,
-        // but it doesn't matter, if the peer is not leader, the proposing command
-        // log entry can't be committed.
-
-
         let pending_cmd = PendingCmd {
             uuid: uuid,
             term: term,
@@ -942,6 +925,38 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // we will call the callback with timeout error.
 
         Ok(())
+    }
+
+    fn validate_region(&self, msg: &RaftCmdRequest) -> Result<()> {
+        let region_id = msg.get_header().get_region_id();
+        let peer_id = msg.get_header().get_peer().get_id();
+
+        let peer = match self.region_peers.get(&region_id) {
+            Some(peer) => peer,
+            None => return Err(Error::RegionNotFound(region_id)),
+        };
+        if !peer.is_leader() {
+            return Err(Error::NotLeader(region_id, peer.get_peer_from_cache(peer.leader_id())));
+        }
+        if peer.peer_id() != peer_id {
+            return Err(box_err!("mismatch peer id {} != {}", peer.peer_id(), peer_id));
+        }
+
+        let res = peer.check_epoch(msg);
+        if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
+            // Attach the next region which might be split from the current region. But it doesn't
+            // matter if the next region is not split from the current region. If the region meta
+            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
+            // updated.
+            if let Some((_, &next_region_id)) = self.region_ranges
+                .range(Excluded(&enc_end_key(peer.region())), Unbounded::<&Key>)
+                .next() {
+                let next_region = self.region_peers[&next_region_id].region();
+                new_regions.push(next_region.to_owned());
+            }
+            return Err(Error::StaleEpoch(msg, new_regions));
+        }
+        res
     }
 
     fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {

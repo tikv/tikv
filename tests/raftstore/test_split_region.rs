@@ -503,3 +503,35 @@ fn test_node_split_region_diff_check() {
     let mut cluster = new_node_cluster(0, count);
     test_split_region_diff_check(&mut cluster);
 }
+
+fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+    let pd_client = cluster.pd_client.clone();
+    let old = pd_client.get_region(b"k1").unwrap();
+    // Construct a get command using old region meta.
+    let get = util::new_request(old.get_id(),
+                                old.get_region_epoch().clone(),
+                                vec![util::new_get_cmd(b"k1")],
+                                false);
+    cluster.must_split(&old, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    let resp = cluster.call_command_on_leader(get, Duration::from_secs(5)).unwrap();
+    assert!(resp.get_header().has_error());
+    assert!(resp.get_header().get_error().has_stale_epoch());
+    assert_eq!(resp.get_header().get_error().get_stale_epoch().get_new_regions(),
+               &[left, right]);
+}
+
+#[test]
+fn test_server_split_stale_epoch() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_split_stale_epoch(&mut cluster);
+}
+
+#[test]
+fn test_node_split_stale_epoch() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_split_stale_epoch(&mut cluster);
+}
