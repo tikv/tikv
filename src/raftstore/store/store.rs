@@ -946,7 +946,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
             // Attach next region, which may be splitted from current region.
             // It won't matter even if next region is not actually splitted from current region.
-            // Whenever TiDB receives a region meta newer than it caches, it can be updated.
+            // Whenever tikv driver receives a region meta newer than it caches, it can be updated.
             if let Some((_, &next_region_id)) = self.region_ranges
                 .range(Excluded(&enc_end_key(peer.region())), Unbounded::<&Key>)
                 .next() {
