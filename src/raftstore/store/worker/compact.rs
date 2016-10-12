@@ -47,7 +47,7 @@ impl Display for Task {
             }
             Task::CompactRangeCF { ref cf_name, ref start_key, ref end_key } => {
                 write!(f,
-                       "Compact for CF[{}], range[{:?}, {:?}]",
+                       "Compact CF[{}], range[{:?}, {:?}]",
                        cf_name,
                        start_key,
                        end_key)
@@ -109,7 +109,6 @@ impl Runner {
                         end_key: Option<Vec<u8>>)
                         -> Result<(), Error> {
         let cf_handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
-
         let compact_range_timer = COMPACT_RANGE_CF.with_label_values(&[&cf_name])
             .start_timer();
         self.engine.compact_range_cf(cf_handle,
@@ -117,7 +116,6 @@ impl Runner {
                                      end_key.as_ref().map(Vec::as_slice));
 
         compact_range_timer.observe_duration();
-
         Ok(())
     }
 }
@@ -131,12 +129,11 @@ impl Runnable<Task> for Runner {
                        compact_idx);
                 match self.compact_raft_log(engine, region_id, compact_idx) {
                     Err(e) => error!("[region {}] failed to compact: {:?}", region_id, e),
-                    Ok(n) => info!("[region {}] compact {} log entries", region_id, n),
+                    Ok(n) => info!("[region {}] compacted {} log entries", region_id, n),
                 }
             }
             Task::CompactRangeCF { cf_name, start_key, end_key } => {
                 let cf = cf_name.clone();
-                debug!("execute compact range for cf {}", &cf);
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
                     error!("execute compact range for cf {} failed, err {}", &cf, e);
                 } else {

@@ -26,24 +26,20 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for i in 1..9 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
-        let key = k.as_bytes();
-        let value = v.as_bytes();
-        cluster.must_put_cf(CF_LOCK, key, value);
+        cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
     }
     for i in 1..9 {
         let k = format!("k{}", i);
-        let key = k.as_bytes();
-        cluster.must_delete_cf(CF_LOCK, key);
+        cluster.must_delete_cf(CF_LOCK, k.as_bytes());
     }
 
-    // wait compact lock cf
+    // wait for compacting cf-lock
     sleep_ms(2000);
 
     for engine in cluster.engines.values() {
         let cf_handle = get_cf_handle(engine, CF_LOCK).unwrap();
         let approximate_size =
             engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
-        println!("new size: {}", approximate_size);
         assert_eq!(approximate_size, 0);
     }
 }

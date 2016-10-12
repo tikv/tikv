@@ -1293,7 +1293,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactLockCf,
                                        self.cfg.lock_cf_compact_interval_secs * 1000) {
-            error!("register snap mgr gc tick err: {:?}", e);
+            error!("register compact cf-lock tick err: {:?}", e);
         }
     }
 
