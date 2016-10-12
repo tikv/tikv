@@ -12,6 +12,8 @@
 // limitations under the License.
 
 
+#![allow(deprecated)]
+
 use std::collections::VecDeque;
 use std::hash::{Hash, SipHasher as DefaultHasher, Hasher};
 use std::usize;
