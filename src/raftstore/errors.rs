@@ -18,7 +18,7 @@ use std::io;
 use std::net;
 use std::vec::Vec;
 
-use protobuf::ProtobufError;
+use protobuf::{ProtobufError, RepeatedField};
 
 use util::codec;
 use pd;
@@ -110,7 +110,7 @@ quick_error!{
             description("request timeout")
             display("Timeout {}", msg)
         }
-        StaleEpoch(msg: String) {
+        StaleEpoch(msg: String, new_regions: Vec<metapb::Region>) {
             description("region is stale")
             display("StaleEpoch {}", msg)
         }
@@ -153,8 +153,10 @@ impl Into<errorpb::Error> for Error {
                 errorpb.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
                 errorpb.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
             }
-            Error::StaleEpoch(_) => {
-                errorpb.set_stale_epoch(errorpb::StaleEpoch::new());
+            Error::StaleEpoch(_, new_regions) => {
+                let mut e = errorpb::StaleEpoch::new();
+                e.set_new_regions(RepeatedField::from_vec(new_regions));
+                errorpb.set_stale_epoch(e);
             }
             Error::Transport(transport::Error::Discard(_)) => {
                 errorpb.set_server_is_busy(errorpb::ServerIsBusy::new());
