@@ -607,6 +607,8 @@ impl Scheduler {
         let res = pro > x;
         if res {
             self.write_stats.clear_history(region_id);
+
+            info!("schedule GC command for region {}", region_id);
         }
 
         res
