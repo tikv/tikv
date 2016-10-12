@@ -56,6 +56,9 @@ backtrace = "0.2.3"
 [dependencies.getopts]
 git = "https://github.com/rust-lang-nursery/getopts"
 
+[dependencies.clap]
+git = "https://github.com/kbknapp/clap-rs"
+
 [dependencies.rocksdb]
 git = "https://github.com/ngaut/rust-rocksdb.git"
 
