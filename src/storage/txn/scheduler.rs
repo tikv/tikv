@@ -32,6 +32,7 @@
 //! to the scheduler.
 
 use rand;
+use std::u8;
 use std::boxed::Box;
 use std::time::Duration;
 use std::fmt::{self, Formatter, Debug};
@@ -50,13 +51,14 @@ use super::Result;
 use super::Error;
 use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
-use super::statistics::{RegionsWriteStats, ROLL_INTERVAL_SECS};
+use super::statistics::{RegionsWriteStats, ROLL_INTERVAL_SECS, CHECK_EXPIRED_INTERVAL_SECS};
 use super::super::metrics::*;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
-pub const INIT_WRITE_STATS: u64 = 16;
-const U8_MAX: u64 = 255;
+pub const WRITE_STATS_BASE: u64 = 64;
+pub const STATS_EXPIRED_SECS: i64 = 24 * 3600; // 24 hours
+const U8_MAX: u64 = u8::max_value() as u64;
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -71,6 +73,7 @@ pub enum ProcessResult {
 
 pub enum Tick {
     RollStats,
+    CheckExpiredStats,
 }
 
 /// Message types for the scheduler event loop.
@@ -490,6 +493,14 @@ fn extract_ctx(cmd: &Command) -> &Context {
 }
 
 impl Scheduler {
+    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
+        self.register_roll_stats_tick(event_loop);
+        self.register_check_expired_stats_tick(event_loop);
+
+        try!(event_loop.run(self));
+        Ok(())
+    }
+
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
@@ -582,6 +593,9 @@ impl Scheduler {
     }
 
     fn should_schedule_gc(&mut self, ctx: &Context) -> bool {
+        let region_id = ctx.get_region_id();
+        self.write_stats.update_active(region_id);
+
         if !self.pro_exec_gc {
             return true;
         }
@@ -594,9 +608,9 @@ impl Scheduler {
         // region, the more data has written the larger the number generated.
         // 2) and then we generate an random number(x) between [0, 255].
         // 3) compare the numbers generate in 1) and 2), if pro > x we schedule the GC command.
-        let region_id = ctx.get_region_id();
+
         let mut history_write = self.write_stats.get_history(region_id);
-        history_write /= INIT_WRITE_STATS;
+        history_write /= WRITE_STATS_BASE;
         let pro: u8 = if history_write >= U8_MAX {
             U8_MAX as u8
         } else {
@@ -606,9 +620,8 @@ impl Scheduler {
         let x = rand::random::<u8>();
         let res = pro > x;
         if res {
-            self.write_stats.clear_history(region_id);
-
             info!("schedule GC command for region {}", region_id);
+            self.write_stats.clear_history(region_id);
         }
 
         res
@@ -621,7 +634,7 @@ impl Scheduler {
         }
     }
 
-    fn on_reveive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
+    fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // Do statistics before schedule command.
         self.statistic(&cmd);
 
@@ -820,15 +833,27 @@ impl Scheduler {
         };
     }
 
-    fn on_roll_stats_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        self.write_stats.roll();
+    fn register_check_expired_stats_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::RollStats,
+                                       CHECK_EXPIRED_INTERVAL_SECS * 1000) {
+            error!("register check expired statistics tick err: {:?}", e);
+        };
+    }
 
+    fn on_roll_stats_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         // The gc command maybe execute for a region that has no write for a long time, the
         // probability of execution for this kinds of regions increasing as time passing by.
         // This is useful for the situation that store crash down and the statistics data lose.
-        self.write_stats.incr_foreach(INIT_WRITE_STATS);
+        self.write_stats.roll_and_up(WRITE_STATS_BASE);
 
         self.register_roll_stats_tick(event_loop);
+    }
+
+    fn on_check_expired_stats_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        self.write_stats.check_expired(STATS_EXPIRED_SECS);
+
+        self.register_check_expired_stats_tick(event_loop);
     }
 }
 
@@ -849,7 +874,7 @@ impl mio::Handler for Scheduler {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => self.shutdown(event_loop),
-            Msg::RawCmd { cmd, cb } => self.on_reveive_new_cmd(cmd, cb),
+            Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
             Msg::SnapshotFinished { cid, snapshot } => self.on_snapshot_finished(cid, snapshot),
             Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
             Msg::WritePrepareFinished { cid, cmd, pr, to_be_write } => {
@@ -871,6 +896,7 @@ impl mio::Handler for Scheduler {
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
         match timeout {
             Tick::RollStats => self.on_roll_stats_tick(event_loop),
+            Tick::CheckExpiredStats => self.on_check_expired_stats_tick(event_loop),
         }
     }
 }
