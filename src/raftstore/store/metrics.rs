@@ -14,20 +14,6 @@
 use prometheus::{CounterVec, GaugeVec, Histogram};
 
 lazy_static! {
-    pub static ref PEER_RAFT_READY_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_raftstore_raft_ready_handled_total",
-            "Total number of raft ready handled.",
-            &["type"]
-        ).unwrap();
-
-    pub static ref PEER_RAFT_READY_SENT_MESSAGE_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_raftstore_raft_ready_sent_message_total",
-            "Total number of raft ready sent messages.",
-            &["type"]
-        ).unwrap();
-
     pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_raftstore_proposal_total",
@@ -46,6 +32,20 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_apply_log_duration_seconds",
             "Bucketed histogram of peer applying log duration"
+        ).unwrap();
+
+    pub static ref STORE_RAFT_READY_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_raft_ready_handled_total",
+            "Total number of raft ready handled.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_raft_sent_message_total",
+            "Total number of raft ready sent messages.",
+            &["type"]
         ).unwrap();
 
     pub static ref STORE_PD_HEARTBEAT_GAUGE_VEC: GaugeVec =
