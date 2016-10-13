@@ -163,16 +163,6 @@ impl PeerStorage {
                     raft_state
                 }
             };
-        let last_term = match raft_state.get_last_index() {
-            0 => 0,
-            RAFT_INIT_LOG_INDEX => RAFT_INIT_LOG_TERM,
-            idx => {
-                let e: Entry =
-                    try!(engine.get_msg_cf(CF_RAFT, &keys::raft_log_key(region.get_id(), idx)))
-                        .unwrap();
-                e.get_term()
-            }
-        };
         let apply_state =
             match try!(engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))) {
                 Some(s) => s,
@@ -187,6 +177,24 @@ impl PeerStorage {
                     apply_state
                 }
             };
+
+        let last_term = match raft_state.get_last_index() {
+            0 => 0,
+            RAFT_INIT_LOG_INDEX => RAFT_INIT_LOG_TERM,
+            idx => {
+                match try!(engine.get_msg_cf::<Entry>(
+                    CF_RAFT, &keys::raft_log_key(region.get_id(), idx))) {
+                    None => {
+                        if idx == apply_state.get_truncated_state().get_index() {
+                            apply_state.get_truncated_state().get_term()
+                        } else {
+                            return Err(box_err!("entry at {} doesn't exist, may lose data.", idx));
+                        }
+                    }
+                    Some(e) => e.get_term(),
+                }
+            }
+        };
 
         Ok(PeerStorage {
             engine: engine,

@@ -263,11 +263,16 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // Add node 1 back.
     cluster.clear_send_filters();
 
-    cluster.must_put_cf(cf, b"k3", b"v3");
-    must_get_cf_equal(&engine1, cf, b"k3", b"v3");
     // Now snapshot must be applied on node 1.
     must_get_cf_equal(&engine1, cf, b"k1", b"v1");
     must_get_cf_none(&engine1, cf, b"k2");
+
+    // test if node can be safely restart without losing any data.
+    cluster.stop_node(1);
+    cluster.run_node(1);
+
+    cluster.must_put_cf(cf, b"k3", b"v3");
+    must_get_cf_equal(&engine1, cf, b"k3", b"v3");
 }
 
 #[test]
