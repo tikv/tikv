@@ -93,6 +93,9 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // check whether peer(2, 2) and its data are destroyed
     must_get_none(&engine_2, key);
     must_get_none(&engine_2, key2);
+    let state_key = keys::region_state_key(1);
+    let state: RegionLocalState = engine_2.get_msg(&state_key).unwrap().unwrap();
+    assert_eq!(state.get_state(), PeerState::Tombstone);
 }
 
 #[test]
@@ -150,7 +153,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(Duration::from_secs(1));
 
     // check whether peer(2, 2) is destroyed
-    // if it's destroyed, it will write tomstone into the engine.
+    // if it's destroyed, it will write tombstone into the engine.
     let engine = cluster.get_engine(2);
     let state_key = keys::region_state_key(1);
     let state: RegionLocalState = engine.get_msg(&state_key).unwrap().unwrap();
