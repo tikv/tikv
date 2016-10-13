@@ -19,9 +19,10 @@ use tipb::schema::ColumnInfo;
 
 use super::number::{NumberDecoder, NumberEncoder};
 use super::bytes::BytesDecoder;
-use super::datum::{DatumDecoder, Context};
+use super::datum::DatumDecoder;
 use super::{Result, Datum, datum};
 use super::mysql::{types, Duration, Time};
+use util::xeval::EvalContext;
 use util::escape;
 
 // handle or index id
@@ -130,7 +131,7 @@ pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<
 }
 
 // `decode_index_key` decodes datums from an index key.
-pub fn decode_index_key(ctx: &Context,
+pub fn decode_index_key(ctx: &EvalContext,
                         mut encoded: &[u8],
                         infos: &[ColumnInfo])
                         -> Result<Vec<Datum>> {
@@ -150,7 +151,7 @@ pub fn decode_index_key(ctx: &Context,
 }
 
 /// `unflatten` converts a raw datum to a column datum.
-fn unflatten(ctx: &Context, datum: Datum, col: &ColumnInfo) -> Result<Datum> {
+fn unflatten(ctx: &EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum> {
     if let Datum::Null = datum {
         return Ok(datum);
     }
@@ -191,7 +192,7 @@ fn unflatten(ctx: &Context, datum: Datum, col: &ColumnInfo) -> Result<Datum> {
 
 pub trait TableDecoder: DatumDecoder {
     // `decode_col_value` decodes data to a Datum according to the column info.
-    fn decode_col_value(&mut self, ctx: &Context, col: &ColumnInfo) -> Result<Datum> {
+    fn decode_col_value(&mut self, ctx: &EvalContext, col: &ColumnInfo) -> Result<Datum> {
         let d = try!(self.decode_datum());
         unflatten(ctx, d, col)
     }
@@ -200,7 +201,7 @@ pub trait TableDecoder: DatumDecoder {
     // TODO: We should only decode columns in the cols map.
     // Row layout: colID1, value1, colID2, value2, .....
     fn decode_row(&mut self,
-                  ctx: &Context,
+                  ctx: &EvalContext,
                   cols: &HashMap<i64, ColumnInfo>)
                   -> Result<HashMap<i64, Datum>> {
         let mut values = try!(self.decode());

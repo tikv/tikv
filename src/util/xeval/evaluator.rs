@@ -13,7 +13,7 @@
 
 
 use util::codec::number::NumberDecoder;
-use util::codec::datum::{Datum, DatumDecoder, Context};
+use util::codec::datum::{Datum, DatumDecoder};
 use util::codec::mysql::DecimalDecoder;
 use util::codec::mysql::{MAX_FSP, Duration};
 use util::TryInsertWith;
@@ -24,6 +24,33 @@ use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::ascii::AsciiExt;
 use tipb::expression::{Expr, ExprType};
+use tipb::select::SelectRequest;
+use chrono::FixedOffset;
+
+#[derive(Debug)]
+pub struct EvalContext {
+    pub tz: FixedOffset,
+}
+
+impl Default for EvalContext {
+    fn default() -> EvalContext {
+        EvalContext { tz: FixedOffset::east(0) }
+    }
+}
+
+impl EvalContext {
+    pub fn new(sel: &SelectRequest) -> Result<EvalContext> {
+        let offset = sel.get_time_zone_offset();
+        if offset <= -3600 * 24 || offset >= 3600 * 24 {
+            return Err(Error::Eval(format!("invalid tz offset {}", offset)));
+        }
+        let tz = match FixedOffset::east_opt(offset as i32) {
+            None => return Err(Error::Eval(format!("invalid tz offset {}", offset))),
+            Some(tz) => tz,
+        };
+        Ok(EvalContext { tz: tz })
+    }
+}
 
 /// `Evaluator` evaluates `tipb::Expr`.
 #[derive(Default)]
@@ -35,7 +62,7 @@ pub struct Evaluator {
 }
 
 impl Evaluator {
-    pub fn batch_eval(&mut self, ctx: &Context, exprs: &[Expr]) -> Result<Vec<Datum>> {
+    pub fn batch_eval(&mut self, ctx: &EvalContext, exprs: &[Expr]) -> Result<Vec<Datum>> {
         let mut res = Vec::with_capacity(exprs.len());
         for expr in exprs {
             let r = try!(self.eval(ctx, expr));
@@ -45,7 +72,7 @@ impl Evaluator {
     }
 
     /// Eval evaluates expr to a Datum.
-    pub fn eval(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    pub fn eval(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         match expr.get_tp() {
             ExprType::Int64 => self.eval_int(expr),
             ExprType::Uint64 => self.eval_uint(expr),
@@ -105,43 +132,43 @@ impl Evaluator {
         self.row.get(&i).cloned().ok_or_else(|| Error::Eval(format!("column {} not found", i)))
     }
 
-    fn eval_lt(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_lt(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c < Ordering::Equal).into())
     }
 
-    fn eval_le(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_le(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c <= Ordering::Equal).into())
     }
 
-    fn eval_eq(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_eq(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c == Ordering::Equal).into())
     }
 
-    fn eval_ne(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_ne(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c != Ordering::Equal).into())
     }
 
-    fn eval_ge(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_ge(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c >= Ordering::Equal).into())
     }
 
-    fn eval_gt(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_gt(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c > Ordering::Equal).into())
     }
 
-    fn eval_null_eq(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_null_eq(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
         let cmp = try!(left.cmp(ctx, &right));
         Ok((cmp == Ordering::Equal).into())
     }
 
-    fn cmp_children(&mut self, ctx: &Context, expr: &Expr) -> Result<Option<Ordering>> {
+    fn cmp_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Option<Ordering>> {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
         if left == Datum::Null || right == Datum::Null {
             return Ok(None);
@@ -149,7 +176,7 @@ impl Evaluator {
         left.cmp(ctx, &right).map(Some).map_err(From::from)
     }
 
-    fn eval_two_children(&mut self, ctx: &Context, expr: &Expr) -> Result<(Datum, Datum)> {
+    fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
         let l = expr.get_children().len();
         if l != 2 {
             return Err(Error::Expr(format!("need 2 operands but got {}", l)));
@@ -160,7 +187,7 @@ impl Evaluator {
         Ok((left, right))
     }
 
-    fn eval_and(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_and(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         self.eval_two_children_as_bool(ctx, expr)
             .map(|p| {
                 match p {
@@ -171,7 +198,7 @@ impl Evaluator {
             })
     }
 
-    fn eval_or(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_or(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         self.eval_two_children_as_bool(ctx, expr).map(|p| {
             match p {
                 (Some(true), _) | (_, Some(true)) => true.into(),
@@ -181,7 +208,7 @@ impl Evaluator {
         })
     }
 
-    fn eval_not(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_not(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let children_cnt = expr.get_children().len();
         if children_cnt != 1 {
             return Err(Error::Expr(format!("expect 1 operand, got {}", children_cnt)));
@@ -194,7 +221,7 @@ impl Evaluator {
         Ok((b.map(|v| !v)).into())
     }
 
-    fn eval_like(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_like(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let (target, pattern) = try!(self.eval_two_children(ctx, expr));
         if Datum::Null == target || Datum::Null == pattern {
             return Ok(Datum::Null);
@@ -221,7 +248,7 @@ impl Evaluator {
     }
 
     fn eval_two_children_as_bool(&mut self,
-                                 ctx: &Context,
+                                 ctx: &EvalContext,
                                  expr: &Expr)
                                  -> Result<(Option<bool>, Option<bool>)> {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
@@ -230,7 +257,7 @@ impl Evaluator {
         Ok((left_bool, right_bool))
     }
 
-    fn eval_in(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+    fn eval_in(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         if expr.get_children().len() != 2 {
             return Err(Error::Expr(format!("IN need 2 operand, got {}",
                                            expr.get_children().len())));
@@ -262,7 +289,7 @@ impl Evaluator {
         Ok(decoded)
     }
 
-    fn eval_arith<F>(&mut self, ctx: &Context, expr: &Expr, f: F) -> Result<Datum>
+    fn eval_arith<F>(&mut self, ctx: &EvalContext, expr: &Expr, f: F) -> Result<Datum>
         where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
     {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
@@ -286,7 +313,7 @@ pub fn eval_arith<F>(left: Datum, right: Datum, f: F) -> Result<Datum>
 }
 
 /// Check if `target` is in `value_list`.
-fn check_in(ctx: &Context, target: Datum, value_list: &[Datum]) -> Result<bool> {
+fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bool> {
     let mut err = None;
     let pos = value_list.binary_search_by(|d| {
         match d.cmp(ctx, &target) {
@@ -310,7 +337,10 @@ mod test {
     use util::codec::{Datum, datum};
     use util::codec::mysql::{self, MAX_FSP, Decimal, Duration, DecimalEncoder};
 
+    use std::i32;
+
     use tipb::expression::{Expr, ExprType};
+    use tipb::select::SelectRequest;
     use protobuf::RepeatedField;
 
     fn datum_expr(datum: Datum) -> Expr {
@@ -573,6 +603,16 @@ mod test {
         expr.mut_children().push(target_expr);
         expr.mut_children().push(list_expr);
         expr
+    }
+
+    #[test]
+    fn test_context() {
+        let mut req = SelectRequest::new();
+        req.set_time_zone_offset(i32::MAX as i64 + 1);
+        let ctx = EvalContext::new(&req);
+        assert!(ctx.is_err());
+        req.set_time_zone_offset(3600);
+        EvalContext::new(&req).unwrap();
     }
 
     #[test]

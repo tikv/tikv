@@ -33,8 +33,8 @@ use storage::{engine, Snapshot, Key, ScanMode};
 use util::codec::table::TableDecoder;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
-use util::codec::{Datum, table, datum, mysql, Context};
-use util::xeval::Evaluator;
+use util::codec::{Datum, table, datum, mysql};
+use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, Either};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
@@ -327,7 +327,7 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 
 #[inline]
 fn inflate_with_col<'a, T>(eval: &mut Evaluator,
-                           ctx: &Context,
+                           ctx: &EvalContext,
                            values: &HashMap<i64, &[u8]>,
                            cols: T,
                            h: i64)
@@ -365,7 +365,7 @@ fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
 }
 
 pub struct SelectContextCore {
-    ctx: Context,
+    ctx: EvalContext,
     sel: SelectRequest,
     eval: Evaluator,
     cols: Either<HashSet<i64>, Vec<i64>>,
@@ -422,7 +422,7 @@ impl SelectContextCore {
         };
 
         Ok(SelectContextCore {
-            ctx: box_try!(Context::new(&sel)),
+            ctx: box_try!(EvalContext::new(&sel)),
             aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
             aggr_cols: aggr_cols,
             sel: sel,

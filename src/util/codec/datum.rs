@@ -13,17 +13,15 @@
 
 
 use std::cmp::Ordering;
-use std::{str, i64, i32};
+use std::{str, i64};
 use std::io::Write;
 use std::str::FromStr;
 use std::mem;
 use std::fmt::{self, Display, Formatter, Debug};
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
-use chrono::FixedOffset;
-use tipb::select::SelectRequest;
-
 use util::escape;
+use util::xeval::EvalContext;
 use super::{number, Result, bytes, convert};
 use super::number::NumberDecoder;
 use super::bytes::BytesEncoder;
@@ -41,31 +39,6 @@ const DURATION_FLAG: u8 = 7;
 const VAR_INT_FLAG: u8 = 8;
 const VAR_UINT_FLAG: u8 = 9;
 const MAX_FLAG: u8 = 250;
-
-#[derive(Debug)]
-pub struct Context {
-    pub tz: FixedOffset,
-}
-
-impl Default for Context {
-    fn default() -> Context {
-        Context { tz: FixedOffset::east(0) }
-    }
-}
-
-impl Context {
-    pub fn new(sel: &SelectRequest) -> Result<Context> {
-        let offset = sel.get_time_zone_offset();
-        if offset <= -3600 * 24 || offset >= 3600 * 24 {
-            return Err(box_err!("invalid tz offset {}", offset));
-        }
-        let tz = match FixedOffset::east_opt(offset as i32) {
-            None => return Err(box_err!("invalid tz offset {}", offset)),
-            Some(tz) => tz,
-        };
-        Ok(Context { tz: tz })
-    }
-}
 
 #[derive(PartialEq, Clone)]
 pub enum Datum {
@@ -120,7 +93,7 @@ fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
 
 #[allow(should_implement_trait)]
 impl Datum {
-    pub fn cmp(&self, ctx: &Context, datum: &Datum) -> Result<Ordering> {
+    pub fn cmp(&self, ctx: &EvalContext, datum: &Datum) -> Result<Ordering> {
         match *datum {
             Datum::Null => {
                 match *self {
@@ -205,7 +178,7 @@ impl Datum {
         }
     }
 
-    fn cmp_bytes(&self, ctx: &Context, bs: &[u8]) -> Result<Ordering> {
+    fn cmp_bytes(&self, ctx: &EvalContext, bs: &[u8]) -> Result<Ordering> {
         match *self {
             Datum::Null | Datum::Min => Ok(Ordering::Less),
             Datum::Max => Ok(Ordering::Greater),
@@ -257,7 +230,7 @@ impl Datum {
         }
     }
 
-    fn cmp_time(&self, ctx: &Context, time: &Time) -> Result<Ordering> {
+    fn cmp_time(&self, ctx: &EvalContext, time: &Time) -> Result<Ordering> {
         match *self {
             Datum::Bytes(ref bs) => {
                 let s = try!(str::from_utf8(bs));
@@ -755,8 +728,6 @@ mod test {
     use std::time::Duration as StdDuration;
     use std::{i8, u8, i16, u16, i32, u32, i64, u64};
 
-    use tipb::select::SelectRequest;
-
     fn same_type(l: &Datum, r: &Datum) -> bool {
         match (l, r) {
             (&Datum::I64(_), &Datum::I64(_)) |
@@ -1045,16 +1016,6 @@ mod test {
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_context() {
-        let mut req = SelectRequest::new();
-        req.set_time_zone_offset(i32::MAX as i64 + 1);
-        let ctx = Context::new(&req);
-        assert!(ctx.is_err());
-        req.set_time_zone_offset(3600);
-        Context::new(&req).unwrap();
     }
 
     #[test]
