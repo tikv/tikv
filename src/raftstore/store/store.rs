@@ -61,6 +61,134 @@ type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 
+/// The buffered metrics counters for raft ready handling.
+#[derive(Debug, Default, Clone)]
+pub struct RaftReadyMetrics {
+    pub message: u64,
+    pub commit: u64,
+    pub append: u64,
+    pub snapshot: u64,
+}
+
+impl RaftReadyMetrics {
+    /// Flushs all metrics
+    fn flush(&mut self) {
+        // reset all buffered metrics once they have been added
+        if self.message > 0 {
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["message"])
+                .inc_by(self.message as f64)
+                .unwrap();
+            self.message = 0;
+        }
+        if self.commit > 0 {
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["commit"])
+                .inc_by(self.commit as f64)
+                .unwrap();
+            self.commit = 0;
+        }
+        if self.append > 0 {
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["append"])
+                .inc_by(self.append as f64)
+                .unwrap();
+            self.append = 0;
+        }
+        if self.snapshot > 0 {
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"]).inc();
+            self.snapshot = 0;
+        }
+    }
+}
+
+/// The buffered metrics counters for raft message.
+#[derive(Debug, Default, Clone)]
+pub struct RaftMessageMetrics {
+    pub append: u64,
+    pub append_resp: u64,
+    pub vote: u64,
+    pub vote_resp: u64,
+    pub snapshot: u64,
+    pub heartbeat: u64,
+    pub heartbeat_resp: u64,
+    pub transfer_leader: u64,
+    pub timeout_now: u64,
+}
+
+impl RaftMessageMetrics {
+    /// Flushs all metrics
+    fn flush(&mut self) {
+        // reset all buffered metrics once they have been added
+        if self.append > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append"])
+                .inc_by(self.append as f64)
+                .unwrap();
+            self.append = 0;
+        }
+        if self.append_resp > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append_resp"])
+                .inc_by(self.append_resp as f64)
+                .unwrap();
+            self.append_resp = 0;
+        }
+        if self.vote > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote"])
+                .inc_by(self.vote as f64)
+                .unwrap();
+            self.vote = 0;
+        }
+        if self.vote_resp > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote_resp"])
+                .inc_by(self.vote_resp as f64)
+                .unwrap();
+            self.vote_resp = 0;
+        }
+        if self.snapshot > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["snapshot"])
+                .inc_by(self.snapshot as f64)
+                .unwrap();
+            self.snapshot = 0;
+        }
+        if self.heartbeat > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat"])
+                .inc_by(self.heartbeat as f64)
+                .unwrap();
+            self.heartbeat = 0;
+        }
+        if self.heartbeat_resp > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat_resp"])
+                .inc_by(self.heartbeat_resp as f64)
+                .unwrap();
+            self.heartbeat_resp = 0;
+        }
+        if self.transfer_leader > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["transfer_leader"])
+                .inc_by(self.transfer_leader as f64)
+                .unwrap();
+            self.transfer_leader = 0;
+        }
+        if self.timeout_now > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["timeout_now"])
+                .inc_by(self.timeout_now as f64)
+                .unwrap();
+            self.timeout_now = 0;
+        }
+    }
+}
+
+/// The buffered metrics counters for raft.
+#[derive(Debug, Default, Clone)]
+pub struct RaftMetrics {
+    pub ready: RaftReadyMetrics,
+    pub message: RaftMessageMetrics,
+}
+
+impl RaftMetrics {
+    /// Flushs all metrics
+    fn flush(&mut self) {
+        self.ready.flush();
+        self.message.flush();
+    }
+}
+
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
@@ -84,6 +212,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
 
     snap_mgr: SnapManager,
+
+    raft_metrics: RaftMetrics,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -131,6 +261,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_client: pd_client,
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
+            raft_metrics: RaftMetrics::default(),
         };
         try!(s.init());
         Ok(s)
@@ -358,6 +489,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
             .inc_by(duration_to_nanos(t.elapsed()) as f64)
             .unwrap();
+
+        self.raft_metrics.flush();
 
         self.register_raft_base_tick(event_loop);
     }
@@ -646,7 +779,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for region_id in ids {
             let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans) {
+                match peer.handle_raft_ready(&self.trans, &mut self.raft_metrics) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
                         error!("{} handle raft ready err: {:?}", peer.tag, e);

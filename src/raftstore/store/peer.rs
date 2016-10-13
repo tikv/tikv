@@ -38,7 +38,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
 use storage::CF_RAFT;
-use super::store::Store;
+use super::store::{Store, RaftReadyMetrics, RaftMessageMetrics, RaftMetrics};
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
 use super::msg::Callback;
@@ -340,37 +340,44 @@ impl Peer {
         self.get_store().is_applying()
     }
 
-    fn send_ready_metric(&self, ready: &Ready) {
+    fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
         if !ready.messages.is_empty() {
-            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["message"])
-                .inc_by(ready.messages.len() as f64)
-                .unwrap();
+            metrics.message += ready.messages.len() as u64;
         }
 
         if !ready.committed_entries.is_empty() {
-            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["commit"])
-                .inc_by(ready.committed_entries.len() as f64)
-                .unwrap();
+            metrics.commit += ready.committed_entries.len() as u64;
         }
 
         if !ready.entries.is_empty() {
-            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["append"])
-                .inc_by(ready.committed_entries.len() as f64)
-                .unwrap();
+            metrics.append += ready.entries.len() as u64;
         }
 
         if !raft::is_empty_snap(&ready.snapshot) {
-            PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"]).inc();
+            metrics.snapshot += 1;
         }
     }
 
     #[inline]
-    fn send<T>(&mut self, trans: &T, msgs: &[eraftpb::Message]) -> Result<()>
+    fn send<T>(&mut self,
+               trans: &T,
+               msgs: &[eraftpb::Message],
+               metrics: &mut RaftMessageMetrics)
+               -> Result<()>
         where T: Transport
     {
         for msg in msgs {
-            if msg.get_msg_type() == MessageType::MsgRequestVote {
-                PEER_RAFT_READY_COUNTER_VEC.with_label_values(&["request_vote"]).inc();
+            match msg.get_msg_type() {
+                MessageType::MsgAppend => metrics.append += 1,
+                MessageType::MsgAppendResponse => metrics.append_resp += 1,
+                MessageType::MsgRequestVote => metrics.vote += 1,
+                MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
+                MessageType::MsgSnapshot => metrics.snapshot += 1,
+                MessageType::MsgHeartbeat => metrics.heartbeat += 1,
+                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp += 1,
+                MessageType::MsgTransferLeader => metrics.transfer_leader += 1,
+                MessageType::MsgTimeoutNow => metrics.timeout_now += 1,
+                _ => {}
             }
 
             try!(self.send_raft_message(msg, trans));
@@ -454,7 +461,10 @@ impl Peer {
         StaleState::Valid
     }
 
-    pub fn handle_raft_ready<T: Transport>(&mut self, trans: &T) -> Result<Option<ReadyResult>> {
+    pub fn handle_raft_ready<T: Transport>(&mut self,
+                                           trans: &T,
+                                           metrics: &mut RaftMetrics)
+                                           -> Result<Option<ReadyResult>> {
         if !self.raft_group.has_ready() {
             return Ok(None);
         }
@@ -478,18 +488,18 @@ impl Peer {
 
         let t = SlowTimer::new();
 
-        self.send_ready_metric(&ready);
+        self.add_ready_metric(&ready, &mut metrics.ready);
 
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1
         if self.is_leader() {
-            try!(self.send(trans, &ready.messages));
+            try!(self.send(trans, &ready.messages, &mut metrics.message));
         }
 
         let apply_result = try!(self.mut_store().handle_raft_ready(&ready));
 
         if !self.is_leader() {
-            try!(self.send(trans, &ready.messages));
+            try!(self.send(trans, &ready.messages, &mut metrics.message));
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
