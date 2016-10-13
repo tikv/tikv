@@ -43,7 +43,7 @@ use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
-use storage::ALL_CFS;
+use storage::{ALL_CFS, CF_LOCK};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
@@ -231,6 +231,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_heartbeat_tick(event_loop);
         self.register_pd_store_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
+        self.register_compact_lock_cf_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -243,7 +244,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
-        box_try!(self.compact_worker.start(CompactRunner));
+        let compact_runner = CompactRunner::new(self.engine.clone());
+        box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
         box_try!(self.pd_worker.start(pd_runner));
@@ -729,7 +731,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_ready_compact_log(&mut self, region_id: u64, state: RaftTruncatedState) {
         let peer = self.region_peers.get(&region_id).unwrap();
-        let task = CompactTask::new(peer.get_store(), state.get_index() + 1);
+        let task = CompactTask::CompactRaftLog {
+            engine: peer.get_store().get_engine().clone(),
+            region_id: peer.get_store().get_region_id(),
+            compact_idx: state.get_index() + 1,
+        };
         if let Err(e) = self.compact_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
@@ -1268,6 +1274,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
     }
 
+    fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
+        // Create a compact lock cf task(compact whole range) and schedule directly.
+        let task = CompactTask::CompactRangeCF {
+            cf_name: String::from(CF_LOCK),
+            start_key: None,
+            end_key: None,
+        };
+        if let Err(e) = self.compact_worker.schedule(task) {
+            error!("failed to schedule compact lock cf task: {}", e);
+        }
+
+        self.register_compact_lock_cf_tick(event_loop);
+    }
+
     fn register_pd_store_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::PdStoreHeartbeat,
@@ -1281,6 +1301,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        Tick::SnapGc,
                                        self.cfg.snap_mgr_gc_tick_interval) {
             error!("register snap mgr gc tick err: {:?}", e);
+        }
+    }
+
+    fn register_compact_lock_cf_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::CompactLockCf,
+                                       self.cfg.lock_cf_compact_interval_secs * 1000) {
+            error!("register compact cf-lock tick err: {:?}", e);
         }
     }
 
@@ -1430,6 +1458,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
+            Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
         }
         slow_log!(t, "handle timeout {:?}", timeout);
     }

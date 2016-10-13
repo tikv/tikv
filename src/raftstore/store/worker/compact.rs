@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::{PeerStorage, keys};
+use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
 use util::rocksdb;
@@ -21,30 +21,38 @@ use rocksdb::{DB, WriteBatch, Writable};
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
+use super::metrics::COMPACT_RANGE_CF;
 
-/// Compact task.
-pub struct Task {
-    engine: Arc<DB>,
-    region_id: u64,
-    compact_idx: u64,
-}
-
-impl Task {
-    pub fn new(ps: &PeerStorage, compact_idx: u64) -> Task {
-        Task {
-            engine: ps.get_engine().clone(),
-            region_id: ps.get_region_id(),
-            compact_idx: compact_idx,
-        }
-    }
+pub enum Task {
+    CompactRangeCF {
+        cf_name: String,
+        start_key: Option<Vec<u8>>, // None means smallest key
+        end_key: Option<Vec<u8>>, // None means largest key
+    },
+    CompactRaftLog {
+        engine: Arc<DB>,
+        region_id: u64,
+        compact_idx: u64,
+    },
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f,
-               "Compact Task [region: {}, to: {}]",
-               self.region_id,
-               self.compact_idx)
+        match *self {
+            Task::CompactRaftLog { region_id, compact_idx, .. } => {
+                write!(f,
+                       "Compact Raft Log Task [region: {}, to: {}]",
+                       region_id,
+                       compact_idx)
+            }
+            Task::CompactRangeCF { ref cf_name, ref start_key, ref end_key } => {
+                write!(f,
+                       "Compact CF[{}], range[{:?}, {:?}]",
+                       cf_name,
+                       start_key,
+                       end_key)
+            }
+        }
     }
 }
 
@@ -60,41 +68,78 @@ quick_error! {
     }
 }
 
-pub struct Runner;
+pub struct Runner {
+    engine: Arc<DB>,
+}
 
 impl Runner {
+    pub fn new(engine: Arc<DB>) -> Runner {
+        Runner { engine: engine }
+    }
+
     /// Do the compact job and return the count of log compacted.
-    fn compact(&mut self, task: Task) -> Result<u64, Error> {
-        let start_key = keys::raft_log_key(task.region_id, 0);
-        let mut first_idx = task.compact_idx;
-        if let Some((k, _)) = box_try!(task.engine.seek_cf(CF_RAFT, &start_key)) {
+    fn compact_raft_log(&mut self,
+                        engine: Arc<DB>,
+                        region_id: u64,
+                        compact_idx: u64)
+                        -> Result<u64, Error> {
+        let start_key = keys::raft_log_key(region_id, 0);
+        let mut first_idx = compact_idx;
+        if let Some((k, _)) = box_try!(engine.seek_cf(CF_RAFT, &start_key)) {
             first_idx = box_try!(keys::raft_log_index(&k));
         }
-        if first_idx >= task.compact_idx {
-            info!("[region {}] no need to compact", task.region_id);
+        if first_idx >= compact_idx {
+            info!("[region {}] no need to compact", region_id);
             return Ok(0);
         }
         let wb = WriteBatch::new();
-        let handle = box_try!(rocksdb::get_cf_handle(&task.engine, CF_RAFT));
-        for idx in first_idx..task.compact_idx {
-            let key = keys::raft_log_key(task.region_id, idx);
+        let handle = box_try!(rocksdb::get_cf_handle(&engine, CF_RAFT));
+        for idx in first_idx..compact_idx {
+            let key = keys::raft_log_key(region_id, idx);
             box_try!(wb.delete_cf(handle, &key));
         }
         // It's not safe to disable WAL here. We may lost data after crashed for unknown reason.
-        box_try!(task.engine.write(wb));
-        Ok(task.compact_idx - first_idx)
+        box_try!(engine.write(wb));
+        Ok(compact_idx - first_idx)
+    }
+
+    fn compact_range_cf(&mut self,
+                        cf_name: String,
+                        start_key: Option<Vec<u8>>,
+                        end_key: Option<Vec<u8>>)
+                        -> Result<(), Error> {
+        let cf_handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
+        let compact_range_timer = COMPACT_RANGE_CF.with_label_values(&[&cf_name])
+            .start_timer();
+        self.engine.compact_range_cf(cf_handle,
+                                     start_key.as_ref().map(Vec::as_slice),
+                                     end_key.as_ref().map(Vec::as_slice));
+
+        compact_range_timer.observe_duration();
+        Ok(())
     }
 }
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
-        debug!("[region {}] execute compacting log to {}",
-               task.region_id,
-               task.compact_idx);
-        let region_id = task.region_id;
-        match self.compact(task) {
-            Err(e) => error!("[region {}] failed to compact: {:?}", region_id, e),
-            Ok(n) => info!("[region {}] compact {} log entries", region_id, n),
+        match task {
+            Task::CompactRaftLog { engine, region_id, compact_idx } => {
+                debug!("[region {}] execute compacting log to {}",
+                       region_id,
+                       compact_idx);
+                match self.compact_raft_log(engine, region_id, compact_idx) {
+                    Err(e) => error!("[region {}] failed to compact: {:?}", region_id, e),
+                    Ok(n) => info!("[region {}] compacted {} log entries", region_id, n),
+                }
+            }
+            Task::CompactRangeCF { cf_name, start_key, end_key } => {
+                let cf = cf_name.clone();
+                if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
+                    error!("execute compact range for cf {} failed, err {}", &cf, e);
+                } else {
+                    info!("compact range for cf {} finished", &cf)
+                }
+            }
         }
     }
 }
