@@ -38,7 +38,7 @@ pub mod table;
 pub mod convert;
 pub mod mysql;
 
-pub use self::datum::Datum;
+pub use self::datum::{Datum, Context};
 
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;

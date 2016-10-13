@@ -13,14 +13,14 @@
 
 
 use std::cmp::Ordering;
-use std::str::{self, FromStr};
+use std::str;
 use std::fmt::{self, Formatter, Display};
 
-use chrono::{NaiveDate, NaiveDateTime, Timelike, Datelike, Duration};
+use chrono::{DateTime, Timelike, UTC, Datelike, FixedOffset, Duration, TimeZone};
 
 use util::codec::mysql::{self, types, parse_frac, check_fsp};
 use util::codec::mysql::Decimal;
-use util::codec::{Error, Result, TEN_POW};
+use util::codec::{Result, TEN_POW};
 
 
 const ZERO_DATETIME_STR: &'static str = "0000-00-00 00:00:00";
@@ -30,27 +30,30 @@ const ZERO_DATE_STR: &'static str = "0000-00-00";
 const ZERO_TIMESTAMP: i64 = -62169984000;
 
 #[inline]
-fn zero_time() -> NaiveDateTime {
-    NaiveDateTime::from_timestamp(ZERO_TIMESTAMP, 0)
+fn zero_time(tz: &FixedOffset) -> DateTime<FixedOffset> {
+    tz.timestamp(ZERO_TIMESTAMP, 0)
 }
 
 #[inline]
-fn zero_datetime() -> Time {
-    Time::new(zero_time(), types::DATETIME, mysql::DEFAULT_FSP).unwrap()
+fn zero_datetime(tz: &FixedOffset) -> Time {
+    Time::new(zero_time(tz), types::DATETIME, mysql::DEFAULT_FSP).unwrap()
 }
 
+#[allow(too_many_arguments)]
 #[inline]
-fn ymd_hms_nanos(year: i32,
-                 month: u32,
-                 day: u32,
-                 hour: u32,
-                 min: u32,
-                 secs: u32,
-                 nanos: u32)
-                 -> Result<NaiveDateTime> {
-    NaiveDate::from_ymd_opt(year, month, day)
-        .and_then(|d| d.and_hms_opt(hour, min, secs))
-        .and_then(|d| d.checked_add(Duration::nanoseconds(nanos as i64)))
+fn ymd_hms_nanos<T: TimeZone>(tz: &T,
+                              year: i32,
+                              month: u32,
+                              day: u32,
+                              hour: u32,
+                              min: u32,
+                              secs: u32,
+                              nanos: u32)
+                              -> Result<DateTime<T>> {
+    tz.ymd_opt(year, month, day)
+        .and_hms_opt(hour, min, secs)
+        .single()
+        .and_then(|t| t.checked_add(Duration::nanoseconds(nanos as i64)))
         .ok_or_else(|| {
             box_err!("'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime",
                      year,
@@ -100,16 +103,14 @@ fn split_ymd_hms(mut s: &[u8]) -> Result<(i32, u32, u32, u32, u32, u32)> {
 /// `Time` is the struct for handling datetime, timestamp and date.
 #[derive(Clone, Debug)]
 pub struct Time {
-    // In TiDB implementation, it use a timezone aware time struct.
-    // But TiKV can be located in any timezone, so it shouldn't depend
-    // on any timezone, hence use naive datetime here.
-    time: NaiveDateTime,
+    // TimeZone should be loaded from request context.
+    time: DateTime<FixedOffset>,
     tp: u8,
     fsp: u8,
 }
 
 impl Time {
-    pub fn new(time: NaiveDateTime, tp: u8, fsp: i8) -> Result<Time> {
+    pub fn new(time: DateTime<FixedOffset>, tp: u8, fsp: i8) -> Result<Time> {
         Ok(Time {
             time: time,
             tp: tp,
@@ -170,7 +171,11 @@ impl Time {
         }
     }
 
-    pub fn parse_datetime(s: &str, fsp: i8) -> Result<Time> {
+    pub fn parse_utc_datetime(s: &str, fsp: i8) -> Result<Time> {
+        Time::parse_datetime(s, fsp, &FixedOffset::east(0))
+    }
+
+    pub fn parse_datetime(s: &str, fsp: i8, tz: &FixedOffset) -> Result<Time> {
         let fsp = try!(check_fsp(fsp));
         let mut frac_str = "";
         let mut need_adjust = false;
@@ -230,18 +235,25 @@ impl Time {
 
         let frac = try!(parse_frac(frac_str.as_bytes(), fsp));
         if y == 0 && m == 0 && d == 0 && h == 0 && minute == 0 && sec == 0 {
-            return Ok(zero_datetime());
+            return Ok(zero_datetime(tz));
         }
         if y < 0 || y > 9999 {
             return Err(box_err!("unsupport year: {}", y));
         }
-        let t = try!(ymd_hms_nanos(y, m, d, h, minute, sec, frac * TEN_POW[9 - fsp as usize]));
+        let t = try!(ymd_hms_nanos(tz,
+                                   y,
+                                   m,
+                                   d,
+                                   h,
+                                   minute,
+                                   sec,
+                                   frac * TEN_POW[9 - fsp as usize]));
         Time::new(t, types::DATETIME as u8, fsp as i8)
     }
 
-    pub fn from_packed_u64(t: u64, tp: u8, fsp: i8) -> Result<Time> {
+    pub fn from_packed_u64(t: u64, tp: u8, fsp: i8, tz: &FixedOffset) -> Result<Time> {
         if t == 0 {
-            return Time::new(zero_time(), tp, fsp);
+            return Time::new(zero_time(tz), tp, fsp);
         }
         let fsp = try!(mysql::check_fsp(fsp));
         let ymdhms = t >> 24;
@@ -255,7 +267,12 @@ impl Time {
         let minute = ((hms >> 6) & ((1 << 6) - 1)) as u32;
         let hour = (hms >> 12) as u32;
         let nanosec = ((t & ((1 << 24) - 1)) * 1000) as u32;
-        let t = try!(ymd_hms_nanos(year, month, day, hour, minute, second, nanosec));
+        let t = if tp == types::TIMESTAMP {
+            let t = try!(ymd_hms_nanos(&UTC, year, month, day, hour, minute, second, nanosec));
+            tz.from_utc_datetime(&t.naive_utc())
+        } else {
+            try!(ymd_hms_nanos(tz, year, month, day, hour, minute, second, nanosec))
+        };
         Time::new(t, tp, fsp as i8)
     }
 
@@ -263,7 +280,11 @@ impl Time {
         if self.is_zero() {
             return 0;
         }
-        let t = &self.time;
+        let t = if self.tp == types::TIMESTAMP {
+            self.time.naive_utc()
+        } else {
+            self.time.naive_local()
+        };
         let ymd = ((t.year() as u64 * 13 + t.month() as u64) << 5) | t.day() as u64;
         let hms = ((t.hour() as u64) << 12) | ((t.minute() as u64) << 6) | t.second() as u64;
         let micro = t.nanosecond() as u64 / 1000;
@@ -288,15 +309,6 @@ impl Eq for Time {}
 impl Ord for Time {
     fn cmp(&self, right: &Time) -> Ordering {
         self.time.cmp(&right.time)
-    }
-}
-
-impl FromStr for Time {
-    type Err = Error;
-
-    /// Parse the decimal value from string.
-    fn from_str(s: &str) -> Result<Time> {
-        Time::parse_datetime(s, 0)
     }
 }
 
@@ -338,34 +350,31 @@ mod test {
 
     use std::cmp::Ordering;
 
+    use chrono::{FixedOffset, Duration};
+
     use util::codec::mysql::{MAX_FSP, UN_SPECIFIED_FSP, types};
+
+    const MIN_OFFSET: i32 = -60 * 24 + 1;
+    const MAX_OFFSET: i32 = 60 * 24;
 
     #[test]
     fn test_parse_datetime() {
         let ok_tables = vec![
-            ("2012-12-31 11:30:45", "2012-12-31 11:30:45"),
-            ("0000-00-00 00:00:00", "0000-00-00 00:00:00"),
-            ("0001-01-01 00:00:00", "0001-01-01 00:00:00"),
-            ("00-12-31 11:30:45", "2000-12-31 11:30:45"),
-            ("12-12-31 11:30:45", "2012-12-31 11:30:45"),
-            ("2012-12-31", "2012-12-31 00:00:00"),
-            ("20121231", "2012-12-31 00:00:00"),
-            ("121231", "2012-12-31 00:00:00"),
-            ("2012^12^31 11+30+45", "2012-12-31 11:30:45"),
-            ("2012^12^31T11+30+45", "2012-12-31 11:30:45"),
-            ("2012-2-1 11:30:45", "2012-02-01 11:30:45"),
-            ("12-2-1 11:30:45", "2012-02-01 11:30:45"),
-            ("20121231113045", "2012-12-31 11:30:45"),
-            ("121231113045", "2012-12-31 11:30:45"),
-            ("2012-02-29", "2012-02-29 00:00:00"),
-        ];
-
-        for (input, exp) in ok_tables {
-            let t = Time::parse_datetime(input, UN_SPECIFIED_FSP).unwrap();
-            assert_eq!(format!("{}", t), exp);
-        }
-
-        let fsp_tbl = vec![
+            ("2012-12-31 11:30:45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("0000-00-00 00:00:00", UN_SPECIFIED_FSP, "0000-00-00 00:00:00"),
+            ("0001-01-01 00:00:00", UN_SPECIFIED_FSP, "0001-01-01 00:00:00"),
+            ("00-12-31 11:30:45", UN_SPECIFIED_FSP, "2000-12-31 11:30:45"),
+            ("12-12-31 11:30:45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-12-31", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("20121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("2012^12^31 11+30+45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012^12^31T11+30+45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("12-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("20121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-02-29", UN_SPECIFIED_FSP, "2012-02-29 00:00:00"),
             ("121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
             ("20121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
             ("121231113045.9999999", 6, "2012-12-31 11:30:46.000000"),
@@ -373,9 +382,26 @@ mod test {
             ("121231113045.999999", 5, "2012-12-31 11:30:46.00000"),
         ];
 
-        for (input, fsp, exp) in fsp_tbl {
-            let t = Time::parse_datetime(input, fsp).unwrap();
+        for (input, fsp, exp) in ok_tables {
+            let t = Time::parse_utc_datetime(input, fsp).unwrap();
             assert_eq!(format!("{}", t), exp);
+
+            for mut offset in MIN_OFFSET..MAX_OFFSET {
+                offset *= 60;
+                let tz = FixedOffset::east(offset);
+                let aware_t = Time::parse_datetime(input, fsp, &tz).unwrap();
+                if t.is_zero() {
+                    assert_eq!(t, aware_t);
+                } else {
+                    let exp_t =
+                        Time::new(t.time - Duration::seconds(offset as i64), t.tp, t.fsp as i8)
+                            .unwrap();
+                    if exp_t != aware_t {
+                        println!("offset {} t {:?}", offset, t);
+                    }
+                    assert_eq!(exp_t, aware_t);
+                }
+            }
         }
 
         let fail_tbl = vec![
@@ -388,7 +414,8 @@ mod test {
         ];
 
         for t in fail_tbl {
-            assert!(Time::parse_datetime(t, 0).is_err(), t);
+            let tz = FixedOffset::east(0);
+            assert!(Time::parse_datetime(t, 0, &tz).is_err(), t);
         }
     }
 
@@ -404,10 +431,22 @@ mod test {
             ("2000-06-01 00:00:00.999999", MAX_FSP),
         ];
         for (s, fsp) in cases {
-            let t = Time::parse_datetime(s, fsp).unwrap();
-            let packed = t.to_packed_u64();
-            let reverted = Time::from_packed_u64(packed, types::DATETIME, fsp).unwrap();
-            assert_eq!(reverted, t);
+            for mut offset in MIN_OFFSET..MAX_OFFSET {
+                offset *= 60;
+                let tz = FixedOffset::east(offset);
+                let aware_t = Time::parse_datetime(s, fsp, &tz).unwrap();
+                let aware_packed = aware_t.to_packed_u64();
+                let reverted = Time::from_packed_u64(aware_packed, types::DATETIME, fsp, &tz)
+                    .unwrap();
+                assert_eq!(reverted, aware_t);
+                assert_eq!(reverted.to_packed_u64(), aware_packed);
+
+                let revered_timestap =
+                    Time::from_packed_u64(aware_packed, types::TIMESTAMP, fsp, &tz).unwrap();
+                assert_eq!(revered_timestap.time,
+                           reverted.time + Duration::seconds(offset as i64));
+                assert_eq!(revered_timestap.to_packed_u64(), aware_packed);
+            }
         }
     }
 
@@ -426,14 +465,18 @@ mod test {
         ];
 
         for (t_str, fsp, datetime_dec, date_dec) in cases {
-            let mut t = Time::parse_datetime(t_str, fsp).unwrap();
-            let mut res = format!("{}", t.to_decimal().unwrap());
-            assert_eq!(res, datetime_dec);
+            for mut offset in MIN_OFFSET..MAX_OFFSET {
+                offset *= 60;
+                let tz = FixedOffset::east(offset);
+                let mut t = Time::parse_datetime(t_str, fsp, &tz).unwrap();
+                let mut res = format!("{}", t.to_decimal().unwrap());
+                assert_eq!(res, datetime_dec);
 
-            t = Time::parse_datetime(t_str, 0).unwrap();
-            t.tp = types::DATE;
-            res = format!("{}", t.to_decimal().unwrap());
-            assert_eq!(res, date_dec);
+                t = Time::parse_datetime(t_str, 0, &tz).unwrap();
+                t.tp = types::DATE;
+                res = format!("{}", t.to_decimal().unwrap());
+                assert_eq!(res, date_dec);
+            }
         }
     }
 
@@ -448,9 +491,13 @@ mod test {
         ];
 
         for (l, r, exp) in cases {
-            let l_t = Time::parse_datetime(l, MAX_FSP).unwrap();
-            let r_t = Time::parse_datetime(r, MAX_FSP).unwrap();
-            assert_eq!(exp, l_t.cmp(&r_t));
+            for mut offset in MIN_OFFSET..MAX_OFFSET {
+                offset *= 60;
+                let tz = FixedOffset::east(offset);
+                let l_t = Time::parse_datetime(l, MAX_FSP, &tz).unwrap();
+                let r_t = Time::parse_datetime(r, MAX_FSP, &tz).unwrap();
+                assert_eq!(exp, l_t.cmp(&r_t));
+            }
         }
     }
 

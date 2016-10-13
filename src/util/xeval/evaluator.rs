@@ -13,7 +13,7 @@
 
 
 use util::codec::number::NumberDecoder;
-use util::codec::datum::{Datum, DatumDecoder};
+use util::codec::datum::{Datum, DatumDecoder, Context};
 use util::codec::mysql::DecimalDecoder;
 use util::codec::mysql::{MAX_FSP, Duration};
 use util::TryInsertWith;
@@ -35,41 +35,41 @@ pub struct Evaluator {
 }
 
 impl Evaluator {
-    pub fn batch_eval(&mut self, exprs: &[Expr]) -> Result<Vec<Datum>> {
+    pub fn batch_eval(&mut self, ctx: &Context, exprs: &[Expr]) -> Result<Vec<Datum>> {
         let mut res = Vec::with_capacity(exprs.len());
         for expr in exprs {
-            let r = try!(self.eval(expr));
+            let r = try!(self.eval(ctx, expr));
             res.push(r);
         }
         Ok(res)
     }
 
     /// Eval evaluates expr to a Datum.
-    pub fn eval(&mut self, expr: &Expr) -> Result<Datum> {
+    pub fn eval(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
         match expr.get_tp() {
             ExprType::Int64 => self.eval_int(expr),
             ExprType::Uint64 => self.eval_uint(expr),
             // maybe we should use take here?
             ExprType::String | ExprType::Bytes => Ok(Datum::Bytes(expr.get_val().to_vec())),
             ExprType::ColumnRef => self.eval_column_ref(expr),
-            ExprType::LT => self.eval_lt(expr),
-            ExprType::LE => self.eval_le(expr),
-            ExprType::EQ => self.eval_eq(expr),
-            ExprType::NE => self.eval_ne(expr),
-            ExprType::GE => self.eval_ge(expr),
-            ExprType::GT => self.eval_gt(expr),
-            ExprType::NullEQ => self.eval_null_eq(expr),
-            ExprType::And => self.eval_and(expr),
-            ExprType::Or => self.eval_or(expr),
-            ExprType::Not => self.eval_not(expr),
-            ExprType::Like => self.eval_like(expr),
+            ExprType::LT => self.eval_lt(ctx, expr),
+            ExprType::LE => self.eval_le(ctx, expr),
+            ExprType::EQ => self.eval_eq(ctx, expr),
+            ExprType::NE => self.eval_ne(ctx, expr),
+            ExprType::GE => self.eval_ge(ctx, expr),
+            ExprType::GT => self.eval_gt(ctx, expr),
+            ExprType::NullEQ => self.eval_null_eq(ctx, expr),
+            ExprType::And => self.eval_and(ctx, expr),
+            ExprType::Or => self.eval_or(ctx, expr),
+            ExprType::Not => self.eval_not(ctx, expr),
+            ExprType::Like => self.eval_like(ctx, expr),
             ExprType::Float32 |
             ExprType::Float64 => self.eval_float(expr),
             ExprType::MysqlDuration => self.eval_duration(expr),
             ExprType::MysqlDecimal => self.eval_decimal(expr),
-            ExprType::In => self.eval_in(expr),
-            ExprType::Plus => self.eval_arith(expr, Datum::checked_add),
-            ExprType::Div => self.eval_arith(expr, Datum::checked_div),
+            ExprType::In => self.eval_in(ctx, expr),
+            ExprType::Plus => self.eval_arith(ctx, expr, Datum::checked_add),
+            ExprType::Div => self.eval_arith(ctx, expr, Datum::checked_div),
             _ => Ok(Datum::Null),
         }
     }
@@ -105,63 +105,63 @@ impl Evaluator {
         self.row.get(&i).cloned().ok_or_else(|| Error::Eval(format!("column {} not found", i)))
     }
 
-    fn eval_lt(&mut self, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(expr));
+    fn eval_lt(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c < Ordering::Equal).into())
     }
 
-    fn eval_le(&mut self, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(expr));
+    fn eval_le(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c <= Ordering::Equal).into())
     }
 
-    fn eval_eq(&mut self, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(expr));
+    fn eval_eq(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c == Ordering::Equal).into())
     }
 
-    fn eval_ne(&mut self, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(expr));
+    fn eval_ne(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c != Ordering::Equal).into())
     }
 
-    fn eval_ge(&mut self, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(expr));
+    fn eval_ge(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c >= Ordering::Equal).into())
     }
 
-    fn eval_gt(&mut self, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(expr));
+    fn eval_gt(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr));
         Ok(cmp.map(|c| c > Ordering::Equal).into())
     }
 
-    fn eval_null_eq(&mut self, expr: &Expr) -> Result<Datum> {
-        let (left, right) = try!(self.eval_two_children(expr));
-        let cmp = try!(left.cmp(&right));
+    fn eval_null_eq(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        let (left, right) = try!(self.eval_two_children(ctx, expr));
+        let cmp = try!(left.cmp(ctx, &right));
         Ok((cmp == Ordering::Equal).into())
     }
 
-    fn cmp_children(&mut self, expr: &Expr) -> Result<Option<Ordering>> {
-        let (left, right) = try!(self.eval_two_children(expr));
+    fn cmp_children(&mut self, ctx: &Context, expr: &Expr) -> Result<Option<Ordering>> {
+        let (left, right) = try!(self.eval_two_children(ctx, expr));
         if left == Datum::Null || right == Datum::Null {
             return Ok(None);
         }
-        left.cmp(&right).map(Some).map_err(From::from)
+        left.cmp(ctx, &right).map(Some).map_err(From::from)
     }
 
-    fn eval_two_children(&mut self, expr: &Expr) -> Result<(Datum, Datum)> {
+    fn eval_two_children(&mut self, ctx: &Context, expr: &Expr) -> Result<(Datum, Datum)> {
         let l = expr.get_children().len();
         if l != 2 {
             return Err(Error::Expr(format!("need 2 operands but got {}", l)));
         }
         let children = expr.get_children();
-        let left = try!(self.eval(&children[0]));
-        let right = try!(self.eval(&children[1]));
+        let left = try!(self.eval(ctx, &children[0]));
+        let right = try!(self.eval(ctx, &children[1]));
         Ok((left, right))
     }
 
-    fn eval_and(&mut self, expr: &Expr) -> Result<Datum> {
-        self.eval_two_children_as_bool(expr)
+    fn eval_and(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        self.eval_two_children_as_bool(ctx, expr)
             .map(|p| {
                 match p {
                     (Some(true), Some(true)) => true.into(),
@@ -171,8 +171,8 @@ impl Evaluator {
             })
     }
 
-    fn eval_or(&mut self, expr: &Expr) -> Result<Datum> {
-        self.eval_two_children_as_bool(expr).map(|p| {
+    fn eval_or(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        self.eval_two_children_as_bool(ctx, expr).map(|p| {
             match p {
                 (Some(true), _) | (_, Some(true)) => true.into(),
                 (Some(false), Some(false)) => false.into(),
@@ -181,12 +181,12 @@ impl Evaluator {
         })
     }
 
-    fn eval_not(&mut self, expr: &Expr) -> Result<Datum> {
+    fn eval_not(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
         let children_cnt = expr.get_children().len();
         if children_cnt != 1 {
             return Err(Error::Expr(format!("expect 1 operand, got {}", children_cnt)));
         }
-        let d = try!(self.eval(&expr.get_children()[0]));
+        let d = try!(self.eval(ctx, &expr.get_children()[0]));
         if d == Datum::Null {
             return Ok(Datum::Null);
         }
@@ -194,8 +194,8 @@ impl Evaluator {
         Ok((b.map(|v| !v)).into())
     }
 
-    fn eval_like(&mut self, expr: &Expr) -> Result<Datum> {
-        let (target, pattern) = try!(self.eval_two_children(expr));
+    fn eval_like(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
+        let (target, pattern) = try!(self.eval_two_children(ctx, expr));
         if Datum::Null == target || Datum::Null == pattern {
             return Ok(Datum::Null);
         }
@@ -220,20 +220,23 @@ impl Evaluator {
         }
     }
 
-    fn eval_two_children_as_bool(&mut self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
-        let (left, right) = try!(self.eval_two_children(expr));
+    fn eval_two_children_as_bool(&mut self,
+                                 ctx: &Context,
+                                 expr: &Expr)
+                                 -> Result<(Option<bool>, Option<bool>)> {
+        let (left, right) = try!(self.eval_two_children(ctx, expr));
         let left_bool = try!(left.into_bool());
         let right_bool = try!(right.into_bool());
         Ok((left_bool, right_bool))
     }
 
-    fn eval_in(&mut self, expr: &Expr) -> Result<Datum> {
+    fn eval_in(&mut self, ctx: &Context, expr: &Expr) -> Result<Datum> {
         if expr.get_children().len() != 2 {
             return Err(Error::Expr(format!("IN need 2 operand, got {}",
                                            expr.get_children().len())));
         }
         let children = expr.get_children();
-        let target = try!(self.eval(&children[0]));
+        let target = try!(self.eval(ctx, &children[0]));
         if let Datum::Null = target {
             return Ok(target);
         }
@@ -242,7 +245,7 @@ impl Evaluator {
             return Err(Error::Expr("the second children should be value list type".to_owned()));
         }
         let decoded = try!(self.decode_value_list(value_list_expr));
-        if try!(check_in(target, decoded)) {
+        if try!(check_in(ctx, target, decoded)) {
             return Ok(true.into());
         }
         if decoded.first().map_or(false, |d| *d == Datum::Null) {
@@ -259,10 +262,10 @@ impl Evaluator {
         Ok(decoded)
     }
 
-    fn eval_arith<F>(&mut self, expr: &Expr, f: F) -> Result<Datum>
+    fn eval_arith<F>(&mut self, ctx: &Context, expr: &Expr, f: F) -> Result<Datum>
         where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
     {
-        let (left, right) = try!(self.eval_two_children(expr));
+        let (left, right) = try!(self.eval_two_children(ctx, expr));
         eval_arith(left, right, f)
     }
 }
@@ -283,10 +286,10 @@ pub fn eval_arith<F>(left: Datum, right: Datum, f: F) -> Result<Datum>
 }
 
 /// Check if `target` is in `value_list`.
-fn check_in(target: Datum, value_list: &[Datum]) -> Result<bool> {
+fn check_in(ctx: &Context, target: Datum, value_list: &[Datum]) -> Result<bool> {
     let mut err = None;
     let pos = value_list.binary_search_by(|d| {
-        match d.cmp(&target) {
+        match d.cmp(ctx, &target) {
             Ok(ord) => ord,
             Err(e) => {
                 err = Some(e);
@@ -400,7 +403,7 @@ mod test {
                 let mut xevaluator = Evaluator::default();
                 xevaluator.row.insert(1, Datum::I64(100));
                 for (expr, result) in cases {
-                    let res = xevaluator.eval(&expr);
+                    let res = xevaluator.eval(&Default::default(), &expr);
                     if res.is_err() {
                         panic!("failed to eval {:?}: {:?}", expr, res);
                     }
@@ -560,7 +563,7 @@ mod test {
 
     fn in_expr(target: Datum, mut list: Vec<Datum>) -> Expr {
         let target_expr = datum_expr(target);
-        list.sort_by(|l, r| l.cmp(r).unwrap());
+        list.sort_by(|l, r| l.cmp(&Default::default(), r).unwrap());
         let val = datum::encode_value(&list).unwrap();
         let mut list_expr = Expr::new();
         list_expr.set_tp(ExprType::ValueList);
@@ -588,7 +591,7 @@ mod test {
 
         let mut eval = Evaluator::default();
         for (expr, expect_res) in cases {
-            let res = eval.eval(&expr);
+            let res = eval.eval(&Default::default(), &expr);
             if res.is_err() {
                 panic!("failed to execute {:?}: {:?}", expr, res);
             }
