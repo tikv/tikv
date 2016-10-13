@@ -24,6 +24,9 @@ release:
 	@mkdir -p bin 
 	cp -f ./target/release/tikv-server ./bin
 
+static_release:
+	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 make release
+
 test:
 	# Default Mac OSX `ulimit -n` is 256, too small. When SIP is enabled, DYLD_LIBRARY_PATH will not work
 	# in subshell, so we have to set it again here. LOCAL_DIR is defined in .travis.yml.
