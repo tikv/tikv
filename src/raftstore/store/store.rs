@@ -73,34 +73,29 @@ pub struct RaftReadyMetrics {
 impl RaftReadyMetrics {
     /// Flushs all metrics
     fn flush(&mut self) {
+        // reset all buffered metrics once they have been added
         if self.message > 0 {
             STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["message"])
                 .inc_by(self.message as f64)
                 .unwrap();
+            self.message = 0;
         }
         if self.commit > 0 {
             STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["commit"])
                 .inc_by(self.commit as f64)
                 .unwrap();
+            self.commit = 0;
         }
         if self.append > 0 {
             STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["append"])
                 .inc_by(self.append as f64)
                 .unwrap();
+            self.append = 0;
         }
         if self.snapshot > 0 {
             STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"]).inc();
+            self.snapshot = 0;
         }
-        // reset all buffered metrics once they have been added
-        self.reset()
-    }
-
-    /// Resets all metrics counters
-    fn reset(&mut self) {
-        self.message = 0u64;
-        self.commit = 0u64;
-        self.append = 0u64;
-        self.snapshot = 0u64;
     }
 }
 
@@ -121,66 +116,61 @@ pub struct RaftMessageMetrics {
 impl RaftMessageMetrics {
     /// Flushs all metrics
     fn flush(&mut self) {
+        // reset all buffered metrics once they have been added
         if self.append > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append"])
                 .inc_by(self.append as f64)
                 .unwrap();
+            self.append = 0;
         }
         if self.append_resp > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append_resp"])
                 .inc_by(self.append_resp as f64)
                 .unwrap();
+            self.append_resp = 0;
         }
         if self.vote > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote"])
                 .inc_by(self.vote as f64)
                 .unwrap();
+            self.vote = 0;
         }
         if self.vote_resp > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote_resp"])
                 .inc_by(self.vote_resp as f64)
                 .unwrap();
+            self.vote_resp = 0;
         }
         if self.snapshot > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["snapshot"])
                 .inc_by(self.snapshot as f64)
                 .unwrap();
+            self.snapshot = 0;
         }
         if self.heartbeat > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat"])
                 .inc_by(self.heartbeat as f64)
                 .unwrap();
+            self.heartbeat = 0;
         }
         if self.heartbeat_resp > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat_resp"])
                 .inc_by(self.heartbeat_resp as f64)
                 .unwrap();
+            self.heartbeat_resp = 0;
         }
         if self.transfer_leader > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["transfer_leader"])
                 .inc_by(self.transfer_leader as f64)
                 .unwrap();
+            self.transfer_leader = 0;
         }
         if self.timeout_now > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["timeout_now"])
                 .inc_by(self.timeout_now as f64)
                 .unwrap();
+            self.timeout_now = 0;
         }
-        // reset all buffered metrics once they have been added
-        self.reset()
-    }
-
-    /// Resets all metrics counters
-    fn reset(&mut self) {
-        self.append = 0u64;
-        self.append_resp = 0u64;
-        self.vote = 0u64;
-        self.vote_resp = 0u64;
-        self.snapshot = 0u64;
-        self.heartbeat = 0u64;
-        self.heartbeat_resp = 0u64;
-        self.transfer_leader = 0u64;
-        self.timeout_now = 0u64;
     }
 }
 
@@ -198,9 +188,6 @@ impl RaftMetrics {
         self.message.flush();
     }
 }
-
-
-
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
