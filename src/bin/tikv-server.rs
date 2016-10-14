@@ -486,7 +486,7 @@ fn get_rocksdb_raftlog_cf_option(matches: &Matches, config: &toml::Value) -> Roc
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
     let write_buffer_size = get_integer_value("",
-                                              "rocksdb.writecf.write-buffer-size",
+                                              "rocksdb.raftcf.write-buffer-size",
                                               matches,
                                               config,
                                               Some(64 * 1024 * 1024),
