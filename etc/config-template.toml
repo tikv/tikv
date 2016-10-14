@@ -128,6 +128,28 @@ enable-statistics = false
 # Same as rocksdb's default value (10 min).
 stats-dump-period-sec = 600
 
+# options for Column Family write
+# Column Family write used to store commit informations in MVCC model
+[rocksdb.writecf]
+compression_per_level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
+write-buffer-size = "64MB"
+max-write-buffer-number = 5
+min-write-buffer-number-to-merge = 1
+max-bytes-for-level-base = "64MB"
+target-file-size-base = "16MB"
+block-cache-size = "256MB"
+
+# options for Column Family raft.
+# Column Family raft is used to store raft log and raft states.
+[rocksdb.raftcf]
+compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
+write-buffer-size = "64MB"
+max-write-buffer-number = 5
+min-write-buffer-number-to-merge = 1
+max-bytes-for-level-base = "64MB"
+target-file-size-base = "16MB"
+block-cache-size = "256MB"
+
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/table.h
 [rocksdb.block-based-table]
 # Approximate size of user data packed per block.  Note that the 
