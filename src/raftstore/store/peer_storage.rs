@@ -21,7 +21,7 @@ use std::mem;
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::Message;
 
-use kvproto::metapb;
+use kvproto::metapb::{self, Region};
 use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
@@ -145,6 +145,57 @@ impl InvokeContext {
     }
 }
 
+fn init_raft_state(engine: &DB, region: &Region) -> Result<RaftLocalState> {
+    Ok(match try!(engine.get_msg_cf(CF_RAFT, &keys::raft_state_key(region.get_id()))) {
+        Some(s) => s,
+        None => {
+            let mut raft_state = RaftLocalState::new();
+            if !region.get_peers().is_empty() {
+                raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
+            }
+            raft_state
+        }
+    })
+}
+
+fn init_apply_state(engine: &DB, region: &Region) -> Result<RaftApplyState> {
+    Ok(match try!(engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))) {
+        Some(s) => s,
+        None => {
+            let mut apply_state = RaftApplyState::new();
+            if !region.get_peers().is_empty() {
+                apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+                let state = apply_state.mut_truncated_state();
+                state.set_index(RAFT_INIT_LOG_INDEX);
+                state.set_term(RAFT_INIT_LOG_TERM);
+            }
+            apply_state
+        }
+    })
+}
+
+fn init_last_term(engine: &DB,
+                  region: &Region,
+                  raft_state: &RaftLocalState,
+                  apply_state: &RaftApplyState)
+                  -> Result<u64> {
+    let last_idx = raft_state.get_last_index();
+    if last_idx == 0 {
+        return Ok(0);
+    } else if last_idx == RAFT_INIT_LOG_INDEX {
+        return Ok(RAFT_INIT_LOG_TERM);
+    } else if last_idx == apply_state.get_truncated_state().get_index() {
+        return Ok(apply_state.get_truncated_state().get_term());
+    } else {
+        assert!(last_idx > RAFT_INIT_LOG_INDEX);
+    }
+    let last_log_key = keys::raft_log_key(region.get_id(), last_idx);
+    Ok(match try!(engine.get_msg_cf::<Entry>(CF_RAFT, &last_log_key)) {
+        None => return Err(box_err!("entry at {} doesn't exist, may lose data.", last_idx)),
+        Some(e) => e.get_term(),
+    })
+}
+
 impl PeerStorage {
     pub fn new(engine: Arc<DB>,
                region: &metapb::Region,
@@ -152,41 +203,9 @@ impl PeerStorage {
                tag: String)
                -> Result<PeerStorage> {
         debug!("creating storage on {} for {:?}", engine.path(), region);
-        let raft_state =
-            match try!(engine.get_msg_cf(CF_RAFT, &keys::raft_state_key(region.get_id()))) {
-                Some(s) => s,
-                None => {
-                    let mut raft_state = RaftLocalState::new();
-                    if !region.get_peers().is_empty() {
-                        raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
-                    }
-                    raft_state
-                }
-            };
-        let last_term = match raft_state.get_last_index() {
-            0 => 0,
-            RAFT_INIT_LOG_INDEX => RAFT_INIT_LOG_TERM,
-            idx => {
-                let e: Entry =
-                    try!(engine.get_msg_cf(CF_RAFT, &keys::raft_log_key(region.get_id(), idx)))
-                        .unwrap();
-                e.get_term()
-            }
-        };
-        let apply_state =
-            match try!(engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))) {
-                Some(s) => s,
-                None => {
-                    let mut apply_state = RaftApplyState::new();
-                    if !region.get_peers().is_empty() {
-                        apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
-                        let state = apply_state.mut_truncated_state();
-                        state.set_index(RAFT_INIT_LOG_INDEX);
-                        state.set_term(RAFT_INIT_LOG_TERM);
-                    }
-                    apply_state
-                }
-            };
+        let raft_state = try!(init_raft_state(&engine, region));
+        let apply_state = try!(init_apply_state(&engine, region));
+        let last_term = try!(init_last_term(&engine, region, &raft_state, &apply_state));
 
         Ok(PeerStorage {
             engine: engine,
