@@ -254,12 +254,12 @@ impl Time {
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
     /// be a UTC time; otherwise the packed time should be in the same timezone as `tz`
     /// specified.
-    pub fn from_packed_u64(t: u64, tp: u8, fsp: i8, tz: &FixedOffset) -> Result<Time> {
-        if t == 0 {
+    pub fn from_packed_u64(u: u64, tp: u8, fsp: i8, tz: &FixedOffset) -> Result<Time> {
+        if u == 0 {
             return Time::new(zero_time(tz), tp, fsp);
         }
         let fsp = try!(mysql::check_fsp(fsp));
-        let ymdhms = t >> 24;
+        let ymdhms = u >> 24;
         let ymd = ymdhms >> 17;
         let day = (ymd & ((1 << 5) - 1)) as u32;
         let ym = ymd >> 5;
@@ -269,7 +269,7 @@ impl Time {
         let second = (hms & ((1 << 6) - 1)) as u32;
         let minute = ((hms >> 6) & ((1 << 6) - 1)) as u32;
         let hour = (hms >> 12) as u32;
-        let nanosec = ((t & ((1 << 24) - 1)) * 1000) as u32;
+        let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
         let t = if tp == types::TIMESTAMP {
             let t = try!(ymd_hms_nanos(&UTC, year, month, day, hour, minute, second, nanosec));
             tz.from_utc_datetime(&t.naive_utc())
@@ -389,23 +389,21 @@ mod test {
         ];
 
         for (input, fsp, exp) in ok_tables {
-            let t = Time::parse_utc_datetime(input, fsp).unwrap();
-            assert_eq!(format!("{}", t), exp);
+            let utc_t = Time::parse_utc_datetime(input, fsp).unwrap();
+            assert_eq!(format!("{}", utc_t), exp);
 
             for mut offset in MIN_OFFSET..MAX_OFFSET {
                 offset *= 60;
                 let tz = FixedOffset::east(offset);
-                let aware_t = Time::parse_datetime(input, fsp, &tz).unwrap();
-                if t.is_zero() {
-                    assert_eq!(t, aware_t);
+                let t = Time::parse_datetime(input, fsp, &tz).unwrap();
+                if utc_t.is_zero() {
+                    assert_eq!(t, utc_t);
                 } else {
-                    let exp_t =
-                        Time::new(t.time - Duration::seconds(offset as i64), t.tp, t.fsp as i8)
-                            .unwrap();
-                    if exp_t != aware_t {
-                        println!("offset {} t {:?}", offset, t);
-                    }
-                    assert_eq!(exp_t, aware_t);
+                    let exp_t = Time::new(utc_t.time - Duration::seconds(offset as i64),
+                                          utc_t.tp,
+                                          utc_t.fsp as i8)
+                        .unwrap();
+                    assert_eq!(exp_t, t);
                 }
             }
         }
@@ -440,18 +438,18 @@ mod test {
             for mut offset in MIN_OFFSET..MAX_OFFSET {
                 offset *= 60;
                 let tz = FixedOffset::east(offset);
-                let aware_t = Time::parse_datetime(s, fsp, &tz).unwrap();
-                let aware_packed = aware_t.to_packed_u64();
-                let reverted = Time::from_packed_u64(aware_packed, types::DATETIME, fsp, &tz)
+                let t = Time::parse_datetime(s, fsp, &tz).unwrap();
+                let packed = t.to_packed_u64();
+                let reverted_datetime = Time::from_packed_u64(packed, types::DATETIME, fsp, &tz)
                     .unwrap();
-                assert_eq!(reverted, aware_t);
-                assert_eq!(reverted.to_packed_u64(), aware_packed);
+                assert_eq!(reverted_datetime, t);
+                assert_eq!(reverted_datetime.to_packed_u64(), packed);
 
-                let revered_timestap =
-                    Time::from_packed_u64(aware_packed, types::TIMESTAMP, fsp, &tz).unwrap();
-                assert_eq!(revered_timestap.time,
-                           reverted.time + Duration::seconds(offset as i64));
-                assert_eq!(revered_timestap.to_packed_u64(), aware_packed);
+                let reverted_timestamp = Time::from_packed_u64(packed, types::TIMESTAMP, fsp, &tz)
+                    .unwrap();
+                assert_eq!(reverted_timestamp.time,
+                           reverted_datetime.time + Duration::seconds(offset as i64));
+                assert_eq!(reverted_timestamp.to_packed_u64(), packed);
             }
         }
     }
