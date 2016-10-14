@@ -101,6 +101,10 @@ impl Evaluator {
             ExprType::In => self.eval_in(ctx, expr),
             ExprType::Plus => self.eval_arith(ctx, expr, Datum::checked_add),
             ExprType::Div => self.eval_arith(ctx, expr, Datum::checked_div),
+            ExprType::Minus => self.eval_arith(ctx, expr, Datum::checked_minus),
+            ExprType::Mul => unimplemented!(),
+            ExprType::IntDiv => self.eval_arith(ctx, expr, Datum::checked_int_div),
+            ExprType::Mod => self.eval_arith(ctx, expr, Datum::checked_rem),
             _ => Ok(Datum::Null),
         }
     }
@@ -436,17 +440,14 @@ mod test {
 
                 let mut xevaluator = Evaluator::default();
                 xevaluator.row.insert(1, Datum::I64(100));
-                for (expr, result) in cases {
+                for (expr, exp) in cases {
                     let res = xevaluator.eval(&Default::default(), &expr);
                     if res.is_err() {
                         panic!("failed to eval {:?}: {:?}", expr, res);
                     }
                     let res = res.unwrap();
-                    if res != result {
-                        panic!("failed to eval {:?} expect {:?}, got {:?}",
-                            expr,
-                            result,
-                            res);
+                    if res != exp {
+                        panic!("failed to eval {:?} expect {:?}, got {:?}", expr, exp, res);
                     }
                 }
             }
@@ -593,6 +594,92 @@ mod test {
          ExprType::Div), Datum::Dec("0.008326394671107410".parse().unwrap())),
         (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
          ExprType::Div), Datum::Dec("9.984025559105431309".parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_minus,
+               vec![
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Minus), Datum::I64(0)),
+        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Minus), Datum::U64(0)),
+        (bin_expr(Datum::U64(1), Datum::I64(-1), ExprType::Minus), Datum::U64(2)),
+        (bin_expr(Datum::U64(1), Datum::U64(1), ExprType::Minus), Datum::U64(0)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Minus), Datum::F64(0.0)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Minus), Datum::F64(2.0)),
+        (bin_expr(Datum::Null, Datum::Null, ExprType::Minus), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Minus), Datum::Null),
+        (bin_expr(Datum::U64(1), Datum::I64(i64::min_value()), ExprType::Minus),
+         Datum::U64(i64::max_value() as u64 + 2)),
+        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Minus), Datum::Null),
+        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Minus), Datum::F64(3.0)),
+        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Minus), Datum::F64(1.0)),
+        (bin_expr(Datum::F64(2.0), Datum::Dec("0.3".parse().unwrap()), ExprType::Minus),
+         Datum::F64(1.7)),
+        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Minus), Datum::F64(-240198.0)),
+        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Minus),
+         Datum::Dec("4.3".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Minus), Datum::Dec("-238200".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+         ExprType::Minus), Datum::Dec("1799.680000".parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_int_div,
+               vec![
+		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::IntDiv), Datum::U64(1)),
+        (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::IntDiv), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::IntDiv), Datum::I64(-1)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"0".to_vec()), ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::Null, Datum::Null, ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::I64(i64::min_value()), Datum::U64(i64::max_value() as u64 + 2),
+         ExprType::IntDiv), Datum::U64(0)),
+        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::IntDiv), Datum::I64(-2)),
+        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::IntDiv), Datum::I64(2)),
+        (bin_expr(Datum::I64(2), Datum::Dec("0.3".parse().unwrap()), ExprType::IntDiv),
+         Datum::I64(6)),
+        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::IntDiv), Datum::I64(0)),
+        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::IntDiv),
+         Datum::I64(-3)),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::IntDiv), Datum::I64(0)),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+         ExprType::IntDiv), Datum::I64(9)),
+    ]);
+
+    test_eval!(test_eval_rem,
+               vec![
+        (bin_expr(Datum::I64(3), Datum::I64(1), ExprType::Mod), Datum::I64(0)),
+		(bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::I64(3), Datum::U64(2), ExprType::Mod), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::I64(3), Datum::Bytes(b"2".to_vec()), ExprType::Mod), Datum::F64(1.0)),
+        (bin_expr(Datum::I64(3), Datum::Bytes(b"-2".to_vec()), ExprType::Mod), Datum::F64(1.0)),
+        (bin_expr(Datum::Null, Datum::Null, ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::U64(2), ExprType::Mod), Datum::I64((-1).into())),
+        (bin_expr(Datum::I64(i64::min_value()), Datum::U64(i64::max_value() as u64),
+         ExprType::Mod), Datum::I64(-1)),
+        (bin_expr(Datum::U64(i64::max_value() as u64), Datum::I64(i64::min_value()),
+         ExprType::Mod), Datum::U64(i64::max_value() as u64)),
+        (bin_expr(Datum::F64(3.2), Datum::I64(2), ExprType::Mod), Datum::F64(1.2000000000000002)),
+        (bin_expr(Datum::F64(-3.2), Datum::I64(2), ExprType::Mod), Datum::F64(-1.2000000000000002)),
+        (bin_expr(Datum::F64(2.0), Datum::Dec("0.3".parse().unwrap()), ExprType::Mod),
+         Datum::F64(0.20000000000000007)),
+        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Mod), Datum::F64(2.0)),
+        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Mod),
+         Datum::Dec("0.3".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Mod), Datum::Dec("2000".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+         ExprType::Mod), Datum::Dec("197.12".parse().unwrap())),
     ]);
 
     fn in_expr(target: Datum, mut list: Vec<Datum>) -> Expr {
