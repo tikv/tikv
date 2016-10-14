@@ -40,12 +40,12 @@ impl Default for EvalContext {
     }
 }
 
-const A_DAY: i64 = 3600 * 24;
+const ONE_DAY: i64 = 3600 * 24;
 
 impl EvalContext {
     pub fn new(sel: &SelectRequest) -> Result<EvalContext> {
         let offset = sel.get_time_zone_offset();
-        if offset <= -A_DAY || offset >= A_DAY {
+        if offset <= -ONE_DAY || offset >= ONE_DAY {
             return Err(Error::Eval(format!("invalid tz offset {}", offset)));
         }
         let tz = match FixedOffset::east_opt(offset as i32) {
