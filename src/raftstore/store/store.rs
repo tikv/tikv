@@ -816,7 +816,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         assert!(!p.is_applying());
 
         let is_initialized = p.is_initialized();
-        let end_key = enc_end_key(p.region());
         if let Err(e) = p.destroy() {
             // should panic here?
             error!("[region {}] destroy peer {:?} in store {} err {:?}",
@@ -827,7 +826,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        if is_initialized && self.region_ranges.remove(&end_key).is_none() {
+        if is_initialized && self.region_ranges.remove(&enc_end_key(p.region())).is_none() {
             panic!("[region {}] remove peer {:?} in store {}",
                    region_id,
                    peer,

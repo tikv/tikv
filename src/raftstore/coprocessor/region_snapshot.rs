@@ -264,7 +264,7 @@ mod tests {
 
     use super::*;
     use std::sync::Arc;
-    use kvproto::metapb::Region;
+    use kvproto::metapb::{Region, Peer};
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -278,6 +278,7 @@ mod tests {
 
     fn load_default_dataset(engine: Arc<DB>) -> (PeerStorage, DataSet) {
         let mut r = Region::new();
+        r.mut_peers().push(Peer::new());
         r.set_id(10);
         r.set_start_key(b"a2".to_vec());
         r.set_end_key(b"a7".to_vec());
@@ -378,7 +379,9 @@ mod tests {
         assert_eq!(res, base_data[1..3].to_vec());
 
         // test last region
-        let store = new_peer_storage(engine.clone(), &Region::new());
+        let mut region = Region::new();
+        region.mut_peers().push(Peer::new());
+        let store = new_peer_storage(engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         data.clear();
         snap.scan(b"",
@@ -406,7 +409,7 @@ mod tests {
         assert_eq!(res, base_data);
 
         // test iterator with upper bound
-        let store = new_peer_storage(engine.clone(), &Region::new());
+        let store = new_peer_storage(engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter(Some(b"a5"));
         assert!(iter.seek_to_first());
@@ -452,7 +455,9 @@ mod tests {
         assert_eq!(res, expect);
 
         // test last region
-        let store = new_peer_storage(engine.clone(), &Region::new());
+        let mut region = Region::new();
+        region.mut_peers().push(Peer::new());
+        let store = new_peer_storage(engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         let mut iter = Cursor::new(snap.iter(None), ScanMode::Mixed);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());
