@@ -251,6 +251,9 @@ impl Time {
         Time::new(t, types::DATETIME as u8, fsp as i8)
     }
 
+    /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
+    /// be a UTC time; otherwise the packed time should be in the same timezone as `tz`
+    /// specified.
     pub fn from_packed_u64(t: u64, tp: u8, fsp: i8, tz: &FixedOffset) -> Result<Time> {
         if t == 0 {
             return Time::new(zero_time(tz), tp, fsp);
@@ -276,6 +279,9 @@ impl Time {
         Time::new(t, tp, fsp as i8)
     }
 
+    /// Serialize time to a u64.
+    ///
+    /// If `tp` is TIMESTAMP, it will be converted to a UTC time first.
     pub fn to_packed_u64(&self) -> u64 {
         if self.is_zero() {
             return 0;
