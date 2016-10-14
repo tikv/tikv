@@ -180,6 +180,7 @@ pub fn enc_end_key(region: &Region) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvproto::metapb::{Region, Peer};
     use std::cmp::Ordering;
 
     #[test]
@@ -264,5 +265,19 @@ mod tests {
     fn test_data_key() {
         assert!(validate_data_key(&data_key(b"abc")));
         assert!(!validate_data_key(b"abc"));
+
+        let mut region = Region::new();
+        // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.
+        assert!(recover_safe!(|| enc_start_key(&region)).is_err());
+        assert!(recover_safe!(|| enc_end_key(&region)).is_err());
+
+        region.mut_peers().push(Peer::new());
+        assert_eq!(enc_start_key(&region), vec![DATA_PREFIX]);
+        assert_eq!(enc_end_key(&region), vec![DATA_PREFIX + 1]);
+
+        region.set_start_key(vec![1]);
+        region.set_end_key(vec![2]);
+        assert_eq!(enc_start_key(&region), vec![DATA_PREFIX, 1]);
+        assert_eq!(enc_end_key(&region), vec![DATA_PREFIX, 2]);
     }
 }
