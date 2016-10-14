@@ -665,7 +665,7 @@ impl PeerStorage {
             let abort = Arc::new(AtomicBool::new(false));
             self.set_snap_state(SnapState::Applying(abort.clone()));
 
-            // cleanup data before schedule apply task
+            // cleanup data before scheduling apply task
             if self.is_initialized() {
                 if let Err(e) = self.clear_extra_data(&res.region) {
                     // No need panic here, when applying snapshot, the deletion will be tried
