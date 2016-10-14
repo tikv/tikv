@@ -28,7 +28,9 @@ use tipb::select::SelectRequest;
 use chrono::FixedOffset;
 
 #[derive(Debug)]
+/// Some global variables needed in an evaluation.
 pub struct EvalContext {
+    /// timezone to use when parse/calculate time.
     pub tz: FixedOffset,
 }
 
@@ -38,10 +40,12 @@ impl Default for EvalContext {
     }
 }
 
+const A_DAY: i64 = 3600 * 24;
+
 impl EvalContext {
     pub fn new(sel: &SelectRequest) -> Result<EvalContext> {
         let offset = sel.get_time_zone_offset();
-        if offset <= -3600 * 24 || offset >= 3600 * 24 {
+        if offset <= -A_DAY || offset >= A_DAY {
             return Err(Error::Eval(format!("invalid tz offset {}", offset)));
         }
         let tz = match FixedOffset::east_opt(offset as i32) {
