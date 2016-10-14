@@ -7,7 +7,7 @@ RUN yum update -y && \
     yum install -y devtoolset-4-gcc-c++ python27 && \
     yum clean all
 
-RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s  -- --disable-sudo -y --channel=nightly
+RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s -- --date=2016-08-06 --disable-sudo -y --channel=nightly
 
 COPY release.sh ./release.sh
 
