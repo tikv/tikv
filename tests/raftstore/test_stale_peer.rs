@@ -75,10 +75,12 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_remove_peer(r1, new_peer(2, 2));
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
-    // Keep peer 2 isolated. Otherwise if the peer 1 or peer 3 is not destroyed yet,
-    // the communication between peer 1/peer 3 and peer 2 would cause peer 2 to
+    // Keep peer 2 isolated after peer 3 is destroyed.
+    // Otherwise if peer 3 is not destroyed, or destroyed and marked as tombstone
+    // the communication between peer 3 and peer 2 would cause peer 2 to
     // destroy itself earlier than this test case expects
-    // due to the handling of stale message on peer 1 or peer 3.
+    // due to the handling of stale message on peer 3.
+    // cluster.clear_send_filters();
 
     // wait for max_leader_missing_duration to timeout
     thread::sleep(max_leader_missing_duration);
