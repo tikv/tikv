@@ -82,7 +82,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // due to the handling of stale message on peer 3.
     // cluster.clear_send_filters();
 
-    // Wait for max_leader_missing_duration to timeout.
+    // Wait for max_leader_missing_duration to time out.
     thread::sleep(max_leader_missing_duration);
     // Sleep one more second to make sure there is enough time for the peer to be destroyed.
     thread::sleep(Duration::from_secs(1));
@@ -149,7 +149,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     // And then isolate peer (2, 2) from peer (1, 1).
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
-    // Wait for max_leader_missing_duration to timeout
+    // Wait for max_leader_missing_duration to time out.
     thread::sleep(max_leader_missing_duration);
     // Sleep one more second to make sure there is enough time for the peer to be destroyed.
     thread::sleep(Duration::from_secs(1));
