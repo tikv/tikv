@@ -62,15 +62,15 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_2 = cluster.get_engine(2);
     must_get_equal(&engine_2, key, value);
 
-    // isolate peer 2 from other part of the cluster
+    // Isolate peer 2 from other part of the cluster.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
-    // add peer [(4, 4), (5, 5), (6, 6)]
+    // Add peer [(4, 4), (5, 5), (6, 6)].
     pd_client.must_add_peer(r1, new_peer(4, 4));
     pd_client.must_add_peer(r1, new_peer(5, 5));
     pd_client.must_add_peer(r1, new_peer(6, 6));
 
-    // remove peer [(1, 1), (2, 2), (3, 3)]
+    // Remove peer [(1, 1), (2, 2), (3, 3)].
     pd_client.must_remove_peer(r1, new_peer(1, 1));
     pd_client.must_remove_peer(r1, new_peer(2, 2));
     pd_client.must_remove_peer(r1, new_peer(3, 3));
@@ -82,17 +82,17 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // due to the handling of stale message on peer 3.
     // cluster.clear_send_filters();
 
-    // wait for max_leader_missing_duration to timeout
+    // Wait for max_leader_missing_duration to timeout.
     thread::sleep(max_leader_missing_duration);
-    // sleep one more second to make sure there is enough time for the peer to be destroyed
+    // Sleep one more second to make sure there is enough time for the peer to be destroyed.
     thread::sleep(Duration::from_secs(1));
 
-    // check whether this region is still functional properly
+    // Check whether this region is still functional properly.
     let (key2, value2) = (b"k2", b"v2");
     cluster.must_put(key2, value2);
     assert_eq!(cluster.get(key2), Some(value2.to_vec()));
 
-    // check whether peer(2, 2) and its data are destroyed
+    // Check whether peer(2, 2) and its data are destroyed.
     must_get_none(&engine_2, key);
     must_get_none(&engine_2, key2);
     let state_key = keys::region_state_key(1);
@@ -137,25 +137,26 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_rule();
 
     let r1 = cluster.run_conf_change();
-    // block peer (2, 2) at receiving snapshot, but not the heartbeat
+    // Block peer (2, 2) at receiving snapshot, but not the heartbeat.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
         .msg_type(MessageType::MsgSnapshot)));
 
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
-    // wait for the heartbeat broadcasted from peer (1, 1) to peer (2, 2)
+    // Wait for the heartbeat broadcasted from peer (1, 1) to peer (2, 2).
     thread::sleep(Duration::from_millis(60));
 
-    // and then isolate peer (2, 2) from peer (1, 1)
+    // And then isolate peer (2, 2) from peer (1, 1).
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
-    // wait for max_leader_missing_duration to timeout
+    // Wait for max_leader_missing_duration to timeout
     thread::sleep(max_leader_missing_duration);
-    // sleep one more second to make sure there is enough time for the peer to be destroyed
+    // Sleep one more second to make sure there is enough time for the peer to be destroyed.
     thread::sleep(Duration::from_secs(1));
 
-    // check whether peer(2, 2) is destroyed
-    // if it's destroyed, it will write tombstone into the engine.
+    // Check whether peer(2, 2) is destroyed.
+    // Before peer 2 is destroyed, a tombstone mark will be written into the engine.
+    // So we could check the tombstone mark to make sure peer 2 is destroyed.
     let engine = cluster.get_engine(2);
     let state_key = keys::region_state_key(1);
     let state: RegionLocalState = engine.get_msg(&state_key).unwrap().unwrap();
