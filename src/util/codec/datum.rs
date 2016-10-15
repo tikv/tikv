@@ -21,10 +21,12 @@ use std::fmt::{self, Display, Formatter, Debug};
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
 use util::escape;
+use util::xeval::EvalContext;
 use super::{number, Result, bytes, convert};
 use super::number::NumberDecoder;
 use super::bytes::BytesEncoder;
-use super::mysql::{self, Duration, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder, Time};
+use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
+                   Time};
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -91,7 +93,7 @@ fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
 
 #[allow(should_implement_trait)]
 impl Datum {
-    pub fn cmp(&self, datum: &Datum) -> Result<Ordering> {
+    pub fn cmp(&self, ctx: &EvalContext, datum: &Datum) -> Result<Ordering> {
         match *datum {
             Datum::Null => {
                 match *self {
@@ -115,10 +117,10 @@ impl Datum {
             Datum::I64(i) => self.cmp_i64(i),
             Datum::U64(u) => self.cmp_u64(u),
             Datum::F64(f) => self.cmp_f64(f),
-            Datum::Bytes(ref bs) => self.cmp_bytes(bs),
+            Datum::Bytes(ref bs) => self.cmp_bytes(ctx, bs),
             Datum::Dur(ref d) => self.cmp_dur(d),
             Datum::Dec(ref d) => self.cmp_dec(d),
-            Datum::Time(ref t) => self.cmp_time(t),
+            Datum::Time(ref t) => self.cmp_time(ctx, t),
         }
     }
 
@@ -176,7 +178,7 @@ impl Datum {
         }
     }
 
-    fn cmp_bytes(&self, bs: &[u8]) -> Result<Ordering> {
+    fn cmp_bytes(&self, ctx: &EvalContext, bs: &[u8]) -> Result<Ordering> {
         match *self {
             Datum::Null | Datum::Min => Ok(Ordering::Less),
             Datum::Max => Ok(Ordering::Greater),
@@ -188,7 +190,7 @@ impl Datum {
             }
             Datum::Time(ref t) => {
                 let s = try!(str::from_utf8(bs));
-                let t2 = try!(Time::from_str(s));
+                let t2 = try!(Time::parse_datetime(s, DEFAULT_FSP, &ctx.tz));
                 Ok(t.cmp(&t2))
             }
             Datum::Dur(ref d) => {
@@ -228,11 +230,11 @@ impl Datum {
         }
     }
 
-    fn cmp_time(&self, time: &Time) -> Result<Ordering> {
+    fn cmp_time(&self, ctx: &EvalContext, time: &Time) -> Result<Ordering> {
         match *self {
             Datum::Bytes(ref bs) => {
                 let s = try!(str::from_utf8(bs));
-                let t = try!(Time::from_str(s));
+                let t = try!(Time::parse_datetime(s, DEFAULT_FSP, &ctx.tz));
                 Ok(t.cmp(time))
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
@@ -864,24 +866,24 @@ mod test {
             (Duration::new(StdDuration::from_millis(34), true, 2).unwrap().into(),
              b"-00.34".as_ref().into(), Ordering::Greater),
 
-            (Time::parse_datetime("2011-10-10 00:00:00", 0).unwrap().into(),
-             Time::parse_datetime("2000-12-12 11:11:11", 0).unwrap().into(),
+            (Time::parse_utc_datetime("2011-10-10 00:00:00", 0).unwrap().into(),
+             Time::parse_utc_datetime("2000-12-12 11:11:11", 0).unwrap().into(),
              Ordering::Greater),
-            (Time::parse_datetime("2011-10-10 00:00:00", 0).unwrap().into(),
+            (Time::parse_utc_datetime("2011-10-10 00:00:00", 0).unwrap().into(),
              b"2000-12-12 11:11:11".as_ref().into(),
              Ordering::Greater),
-            (Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
-             Time::parse_datetime("2001-10-10 00:00:00", 0).unwrap().into(),
+            (Time::parse_utc_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+             Time::parse_utc_datetime("2001-10-10 00:00:00", 0).unwrap().into(),
              Ordering::Less),
-            (Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
-             Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+            (Time::parse_utc_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+             Time::parse_utc_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
              Ordering::Equal),
-            (Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+            (Time::parse_utc_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
              Datum::I64(20001010000000), Ordering::Equal),
-            (Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+            (Time::parse_utc_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
              Datum::I64(0), Ordering::Greater),
             (Datum::I64(0),
-             Time::parse_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
+             Time::parse_utc_datetime("2000-10-10 00:00:00", 0).unwrap().into(),
              Ordering::Less),
 
             (Datum::Dec("1234".parse().unwrap()), Datum::Dec("123400".parse().unwrap()),
@@ -989,13 +991,13 @@ mod test {
         ];
 
         for (lhs, rhs, ret) in tests {
-            if ret != lhs.cmp(&rhs).unwrap() {
+            if ret != lhs.cmp(&Default::default(), &rhs).unwrap() {
                 panic!("{:?} should be {:?} to {:?}", lhs, ret, rhs);
             }
 
             let rev_ret = ret.reverse();
 
-            if rev_ret != rhs.cmp(&lhs).unwrap() {
+            if rev_ret != rhs.cmp(&Default::default(), &lhs).unwrap() {
                 panic!("{:?} should be {:?} to {:?}", rhs, rev_ret, lhs);
             }
 
@@ -1034,7 +1036,7 @@ mod test {
             (b"0".as_ref().into(), Some(false)),
             (b"2".as_ref().into(), Some(true)),
             (b"abc".as_ref().into(), Some(false)),
-            (Time::parse_datetime("2011-11-10 11:11:11.999999", 6).unwrap().into(), Some(true)),
+            (Time::parse_utc_datetime("2011-11-10 11:11:11.999999", 6).unwrap().into(), Some(true)),
             (Duration::parse(b"11:11:11.999999", MAX_FSP).unwrap().into(), Some(true)),
             (Datum::Dec(Decimal::from_f64(0.1415926).unwrap()), Some(false)),
             (Datum::Dec(0u64.into()), Some(false)),
