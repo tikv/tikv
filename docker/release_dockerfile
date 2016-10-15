@@ -9,6 +9,15 @@ RUN yum update -y && \
 
 RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s -- --date=2016-08-06 --disable-sudo -y --channel=nightly
 
+ADD https://github.com/pingcap/tikv/archive/master.tar.gz /master.tar.gz
+
+# cache dep package
+RUN tar xf master.tar.gz && \
+    cd tikv-master && \
+    cargo fetch && \
+    cd .. && \
+    rm -rf master.tar.gz tikv-master
+
 COPY release.sh ./release.sh
 
 RUN chmod a+x ./release.sh
@@ -16,3 +25,4 @@ RUN chmod a+x ./release.sh
 WORKDIR /tikv
 
 ENTRYPOINT ["/release.sh"]
+
