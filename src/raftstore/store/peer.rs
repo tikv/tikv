@@ -126,7 +126,7 @@ impl PendingCmdQueue {
     }
 
     fn take_conf_change(&mut self) -> Option<PendingCmd> {
-        // conf change will not be effected when changing between follower and leader,
+        // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
         let cmd = self.conf_change.take();
         self.remove(&cmd);
@@ -197,7 +197,7 @@ impl Peer {
 
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
-    // will be retrieved later after appling snapshot.
+    // will be retrieved later after applying snapshot.
     pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                                 region_id: u64,
                                                 peer_id: u64)
@@ -302,7 +302,7 @@ impl Peer {
     }
 
     pub fn load_all_coprocessors(&mut self) {
-        // TODO load coprocessors from configuation
+        // TODO load coprocessors from configuration
         self.coprocessor_host.registry.register_observer(100, box SplitObserver);
     }
 
@@ -403,7 +403,7 @@ impl Peer {
             return;
         }
 
-        // Insert heartbeats in case that some peers never reponse heartbeats.
+        // Insert heartbeats in case that some peers never response heartbeats.
         for peer in self.region().get_peers().to_owned() {
             self.peer_heartbeats.entry(peer.get_id()).or_insert_with(Instant::now);
         }
@@ -580,7 +580,7 @@ impl Peer {
                 return Err(box_err!("there is a pending conf change, try later"));
             }
             if let Some(cmd) = self.pending_cmds.take_conf_change() {
-                // if it loses leader ship before confchange is replicated, there may be
+                // if it loses leadership before conf change is replicated, there may be
                 // a stale pending conf change before next conf change is applied. If it
                 // becomes leader again with the stale pending conf change, will enter
                 // this block, so we notify leadership may have changed.
