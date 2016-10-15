@@ -34,7 +34,7 @@ use util::codec::table::TableDecoder;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
-use util::xeval::Evaluator;
+use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, Either};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
@@ -327,6 +327,7 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 
 #[inline]
 fn inflate_with_col<'a, T>(eval: &mut Evaluator,
+                           ctx: &EvalContext,
                            values: &HashMap<i64, &[u8]>,
                            cols: T,
                            h: i64)
@@ -345,7 +346,7 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                         return Err(box_err!("column {} of {} is missing", col_id, h));
                     }
                     None => Datum::Null,
-                    Some(bs) => box_try!(bs.clone().decode_col_value(col)),
+                    Some(bs) => box_try!(bs.clone().decode_col_value(ctx, col)),
                 };
                 e.insert(value);
             }
@@ -364,6 +365,7 @@ fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
 }
 
 pub struct SelectContextCore {
+    ctx: EvalContext,
     sel: SelectRequest,
     eval: Evaluator,
     cols: Either<HashSet<i64>, Vec<i64>>,
@@ -420,6 +422,7 @@ impl SelectContextCore {
         };
 
         Ok(SelectContextCore {
+            ctx: box_try!(EvalContext::new(&sel)),
             aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
             aggr_cols: aggr_cols,
             sel: sel,
@@ -453,8 +456,8 @@ impl SelectContextCore {
         if !self.sel.has_field_where() {
             return Ok(false);
         }
-        try!(inflate_with_col(&mut self.eval, values, &self.cond_cols, h));
-        let res = box_try!(self.eval.eval(self.sel.get_field_where()));
+        try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.cond_cols, h));
+        let res = box_try!(self.eval.eval(&self.ctx, self.sel.get_field_where()));
         let b = box_try!(res.into_bool());
         Ok(b.map_or(true, |v| !v))
     }
@@ -495,7 +498,7 @@ impl SelectContextCore {
         }
         let mut vals = Vec::with_capacity(items.len());
         for item in items {
-            let v = box_try!(self.eval.eval(item.get_expr()));
+            let v = box_try!(self.eval.eval(&self.ctx, item.get_expr()));
             vals.push(v);
         }
         let res = box_try!(datum::encode_value(&vals));
@@ -503,7 +506,7 @@ impl SelectContextCore {
     }
 
     fn aggregate(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<()> {
-        try!(inflate_with_col(&mut self.eval, values, &self.aggr_cols, h));
+        try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.aggr_cols, h));
         let gk = Rc::new(try!(self.get_group_key()));
         let aggr_exprs = self.sel.get_aggregates();
         match self.gk_aggrs.entry(gk.clone()) {
@@ -511,16 +514,16 @@ impl SelectContextCore {
                 let funcs = e.into_mut();
                 for (expr, func) in aggr_exprs.iter().zip(funcs) {
                     // TODO: cache args
-                    let args = box_try!(self.eval.batch_eval(expr.get_children()));
-                    try!(func.update(args));
+                    let args = box_try!(self.eval.batch_eval(&self.ctx, expr.get_children()));
+                    try!(func.update(&self.ctx, args));
                 }
             }
             Entry::Vacant(e) => {
                 let mut aggrs = Vec::with_capacity(aggr_exprs.len());
                 for expr in aggr_exprs {
                     let mut aggr = try!(aggregate::build_aggr_func(expr));
-                    let args = box_try!(self.eval.batch_eval(expr.get_children()));
-                    try!(aggr.update(args));
+                    let args = box_try!(self.eval.batch_eval(&self.ctx, expr.get_children()));
+                    try!(aggr.update(&self.ctx, args));
                     aggrs.push(aggr);
                 }
                 self.gks.push(gk);

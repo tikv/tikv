@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use tipb::expression::{Expr, ExprType};
 
 use util::codec::Datum;
-use util::xeval::evaluator;
+use util::xeval::{evaluator, EvalContext};
 
 use super::Result;
 
@@ -27,7 +27,7 @@ pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
 /// `AggrFunc` is used to execute aggregate operations.
 pub trait AggrFunc {
     /// `update` is used for update aggregate context.
-    fn update(&mut self, args: Vec<Datum>) -> Result<()>;
+    fn update(&mut self, ctx: &EvalContext, args: Vec<Datum>) -> Result<()>;
     /// `calc` calculates the aggregated result and push it to collector.
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()>;
 }
@@ -35,7 +35,7 @@ pub trait AggrFunc {
 type Count = u64;
 
 impl AggrFunc for Count {
-    fn update(&mut self, args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, _: &EvalContext, args: Vec<Datum>) -> Result<()> {
         for arg in args {
             if arg == Datum::Null {
                 return Ok(());
@@ -54,7 +54,7 @@ impl AggrFunc for Count {
 type First = Option<Datum>;
 
 impl AggrFunc for First {
-    fn update(&mut self, mut args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, _: &EvalContext, mut args: Vec<Datum>) -> Result<()> {
         if self.is_some() {
             return Ok(());
         }
@@ -100,7 +100,7 @@ impl Sum {
 }
 
 impl AggrFunc for Sum {
-    fn update(&mut self, args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, _: &EvalContext, args: Vec<Datum>) -> Result<()> {
         try!(self.add_asssign(args));
         Ok(())
     }
@@ -123,7 +123,7 @@ struct Avg {
 }
 
 impl AggrFunc for Avg {
-    fn update(&mut self, args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, _: &EvalContext, args: Vec<Datum>) -> Result<()> {
         if try!(self.sum.add_asssign(args)) {
             self.cnt += 1;
         }
@@ -151,7 +151,7 @@ impl Extremum {
 }
 
 impl AggrFunc for Extremum {
-    fn update(&mut self, mut args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &EvalContext, mut args: Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
             return Err(box_err!("max/min only support one column, but got {}", args.len()));
         }
@@ -159,7 +159,7 @@ impl AggrFunc for Extremum {
             return Ok(());
         }
         if let Some(ref d) = self.datum {
-            if box_try!(d.cmp(&args[0])) != self.ord {
+            if box_try!(d.cmp(ctx, &args[0])) != self.ord {
                 return Ok(());
             }
         }
