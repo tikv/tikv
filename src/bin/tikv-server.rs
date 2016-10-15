@@ -270,7 +270,7 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
-                               "rocksdb.compression_per_level",
+                               "rocksdb.compression-per-level",
                                matches,
                                config,
                                Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
@@ -407,7 +407,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
-                               "rocksdb.writecf.compression_per_level",
+                               "rocksdb.writecf.compression-per-level",
                                matches,
                                config,
                                Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),

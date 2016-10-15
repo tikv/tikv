@@ -81,7 +81,7 @@ endpoints = ""
 #   lz4hc:  kLZ4HCCompression
 
 # per level compression
-compression_per_level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
+compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
 
 # Amount of data to build up in memory (backed by an unsorted log
 # on disk) before converting to a sorted on-disk file.
@@ -131,7 +131,7 @@ stats-dump-period-sec = 600
 # options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
-compression_per_level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
+compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
 write-buffer-size = "64MB"
 max-write-buffer-number = 5
 min-write-buffer-number-to-merge = 1
