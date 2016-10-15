@@ -478,7 +478,7 @@ fn get_rocksdb_raftlog_cf_option(matches: &Matches, config: &toml::Value) -> Roc
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
-                               "rocksdb.raftcf.compression_per_level",
+                               "rocksdb.raftcf.compression-per-level",
                                matches,
                                config,
                                Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
