@@ -122,7 +122,7 @@ fn test_server_stale_peer_out_of_region() {
 /// and wouldn't be contacted anymore.
 /// In both cases, peer B would notice that the leader is missing for a long time,
 /// and it's an initialized peer without any data. It would destroy itself as
-/// as stale peer directly.
+/// as stale peer directly and should not impact other region data on the same store.
 fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     // Use a value of 3 seconds as max time here just for test.
     // In production environment, the value of max_leader_missing_duration
@@ -134,11 +134,23 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_rule();
 
     let r1 = cluster.run_conf_change();
-    // Block peer (2, 2) at receiving snapshot, but not the heartbeat.
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k2");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    let engine2 = cluster.get_engine(2);
+    must_get_equal(&engine2, b"k1", b"v1");
+    must_get_none(&engine2, b"k3");
+
+    let new_region = cluster.get_region(b"k3");
+    let new_region_id = new_region.get_id();
+    // Block peer (new_region_id, 2) at receiving snapshot, but not the heartbeat
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(new_region_id, 2)
         .msg_type(MessageType::MsgSnapshot)));
 
-    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(new_region_id, new_peer(2, 3));
 
     // Wait for the heartbeat broadcasted from peer (1, 1) to peer (2, 2).
     thread::sleep(Duration::from_millis(60));
@@ -151,13 +163,18 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     // Sleep one more second to make sure there is enough time for the peer to be destroyed.
     thread::sleep(Duration::from_secs(1));
 
-    // Check whether peer(2, 2) is destroyed.
-    // Before peer 2 is destroyed, a tombstone mark will be written into the engine.
-    // So we could check the tombstone mark to make sure peer 2 is destroyed.
-    let engine = cluster.get_engine(2);
-    let state_key = keys::region_state_key(1);
-    let state: RegionLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    // There must be no data on store 2 belongs to new region
+    must_get_none(&engine2, b"k3");
+
+    // Check whether peer(2, 3) is destroyed.
+    // Before peer 3 is destroyed, a tombstone mark will be written into the engine.
+    // So we could check the tombstone mark to make sure peer 3 is destroyed.
+    let state_key = keys::region_state_key(new_region_id);
+    let state: RegionLocalState = engine2.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
+
+    // other region should not be affected.
+    must_get_equal(&engine2, b"k1", b"v1");
 }
 
 #[test]
