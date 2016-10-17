@@ -122,7 +122,7 @@ fn test_server_stale_peer_out_of_region() {
 /// and wouldn't be contacted anymore.
 /// In both cases, peer B would notice that the leader is missing for a long time,
 /// and it's an initialized peer without any data. It would destroy itself as
-/// as stale peer directly.
+/// as stale peer directly and should not impact other region data on the same store.
 fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     // Use a value of 3 seconds as max time here just for test.
     // In production environment, the value of max_leader_missing_duration
@@ -166,9 +166,9 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     // There must be no data on store 2 belongs to new region
     must_get_none(&engine2, b"k3");
 
-    // Check whether peer(2, 2) is destroyed.
-    // Before peer 2 is destroyed, a tombstone mark will be written into the engine.
-    // So we could check the tombstone mark to make sure peer 2 is destroyed.
+    // Check whether peer(2, 3) is destroyed.
+    // Before peer 3 is destroyed, a tombstone mark will be written into the engine.
+    // So we could check the tombstone mark to make sure peer 3 is destroyed.
     let state_key = keys::region_state_key(new_region_id);
     let state: RegionLocalState = engine2.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
