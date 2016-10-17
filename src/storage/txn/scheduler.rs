@@ -32,7 +32,6 @@
 //! to the scheduler.
 
 use rand;
-use std::u8;
 use std::boxed::Box;
 use std::time::Duration;
 use std::fmt::{self, Formatter, Debug};
@@ -51,14 +50,13 @@ use super::Result;
 use super::Error;
 use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
-use super::statistics::{RegionsWriteStats, ROLL_INTERVAL_SECS, CHECK_EXPIRED_INTERVAL_SECS};
+use super::statistics::{RegionsWriteStats, ROLL_INTERVAL_SECS, CHECK_EXPIRED_INTERVAL_SECS, U8_MAX};
 use super::super::metrics::*;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
 pub const WRITE_STATS_BASE: u64 = 64;
-pub const STATS_EXPIRED_SECS: i64 = 24 * 3600; // 24 hours
-const U8_MAX: u64 = u8::max_value() as u64;
+pub const STATS_EXPIRED_SECS: u64 = 24 * 3600; // 24 hours
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -620,7 +618,7 @@ impl Scheduler {
         let x = rand::random::<u8>();
         let res = pro > x;
         if res {
-            info!("schedule GC command for region {}", region_id);
+            info!("region [{}] schedule GC command", region_id);
             self.write_stats.clear_history(region_id);
         }
 

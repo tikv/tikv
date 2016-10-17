@@ -11,16 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use time::{get_time, Timespec};
+use std::time::{Instant, Duration};
 use std::collections::HashMap;
+use rand::{self, Rng};
+use std::u8;
 
 pub const ROLL_INTERVAL_SECS: u64 = 60 * 10;
 pub const CHECK_EXPIRED_INTERVAL_SECS: u64 = 60 * 60;
+pub const U8_MAX: u64 = u8::max_value() as u64;
 
 struct WriteStats {
     pub history: u64,
-    pub current: u64,
-    pub last_active: Timespec,
+    current: u64,
+    pub last_active: Instant,
 }
 
 impl WriteStats {
@@ -28,7 +31,7 @@ impl WriteStats {
         WriteStats {
             history: 0,
             current: 0,
-            last_active: get_time(),
+            last_active: Instant::now(),
         }
     }
 
@@ -62,9 +65,15 @@ impl RegionsWriteStats {
     }
 
     pub fn roll_and_up(&mut self, base: u64) {
+        let mut rng = rand::thread_rng();
         for (_, stat) in &mut self.stats {
             stat.roll();
-            stat.incr(base);
+
+            // We initialize the stat with random number between [0 - base]. If we just use base
+            // initialize the stat, A large number of regions that haven't been written yet might
+            // execute GC command at about the same time.
+            let score = base * rng.gen::<u8>() as u64 / U8_MAX;
+            stat.incr(score);
         }
     }
 
@@ -77,17 +86,13 @@ impl RegionsWriteStats {
         self.stats.get(&region_id).map_or(0, |s| s.history)
     }
 
-    // used for test
-    #[allow(dead_code)]
-    pub fn get_current(&self, region_id: u64) -> u64 {
-        self.stats.get(&region_id).map_or(0, |s| s.current)
-    }
-
-    fn collect_expired(&self, timeout_secs: i64) -> Vec<u64> {
-        let now = get_time();
+    fn collect_expired(&self, timeout_secs: u64) -> Vec<u64> {
+        let timeout = Duration::from_secs(timeout_secs);
         let mut expired = Vec::with_capacity(self.stats.len());
+        let now = Instant::now();
         for (region_id, stat) in &self.stats {
-            if stat.last_active.sec + timeout_secs < now.sec {
+            let duration = now.duration_since(stat.last_active.clone());
+            if duration > timeout {
                 expired.push(*region_id);
             }
         }
@@ -98,7 +103,7 @@ impl RegionsWriteStats {
     // 1) the region has moved to another store, or
     // 2) the region's leader has transferred to another peer
     // has happened, we don't need to hold WriteStats for this region anymore.
-    pub fn check_expired(&mut self, timeout_secs: i64) {
+    pub fn check_expired(&mut self, timeout_secs: u64) {
         let expired = self.collect_expired(timeout_secs);
 
         for region_id in expired {
@@ -109,9 +114,8 @@ impl RegionsWriteStats {
 
     // When receive GC command for a region, we update the last_active of this region.
     pub fn update_active(&mut self, region_id: u64) {
-        let now = get_time();
         let stat = self.stats.entry(region_id).or_insert_with(WriteStats::new);
-        stat.last_active = now;
+        stat.last_active = Instant::now();
     }
 
     // used for test
@@ -132,10 +136,8 @@ mod tests {
 
         stats.incr(1, 100);
         assert_eq!(stats.get_history(1), 0);
-        assert_eq!(stats.get_current(1), 100);
         stats.roll_and_up(100);
         assert_eq!(stats.get_history(1), 100);
-        assert_eq!(stats.get_current(1), 100);
         stats.clear_history(1);
         assert_eq!(stats.get_history(1), 0);
 
