@@ -620,6 +620,13 @@ impl<'a> SelectContext<'a> {
         }
     }
 
+    fn key_only(&self) -> bool {
+        match self.core.cols {
+            Either::Left(ref cols) => cols.is_empty(),
+            Either::Right(_) => false, // TODO: true when index is not uniq index.
+        }
+    }
+
     fn get_rows_from_range(&mut self, range: KeyRange, limit: usize, desc: bool) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
@@ -640,10 +647,11 @@ impl<'a> SelectContext<'a> {
                 range.get_start().to_vec()
             };
             let mut scanner = try!(self.snap.scanner(if desc {
-                ScanMode::Mixed
-            } else {
-                ScanMode::Forward
-            }));
+                                                         ScanMode::Mixed
+                                                     } else {
+                                                         ScanMode::Forward
+                                                     },
+                                                     self.key_only()));
             while limit > row_count {
                 let kv = if desc {
                     try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
@@ -700,10 +708,11 @@ impl<'a> SelectContext<'a> {
             r.get_start().to_vec()
         };
         let mut scanner = try!(self.snap.scanner(if desc {
-            ScanMode::Mixed
-        } else {
-            ScanMode::Forward
-        }));
+                                                     ScanMode::Mixed
+                                                 } else {
+                                                     ScanMode::Forward
+                                                 },
+                                                 self.key_only()));
         while row_cnt < limit {
             let nk = if desc {
                 try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
