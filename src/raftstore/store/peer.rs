@@ -290,7 +290,9 @@ impl Peer {
         try!(self.get_store().clear_meta(&wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
         try!(self.engine.write(wb));
-        try!(self.get_store().clear_data());
+        if self.get_store().is_initialized() {
+            try!(self.get_store().clear_data());
+        }
         self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
 
