@@ -166,12 +166,12 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     // Sleep one more second to make sure there is enough time for the peer to be destroyed.
     thread::sleep(Duration::from_secs(1));
 
-    // There must be no data on store 2 belongs to new region
+    // There must be no data on store 3 belongs to new region
     must_get_none(&engine3, b"k3");
 
-    // Check whether peer(2, 3) is destroyed.
-    // Before peer 3 is destroyed, a tombstone mark will be written into the engine.
-    // So we could check the tombstone mark to make sure peer 3 is destroyed.
+    // Check whether peer(3, 4) is destroyed.
+    // Before peer 4 is destroyed, a tombstone mark will be written into the engine.
+    // So we could check the tombstone mark to make sure peer 4 is destroyed.
     let state_key = keys::region_state_key(new_region_id);
     let state: RegionLocalState = engine3.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
