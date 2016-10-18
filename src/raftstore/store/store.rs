@@ -44,7 +44,7 @@ use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_LOCK};
-use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
+use super::worker::{SplitCheckRunner, split_check, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
@@ -201,7 +201,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
-    split_check_worker: Worker<SplitCheckTask>,
+    split_check_worker: Worker<split_check::Task>,
     region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
@@ -366,7 +366,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
-                                                       self.cfg.region_split_size);
+                                                       self.cfg.region_split_size,
+                                                       self.cfg.region_merge_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(self.engine.clone(),
@@ -1189,7 +1190,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   peer.tag,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
-            let task = SplitCheckTask::new(peer.get_store());
+            let task = split_check::new_split_check_task(peer.get_store());
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("failed to schedule split check: {}", e);
             }
@@ -1240,6 +1241,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                    split_key,
                    e);
         }
+    }
+
+    fn on_merge_check_result(&mut self, _region_id: u64, _epoch: metapb::RegionEpoch) {
+        // TODO add impl
     }
 
     fn heartbeat_pd(&self, peer: &Peer) {
@@ -1473,8 +1478,36 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_gc(&mut self, _region_id: u64, _peer_id: u64) {
-        // TODO
+    fn on_gc(&mut self, region_id: u64, peer_id: u64) {
+        // To avoid frequent scan, we only add new scan tasks if all previous tasks
+        // have finished.
+        if self.split_check_worker.is_busy() {
+            warn!("split check worker is busy, ignore gc notify for [region {}] peer {}",
+                  region_id,
+                  peer_id);
+            return;
+        }
+
+        // Check that the region and peer do exist.
+        if let Some(peer) = self.region_peers.get(&region_id) {
+            if peer.peer_id() == peer_id {
+                // only handle gc notify on leader peer
+                if !peer.is_leader() {
+                    return;
+                }
+
+                info!("{} gc is done, need to check whether should merge",
+                      peer.tag);
+                let task = split_check::new_merge_check_task(peer.get_store());
+                if let Err(e) = self.split_check_worker.schedule(task) {
+                    error!("failed to schedule merge check: {}", e);
+                }
+                return;
+            }
+        }
+        error!("[region {}] peer {} not found, skip handling gc notify",
+               region_id,
+               peer_id);
     }
 
     fn on_snap_gen_res(&mut self, region_id: u64, snap: Option<Snapshot>) {
@@ -1567,6 +1600,10 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SplitCheckResult { region_id, epoch, split_key } => {
                 info!("[region {}] split check complete.", region_id);
                 self.on_split_check_result(region_id, epoch, split_key);
+            }
+            Msg::MergeCheckResult { region_id, epoch } => {
+                info!("[region {}] merge check complete.", region_id);
+                self.on_merge_check_result(region_id, epoch);
             }
             Msg::ReportSnapshot { region_id, to_peer_id, status } => {
                 self.on_report_snapshot(region_id, to_peer_id, status);

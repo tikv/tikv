@@ -27,6 +27,7 @@ const RAFT_LOG_GC_LIMIT: u64 = 100000;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
+const REGION_MERGE_SIZE: u64 = 10 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
 const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 10000;
@@ -70,6 +71,9 @@ pub struct Config {
     /// be region_split_size (or a little bit smaller).
     pub region_max_size: u64,
     pub region_split_size: u64,
+    /// When the size of a region decreases to `region_merge_size` after GC,
+    /// the corresponding peer will ask PD to perform a region merge.
+    pub region_merge_size: u64,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_check_size_diff: u64,
@@ -109,6 +113,7 @@ impl Default for Config {
             split_region_check_tick_interval: SPLIT_REGION_CHECK_TICK_INTERVAL,
             region_max_size: REGION_MAX_SIZE,
             region_split_size: REGION_SPLIT_SIZE,
+            region_merge_size: REGION_MERGE_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
             pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL_MS,

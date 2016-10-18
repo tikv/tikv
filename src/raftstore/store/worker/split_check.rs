@@ -25,30 +25,62 @@ use util::worker::Runnable;
 
 use super::metrics::*;
 
-/// Split checking task.
-pub struct Task {
-    region_id: u64,
-    epoch: RegionEpoch,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
-    engine: Arc<DB>,
+pub enum Task {
+    SplitCheck {
+        region_id: u64,
+        epoch: RegionEpoch,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        engine: Arc<DB>,
+    },
+    MergeCheck {
+        region_id: u64,
+        epoch: RegionEpoch,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        engine: Arc<DB>,
+    },
 }
 
-impl Task {
-    pub fn new(ps: &PeerStorage) -> Task {
-        Task {
-            region_id: ps.get_region_id(),
-            epoch: ps.get_region().get_region_epoch().clone(),
-            start_key: keys::enc_start_key(&ps.region),
-            end_key: keys::enc_end_key(&ps.region),
-            engine: ps.get_engine().clone(),
-        }
+pub fn new_split_check_task(ps: &PeerStorage) -> Task {
+    Task::SplitCheck {
+        region_id: ps.get_region_id(),
+        epoch: ps.get_region().get_region_epoch().clone(),
+        start_key: keys::enc_start_key(&ps.region),
+        end_key: keys::enc_end_key(&ps.region),
+        engine: ps.get_engine().clone(),
     }
 }
 
+pub fn new_merge_check_task(ps: &PeerStorage) -> Task {
+    Task::MergeCheck {
+        region_id: ps.get_region_id(),
+        epoch: ps.get_region().get_region_epoch().clone(),
+        start_key: keys::enc_start_key(&ps.region),
+        end_key: keys::enc_end_key(&ps.region),
+        engine: ps.get_engine().clone(),
+    }
+}
+
+
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Split Check Task for {}", self.region_id)
+        match *self {
+            Task::SplitCheck { ref region_id, ref start_key, ref end_key, .. } => {
+                write!(f,
+                       "Split Check Task for region {}, start_key {}, end_key {}",
+                       region_id,
+                       escape(start_key),
+                       escape(end_key))
+            }
+            Task::MergeCheck { ref region_id, ref start_key, ref end_key, .. } => {
+                write!(f,
+                       "Merge Check Task for region {}, start_key {}, end_key {}",
+                       region_id,
+                       escape(start_key),
+                       escape(end_key))
+            }
+        }
     }
 }
 
@@ -56,33 +88,37 @@ pub struct Runner {
     ch: SendCh<Msg>,
     region_max_size: u64,
     split_size: u64,
+    merge_size: u64,
 }
 
 impl Runner {
-    pub fn new(ch: SendCh<Msg>, region_max_size: u64, split_size: u64) -> Runner {
+    pub fn new(ch: SendCh<Msg>, region_max_size: u64, split_size: u64, merge_size: u64) -> Runner {
         Runner {
             ch: ch,
             region_max_size: region_max_size,
             split_size: split_size,
+            merge_size: merge_size,
         }
     }
 }
 
-impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
-        debug!("[region {}] executing task {} {}",
-               task.region_id,
-               escape(&task.start_key),
-               escape(&task.end_key));
-        CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
+impl Runner {
+    fn handle_check_split(&self,
+                          region_id: u64,
+                          epoch: RegionEpoch,
+                          start_key: Vec<u8>,
+                          end_key: Vec<u8>,
+                          engine: Arc<DB>) {
+        CHECK_SPLIT_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
 
         let mut size = 0;
         let mut split_key = vec![];
-        let timer = CHECK_SPILT_HISTOGRAM.start_timer();
+        let histogram = CHECK_SPLIT_HISTOGRAM.with_label_values(&["split"]);
+        let timer = histogram.start_timer();
 
-        let res = task.engine.scan(&task.start_key,
-                                   &task.end_key,
-                                   &mut |k, v| {
+        let res = engine.scan(&start_key,
+                              &end_key,
+                              &mut |k, v| {
             size += k.len() as u64;
             size += v.len() as u64;
             if split_key.is_empty() && size > self.split_size {
@@ -91,9 +127,7 @@ impl Runnable<Task> for Runner {
             Ok(size < self.region_max_size)
         });
         if let Err(e) = res {
-            error!("failed to scan split key of region {}: {:?}",
-                   task.region_id,
-                   e);
+            error!("failed to scan split key of region {}: {:?}", region_id, e);
             return;
         }
 
@@ -101,21 +135,75 @@ impl Runnable<Task> for Runner {
 
         if size < self.region_max_size {
             debug!("[region {}] no need to send for {} < {}",
-                   task.region_id,
+                   region_id,
                    size,
                    self.region_max_size);
 
-            CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
+            CHECK_SPLIT_COUNTER_VEC.with_label_values(&["split", "ignore"]).inc();
             return;
         }
-        let res = self.ch.try_send(new_split_check_result(task.region_id, task.epoch, split_key));
+        let res = self.ch.try_send(new_split_check_result(region_id, epoch, split_key));
         if let Err(e) = res {
             warn!("[region {}] failed to send check result, err {:?}",
-                  task.region_id,
+                  region_id,
                   e);
         }
 
-        CHECK_SPILT_COUNTER_VEC.with_label_values(&["success"]).inc();
+        CHECK_SPLIT_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
+    }
+
+    fn handle_check_merge(&self,
+                          region_id: u64,
+                          epoch: RegionEpoch,
+                          start_key: Vec<u8>,
+                          end_key: Vec<u8>,
+                          engine: Arc<DB>) {
+        CHECK_SPLIT_COUNTER_VEC.with_label_values(&["merge", "all"]).inc();
+
+        let mut size = 0;
+        let histogram = CHECK_SPLIT_HISTOGRAM.with_label_values(&["merge"]);
+        let timer = histogram.start_timer();
+
+        let _ = engine.scan(&start_key,
+                            &end_key,
+                            &mut |k, v| {
+                                size += k.len() as u64;
+                                size += v.len() as u64;
+                                Ok(size >= self.merge_size)
+                            });
+
+        timer.observe_duration();
+
+        if size >= self.merge_size {
+            debug!("[region {}] no need to ask PD to merge, since size {} >= merge_size {}",
+                   region_id,
+                   size,
+                   self.merge_size);
+            CHECK_SPLIT_COUNTER_VEC.with_label_values(&["merge", "ignore"]).inc();
+            return;
+        }
+
+        let res = self.ch.try_send(new_merge_check_result(region_id, epoch));
+        if let Err(e) = res {
+            warn!("[region {}] failed to send merge check result, err {:?}",
+                  region_id,
+                  e)
+        }
+        CHECK_SPLIT_COUNTER_VEC.with_label_values(&["merge", "success"]).inc()
+    }
+}
+
+impl Runnable<Task> for Runner {
+    fn run(&mut self, task: Task) {
+        debug!("executing task {}", task);
+        match task {
+            Task::SplitCheck { region_id, epoch, start_key, end_key, engine } => {
+                self.handle_check_split(region_id, epoch, start_key, end_key, engine)
+            }
+            Task::MergeCheck { region_id, epoch, start_key, end_key, engine } => {
+                self.handle_check_merge(region_id, epoch, start_key, end_key, engine)
+            }
+        }
     }
 }
 
@@ -124,5 +212,12 @@ fn new_split_check_result(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>
         region_id: region_id,
         epoch: epoch,
         split_key: split_key,
+    }
+}
+
+fn new_merge_check_result(region_id: u64, epoch: RegionEpoch) -> Msg {
+    Msg::MergeCheckResult {
+        region_id: region_id,
+        epoch: epoch,
     }
 }
