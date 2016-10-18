@@ -6,7 +6,7 @@ dependencies = [
  "byteorder 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.2.25 (registry+https://github.com/rust-lang/crates.io-index)",
- "clap 2.14.0 (git+https://github.com/kbknapp/clap-rs)",
+ "clap 2.14.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "clippy 0.0.95 (registry+https://github.com/rust-lang/crates.io-index)",
  "crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "fs2 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -112,7 +112,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "2.14.0"
-source = "git+https://github.com/kbknapp/clap-rs#95bde3635383b4ec5750323736e9ee04c35c751e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "ansi_term 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -769,7 +769,7 @@ dependencies = [
 "checksum bytes 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c129aff112dcc562970abb69e2508b40850dd24c274761bb50fb8a0067ba6c27"
 "checksum cfg-if 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "de1e760d7b6535af4241fca8bd8adf68e2e7edacc6b29f5d399050c5e48cf88c"
 "checksum chrono 0.2.25 (registry+https://github.com/rust-lang/crates.io-index)" = "9213f7cd7c27e95c2b57c49f0e69b1ea65b27138da84a170133fd21b07659c00"
-"checksum clap 2.14.0 (git+https://github.com/kbknapp/clap-rs)" = "<none>"
+"checksum clap 2.14.0 (registry+https://github.com/rust-lang/crates.io-index)" = "5fa304b03c49ccbb005784fc26e985b5d2310b1d37f2c311ce90dbcd18ea5fde"
 "checksum clippy 0.0.95 (registry+https://github.com/rust-lang/crates.io-index)" = "326a296da2adbb719fcc2301f3b44a148261f72a46dbda89930ead9c90d584b2"
 "checksum clippy_lints 0.0.95 (registry+https://github.com/rust-lang/crates.io-index)" = "921bb7c49a9a58f6bd097fbbb9f729426e0f05372fe5b81a0a053f6b2d98dc5b"
 "checksum cookie 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)" = "0e3d6405328b6edb412158b3b7710e2634e23f3614b9bb1c412df7952489a626"

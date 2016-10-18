@@ -32,12 +32,8 @@ use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
 use tikv::storage::{ALL_CFS, CF_RAFT};
 
-static VERSION: &'static str = "0.0.1";
-const DEFAULT_TO: Vec<i32> = vec![0xff];
-
 fn main() {
-    let matches = App::new("tikv")
-        .version(VERSION)
+    let matches = App::new("TiKV Ctl")
         .author("PingCAP")
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(Arg::with_name("db")
@@ -46,28 +42,24 @@ fn main() {
              .help("set rocksdb path, required"))
         .subcommand(SubCommand::with_name("raft")
                     .about("print raft log entry")
-                    .version(VERSION)
-                    .subcommand(Subcommand::with_name("log")
+                    .subcommand(SubCommand::with_name("log")
                                 .about("print the raft log entry info")
-                                .version(VERSION)
                                 .arg(Arg::with_name("region")
                                      .short("r")
                                      .takes_value(true)
-                                     .help("set the region id, required when get raft message"))
+                                     .help("set the region id"))
                                 .arg(Arg::with_name("index")
                                      .short("i")
                                      .takes_value(true)
                                      .help("set the raft log index")))
                     .subcommand(SubCommand::with_name("region")
                                 .about("print region info")
-                                .version(VERSION)
                                 .arg(Arg::with_name("region")
                                      .short("r")
                                      .takes_value(true)
                                      .help("set the region id"))))
-        .subcommand(SubCommand::with_name("range")
+        .subcommand(SubCommand::with_name("scan")
                                 .about("print the range db range")
-                                .version(VERSION)
                                 .arg(Arg::with_name("from")
                                      .short("f")
                                      .takes_value(true)
@@ -83,14 +75,13 @@ fn main() {
                                 .arg(Arg::with_name("cf")
                                      .short("c")
                                      .takes_value(true)
-                                     .help("column family name, only aviable for dump-range")))
-        .subcommand(SubCommand::with_name("raw")
-                    .about("print the raw node value")
-                    .version(VERSION)
+                                     .help("column family name")))
+        .subcommand(SubCommand::with_name("print")
+                    .about("print the raw value")
                     .arg(Arg::with_name("cf")
                          .short("c")
                          .takes_value(true)
-                         .help("column family name, only aviable for dump-range"))
+                         .help("column family name"))
                     .arg(Arg::with_name("key")
                          .short("k")
                          .takes_value(true)
@@ -99,7 +90,7 @@ fn main() {
 
     let db_path = matches.value_of("db").unwrap();
     let db = util::rocksdb::open(db_path, ALL_CFS).unwrap();
-    if let Some(matches) = matches.subcommand_matches("raw") {
+    if let Some(matches) = matches.subcommand_matches("print") {
         let cf_name = matches.value_of("cf").unwrap_or("default");
         let key = String::from(matches.value_of("key").unwrap());
         dump_raw_value(db, cf_name, key);
@@ -114,20 +105,20 @@ fn main() {
         } else {
             panic!("Currently only support raft log entry and scan.")
         }
-    } else if let Some(matches) = matches.subcommand_matches("range") {
+    } else if let Some(matches) = matches.subcommand_matches("scan") {
         let from = String::from(matches.value_of("from").unwrap());
         let to = matches.value_of("to").map(|s| String::from(s));
         let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
         let cf_name = matches.value_of("cf").unwrap_or("default");
-        if let Some(to) = to {
-            if to > from {
+        if let Some(ref to) = to {
+            if to > &from {
                 panic!("The region's start pos must greater than the end pos.")
             }
         }
         dump_range(db, from, to, limit, cf_name);
     }
     else {
-        panic!("currently only random key-value and raft log entry query are supported.");
+        panic!("The command is not supported now.");
     }
 
 }
@@ -173,7 +164,7 @@ fn dump_region_info(db: DB, region_id_str: String) {
 
 fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: &str) {
     let from = unescape(&from);
-    let to = to.map_or_else(|| DEFAULT_TO, |s| unescape(&s));
+    let to = to.map_or_else(|| vec![0xff], |s| unescape(&s));
     let limit = limit.unwrap_or(u64::MAX);
 
     if limit == 0 {
