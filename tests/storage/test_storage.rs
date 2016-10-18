@@ -20,11 +20,27 @@ use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::{Mutation, Key, KvPair, make_key};
 use tikv::storage::txn::GC_BATCH_SIZE;
+use tikv::raftstore::store::Msg as StoreMsg;
+use tikv::raftstore::Result as RaftStoreResult;
+use tikv::server::transport::RaftStoreRouter;
+
+/// A dummy `RaftStoreRouter` implementation for tests.
+#[derive(Clone)]
+pub struct DummyRaftStoreRouter;
+
+impl RaftStoreRouter for DummyRaftStoreRouter {
+    fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        Ok(())
+    }
+    fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        Ok(())
+    }
+}
 
 #[derive(Clone)]
-struct AssertionStorage(SyncStorage);
+struct AssertionStorage<T: RaftStoreRouter + 'static>(SyncStorage<T>);
 
-impl AssertionStorage {
+impl<T: RaftStoreRouter + 'static> AssertionStorage<T> {
     fn get_none(&self, key: &[u8], ts: u64) {
         let key = make_key(key);
         assert_eq!(self.0.get(Context::new(), &key, ts).unwrap(), None);
@@ -139,8 +155,8 @@ impl AssertionStorage {
     }
 }
 
-fn new_assertion_storage() -> AssertionStorage {
-    AssertionStorage(SyncStorage::new(&Default::default()))
+fn new_assertion_storage() -> AssertionStorage<DummyRaftStoreRouter> {
+    AssertionStorage(SyncStorage::new(&Default::default(), DummyRaftStoreRouter))
 }
 
 #[test]
@@ -474,7 +490,7 @@ impl Oracle {
 
 const INC_MAX_RETRY: usize = 100;
 
-fn inc(store: &SyncStorage, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
+fn inc<T: RaftStoreRouter>(store: &SyncStorage<T>, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
     let key_address = make_key(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
@@ -540,7 +556,7 @@ fn format_key(x: usize) -> Vec<u8> {
     format!("k{}", x).into_bytes()
 }
 
-fn inc_multi(store: &SyncStorage, oracle: &Oracle, n: usize) -> bool {
+fn inc_multi<T: RaftStoreRouter>(store: &SyncStorage<T>, oracle: &Oracle, n: usize) -> bool {
     'retry: for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
         let keys: Vec<Key> = (0..n).map(format_key).map(|x| make_key(&x)).collect();

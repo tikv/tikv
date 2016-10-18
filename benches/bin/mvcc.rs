@@ -19,6 +19,7 @@ mod sync_storage;
 
 use test_util::*;
 use tikv::storage::{Mutation, Key};
+use tikv::server::transport::MockRaftStoreRouter;
 use kvproto::kvrpcpb::Context;
 use self::sync_storage::SyncStorage;
 
@@ -27,7 +28,7 @@ use super::print_result;
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.
 fn bench_tombstone_scan() -> BenchSamples {
-    let store = SyncStorage::new(&Default::default());
+    let store = SyncStorage::new(&Default::default(), MockRaftStoreRouter);
     let mut ts_generator = 1..;
 
     let mut kvs = KvGenerator::new(100, 1000);

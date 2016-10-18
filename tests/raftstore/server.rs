@@ -174,7 +174,7 @@ impl Simulator for ServerCluster {
         self.sim_trans.insert(node_id, simulate_trans);
 
         let mut store = create_raft_storage(sim_router.clone(), engine, &cfg).unwrap();
-        store.start(&cfg.storage).unwrap();
+        store.start(&cfg.storage, sim_router.clone()).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
         let mut server = Server::new(&mut event_loop,

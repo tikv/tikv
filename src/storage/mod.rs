@@ -545,6 +545,7 @@ pub fn create_event_loop<T: RaftStoreRouter + 'static>(notify_capacity: usize,
 mod tests {
     use super::*;
     use std::sync::mpsc::{channel, Sender};
+    use server::transport::MockRaftStoreRouter;
     use kvproto::kvrpcpb::Context;
 
     fn expect_get_none(done: Sender<i32>) -> Callback<Option<Value>> {
@@ -603,7 +604,7 @@ mod tests {
     fn test_get_put() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config).unwrap();
+        storage.start(&config, MockRaftStoreRouter).unwrap();
         let (tx, rx) = channel();
         storage.async_get(Context::new(),
                        make_key(b"x"),
@@ -646,7 +647,7 @@ mod tests {
         // New engine lack of some column families.
         let engine = engine::new_engine(Dsn::RocksDBPath(&config.path), &["default"]).unwrap();
         let mut storage = Storage::from_engine(engine, &config).unwrap();
-        storage.start(&config).unwrap();
+        storage.start(&config, MockRaftStoreRouter).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![
@@ -666,7 +667,7 @@ mod tests {
     fn test_scan() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config).unwrap();
+        storage.start(&config, MockRaftStoreRouter).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![
@@ -705,7 +706,7 @@ mod tests {
     fn test_batch_get() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config).unwrap();
+        storage.start(&config, MockRaftStoreRouter).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![
@@ -743,7 +744,7 @@ mod tests {
     fn test_txn() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config).unwrap();
+        storage.start(&config, MockRaftStoreRouter).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],

@@ -1,5 +1,6 @@
 use tikv::server::coprocessor::*;
 use tikv::server::coprocessor;
+use tikv::server::transport::{RaftStoreRouter, MockRaftStoreRouter};
 use kvproto::kvrpcpb::Context;
 use tikv::util::codec::{table, Datum, datum};
 use tikv::util::codec::number::*;
@@ -229,14 +230,14 @@ impl TableBuilder {
     }
 }
 
-struct Insert<'a> {
-    store: &'a mut Store,
+struct Insert<'a, T: RaftStoreRouter + 'static> {
+    store: &'a mut Store<T>,
     table: &'a Table,
     values: BTreeMap<i64, Datum>,
 }
 
-impl<'a> Insert<'a> {
-    fn new(store: &'a mut Store, table: &'a Table) -> Insert<'a> {
+impl<'a, T: RaftStoreRouter> Insert<'a, T> {
+    fn new(store: &'a mut Store<T>, table: &'a Table) -> Insert<'a, T> {
         Insert {
             store: store,
             table: table,
@@ -244,7 +245,7 @@ impl<'a> Insert<'a> {
         }
     }
 
-    fn set(mut self, col: Column, value: Datum) -> Insert<'a> {
+    fn set(mut self, col: Column, value: Datum) -> Insert<'a, T> {
         assert!(self.table.cols.contains_key(&col.id));
         self.values.insert(col.id, value);
         self
@@ -396,13 +397,13 @@ impl<'a> Select<'a> {
     }
 }
 
-struct Delete<'a> {
-    store: &'a mut Store,
+struct Delete<'a, T: RaftStoreRouter + 'static> {
+    store: &'a mut Store<T>,
     table: &'a Table,
 }
 
-impl<'a> Delete<'a> {
-    fn new(store: &'a mut Store, table: &'a Table) -> Delete<'a> {
+impl<'a, T: RaftStoreRouter> Delete<'a, T> {
+    fn new(store: &'a mut Store<T>, table: &'a Table) -> Delete<'a, T> {
         Delete {
             store: store,
             table: table,
@@ -428,16 +429,16 @@ impl<'a> Delete<'a> {
     }
 }
 
-struct Store {
-    store: SyncStorage,
+struct Store<T: RaftStoreRouter + 'static> {
+    store: SyncStorage<T>,
     current_ts: u64,
     handles: Vec<Vec<u8>>,
 }
 
-impl Store {
-    fn new(engine: Box<Engine>) -> Store {
+impl<T: RaftStoreRouter> Store<T> {
+    fn new(engine: Box<Engine>, router: T) -> Store<T> {
         Store {
-            store: SyncStorage::from_engine(engine, &Default::default()),
+            store: SyncStorage::from_engine(engine, &Default::default(), router),
             current_ts: 1,
             handles: vec![],
         }
@@ -452,7 +453,7 @@ impl Store {
         self.handles.clear();
     }
 
-    fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a> {
+    fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a, T> {
         Insert::new(self, table)
     }
 
@@ -463,7 +464,7 @@ impl Store {
         self.store.prewrite(Context::new(), kv, pk, self.current_ts).unwrap();
     }
 
-    fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a> {
+    fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a, T> {
         Delete::new(self, table)
     }
 
@@ -517,9 +518,9 @@ impl ProductTable {
 // This function will create a Product table and initialize with the specified data.
 fn init_with_data(tbl: &ProductTable,
                   vals: &[(i64, Option<&str>, i64)])
-                  -> (Store, Worker<EndPointTask>) {
+                  -> (Store<MockRaftStoreRouter>, Worker<EndPointTask>) {
     let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
-    let mut store = Store::new(engine);
+    let mut store = Store::new(engine, MockRaftStoreRouter);
 
     store.begin();
     for &(id, name, count) in vals {

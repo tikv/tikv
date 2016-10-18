@@ -698,13 +698,14 @@ mod tests {
         let cfg = Config::new();
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let mut storage = Storage::new(&cfg.storage).unwrap();
-        storage.start(&cfg.storage).unwrap();
         let (tx, rx) = mpsc::channel();
+        let router = TestRaftStoreRouter { tx: tx };
+        storage.start(&cfg.storage, router.clone()).unwrap();
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
                                      listener,
                                      storage,
-                                     TestRaftStoreRouter { tx: tx },
+                                     router,
                                      resolver,
                                      store::new_snap_mgr("", None))
             .unwrap();

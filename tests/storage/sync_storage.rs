@@ -16,27 +16,28 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tikv::storage::{Storage, Engine, Key, Value, KvPair, Mutation, Result};
 use tikv::storage::config::Config;
+use tikv::server::transport::RaftStoreRouter;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
-pub struct SyncStorage {
-    store: Storage,
+pub struct SyncStorage<T: RaftStoreRouter + 'static> {
+    store: Storage<T>,
     cnt: Arc<AtomicUsize>,
 }
 
-impl SyncStorage {
-    pub fn new(config: &Config) -> SyncStorage {
+impl<T: RaftStoreRouter> SyncStorage<T> {
+    pub fn new(config: &Config, router: T) -> SyncStorage<T> {
         let mut storage = Storage::new(config).unwrap();
-        storage.start(config).unwrap();
+        storage.start(config, router).unwrap();
         SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> SyncStorage {
+    pub fn from_engine(engine: Box<Engine>, config: &Config, router: T) -> SyncStorage<T> {
         let mut storage = Storage::from_engine(engine, config).unwrap();
-        storage.start(config).unwrap();
+        storage.start(config, router).unwrap();
         SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
@@ -113,8 +114,8 @@ impl SyncStorage {
     }
 }
 
-impl Clone for SyncStorage {
-    fn clone(&self) -> SyncStorage {
+impl<T: RaftStoreRouter + 'static> Clone for SyncStorage<T> {
+    fn clone(&self) -> SyncStorage<T> {
         self.cnt.fetch_add(1, Ordering::SeqCst);
         SyncStorage {
             store: self.store.clone(),
@@ -123,7 +124,7 @@ impl Clone for SyncStorage {
     }
 }
 
-impl Drop for SyncStorage {
+impl<T: RaftStoreRouter + 'static> Drop for SyncStorage<T> {
     fn drop(&mut self) {
         if self.cnt.fetch_sub(1, Ordering::SeqCst) == 0 {
             self.store.stop().unwrap()

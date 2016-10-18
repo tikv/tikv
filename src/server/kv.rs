@@ -31,6 +31,97 @@ use super::transport::RaftStoreRouter;
 
 use super::{Result, Error, OnResponse};
 
+fn cmd_get_done(r: StorageResult<Option<Value>>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdGet);
+    let mut get_resp = CmdGetResponse::new();
+    match r {
+        Ok(Some(val)) => get_resp.set_value(val),
+        Ok(None) => get_resp.set_value(vec![]),
+        Err(e) => get_resp.set_error(extract_key_error(&e)),
+    }
+    resp.set_cmd_get_resp(get_resp);
+}
+
+fn cmd_scan_done(kvs: StorageResult<Vec<StorageResult<KvPair>>>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdScan);
+    let mut scan_resp = CmdScanResponse::new();
+    scan_resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(kvs)));
+    resp.set_cmd_scan_resp(scan_resp);
+}
+
+fn cmd_batch_get_done(kvs: StorageResult<Vec<StorageResult<KvPair>>>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdBatchGet);
+    let mut batch_get_resp = CmdBatchGetResponse::new();
+    batch_get_resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(kvs)));
+    resp.set_cmd_batch_get_resp(batch_get_resp);
+}
+
+fn cmd_prewrite_done(results: StorageResult<Vec<StorageResult<()>>>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdPrewrite);
+    let mut prewrite_resp = CmdPrewriteResponse::new();
+    prewrite_resp.set_errors(RepeatedField::from_vec(extract_key_errors(results)));
+    resp.set_cmd_prewrite_resp(prewrite_resp);
+}
+
+fn cmd_commit_done(r: StorageResult<()>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdCommit);
+    let mut cmd_commit_resp = CmdCommitResponse::new();
+    if let Err(e) = r {
+        cmd_commit_resp.set_error(extract_key_error(&e));
+    }
+    resp.set_cmd_commit_resp(cmd_commit_resp);
+}
+
+fn cmd_batch_rollback_done(r: StorageResult<()>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdBatchRollback);
+    let mut cmd_batch_rollback_resp = CmdBatchRollbackResponse::new();
+    if let Err(e) = r {
+        cmd_batch_rollback_resp.set_error(extract_key_error(&e));
+    }
+    resp.set_cmd_batch_rollback_resp(cmd_batch_rollback_resp)
+}
+
+fn cmd_cleanup_done(r: StorageResult<()>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdCleanup);
+    let mut cmd_cleanup_resp = CmdCleanupResponse::new();
+    if let Err(e) = r {
+        if let Some(ts) = extract_committed(&e) {
+            cmd_cleanup_resp.set_commit_version(ts);
+        } else {
+            cmd_cleanup_resp.set_error(extract_key_error(&e));
+        }
+    }
+    resp.set_cmd_cleanup_resp(cmd_cleanup_resp);
+}
+
+fn cmd_scan_lock_done(r: StorageResult<Vec<LockInfo>>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdScanLock);
+    let mut scan_lock = CmdScanLockResponse::new();
+    match r {
+        Ok(locks) => scan_lock.set_locks(RepeatedField::from_vec(locks)),
+        Err(e) => scan_lock.set_error(extract_key_error(&e)),
+    }
+    resp.set_cmd_scan_lock_resp(scan_lock);
+}
+
+fn cmd_resolve_lock_done(r: StorageResult<()>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdResolveLock);
+    let mut resolve_lock = CmdResolveLockResponse::new();
+    if let Err(e) = r {
+        resolve_lock.set_error(extract_key_error(&e));
+    }
+    resp.set_cmd_resolve_lock_resp(resolve_lock);
+}
+
+fn cmd_gc_done(r: StorageResult<()>, resp: &mut Response) {
+    resp.set_field_type(MessageType::CmdGC);
+    let mut gc = CmdGCResponse::new();
+    if let Err(e) = r {
+        gc.set_error(extract_key_error(&e));
+    }
+    resp.set_cmd_gc_resp(gc);
+}
+
 pub struct StoreHandler<T: RaftStoreRouter + 'static> {
     pub store: Storage<T>,
 }
@@ -236,98 +327,6 @@ impl<T: RaftStoreRouter + 'static> StoreHandler<T> {
     }
 }
 
-fn cmd_get_done(r: StorageResult<Option<Value>>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdGet);
-    let mut get_resp = CmdGetResponse::new();
-    match r {
-        Ok(Some(val)) => get_resp.set_value(val),
-        Ok(None) => get_resp.set_value(vec![]),
-        Err(e) => get_resp.set_error(extract_key_error(&e)),
-    }
-    resp.set_cmd_get_resp(get_resp);
-}
-
-fn cmd_scan_done(kvs: StorageResult<Vec<StorageResult<KvPair>>>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdScan);
-    let mut scan_resp = CmdScanResponse::new();
-    scan_resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(kvs)));
-    resp.set_cmd_scan_resp(scan_resp);
-}
-
-fn cmd_batch_get_done(kvs: StorageResult<Vec<StorageResult<KvPair>>>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdBatchGet);
-    let mut batch_get_resp = CmdBatchGetResponse::new();
-    batch_get_resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(kvs)));
-    resp.set_cmd_batch_get_resp(batch_get_resp);
-}
-
-fn cmd_prewrite_done(results: StorageResult<Vec<StorageResult<()>>>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdPrewrite);
-    let mut prewrite_resp = CmdPrewriteResponse::new();
-    prewrite_resp.set_errors(RepeatedField::from_vec(extract_key_errors(results)));
-    resp.set_cmd_prewrite_resp(prewrite_resp);
-}
-
-fn cmd_commit_done(r: StorageResult<()>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdCommit);
-    let mut cmd_commit_resp = CmdCommitResponse::new();
-    if let Err(e) = r {
-        cmd_commit_resp.set_error(extract_key_error(&e));
-    }
-    resp.set_cmd_commit_resp(cmd_commit_resp);
-}
-
-fn cmd_batch_rollback_done(r: StorageResult<()>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdBatchRollback);
-    let mut cmd_batch_rollback_resp = CmdBatchRollbackResponse::new();
-    if let Err(e) = r {
-        cmd_batch_rollback_resp.set_error(extract_key_error(&e));
-    }
-    resp.set_cmd_batch_rollback_resp(cmd_batch_rollback_resp)
-}
-
-fn cmd_cleanup_done(r: StorageResult<()>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdCleanup);
-    let mut cmd_cleanup_resp = CmdCleanupResponse::new();
-    if let Err(e) = r {
-        if let Some(ts) = extract_committed(&e) {
-            cmd_cleanup_resp.set_commit_version(ts);
-        } else {
-            cmd_cleanup_resp.set_error(extract_key_error(&e));
-        }
-    }
-    resp.set_cmd_cleanup_resp(cmd_cleanup_resp);
-}
-
-fn cmd_scan_lock_done(r: StorageResult<Vec<LockInfo>>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdScanLock);
-    let mut scan_lock = CmdScanLockResponse::new();
-    match r {
-        Ok(locks) => scan_lock.set_locks(RepeatedField::from_vec(locks)),
-        Err(e) => scan_lock.set_error(extract_key_error(&e)),
-    }
-    resp.set_cmd_scan_lock_resp(scan_lock);
-}
-
-fn cmd_resolve_lock_done(r: StorageResult<()>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdResolveLock);
-    let mut resolve_lock = CmdResolveLockResponse::new();
-    if let Err(e) = r {
-        resolve_lock.set_error(extract_key_error(&e));
-    }
-    resp.set_cmd_resolve_lock_resp(resolve_lock);
-}
-
-fn cmd_gc_done(r: StorageResult<()>, resp: &mut Response) {
-    resp.set_field_type(MessageType::CmdGC);
-    let mut gc = CmdGCResponse::new();
-    if let Err(e) = r {
-        gc.set_error(extract_key_error(&e));
-    }
-    resp.set_cmd_gc_resp(gc);
-}
-
-
 fn extract_region_error<T>(res: &StorageResult<T>) -> Option<RegionError> {
     match *res {
         // TODO: use `Error::cause` instead.
@@ -420,7 +419,6 @@ mod tests {
     use kvproto::errorpb::NotLeader;
     use storage::{self, txn, mvcc, engine};
     use storage::Result as StorageResult;
-    use super::*;
 
     fn build_resp<T>(r: StorageResult<T>, f: fn(StorageResult<T>, &mut Response)) -> Response {
         let mut resp = Response::new();
@@ -433,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_get_done_none() {
-        let resp = build_resp(Ok(None), cmd_get_done);
+        let resp = build_resp(Ok(None), super::cmd_get_done);
         let mut cmd = CmdGetResponse::new();
         cmd.set_value(Vec::new());
         let mut expect = Response::new();
@@ -445,7 +443,7 @@ mod tests {
     #[test]
     fn test_get_done_some() {
         let val = vec![0x0; 0x8];
-        let resp = build_resp(Ok(Some(val.clone())), cmd_get_done);
+        let resp = build_resp(Ok(Some(val.clone())), super::cmd_get_done);
         let mut cmd = CmdGetResponse::new();
         cmd.set_value(val);
         let mut expect = Response::new();
@@ -456,7 +454,7 @@ mod tests {
 
     #[test]
     fn test_get_done_error() {
-        let resp = build_resp(Err(box_err!("error")), cmd_get_done);
+        let resp = build_resp(Err(box_err!("error")), super::cmd_get_done);
         let mut cmd = CmdGetResponse::new();
         let mut key_error = KeyError::new();
         key_error.set_abort("Other(StringError(\"error\"))".to_owned());
@@ -469,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_scan_done_empty() {
-        let resp = build_resp(Ok(Vec::new()), cmd_scan_done);
+        let resp = build_resp(Ok(Vec::new()), super::cmd_scan_done);
         let cmd = CmdScanResponse::new();
         let mut expect = Response::new();
         expect.set_field_type(MessageType::CmdScan);
@@ -484,7 +482,7 @@ mod tests {
         let k1 = vec![0x0, 0x1];
         let v1 = vec![0xff, 0xfe];
         let kvs = vec![Ok((k0.clone(), v0.clone())), Ok((k1.clone(), v1.clone()))];
-        let resp = build_resp(Ok(kvs), cmd_scan_done);
+        let resp = build_resp(Ok(kvs), super::cmd_scan_done);
         assert_eq!(MessageType::CmdScan, resp.get_field_type());
         let cmd = resp.get_cmd_scan_resp();
         let pairs = cmd.get_pairs();
@@ -507,7 +505,7 @@ mod tests {
         let k1_ts = 10000;
         let kvs = vec![Ok((k0.clone(), v0.clone())),
                        make_lock_error(k1.clone(), k1_primary.clone(), k1_ts)];
-        let resp = build_resp(Ok(kvs), cmd_scan_done);
+        let resp = build_resp(Ok(kvs), super::cmd_scan_done);
         assert_eq!(MessageType::CmdScan, resp.get_field_type());
         let cmd = resp.get_cmd_scan_resp();
         let pairs = cmd.get_pairs();
@@ -524,7 +522,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_done_ok() {
-        let resp = build_resp(Ok(Vec::new()), cmd_prewrite_done);
+        let resp = build_resp(Ok(Vec::new()), super::cmd_prewrite_done);
         assert_eq!(MessageType::CmdPrewrite, resp.get_field_type());
         let cmd = resp.get_cmd_prewrite_resp();
         assert_eq!(cmd.get_errors().len(), 0);
@@ -532,14 +530,14 @@ mod tests {
 
     #[test]
     fn test_prewrite_done_err() {
-        let resp = build_resp(Ok(vec![Err(box_err!("error"))]), cmd_prewrite_done);
+        let resp = build_resp(Ok(vec![Err(box_err!("error"))]), super::cmd_prewrite_done);
         let cmd = resp.get_cmd_prewrite_resp();
         assert_eq!(cmd.get_errors().len(), 1);
     }
 
     #[test]
     fn test_commit_done_ok() {
-        let resp = build_resp(Ok(()), cmd_commit_done);
+        let resp = build_resp(Ok(()), super::cmd_commit_done);
         assert_eq!(MessageType::CmdCommit, resp.get_field_type());
         let cmd = resp.get_cmd_commit_resp();
         assert!(!cmd.has_error());
@@ -547,7 +545,7 @@ mod tests {
 
     #[test]
     fn test_commit_done_err() {
-        let resp = build_resp(Err(box_err!("commit error")), cmd_commit_done);
+        let resp = build_resp(Err(box_err!("commit error")), super::cmd_commit_done);
         assert_eq!(MessageType::CmdCommit, resp.get_field_type());
         let cmd = resp.get_cmd_commit_resp();
         assert!(cmd.has_error());
@@ -555,7 +553,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_done_ok() {
-        let resp = build_resp(Ok(()), cmd_cleanup_done);
+        let resp = build_resp(Ok(()), super::cmd_cleanup_done);
         assert_eq!(MessageType::CmdCleanup, resp.get_field_type());
         let cmd = resp.get_cmd_cleanup_resp();
         assert!(!cmd.has_error());
@@ -563,7 +561,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_done_err() {
-        let resp = build_resp(Err(box_err!("cleanup error")), cmd_cleanup_done);
+        let resp = build_resp(Err(box_err!("cleanup error")), super::cmd_cleanup_done);
         assert_eq!(MessageType::CmdCleanup, resp.get_field_type());
         let cmd = resp.get_cmd_cleanup_resp();
         assert!(cmd.has_error());
@@ -571,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_rollback_done_ok() {
-        let resp = build_resp(Ok(()), cmd_batch_rollback_done);
+        let resp = build_resp(Ok(()), super::cmd_batch_rollback_done);
         assert_eq!(MessageType::CmdBatchRollback, resp.get_field_type());
         let cmd = resp.get_cmd_batch_rollback_resp();
         assert!(!cmd.has_error());
@@ -579,7 +577,8 @@ mod tests {
 
     #[test]
     fn test_rollback_done_err() {
-        let resp = build_resp(Err(box_err!("rollback error")), cmd_batch_rollback_done);
+        let resp = build_resp(Err(box_err!("rollback error")),
+                              super::cmd_batch_rollback_done);
         assert_eq!(MessageType::CmdBatchRollback, resp.get_field_type());
         let cmd = resp.get_cmd_batch_rollback_resp();
         assert!(cmd.has_error());
@@ -590,7 +589,7 @@ mod tests {
         let mut leader_info = NotLeader::new();
         leader_info.set_region_id(1);
         let storage_res = make_not_leader_error(leader_info.to_owned());
-        let resp = build_resp(storage_res, cmd_get_done);
+        let resp = build_resp(storage_res, super::cmd_get_done);
         assert!(resp.has_region_error());
         let region_err = resp.get_region_error();
         assert!(region_err.has_not_leader());
@@ -602,7 +601,7 @@ mod tests {
         let mut leader_info = NotLeader::new();
         leader_info.set_region_id(1);
         let storage_res = make_not_leader_error(leader_info.to_owned());
-        let resp = build_resp(storage_res, cmd_scan_done);
+        let resp = build_resp(storage_res, super::cmd_scan_done);
         assert!(resp.has_region_error());
         let region_err = resp.get_region_error();
         assert!(region_err.has_not_leader());
@@ -614,7 +613,7 @@ mod tests {
         let mut leader_info = NotLeader::new();
         leader_info.set_region_id(1);
         let storage_res = make_not_leader_error(leader_info.to_owned());
-        let resp = build_resp(storage_res, cmd_prewrite_done);
+        let resp = build_resp(storage_res, super::cmd_prewrite_done);
         assert!(resp.has_region_error());
         let region_err = resp.get_region_error();
         assert!(region_err.has_not_leader());
