@@ -469,11 +469,11 @@ impl Datum {
                     (l as u64).checked_sub(r).into()
                 }
             }
-            (Datum::U64(r), Datum::I64(l)) => {
-                if l < 0 {
-                    r.checked_add(opp_neg!(l)).into()
+            (Datum::U64(l), Datum::I64(r)) => {
+                if r < 0 {
+                    l.checked_add(opp_neg!(r)).into()
                 } else {
-                    r.checked_sub(l as u64).into()
+                    l.checked_sub(r as u64).into()
                 }
             }
             (Datum::U64(l), Datum::U64(r)) => l.checked_sub(r).into(),
