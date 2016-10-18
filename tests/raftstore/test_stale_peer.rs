@@ -137,26 +137,29 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
     let region = cluster.get_region(b"");
-    cluster.must_split(&region, b"k2");
     pd_client.must_add_peer(r1, new_peer(2, 2));
+    cluster.must_split(&region, b"k2");
+    pd_client.must_add_peer(r1, new_peer(3, 3));
 
-    let engine2 = cluster.get_engine(2);
-    must_get_equal(&engine2, b"k1", b"v1");
-    must_get_none(&engine2, b"k3");
+    let engine3 = cluster.get_engine(3);
+    must_get_equal(&engine3, b"k1", b"v1");
+    must_get_none(&engine3, b"k3");
 
     let new_region = cluster.get_region(b"k3");
     let new_region_id = new_region.get_id();
-    // Block peer (new_region_id, 2) at receiving snapshot, but not the heartbeat
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(new_region_id, 2)
+    // Block peer (new_region_id, 4) at receiving snapshot, but not the heartbeat
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(new_region_id, 4)
         .msg_type(MessageType::MsgSnapshot)));
 
-    pd_client.must_add_peer(new_region_id, new_peer(2, 3));
+    pd_client.must_add_peer(new_region_id, new_peer(3, 4));
 
-    // Wait for the heartbeat broadcasted from peer (1, 1) to peer (2, 2).
+    // Wait for the heartbeat broadcasted from peer (1, 1000) to peer (3, 4).
     thread::sleep(Duration::from_millis(60));
 
-    // And then isolate peer (2, 2) from peer (1, 1).
-    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    // And then isolate peer (3, 4) from peer (1, 1000).
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    pd_client.must_remove_peer(new_region_id, new_peer(3, 4));
 
     // Wait for max_leader_missing_duration to time out.
     thread::sleep(max_leader_missing_duration);
@@ -164,29 +167,29 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(Duration::from_secs(1));
 
     // There must be no data on store 2 belongs to new region
-    must_get_none(&engine2, b"k3");
+    must_get_none(&engine3, b"k3");
 
     // Check whether peer(2, 3) is destroyed.
     // Before peer 3 is destroyed, a tombstone mark will be written into the engine.
     // So we could check the tombstone mark to make sure peer 3 is destroyed.
     let state_key = keys::region_state_key(new_region_id);
-    let state: RegionLocalState = engine2.get_msg(&state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine3.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // other region should not be affected.
-    must_get_equal(&engine2, b"k1", b"v1");
+    must_get_equal(&engine3, b"k1", b"v1");
 }
 
 #[test]
 fn test_node_stale_peer_without_data() {
-    let count = 2;
+    let count = 3;
     let mut cluster = new_node_cluster(0, count);
     test_stale_peer_without_data(&mut cluster);
 }
 
 #[test]
 fn test_server_stale_peer_without_data() {
-    let count = 2;
+    let count = 3;
     let mut cluster = new_server_cluster(0, count);
     test_stale_peer_without_data(&mut cluster);
 }

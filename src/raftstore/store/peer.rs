@@ -55,7 +55,6 @@ const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 pub enum StaleState {
     Valid,
     ToValidate,
-    Stale,
 }
 
 pub struct PendingCmd {
@@ -454,11 +453,7 @@ impl Peer {
             // Resets the `leader_missing_time` to avoid sending the same tasks to
             // PD worker continuously during the leader missing timeout.
             self.leader_missing_time = None;
-            if self.is_initialized() {
-                return StaleState::ToValidate;
-            } else {
-                return StaleState::Stale;
-            }
+            return StaleState::ToValidate;
         }
         StaleState::Valid
     }

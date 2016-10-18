@@ -424,7 +424,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let t = Instant::now();
-        let mut region_to_be_destroyed = vec![];
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
@@ -433,7 +432,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // it should consider itself as a stale peer which is removed from
                 // the original cluster.
                 // This most likely happens in the following scenario:
-                // 1. At first, there are three peer A, B, C in the cluster, and A is leader.
+                // At first, there are three peer A, B, C in the cluster, and A is leader.
                 // Peer B gets down. And then A adds D, E, F into the cluster.
                 // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
                 // After all these peer in and out, now the cluster has peer D, E, F.
@@ -444,12 +443,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // In this case, peer B would notice that the leader is missing for a long time,
                 // and it would check with pd to confirm whether it's still a member of the cluster.
                 // If not, it destroys itself as a stale peer which is removed out already.
-                // 2. A peer, B is initialized as a replicated peer without data after
-                // receiving a single raft AE message. But then it goes through some process like 1,
-                // it's removed out of the region and wouldn't be contacted anymore.
-                // In this case, peer B would notice that the leader is missing for a long time,
-                // and it's an uninitialized peer without any data. It would destroy itself as
-                // a stale peer directly.
                 match peer.check_stale_state(self.cfg.max_leader_missing_duration) {
                     StaleState::Valid => {
                         self.pending_raft_groups.insert(region_id);
@@ -469,21 +462,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                         self.pending_raft_groups.insert(region_id);
                     }
-                    StaleState::Stale => {
-                        info!("{} detects peer stale, to be destroyed", peer.tag);
-                        // for peer B in case 2 above
-                        // directly destroy peer without data since it doesn't have region range,
-                        // so that it doesn't have the correct region start_key to
-                        // validate peer with PD
-                        region_to_be_destroyed.push((region_id, peer.peer.clone()));
-                    }
                 }
             }
-        }
-
-        // do perform the peer destroy
-        for (region_id, peer) in region_to_be_destroyed {
-            self.destroy_peer(region_id, peer);
         }
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
