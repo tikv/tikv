@@ -197,13 +197,7 @@ impl TiDbEndPoint {
 impl TiDbEndPoint {
     fn handle_requests(&self, reqs: Vec<RequestTask>) {
         for t in reqs {
-            let histogram =
-                COPR_REQ_HISTOGRAM_VEC.with_label_values(&[&t.req.get_tp().to_string()]);
-            let histogram_timer = histogram.start_timer();
-
             self.handle_request(t.req, t.on_resp);
-
-            histogram_timer.observe_duration();
         }
     }
 
@@ -246,7 +240,7 @@ impl TiDbEndPoint {
         };
 
         let select_histogram =
-            COPR_SELECT_HISTOGRAM_VEC.with_label_values(&[&req.get_tp().to_string()]);
+            COPR_REQ_HISTOGRAM_VEC.with_label_values(&["select", get_req_type_str(req.get_tp())]);
         let select_timer = select_histogram.start_timer();
 
         let res = if req.get_tp() == REQ_TYPE_SELECT {
@@ -736,5 +730,30 @@ impl<'a> SelectContext<'a> {
             seek_key = if desc { key } else { prefix_next(&key) };
         }
         Ok(row_cnt)
+    }
+}
+
+pub const STR_REQ_TYPE_SELECT: &'static str = "select";
+pub const STR_REQ_TYPE_INDEX: &'static str = "index";
+pub const STR_REQ_TYPE_UNKNOWN: &'static str = "unknown";
+
+#[inline]
+pub fn get_req_type_str(tp: i64) -> &'static str {
+    match tp {
+        REQ_TYPE_SELECT => STR_REQ_TYPE_SELECT,
+        REQ_TYPE_INDEX => STR_REQ_TYPE_INDEX,
+        _ => STR_REQ_TYPE_UNKNOWN,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_req_type_str() {
+        assert_eq!(get_req_type_str(REQ_TYPE_SELECT), STR_REQ_TYPE_SELECT);
+        assert_eq!(get_req_type_str(REQ_TYPE_INDEX), STR_REQ_TYPE_INDEX);
+        assert_eq!(get_req_type_str(0), STR_REQ_TYPE_UNKNOWN);
     }
 }
