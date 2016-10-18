@@ -49,6 +49,7 @@ use super::Error;
 use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 use super::super::metrics::*;
+use server::transport::RaftStoreRouter;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
@@ -188,7 +189,7 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallbac
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
-pub struct Scheduler {
+pub struct Scheduler<T: RaftStoreRouter> {
     engine: Box<Engine>,
 
     // cid -> context
@@ -204,15 +205,18 @@ pub struct Scheduler {
 
     // worker pool
     worker_pool: ThreadPool,
+
+    raft_router: T,
 }
 
-impl Scheduler {
+impl<T: RaftStoreRouter> Scheduler<T> {
     /// Creates a scheduler.
     pub fn new(engine: Box<Engine>,
                schedch: SendCh<Msg>,
                concurrency: usize,
-               worker_pool_size: usize)
-               -> Scheduler {
+               worker_pool_size: usize,
+               raft_router: T)
+               -> Scheduler<T> {
         Scheduler {
             engine: engine,
             cmd_ctxs: HashMap::new(),
@@ -221,13 +225,18 @@ impl Scheduler {
             latches: Latches::new(concurrency),
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
+            raft_router: raft_router,
         }
     }
 }
 
 /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
 /// event loop.
-fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
+fn process_read<T: RaftStoreRouter>(cid: u64,
+                                    mut cmd: Command,
+                                    ch: SendCh<Msg>,
+                                    snapshot: Box<Snapshot>,
+                                    router: T) {
     debug!("process read cmd(cid={}) in worker pool.", cid);
     SCHED_WORKER_COUNTER_VEC.with_label_values(&[cmd.tag(), "read"]).inc();
 
@@ -344,7 +353,19 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 });
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
-                Ok(None) => ProcessResult::Res,
+                Ok(None) => {
+                    // Notify corresponding peer to check region size after GC is done.
+                    let region_id = ctx.get_region_id();
+                    let peer_id = ctx.get_peer().get_id();
+                    if let Err(e) = router.report_gc(region_id, peer_id) {
+                        error!("report gc for region {}, peer {} failed {:?}",
+                               region_id,
+                               peer_id,
+                               e);
+                    }
+
+                    ProcessResult::Res
+                }
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
@@ -464,7 +485,7 @@ fn extract_ctx(cmd: &Command) -> &Context {
     }
 }
 
-impl Scheduler {
+impl<T: RaftStoreRouter + 'static> Scheduler<T> {
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
@@ -520,7 +541,9 @@ impl Scheduler {
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
         if readcmd {
-            self.worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
+            let router = self.raft_router.clone();
+            self.worker_pool
+                .execute(move || process_read(cid, cmd, ch, snapshot, router));
         } else {
             self.worker_pool.execute(move || process_write(cid, cmd, ch, snapshot));
         }
@@ -709,7 +732,7 @@ impl Scheduler {
 }
 
 /// Handler of the scheduler event loop.
-impl mio::Handler for Scheduler {
+impl<T: RaftStoreRouter + 'static> mio::Handler for Scheduler<T> {
     type Timeout = ();
     type Message = Msg;
 

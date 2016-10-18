@@ -59,6 +59,8 @@ pub enum Msg {
 
     ReportUnreachable { region_id: u64, to_peer_id: u64 },
 
+    ReportGc { region_id: u64, peer_id: u64 },
+
     // For snapshot stats.
     SnapshotStats,
     SnapApplyRes {
@@ -91,6 +93,9 @@ impl fmt::Debug for Msg {
                        "peer {} for region {} is unreachable",
                        to_peer_id,
                        region_id)
+            }
+            Msg::ReportGc { ref region_id, ref peer_id } => {
+                write!(fmt, "gc for region {}, peer {} is done", region_id, peer_id)
             }
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
             Msg::SnapApplyRes { region_id, is_success, is_aborted } => {

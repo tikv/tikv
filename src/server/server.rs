@@ -80,7 +80,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
 
     raft_router: T,
 
-    store: StoreHandler,
+    store: StoreHandler<T>,
     end_point_worker: Worker<EndPointTask>,
 
     snap_mgr: SnapManager,
@@ -100,7 +100,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
                listener: TcpListener,
-               storage: Storage,
+               storage: Storage<T>,
                raft_router: T,
                resolver: S,
                snap_mgr: SnapManager)

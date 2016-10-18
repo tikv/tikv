@@ -1473,6 +1473,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn on_gc(&mut self, _region_id: u64, _peer_id: u64) {
+        // TODO
+    }
+
     fn on_snap_gen_res(&mut self, region_id: u64, snap: Option<Snapshot>) {
         let peer = match self.region_peers.get_mut(&region_id) {
             None => return,
@@ -1569,6 +1573,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             }
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
+            }
+            Msg::ReportGc { region_id, peer_id } => {
+                self.on_gc(region_id, peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
             Msg::SnapApplyRes { region_id, is_success, is_aborted } => {

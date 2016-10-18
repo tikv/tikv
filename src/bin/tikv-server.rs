@@ -682,12 +682,13 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
     cfg
 }
 
-fn build_raftkv(matches: &Matches,
-                config: &toml::Value,
-                ch: SendCh<Msg>,
-                pd_client: Arc<RpcClient>,
-                cfg: &Config)
-                -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager) {
+fn build_raftkv
+    (matches: &Matches,
+     config: &toml::Value,
+     ch: SendCh<Msg>,
+     pd_client: Arc<RpcClient>,
+     cfg: &Config)
+     -> (Node<RpcClient>, Storage<ServerRaftStoreRouter>, ServerRaftStoreRouter, SnapManager) {
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
@@ -786,7 +787,7 @@ fn run_local_server(listener: TcpListener, config: &Config) {
     let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
 
     let mut store = Storage::new(&config.storage).unwrap();
-    if let Err(e) = store.start(&config.storage) {
+    if let Err(e) = store.start(&config.storage, MockRaftStoreRouter) {
         panic!("failed to start storage, error = {:?}", e);
     }
 
@@ -829,7 +830,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
     initial_metric(matches, config, Some(node.id()));
 
     info!("start storage");
-    if let Err(e) = store.start(&cfg.storage) {
+    if let Err(e) = store.start(&cfg.storage, raft_router.clone()) {
         panic!("failed to start storage, error = {:?}", e);
     }
 

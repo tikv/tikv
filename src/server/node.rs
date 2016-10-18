@@ -32,7 +32,7 @@ use super::transport::RaftStoreRouter;
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
+pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage<S>>
     where S: RaftStoreRouter + 'static
 {
     let engine = box RaftKv::new(db, router);

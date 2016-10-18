@@ -20,6 +20,7 @@ use std::io::Error as IoError;
 use kvproto::kvrpcpb::LockInfo;
 use mio::{EventLoop, EventLoopBuilder};
 use self::metrics::*;
+use server::transport::RaftStoreRouter;
 
 pub mod engine;
 pub mod mvcc;
@@ -228,19 +229,19 @@ impl Command {
 
 use util::transport::SendCh;
 
-struct StorageHandle {
+struct StorageHandle<T: RaftStoreRouter + 'static> {
     handle: Option<thread::JoinHandle<()>>,
-    event_loop: Option<EventLoop<Scheduler>>,
+    event_loop: Option<EventLoop<Scheduler<T>>>,
 }
 
-pub struct Storage {
+pub struct Storage<T: RaftStoreRouter + 'static> {
     engine: Box<Engine>,
     sendch: SendCh<Msg>,
-    handle: Arc<Mutex<StorageHandle>>,
+    handle: Arc<Mutex<StorageHandle<T>>>,
 }
 
-impl Storage {
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
+impl<T: RaftStoreRouter> Storage<T> {
+    pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage<T>> {
         let event_loop = try!(create_event_loop(config.sched_notify_capacity,
                                                 config.sched_msg_per_tick));
         let sendch = SendCh::new(event_loop.channel());
@@ -256,12 +257,12 @@ impl Storage {
         })
     }
 
-    pub fn new(config: &Config) -> Result<Storage> {
+    pub fn new(config: &Config) -> Result<Storage<T>> {
         let engine = try!(engine::new_engine(Dsn::RocksDBPath(&config.path), ALL_CFS));
         Storage::from_engine(engine, config)
     }
 
-    pub fn start(&mut self, config: &Config) -> Result<()> {
+    pub fn start(&mut self, config: &Config, router: T) -> Result<()> {
         let mut handle = self.handle.lock().unwrap();
         if handle.handle.is_some() {
             return Err(box_err!("scheduler is already running"));
@@ -274,7 +275,11 @@ impl Storage {
         let sched_worker_pool_size = config.sched_worker_pool_size;
         let ch = self.sendch.clone();
         let h = try!(builder.spawn(move || {
-            let mut sched = Scheduler::new(engine, ch, sched_concurrency, sched_worker_pool_size);
+            let mut sched = Scheduler::new(engine,
+                                           ch,
+                                           sched_concurrency,
+                                           sched_worker_pool_size,
+                                           router);
             if let Err(e) = el.run(&mut sched) {
                 panic!("scheduler run err:{:?}", e);
             }
@@ -485,8 +490,8 @@ impl Storage {
     }
 }
 
-impl Clone for Storage {
-    fn clone(&self) -> Storage {
+impl<T: RaftStoreRouter> Clone for Storage<T> {
+    fn clone(&self) -> Storage<T> {
         Storage {
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
@@ -526,9 +531,9 @@ quick_error! {
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
-pub fn create_event_loop(notify_capacity: usize,
-                         messages_per_tick: usize)
-                         -> Result<EventLoop<Scheduler>> {
+pub fn create_event_loop<T: RaftStoreRouter + 'static>(notify_capacity: usize,
+                                                       messages_per_tick: usize)
+                                                       -> Result<EventLoop<Scheduler<T>>> {
     let mut builder = EventLoopBuilder::new();
     builder.notify_capacity(notify_capacity);
     builder.messages_per_tick(messages_per_tick);
