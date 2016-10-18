@@ -1018,8 +1018,8 @@ impl Peer {
                             storage.region = region.clone();
                         }
                         ExecResult::CompactLog { .. } => {}
-                        ExecResult::SplitRegion { ref left, .. } => {
-                            storage.region = left.clone();
+                        ExecResult::SplitRegion { ref right, .. } => {
+                            storage.region = right.clone();
                         }
                     }
                 };
@@ -1231,12 +1231,12 @@ impl Peer {
         // TODO: check new region id validation.
         let new_region_id = split_req.get_new_region_id();
 
-        // After split, the origin region key range is [start_key, split_key),
-        // the new split region is [split_key, end).
+        // After split, the origin region key range is [split_key, end_key),
+        // the new split region is [start_key, split_key).
         let mut new_region = region.clone();
-        region.set_end_key(split_key.to_vec());
+        region.set_start_key(split_key.to_vec());
 
-        new_region.set_start_key(split_key.to_vec());
+        new_region.set_end_key(split_key.to_vec());
         new_region.set_id(new_region_id);
 
         // Update new region peer ids.
@@ -1264,17 +1264,15 @@ impl Peer {
         try!(write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()));
 
         let mut resp = AdminResponse::new();
-        resp.mut_split().set_left(region.clone());
-        resp.mut_split().set_right(new_region.clone());
-
-        self.size_diff_hint = 0;
+        resp.mut_split().set_left(new_region.clone());
+        resp.mut_split().set_right(region.clone());
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
 
         Ok((resp,
             Some(ExecResult::SplitRegion {
-            left: region,
-            right: new_region,
+            left: new_region,
+            right: region,
         })))
     }
 
