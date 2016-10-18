@@ -16,7 +16,7 @@ use std::fmt::{self, Formatter, Display};
 use std::error;
 use std::fs::File;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 use std::str;
 
@@ -29,6 +29,7 @@ use util::{escape, HandyRwLock, rocksdb};
 use util::transport::SendCh;
 use raftstore;
 use raftstore::store::engine::{Mutable, Snapshot, Iterable};
+use raftstore::store::peer_storage::{JOB_STATUS_CANCEL, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
 use storage::CF_RAFT;
 
@@ -39,7 +40,7 @@ pub enum Task {
     Gen { region_id: u64 },
     Apply {
         region_id: u64,
-        abort: Arc<AtomicBool>,
+        status: Arc<AtomicU8>,
     },
     /// Destroy data between [start_key, end_key).
     ///
@@ -104,8 +105,8 @@ impl MsgSender for SendCh<Msg> {
 }
 
 #[inline]
-fn check_abort(abort: &AtomicBool) -> Result<(), Error> {
-    if abort.load(Ordering::Relaxed) {
+fn check_abort(status: &AtomicU8) -> Result<(), Error> {
+    if status.load(Ordering::Relaxed) == JOB_STATUS_CANCEL {
         return Err(Error::Abort);
     }
     Ok(())
@@ -167,7 +168,7 @@ impl<T: MsgSender> Runner<T> {
     fn delete_all_in_range(&self,
                            start_key: &[u8],
                            end_key: &[u8],
-                           abort: &AtomicBool)
+                           abort: &AtomicU8)
                            -> Result<(), Error> {
         let mut wb = WriteBatch::new();
         let mut size_cnt = 0;
@@ -208,7 +209,7 @@ impl<T: MsgSender> Runner<T> {
         Ok(())
     }
 
-    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicBool>) -> Result<(), Error> {
+    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicU8>) -> Result<(), Error> {
         info!("[region {}] begin apply snap data", region_id);
         try!(check_abort(&abort));
         let region_key = keys::region_state_key(region_id);
@@ -283,12 +284,13 @@ impl<T: MsgSender> Runner<T> {
         Ok(())
     }
 
-    fn handle_apply(&self, region_id: u64, abort: Arc<AtomicBool>) {
+    fn handle_apply(&self, region_id: u64, status: Arc<AtomicU8>) {
+        status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_timer();
 
-        let (is_success, is_aborted) = match self.apply_snap(region_id, abort) {
+        let (is_success, is_aborted) = match self.apply_snap(region_id, status) {
             Ok(()) => (true, false),
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);
@@ -325,7 +327,8 @@ impl<T: MsgSender> Runner<T> {
               region_id,
               escape(&start_key),
               escape(&end_key));
-        if let Err(e) = self.delete_all_in_range(&start_key, &end_key, &AtomicBool::new(false)) {
+        if let Err(e) =
+               self.delete_all_in_range(&start_key, &end_key, &AtomicU8::new(JOB_STATUS_RUNNING)) {
             error!("failed to delete data in [{}, {}): {:?}",
                    escape(&start_key),
                    escape(&end_key),
@@ -338,7 +341,7 @@ impl<T: MsgSender> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Gen { region_id } => self.handle_gen(region_id),
-            Task::Apply { region_id, abort } => self.handle_apply(region_id, abort),
+            Task::Apply { region_id, status } => self.handle_apply(region_id, status),
             Task::Destroy { region_id, start_key, end_key } => {
                 self.handle_destroy(region_id, start_key, end_key)
             }
