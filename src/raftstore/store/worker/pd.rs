@@ -28,7 +28,7 @@ use util::transport::SendCh;
 use pd::PdClient;
 use raftstore::store::Msg;
 use raftstore::Result;
-use raftstore::store::util::{check_key_in_region, is_epoch_stale};
+use raftstore::store::util::is_epoch_stale;
 
 use super::metrics::*;
 
@@ -221,35 +221,9 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
         PD_REQ_COUNTER_VEC.with_label_values(&["get region", "all"]).inc();
-        match self.pd_client.get_region(local_region.get_start_key()) {
+        match self.pd_client.get_region_by_id(local_region.get_id()) {
             Ok(pd_region) => {
                 PD_REQ_COUNTER_VEC.with_label_values(&["get region", "success"]).inc();
-                if let Err(_) = check_key_in_region(local_region.get_start_key(), &pd_region) {
-                    // The region [start_key, ...) is missing in pd currently. It's probably
-                    // that a pending region split is happenning right now and that region
-                    // doesn't report it's heartbeat(with updated region info) yet.
-                    // We should sit tight and try another get_region task later.
-                    warn!("[region {}] {} fails to get region info from pd with start key: {:?}, \
-                           retry later",
-                          local_region.get_id(),
-                          peer.get_id(),
-                          local_region.get_start_key());
-                    PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region info missing"]).inc();
-                    return;
-                }
-                if pd_region.get_id() != local_region.get_id() {
-                    // The region range is covered by another region(different region id).
-                    // Local peer must be obsolete.
-                    info!("[region {}] {} the region has change its id to {}, this peer must be \
-                           stale and destroyed later",
-                          local_region.get_id(),
-                          peer.get_id(),
-                          pd_region.get_id());
-                    PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region id changed"]).inc();
-                    self.send_destroy_peer_message(local_region, peer, pd_region);
-                    return;
-                }
-
                 if is_epoch_stale(pd_region.get_region_epoch(),
                                   local_region.get_region_epoch()) {
                     // The local region epoch is fresher than region epoch in PD
@@ -266,8 +240,7 @@ impl<T: PdClient> Runner<T> {
                     return;
                 }
 
-                let valid = pd_region.get_peers().into_iter().any(|p| p.to_owned() == peer);
-                if !valid {
+                if pd_region.get_peers().into_iter().all(|p| p != &peer) {
                     // Peer is not a member of this region anymore. Probably it's removed out.
                     // Send it a raft massage to destroy it since it's obsolete.
                     info!("[region {}] {} is not a valid member of region {:?}. To be destroyed \
