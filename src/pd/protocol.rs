@@ -100,7 +100,7 @@ impl super::PdClient for RpcClient {
 
         let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        if resp.take_get_region_by_id().has_region() {
+        if resp.get_get_region_by_id().has_region() {
             Ok(Some(resp.take_get_region_by_id().take_region()))
         } else {
             Ok(None)
