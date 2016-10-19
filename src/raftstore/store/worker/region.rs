@@ -16,7 +16,7 @@ use std::fmt::{self, Formatter, Display};
 use std::error;
 use std::fs::File;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use std::str;
 
@@ -40,7 +40,7 @@ pub enum Task {
     Gen { region_id: u64 },
     Apply {
         region_id: u64,
-        status: Arc<AtomicU8>,
+        status: Arc<AtomicUsize>,
     },
     /// Destroy data between [start_key, end_key).
     ///
@@ -105,7 +105,7 @@ impl MsgSender for SendCh<Msg> {
 }
 
 #[inline]
-fn check_abort(status: &AtomicU8) -> Result<(), Error> {
+fn check_abort(status: &AtomicUsize) -> Result<(), Error> {
     if status.load(Ordering::Relaxed) == JOB_STATUS_CANCEL {
         return Err(Error::Abort);
     }
@@ -168,7 +168,7 @@ impl<T: MsgSender> Runner<T> {
     fn delete_all_in_range(&self,
                            start_key: &[u8],
                            end_key: &[u8],
-                           abort: &AtomicU8)
+                           abort: &AtomicUsize)
                            -> Result<(), Error> {
         let mut wb = WriteBatch::new();
         let mut size_cnt = 0;
@@ -209,7 +209,7 @@ impl<T: MsgSender> Runner<T> {
         Ok(())
     }
 
-    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicU8>) -> Result<(), Error> {
+    fn apply_snap(&self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<(), Error> {
         info!("[region {}] begin apply snap data", region_id);
         try!(check_abort(&abort));
         let region_key = keys::region_state_key(region_id);
@@ -284,7 +284,7 @@ impl<T: MsgSender> Runner<T> {
         Ok(())
     }
 
-    fn handle_apply(&self, region_id: u64, status: Arc<AtomicU8>) {
+    fn handle_apply(&self, region_id: u64, status: Arc<AtomicUsize>) {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
@@ -327,8 +327,8 @@ impl<T: MsgSender> Runner<T> {
               region_id,
               escape(&start_key),
               escape(&end_key));
-        if let Err(e) =
-               self.delete_all_in_range(&start_key, &end_key, &AtomicU8::new(JOB_STATUS_RUNNING)) {
+        let status = AtomicUsize::new(JOB_STATUS_PENDING);
+        if let Err(e) = self.delete_all_in_range(&start_key, &end_key, &status) {
             error!("failed to delete data in [{}, {}): {:?}",
                    escape(&start_key),
                    escape(&end_key),

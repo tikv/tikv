@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::{self, Arc};
-use std::sync::atomic::{AtomicUsize, Ordering, AtomicU8};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
 use std::error;
 use std::time::Instant;
@@ -43,9 +43,9 @@ pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: usize = 5;
 
-pub const JOB_STATUS_PENDING: u8 = 0;
-pub const JOB_STATUS_RUNNING: u8 = 1;
-pub const JOB_STATUS_CANCEL: u8 = 2;
+pub const JOB_STATUS_PENDING: usize = 0;
+pub const JOB_STATUS_RUNNING: usize = 1;
+pub const JOB_STATUS_CANCEL: usize = 2;
 
 pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -54,7 +54,7 @@ pub enum SnapState {
     Relax,
     Generating,
     Snap(Snapshot),
-    Applying(Arc<AtomicU8>),
+    Applying(Arc<AtomicUsize>),
     ApplyAborted,
     Failed,
 }
@@ -653,7 +653,7 @@ impl PeerStorage {
     }
 
     pub fn schedule_applying_snapshot(&mut self) {
-        let status = Arc::new(AtomicU8::new(JOB_STATUS_PENDING));
+        let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
         self.set_snap_state(SnapState::Applying(status.clone()));
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
