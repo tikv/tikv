@@ -23,4 +23,4 @@ out/
 
 target
 tmp
-bin
+/bin
