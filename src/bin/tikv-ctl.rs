@@ -33,7 +33,7 @@ use tikv::raftstore::store::engine::{Peekable, Iterable};
 use tikv::storage::{ALL_CFS, CF_RAFT};
 
 fn main() {
-    let matches = App::new("TiKV Ctl")
+    let mut app = App::new("TiKV Ctl")
         .author("PingCAP")
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(Arg::with_name("db")
@@ -85,8 +85,8 @@ fn main() {
                     .arg(Arg::with_name("key")
                          .short("k")
                          .takes_value(true)
-                         .help("set the query raw key, in escaped form")))
-        .get_matches();
+                         .help("set the query raw key, in escaped form")));
+    let matches = app.clone().get_matches();
 
     let db_path = matches.value_of("db").unwrap();
     let db = util::rocksdb::open(db_path, ALL_CFS).unwrap();
@@ -107,7 +107,7 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("scan") {
         let from = String::from(matches.value_of("from").unwrap());
-        let to = matches.value_of("to").map(|s| String::from(s));
+        let to = matches.value_of("to").map(String::from);
         let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
         let cf_name = matches.value_of("cf").unwrap_or("default");
         if let Some(ref to) = to {
@@ -118,7 +118,7 @@ fn main() {
         dump_range(db, from, to, limit, cf_name);
     }
     else {
-        panic!("The command is not supported now.");
+        let _ = app.print_help();
     }
 
 }
