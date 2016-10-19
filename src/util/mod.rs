@@ -396,7 +396,7 @@ fn build_info() -> (String, String) {
 /// `print_tikv_info` prints the tikv version information to the standard output.
 pub fn print_tikv_info() {
     let (hash, date) = build_info();
-    info!("Welcome to the TiKV.");
+    info!("Welcome to TiKV.");
     info!("Version:");
     info!("Git Commit Hash: {}", hash);
     info!("UTC Build Time:  {}", date);
