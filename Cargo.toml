@@ -22,9 +22,6 @@ name = "bench-tikv"
 path = "benches/bin/bench-tikv.rs"
 
 [[bin]]
-name = "tikv-dump"
-
-[[bin]]
 name = "tikv-ctl"
 
 [[test]]
