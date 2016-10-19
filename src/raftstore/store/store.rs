@@ -1064,10 +1064,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let res = peer.check_epoch(msg);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
-            // Attach the next region which might be split from the current region. But it doesn't
-            // matter if the next region is not split from the current region. If the region meta
-            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
-            // updated.
+            // Attach the previous region which might be split from the current region. But it
+            // doesn't matter if the previous region is not split from the current region. If the
+            // region meta received by the TiKV driver is newer than the meta cached in the
+            // driver, the meta is updated.
             if let Some((_, &prev_region_id)) = self.region_ranges
                 .range(Unbounded::<&Key>, Excluded(&enc_end_key(peer.region())))
                 .next_back() {
