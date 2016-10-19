@@ -91,7 +91,7 @@ impl super::PdClient for RpcClient {
         Ok(resp.take_get_region().take_region())
     }
 
-    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
+    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
         let mut get_region_by_id = pdpb::GetRegionByIDRequest::new();
         get_region_by_id.set_region_id(region_id);
 
@@ -100,7 +100,11 @@ impl super::PdClient for RpcClient {
 
         let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
-        Ok(resp.take_get_region_by_id().take_region())
+        if resp.take_get_region_by_id().has_region() {
+            Ok(Some(resp.take_get_region_by_id().take_region()))
+        } else {
+            Ok(None)
+        }
     }
 
     fn region_heartbeat(&self,
