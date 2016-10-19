@@ -22,7 +22,7 @@ name = "bench-tikv"
 path = "benches/bin/bench-tikv.rs"
 
 [[bin]]
-name = "tikv-dump"
+name = "tikv-ctl"
 
 [[test]]
 name = "tests"
@@ -51,6 +51,7 @@ chrono = "0.2"
 lazy_static = "0.2.1"
 signal = "0.2"
 backtrace = "0.2.3"
+clap = "2"
 
 # The getopts in crate.io is outdated, use the latest getopts instead.
 [dependencies.getopts]
