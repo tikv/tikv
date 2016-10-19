@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::option::Option;
@@ -306,12 +305,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("region {:?} is applying in store {}",
                       local_state.get_region(),
                       self.store_id());
-                let abort = Arc::new(AtomicBool::new(false));
-                peer.mut_store().set_snap_state(SnapState::Applying(abort.clone()));
-                box_try!(self.region_worker.schedule(RegionTask::Apply {
-                    region_id: region_id,
-                    abort: abort,
-                }));
+                peer.mut_store().schedule_applying_snapshot();
             }
 
             self.region_ranges.insert(enc_end_key(region), region_id);
@@ -480,14 +474,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // current peer is stale, then we should remove current peer
         let mut has_peer = false;
         let mut stale_peer = None;
-        if let Some(p) = self.region_peers.get(&region_id) {
+        if let Some(p) = self.region_peers.get_mut(&region_id) {
             has_peer = true;
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
-                if p.is_applying() {
-                    // to remove the applying peer, we should find a reliable way to abort
-                    // the apply process.
-                    warn!("Stale peer {} is applying snapshot, will destroy next time.",
+                if p.is_applying() && !p.mut_store().cancel_applying_snap() {
+                    warn!("[region {}] Stale peer {} is applying snapshot, will destroy next \
+                           time.",
+                          region_id,
                           p.peer_id());
                     return Ok(false);
                 }
