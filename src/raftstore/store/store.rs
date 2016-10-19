@@ -499,7 +499,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
                 if p.is_applying() && !p.mut_store().cancel_applying_snap() {
-                    warn!("Stale peer {} is applying snapshot, will destroy next time.",
+                    warn!("[region {}] Stale peer {} is applying snapshot, will destroy next \
+                           time.",
+                          region_id,
                           p.peer_id());
                     return Ok(false);
                 }
