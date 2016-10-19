@@ -902,7 +902,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     .is_some() {
                     panic!("region should not exist, {:?}", left);
                 }
-                // TODO: add tests
                 if self.region_ranges
                     .insert(enc_end_key(&right), right.get_id())
                     .is_none() {

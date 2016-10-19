@@ -513,15 +513,17 @@ fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>) {
                                 old.get_region_epoch().clone(),
                                 vec![util::new_get_cmd(b"k1")],
                                 false);
-    cluster.must_split(&old, b"k2");
+    cluster.must_split(&old, b"k3");
     let left = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&left, b"k2");
+    let middle = pd_client.get_region(b"k2").unwrap();
     let right = pd_client.get_region(b"k3").unwrap();
 
     let resp = cluster.call_command_on_leader(get, Duration::from_secs(5)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_stale_epoch());
     assert_eq!(resp.get_header().get_error().get_stale_epoch().get_new_regions(),
-               &[right, left]);
+               &[right, middle]);
 }
 
 #[test]
