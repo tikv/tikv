@@ -222,7 +222,7 @@ impl<T: PdClient> Runner<T> {
     fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
         PD_REQ_COUNTER_VEC.with_label_values(&["get region", "all"]).inc();
         match self.pd_client.get_region_by_id(local_region.get_id()) {
-            Ok(pd_region) => {
+            Ok(Some(pd_region)) => {
                 PD_REQ_COUNTER_VEC.with_label_values(&["get region", "success"]).inc();
                 if is_epoch_stale(pd_region.get_region_epoch(),
                                   local_region.get_region_epoch()) {
@@ -257,6 +257,10 @@ impl<T: PdClient> Runner<T> {
                       peer.get_id(),
                       pd_region);
                 PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["peer valid"]).inc();
+            }
+            Ok(None) => {
+                // split region has not yet report to pd.
+                // TODO: handle merge
             }
             Err(e) => error!("get region failed {:?}", e),
         }

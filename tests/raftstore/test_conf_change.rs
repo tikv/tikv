@@ -58,8 +58,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let epoch = cluster.pd_client
         .get_region_by_id(1)
         .unwrap()
-        .get_region_epoch()
-        .clone();
+        .unwrap()
+        .take_region_epoch();
 
     // Conf version must change.
     assert!(epoch.get_conf_ver() > 1);
@@ -251,7 +251,10 @@ fn test_server_pd_conf_change() {
 fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize) {
     let mut replica_count = 0;
     for _ in 0..1000 {
-        let region = pd_client.get_region_by_id(region_id).unwrap();
+        let region = match pd_client.get_region_by_id(region_id).unwrap() {
+            Some(r) => r,
+            None => continue,
+        };
         replica_count = region.get_peers().len();
         if replica_count == c {
             return;
@@ -279,7 +282,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    region = pd_client.get_region_by_id(region_id).unwrap();
+    region = pd_client.get_region_by_id(region_id).unwrap().unwrap();
     let i = stores.iter()
         .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
         .unwrap();
@@ -296,7 +299,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.reset_rule();
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 
-    region = pd_client.get_region_by_id(region_id).unwrap();
+    region = pd_client.get_region_by_id(region_id).unwrap().unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
     pd_client.must_remove_peer(region_id, peer);
     wait_till_reach_count(pd_client.clone(), region_id, 4);
@@ -356,8 +359,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     let epoch = cluster.pd_client
         .get_region_by_id(1)
         .unwrap()
-        .get_region_epoch()
-        .clone();
+        .unwrap()
+        .take_region_epoch();
 
     let engine1 = cluster.get_engine(1);
     let state =
