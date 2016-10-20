@@ -52,7 +52,6 @@ use super::super::metrics::*;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
-const SCHEDULER_TOO_BUSY_THRESHOLD: usize = 100;
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -203,6 +202,8 @@ pub struct Scheduler {
     // write concurrency control
     latches: Latches,
 
+    sched_too_busy_threshold: usize,
+
     // worker pool
     worker_pool: ThreadPool,
 }
@@ -212,7 +213,8 @@ impl Scheduler {
     pub fn new(engine: Box<Engine>,
                schedch: SendCh<Msg>,
                concurrency: usize,
-               worker_pool_size: usize)
+               worker_pool_size: usize,
+               sched_too_busy_threshold: usize)
                -> Scheduler {
         Scheduler {
             engine: engine,
@@ -220,6 +222,7 @@ impl Scheduler {
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
+            sched_too_busy_threshold: sched_too_busy_threshold,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
         }
@@ -570,7 +573,7 @@ impl Scheduler {
     }
 
     fn too_busy(&self) -> bool {
-        self.cmd_ctxs.len() > SCHEDULER_TOO_BUSY_THRESHOLD
+        self.cmd_ctxs.len() >= self.sched_too_busy_threshold
     }
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
