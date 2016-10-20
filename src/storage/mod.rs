@@ -272,9 +272,14 @@ impl Storage {
         let mut el = handle.event_loop.take().unwrap();
         let sched_concurrency = config.sched_concurrency;
         let sched_worker_pool_size = config.sched_worker_pool_size;
+        let sched_too_busy_threshold = config.sched_too_busy_threshold;
         let ch = self.sendch.clone();
         let h = try!(builder.spawn(move || {
-            let mut sched = Scheduler::new(engine, ch, sched_concurrency, sched_worker_pool_size);
+            let mut sched = Scheduler::new(engine,
+                                           ch,
+                                           sched_concurrency,
+                                           sched_worker_pool_size,
+                                           sched_too_busy_threshold);
             if let Err(e) = el.run(&mut sched) {
                 panic!("scheduler run err:{:?}", e);
             }
@@ -521,6 +526,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        SchedTooBusy {
+            description("scheduler is too busy")
+        }
     }
 }
 
@@ -566,6 +574,17 @@ mod tests {
     fn expect_fail<T>(done: Sender<i32>) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             assert!(x.is_err());
+            done.send(1).unwrap();
+        })
+    }
+
+    fn expect_too_busy<T>(done: Sender<i32>) -> Callback<T> {
+        Box::new(move |x: Result<T>| {
+            assert!(x.is_err());
+            match x {
+                Err(Error::SchedTooBusy) => {}
+                _ => panic!("expect too busy"),
+            }
             done.send(1).unwrap();
         })
     }
@@ -785,6 +804,29 @@ mod tests {
                             b"x".to_vec(),
                             105,
                             expect_fail(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_sched_too_busy() {
+        let mut config = Config::new();
+        config.sched_too_busy_threshold = 0;
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       100,
+                       expect_get_none(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            expect_too_busy(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();

@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::{self, Arc};
-use std::sync::atomic::{AtomicUsize, Ordering, AtomicBool};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
 use std::error;
 use std::time::Instant;
@@ -43,6 +43,10 @@ pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: usize = 5;
 
+pub const JOB_STATUS_PENDING: usize = 0;
+pub const JOB_STATUS_RUNNING: usize = 1;
+pub const JOB_STATUS_CANCEL: usize = 2;
+
 pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
 #[derive(Debug)]
@@ -50,7 +54,7 @@ pub enum SnapState {
     Relax,
     Generating,
     Snap(Snapshot),
-    Applying(Arc<AtomicBool>),
+    Applying(Arc<AtomicUsize>),
     ApplyAborted,
     Failed,
 }
@@ -619,14 +623,18 @@ impl PeerStorage {
     #[inline]
     pub fn is_canceling_snap(&self) -> bool {
         match *self.snap_state.borrow() {
-            SnapState::Applying(ref abort) => abort.load(Ordering::Relaxed),
+            SnapState::Applying(ref status) => status.load(Ordering::Relaxed) == JOB_STATUS_CANCEL,
             _ => false,
         }
     }
 
-    pub fn cancel_applying_snap(&mut self) {
-        if let SnapState::Applying(ref abort) = *self.snap_state.borrow() {
-            abort.store(true, Ordering::Relaxed);
+    /// Cancel applying snapshot, return true if the job can be considered actually cancelled.
+    pub fn cancel_applying_snap(&mut self) -> bool {
+        match *self.snap_state.borrow() {
+            SnapState::Applying(ref status) => {
+                status.swap(JOB_STATUS_CANCEL, Ordering::Relaxed) == JOB_STATUS_PENDING
+            }
+            _ => false,
         }
     }
 
@@ -642,6 +650,17 @@ impl PeerStorage {
 
     pub fn get_region_id(&self) -> u64 {
         self.region.get_id()
+    }
+
+    pub fn schedule_applying_snapshot(&mut self) {
+        let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
+        self.set_snap_state(SnapState::Applying(status.clone()));
+        let task = RegionTask::Apply {
+            region_id: self.get_region_id(),
+            status: status,
+        };
+        // TODO: gracefully remove region instead.
+        self.region_sched.schedule(task).expect("snap apply job should not fail");
     }
 
     pub fn handle_raft_ready(&mut self, ready: &Ready) -> Result<Option<ApplySnapResult>> {
@@ -681,9 +700,6 @@ impl PeerStorage {
         self.last_term = ctx.last_term;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
-            let abort = Arc::new(AtomicBool::new(false));
-            self.set_snap_state(SnapState::Applying(abort.clone()));
-
             // cleanup data before scheduling apply task
             if self.is_initialized() {
                 if let Err(e) = self.clear_extra_data(&res.region) {
@@ -697,12 +713,8 @@ impl PeerStorage {
                 }
             }
 
-            let task = RegionTask::Apply {
-                region_id: region_id,
-                abort: abort,
-            };
-            // TODO: gracefully remove region instead.
-            self.region_sched.schedule(task).expect("snap apply job should not fail");
+            self.schedule_applying_snapshot();
+
             self.region = res.region.clone();
             return Ok(Some(res));
         }

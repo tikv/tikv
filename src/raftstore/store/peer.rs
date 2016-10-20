@@ -472,12 +472,15 @@ impl Peer {
         let is_applying = self.get_store().is_applying_snap();
         if is_applying {
             if !raft::is_empty_snap(&ready.snapshot) {
-                if !self.get_store().is_canceling_snap() {
-                    warn!("receiving a new snap {:?} when applying the old one, try to abort.",
-                          ready.snapshot);
-                    self.mut_store().cancel_applying_snap();
+                if self.get_store().is_canceling_snap() {
+                    return Ok(None);
                 }
-                return Ok(None);
+                warn!("{} receiving a new snap {:?} when applying the old one, try to abort.",
+                      self.tag,
+                      ready.snapshot);
+                if !self.mut_store().cancel_applying_snap() {
+                    return Ok(None);
+                }
             }
             // skip apply
             ready.committed_entries = vec![];
