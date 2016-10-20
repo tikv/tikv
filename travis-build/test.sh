@@ -14,6 +14,14 @@
 
 set -o pipefail
 
+panic() {
+    echo $@ >&1
+    exit 1
+}
+
+make format
+git diff-index --quiet HEAD -- || panic please make format before create a pr. 
+
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
 
 # start pd
