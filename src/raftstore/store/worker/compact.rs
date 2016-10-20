@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
+use std::thread;
+
 use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
@@ -22,6 +25,9 @@ use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
 use super::metrics::COMPACT_RANGE_CF;
+
+const COMPACT_BATCH: u64 = 8;
+const COMPACT_SLEEP_MS: u64 = 10;
 
 pub enum Task {
     CompactRangeCF {
@@ -70,11 +76,15 @@ quick_error! {
 
 pub struct Runner {
     engine: Arc<DB>,
+    compacted: u64,
 }
 
 impl Runner {
     pub fn new(engine: Arc<DB>) -> Runner {
-        Runner { engine: engine }
+        Runner {
+            engine: engine,
+            compacted: 0,
+        }
     }
 
     /// Do the compact job and return the count of log compacted.
@@ -140,6 +150,12 @@ impl Runnable<Task> for Runner {
                     info!("compact range for cf {} finished", &cf)
                 }
             }
+        }
+
+        self.compacted += 1;
+        if self.compacted >= COMPACT_BATCH {
+            thread::sleep(Duration::from_millis(COMPACT_SLEEP_MS));
+            self.compacted = 0;
         }
     }
 }
