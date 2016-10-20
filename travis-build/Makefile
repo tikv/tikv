@@ -55,16 +55,16 @@ ${LOCAL_DIR}/bin/pd-server:
 prepare_rust:
 	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=2016-10-06 --prefix=~/rust --disable-sudo --channel=nightly
 
-${LOCAL_DIR}/bin/rustfmt: prepare_rust
-	cargo install --root ${LOCAL_DIR} rustfmt
+prepare-rustfmt: | prepare_rust
+	cargo install rustfmt || exit 0
 
-prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov ${LOCAL_DIR}/bin/pd-server ${LOCAL_DIR}/bin/rustfmt | prepare_rust
+prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov ${LOCAL_DIR}/bin/pd-server prepare-rustfmt | prepare_rust
 
 prepare_brew:
 	brew update && \
 	brew install gflags snappy
 
-prepare_osx: ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/bin/pd-server ${LOCAL_DIR}/bin/rustfmt | prepare_brew prepare_rust
+prepare_osx: ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/bin/pd-server prepare-rustfmt | prepare_brew prepare_rust
 
 test_linux test_osx:
 	ulimit -n 2000 && ./travis-build/test.sh
