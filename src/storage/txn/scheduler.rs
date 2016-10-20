@@ -202,6 +202,8 @@ pub struct Scheduler {
     // write concurrency control
     latches: Latches,
 
+    sched_too_busy_threshold: usize,
+
     // worker pool
     worker_pool: ThreadPool,
 }
@@ -211,7 +213,8 @@ impl Scheduler {
     pub fn new(engine: Box<Engine>,
                schedch: SendCh<Msg>,
                concurrency: usize,
-               worker_pool_size: usize)
+               worker_pool_size: usize,
+               sched_too_busy_threshold: usize)
                -> Scheduler {
         Scheduler {
             engine: engine,
@@ -219,6 +222,7 @@ impl Scheduler {
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
+            sched_too_busy_threshold: sched_too_busy_threshold,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
         }
@@ -555,7 +559,7 @@ impl Scheduler {
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
     /// 2) there may be non-conflicitng commands running concurrently, but it doesn't matter.
-    fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
+    fn schedule_command(&mut self, cmd: Command, callback: StorageCb) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[cmd.tag(), "new"]).inc();
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
@@ -565,6 +569,20 @@ impl Scheduler {
 
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);
+        }
+    }
+
+    fn too_busy(&self) -> bool {
+        self.cmd_ctxs.len() >= self.sched_too_busy_threshold
+    }
+
+    fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
+        // write flow control
+        if !cmd.readonly() && self.too_busy() {
+            execute_callback(callback,
+                             ProcessResult::Failed { err: StorageError::SchedTooBusy });
+        } else {
+            self.schedule_command(cmd, callback);
         }
     }
 
@@ -620,7 +638,7 @@ impl Scheduler {
         let cb = ctx.callback.take().unwrap();
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[ctx.tag, "next_cmd"]).inc();
-            self.on_receive_new_cmd(cmd, cb);
+            self.schedule_command(cmd, cb);
         } else {
             execute_callback(cb, pr);
         }
@@ -678,7 +696,7 @@ impl Scheduler {
         };
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[ctx.tag, "next_cmd"]).inc();
-            self.on_receive_new_cmd(cmd, cb);
+            self.schedule_command(cmd, cb);
         } else {
             execute_callback(cb, pr);
         }
