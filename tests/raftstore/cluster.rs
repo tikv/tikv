@@ -225,17 +225,19 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
-        let store_ids = self.store_ids_of_region(region_id);
+        let store_ids = match self.store_ids_of_region(region_id) {
+            None => return false,
+            Some(ids) => ids,
+        };
         let node_ids = self.sim.rl().get_node_ids();
         store_ids.contains(&leader_id) && node_ids.contains(&leader_id)
     }
 
-    fn store_ids_of_region(&self, region_id: u64) -> Vec<u64> {
-        let peers = self.pd_client
+    fn store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
+        self.pd_client
             .get_region_by_id(region_id)
             .unwrap()
-            .take_peers();
-        peers.iter().map(|peer| peer.get_store_id()).collect()
+            .map(|region| region.get_peers().into_iter().map(|p| p.get_store_id()).collect())
     }
 
     fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
@@ -253,7 +255,10 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
-        let store_ids = self.store_ids_of_region(region_id);
+        let store_ids = match self.store_ids_of_region(region_id) {
+            None => return None,
+            Some(ids) => ids,
+        };
         if let Some(l) = self.leaders.get(&region_id) {
             // leader may be stopped in some tests.
             if self.valid_leader_id(region_id, l.get_store_id()) {
@@ -520,8 +525,8 @@ impl<T: Simulator> Cluster<T> {
         self.pd_client
             .get_region_by_id(region_id)
             .unwrap()
-            .get_region_epoch()
-            .clone()
+            .unwrap()
+            .take_region_epoch()
     }
 
     pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {
