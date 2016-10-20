@@ -521,6 +521,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        SchedTooBusy {
+            description("scheduler is too busy")
+        }
     }
 }
 
