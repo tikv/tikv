@@ -474,6 +474,18 @@ fn process_write_impl(cid: u64,
     Ok(())
 }
 
+fn gc_dice(score: u64, base: u64) -> bool {
+    let score = score / base;
+    let pro: u8 = if score >= U8_MAX {
+        U8_MAX as u8
+    } else {
+        score as u8
+    };
+
+    let x = rand::random::<u8>();
+    pro > x
+}
+
 /// Extracts the context of a command.
 fn extract_ctx(cmd: &Command) -> &Context {
     match *cmd {
@@ -607,16 +619,8 @@ impl Scheduler {
         // 2) and then we generate an random number(x) between [0, 255].
         // 3) compare the numbers generate in 1) and 2), if pro > x we schedule the GC command.
 
-        let mut history_write = self.write_stats.get_history(region_id);
-        history_write /= WRITE_STATS_BASE;
-        let pro: u8 = if history_write >= U8_MAX {
-            U8_MAX as u8
-        } else {
-            history_write as u8
-        };
-
-        let x = rand::random::<u8>();
-        let res = pro > x;
+        let history_write = self.write_stats.get_history(region_id);
+        let res = gc_dice(history_write, WRITE_STATS_BASE);
         if res {
             info!("region [{}] schedule GC command", region_id);
             self.write_stats.clear_history(region_id);
@@ -896,5 +900,39 @@ impl mio::Handler for Scheduler {
             Tick::RollStats => self.on_roll_stats_tick(event_loop),
             Tick::CheckExpiredStats => self.on_check_expired_stats_tick(event_loop),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gc_dice, WRITE_STATS_BASE};
+
+    fn test_gc_dice_true_count(score: u64, base: u64, total_round: u64) -> u64 {
+        let mut true_count = 0;
+        for _ in 0..total_round {
+            if gc_dice(score, base) {
+                true_count += 1
+            }
+        }
+        true_count
+    }
+
+    #[test]
+    fn test_gc_dice_loop() {
+        let multiple = 4;
+
+        let mut true_count = test_gc_dice_true_count(0, WRITE_STATS_BASE, 256*multiple);
+        assert_eq!(true_count, 0);
+
+        true_count = test_gc_dice_true_count(10 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256*multiple);
+        assert_eq!(true_count >= 0 * multiple, true);
+        assert_eq!(true_count <= 20 * multiple, true);
+
+        true_count = test_gc_dice_true_count(150 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256*multiple);
+        assert_eq!(true_count >= 140 * multiple, true);
+        assert_eq!(true_count <= 160 * multiple, true);
+
+        true_count = test_gc_dice_true_count(300 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256*multiple);
+        assert_eq!(true_count >= 250 * multiple, true);
     }
 }
