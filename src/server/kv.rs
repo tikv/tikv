@@ -20,7 +20,7 @@ use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, Cmd
                        CmdScanLockResponse, CmdResolveLockResponse, CmdGCResponse, Request,
                        Response, MessageType, KvPair as RpcKvPair, KeyError, LockInfo, Op};
 use kvproto::msgpb;
-use kvproto::errorpb::Error as RegionError;
+use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use storage::{Engine, Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
 use storage::Error as StorageError;
 use storage::txn::Error as TxnError;
@@ -332,6 +332,11 @@ fn extract_region_error<T>(res: &StorageResult<T>) -> Option<RegionError> {
         Err(StorageError::Txn(TxnError::Engine(EngineError::Request(ref e)))) |
         Err(StorageError::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
             Some(e.to_owned())
+        }
+        Err(StorageError::SchedTooBusy) => {
+            let mut err = RegionError::new();
+            err.set_server_is_busy(ServerIsBusy::new());
+            Some(err)
         }
         _ => None,
     }
