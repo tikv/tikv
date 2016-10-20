@@ -26,7 +26,7 @@ use std::fmt::{self, Formatter, Display};
 use std::error;
 use super::metrics::COMPACT_RANGE_CF;
 
-const COMPACT_BATCH: u64 = 8;
+const COMPACT_BATCH: u64 = 4096;
 const COMPACT_SLEEP_MS: u64 = 10;
 
 pub enum Task {
@@ -139,7 +139,10 @@ impl Runnable<Task> for Runner {
                        compact_idx);
                 match self.compact_raft_log(engine, region_id, compact_idx) {
                     Err(e) => error!("[region {}] failed to compact: {:?}", region_id, e),
-                    Ok(n) => info!("[region {}] compacted {} log entries", region_id, n),
+                    Ok(n) => {
+                        info!("[region {}] compacted {} log entries", region_id, n);
+                        self.compacted += n;
+                    }
                 }
             }
             Task::CompactRangeCF { cf_name, start_key, end_key } => {
@@ -152,7 +155,6 @@ impl Runnable<Task> for Runner {
             }
         }
 
-        self.compacted += 1;
         if self.compacted >= COMPACT_BATCH {
             thread::sleep(Duration::from_millis(COMPACT_SLEEP_MS));
             self.compacted = 0;
