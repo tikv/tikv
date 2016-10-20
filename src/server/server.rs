@@ -402,7 +402,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn report_unreachable(&self, data: ConnData) {
-        if data.msg.has_raft() {
+        if !data.msg.has_raft() {
             return;
         }
 
@@ -643,14 +643,19 @@ mod tests {
     use mio::tcp::TcpListener;
 
     use super::*;
+    use super::super::metrics::*;
     use super::super::{Msg, ConnData, Result, Config};
-    use super::super::transport::RaftStoreRouter;
+    use super::super::transport::{RaftStoreRouter, ServerRaftStoreRouter};
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::Storage;
     use kvproto::msgpb::{Message, MessageType};
+    use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::{self, Msg as StoreMsg};
     use raft::SnapshotStatus;
+    use util::transport::SendCh;
+    use server::transport::ServerTransport;
+    use pd::RpcClient;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -727,5 +732,41 @@ mod tests {
 
         ch.try_send(Msg::Quit).unwrap();
         h.join().unwrap();
+    }
+
+    #[test]
+    fn test_report_unreachable() {
+        let addr = "127.0.0.1:0".parse().unwrap();
+        let listener = TcpListener::bind(&addr).unwrap();
+        let resolver = MockResolver { addr: listener.local_addr().unwrap() };
+
+        let cfg = Config::new();
+
+        let evloop = store::create_event_loop::<ServerTransport, RpcClient>(&cfg.raft_store);
+        let sendch = SendCh::new(evloop.unwrap().channel());
+        let router = ServerRaftStoreRouter::new(sendch, 0);
+
+        let mut event_loop = create_event_loop(&cfg).unwrap();
+        let mut storage = Storage::new(&cfg.storage).unwrap();
+        storage.start(&cfg.storage).unwrap();
+
+        let server = Server::new(&mut event_loop,
+                                 &cfg,
+                                 listener,
+                                 storage,
+                                 router,
+                                 resolver,
+                                 store::new_snap_mgr("", None))
+            .unwrap();
+
+        for i in 0..10 {
+            let mut msg = Message::new();
+            if i % 2 == 1 {
+                msg.set_raft(RaftMessage::new());
+            }
+            server.report_unreachable(ConnData::new(0, msg));
+            let counter = RAFT_STORE_MSG_COUNTER.with_label_values(&["unreachable"]).get();
+            assert_eq!(counter, ((i + 1) / 2) as f64);
+        }
     }
 }
