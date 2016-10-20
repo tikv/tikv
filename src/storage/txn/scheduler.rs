@@ -921,18 +921,21 @@ mod tests {
     fn test_gc_dice_loop() {
         let multiple = 4;
 
-        let mut true_count = test_gc_dice_true_count(0, WRITE_STATS_BASE, 256*multiple);
+        let mut true_count = test_gc_dice_true_count(0, WRITE_STATS_BASE, 256 * multiple);
         assert_eq!(true_count, 0);
 
-        true_count = test_gc_dice_true_count(10 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256*multiple);
+        true_count =
+            test_gc_dice_true_count(10 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256 * multiple);
         assert_eq!(true_count >= 0 * multiple, true);
         assert_eq!(true_count <= 20 * multiple, true);
 
-        true_count = test_gc_dice_true_count(150 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256*multiple);
+        true_count =
+            test_gc_dice_true_count(150 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256 * multiple);
         assert_eq!(true_count >= 140 * multiple, true);
         assert_eq!(true_count <= 160 * multiple, true);
 
-        true_count = test_gc_dice_true_count(300 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256*multiple);
+        true_count =
+            test_gc_dice_true_count(300 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256 * multiple);
         assert_eq!(true_count >= 250 * multiple, true);
     }
 }

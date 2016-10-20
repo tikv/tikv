@@ -91,7 +91,7 @@ impl RegionsWriteStats {
         let mut expired = Vec::with_capacity(self.stats.len());
         let now = Instant::now();
         for (region_id, stat) in &self.stats {
-            let duration = now.duration_since(stat.last_active.clone());
+            let duration = now.duration_since(stat.last_active);
             if duration > timeout {
                 expired.push(*region_id);
             }
