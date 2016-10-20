@@ -26,9 +26,6 @@ use std::fmt::{self, Formatter, Display};
 use std::error;
 use super::metrics::COMPACT_RANGE_CF;
 
-const COMPACT_BATCH: u64 = 4096;
-const COMPACT_SLEEP_MS: u64 = 10;
-
 pub enum Task {
     CompactRangeCF {
         cf_name: String,
@@ -77,13 +74,17 @@ quick_error! {
 pub struct Runner {
     engine: Arc<DB>,
     compacted: u64,
+    compact_rest_threshold: u64,
+    compact_rest_ms: u64,
 }
 
 impl Runner {
-    pub fn new(engine: Arc<DB>) -> Runner {
+    pub fn new(engine: Arc<DB>, rest_threshold: u64, rest_ms: u64) -> Runner {
         Runner {
             engine: engine,
             compacted: 0,
+            compact_rest_threshold: rest_threshold,
+            compact_rest_ms: rest_ms,
         }
     }
 
@@ -128,6 +129,10 @@ impl Runner {
         compact_range_timer.observe_duration();
         Ok(())
     }
+
+    pub fn need_rest(&self) -> bool {
+        self.compacted >= self.compact_rest_threshold
+    }
 }
 
 impl Runnable<Task> for Runner {
@@ -155,8 +160,8 @@ impl Runnable<Task> for Runner {
             }
         }
 
-        if self.compacted >= COMPACT_BATCH {
-            thread::sleep(Duration::from_millis(COMPACT_SLEEP_MS));
+        if self.need_rest() {
+            thread::sleep(Duration::from_millis(self.compact_rest_ms));
             self.compacted = 0;
         }
     }

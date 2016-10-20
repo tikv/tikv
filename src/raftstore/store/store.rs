@@ -375,7 +375,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
-        let compact_runner = CompactRunner::new(self.engine.clone());
+        let compact_runner = CompactRunner::new(self.engine.clone(),
+                                                self.cfg.raft_log_gc_rest_threshold,
+                                                self.cfg.raft_log_gc_rest_ms);
         box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
