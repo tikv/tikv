@@ -15,6 +15,8 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 use raftstore::store::Msg;
 use util::transport::SendCh;
 
+const TMP_FILE_SUFFIX: &'static str = ".tmp";
+
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SnapKey {
     pub region_id: u64,
@@ -101,7 +103,7 @@ impl SnapFile {
             return Ok(());
         }
 
-        let tmp_path = format!("{}.tmp", self.path().display());
+        let tmp_path = format!("{}{}", self.path().display(), TMP_FILE_SUFFIX);
         let tmp_f = try!(OpenOptions::new().write(true).create_new(true).open(&tmp_path));
         self.tmp_file = Some((tmp_f, tmp_path));
         Ok(())
@@ -243,6 +245,16 @@ impl SnapManagerCore {
             return Err(io::Error::new(ErrorKind::Other,
                                       format!("{} should be a directory", path.display())));
         }
+        for f in try!(fs::read_dir(path)) {
+            let p = try!(f);
+            if try!(p.file_type()).is_file() {
+                if let Some(s) = p.file_name().to_str() {
+                    if s.ends_with(TMP_FILE_SUFFIX) {
+                        try!(fs::remove_file(p.path()));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -370,4 +382,57 @@ pub type SnapManager = Arc<RwLock<SnapManagerCore>>;
 
 pub fn new_snap_mgr<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
     Arc::new(RwLock::new(SnapManagerCore::new(path, ch)))
+}
+
+#[cfg(test)]
+mod test {
+    use std::path::Path;
+    use std::fs::File;
+
+    use tempdir::TempDir;
+
+    use util::HandyRwLock;
+    use super::*;
+
+    #[test]
+    fn test_snap_mgr() {
+        let path = TempDir::new("test-snap-mgr").unwrap();
+
+        // mgr should create directory when not exist.
+        let path1 = path.path().to_str().unwrap().to_owned() + "/snap1";
+        let p = Path::new(&path1);
+        assert!(!p.exists());
+        let mut mgr = new_snap_mgr(path1.clone(), None);
+        mgr.wl().init().unwrap();
+        assert!(p.exists());
+
+        // if target is a file, an error should be returned.
+        let path2 = path.path().to_str().unwrap().to_owned() + "/snap2";
+        File::create(&path2).unwrap();
+        mgr = new_snap_mgr(path2, None);
+        assert!(mgr.wl().init().is_err());
+
+        // if temporary files exist, they should deleted.
+        let path3 = path.path().to_str().unwrap().to_owned() + "/snap3";
+        let key1 = SnapKey::new(1, 1, 1);
+        let f1 = SnapFile::new(&path3, true, &key1).unwrap();
+        let f2 = SnapFile::new(&path3, false, &key1).unwrap();
+        let key2 = SnapKey::new(2, 1, 1);
+        let mut f3 = SnapFile::new(&path3, true, &key2).unwrap();
+        f3.save().unwrap();
+        let mut f4 = SnapFile::new(&path3, false, &key2).unwrap();
+        f4.save().unwrap();
+        assert!(!f1.exists());
+        assert!(!f2.exists());
+        assert!(f3.exists());
+        assert!(f4.exists());
+        assert!(Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
+        assert!(Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
+        mgr = new_snap_mgr(path3, None);
+        mgr.wl().init().unwrap();
+        assert!(!Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
+        assert!(!Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
+        assert!(f3.exists());
+        assert!(f4.exists());
+    }
 }
