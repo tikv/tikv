@@ -29,6 +29,7 @@ use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
+use tikv::util::codec::number::NumberDecoder;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
 use tikv::storage::{ALL_CFS, CF_RAFT};
@@ -156,18 +157,17 @@ fn main() {
 }
 
 fn gen_key_prefix(key: &str) -> Vec<u8> {
-    let mut prefix = "t".as_bytes().to_vec();
+    let mut prefix = b"t".to_vec();
     let mut encoded = encode_bytes(key.as_bytes());
     prefix.append(&mut encoded);
     prefix
 }
 
-fn compare_prefix(key: &[u8], prefix: &Vec<u8>) -> bool {
-    let (pre, _) = key.split_at(prefix.len());
-    pre == prefix.as_slice()
+fn compare_prefix(key: &[u8], prefix: &[u8]) -> bool {
+    prefix.starts_with(key)
 }
 
-fn get_default_start_ts<'a>(key: &'a [u8], prefix: &Vec<u8>) -> &'a [u8] {
+fn get_key_rest<'a>(key: &'a [u8], prefix: &[u8]) -> &'a [u8] {
     let (_, rest) = key.split_at(prefix.len());
     rest
 }
@@ -175,65 +175,44 @@ fn get_default_start_ts<'a>(key: &'a [u8], prefix: &Vec<u8>) -> &'a [u8] {
 fn dump_mvcc_default(db: DB, key_prefix: Vec<u8>) {
     let mut iter = db.new_iterator(None);
     iter.seek(key_prefix.as_slice().into());
-    if iter.valid() {
-        if compare_prefix(iter.key(), &key_prefix) {
-            println!("key: {:?}", iter.key());
-            println!("value: {:?}", iter.value());
-            println!("start_ts: {:?}", get_default_start_ts(iter.key(), &key_prefix));
-        }
-        while iter.next() && compare_prefix(iter.key(), &key_prefix) {
-            println!("key: {:?}", iter.key());
-            println!("value: {:?}", iter.value());
-            println!("start_ts: {:?}", get_default_start_ts(iter.key(), &key_prefix));
-        }
-    } else {
-        println!("No such record");
+    if !iter.valid() {
+        panic!("No such record!");
+    }
+    while iter.valid() && compare_prefix(iter.key(), &key_prefix[..]){
+        println!("Key: {:?}", iter.key());
+        println!("Value: {:?}", iter.value());
+        println!("Start_ts: {:?}", get_key_rest(iter.key(), &key_prefix[..]).decode_u64_desc().unwrap());
     }
 }
 
 fn dump_mvcc_lock(db: DB, key_prefix: Vec<u8>) {
-    let mut iter = db.new_iterator(None);
+    let mut iter = db.new_iterator_cf("lock", None).unwrap();
     iter.seek(key_prefix.as_slice().into());
-    if iter.valid() {
+    if !iter.valid() {
+        panic!("No such record!");
+    }
+    while iter.valid() && compare_prefix(iter.key(), &key_prefix[..]) {
         let lock = Lock::parse(iter.value().clone()).unwrap();
-        if compare_prefix(iter.key(), &key_prefix) {
-            println!("Key: {:?}", iter.key());
-            println!("Value: {:?}", lock.primary);
-            println!("Type: {:?}", lock.lock_type);
-            println!("Start_ts: {:?}", lock.ts);
-        }
-        while iter.next() && compare_prefix(iter.key(), &key_prefix) {
-            let lock = Lock::parse(iter.value().clone()).unwrap();
-            println!("Key: {:?}", iter.key());
-            println!("Value: {:?}", lock.primary);
-            println!("Type: {:?}", lock.lock_type);
-            println!("Start_ts: {:?}", lock.ts);
-        }
-    } else {
-        println!("No such record");
+        println!("Key: {:?}", iter.key());
+        println!("Value: {:?}", lock.primary);
+        println!("Type: {:?}", lock.lock_type);
+        println!("Start_ts: {:?}", lock.ts);
     }
 }
 
 fn dump_mvcc_write(db: DB, key_prefix: Vec<u8>) {
-    let mut iter = db.new_iterator(None);
+    let mut iter = db.new_iterator_cf("write", None).unwrap();
     iter.seek(key_prefix.as_slice().into());
-    if iter.valid() {
+    if !iter.valid() {
+        panic!("No such record!");
+    }
+    while iter.valid() && compare_prefix(iter.key(), &key_prefix[..]) {
         let write = Write::parse(iter.value().clone()).unwrap();
-        if compare_prefix(iter.key(), &key_prefix) {
-            println!("Key: {:?}", iter.key());
-            println!("Value: {:?}", iter.value());
-            println!("Type: {:?}", write.write_type);
-            println!("Start_ts: {:?}", write.start_ts);
-        }
-        while iter.next() && compare_prefix(iter.key(), &key_prefix) {
-            let write = Write::parse(iter.value().clone()).unwrap();
-            println!("Key: {:?}", iter.key());
-            println!("Value: {:?}", iter.value());
-            println!("Type: {:?}", write.write_type);
-            println!("Start_ts: {:?}", write.start_ts);
-        }
-    } else {
-        println!("No such record!");
+        println!("Key: {:?}", iter.key());
+        println!("Value: {:?}", iter.value());
+        println!("Type: {:?}", write.write_type);
+        println!("Start_ts: {:?}", write.start_ts);
+        println!("Commit_ts: {:?}", get_key_rest(iter.key(), &key_prefix[..]).decode_var_u64().unwrap());
     }
 }
 
