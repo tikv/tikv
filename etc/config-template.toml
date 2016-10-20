@@ -175,7 +175,7 @@ scheduler-notify-capacity = 10240
 # maximum number of messages can be processed in one tick
 scheduler-messages-per-tick = 1024
 
-scheduler-concurrency = 1024
+scheduler-concurrency = 10240
 
 # scheduler's worker pool size
 scheduler-worker-pool-size = 4
