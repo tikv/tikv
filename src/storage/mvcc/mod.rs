@@ -20,6 +20,8 @@ mod metrics;
 use std::io;
 pub use self::txn::MvccTxn;
 pub use self::reader::MvccReader;
+pub use self::lock::Lock;
+pub use self::write::Write;
 use util::escape;
 
 quick_error! {

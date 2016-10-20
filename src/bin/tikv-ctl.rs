@@ -28,9 +28,11 @@ use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState};
 use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
+use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
 use tikv::storage::{ALL_CFS, CF_RAFT};
+use tikv::storage::mvcc::{Lock, Write};
 
 fn main() {
     let mut app = App::new("TiKV Ctl")
@@ -77,15 +79,25 @@ fn main() {
                 .takes_value(true)
                 .help("column family name")))
         .subcommand(SubCommand::with_name("print")
-            .about("print the raw value")
-            .arg(Arg::with_name("cf")
-                .short("c")
-                .takes_value(true)
-                .help("column family name"))
-            .arg(Arg::with_name("key")
-                .short("k")
-                .takes_value(true)
-                .help("set the query raw key, in escaped form")));
+                .about("print the raw value")
+                .arg(Arg::with_name("cf")
+                     .short("c")
+                     .takes_value(true)
+                     .help("column family name"))
+                .arg(Arg::with_name("key")
+                     .short("k")
+                     .takes_value(true)
+                     .help("set the query raw key, in escaped form")))
+        .subcommand(SubCommand::with_name("mvcc")
+                .about("print the mvcc value")
+                .arg(Arg::with_name("cf")
+                     .short("c")
+                     .takes_value(true)
+                     .help("column family name, only can be default/lock/write"))
+                .arg(Arg::with_name("key")
+                     .short("key")
+                     .takes_value(true)
+                     .help("the query key")));
     let matches = app.clone().get_matches();
 
     let db_path = matches.value_of("db").unwrap();
@@ -116,10 +128,113 @@ fn main() {
             }
         }
         dump_range(db, from, to, limit, cf_name);
+    } else if let Some(matches) = matches.subcommand_matches("mvcc") {
+        let cf_name = matches.value_of("cf").unwrap_or("default");
+        let key = matches.value_of("key").unwrap();
+        println!("You are searching Key {}: ", key);
+        match cf_name {
+            "default" => {
+                let key_prefix = gen_key_prefix(key);
+                dump_mvcc_default(db, key_prefix);
+            }
+            "lock" => {
+                let key_prefix = gen_key_prefix(key);
+                dump_mvcc_lock(db, key_prefix);
+            }
+            "write" => {
+                let key_prefix = gen_key_prefix(key);
+                dump_mvcc_write(db, key_prefix);
+            }
+            _ => {
+                let _ = app.print_help();
+            }
+        }
     } else {
         let _ = app.print_help();
     }
 
+}
+
+fn gen_key_prefix(key: &str) -> Vec<u8> {
+    let mut prefix = "t".as_bytes().to_vec();
+    let mut encoded = encode_bytes(key.as_bytes());
+    prefix.append(&mut encoded);
+    prefix
+}
+
+fn compare_prefix(key: &[u8], prefix: &Vec<u8>) -> bool {
+    let (pre, _) = key.split_at(prefix.len());
+    pre == prefix.as_slice()
+}
+
+fn get_default_start_ts<'a>(key: &'a [u8], prefix: &Vec<u8>) -> &'a [u8] {
+    let (_, rest) = key.split_at(prefix.len());
+    rest
+}
+
+fn dump_mvcc_default(db: DB, key_prefix: Vec<u8>) {
+    let mut iter = db.new_iterator(None);
+    iter.seek(key_prefix.as_slice().into());
+    if iter.valid() {
+        if compare_prefix(iter.key(), &key_prefix) {
+            println!("key: {:?}", iter.key());
+            println!("value: {:?}", iter.value());
+            println!("start_ts: {:?}", get_default_start_ts(iter.key(), &key_prefix));
+        }
+        while iter.next() && compare_prefix(iter.key(), &key_prefix) {
+            println!("key: {:?}", iter.key());
+            println!("value: {:?}", iter.value());
+            println!("start_ts: {:?}", get_default_start_ts(iter.key(), &key_prefix));
+        }
+    } else {
+        println!("No such record");
+    }
+}
+
+fn dump_mvcc_lock(db: DB, key_prefix: Vec<u8>) {
+    let mut iter = db.new_iterator(None);
+    iter.seek(key_prefix.as_slice().into());
+    if iter.valid() {
+        let lock = Lock::parse(iter.value().clone()).unwrap();
+        if compare_prefix(iter.key(), &key_prefix) {
+            println!("Key: {:?}", iter.key());
+            println!("Value: {:?}", lock.primary);
+            println!("Type: {:?}", lock.lock_type);
+            println!("Start_ts: {:?}", lock.ts);
+        }
+        while iter.next() && compare_prefix(iter.key(), &key_prefix) {
+            let lock = Lock::parse(iter.value().clone()).unwrap();
+            println!("Key: {:?}", iter.key());
+            println!("Value: {:?}", lock.primary);
+            println!("Type: {:?}", lock.lock_type);
+            println!("Start_ts: {:?}", lock.ts);
+        }
+    } else {
+        println!("No such record");
+    }
+}
+
+fn dump_mvcc_write(db: DB, key_prefix: Vec<u8>) {
+    let mut iter = db.new_iterator(None);
+    iter.seek(key_prefix.as_slice().into());
+    if iter.valid() {
+        let write = Write::parse(iter.value().clone()).unwrap();
+        if compare_prefix(iter.key(), &key_prefix) {
+            println!("Key: {:?}", iter.key());
+            println!("Value: {:?}", iter.value());
+            println!("Type: {:?}", write.write_type);
+            println!("Start_ts: {:?}", write.start_ts);
+        }
+        while iter.next() && compare_prefix(iter.key(), &key_prefix) {
+            let write = Write::parse(iter.value().clone()).unwrap();
+            println!("Key: {:?}", iter.key());
+            println!("Value: {:?}", iter.value());
+            println!("Type: {:?}", write.write_type);
+            println!("Start_ts: {:?}", write.start_ts);
+        }
+    } else {
+        println!("No such record!");
+    }
 }
 
 fn dump_raw_value(db: DB, cf: &str, key: String) {
