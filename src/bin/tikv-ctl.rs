@@ -37,55 +37,55 @@ fn main() {
         .author("PingCAP")
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(Arg::with_name("db")
-             .short("d")
-             .takes_value(true)
-             .help("set rocksdb path, required"))
+            .short("d")
+            .takes_value(true)
+            .help("set rocksdb path, required"))
         .subcommand(SubCommand::with_name("raft")
-                    .about("print raft log entry")
-                    .subcommand(SubCommand::with_name("log")
-                                .about("print the raft log entry info")
-                                .arg(Arg::with_name("region")
-                                     .short("r")
-                                     .takes_value(true)
-                                     .help("set the region id"))
-                                .arg(Arg::with_name("index")
-                                     .short("i")
-                                     .takes_value(true)
-                                     .help("set the raft log index")))
-                    .subcommand(SubCommand::with_name("region")
-                                .about("print region info")
-                                .arg(Arg::with_name("region")
-                                     .short("r")
-                                     .takes_value(true)
-                                     .help("set the region id"))))
+            .about("print raft log entry")
+            .subcommand(SubCommand::with_name("log")
+                .about("print the raft log entry info")
+                .arg(Arg::with_name("region")
+                    .short("r")
+                    .takes_value(true)
+                    .help("set the region id"))
+                .arg(Arg::with_name("index")
+                    .short("i")
+                    .takes_value(true)
+                    .help("set the raft log index")))
+            .subcommand(SubCommand::with_name("region")
+                .about("print region info")
+                .arg(Arg::with_name("region")
+                    .short("r")
+                    .takes_value(true)
+                    .help("set the region id"))))
         .subcommand(SubCommand::with_name("scan")
-                                .about("print the range db range")
-                                .arg(Arg::with_name("from")
-                                     .short("f")
-                                     .takes_value(true)
-                                     .help("set the scan from raw key, in escaped format"))
-                                .arg(Arg::with_name("to")
-                                     .short("t")
-                                     .takes_value(true)
-                                     .help("set the scan end raw key, in escaped format"))
-                                .arg(Arg::with_name("limit")
-                                     .short("l")
-                                     .takes_value(true)
-                                     .help("set the scan limit"))
-                                .arg(Arg::with_name("cf")
-                                     .short("c")
-                                     .takes_value(true)
-                                     .help("column family name")))
+            .about("print the range db range")
+            .arg(Arg::with_name("from")
+                .short("f")
+                .takes_value(true)
+                .help("set the scan from raw key, in escaped format"))
+            .arg(Arg::with_name("to")
+                .short("t")
+                .takes_value(true)
+                .help("set the scan end raw key, in escaped format"))
+            .arg(Arg::with_name("limit")
+                .short("l")
+                .takes_value(true)
+                .help("set the scan limit"))
+            .arg(Arg::with_name("cf")
+                .short("c")
+                .takes_value(true)
+                .help("column family name")))
         .subcommand(SubCommand::with_name("print")
-                    .about("print the raw value")
-                    .arg(Arg::with_name("cf")
-                         .short("c")
-                         .takes_value(true)
-                         .help("column family name"))
-                    .arg(Arg::with_name("key")
-                         .short("k")
-                         .takes_value(true)
-                         .help("set the query raw key, in escaped form")));
+            .about("print the raw value")
+            .arg(Arg::with_name("cf")
+                .short("c")
+                .takes_value(true)
+                .help("column family name"))
+            .arg(Arg::with_name("key")
+                .short("k")
+                .takes_value(true)
+                .help("set the query raw key, in escaped form")));
     let matches = app.clone().get_matches();
 
     let db_path = matches.value_of("db").unwrap();
@@ -95,7 +95,7 @@ fn main() {
         let key = String::from(matches.value_of("key").unwrap());
         dump_raw_value(db, cf_name, key);
     } else if let Some(matches) = matches.subcommand_matches("raft") {
-        if let Some(matches) = matches.subcommand_matches("log"){
+        if let Some(matches) = matches.subcommand_matches("log") {
             let region = String::from(matches.value_of("region").unwrap());
             let index = String::from(matches.value_of("index").unwrap());
             dump_raft_log_entry(db, region, index);
@@ -116,8 +116,7 @@ fn main() {
             }
         }
         dump_range(db, from, to, limit, cf_name);
-    }
-    else {
+    } else {
         let _ = app.print_help();
     }
 
