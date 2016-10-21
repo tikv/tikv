@@ -21,6 +21,7 @@ use rocksdb::{DB, WriteBatch, Writable};
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
+use std::time::Instant;
 use super::metrics::COMPACT_RANGE_CF;
 
 pub enum Task {
@@ -133,11 +134,14 @@ impl Runnable<Task> for Runner {
                 }
             }
             Task::CompactRangeCF { cf_name, start_key, end_key } => {
+                let t = Instant::now();
                 let cf = cf_name.clone();
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
                     error!("execute compact range for cf {} failed, err {}", &cf, e);
                 } else {
-                    info!("compact range for cf {} finished", &cf)
+                    info!("compact range for cf {} finished, use time: {:?}",
+                          &cf,
+                          t.elapsed());
                 }
             }
         }
