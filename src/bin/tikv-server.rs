@@ -599,6 +599,15 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
 
     cfg_usize(&mut cfg.send_buffer_size, "server.send-buffer-size", config);
     cfg_usize(&mut cfg.recv_buffer_size, "server.recv-buffer-size", config);
+    cfg_u64(&mut cfg.raft_store.raft_base_tick_interval,
+            "raftstore.raft-base-tick-interval",
+            config);
+    cfg_usize(&mut cfg.raft_store.raft_heartbeat_ticks,
+              "raftstore.raft-heartbeat-ticks",
+              config);
+    cfg_usize(&mut cfg.raft_store.raft_election_timeout_ticks,
+              "raftstore.raft-election-timeout-ticks",
+              config);
     cfg_usize(&mut cfg.raft_store.notify_capacity,
               "raftstore.notify-capacity",
               config);
