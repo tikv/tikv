@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
+use std::thread;
+
 use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
@@ -70,11 +73,19 @@ quick_error! {
 
 pub struct Runner {
     engine: Arc<DB>,
+    compacted: u64,
+    compact_rest_threshold: u64,
+    compact_rest_ms: u64,
 }
 
 impl Runner {
-    pub fn new(engine: Arc<DB>) -> Runner {
-        Runner { engine: engine }
+    pub fn new(engine: Arc<DB>, rest_threshold: u64, rest_ms: u64) -> Runner {
+        Runner {
+            engine: engine,
+            compacted: 0,
+            compact_rest_threshold: rest_threshold,
+            compact_rest_ms: rest_ms,
+        }
     }
 
     /// Do the compact job and return the count of log compacted.
@@ -118,6 +129,10 @@ impl Runner {
         compact_range_timer.observe_duration();
         Ok(())
     }
+
+    pub fn need_rest(&self) -> bool {
+        self.compacted >= self.compact_rest_threshold
+    }
 }
 
 impl Runnable<Task> for Runner {
@@ -129,7 +144,10 @@ impl Runnable<Task> for Runner {
                        compact_idx);
                 match self.compact_raft_log(engine, region_id, compact_idx) {
                     Err(e) => error!("[region {}] failed to compact: {:?}", region_id, e),
-                    Ok(n) => info!("[region {}] compacted {} log entries", region_id, n),
+                    Ok(n) => {
+                        info!("[region {}] compacted {} log entries", region_id, n);
+                        self.compacted += n;
+                    }
                 }
             }
             Task::CompactRangeCF { cf_name, start_key, end_key } => {
@@ -140,6 +158,11 @@ impl Runnable<Task> for Runner {
                     info!("compact range for cf {} finished", &cf)
                 }
             }
+        }
+
+        if self.need_rest() {
+            thread::sleep(Duration::from_millis(self.compact_rest_ms));
+            self.compacted = 0;
         }
     }
 }
