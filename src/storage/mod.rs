@@ -280,14 +280,8 @@ impl Storage {
                                            ch,
                                            sched_concurrency,
                                            sched_pro_exec_gc,
+                                           sched_too_busy_threshold,
                                            sched_worker_pool_size);
-            let mut sched = Scheduler::new(engine,
-                                           ch,
-                                           sched_concurrency,
-                                           sched_worker_pool_size,
-                                           sched_too_busy_threshold);
-            if let Err(e) = el.run(&mut sched) {
-                panic!("scheduler run err:{:?}", e);
             let mut event_loop = el;
             if let Err(e) = sched.run(&mut event_loop) {
                 panic!("scheduler run err: {:?}", e);

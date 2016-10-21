@@ -232,9 +232,8 @@ impl Scheduler {
                schedch: SendCh<Msg>,
                concurrency: usize,
                pro_exec_gc: bool,
+               sched_too_busy_threshold: usize,
                worker_pool_size: usize)
-               worker_pool_size: usize,
-               sched_too_busy_threshold: usize)
                -> Scheduler {
         Scheduler {
             engine: engine,
@@ -636,19 +635,6 @@ impl Scheduler {
         }
     }
 
-    fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
-        // Do statistics before schedule command.
-        self.statistic(&cmd);
-
-        // Gc command execute with probability
-        let should_schedule = self.should_schedule(&cmd);
-        if should_schedule {
-            self.schedule_cmd(cmd, callback);
-        } else {
-            execute_callback(callback, ProcessResult::Res);
-        }
-    }
-
     /// Event handler for new command.
     ///
     /// This method will try to acquire all the necessary latches. If all the necessary latches are
@@ -678,8 +664,18 @@ impl Scheduler {
         if !cmd.readonly() && self.too_busy() {
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
-        } else {
+            return;
+        }
+
+        // Do statistics before schedule command.
+        self.statistic(&cmd);
+
+        // Gc command execute with probability
+        let should_schedule = self.should_schedule(&cmd);
+        if should_schedule {
             self.schedule_command(cmd, callback);
+        } else {
+            execute_callback(callback, ProcessResult::Res);
         }
     }
 
