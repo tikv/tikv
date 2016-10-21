@@ -13,7 +13,6 @@
 
 use std::time::{Instant, Duration};
 use std::collections::HashMap;
-use rand::{self, Rng};
 use std::u8;
 
 pub const ROLL_INTERVAL_SECS: u64 = 60 * 10;
@@ -65,15 +64,9 @@ impl RegionsWriteStats {
     }
 
     pub fn roll_and_up(&mut self, base: u64) {
-        let mut rng = rand::thread_rng();
         for (_, stat) in &mut self.stats {
             stat.roll();
-
-            // We initialize the stat with random number between [0 - base]. If we just use base
-            // initialize the stat, A large number of regions that haven't been written yet might
-            // execute GC command at about the same time.
-            let score = base * rng.gen::<u8>() as u64 / U8_MAX;
-            stat.incr(score);
+            stat.incr(base);
         }
     }
 

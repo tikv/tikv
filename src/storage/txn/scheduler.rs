@@ -56,7 +56,7 @@ use super::super::metrics::*;
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
 pub const WRITE_STATS_BASE: u64 = 64;
-pub const STATS_EXPIRED_SECS: u64 = 24 * 3600; // 24 hours
+pub const STATS_EXPIRED_SECS: u64 = 7 * 24 * 3600; // 7 * 24 hours
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -592,12 +592,9 @@ impl Scheduler {
     }
 
     fn statistic(&mut self, cmd: &Command) {
-        match *cmd {
-            Command::Prewrite { ref ctx, ref mutations, .. } => {
-                let region_id = ctx.get_region_id();
-                self.write_stats.incr(region_id, mutations.len() as u64);
-            }
-            _ => debug!("don't need statistic for command {:?}", cmd),
+        if let Command::Prewrite { ref ctx, ref mutations, .. } = *cmd {
+            let region_id = ctx.get_region_id();
+            self.write_stats.incr(region_id, mutations.len() as u64);
         }
     }
 
@@ -833,7 +830,7 @@ impl Scheduler {
 
     fn register_check_expired_stats_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
-                                       Tick::RollStats,
+                                       Tick::CheckExpiredStats,
                                        CHECK_EXPIRED_INTERVAL_SECS * 1000) {
             error!("register check expired statistics tick err: {:?}", e);
         };
