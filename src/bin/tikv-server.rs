@@ -29,7 +29,7 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 
-use std::{env, thread};
+use std::{env, thread, usize};
 use std::fs::{self, File};
 use std::path::Path;
 use std::sync::Arc;
@@ -111,6 +111,38 @@ fn get_boolean_value<F>(short: &str,
         })
         .expect(&format!("please specify {}", long))
 }
+
+// A helper macro that generate functions that can read int from configuration and
+// than transform into other type.
+macro_rules! cfg_int_func {
+    ($t:ty, $name:ident, $i:ident => $trans:expr) => (
+        fn $name(opt: &mut $t, path: &str, config: &toml::Value) {
+            let val = config.lookup(path).and_then(|v| {
+                if let toml::Value::String(ref s) = *v {
+                    Some(util::config::parse_readable_int(s).expect(&format!("malformed {}", path)))
+                } else {
+                    v.as_integer()
+                }
+            });
+            match val {
+                Some($i) => *opt = $trans,
+                None => info!("{} not found, keep default {:?}", path, *opt),
+            }
+        }
+    )
+}
+
+cfg_int_func!(u64, cfg_u64, i => {
+    assert!(i >= 0);
+    i as u64
+});
+
+cfg_int_func!(usize, cfg_usize, u => {
+    assert!(u >= 0 && u <= usize::MAX as i64);
+    u as usize
+});
+
+cfg_int_func!(Duration, cfg_dur, u => Duration::from_millis(u as u64));
 
 fn get_integer_value<F>(short: &str,
                         long: &str,
@@ -536,26 +568,15 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
-    cfg.notify_capacity = get_integer_value("",
-                                            "server.notify-capacity",
-                                            matches,
-                                            config,
-                                            Some(40960),
-                                            |v| v.as_integer()) as usize;
-    cfg.end_point_concurrency =
-        get_integer_value("",
-                          "server.end-point-concurrency",
-                          matches,
-                          config,
-                          Some(8),
-                          |v| v.as_integer()) as usize;
-    cfg.messages_per_tick =
-        get_integer_value("",
-                          "server.messages-per-tick",
-                          matches,
-                          config,
-                          Some(4096),
-                          |v| v.as_integer()) as usize;
+
+    cfg_usize(&mut cfg.notify_capacity, "server.notify-capacity", config);
+    cfg_usize(&mut cfg.end_point_concurrency,
+              "server.end-point-concurrency",
+              config);
+    cfg_usize(&mut cfg.messages_per_tick,
+              "server.messages-per-tick",
+              config);
+
     let capacity = get_integer_value("capacity",
                                      "server.capacity",
                                      matches,
@@ -575,110 +596,56 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                                           config,
                                           Some(addr.to_owned()),
                                           |v| v.as_str().map(|s| s.to_owned()));
-    cfg.send_buffer_size =
-        get_integer_value("",
-                          "server.send-buffer-size",
-                          matches,
-                          config,
-                          Some(128 * 1024),
-                          |v| v.as_integer()) as usize;
-    cfg.recv_buffer_size =
-        get_integer_value("",
-                          "server.recv-buffer-size",
-                          matches,
-                          config,
-                          Some(128 * 1024),
-                          |v| v.as_integer()) as usize;
 
-    cfg.raft_store.notify_capacity =
-        get_integer_value("",
-                          "raftstore.notify-capacity",
-                          matches,
-                          config,
-                          Some(40960),
-                          |v| v.as_integer()) as usize;
-    cfg.raft_store.messages_per_tick =
-        get_integer_value("",
-                          "raftstore.messages-per-tick",
-                          matches,
-                          config,
-                          Some(4096),
-                          |v| v.as_integer()) as usize;
-    cfg.raft_store.region_split_size =
-        get_integer_value("",
-                          "raftstore.region-split-size",
-                          matches,
-                          config,
-                          Some(64 * 1024 * 1024),
-                          |v| v.as_integer()) as u64;
-    cfg.raft_store.region_max_size =
-        get_integer_value("",
-                          "raftstore.region-max-size",
-                          matches,
-                          config,
-                          Some(80 * 1024 * 1024),
-                          |v| v.as_integer()) as u64;
-    cfg.raft_store.region_check_size_diff =
-        get_integer_value("",
-                          "raftstore.region-split-check-diff",
-                          matches,
-                          config,
-                          Some(8 * 1024 * 1024),
-                          |v| v.as_integer()) as u64;
+    cfg_usize(&mut cfg.send_buffer_size, "server.send-buffer-size", config);
+    cfg_usize(&mut cfg.recv_buffer_size, "server.recv-buffer-size", config);
+    cfg_u64(&mut cfg.raft_store.raft_base_tick_interval,
+            "raftstore.raft-base-tick-interval",
+            config);
+    cfg_usize(&mut cfg.raft_store.raft_heartbeat_ticks,
+              "raftstore.raft-heartbeat-ticks",
+              config);
+    cfg_usize(&mut cfg.raft_store.raft_election_timeout_ticks,
+              "raftstore.raft-election-timeout-ticks",
+              config);
+    cfg_usize(&mut cfg.raft_store.notify_capacity,
+              "raftstore.notify-capacity",
+              config);
+    cfg_usize(&mut cfg.raft_store.messages_per_tick,
+              "raftstore.messages-per-tick",
+              config);
+    cfg_u64(&mut cfg.raft_store.region_split_size,
+            "raftstore.region-split-size",
+            config);
+    cfg_u64(&mut cfg.raft_store.region_max_size,
+            "raftstore.region-max-size",
+            config);
+    cfg_u64(&mut cfg.raft_store.region_check_size_diff,
+            "raftstore.region-split-check-diff",
+            config);
+    cfg_dur(&mut cfg.raft_store.max_peer_down_duration,
+            "raftstore.max-peer-down-duration",
+            config);
 
-    let max_peer_down_millis =
-        get_integer_value("",
-                          "raftstore.max-peer-down-duration",
-                          matches,
-                          config,
-                          Some(300_000),
-                          |v| v.as_integer()) as u64;
-    cfg.raft_store.max_peer_down_duration = Duration::from_millis(max_peer_down_millis);
+    cfg_u64(&mut cfg.raft_store.pd_heartbeat_tick_interval,
+            "raftstore.pd-heartbeat-tick-interval",
+            config);
+    cfg_u64(&mut cfg.raft_store.pd_store_heartbeat_tick_interval,
+            "raftstore.pd-store-heartbeat-tick-interval",
+            config);
+    cfg_usize(&mut cfg.storage.sched_notify_capacity,
+              "storage.scheduler-notify-capacity",
+              config);
+    cfg_usize(&mut cfg.storage.sched_msg_per_tick,
+              "storage.scheduler-messages-per-tick",
+              config);
+    cfg_usize(&mut cfg.storage.sched_concurrency,
+              "storage.scheduler-concurrency",
+              config);
+    cfg_usize(&mut cfg.storage.sched_worker_pool_size,
+              "storage.scheduler-worker-pool-size",
+              config);
 
-    cfg.raft_store.pd_heartbeat_tick_interval =
-        get_integer_value("",
-                          "raftstore.pd-heartbeat-tick-interval",
-                          matches,
-                          config,
-                          Some(5000),
-                          |v| v.as_integer()) as u64;
-
-    cfg.raft_store.pd_store_heartbeat_tick_interval =
-        get_integer_value("",
-                          "raftstore.pd-store-heartbeat-tick-interval",
-                          matches,
-                          config,
-                          Some(10000),
-                          |v| v.as_integer()) as u64;
-
-    cfg.storage.sched_notify_capacity =
-        get_integer_value("",
-                          "storage.scheduler-notify-capacity",
-                          matches,
-                          config,
-                          Some(10240),
-                          |v| v.as_integer()) as usize;
-    cfg.storage.sched_msg_per_tick =
-        get_integer_value("",
-                          "storage.scheduler-messages-per-tick",
-                          matches,
-                          config,
-                          Some(1024),
-                          |v| v.as_integer()) as usize;
-    cfg.storage.sched_concurrency =
-        get_integer_value("",
-                          "storage.scheduler-concurrency",
-                          matches,
-                          config,
-                          Some(1024),
-                          |v| v.as_integer()) as usize;
-    cfg.storage.sched_worker_pool_size =
-        get_integer_value("",
-                          "storage.scheduler-worker-pool-size",
-                          matches,
-                          config,
-                          Some(4),
-                          |v| v.as_integer()) as usize;
     cfg
 }
 

@@ -38,6 +38,18 @@ address = ""
 job = "tikv"
 
 [raftstore]
+# Base tick interval
+# raft-base-tick-interval = 100ms
+
+# Ticks to trigger a hearbeat
+# raft-heartbeat-ticks = 3
+
+# Ticks that must pass between elections. It must be greater than
+# raft-heartbeat-ticks. We suggest
+# raft-election-timeout-ticks = 10 * raft-hearbeat-ticks to avoid
+# unnecessary leader switching
+# raft-election-timeout-ticks = 15
+
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960
 

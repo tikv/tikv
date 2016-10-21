@@ -31,11 +31,11 @@ const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
 const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 10000;
 const STORE_CAPACITY: u64 = u64::MAX;
-const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
+const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
 const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
-const DEFAULT_MESSAGES_PER_TICK: usize = 256;
-const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
+const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
+const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300_000;
 const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
 // If the leader missing for over 2 hours,
 // a peer should consider itself as a stale peer that is out of region.
@@ -116,7 +116,7 @@ impl Default for Config {
             snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL_MS,
             snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
-            max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
+            max_peer_down_duration: Duration::from_millis(DEFAULT_MAX_PEER_DOWN_SECS),
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
