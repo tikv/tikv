@@ -610,7 +610,7 @@ impl Scheduler {
         };
 
         if let Err(e) = self.engine.async_snapshot(self.extract_context(cid), cb) {
-            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async-snap-err"])
+            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
                 .inc();
             self.finish_with_err(cid, Error::from(e));
         }
@@ -660,7 +660,7 @@ impl Scheduler {
     /// error to the callback, and releases the latches.
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
         debug!("write command(cid={}) failed at prewrite.", cid);
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "pre-write-err"]).inc();
+        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"]).inc();
         self.finish_with_err(cid, e);
     }
 
@@ -679,7 +679,7 @@ impl Scheduler {
         }
         let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
         if let Err(e) = self.engine.async_write(extract_ctx(&cmd), to_be_write, engine_cb) {
-            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async-write-err"])
+            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
                 .inc();
             self.finish_with_err(cid, Error::from(e));
         }
