@@ -398,7 +398,7 @@ mod test {
     fn test_snap_mgr() {
         let path = TempDir::new("test-snap-mgr").unwrap();
 
-        // mgr should create directory when not exist.
+        // `mgr` should create the specified directory when it does not exist.
         let path1 = path.path().to_str().unwrap().to_owned() + "/snap1";
         let p = Path::new(&path1);
         assert!(!p.exists());
