@@ -610,6 +610,8 @@ impl Scheduler {
         };
 
         if let Err(e) = self.engine.async_snapshot(self.extract_context(cid), cb) {
+            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
+                .inc();
             self.finish_with_err(cid, Error::from(e));
         }
     }
@@ -619,11 +621,17 @@ impl Scheduler {
     /// Delivers the command along with the snapshot to a worker thread to execute.
     fn on_snapshot_finished(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
         debug!("receive snapshot finish msg for cid={}", cid);
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_finish"])
-            .inc();
         match snapshot {
-            Ok(snapshot) => self.process_by_worker(cid, snapshot),
-            Err(e) => self.finish_with_err(cid, Error::from(e)),
+            Ok(snapshot) => {
+                SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
+                    .inc();
+                self.process_by_worker(cid, snapshot);
+            }
+            Err(e) => {
+                SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
+                    .inc();
+                self.finish_with_err(cid, Error::from(e));
+            }
         }
     }
 
@@ -652,13 +660,8 @@ impl Scheduler {
     /// error to the callback, and releases the latches.
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
         debug!("write command(cid={}) failed at prewrite.", cid);
-
-        let mut ctx = self.remove_ctx(cid);
-        let cb = ctx.callback.take().unwrap();
-        let pr = ProcessResult::Failed { err: StorageError::from(e) };
-        execute_callback(cb, pr);
-
-        self.release_lock(&ctx.lock, cid);
+        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"]).inc();
+        self.finish_with_err(cid, e);
     }
 
     /// Event handler for the success of write prepare.
@@ -676,11 +679,9 @@ impl Scheduler {
         }
         let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
         if let Err(e) = self.engine.async_write(extract_ctx(&cmd), to_be_write, engine_cb) {
-            let mut ctx = self.remove_ctx(cid);
-            let cb = ctx.callback.take().unwrap();
-            execute_callback(cb, ProcessResult::Failed { err: StorageError::from(e) });
-
-            self.release_lock(&ctx.lock, cid);
+            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
+                .inc();
+            self.finish_with_err(cid, Error::from(e));
         }
     }
 
