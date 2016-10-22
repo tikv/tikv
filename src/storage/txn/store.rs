@@ -44,9 +44,13 @@ impl<'a> SnapshotStore<'a> {
         Ok(results)
     }
 
-    pub fn scanner(&self, mode: ScanMode) -> Result<StoreScanner> {
+    /// Create a scanner.
+    /// when key_only is true, all the returned value will be empty.
+    pub fn scanner(&self, mode: ScanMode, key_only: bool) -> Result<StoreScanner> {
+        let mut reader = MvccReader::new(self.snapshot, Some(mode));
+        reader.set_key_only(key_only);
         Ok(StoreScanner {
-            reader: MvccReader::new(self.snapshot, Some(mode)),
+            reader: reader,
             start_ts: self.start_ts,
         })
     }
