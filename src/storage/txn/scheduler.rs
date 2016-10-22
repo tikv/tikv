@@ -660,7 +660,8 @@ impl Scheduler {
     /// error to the callback, and releases the latches.
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
         debug!("write command(cid={}) failed at prewrite.", cid);
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"]).inc();
+        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"])
+            .inc();
         self.finish_with_err(cid, e);
     }
 

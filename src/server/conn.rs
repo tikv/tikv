@@ -40,6 +40,7 @@ enum ConnType {
 const SNAPSHOT_PAYLOAD_BUF: usize = 4 * 1024 * 1024;
 const DEFAULT_SEND_BUFFER_SIZE: usize = 8 * 1024;
 const DEFAULT_RECV_BUFFER_SIZE: usize = 8 * 1024;
+const SEND_BUFFER_SHRINK_THRESHOLD: usize = 1024 * 1024;
 
 pub struct Conn {
     pub sock: TcpStream,
@@ -250,6 +251,9 @@ impl Conn {
         }
 
         // no data for writing, remove writable
+        if self.send_buffer.capacity() > SEND_BUFFER_SHRINK_THRESHOLD {
+            self.send_buffer.shrink_to(DEFAULT_SEND_BUFFER_SIZE);
+        }
         self.interest.remove(EventSet::writable());
         try!(self.reregister(event_loop));
 
