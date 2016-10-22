@@ -40,7 +40,7 @@ enum ConnType {
 const SNAPSHOT_PAYLOAD_BUF: usize = 4 * 1024 * 1024;
 const DEFAULT_SEND_BUFFER_SIZE: usize = 8 * 1024;
 const DEFAULT_RECV_BUFFER_SIZE: usize = 8 * 1024;
-const SEND_BUFFER_SHRINK_THRESHOLD: usize = 1024 * 1024;
+const DEFAULT_BUFFER_SHRINK_THRESHOLD: usize = 1024 * 1024;
 
 pub struct Conn {
     pub sock: TcpStream,
@@ -62,6 +62,8 @@ pub struct Conn {
 
     send_buffer: PipeBuffer,
     recv_buffer: Option<PipeBuffer>,
+
+    pub buffer_shrink_threshold: usize,
 }
 
 impl Conn {
@@ -82,6 +84,7 @@ impl Conn {
             // TODO: Maybe we should need max size to shrink later.
             send_buffer: PipeBuffer::new(DEFAULT_SEND_BUFFER_SIZE),
             recv_buffer: Some(PipeBuffer::new(DEFAULT_RECV_BUFFER_SIZE)),
+            buffer_shrink_threshold: DEFAULT_BUFFER_SHRINK_THRESHOLD,
         }
     }
 
@@ -251,7 +254,7 @@ impl Conn {
         }
 
         // no data for writing, remove writable
-        if self.send_buffer.capacity() > SEND_BUFFER_SHRINK_THRESHOLD {
+        if self.send_buffer.capacity() > self.buffer_shrink_threshold {
             self.send_buffer.shrink_to(DEFAULT_SEND_BUFFER_SIZE);
         }
         self.interest.remove(EventSet::writable());
