@@ -30,11 +30,11 @@ use util::codec::rpc;
 use util::make_std_tcp_conn;
 use util::transport::SendCh;
 use raftstore::store::Msg;
+use raftstore::store::util::ensure_schedule;
 use raftstore::Result;
 
 const MAX_RAFT_RPC_SEND_RETRY_COUNT: u64 = 2;
 const RAFT_RPC_RETRY_TIME_MILLIS: u64 = 50;
-const RESOLVE_RETRY_TIME_MILLIS: u64 = 50;
 const SOCKET_READ_TIMEOUT: u64 = 3;
 const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
@@ -257,19 +257,6 @@ fn next_peer(region: &Region, last_peer: Peer) -> Peer {
         return last_peer;
     }
     peers[0].clone()
-}
-
-fn ensure_schedule(scheduler: Scheduler<Task>, task: Task) {
-    // TODO change a way to ensure this task is delivered
-    loop {
-        if let Err(e) = scheduler.schedule(task.clone()) {
-            error!("failed to schedule task {}, err: {:?}", task, e);
-            thread::sleep(Duration::from_millis(RESOLVE_RETRY_TIME_MILLIS));
-        } else {
-            return;
-        }
-    }
-
 }
 
 impl Runner {

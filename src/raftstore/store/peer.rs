@@ -1366,10 +1366,8 @@ impl Peer {
             region: merge_req.get_region().clone(),
             leader: merge_req.get_leader().clone(),
         };
-        // TODO make sure this task scheduling always succeeds
-        if let Err(e) = self.merge_scheduler.schedule(task) {
-            error!("failed to schedule merge task, err: {}", e)
-        }
+        util::ensure_schedule(self.merge_scheduler.clone(), task);
+
         let mut resp = AdminResponse::new();
         resp.set_merge(MergeResponse::new());
 
