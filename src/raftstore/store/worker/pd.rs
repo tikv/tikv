@@ -39,6 +39,10 @@ pub enum Task {
         split_key: Vec<u8>,
         peer: metapb::Peer,
     },
+    AskMerge {
+        region: metapb::Region,
+        peer: metapb::Peer,
+    },
     Heartbeat {
         region: metapb::Region,
         peer: metapb::Peer,
@@ -65,6 +69,7 @@ impl Display for Task {
                        region.get_id(),
                        escape(&split_key))
             }
+            Task::AskMerge { ref region, .. } => write!(f, "ask merge region {}", region.get_id()),
             Task::Heartbeat { ref region, ref peer, .. } => {
                 write!(f,
                        "heartbeat for region {:?}, leader {}",
@@ -143,6 +148,21 @@ impl<T: PdClient> Runner<T> {
         }
     }
 
+    fn handle_ask_merge(&self, region: metapb::Region, _peer: metapb::Peer) {
+        PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "all"]).inc();
+
+        match self.pd_client.ask_merge(region.clone()) {
+            Ok(resp) => {
+                info!("[region {}] try to merge with another region id {} for region {:?}",
+                      region.get_id(),
+                      resp.get_region().get_id(),
+                      region);
+                PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "success"]).inc();
+            }
+            Err(e) => debug!("[region {}] failed to ask merge: {:?}", region.get_id(), e),
+        }
+    }
+
     fn handle_heartbeat(&self,
                         region: metapb::Region,
                         peer: metapb::Peer,
@@ -176,6 +196,17 @@ impl<T: PdClient> Runner<T> {
                           transfer_leader.get_peer());
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     self.send_admin_request(region, peer, req)
+                } else if resp.has_region_merge() {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["region merge"]).inc();
+
+                    let mut region_merge = resp.take_region_merge();
+                    info!("[region {}] try to merge region {:?} to {:?}",
+                          region.get_id(),
+                          region_merge.get_region(),
+                          region);
+                    let req = new_region_merge_request(region_merge.take_region(),
+                                                       region_merge.take_leader());
+                    self.send_admin_request(region, peer, req);
                 }
             }
             Err(e) => {
@@ -298,6 +329,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::AskSplit { region, split_key, peer } => {
                 self.handle_ask_split(region, split_key, peer)
             }
+            Task::AskMerge { region, peer } => self.handle_ask_merge(region, peer),
             Task::Heartbeat { region, peer, down_peers } => {
                 self.handle_heartbeat(region, peer, down_peers)
             }
@@ -332,5 +364,13 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::TransferLeader);
     req.mut_transfer_leader().set_peer(peer);
+    req
+}
+
+fn new_region_merge_request(region: metapb::Region, leader: metapb::Peer) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::Merge);
+    req.mut_merge().set_region(region);
+    req.mut_merge().set_leader(leader);
     req
 }

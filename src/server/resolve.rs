@@ -20,7 +20,7 @@ use std::time::Instant;
 
 use super::Result;
 use util;
-use util::worker::{Runnable, Worker};
+use util::worker::{Runnable, Worker, Scheduler};
 use pd::PdClient;
 use kvproto::metapb;
 use super::metrics::*;
@@ -30,15 +30,24 @@ const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 pub type Callback = Box<FnBox(Result<SocketAddr>) + Send>;
 
 // StoreAddrResolver resolves the store address.
-pub trait StoreAddrResolver {
+pub trait StoreAddrResolver: Send + 'static {
     // Resolve resolves the store address asynchronously.
     fn resolve(&self, store_id: u64, cb: Callback) -> Result<()>;
 }
 
 /// Snapshot generating task.
-struct Task {
+pub struct Task {
     store_id: u64,
     cb: Callback,
+}
+
+impl Task {
+    pub fn new(store_id: u64, cb: Callback) -> Task {
+        Task {
+            store_id: store_id,
+            cb: cb,
+        }
+    }
 }
 
 impl Display for Task {
@@ -121,6 +130,10 @@ impl PdStoreAddrResolver {
         };
         box_try!(r.worker.start(runner));
         Ok(r)
+    }
+
+    pub fn scheduler(&self) -> Scheduler<Task> {
+        self.worker.scheduler()
     }
 }
 

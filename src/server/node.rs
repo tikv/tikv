@@ -22,12 +22,14 @@ use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use util::transport::SendCh;
+use util::worker::Scheduler;
 use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
                        SnapManager};
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::RaftStoreRouter;
+use super::resolve::Task as ResolveTask;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -84,7 +86,8 @@ impl<C> Node<C>
                     event_loop: EventLoop<Store<T, C>>,
                     engine: Arc<DB>,
                     trans: T,
-                    snap_mgr: SnapManager)
+                    snap_mgr: SnapManager,
+                    resolve_scheduler: Scheduler<ResolveTask>)
                     -> Result<()>
         where T: Transport + 'static
     {
@@ -111,7 +114,12 @@ impl<C> Node<C>
         }
 
         // inform pd.
-        try!(self.start_store(event_loop, store_id, engine, trans, snap_mgr));
+        try!(self.start_store(event_loop,
+                              store_id,
+                              engine,
+                              trans,
+                              snap_mgr,
+                              resolve_scheduler));
         try!(self.pd_client
             .put_store(self.store.clone()));
         Ok(())
@@ -212,7 +220,8 @@ impl<C> Node<C>
                       store_id: u64,
                       db: Arc<DB>,
                       trans: T,
-                      snap_mgr: SnapManager)
+                      snap_mgr: SnapManager,
+                      resolve_scheduler: Scheduler<ResolveTask>)
                       -> Result<()>
         where T: Transport + 'static
     {
@@ -230,7 +239,14 @@ impl<C> Node<C>
         let (tx, rx) = mpsc::channel();
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
-            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
+            let mut store = match Store::new(ch,
+                                             store,
+                                             cfg,
+                                             db,
+                                             trans,
+                                             pd_client,
+                                             snap_mgr,
+                                             resolve_scheduler) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };

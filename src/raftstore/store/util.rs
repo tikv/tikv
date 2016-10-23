@@ -18,6 +18,7 @@ use uuid::Uuid;
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_serverpb::MergePhase;
 use raftstore::{Result, Error};
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -78,6 +79,18 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
     match *conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
+    }
+}
+
+const STR_REGION_MERGE_PHASE_NO_MERGE: &'static str = "NoMerge";
+const STR_REGION_MERGE_PHASE_PREPARE: &'static str = "Prepare";
+const STR_REGION_MERGE_PHASE_COMMIT: &'static str = "Commit";
+
+pub fn region_merge_phase_str(p: &MergePhase) -> &'static str {
+    match *p {
+        MergePhase::NoMerge => STR_REGION_MERGE_PHASE_NO_MERGE,
+        MergePhase::Prepare => STR_REGION_MERGE_PHASE_PREPARE,
+        MergePhase::Commit => STR_REGION_MERGE_PHASE_COMMIT,
     }
 }
 

@@ -44,8 +44,8 @@ use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_LOCK};
-use super::worker::{SplitCheckRunner, split_check, RegionTask, RegionRunner, CompactTask,
-                    CompactRunner, PdRunner, PdTask};
+use super::worker::{split_check, SplitCheckRunner, merge, MergeRunner, RegionTask, RegionRunner,
+                    CompactTask, CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
@@ -56,6 +56,7 @@ use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
+use server::ResolveTask;
 
 type Key = Vec<u8>;
 
@@ -202,6 +203,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<split_check::Task>,
+    merge_worker: Worker<merge::Task>,
     region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
@@ -212,6 +214,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
 
     snap_mgr: SnapManager,
+
+    resolve_scheduler: Scheduler<ResolveTask>,
 
     raft_metrics: RaftMetrics,
 }
@@ -236,7 +240,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                engine: Arc<DB>,
                trans: T,
                pd_client: Arc<C>,
-               mgr: SnapManager)
+               mgr: SnapManager,
+               resolve_scheduler: Scheduler<ResolveTask>)
                -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
@@ -252,6 +257,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker"),
+            merge_worker: Worker::new("merge worker"),
             region_worker: Worker::new("snapshot worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
@@ -261,6 +267,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_client: pd_client,
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
+            resolve_scheduler: resolve_scheduler,
             raft_metrics: RaftMetrics::default(),
         };
         try!(s.init());
@@ -299,7 +306,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                        self.store_id());
                 return Ok(true);
             }
-            let mut peer = try!(Peer::create(self, region));
+            let merge_scheduler = self.merge_worker.scheduler();
+            let mut peer =
+                try!(Peer::create(self, region, local_state.get_state(), merge_scheduler));
 
             if local_state.get_state() == PeerState::Applying {
                 applying_count += 1;
@@ -369,6 +378,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size,
                                                        self.cfg.region_merge_size);
         box_try!(self.split_check_worker.start(split_check_runner));
+
+        let merge_runner = MergeRunner::new(self.merge_worker.scheduler(),
+                                            self.resolve_scheduler.clone(),
+                                            self.sendch.clone());
+
+        box_try!(self.merge_worker.start(merge_runner));
 
         let runner = RegionRunner::new(self.engine.clone(),
                                        self.get_sendch(),
@@ -527,7 +542,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if !has_peer {
-            let peer = try!(Peer::replicate(self, region_id, target.get_id()));
+            let merge_scheduler = self.merge_worker.scheduler();
+            let peer = try!(Peer::replicate(self, region_id, target.get_id(), merge_scheduler));
             // We don't have start_key of the region, so there is no need to insert into
             // region_ranges
             self.region_peers.insert(region_id, peer);
@@ -889,8 +905,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("duplicated region {} for split region", new_region_id);
             }
         }
-
-        match Peer::create(self, &right) {
+        let merge_scheduler = self.merge_worker.scheduler();
+        match Peer::create(self, &right, PeerState::Normal, merge_scheduler) {
             Err(e) => {
                 // peer information is already written into db, can't recover.
                 // there is probably a bug.
@@ -1243,8 +1259,36 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_merge_check_result(&mut self, _region_id: u64, _epoch: metapb::RegionEpoch) {
-        // TODO add impl
+    fn on_merge_check_result(&mut self, region_id: u64, epoch: metapb::RegionEpoch) {
+        let p = self.region_peers.get(&region_id);
+        if p.is_none() || !p.unwrap().is_leader() {
+            // Peer for the specified region is gone from this store or
+            // it is no longer the leader. Just ignore this merge check result.
+            info!("[region {}] region on {} doesn't exist or is not leader, ignore merge check \
+                   result",
+                  region_id,
+                  self.store_id());
+            return;
+        }
+
+        let peer = p.unwrap();
+        let region = peer.region();
+
+        if region.get_region_epoch().get_version() != epoch.get_version() {
+            info!("{} epoch changed {:?} != {:?}, need to redo merge check later",
+                  peer.tag,
+                  region.get_region_epoch(),
+                  epoch);
+            return;
+        }
+
+        let task = PdTask::AskMerge {
+            region: region.clone(),
+            peer: peer.peer.clone(),
+        };
+        if let Err(e) = self.pd_worker.schedule(task) {
+            error!("{} failed to notify PD to merge, err {}", peer.tag, e);
+        }
     }
 
     fn heartbeat_pd(&self, peer: &Peer) {

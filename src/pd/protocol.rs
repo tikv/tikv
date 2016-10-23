@@ -133,6 +133,18 @@ impl super::PdClient for RpcClient {
         Ok(resp.take_ask_split())
     }
 
+    fn ask_merge(&self, region: metapb::Region) -> Result<pdpb::AskMergeResponse> {
+        let mut ask_merge = pdpb::AskMergeRequest::new();
+        ask_merge.set_region(region);
+
+        let mut req = self.new_request(pdpb::CommandType::AskMerge);
+        req.set_ask_merge(ask_merge);
+
+        let mut resp = try!(self.send(&req));
+        try!(check_resp(&resp));
+        Ok(resp.take_ask_merge())
+    }
+
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
         let mut heartbeat = pdpb::StoreHeartbeatRequest::new();
         heartbeat.set_stats(stats);
@@ -151,6 +163,23 @@ impl super::PdClient for RpcClient {
 
         let mut req = self.new_request(pdpb::CommandType::ReportSplit);
         req.set_report_split(report_split);
+
+        let resp = try!(self.send(&req));
+        check_resp(&resp)
+    }
+
+    fn report_merge(&self,
+                    new: metapb::Region,
+                    old: metapb::Region,
+                    to_delete: metapb::Region)
+                    -> Result<()> {
+        let mut report_merge = pdpb::ReportMergeRequest::new();
+        report_merge.set_new(new);
+        report_merge.set_old(old);
+        report_merge.set_to_delete(to_delete);
+
+        let mut req = self.new_request(pdpb::CommandType::ReportMerge);
+        req.set_report_merge(report_merge);
 
         let resp = try!(self.send(&req));
         check_resp(&resp)
