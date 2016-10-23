@@ -137,7 +137,7 @@ impl Cluster {
 
     fn handle_heartbeat_version(&mut self, region: metapb::Region) -> Result<()> {
         // For split, we should handle heartbeat carefully.
-        // E.g, for region 1 [a, c) -> 1 [a, b) + 2 [b, c).
+        // E.g, for region 1 [a, c) -> 2 [a, b) + 1 [b, c).
         // after split, region 1 and 2 will do heartbeat independently.
         let start_key = enc_start_key(&region);
         let end_key = enc_end_key(&region);
@@ -172,7 +172,7 @@ impl Cluster {
             self.add_region(&region);
         } else {
             // overlap, remove old, insert new.
-            // E.g, 1 [a, c) -> 1 [a, b) + 2 [b, c), either new 1 or 2 reports, the region
+            // E.g, 1 [a, c) -> 2 [a, b) + 1 [b, c), either new 1 or 2 reports, the region
             // is overlapped with origin [a, c).
             if version <= search_version || conf_ver < search_conf_ver {
                 return Err(box_err!("epoch {:?} is stale.", region.get_region_epoch()));
@@ -192,7 +192,6 @@ impl Cluster {
         let conf_ver = region.get_region_epoch().get_conf_ver();
         let end_key = enc_end_key(&region);
 
-        // it can pass handle_heartbeat_version means it must exist.
         let cur_region = self.get_region_by_id(region.get_id()).unwrap().unwrap();
 
         let cur_conf_ver = cur_region.get_region_epoch().get_conf_ver();

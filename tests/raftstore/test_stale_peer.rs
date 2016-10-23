@@ -142,10 +142,10 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let engine3 = cluster.get_engine(3);
-    must_get_equal(&engine3, b"k1", b"v1");
-    must_get_none(&engine3, b"k3");
+    must_get_equal(&engine3, b"k3", b"v3");
+    must_get_none(&engine3, b"k1");
 
-    let new_region = cluster.get_region(b"k3");
+    let new_region = cluster.get_region(b"k1");
     let new_region_id = new_region.get_id();
     // Block peer (new_region_id, 4) at receiving snapshot, but not the heartbeat
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(new_region_id, 4)
@@ -167,7 +167,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(Duration::from_secs(1));
 
     // There must be no data on store 3 belongs to new region
-    must_get_none(&engine3, b"k3");
+    must_get_none(&engine3, b"k1");
 
     // Check whether peer(3, 4) is destroyed.
     // Before peer 4 is destroyed, a tombstone mark will be written into the engine.
@@ -177,7 +177,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // other region should not be affected.
-    must_get_equal(&engine3, b"k1", b"v1");
+    must_get_equal(&engine3, b"k3", b"v3");
 }
 
 #[test]

@@ -853,7 +853,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              region_id: u64,
                              left: metapb::Region,
                              right: metapb::Region) {
-        let new_region_id = right.get_id();
+        let new_region_id = left.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
             // If the store received a raft msg with the new region raft group
             // before splitting, it will creates a uninitialized peer.
@@ -863,18 +863,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        match Peer::create(self, &right) {
+        match Peer::create(self, &left) {
             Err(e) => {
                 // peer information is already written into db, can't recover.
                 // there is probably a bug.
-                panic!("create new split region {:?} err {:?}", right, e);
+                panic!("create new split region {:?} err {:?}", left, e);
             }
             Ok(mut new_peer) => {
                 // If the peer for the region before split is leader,
                 // we can force the new peer for the new split region to campaign
                 // to become the leader too.
                 let is_leader = self.region_peers.get(&region_id).unwrap().is_leader();
-                if is_leader && right.get_peers().len() > 1 {
+                if is_leader && left.get_peers().len() > 1 {
                     if let Err(e) = new_peer.raft_group.campaign() {
                         error!("[region {}] peer {:?} campaigns  err {:?}",
                                new_region_id,
@@ -885,8 +885,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 if is_leader {
                     // Notify pd immediately to let it update the region meta.
-                    let left = self.region_peers.get(&region_id).unwrap();
-                    self.report_split_pd(left, &new_peer);
+                    let right = self.region_peers.get(&region_id).unwrap();
+                    self.report_split_pd(&new_peer, right);
                 }
 
                 // Insert new regions and validation
@@ -897,11 +897,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("region should not exist, {:?}", left);
                 }
                 if self.region_ranges
-                    .insert(enc_end_key(&right), new_region_id)
+                    .insert(enc_end_key(&right), right.get_id())
                     .is_none() {
                     panic!("region should exist, {:?}", right);
                 }
-                new_peer.size_diff_hint = self.cfg.region_check_size_diff;
+                self.region_peers.get_mut(&region_id).unwrap().size_diff_hint = self.cfg
+                    .region_check_size_diff;
                 self.region_peers.insert(new_region_id, new_peer);
             }
         }
@@ -1056,15 +1057,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let res = peer.check_epoch(msg);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
-            // Attach the next region which might be split from the current region. But it doesn't
-            // matter if the next region is not split from the current region. If the region meta
-            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
-            // updated.
-            if let Some((_, &next_region_id)) = self.region_ranges
-                .range(Excluded(&enc_end_key(peer.region())), Unbounded::<&Key>)
-                .next() {
-                let next_region = self.region_peers[&next_region_id].region();
-                new_regions.push(next_region.to_owned());
+            // Attach the previous region which might be split from the current region. But it
+            // doesn't matter if the previous region is not split from the current region. If the
+            // region meta received by the TiKV driver is newer than the meta cached in the
+            // driver, the meta is updated.
+            if let Some((_, &prev_region_id)) = self.region_ranges
+                .range(Unbounded::<&Key>, Excluded(&enc_end_key(peer.region())))
+                .next_back() {
+                let prev_region = self.region_peers[&prev_region_id].region();
+                new_regions.push(prev_region.to_owned());
             }
             return Err(Error::StaleEpoch(msg, new_regions));
         }
