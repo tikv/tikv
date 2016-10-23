@@ -242,16 +242,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let msg_type = msg.get_msg_type();
         match msg_type {
             MessageType::Raft => {
-                RECV_MSG_COUNTER.with_label_values(&["raft"]).inc();
+                RECV_MSG_COUNTER_VEC.with_label_values(&["raft"]).inc();
                 try!(self.raft_router.send_raft_msg(msg.take_raft()));
                 Ok(())
             }
             MessageType::Cmd => {
-                RECV_MSG_COUNTER.with_label_values(&["cmd"]).inc();
+                RECV_MSG_COUNTER_VEC.with_label_values(&["cmd"]).inc();
                 self.on_raft_command(msg.take_cmd_req(), token, msg_id)
             }
             MessageType::KvReq => {
-                RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
+                RECV_MSG_COUNTER_VEC.with_label_values(&["kv"]).inc();
                 let req = msg.take_kv_req();
                 debug!("notify Request token[{:?}] msg_id[{}] type[{:?}]",
                        token,
@@ -261,14 +261,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 self.store.on_request(req, on_resp)
             }
             MessageType::CopReq => {
-                RECV_MSG_COUNTER.with_label_values(&["coprocessor"]).inc();
+                RECV_MSG_COUNTER_VEC.with_label_values(&["coprocessor"]).inc();
                 let on_resp = self.make_response_cb(token, msg_id);
                 let req = RequestTask::new(msg.take_cop_req(), on_resp);
                 box_try!(self.end_point_worker.schedule(EndPointTask::Request(req)));
                 Ok(())
             }
             _ => {
-                RECV_MSG_COUNTER.with_label_values(&["invalid"]).inc();
+                RECV_MSG_COUNTER_VEC.with_label_values(&["invalid"]).inc();
                 Err(box_err!("unsupported message {:?} for token {:?} with msg id {}",
                              msg_type,
                              token,
@@ -419,7 +419,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn send_store(&mut self, event_loop: &mut EventLoop<Self>, store_id: u64, data: ConnData) {
         if data.is_snapshot() {
-            RESOLVE_STORE_COUNTER.with_label_values(&["snap"]).inc();
+            RESOLVE_STORE_COUNTER_VEC.with_label_values(&["snap"]).inc();
             return self.resolve_store(store_id, data);
         }
 
@@ -430,7 +430,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
         // No connection, try to resolve it.
         if self.store_resolving.contains(&store_id) {
-            RESOLVE_STORE_COUNTER.with_label_values(&["resolving"]).inc();
+            RESOLVE_STORE_COUNTER_VEC.with_label_values(&["resolving"]).inc();
             // If we are resolving the address, drop the message here.
             debug!("store {} address is being resolved, drop msg {}",
                    store_id,
@@ -440,7 +440,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
 
         debug!("begin to resolve store {} address", store_id);
-        RESOLVE_STORE_COUNTER.with_label_values(&["store"]).inc();
+        RESOLVE_STORE_COUNTER_VEC.with_label_values(&["store"]).inc();
         self.store_resolving.insert(store_id);
         self.resolve_store(store_id, data);
     }
@@ -463,11 +463,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
 
         if sock_addr.is_err() {
-            RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
+            RESOLVE_STORE_COUNTER_VEC.with_label_values(&["failed"]).inc();
             return self.on_resolve_failed(store_id, sock_addr, data);
         }
 
-        RESOLVE_STORE_COUNTER.with_label_values(&["success"]).inc();
+        RESOLVE_STORE_COUNTER_VEC.with_label_values(&["success"]).inc();
         let sock_addr = sock_addr.unwrap();
         info!("resolve store {} address ok, addr {}", store_id, sock_addr);
 

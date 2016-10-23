@@ -27,14 +27,14 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref RECV_MSG_COUNTER: CounterVec =
+    pub static ref RECV_MSG_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_server_receive_msg_total",
             "Total number of receiving messages",
             &["type"]
         ).unwrap();
 
-    pub static ref RESOLVE_STORE_COUNTER: CounterVec =
+    pub static ref RESOLVE_STORE_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_server_resolve_store_total",
             "Total number of resolving store",
