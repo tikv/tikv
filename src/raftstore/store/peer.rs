@@ -1340,11 +1340,22 @@ impl Peer {
         let mut local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key)).unwrap();
         let phase = local_state.get_merge_state().get_phase();
         if phase == MergePhase::NoMerge {
+            // update local region merge state
             let mut new_merge_state = RegionMergeState::new();
             new_merge_state.set_phase(MergePhase::Prepare);
             new_merge_state.set_to_merge(merge_req.get_region().clone());
             local_state.set_merge_state(new_merge_state);
+            // TODO remove this update if region merge info is removed from peer meta
+            // update peer meta info
+            let mut merge = metapb::RegionMerge::new();
+            merge.set_state(metapb::MergeState::Prepare);
+            merge.set_from_id(merge_req.get_region().get_id());
+            merge.set_into_id(self.region_id);
+            local_state.mut_region().set_region_merge(merge);
+            // write peer local state
             try!(self.engine.put_msg(&state_key, &local_state));
+            // update store cached region meta, which is used for reporting PD
+            self.mut_store().set_region(local_state.get_region());
         } else {
             info!("{} already in region merge phase {}, ignore region merge request",
                   self.tag,
@@ -1398,7 +1409,7 @@ impl Peer {
         let commit_merge = req.get_commit_merge();
         // TODO add impl
         // 1. change local state, merge state
-        // 2. extend region range
+        // 2. extend region range, write it to peer local state and update peer mete info
         // 3. return response
         let mut resp = AdminResponse::new();
         resp.mut_commit_merge().set_region(commit_merge.get_region().clone());

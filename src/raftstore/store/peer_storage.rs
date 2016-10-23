@@ -351,6 +351,10 @@ impl PeerStorage {
         &self.region
     }
 
+    pub fn set_region(&mut self, region: &metapb::Region) {
+        self.region = region.clone()
+    }
+
     pub fn raw_snapshot(&self) -> DbSnapshot {
         DbSnapshot::new(self.engine.clone())
     }
