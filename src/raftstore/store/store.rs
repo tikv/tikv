@@ -1282,10 +1282,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        let task = PdTask::AskMerge {
-            region: region.clone(),
-            peer: peer.peer.clone(),
-        };
+        let task = PdTask::AskMerge { region: region.clone() };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify PD to merge, err {}", peer.tag, e);
         }
@@ -1535,7 +1532,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Check that the region and peer do exist.
         if let Some(peer) = self.region_peers.get(&region_id) {
             if peer.peer_id() == peer_id {
-                // only handle gc notify on leader peer
+                // Only handle gc notify on leader peer.
                 if !peer.is_leader() {
                     return;
                 }
@@ -1543,6 +1540,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("{} gc is done, need to check whether should merge",
                       peer.tag);
                 let task = split_check::new_merge_check_task(peer.get_store());
+                // If it fails to schedule this task, another gc in the future
+                // will re-trigger the checking for region merge.
+                // So it's fine to just log an error message here.
                 if let Err(e) = self.split_check_worker.schedule(task) {
                     error!("failed to schedule merge check: {}", e);
                 }

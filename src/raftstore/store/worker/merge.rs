@@ -59,34 +59,66 @@ pub struct TaskContext {
     task_type: TaskType,
     region: Region,
     peer: Peer,
+    local_region: Region,
+    local_peer: Peer,
     address: SocketAddr,
 }
 
 impl Display for TaskContext {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f,
-               "task context, type {:?}, region {:?}, peer {:?}, address: {}",
+               "task context, type {:?}, region {:?}, peer {:?}, local_region: {:?}, local_peer: \
+                {:?}, address: {}",
                self.task_type,
                self.region,
                self.peer,
+               self.region,
+               self.local_peer,
                self.address)
     }
 }
 
 #[derive(Clone)]
 pub enum Task {
-    SuspendRegion { region: Region, leader: Peer },
-    CommitMerge { region: Region, peer: Peer },
-    ShutdownRegion { region: Region, leader: Peer },
-    AfterResolve { context: TaskContext },
+    SuspendRegion {
+        // the region to be suspended
+        region: Region,
+        // a hint to start raft rpc with
+        leader: Peer,
+        // local region which controls the region merge procedure
+        local_region: Region,
+        // local peer which controls the region merge procedure
+        local_peer: Peer,
+    },
+    CommitMerge {
+        // local region which controls the region merge procedure
+        region: Region,
+        // local region which controls the region merge procedure
+        peer: Peer,
+    },
+    ShutdownRegion {
+        // the region to be shutdown
+        region: Region,
+        // a hint to start raft rpc with
+        leader: Peer,
+    },
+    AfterResolve {
+        // a struct that passes the task context between callbacks
+        context: TaskContext,
+    },
 }
 
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::SuspendRegion { ref region, ref leader } => {
-                write!(f, "suspend region {:?}, leader {:?}", region, leader)
+            Task::SuspendRegion { ref region, ref leader, ref local_region, ref local_peer } => {
+                write!(f,
+                       "suspend region {:?}, leader {:?}, local region {:?}, local peer {:?}",
+                       region,
+                       leader,
+                       local_region,
+                       local_peer)
             }
             Task::CommitMerge { ref region, ref peer } => {
                 write!(f,
@@ -104,7 +136,7 @@ impl Display for Task {
 
 #[derive(Debug)]
 struct RaftRpcClientCore {
-    address: String,
+    address: SocketAddr,
     stream: Option<TcpStream>,
 }
 
@@ -129,14 +161,14 @@ fn send_request(stream: &mut TcpStream,
     Ok((id, resp.take_cmd_resp()))
 }
 
-fn rpc_connect(address: &str) -> Result<TcpStream> {
+fn rpc_connect(address: SocketAddr) -> Result<TcpStream> {
     let stream = try!(make_std_tcp_conn(address));
     try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
     Ok(stream)
 }
 
 impl RaftRpcClientCore {
-    pub fn new(address: String) -> RaftRpcClientCore {
+    pub fn new(address: SocketAddr) -> RaftRpcClientCore {
         RaftRpcClientCore {
             address: address,
             stream: None,
@@ -144,7 +176,7 @@ impl RaftRpcClientCore {
     }
 
     fn try_connect(&mut self) -> Result<()> {
-        let stream = try!(rpc_connect(&self.address));
+        let stream = try!(rpc_connect(self.address));
         self.stream = Some(stream);
         Ok(())
     }
@@ -190,7 +222,7 @@ pub struct RaftRpcClient {
 }
 
 impl RaftRpcClient {
-    pub fn new(address: String) -> RaftRpcClient {
+    pub fn new(address: SocketAddr) -> RaftRpcClient {
         RaftRpcClient {
             msg_id: AtomicUsize::new(0),
             core: Mutex::new(RaftRpcClientCore::new(address)),
@@ -271,7 +303,11 @@ impl Runner {
         }
     }
 
-    fn handle_suspend_region(&self, region: Region, leader: Peer) {
+    fn handle_suspend_region(&self,
+                             region: Region,
+                             leader: Peer,
+                             local_region: Region,
+                             local_peer: Peer) {
         // TODO add impl
         // send a raft command "suspend region" to the specified region/leader
         // if network errors happen, try another peer
@@ -290,6 +326,8 @@ impl Runner {
                             task_type: TaskType::SuspendRegion,
                             region: region,
                             peer: last_peer,
+                            local_region: local_region,
+                            local_peer: local_peer,
                             address: addr,
                         },
                     };
@@ -302,15 +340,17 @@ impl Runner {
                     let task = Task::SuspendRegion {
                         region: region,
                         leader: next_peer,
+                        local_region: local_region,
+                        local_peer: local_peer,
                     };
                     ensure_schedule(scheduler, task);
                 }
             }
         };
+        // TODO rewrite it using `ensure_schedule`
         if let Err(e) = self.resolve_scheduler.schedule(ResolveTask::new(store_id, cb)) {
             error!("try to resolve err {:?}", e);
         }
-
     }
 
     fn handle_commit_merge(&self, _region: Region, _peer: Peer) {
@@ -331,7 +371,35 @@ impl Runner {
 
     fn handle_after_resolve(&self, context: TaskContext) {
         match context.task_type {
-            TaskType::SuspendRegion => {}
+            TaskType::SuspendRegion => {
+                let client = RaftRpcClient::new(context.address);
+                match client.send_suspend_region(context.region.clone(), context.peer.clone()) {
+                    Ok(()) => {
+                        // TODO check that the region info in response matches
+                        // Succeed to suspend the specified region, and then go to next step
+                        let task = Task::CommitMerge {
+                            region: context.local_region,
+                            peer: context.local_peer,
+                        };
+                        ensure_schedule(self.scheduler.clone(), task);
+                    }
+                    Err(e) => {
+                        error!("fail to send raft rpc to peer {:?} error {:?}",
+                               context.peer,
+                               e);
+                        // TODO what are all the possible errors returned here?
+                        // Try another peer in the specified region
+                        let next_peer = next_peer(&context.region, context.peer);
+                        let task = Task::SuspendRegion {
+                            region: context.region,
+                            leader: next_peer,
+                            local_region: context.local_region,
+                            local_peer: context.local_peer,
+                        };
+                        ensure_schedule(self.scheduler.clone(), task);
+                    }
+                }
+            }
             TaskType::ShutdownRegion => {}
         }
     }
@@ -342,7 +410,9 @@ impl Runnable<Task> for Runner {
         debug!("executing task {}", task);
 
         match task {
-            Task::SuspendRegion { region, leader } => self.handle_suspend_region(region, leader),
+            Task::SuspendRegion { region, leader, local_region, local_peer } => {
+                self.handle_suspend_region(region, leader, local_region, local_peer)
+            }
             Task::CommitMerge { region, peer } => self.handle_commit_merge(region, peer),
             Task::ShutdownRegion { region, leader } => self.handle_shutdown_region(region, leader),
             Task::AfterResolve { context } => self.handle_after_resolve(context),

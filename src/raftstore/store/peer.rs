@@ -1365,6 +1365,8 @@ impl Peer {
         let task = merge::Task::SuspendRegion {
             region: merge_req.get_region().clone(),
             leader: merge_req.get_leader().clone(),
+            local_region: self.region().clone(),
+            local_peer: self.peer.clone(),
         };
         util::ensure_schedule(self.merge_scheduler.clone(), task);
 

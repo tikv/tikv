@@ -164,6 +164,7 @@ impl Runner {
         let histogram = CHECK_SPLIT_HISTOGRAM.with_label_values(&["merge"]);
         let timer = histogram.start_timer();
 
+        // Scan the engine and get the totol size of the region.
         let _ = engine.scan(&start_key,
                             &end_key,
                             &mut |k, v| {

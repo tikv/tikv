@@ -39,10 +39,7 @@ pub enum Task {
         split_key: Vec<u8>,
         peer: metapb::Peer,
     },
-    AskMerge {
-        region: metapb::Region,
-        peer: metapb::Peer,
-    },
+    AskMerge { region: metapb::Region },
     Heartbeat {
         region: metapb::Region,
         peer: metapb::Peer,
@@ -148,16 +145,20 @@ impl<T: PdClient> Runner<T> {
         }
     }
 
-    fn handle_ask_merge(&self, region: metapb::Region, _peer: metapb::Peer) {
+    fn handle_ask_merge(&self, region: metapb::Region) {
         PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "all"]).inc();
 
         match self.pd_client.ask_merge(region.clone()) {
             Ok(resp) => {
-                info!("[region {}] try to merge with another region id {} for region {:?}",
-                      region.get_id(),
-                      resp.get_region().get_id(),
-                      region);
-                PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "success"]).inc();
+                if resp.get_ok() {
+                    info!("[region {}] PD permits ask merge, from region {:?}",
+                          region.get_id(),
+                          resp.get_region());
+                    PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "success"]).inc();
+                } else {
+                    info!("[region {}] PD rejects ask merge", region.get_id());
+                    PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "fail"]).inc();
+                }
             }
             Err(e) => debug!("[region {}] failed to ask merge: {:?}", region.get_id(), e),
         }
@@ -329,7 +330,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::AskSplit { region, split_key, peer } => {
                 self.handle_ask_split(region, split_key, peer)
             }
-            Task::AskMerge { region, peer } => self.handle_ask_merge(region, peer),
+            Task::AskMerge { region } => self.handle_ask_merge(region),
             Task::Heartbeat { region, peer, down_peers } => {
                 self.handle_heartbeat(region, peer, down_peers)
             }
