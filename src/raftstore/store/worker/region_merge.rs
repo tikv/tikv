@@ -91,6 +91,10 @@ pub enum Task {
         local_peer: Peer,
     },
     CommitMerge {
+        // the region to be shutdown
+        region: Region,
+        // a hint to start raft rpc with
+        leader: Peer,
         // local region which controls the region merge procedure
         local_region: Region,
         // local region which controls the region merge procedure
@@ -120,9 +124,12 @@ impl Display for Task {
                        local_region,
                        local_peer)
             }
-            Task::CommitMerge { ref local_region, ref local_peer } => {
+            Task::CommitMerge { ref region, ref leader, ref local_region, ref local_peer } => {
                 write!(f,
-                       "commit region merge for local region {:?}, local peer {:?}",
+                       "commit region merge for region {:?}, leader {:?}, local region {:?}, \
+                        local peer {:?}",
+                       region,
+                       leader,
                        local_region,
                        local_peer)
             }
@@ -382,12 +389,16 @@ impl Runner {
         }
     }
 
-    fn handle_commit_merge(&self, local_region: Region, local_peer: Peer) {
+    fn handle_commit_merge(&self,
+                           region: Region,
+                           leader: Peer,
+                           local_region: Region,
+                           local_peer: Peer) {
         // TODO add impl
         // send a raft cmd "commit merge" to the specified peer
         // if it times out on waiting for response, retry
         // make sure get one response "ok"
-        let req = new_commit_merge_request(local_region.clone());
+        let req = new_commit_merge_request(region, leader, local_region.clone());
         self.send_admin_request(local_region, local_peer, req)
     }
 
@@ -409,6 +420,8 @@ impl Runner {
                         // TODO check that the region info in response matches
                         // Succeed to suspend the specified region, and then go to next step
                         let task = Task::CommitMerge {
+                            region: context.region,
+                            leader: context.peer,
                             local_region: context.local_region,
                             local_peer: context.local_peer,
                         };
@@ -444,8 +457,8 @@ impl Runnable<Task> for Runner {
             Task::SuspendRegion { region, leader, local_region, local_peer } => {
                 self.handle_suspend_region(region, leader, local_region, local_peer)
             }
-            Task::CommitMerge { local_region, local_peer } => {
-                self.handle_commit_merge(local_region, local_peer)
+            Task::CommitMerge { region, leader, local_region, local_peer } => {
+                self.handle_commit_merge(region, leader, local_region, local_peer)
             }
             Task::ShutdownRegion { region, leader } => self.handle_shutdown_region(region, leader),
             Task::AfterResolve { context } => self.handle_after_resolve(context),
@@ -453,9 +466,11 @@ impl Runnable<Task> for Runner {
     }
 }
 
-fn new_commit_merge_request(region: Region) -> AdminRequest {
+fn new_commit_merge_request(region: Region, leader: Peer, local_region: Region) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::CommitMerge);
     req.mut_commit_merge().set_region(region);
+    req.mut_commit_merge().set_leader(leader);
+    req.mut_commit_merge().set_local_region(local_region);
     req
 }

@@ -79,6 +79,11 @@ pub enum ExecResult {
         left: metapb::Region,
         right: metapb::Region,
     },
+    MergeRegion {
+        new: metapb::Region,
+        old: metapb::Region,
+        to_shutdown: metapb::Region,
+    },
 }
 
 // When we apply commands in handing ready, we should also need a way to
@@ -1051,6 +1056,9 @@ impl Peer {
                         ExecResult::SplitRegion { ref left, .. } => {
                             storage.region = left.clone();
                         }
+                        ExecResult::MergeRegion { ref new, .. } => {
+                            storage.region = new.clone();
+                        }
                     }
                 };
             }
@@ -1406,14 +1414,69 @@ impl Peer {
                          _ctx: &ExecContext,
                          req: &AdminRequest)
                          -> Result<(AdminResponse, Option<ExecResult>)> {
+
         let commit_merge = req.get_commit_merge();
-        // TODO add impl
-        // 1. change local state, merge state
-        // 2. extend region range, write it to peer local state and update peer mete info
-        // 3. return response
         let mut resp = AdminResponse::new();
-        resp.mut_commit_merge().set_region(commit_merge.get_region().clone());
-        Ok((resp, None))
+        resp.mut_commit_merge().set_local_region(commit_merge.get_local_region().clone());
+        // TODO add checking for commit_merge.get_local_region() == local_state.get_region()
+        // TODO add impl
+
+        // write it to peer local state and update peer mete info
+        let state_key = keys::region_state_key(self.peer_id());
+        let mut local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key)).unwrap();
+        let phase = local_state.get_merge_state().get_phase();
+        if phase == MergePhase::Prepare {
+            // update local region merge state
+            let mut new_merge_state = RegionMergeState::new();
+            new_merge_state.set_phase(MergePhase::NoMerge);
+            local_state.set_merge_state(new_merge_state);
+            // TODO remove this update if region merge info is removed from region meta
+            // update region meta info
+            let mut merge = metapb::RegionMerge::new();
+            merge.set_state(metapb::MergeState::None);
+            local_state.mut_region().set_region_merge(merge);
+            // merge region range
+            let to_shutdown = commit_merge.get_region().clone();
+            let old_region = local_state.get_region().clone();
+            let mut new_region = old_region.clone();
+            // the ranges in r1, r2 should be adjacent
+            // TODO add checking for that relationship
+            if to_shutdown.get_start_key() < old_region.get_start_key() {
+                // the range of r1 is ahead of the range of r2
+                new_region.set_start_key(to_shutdown.get_start_key().to_vec());
+                new_region.set_end_key(old_region.get_end_key().to_vec());
+            } else {
+                // the range of r2 is ahead of the range of r1
+                new_region.set_start_key(old_region.get_start_key().to_vec());
+                new_region.set_end_key(to_shutdown.get_end_key().to_vec());
+            }
+            // update region epoch version
+            let region_version = old_region.get_region_epoch().get_version() + 1;
+            new_region.mut_region_epoch().set_version(region_version);
+            local_state.set_region(new_region.clone());
+            // write peer local state
+            try!(self.engine.put_msg(&state_key, &local_state));
+            // update store cached region meta, which is used for reporting PD
+            self.mut_store().set_region(local_state.get_region());
+            // schedule a shutdown task for the region which is about to be shutdown
+            let shutdown_task = region_merge::Task::ShutdownRegion {
+                region: commit_merge.get_region().clone(),
+                leader: commit_merge.get_leader().clone(),
+            };
+            util::ensure_schedule(self.merge_scheduler.clone(), shutdown_task);
+
+            Ok((resp,
+                Some(ExecResult::MergeRegion {
+                new: new_region,
+                old: old_region,
+                to_shutdown: commit_merge.get_region().clone(),
+            })))
+        } else {
+            info!("{} not in region merge prepare state, ignore commit region {:?}",
+                  self.tag,
+                  commit_merge);
+            Ok((resp, None))
+        }
     }
 
     fn exec_shutdown_region(&mut self,

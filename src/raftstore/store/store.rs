@@ -950,6 +950,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn on_ready_merge_region(&mut self,
+                             new: metapb::Region,
+                             old: metapb::Region,
+                             to_shutdown: metapb::Region) {
+        // TODO add impl
+        // for old -> new:
+        // extend the region range in `region_ranges`
+        // for shutdown:
+        // move to_shutdown to recycle regions
+
+        // schedule a task to report to PD that the region merge is done
+        let report_task = PdTask::ReportMerge {
+            new: new,
+            old: old,
+            to_shutdown: to_shutdown,
+        };
+        util::ensure_schedule(self.pd_worker.scheduler(), report_task)
+    }
+
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
         let left_region = left.region();
         let right_region = right.region();
@@ -1013,6 +1032,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::CompactLog { state } => self.on_ready_compact_log(region_id, state),
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
+                }
+                ExecResult::MergeRegion { new, old, to_shutdown } => {
+                    self.on_ready_merge_region(new, old, to_shutdown)
                 }
             }
         }

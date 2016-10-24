@@ -171,12 +171,12 @@ impl super::PdClient for RpcClient {
     fn report_merge(&self,
                     new: metapb::Region,
                     old: metapb::Region,
-                    to_delete: metapb::Region)
+                    to_shutdown: metapb::Region)
                     -> Result<()> {
         let mut report_merge = pdpb::ReportMergeRequest::new();
         report_merge.set_new(new);
         report_merge.set_old(old);
-        report_merge.set_to_delete(to_delete);
+        report_merge.set_to_shutdown(to_shutdown);
 
         let mut req = self.new_request(pdpb::CommandType::ReportMerge);
         req.set_report_merge(report_merge);

@@ -104,6 +104,6 @@ pub trait PdClient: Send + Sync {
     fn report_merge(&self,
                     new: metapb::Region,
                     old: metapb::Region,
-                    to_delete: metapb::Region)
+                    to_shutdown: metapb::Region)
                     -> Result<()>;
 }
