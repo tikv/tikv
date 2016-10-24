@@ -28,6 +28,7 @@ pub enum Tick {
     Raft,
     RaftLogGc,
     SplitRegionCheck,
+    CompactCheck,
     PdHeartbeat,
     PdStoreHeartbeat,
     SnapGc,

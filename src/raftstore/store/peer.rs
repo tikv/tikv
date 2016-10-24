@@ -37,7 +37,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
-use storage::CF_RAFT;
+use storage::{CF_LOCK, CF_RAFT};
 use super::store::{Store, RaftReadyMetrics, RaftMessageMetrics, RaftMetrics};
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
@@ -167,6 +167,8 @@ pub struct Peer {
     coprocessor_host: CoprocessorHost,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
+    /// delete keys' count since last reset.
+    pub delete_keys_hint: u64,
 
     leader_missing_time: Option<Instant>,
 
@@ -252,6 +254,7 @@ impl Peer {
             peer_heartbeats: HashMap::new(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
+            delete_keys_hint: 0,
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
@@ -1271,6 +1274,7 @@ impl Peer {
         resp.mut_split().set_right(new_region.clone());
 
         self.size_diff_hint = 0;
+        self.delete_keys_hint = 0;
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
 
@@ -1398,8 +1402,13 @@ impl Peer {
             let cf = req.get_delete().get_cf();
             let handle = try!(rocksdb::get_cf_handle(&self.engine, cf));
             try!(ctx.wb.delete_cf(handle, &key));
+            // lock cf is compact periodically.
+            if cf != CF_LOCK {
+                self.delete_keys_hint += 1;
+            }
         } else {
             try!(ctx.wb.delete(&key));
+            self.delete_keys_hint += 1;
         }
 
         Ok(resp)
