@@ -44,7 +44,7 @@ use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_LOCK};
-use super::worker::{split_check, SplitCheckRunner, region_merge, MergeRunner, RegionTask,
+use super::worker::{region_check, RegionCheckRunner, region_merge, MergeRunner, RegionTask,
                     RegionRunner, CompactTask, CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
@@ -202,7 +202,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
-    split_check_worker: Worker<split_check::Task>,
+    region_check_worker: Worker<region_check::Task>,
     merge_worker: Worker<region_merge::Task>,
     region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
@@ -256,7 +256,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             sendch: sendch,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
-            split_check_worker: Worker::new("split check worker"),
+            region_check_worker: Worker::new("split check worker"),
             merge_worker: Worker::new("merge worker"),
             region_worker: Worker::new("snapshot worker"),
             compact_worker: Worker::new("compact worker"),
@@ -373,11 +373,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
 
-        let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
-                                                       self.cfg.region_max_size,
-                                                       self.cfg.region_split_size,
-                                                       self.cfg.region_merge_size);
-        box_try!(self.split_check_worker.start(split_check_runner));
+        let region_check_runner = RegionCheckRunner::new(self.sendch.clone(),
+                                                         self.cfg.region_max_size,
+                                                         self.cfg.region_split_size,
+                                                         self.cfg.region_merge_size);
+        box_try!(self.region_check_worker.start(region_check_runner));
 
         let merge_runner = MergeRunner::new(self.merge_worker.scheduler(),
                                             self.resolve_scheduler.clone(),
@@ -1190,7 +1190,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         // TODO: check whether a gc progress has been started.
-        if self.split_check_worker.is_busy() {
+        if self.region_check_worker.is_busy() {
             self.register_split_region_check_tick(event_loop);
             return;
         }
@@ -1206,8 +1206,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   peer.tag,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
-            let task = split_check::new_split_check_task(peer.get_store());
-            if let Err(e) = self.split_check_worker.schedule(task) {
+            let task = region_check::new_split_check_task(peer.get_store());
+            if let Err(e) = self.region_check_worker.schedule(task) {
                 error!("failed to schedule split check: {}", e);
             }
             peer.size_diff_hint = 0;
@@ -1522,7 +1522,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_gc(&mut self, region_id: u64, peer_id: u64) {
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
-        if self.split_check_worker.is_busy() {
+        if self.region_check_worker.is_busy() {
             warn!("split check worker is busy, ignore gc notify for [region {}] peer {}",
                   region_id,
                   peer_id);
@@ -1539,11 +1539,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 info!("{} gc is done, need to check whether should merge",
                       peer.tag);
-                let task = split_check::new_merge_check_task(peer.get_store());
+                let task = region_check::new_merge_check_task(peer.get_store());
                 // If it fails to schedule this task, another gc in the future
                 // will re-trigger the checking for region merge.
                 // So it's fine to just log an error message here.
-                if let Err(e) = self.split_check_worker.schedule(task) {
+                if let Err(e) = self.region_check_worker.schedule(task) {
                     error!("failed to schedule merge check: {}", e);
                 }
                 return;
@@ -1685,8 +1685,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            for (handle, name) in vec![(self.split_check_worker.stop(),
-                                        self.split_check_worker.name()),
+            for (handle, name) in vec![(self.region_check_worker.stop(),
+                                        self.region_check_worker.name()),
                                        (self.region_worker.stop(), self.region_worker.name()),
                                        (self.compact_worker.stop(), self.compact_worker.name()),
                                        (self.pd_worker.stop(), self.pd_worker.name())] {
