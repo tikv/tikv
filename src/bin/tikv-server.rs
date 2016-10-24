@@ -48,15 +48,12 @@ use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config, bind,
                    create_event_loop, create_raft_storage, Msg};
-use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
+use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
-use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver, StoreAddrResolver};
+use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
-
-const ROCKSDB_DSN: &'static str = "rocksdb";
-const RAFTKV_DSN: &'static str = "raftkv";
 
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -781,26 +778,6 @@ fn handle_signal(ch: SendCh<Msg>) {
 #[cfg(not(unix))]
 fn handle_signal(ch: SendCh<Msg>) {}
 
-fn run_local_server(listener: TcpListener, config: &Config) {
-    let mut event_loop = create_event_loop(config).unwrap();
-    let snap_mgr = store::new_snap_mgr(TEMP_DIR, None);
-
-    let mut store = Storage::new(&config.storage).unwrap();
-    if let Err(e) = store.start(&config.storage) {
-        panic!("failed to start storage, error = {:?}", e);
-    }
-
-    let svr = Server::new(&mut event_loop,
-                          config,
-                          listener,
-                          store,
-                          MockRaftStoreRouter,
-                          MockStoreAddrResolver,
-                          snap_mgr)
-        .unwrap();
-    start_server(svr, event_loop);
-}
-
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel());
@@ -877,8 +854,8 @@ fn main() {
                 "default: 0 (unlimited)");
     opts.optopt("S",
                 "dsn",
-                "set which dsn to use, warning: default is rocksdb without persistent",
-                "dsn: rocksdb, raftkv");
+                "[deprecated] set which dsn to use, warning: now only support raftkv",
+                "dsn: raftkv");
     opts.optopt("I",
                 "cluster-id",
                 "set cluster id",
@@ -915,12 +892,6 @@ fn main() {
                                 |v| v.as_str().map(|s| s.to_owned()));
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
-    let dsn_name = get_string_value("S",
-                                    "server.dsn",
-                                    &matches,
-                                    &config,
-                                    Some(ROCKSDB_DSN.to_owned()),
-                                    |v| v.as_str().map(|s| s.to_owned()));
     panic_hook::set_exit_hook();
     let cluster_id = get_integer_value("I",
                                        "raft.cluster-id",
@@ -933,18 +904,10 @@ fn main() {
                             cluster_id,
                             &format!("{}", listener.local_addr().unwrap()));
     cfg.storage.path = get_store_path(&matches, &config);
-    match dsn_name.as_ref() {
-        ROCKSDB_DSN => {
-            initial_metric(&matches, &config, None);
-            run_local_server(listener, &cfg);
-        }
-        RAFTKV_DSN => {
-            if cluster_id == DEFAULT_CLUSTER_ID {
-                panic!("in raftkv, cluster_id must greater than 0");
-            }
-            let _m = TimeMonitor::default();
-            run_raft_server(listener, &matches, &config, &cfg);
-        }
-        n => panic!("unrecognized dns name: {}", n),
-    };
+
+    if cluster_id == DEFAULT_CLUSTER_ID {
+        panic!("in raftkv, cluster_id must greater than 0");
+    }
+    let _m = TimeMonitor::default();
+    run_raft_server(listener, &matches, &config, &cfg);
 }
