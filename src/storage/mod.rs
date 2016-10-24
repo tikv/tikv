@@ -29,7 +29,7 @@ mod types;
 mod metrics;
 
 pub use self::config::Config;
-pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Cursor,
+pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cursor,
                        Error as EngineError, ScanMode};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg};
@@ -257,7 +257,7 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let engine = try!(engine::new_engine(Dsn::RocksDBPath(&config.path), ALL_CFS));
+        let engine = try!(engine::new_local_engine(&config.path, ALL_CFS));
         Storage::from_engine(engine, config)
     }
 
@@ -658,7 +658,7 @@ mod tests {
     fn test_put_with_err() {
         let config = Config::new();
         // New engine lack of some column families.
-        let engine = engine::new_engine(Dsn::RocksDBPath(&config.path), &["default"]).unwrap();
+        let engine = engine::new_local_engine(&config.path, &["default"]).unwrap();
         let mut storage = Storage::from_engine(engine, &config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();

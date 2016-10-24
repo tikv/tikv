@@ -311,20 +311,9 @@ impl<'a> Cursor<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Dsn<'a> {
-    RocksDBPath(&'a str),
-    RaftKv,
-}
-
-// Now we only support RocksDB.
-pub fn new_engine(dsn: Dsn, cfs: &[CfName]) -> Result<Box<Engine>> {
-    match dsn {
-        Dsn::RocksDBPath(path) => {
-            EngineRocksdb::new(path, cfs).map(|engine| -> Box<Engine> { Box::new(engine) })
-        }
-        Dsn::RaftKv => unimplemented!(),
-    }
+/// Create a local Rocskdb engine. (Whihout raft, mainly for tests).
+pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<Box<Engine>> {
+    EngineRocksdb::new(path, cfs).map(|engine| -> Box<Engine> { Box::new(engine) })
 }
 
 quick_error! {
@@ -370,9 +359,7 @@ mod tests {
     #[test]
     fn rocksdb() {
         let dir = TempDir::new("rocksdb_test").unwrap();
-        let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
-                           TEST_ENGINE_CFS)
-            .unwrap();
+        let e = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
 
         test_get_put(e.as_ref());
         test_batch(e.as_ref());
@@ -387,15 +374,11 @@ mod tests {
     fn rocksdb_reopen() {
         let dir = TempDir::new("rocksdb_test").unwrap();
         {
-            let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
-                               TEST_ENGINE_CFS)
-                .unwrap();
+            let e = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
             must_put_cf(e.as_ref(), "cf", b"k", b"v1");
         }
         {
-            let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
-                               TEST_ENGINE_CFS)
-                .unwrap();
+            let e = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
             assert_has_cf(e.as_ref(), "cf", b"k", b"v1");
         }
     }
@@ -603,9 +586,7 @@ mod tests {
     #[test]
     fn test_linear() {
         let dir = TempDir::new("rocksdb_test").unwrap();
-        let e = new_engine(Dsn::RocksDBPath(dir.path().to_str().unwrap()),
-                           TEST_ENGINE_CFS)
-            .unwrap();
+        let e = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
         for i in 50..50 + SEEK_BOUND * 10 {
             let key = format!("key_{}", i * 2);
             let value = format!("value_{}", i);

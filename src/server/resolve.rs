@@ -143,14 +143,6 @@ impl Drop for PdStoreAddrResolver {
     }
 }
 
-pub struct MockStoreAddrResolver;
-
-impl StoreAddrResolver for MockStoreAddrResolver {
-    fn resolve(&self, _: u64, _: Callback) -> Result<()> {
-        unimplemented!();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
