@@ -10,8 +10,6 @@
 addr = "127.0.0.1:20160"
 # if not set, use addr instead. set advertise listening address for client communication.
 advertise-addr = ""
-# set which dsn to use, warning: default is rocksdb without persistent.
-dsn = "rocksdb"
 # set the path to rocksdb directory.
 store = "/tmp/tikv/store"
 # log level: trace, debug, info, warn, error, off.
