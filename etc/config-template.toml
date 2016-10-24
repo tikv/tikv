@@ -44,10 +44,10 @@ notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
 messages-per-tick = 4096
 
-# Region heartbeat tick interval (ms) for reporting to pd. 
-pd-heartbeat-tick-interval = "5000ms"
-# Store heartbeat tick interval (ms) for reporting to pd.
-pd-store-heartbeat-tick-interval = "10000ms"
+# Region heartbeat tick interval for reporting to pd. 
+pd-heartbeat-tick-interval = "60s"
+# Store heartbeat tick interval for reporting to pd.
+pd-store-heartbeat-tick-interval = "10s"
 
 # When the region's size exceeds region-max-size, we will split the region 
 # into two which the left region's size will be region-split-size or a little 
