@@ -135,7 +135,7 @@ impl super::PdClient for RpcClient {
 
     fn ask_merge(&self, region: metapb::Region) -> Result<pdpb::AskMergeResponse> {
         let mut ask_merge = pdpb::AskMergeRequest::new();
-        ask_merge.set_region(region);
+        ask_merge.set_from_region(region);
 
         let mut req = self.new_request(pdpb::CommandType::AskMerge);
         req.set_ask_merge(ask_merge);

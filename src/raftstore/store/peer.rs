@@ -29,8 +29,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse, MergeResponse,
                           SuspendRegionRequest};
-use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, MergePhase,
-                             RegionMergeState, PeerState, RegionLocalState};
+use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
+                             RegionLocalState};
 use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
 use raftstore::{Result, Error};
@@ -79,7 +79,8 @@ pub enum ExecResult {
         left: metapb::Region,
         right: metapb::Region,
     },
-    MergeRegion {
+    MergeRegion { region: metapb::Region },
+    CommitMerge {
         new: metapb::Region,
         old: metapb::Region,
         to_shutdown: metapb::Region,
@@ -1056,7 +1057,10 @@ impl Peer {
                         ExecResult::SplitRegion { ref left, .. } => {
                             storage.region = left.clone();
                         }
-                        ExecResult::MergeRegion { ref new, .. } => {
+                        ExecResult::MergeRegion { ref region } => {
+                            storage.region = region.clone();
+                        }
+                        ExecResult::CommitMerge { ref new, .. } => {
                             storage.region = new.clone();
                         }
                     }
@@ -1339,49 +1343,42 @@ impl Peer {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["merge", "all"]).inc();
 
         let merge_req = req.get_merge();
-        info!("{} merge region {:?} to region {:?}",
+        info!("{} merge region {:?} into region {:?}",
               self.tag,
-              merge_req.get_region(),
+              merge_req.get_from_region(),
               self.region());
-
-        let state_key = keys::region_state_key(self.peer_id());
-        let mut local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key)).unwrap();
-        let phase = local_state.get_merge_state().get_phase();
-        if phase == MergePhase::NoMerge {
-            // update local region merge state
-            let mut new_merge_state = RegionMergeState::new();
-            new_merge_state.set_phase(MergePhase::Prepare);
-            new_merge_state.set_to_merge(merge_req.get_region().clone());
-            local_state.set_merge_state(new_merge_state);
-            // TODO remove this update if region merge info is removed from peer meta
-            // update peer meta info
-            let mut merge = metapb::RegionMerge::new();
-            merge.set_state(metapb::MergeState::Prepare);
-            merge.set_from_id(merge_req.get_region().get_id());
-            merge.set_into_id(self.region_id);
-            local_state.mut_region().set_region_merge(merge);
-            // write peer local state
-            try!(self.engine.put_msg(&state_key, &local_state));
-            // update store cached region meta, which is used for reporting PD
-            self.mut_store().set_region(local_state.get_region());
-        } else {
-            info!("{} already in region merge phase {}, ignore region merge request",
-                  self.tag,
-                  util::region_merge_phase_str(&phase));
-        }
-
-        let task = region_merge::Task::SuspendRegion {
-            region: merge_req.get_region().clone(),
-            leader: merge_req.get_leader().clone(),
-            local_region: self.region().clone(),
-            local_peer: self.peer.clone(),
-        };
-        util::ensure_schedule(self.merge_scheduler.clone(), task);
 
         let mut resp = AdminResponse::new();
         resp.set_merge(MergeResponse::new());
 
-        Ok((resp, None))
+        let merge_state = self.region().get_region_merge().get_state();;
+        if merge_state == metapb::MergeState::Merging {
+            info!("{} already in region merge state {:?}, ignore region merge request",
+                  self.tag,
+                  merge_state);
+            Ok((resp, None))
+        } else {
+            // update peer meta info
+            let state_key = keys::region_state_key(self.peer_id());
+            let mut local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+                .unwrap();
+            let mut region_merge = metapb::RegionMerge::new();
+            region_merge.set_state(metapb::MergeState::Merging);
+            region_merge.set_from_id(merge_req.get_from_region().get_id());
+            region_merge.set_into_id(self.region_id);
+            local_state.mut_region().set_region_merge(region_merge);
+            try!(self.engine.put_msg(&state_key, &local_state));
+
+            let task = region_merge::Task::SuspendRegion {
+                from_region: merge_req.get_from_region().clone(),
+                from_leader: merge_req.get_from_leader().clone(),
+                into_region: local_state.get_region().clone(),
+                into_peer: self.peer.clone(),
+            };
+            util::ensure_schedule(self.merge_scheduler.clone(), task);
+
+            Ok((resp, Some(ExecResult::MergeRegion { region: local_state.get_region().clone() })))
+        }
     }
 
     fn exec_suspend_region(&mut self,
@@ -1417,27 +1414,28 @@ impl Peer {
 
         let commit_merge = req.get_commit_merge();
         let mut resp = AdminResponse::new();
-        resp.mut_commit_merge().set_local_region(commit_merge.get_local_region().clone());
+        resp.mut_commit_merge().set_into_region(commit_merge.get_into_region().clone());
         // TODO add checking for commit_merge.get_local_region() == local_state.get_region()
         // TODO add impl
 
         // write it to peer local state and update peer mete info
-        let state_key = keys::region_state_key(self.peer_id());
-        let mut local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key)).unwrap();
-        let phase = local_state.get_merge_state().get_phase();
-        if phase == MergePhase::Prepare {
-            // update local region merge state
-            let mut new_merge_state = RegionMergeState::new();
-            new_merge_state.set_phase(MergePhase::NoMerge);
-            local_state.set_merge_state(new_merge_state);
-            // TODO remove this update if region merge info is removed from region meta
+        let merge_state = self.region().get_region_merge().get_state();
+        if merge_state != metapb::MergeState::Merging {
+            info!("{} not in region merge Merging state, ignore commit region {:?}",
+                  self.tag,
+                  commit_merge);
+            Ok((resp, None))
+        } else {
             // update region meta info
-            let mut merge = metapb::RegionMerge::new();
-            merge.set_state(metapb::MergeState::None);
-            local_state.mut_region().set_region_merge(merge);
+            let state_key = keys::region_state_key(self.peer_id());
+            let mut local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+                .unwrap();
+            let mut region_merge = metapb::RegionMerge::new();
+            region_merge.set_state(metapb::MergeState::None);
+            local_state.mut_region().set_region_merge(region_merge);
             // merge region range
-            let to_shutdown = commit_merge.get_region().clone();
-            let old_region = local_state.get_region().clone();
+            let to_shutdown = commit_merge.get_from_region().clone();
+            let old_region = commit_merge.get_into_region().clone();
             let mut new_region = old_region.clone();
             // the ranges in r1, r2 should be adjacent
             // TODO add checking for that relationship
@@ -1454,28 +1452,21 @@ impl Peer {
             let region_version = old_region.get_region_epoch().get_version() + 1;
             new_region.mut_region_epoch().set_version(region_version);
             local_state.set_region(new_region.clone());
-            // write peer local state
+            // persist peer local state
             try!(self.engine.put_msg(&state_key, &local_state));
-            // update store cached region meta, which is used for reporting PD
-            self.mut_store().set_region(local_state.get_region());
             // schedule a shutdown task for the region which is about to be shutdown
             let shutdown_task = region_merge::Task::ShutdownRegion {
-                region: commit_merge.get_region().clone(),
-                leader: commit_merge.get_leader().clone(),
+                region: commit_merge.get_from_region().clone(),
+                leader: commit_merge.get_from_leader().clone(),
             };
             util::ensure_schedule(self.merge_scheduler.clone(), shutdown_task);
 
             Ok((resp,
-                Some(ExecResult::MergeRegion {
+                Some(ExecResult::CommitMerge {
                 new: new_region,
                 old: old_region,
-                to_shutdown: commit_merge.get_region().clone(),
+                to_shutdown: commit_merge.get_from_region().clone(),
             })))
-        } else {
-            info!("{} not in region merge prepare state, ignore commit region {:?}",
-                  self.tag,
-                  commit_merge);
-            Ok((resp, None))
         }
     }
 

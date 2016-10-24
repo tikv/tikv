@@ -950,14 +950,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_merge_region(&mut self,
+    fn on_ready_merge_region(&mut self, _region: metapb::Region) {
+        // TODO anything to do here?
+    }
+
+    fn on_ready_commit_merge(&mut self,
                              new: metapb::Region,
                              old: metapb::Region,
                              to_shutdown: metapb::Region) {
         // TODO add impl
-        // for old -> new:
+        // for old -> new region:
         // extend the region range in `region_ranges`
-        // for shutdown:
+        // for region to be shutdown:
         // move to_shutdown to recycle regions
 
         // schedule a task to report to PD that the region merge is done
@@ -1033,8 +1037,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
                 }
-                ExecResult::MergeRegion { new, old, to_shutdown } => {
-                    self.on_ready_merge_region(new, old, to_shutdown)
+                ExecResult::MergeRegion { region } => self.on_ready_merge_region(region),
+                ExecResult::CommitMerge { new, old, to_shutdown } => {
+                    self.on_ready_commit_merge(new, old, to_shutdown)
                 }
             }
         }

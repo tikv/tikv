@@ -164,16 +164,20 @@ impl<T: PdClient> Runner<T> {
         match self.pd_client.ask_merge(region.clone()) {
             Ok(resp) => {
                 if resp.get_ok() {
-                    info!("[region {}] PD permits ask merge, from region {:?}",
+                    info!("[region {}] PD permits ask merge request. Later this region will be \
+                           merged into region {:?}",
                           region.get_id(),
-                          resp.get_region());
+                          resp.get_into_region());
                     PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "success"]).inc();
                 } else {
-                    info!("[region {}] PD rejects ask merge", region.get_id());
-                    PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "fail"]).inc();
+                    info!("[region {}] PD rejects ask merge request", region.get_id());
                 }
             }
-            Err(e) => debug!("[region {}] failed to ask merge: {:?}", region.get_id(), e),
+            Err(e) => {
+                debug!("[region {}] failed to ask merge, error: {:?}",
+                       region.get_id(),
+                       e)
+            }
         }
     }
 
@@ -214,12 +218,12 @@ impl<T: PdClient> Runner<T> {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["region merge"]).inc();
 
                     let mut region_merge = resp.take_region_merge();
-                    info!("[region {}] try to merge region {:?} to {:?}",
+                    info!("[region {}] try to merge region {:?} into {:?}",
                           region.get_id(),
-                          region_merge.get_region(),
+                          region_merge.get_from_region(),
                           region);
-                    let req = new_region_merge_request(region_merge.take_region(),
-                                                       region_merge.take_leader());
+                    let req = new_region_merge_request(region_merge.take_from_region(),
+                                                       region_merge.take_from_leader());
                     self.send_admin_request(region, peer, req);
                 }
             }
@@ -397,10 +401,12 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     req
 }
 
-fn new_region_merge_request(region: metapb::Region, leader: metapb::Peer) -> AdminRequest {
+fn new_region_merge_request(from_region: metapb::Region,
+                            from_leader: metapb::Peer)
+                            -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::Merge);
-    req.mut_merge().set_region(region);
-    req.mut_merge().set_leader(leader);
+    req.mut_merge().set_from_region(from_region);
+    req.mut_merge().set_from_leader(from_leader);
     req
 }
