@@ -855,7 +855,7 @@ fn main() {
     opts.optopt("S",
                 "dsn",
                 "[deprecated] set which dsn to use, warning: now only support raftkv",
-                "dsn: rocksdb, raftkv");
+                "dsn: raftkv");
     opts.optopt("I",
                 "cluster-id",
                 "set cluster id",
