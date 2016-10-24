@@ -852,6 +852,10 @@ fn main() {
                 "capacity",
                 "set the store capacity",
                 "default: 0 (unlimited)");
+    opts.optopt("S",
+                "dsn",
+                "[deprecated] set which dsn to use, warning: now only support raftkv",
+                "dsn: rocksdb, raftkv");
     opts.optopt("I",
                 "cluster-id",
                 "set cluster id",
