@@ -137,7 +137,7 @@ impl Runnable<Task> for Runner {
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
                     error!("execute compact range for cf {} failed, err {}", &cf, e);
                 } else {
-                    info!("compact range for cf {} finished", &cf)
+                    info!("compact range for cf {} finished", &cf);
                 }
             }
         }

@@ -42,7 +42,7 @@ use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
-use storage::{ALL_CFS, CF_LOCK};
+use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
@@ -353,6 +353,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
+        self.register_compact_check_tick(event_loop);
         self.register_pd_heartbeat_tick(event_loop);
         self.register_pd_store_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
@@ -1173,6 +1174,36 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_split_region_check_tick(event_loop);
     }
 
+    fn register_compact_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::CompactCheck,
+                                       self.cfg.region_compact_check_tick_interval) {
+            error!("register compact check tick err: {:?}", e);
+        };
+    }
+
+    fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        for (_, peer) in &mut self.region_peers {
+            if peer.delete_keys_hint < self.cfg.region_compact_delete_keys_count {
+                continue;
+            }
+            for &cf in &[CF_DEFAULT, CF_WRITE] {
+                let task = CompactTask::CompactRangeCF {
+                    cf_name: String::from(cf),
+                    start_key: Some(keys::enc_start_key(peer.region())),
+                    end_key: Some(keys::enc_end_key(peer.region())),
+                };
+                if let Err(e) = self.compact_worker.schedule(task) {
+                    error!("failed to schedule compact task: {}", e);
+                }
+            }
+            peer.delete_keys_hint = 0;
+            // Compact only 1 region each check in case compact task accumulates.
+            break;
+        }
+        self.register_compact_check_tick(event_loop);
+    }
+
     fn on_split_check_result(&mut self,
                              region_id: u64,
                              epoch: metapb::RegionEpoch,
@@ -1561,6 +1592,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::Raft => self.on_raft_base_tick(event_loop),
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
+            Tick::CompactCheck => self.on_compact_check_tick(event_loop),
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
