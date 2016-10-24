@@ -92,9 +92,9 @@ pub enum Task {
     },
     CommitMerge {
         // local region which controls the region merge procedure
-        region: Region,
+        local_region: Region,
         // local region which controls the region merge procedure
-        peer: Peer,
+        local_peer: Peer,
     },
     ShutdownRegion {
         // the region to be shutdown
@@ -120,11 +120,11 @@ impl Display for Task {
                        local_region,
                        local_peer)
             }
-            Task::CommitMerge { ref region, ref peer } => {
+            Task::CommitMerge { ref local_region, ref local_peer } => {
                 write!(f,
-                       "commit region merge for region {:?}, peer {:?}",
-                       region,
-                       peer)
+                       "commit region merge for local region {:?}, local peer {:?}",
+                       local_region,
+                       local_peer)
             }
             Task::ShutdownRegion { ref region, ref leader } => {
                 write!(f, "shutdown region {:?}, leader {:?}", region, leader)
@@ -303,6 +303,35 @@ impl Runner {
         }
     }
 
+    fn send_admin_request(&self, mut region: Region, peer: Peer, request: AdminRequest) {
+        let region_id = region.get_id();
+        let cmd_type = request.get_cmd_type();
+
+        let mut req = RaftCmdRequest::new();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header().set_region_epoch(region.take_region_epoch());
+        req.mut_header().set_peer(peer);
+        req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        req.set_admin_request(request);
+
+        loop {
+            let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
+            let cmd = Msg::RaftCmd {
+                request: req.clone(),
+                callback: cb,
+            };
+            if let Err(e) = self.ch.try_send(cmd) {
+                error!("[region {}] send {:?} request err {:?}",
+                       region_id,
+                       cmd_type,
+                       e);
+            } else {
+                return;
+            }
+        }
+    }
+
     fn handle_suspend_region(&self,
                              region: Region,
                              leader: Peer,
@@ -353,11 +382,13 @@ impl Runner {
         }
     }
 
-    fn handle_commit_merge(&self, _region: Region, _peer: Peer) {
+    fn handle_commit_merge(&self, local_region: Region, local_peer: Peer) {
         // TODO add impl
         // send a raft cmd "commit merge" to the specified peer
         // if it times out on waiting for response, retry
         // make sure get one response "ok"
+        let req = new_commit_merge_request(local_region.clone());
+        self.send_admin_request(local_region, local_peer, req)
     }
 
     fn handle_shutdown_region(&self, _region: Region, _leader: Peer) {
@@ -378,8 +409,8 @@ impl Runner {
                         // TODO check that the region info in response matches
                         // Succeed to suspend the specified region, and then go to next step
                         let task = Task::CommitMerge {
-                            region: context.local_region,
-                            peer: context.local_peer,
+                            local_region: context.local_region,
+                            local_peer: context.local_peer,
                         };
                         ensure_schedule(self.scheduler.clone(), task);
                     }
@@ -413,9 +444,18 @@ impl Runnable<Task> for Runner {
             Task::SuspendRegion { region, leader, local_region, local_peer } => {
                 self.handle_suspend_region(region, leader, local_region, local_peer)
             }
-            Task::CommitMerge { region, peer } => self.handle_commit_merge(region, peer),
+            Task::CommitMerge { local_region, local_peer } => {
+                self.handle_commit_merge(local_region, local_peer)
+            }
             Task::ShutdownRegion { region, leader } => self.handle_shutdown_region(region, leader),
             Task::AfterResolve { context } => self.handle_after_resolve(context),
         };
     }
+}
+
+fn new_commit_merge_request(region: Region) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::CommitMerge);
+    req.mut_commit_merge().set_region(region);
+    req
 }
