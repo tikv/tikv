@@ -640,7 +640,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           "raftstore.pd-heartbeat-tick-interval",
                           matches,
                           config,
-                          Some(5000),
+                          Some(60_000),
                           |v| v.as_integer()) as u64;
 
     cfg.raft_store.pd_store_heartbeat_tick_interval =
@@ -648,7 +648,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           "raftstore.pd-store-heartbeat-tick-interval",
                           matches,
                           config,
-                          Some(10000),
+                          Some(10_000),
                           |v| v.as_integer()) as u64;
 
     cfg.storage.sched_notify_capacity =
