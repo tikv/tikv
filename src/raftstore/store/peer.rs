@@ -49,7 +49,7 @@ use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
-use super::worker::merge;
+use super::worker::region_merge;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -175,7 +175,7 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
 
     state: PeerState,
-    merge_scheduler: Scheduler<merge::Task>,
+    merge_scheduler: Scheduler<region_merge::Task>,
 
     pub tag: String,
 }
@@ -187,7 +187,7 @@ impl Peer {
     pub fn create<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                              region: &metapb::Region,
                                              state: PeerState,
-                                             merge_scheduler: Scheduler<merge::Task>)
+                                             merge_scheduler: Scheduler<region_merge::Task>)
                                              -> Result<Peer> {
         let store_id = store.store_id();
         let peer_id = match util::find_peer(region, store_id) {
@@ -209,7 +209,7 @@ impl Peer {
     pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                                 region_id: u64,
                                                 peer_id: u64,
-                                                merge_scheduler: Scheduler<merge::Task>)
+                                                merge_scheduler: Scheduler<region_merge::Task>)
                                                 -> Result<Peer> {
         // We will remove tombstone key when apply snapshot
         info!("[region {}] replicate peer with id {}", region_id, peer_id);
@@ -223,7 +223,7 @@ impl Peer {
                                       region: &metapb::Region,
                                       peer_id: u64,
                                       state: PeerState,
-                                      merge_scheduler: Scheduler<merge::Task>)
+                                      merge_scheduler: Scheduler<region_merge::Task>)
                                       -> Result<Peer> {
         if peer_id == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -1362,7 +1362,7 @@ impl Peer {
                   util::region_merge_phase_str(&phase));
         }
 
-        let task = merge::Task::SuspendRegion {
+        let task = region_merge::Task::SuspendRegion {
             region: merge_req.get_region().clone(),
             leader: merge_req.get_leader().clone(),
             local_region: self.region().clone(),

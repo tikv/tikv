@@ -44,8 +44,8 @@ use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_LOCK};
-use super::worker::{split_check, SplitCheckRunner, merge, MergeRunner, RegionTask, RegionRunner,
-                    CompactTask, CompactRunner, PdRunner, PdTask};
+use super::worker::{split_check, SplitCheckRunner, region_merge, MergeRunner, RegionTask,
+                    RegionRunner, CompactTask, CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
@@ -203,7 +203,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<split_check::Task>,
-    merge_worker: Worker<merge::Task>,
+    merge_worker: Worker<region_merge::Task>,
     region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
