@@ -62,11 +62,6 @@ pub enum Msg {
 
     // For snapshot stats.
     SnapshotStats,
-    SnapApplyRes {
-        region_id: u64,
-        is_success: bool,
-        is_aborted: bool,
-    },
     SnapGenRes {
         region_id: u64,
         snap: Option<Snapshot>,
@@ -94,13 +89,6 @@ impl fmt::Debug for Msg {
                        region_id)
             }
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
-            Msg::SnapApplyRes { region_id, is_success, is_aborted } => {
-                write!(fmt,
-                       "SnapApplyRes [region_id: {}, is_success: {}, is_aborted: {}]",
-                       region_id,
-                       is_success,
-                       is_aborted)
-            }
             Msg::SnapGenRes { region_id, ref snap } => {
                 write!(fmt,
                        "SnapGenRes [region_id: {}, is_success: {}]",

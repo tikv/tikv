@@ -148,13 +148,13 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     let new_region = cluster.get_region(b"k3");
     let new_region_id = new_region.get_id();
     // Block peer (new_region_id, 4) at receiving snapshot, but not the heartbeat
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(new_region_id, 4)
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(new_region_id, 3)
         .msg_type(MessageType::MsgSnapshot)));
 
     pd_client.must_add_peer(new_region_id, new_peer(3, 4));
 
     // Wait for the heartbeat broadcasted from peer (1, 1000) to peer (3, 4).
-    thread::sleep(Duration::from_millis(60));
+    cluster.must_region_exist(new_region_id, 3);
 
     // And then isolate peer (3, 4) from peer (1, 1000).
     cluster.add_send_filter(IsolationFilterFactory::new(3));

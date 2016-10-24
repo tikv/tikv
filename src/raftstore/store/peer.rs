@@ -465,29 +465,22 @@ impl Peer {
                                            trans: &T,
                                            metrics: &mut RaftMetrics)
                                            -> Result<Option<ReadyResult>> {
+        if self.mut_store().check_applying_snap() {
+            // If we continue handle all the messages, it may cause too many messages because
+            // leader will send all the remaining messages to this follower, which can lead
+            // to full message queue under high load.
+            debug!("{} still applying snapshot, skip further handling.",
+                   self.tag);
+            return Ok(None);
+        }
+
         if !self.raft_group.has_ready() {
             return Ok(None);
         }
 
         debug!("{} handle raft ready", self.tag);
 
-        let mut ready = self.raft_group.ready();
-        let is_applying = self.get_store().is_applying_snap();
-        if is_applying {
-            if !raft::is_empty_snap(&ready.snapshot) {
-                if self.get_store().is_canceling_snap() {
-                    return Ok(None);
-                }
-                warn!("{} receiving a new snap {:?} when applying the old one, try to abort.",
-                      self.tag,
-                      ready.snapshot);
-                if !self.mut_store().cancel_applying_snap() {
-                    return Ok(None);
-                }
-            }
-            // skip apply
-            ready.committed_entries = vec![];
-        }
+        let ready = self.raft_group.ready();
 
         let t = SlowTimer::new();
 
@@ -516,11 +509,6 @@ impl Peer {
                   ready.messages.len(),
                   apply_result.is_some(),
                   ready.hs.is_some());
-
-        if is_applying {
-            // remove hard state so raft won't change the apply index.
-            ready.hs.take();
-        }
 
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
