@@ -201,6 +201,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
+    region_ranges_to_shutdown: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
     region_check_worker: Worker<region_check::Task>,
     merge_worker: Worker<region_merge::Task>,
@@ -262,6 +263,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
+            region_ranges_to_shutdown: BTreeMap::new(),
             pending_regions: vec![],
             trans: trans,
             pd_client: pd_client,
@@ -353,6 +355,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             try!(delete_all_in_range(&self.engine, &last_start_key, &start_key));
             last_start_key = keys::enc_end_key(region);
         }
+        // `region_ranges_to_shutdown` should be empty on initialization. Skip it here.
 
         try!(delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
 
@@ -843,7 +846,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        if is_initialized && self.region_ranges.remove(&enc_end_key(p.region())).is_none() {
+        let end_key = enc_end_key(p.region());
+        if is_initialized &&
+           (self.region_ranges.remove(&end_key).is_none() ||
+            self.region_ranges_to_shutdown.remove(&end_key).is_none()) {
             panic!("[region {}] remove peer {:?} in store {}",
                    region_id,
                    peer,
@@ -958,11 +964,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              new: metapb::Region,
                              old: metapb::Region,
                              to_shutdown: metapb::Region) {
-        // TODO add impl
-        // for old -> new region:
-        // extend the region range in `region_ranges`
-        // for region to be shutdown:
-        // move to_shutdown to recycle regions
+        // for new region, extend the region range in `region_ranges`
+        if self.region_ranges.remove(&enc_end_key(&old)).is_none() {
+            panic!("[region {}] region should exist {:?}", old.get_id(), old);
+        }
+        if self.region_ranges.remove(&enc_end_key(&to_shutdown)).is_none() {
+            panic!("[region {}] region should exist {:?}",
+                   to_shutdown.get_id(),
+                   to_shutdown);
+        }
+        self.region_ranges.insert(enc_end_key(&new), new.get_id());
+        // for region to be shutdown, move the range of it to `region_ranges_to_shutdown`
+        self.region_ranges_to_shutdown.insert(enc_end_key(&to_shutdown), to_shutdown.get_id());
 
         // schedule a task to report to PD that the region merge is done
         let report_task = PdTask::ReportMerge {
@@ -1010,14 +1023,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   prev_region,
                   region);
             // we have already initialized the peer, so it must exist in region_ranges.
-            if self.region_ranges.remove(&enc_end_key(&prev_region)).is_none() {
+            let mut exist = false;
+            let end_key = enc_end_key(&prev_region);
+            if self.region_ranges.remove(&end_key).is_some() {
+                exist = true;
+                self.region_ranges.insert(end_key, region.get_id());
+            } else if self.region_ranges_to_shutdown.remove(&end_key).is_some() {
+                exist = true;
+                self.region_ranges_to_shutdown.insert(end_key, region.get_id());
+            }
+            if !exist {
                 panic!("[region {}] region should exist {:?}",
                        region_id,
                        prev_region);
             }
+        } else {
+            self.region_ranges.insert(enc_end_key(&region), region.get_id());
         }
-
-        self.region_ranges.insert(enc_end_key(&region), region.get_id());
     }
 
     fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
