@@ -554,9 +554,10 @@ impl Scheduler {
 
     /// Event handler for new command.
     ///
-    /// This method will try to acquire all the necessary latches. If successful, initiates a get
-    /// snapshot for furthur processing; otherwise, adds the command to the waiting queue(s), it
-    /// will be handled later in `lock_and_get_snapshot` when its turn comes.
+    /// This method will try to acquire all the necessary latches. If all the necessary latches are
+    /// acquired,  the method initiates a get snapshot operation for furthur processing; otherwise,
+    /// the method adds the command to the waiting queue(s).   The command will be handled later in
+    /// `lock_and_get_snapshot` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
@@ -717,8 +718,8 @@ impl Scheduler {
         }
     }
 
-    /// Tries to acquire all the necessary latches. If successful, initiates a get
-    /// snapshot for furthur processing.
+    /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
+    /// the method initiates a get snapshot operation for furthur processing.
     fn lock_and_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);
