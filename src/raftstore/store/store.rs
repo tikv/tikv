@@ -986,6 +986,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         util::ensure_schedule(self.pd_worker.scheduler(), report_task)
     }
 
+    fn on_ready_shutdown_region(&mut self, region: metapb::Region, peer: metapb::Peer) {
+        // destroy peer from this store
+        self.destroy_peer(region.get_id(), peer);
+    }
+
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
         let left_region = left.region();
         let right_region = right.region();
@@ -1062,6 +1067,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::MergeRegion { region } => self.on_ready_merge_region(region),
                 ExecResult::CommitMerge { new, old, to_shutdown } => {
                     self.on_ready_commit_merge(new, old, to_shutdown)
+                }
+                ExecResult::ShutdownRegion { region, peer } => {
+                    self.on_ready_shutdown_region(region, peer)
                 }
             }
         }

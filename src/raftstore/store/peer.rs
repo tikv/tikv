@@ -84,6 +84,10 @@ pub enum ExecResult {
         old: metapb::Region,
         to_shutdown: metapb::Region,
     },
+    ShutdownRegion {
+        region: metapb::Region,
+        peer: metapb::Peer,
+    },
 }
 
 // When we apply commands in handing ready, we should also need a way to
@@ -1080,6 +1084,7 @@ impl Peer {
                         ExecResult::CommitMerge { ref new, .. } => {
                             storage.region = new.clone();
                         }
+                        _ => {}
                     }
                 };
             }
@@ -1490,11 +1495,24 @@ impl Peer {
                             req: &AdminRequest)
                             -> Result<(AdminResponse, Option<ExecResult>)> {
         let shutdown_region = req.get_shutdown_region();
-        // TODO add impl
-        // destroy self
+        let region = shutdown_region.get_region();
+
+        // TODO check region == self.region()
+
         let mut resp = AdminResponse::new();
-        resp.mut_shutdown_region().set_region(shutdown_region.get_region().clone());
-        Ok((resp, None))
+        resp.mut_shutdown_region().set_region(region.clone());
+
+        // If this peer is in the region which is asked to shutdown, it will destroy itself.
+        let peer_id = self.peer_id();
+        if region.get_peers().iter().find(|p| p.get_id() == peer_id).is_some() {
+            Ok((resp,
+                Some(ExecResult::ShutdownRegion {
+                region: self.region().clone(),
+                peer: self.peer.clone(),
+            })))
+        } else {
+            Ok((resp, None))
+        }
     }
 
     fn exec_compact_log(&mut self,
