@@ -541,17 +541,20 @@ impl Peer {
             ready.hs.take();
         }
 
-        // TODO for new leader
-        // schedule a task to retry the region merge procedure
-        // let region_merge = region_local_state.get_region().get_region_merge();
-        // if region_merge.get_state() == metapb::MergeState::Merging {
-        //     let task = region_merge::Task::RetrySuspendRegion {
-        //         from_region_id: region_merge.get_from_id(),
-        //         into_region: peer.region().clone(),
-        //         into_peer: peer.peer.clone(),
-        //     };
-        //     util::ensure_schedule(self.merge_scheduler.clone(), task);
-        // }
+        if ready.ss.is_some() && ready.ss.as_ref().unwrap().leader_id == self.peer_id() {
+            // This peer has been elected to be the raft leader just now.
+            // If this region is the control region of a region merge,
+            // schedule a task to retry the region merge procedure.
+            let region_merge = self.region().get_region_merge();
+            if region_merge.get_state() == metapb::MergeState::Merging {
+                let task = region_merge::Task::RetrySuspendRegion {
+                    from_region_id: region_merge.get_from_id(),
+                    into_region: self.region().clone(),
+                    into_peer: self.peer.clone(),
+                };
+                util::ensure_schedule(self.merge_scheduler.clone(), task);
+            }
+        }
 
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
@@ -1425,8 +1428,8 @@ impl Peer {
         let commit_merge = req.get_commit_merge();
         let mut resp = AdminResponse::new();
         resp.mut_commit_merge().set_into_region(commit_merge.get_into_region().clone());
+
         // TODO add checking for commit_merge.get_local_region() == region_local_state.get_region()
-        // TODO add impl
 
         // write it to peer local state and update peer mete info
         let merge_state = self.region().get_region_merge().get_state();
