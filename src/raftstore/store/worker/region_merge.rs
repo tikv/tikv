@@ -15,7 +15,7 @@ use std::thread;
 use std::time::Duration;
 use std::fmt::{self, Formatter, Display};
 use std::net::{TcpStream, SocketAddr};
-use std::sync::Mutex;
+use std::sync::{Mutex, Arc};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use uuid::Uuid;
@@ -24,6 +24,7 @@ use kvproto::metapb::{Region, Peer};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, AdminRequest, AdminCmdType};
 use kvproto::msgpb::{Message, MessageType};
 
+use pd::PdClient;
 use server::ResolveTask;
 use util::worker::{Scheduler, Runnable};
 use util::codec::rpc;
@@ -35,6 +36,7 @@ use raftstore::Result;
 
 const MAX_RAFT_RPC_SEND_RETRY_COUNT: u64 = 2;
 const RAFT_RPC_RETRY_TIME_MILLIS: u64 = 50;
+const GET_REGION_FROM_PD_RETRY_TIME_MILLIS: u64 = 50;
 const SOCKET_READ_TIMEOUT: u64 = 3;
 const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
@@ -90,6 +92,14 @@ pub enum Task {
         // local peer which controls the region merge procedure
         into_peer: Peer,
     },
+    RetrySuspendRegion {
+        // the id of the region to be suspended
+        from_region_id: u64,
+        // local region which controls the region merge procedure
+        into_region: Region,
+        // local peer which controls the region merge procedure
+        into_peer: Peer,
+    },
     CommitMerge {
         // the region to be shutdown
         from_region: Region,
@@ -124,6 +134,13 @@ impl Display for Task {
                        "suspend region {:?}, leader {:?}, local region {:?}, peer {:?}",
                        from_region,
                        from_leader,
+                       into_region,
+                       into_peer)
+            }
+            Task::RetrySuspendRegion { ref from_region_id, ref into_region, ref into_peer } => {
+                write!(f,
+                       "retry to suspend region id {}, local region {:?}, peer {:?}",
+                       from_region_id,
                        into_region,
                        into_peer)
             }
@@ -285,9 +302,10 @@ impl RaftClient for RaftRpcClient {
     }
 }
 
-pub struct Runner {
+pub struct Runner<T: PdClient> {
     scheduler: Scheduler<Task>,
     resolve_scheduler: Scheduler<ResolveTask>,
+    pd_client: Arc<T>,
     ch: SendCh<Msg>,
 }
 
@@ -304,14 +322,16 @@ fn next_peer(region: &Region, last_peer: Peer) -> Peer {
     peers[0].clone()
 }
 
-impl Runner {
+impl<T: PdClient> Runner<T> {
     pub fn new(scheduler: Scheduler<Task>,
                resolve_scheduler: Scheduler<ResolveTask>,
+               pd_client: Arc<T>,
                ch: SendCh<Msg>)
-               -> Runner {
+               -> Runner<T> {
         Runner {
             scheduler: scheduler,
             resolve_scheduler: resolve_scheduler,
+            pd_client: pd_client,
             ch: ch,
         }
     }
@@ -395,6 +415,39 @@ impl Runner {
         }
     }
 
+    fn handle_retry_suspend_region(&self,
+                                   from_region_id: u64,
+                                   into_region: Region,
+                                   into_peer: Peer) {
+        loop {
+            // try to get the specified region info from PD
+            match self.pd_client.get_region_by_id(from_region_id) {
+                Ok(region) => {
+                    if region.get_peers().len() == 0 {
+                        panic!("[region {}] region {} should not has no peers for region merge, \
+                                region {:?}",
+                               into_region.get_id(),
+                               region.get_id(),
+                               region)
+                    }
+                    // Simply choose the first peer in region info as the leader.
+                    // If it's not the leader, then the retries in `handle_suspend_region`
+                    // will figure out the real leader.
+                    let leader = region.get_peers()[0].clone();
+                    self.handle_suspend_region(region, leader, into_region, into_peer);
+                    return;
+                }
+                Err(e) => {
+                    error!("[region {}] failed to get region by id {}, error {:?}",
+                           into_region.get_id(),
+                           from_region_id,
+                           e);
+                    thread::sleep(Duration::from_millis(GET_REGION_FROM_PD_RETRY_TIME_MILLIS));
+                }
+            }
+        }
+    }
+
     fn handle_commit_merge(&self,
                            from_region: Region,
                            from_leader: Peer,
@@ -451,18 +504,25 @@ impl Runner {
                     }
                 }
             }
-            TaskType::ShutdownRegion => {}
+            TaskType::ShutdownRegion => {
+                // TODO add impl
+                // send a shutdown region command to the specified region
+                // if error happens, exit the task handling
+            }
         }
     }
 }
 
-impl Runnable<Task> for Runner {
+impl<T: PdClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
         debug!("executing task {}", task);
 
         match task {
             Task::SuspendRegion { from_region, from_leader, into_region, into_peer } => {
                 self.handle_suspend_region(from_region, from_leader, into_region, into_peer)
+            }
+            Task::RetrySuspendRegion { from_region_id, into_region, into_peer } => {
+                self.handle_retry_suspend_region(from_region_id, into_region, into_peer)
             }
             Task::CommitMerge { from_region, from_leader, into_region, into_peer } => {
                 self.handle_commit_merge(from_region, from_leader, into_region, into_peer)

@@ -27,8 +27,7 @@ use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
-                          TransferLeaderRequest, TransferLeaderResponse, MergeResponse,
-                          SuspendRegionRequest};
+                          TransferLeaderRequest, TransferLeaderResponse, MergeResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
                              RegionLocalState};
 use kvproto::pdpb::PeerStats;
@@ -192,7 +191,6 @@ impl Peer {
     // for this store.
     pub fn create<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                              region: &metapb::Region,
-                                             state: PeerState,
                                              merge_scheduler: Scheduler<region_merge::Task>)
                                              -> Result<Peer> {
         let store_id = store.store_id();
@@ -206,7 +204,7 @@ impl Peer {
         info!("[region {}] create peer with id {}",
               region.get_id(),
               peer_id);
-        Peer::new(store, region, peer_id, state, merge_scheduler)
+        Peer::new(store, region, peer_id, merge_scheduler)
     }
 
     // The peer can be created from another node with raft membership changes, and we only
@@ -222,13 +220,12 @@ impl Peer {
 
         let mut region = metapb::Region::new();
         region.set_id(region_id);
-        Peer::new(store, &region, peer_id, PeerState::Normal, merge_scheduler)
+        Peer::new(store, &region, peer_id, merge_scheduler)
     }
 
     fn new<T: Transport, C: PdClient>(store: &mut Store<T, C>,
                                       region: &metapb::Region,
                                       peer_id: u64,
-                                      state: PeerState,
                                       merge_scheduler: Scheduler<region_merge::Task>)
                                       -> Result<Peer> {
         if peer_id == raft::INVALID_ID {
@@ -242,6 +239,10 @@ impl Peer {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
         let ps = try!(PeerStorage::new(store.engine(), &region, sched, tag.clone()));
+
+        let region_local_state = try!(store.engine()
+                .get_msg::<RegionLocalState>(&keys::region_state_key(region.get_id())))
+            .unwrap();
 
         let applied_index = ps.applied_index();
 
@@ -272,7 +273,7 @@ impl Peer {
             size_diff_hint: 0,
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
-            state: state,
+            state: region_local_state.get_state(),
             merge_scheduler: merge_scheduler,
             tag: tag,
         };
@@ -540,6 +541,18 @@ impl Peer {
             ready.hs.take();
         }
 
+        // TODO for new leader
+        // schedule a task to retry the region merge procedure
+        // let region_merge = region_local_state.get_region().get_region_merge();
+        // if region_merge.get_state() == metapb::MergeState::Merging {
+        //     let task = region_merge::Task::RetrySuspendRegion {
+        //         from_region_id: region_merge.get_from_id(),
+        //         into_region: peer.region().clone(),
+        //         into_peer: peer.peer.clone(),
+        //     };
+        //     util::ensure_schedule(self.merge_scheduler.clone(), task);
+        // }
+
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
             apply_snap_result: apply_result,
@@ -553,8 +566,9 @@ impl Peer {
                    mut err_resp: RaftCmdResponse)
                    -> Result<()> {
 
-        if self.state == PeerState::Suspended && get_suspend_region_request(&req).is_none() {
-            debug!("{} suspended region ignore requests other than suspend region request",
+        // Reject data read/write requests from client.
+        if self.state == PeerState::Suspended && req.get_requests().len() != 0 {
+            debug!("{} suspended region rejects data read/write requests",
                    self.tag);
             cmd_resp::bind_error(&mut err_resp, box_err!("region suspended"));
             return cmd.cb.call_box((err_resp,));
@@ -1076,18 +1090,6 @@ impl Peer {
     }
 }
 
-fn get_suspend_region_request(msg: &RaftCmdRequest) -> Option<&SuspendRegionRequest> {
-    if !msg.has_admin_request() {
-        return None;
-    }
-    let req = msg.get_admin_request();
-    if !req.has_suspend_region() {
-        return None;
-    }
-
-    Some(req.get_suspend_region())
-}
-
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
     if !msg.has_admin_request() {
         return None;
@@ -1359,25 +1361,28 @@ impl Peer {
             Ok((resp, None))
         } else {
             // update peer meta info
-            let state_key = keys::region_state_key(self.peer_id());
-            let mut local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+            let state_key = keys::region_state_key(self.region().get_id());
+            let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
                 .unwrap();
             let mut region_merge = metapb::RegionMerge::new();
             region_merge.set_state(metapb::MergeState::Merging);
             region_merge.set_from_id(merge_req.get_from_region().get_id());
             region_merge.set_into_id(self.region_id);
-            local_state.mut_region().set_region_merge(region_merge);
-            try!(self.engine.put_msg(&state_key, &local_state));
+            region_local_state.mut_region().set_region_merge(region_merge);
+            try!(self.engine.put_msg(&state_key, &region_local_state));
 
             let task = region_merge::Task::SuspendRegion {
                 from_region: merge_req.get_from_region().clone(),
                 from_leader: merge_req.get_from_leader().clone(),
-                into_region: local_state.get_region().clone(),
+                into_region: region_local_state.get_region().clone(),
                 into_peer: self.peer.clone(),
             };
             util::ensure_schedule(self.merge_scheduler.clone(), task);
 
-            Ok((resp, Some(ExecResult::MergeRegion { region: local_state.get_region().clone() })))
+            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["merge", "success"]).inc();
+
+            Ok((resp,
+                Some(ExecResult::MergeRegion { region: region_local_state.get_region().clone() })))
         }
     }
 
@@ -1385,6 +1390,8 @@ impl Peer {
                            _ctx: &ExecContext,
                            req: &AdminRequest)
                            -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["suspend", "all"]).inc();
+
         let suspend_region = req.get_suspend_region();
 
         // TODO check suspend_region.get_region() == self.region()
@@ -1394,12 +1401,14 @@ impl Peer {
               suspend_region.get_region());
 
         if self.state != PeerState::Suspended {
-            let state_key = keys::region_state_key(self.peer_id());
-            let mut local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+            let state_key = keys::region_state_key(self.region().get_id());
+            let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
                 .unwrap();
-            local_state.set_state(PeerState::Suspended);
-            try!(self.engine.put_msg(&state_key, &local_state));
+            region_local_state.set_state(PeerState::Suspended);
+            try!(self.engine.put_msg(&state_key, &region_local_state));
             self.state = PeerState::Suspended;
+
+            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["suspend", "success"]).inc();
         }
 
         let mut resp = AdminResponse::new();
@@ -1411,11 +1420,12 @@ impl Peer {
                          _ctx: &ExecContext,
                          req: &AdminRequest)
                          -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["commit merge", "all"]).inc();
 
         let commit_merge = req.get_commit_merge();
         let mut resp = AdminResponse::new();
         resp.mut_commit_merge().set_into_region(commit_merge.get_into_region().clone());
-        // TODO add checking for commit_merge.get_local_region() == local_state.get_region()
+        // TODO add checking for commit_merge.get_local_region() == region_local_state.get_region()
         // TODO add impl
 
         // write it to peer local state and update peer mete info
@@ -1427,12 +1437,12 @@ impl Peer {
             Ok((resp, None))
         } else {
             // update region meta info
-            let state_key = keys::region_state_key(self.peer_id());
-            let mut local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+            let state_key = keys::region_state_key(self.region().get_id());
+            let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
                 .unwrap();
             let mut region_merge = metapb::RegionMerge::new();
             region_merge.set_state(metapb::MergeState::None);
-            local_state.mut_region().set_region_merge(region_merge);
+            region_local_state.mut_region().set_region_merge(region_merge);
             // merge region range
             let to_shutdown = commit_merge.get_from_region().clone();
             let old_region = commit_merge.get_into_region().clone();
@@ -1451,15 +1461,17 @@ impl Peer {
             // update region epoch version
             let region_version = old_region.get_region_epoch().get_version() + 1;
             new_region.mut_region_epoch().set_version(region_version);
-            local_state.set_region(new_region.clone());
+            region_local_state.set_region(new_region.clone());
             // persist peer local state
-            try!(self.engine.put_msg(&state_key, &local_state));
+            try!(self.engine.put_msg(&state_key, &region_local_state));
             // schedule a shutdown task for the region which is about to be shutdown
             let shutdown_task = region_merge::Task::ShutdownRegion {
                 region: commit_merge.get_from_region().clone(),
                 leader: commit_merge.get_from_leader().clone(),
             };
             util::ensure_schedule(self.merge_scheduler.clone(), shutdown_task);
+
+            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["commit merge", "success"]).inc();
 
             Ok((resp,
                 Some(ExecResult::CommitMerge {

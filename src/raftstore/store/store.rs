@@ -309,8 +309,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(true);
             }
             let merge_scheduler = self.merge_worker.scheduler();
-            let mut peer =
-                try!(Peer::create(self, region, local_state.get_state(), merge_scheduler));
+            let mut peer = try!(Peer::create(self, region, merge_scheduler));
 
             if local_state.get_state() == PeerState::Applying {
                 applying_count += 1;
@@ -384,6 +383,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let merge_runner = MergeRunner::new(self.merge_worker.scheduler(),
                                             self.resolve_scheduler.clone(),
+                                            self.pd_client.clone(),
                                             self.sendch.clone());
 
         box_try!(self.merge_worker.start(merge_runner));
@@ -912,7 +912,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         let merge_scheduler = self.merge_worker.scheduler();
-        match Peer::create(self, &right, PeerState::Normal, merge_scheduler) {
+        match Peer::create(self, &right, merge_scheduler) {
             Err(e) => {
                 // peer information is already written into db, can't recover.
                 // there is probably a bug.
