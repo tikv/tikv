@@ -556,7 +556,7 @@ impl Scheduler {
     ///
     /// This method will try to acquire all the necessary latches. If successful, initiates a get
     /// snapshot for furthur processing; otherwise, adds the command to the waiting queue(s), it
-    /// will be handled later in `wakeup_cmd` when its turn comes.
+    /// will be handled later in `lock_and_get_snapshot` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
@@ -568,7 +568,7 @@ impl Scheduler {
         let lock = self.gen_lock(&cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
         self.insert_ctx(ctx);
-        self.wakeup_cmd(cid);
+        self.lock_and_get_snapshot(cid);
     }
 
     fn too_busy(&self) -> bool {
@@ -713,12 +713,13 @@ impl Scheduler {
     fn release_lock(&mut self, lock: &Lock, cid: u64) {
         let wakeup_list = self.latches.release(lock, cid);
         for wcid in wakeup_list {
-            self.wakeup_cmd(wcid);
+            self.lock_and_get_snapshot(wcid);
         }
     }
 
-    /// Wakes up the next command for execution.
-    fn wakeup_cmd(&mut self, cid: u64) {
+    /// Tries to acquire all the necessary latches. If successful, initiates a get
+    /// snapshot for furthur processing.
+    fn lock_and_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);
         }
