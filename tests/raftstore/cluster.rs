@@ -628,6 +628,30 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    /// Make sure region exists on that store.
+    pub fn must_region_exist(&mut self, region_id: u64, store_id: u64) {
+        let mut try_cnt = 0;
+        loop {
+            let find_leader =
+                new_status_request(region_id, new_peer(store_id, 0), new_region_leader_cmd());
+            let resp = self.call_command(find_leader, Duration::from_secs(5)).unwrap();
+
+            if !is_error_response(&resp) {
+                return;
+            }
+
+            if try_cnt > 250 {
+                panic!("region {} doesn't exist on store {} after {} tries",
+                       region_id,
+                       store_id,
+                       try_cnt);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+
+    }
+
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
