@@ -466,7 +466,7 @@ impl Peer {
                                            metrics: &mut RaftMetrics)
                                            -> Result<Option<ReadyResult>> {
         if self.mut_store().check_applying_snap() {
-            // If we continue handle all the messages, it may cause too many messages because
+            // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
             // to full message queue under high load.
             debug!("{} still applying snapshot, skip further handling.",

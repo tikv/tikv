@@ -29,7 +29,7 @@ use util::{escape, HandyRwLock, rocksdb};
 use util::transport::SendCh;
 use raftstore;
 use raftstore::store::engine::{Mutable, Snapshot, Iterable};
-use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELED, JOB_STATUS_FAILED,
+use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
 use storage::CF_RAFT;
@@ -298,7 +298,7 @@ impl<T: MsgSender> Runner<T> {
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);
-                assert!(status.swap(JOB_STATUS_CANCELED, Ordering::SeqCst) ==
+                assert!(status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst) ==
                         JOB_STATUS_CANCELLING);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"]).inc();
             }

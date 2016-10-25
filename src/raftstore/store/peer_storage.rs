@@ -46,7 +46,7 @@ const MAX_SNAP_TRY_CNT: usize = 5;
 pub const JOB_STATUS_PENDING: usize = 0;
 pub const JOB_STATUS_RUNNING: usize = 1;
 pub const JOB_STATUS_CANCELLING: usize = 2;
-pub const JOB_STATUS_CANCELED: usize = 3;
+pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
 
@@ -622,7 +622,7 @@ impl PeerStorage {
                 let s = status.load(Ordering::Relaxed);
                 if s == JOB_STATUS_FINISHED {
                     SnapState::Relax
-                } else if s == JOB_STATUS_CANCELED {
+                } else if s == JOB_STATUS_CANCELLED {
                     SnapState::ApplyAborted
                 } else if s == JOB_STATUS_FAILED {
                     // TODO: cleanup region and treat it as tombstone.
@@ -665,7 +665,7 @@ impl PeerStorage {
             }
             _ => return false,
         }
-        // now status can only be JOB_STATUS_CANCELLING, JOB_STATUS_CANCELED,
+        // now status can only be JOB_STATUS_CANCELLING, JOB_STATUS_CANCELLED,
         // JOB_STATUS_FAILED and JOB_STATUS_FINISHED.
         !self.check_applying_snap()
     }
@@ -1263,7 +1263,7 @@ mod test {
         assert!(!s.cancel_applying_snap());
 
         s.snap_state =
-            RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELED))));
+            RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELLED))));
         // canceled snapshot can be cancel directly.
         assert!(s.cancel_applying_snap());
         assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
@@ -1298,7 +1298,7 @@ mod test {
         assert!(s.check_applying_snap());
         assert_eq!(*s.snap_state.borrow(), snap_state);
 
-        snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELED)));
+        snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELLED)));
         s.snap_state = RefCell::new(snap_state);
         assert!(!s.check_applying_snap());
         assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
