@@ -422,18 +422,7 @@ impl<T: PdClient> Runner<T> {
         loop {
             // try to get the specified region info from PD
             match self.pd_client.get_region_by_id(from_region_id) {
-                Ok(region) => {
-                    if region.get_peers().len() == 0 {
-                        panic!("[region {}] region {} should not has no peers for region merge, \
-                                region {:?}",
-                               into_region.get_id(),
-                               region.get_id(),
-                               region)
-                    }
-                    // Simply choose the first peer in region info as the leader.
-                    // If it's not the leader, then the retries in `handle_suspend_region`
-                    // will figure out the real leader.
-                    let leader = region.get_peers()[0].clone();
+                Ok((region, leader)) => {
                     self.handle_suspend_region(region, leader, into_region, into_peer);
                     return;
                 }
