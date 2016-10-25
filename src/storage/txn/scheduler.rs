@@ -154,6 +154,7 @@ pub struct RunningCtx {
     lock: Lock,
     callback: Option<StorageCb>,
     tag: &'static str,
+    latch_timer: Option<HistogramTimer>,
     _timer: HistogramTimer,
 }
 
@@ -167,6 +168,7 @@ impl RunningCtx {
             lock: lock,
             callback: Some(cb),
             tag: tag,
+            latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer()),
             _timer: SCHED_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer(),
         }
     }
@@ -552,9 +554,10 @@ impl Scheduler {
 
     /// Event handler for new command.
     ///
-    /// This method will try to acquire all the necessary latches. If successful, initiates a get
-    /// snapshot for furthur processing; otherwise, adds the command to the waiting queue(s), it
-    /// will be handled later in `wakeup_cmd` when its turn comes.
+    /// This method will try to acquire all the necessary latches. If all the necessary latches are
+    /// acquired,  the method initiates a get snapshot operation for furthur processing; otherwise,
+    /// the method adds the command to the waiting queue(s).   The command will be handled later in
+    /// `lock_and_get_snapshot` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
@@ -566,10 +569,7 @@ impl Scheduler {
         let lock = self.gen_lock(&cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
         self.insert_ctx(ctx);
-
-        if self.acquire_lock(cid) {
-            self.get_snapshot(cid);
-        }
+        self.lock_and_get_snapshot(cid);
     }
 
     fn too_busy(&self) -> bool {
@@ -590,9 +590,13 @@ impl Scheduler {
     ///
     /// Returns true if successful; returns false otherwise.
     fn acquire_lock(&mut self, cid: u64) -> bool {
-        let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
+        let mut ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
-        self.latches.acquire(&mut ctx.lock, cid)
+        let ok = self.latches.acquire(&mut ctx.lock, cid);
+        if ok {
+            ctx.latch_timer.take();
+        }
+        ok
     }
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
@@ -710,12 +714,13 @@ impl Scheduler {
     fn release_lock(&mut self, lock: &Lock, cid: u64) {
         let wakeup_list = self.latches.release(lock, cid);
         for wcid in wakeup_list {
-            self.wakeup_cmd(wcid);
+            self.lock_and_get_snapshot(wcid);
         }
     }
 
-    /// Wakes up the next command for execution.
-    fn wakeup_cmd(&mut self, cid: u64) {
+    /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
+    /// the method initiates a get snapshot operation for furthur processing.
+    fn lock_and_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);
         }

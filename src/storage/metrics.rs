@@ -47,4 +47,11 @@ lazy_static! {
             "Bucketed histogram of command execution",
             &["type"]
         ).unwrap();
+
+    pub static ref SCHED_LATCH_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_scheduler_latch_wait_duration_seconds",
+            "Bucketed histogram of latch wait",
+            &["type"]
+        ).unwrap();
 }
