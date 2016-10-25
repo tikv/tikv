@@ -12,8 +12,7 @@
 // limitations under the License.
 
 use std::time::Duration;
-use std::thread;
-use std::cmp;
+use std::{thread, cmp, fs};
 use rand::{self, Rng};
 
 use kvproto::eraftpb::MessageType;
@@ -258,7 +257,6 @@ fn test_server_delay_split_region() {
     test_delay_split_region(&mut cluster);
 }
 
-
 fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // We use three nodes([1, 2, 3]) for this test.
     cluster.run();
@@ -289,6 +287,12 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let engine3 = cluster.get_engine(3);
     util::must_get_none(&engine3, b"k2");
+
+    thread::sleep(Duration::from_secs(1));
+    let snap_dir = cluster.get_snap_dir(3);
+    // no snaps should be sent.
+    let snapfiles: Vec<_> = fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
+    assert!(snapfiles.is_empty());
 
     cluster.clear_send_filters();
     cluster.must_put(b"k3", b"v3");

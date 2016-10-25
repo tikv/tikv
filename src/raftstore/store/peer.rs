@@ -31,7 +31,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
                              RegionLocalState};
 use kvproto::pdpb::PeerStats;
-use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
+use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -363,12 +363,9 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T>(&mut self,
-               trans: &T,
-               msgs: &[eraftpb::Message],
-               metrics: &mut RaftMessageMetrics)
-               -> Result<()>
-        where T: Transport
+    fn send<T, I>(&mut self, trans: &T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
+        where T: Transport,
+              I: Iterator<Item = eraftpb::Message>
     {
         for msg in msgs {
             match msg.get_msg_type() {
@@ -480,7 +477,7 @@ impl Peer {
 
         debug!("{} handle raft ready", self.tag);
 
-        let ready = self.raft_group.ready();
+        let mut ready = self.raft_group.ready();
 
         let t = SlowTimer::new();
 
@@ -489,13 +486,13 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1
         if self.is_leader() {
-            try!(self.send(trans, &ready.messages, &mut metrics.message));
+            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
         }
 
         let apply_result = try!(self.mut_store().handle_raft_ready(&ready));
 
         if !self.is_leader() {
-            try!(self.send(trans, &ready.messages, &mut metrics.message));
+            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
@@ -751,11 +748,9 @@ impl Peer {
         None
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: &eraftpb::Message, trans: &T) -> Result<()> {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
-        // TODO: can we use move instead?
-        send_msg.set_message(msg.clone());
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
         let mut unreachable = false;
@@ -790,6 +785,17 @@ impl Peer {
 
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
+
+        if self.get_store().is_initialized() &&
+           (msg_type == MessageType::MsgRequestVote ||
+            // the peer has not been known to this leader, it may exist or not.
+            msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX) {
+            let region = self.region();
+            send_msg.set_start_key(region.get_start_key().to_vec());
+            send_msg.set_end_key(region.get_end_key().to_vec());
+        }
+
+        send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
             warn!("{} failed to send msg to {} in store {}, err: {:?}",

@@ -62,6 +62,7 @@ git = "https://github.com/ngaut/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
+branch = "busyjay/check-region-range"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
