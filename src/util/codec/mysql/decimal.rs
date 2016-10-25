@@ -14,7 +14,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 use std::io::Write;
-use std::ops::{Deref, DerefMut, Add, Sub, Div, Rem};
+use std::ops::{Deref, DerefMut, Add, Sub, Mul, Div, Rem};
 use std::{cmp, i64, u64, i32, u32, mem};
 use std::cmp::Ordering;
 
@@ -109,6 +109,7 @@ const DEFAULT_DIV_FRAC_INCR: u8 = 4;
 const DIG_2_BYTES: &'static [u8] = &[0, 1, 1, 2, 2, 3, 3, 4, 4, 4];
 const FRAC_MAX: &'static [u32] = &[900000000, 990000000, 999000000, 999900000, 999990000,
                                    999999000, 999999900, 999999990];
+const NOT_FIXED_DEC: u8 = 31;
 
 macro_rules! word_cnt {
     ($len:expr) => (word_cnt!($len, u8));
@@ -275,11 +276,12 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
 }
 
 /// subtract rhs from lhs.
-fn do_sub(mut lhs: Decimal, mut rhs: Decimal) -> Res<Decimal> {
-    let (carry, mut frac_word_to, l_res, r_res) = calc_sub_carry(&lhs, &rhs);
+fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
+    let (carry, mut frac_word_to, l_res, r_res) = calc_sub_carry(lhs, rhs);
     if carry.is_none() {
-        lhs.reset_to_zero();
-        return Res::Ok(lhs);
+        let mut res = lhs.to_owned();
+        res.reset_to_zero();
+        return Res::Ok(res);
     }
     let (mut l_start, mut l_int_word_cnt, mut l_frac_word_cnt) = l_res;
     let (mut r_start, mut r_int_word_cnt, mut r_frac_word_cnt) = r_res;
@@ -391,7 +393,7 @@ fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
 }
 
 /// add lhs to rhs.
-fn do_add(mut lhs: Decimal, mut rhs: Decimal) -> Res<Decimal> {
+fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let (mut l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt),
                                                      word_cnt!(lhs.frac_cnt));
     let (mut r_int_word_cnt, mut r_frac_word_cnt) = (word_cnt!(rhs.int_cnt),
@@ -657,6 +659,104 @@ fn do_div_mod(mut lhs: Decimal,
         }
     }
     Some(res)
+}
+
+/// `do_mul` multiplies two decimals.
+fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
+    let (l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt) as usize,
+                                                 word_cnt!(lhs.frac_cnt) as usize);
+    let (mut r_int_word_cnt, mut r_frac_word_cnt) = (word_cnt!(rhs.int_cnt) as usize,
+                                                     word_cnt!(rhs.frac_cnt) as usize);
+    let (int_word_to, frac_word_to) = (word_cnt!(lhs.int_cnt + rhs.int_cnt) as usize,
+                                       l_frac_word_cnt + r_frac_word_cnt);
+    let (mut old_int_word_to, mut old_frac_word_to) = (int_word_to, frac_word_to);
+    let res = fix_word_cnt_err(int_word_to as u8, frac_word_to as u8, WORD_BUF_LEN);
+    let (int_word_to, frac_word_to) = (res.0 as usize, res.1 as usize);
+    let negative = lhs.negative != rhs.negative;
+    let frac_cnt = cmp::min(lhs.frac_cnt + rhs.frac_cnt, NOT_FIXED_DEC);
+    let int_cnt = int_word_to as u8 * DIGITS_PER_WORD;
+    let mut dec = Decimal::new(int_cnt, frac_cnt, negative);
+    dec.result_frac_cnt = cmp::min(lhs.result_frac_cnt + rhs.result_frac_cnt, MAX_FRACTION);
+    if res.is_overflow() {
+        return Res::Overflow(dec);
+    }
+
+    if !res.is_ok() {
+        dec.frac_cnt = cmp::min(dec.frac_cnt, frac_word_to as u8 * DIGITS_PER_WORD);
+        if old_int_word_to > int_word_to {
+            old_int_word_to -= int_word_to;
+            old_frac_word_to = old_int_word_to / 2;
+            r_int_word_cnt = old_int_word_to - old_frac_word_to;
+            l_frac_word_cnt = 0;
+            r_frac_word_cnt = 0;
+        } else {
+            old_frac_word_to -= int_word_to;
+            old_int_word_to = old_frac_word_to / 2;
+            if l_frac_word_cnt <= r_frac_word_cnt {
+                l_frac_word_cnt -= old_int_word_to;
+                r_frac_word_cnt -= old_frac_word_to - old_int_word_to;
+            } else {
+                r_frac_word_cnt -= old_int_word_to;
+                l_frac_word_cnt -= old_frac_word_to - old_int_word_to;
+            }
+        }
+    }
+
+    let mut start_to = int_word_to + frac_word_to;
+    let r_start = r_int_word_cnt + r_frac_word_cnt;
+    for l_idx in (0..l_int_word_cnt + l_frac_word_cnt).rev() {
+        assert!(start_to >= r_start);
+        let (mut carry, mut idx_to) = (0, start_to);
+        start_to -= 1;
+        for r_idx in (0..r_start).rev() {
+            idx_to -= 1;
+            let p = lhs.word_buf[l_idx] as u64 * rhs.word_buf[r_idx] as u64;
+            let hi = p / WORD_BASE as u64;
+            let lo = p - hi * WORD_BASE as u64;
+            add(dec.word_buf[idx_to],
+                lo as u32,
+                &mut carry,
+                &mut dec.word_buf[idx_to]);
+            carry += hi as u32;
+        }
+        while carry > 0 {
+            if idx_to == 0 {
+                return Res::Overflow(dec);
+            }
+            idx_to -= 1;
+            add(dec.word_buf[idx_to],
+                0,
+                &mut carry,
+                &mut dec.word_buf[idx_to]);
+        }
+    }
+
+    // Now we have to check for -0.000 case
+    if dec.negative {
+        let (mut idx, end) = (0, int_word_to + frac_word_to);
+        while dec.word_buf[idx] == 0 {
+            idx += 1;
+            if idx == end {
+                // we got decimal zero.
+                dec.reset_to_zero();
+                break;
+            }
+        }
+    }
+
+    let (mut idx_to, mut d_to_move) = (0, int_word_to + word_cnt!(dec.frac_cnt) as usize);
+    while dec.word_buf[idx_to] == 0 && dec.int_cnt > DIGITS_PER_WORD {
+        idx_to += 1;
+        dec.int_cnt -= DIGITS_PER_WORD;
+        d_to_move -= 1;
+    }
+    if idx_to > 0 {
+        for cur_idx in 0..d_to_move {
+            dec.word_buf[cur_idx] = dec.word_buf[idx_to];
+            idx_to += 1;
+        }
+    }
+    res.map(|_| dec)
 }
 
 /// `Decimal` represents a decimal value.
@@ -1735,10 +1835,10 @@ impl Ord for Decimal {
     }
 }
 
-impl Add<Decimal> for Decimal {
+impl<'a> Add<&'a Decimal> for &'a Decimal {
     type Output = Res<Decimal>;
 
-    fn add(self, rhs: Decimal) -> Res<Decimal> {
+    fn add(self, rhs: &'a Decimal) -> Res<Decimal> {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
         let mut res = if self.negative == rhs.negative {
             do_add(self, rhs)
@@ -1750,10 +1850,10 @@ impl Add<Decimal> for Decimal {
     }
 }
 
-impl Sub<Decimal> for Decimal {
+impl<'a> Sub<&'a Decimal> for &'a Decimal {
     type Output = Res<Decimal>;
 
-    fn sub(self, rhs: Decimal) -> Res<Decimal> {
+    fn sub(self, rhs: &'a Decimal) -> Res<Decimal> {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
         let mut res = if self.negative == rhs.negative {
             do_sub(self, rhs)
@@ -1762,6 +1862,14 @@ impl Sub<Decimal> for Decimal {
         };
         res.result_frac_cnt = result_frac_cnt;
         res
+    }
+}
+
+impl<'a> Mul for &'a Decimal {
+    type Output = Res<Decimal>;
+
+    fn mul(self, rhs: &'a Decimal) -> Res<Decimal> {
+        do_mul(self, rhs)
     }
 }
 
@@ -2209,12 +2317,12 @@ mod test {
             let lhs = lhs_str.parse::<Decimal>().unwrap();
             let rhs = rhs_str.parse::<Decimal>().unwrap();
 
-            let res_dec = lhs.clone() + rhs.clone();
+            let res_dec = &lhs + &rhs;
             let res = res_dec.map(|s| s.to_string());
             let exp_str = exp.map(|s| s.to_owned());
             assert_eq!(res, exp_str);
 
-            let res_dec = rhs + lhs;
+            let res_dec = &rhs + &lhs;
             let res = res_dec.map(|s| s.to_string());
             assert_eq!(res, exp_str);
         }
@@ -2242,9 +2350,37 @@ mod test {
         for (lhs_str, rhs_str, exp) in cases {
             let lhs = lhs_str.parse::<Decimal>().unwrap();
             let rhs = rhs_str.parse::<Decimal>().unwrap();
-            let res_dec = lhs - rhs;
+            let res_dec = &lhs - &rhs;
             let res = res_dec.map(|s| s.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
+        }
+    }
+
+    #[test]
+    fn test_mul() {
+        let a = "1".to_owned() + &repeat('0').take(60).collect::<String>();
+        let b = "1".to_owned() + &repeat("0").take(60).collect::<String>();
+        let cases = vec![
+            ("12", "10", Res::Ok("120")),
+            ("0", "-1.1", Res::Ok("0")),
+            ("-123.456", "98765.4321", Res::Ok("-12193185.1853376")),
+            ("-123456000000", "98765432100000", Res::Ok("-12193185185337600000000000")),
+            ("123456", "987654321", Res::Ok("121931851853376")),
+            ("123456", "9876543210", Res::Ok("1219318518533760")),
+            ("123", "0.01", Res::Ok("1.23")),
+            ("123", "0", Res::Ok("0")),
+            (&a, &b, Res::Overflow("0")),
+        ];
+
+        for (lhs_str, rhs_str, exp_str) in cases {
+            let lhs: Decimal = lhs_str.parse().unwrap();
+            let rhs: Decimal = rhs_str.parse().unwrap();
+            let exp = exp_str.map(|s| s.to_owned());
+            let res = (&lhs * &rhs).map(|d| d.to_string());
+            assert_eq!(res, exp);
+
+            let res = (&rhs * &lhs).map(|d| d.to_string());
+            assert_eq!(res, exp);
         }
     }
 
