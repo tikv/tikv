@@ -1497,23 +1497,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
     }
-
-    fn on_snap_apply_res(&mut self, region_id: u64, is_success: bool, is_aborted: bool) {
-        let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let mut storage = peer.mut_store();
-        assert!(storage.is_applying_snap(),
-                "snap state should not change during applying");
-        if is_success {
-            storage.set_snap_state(SnapState::Relax);
-        } else {
-            if !is_aborted {
-                // TODO: cleanup region and treat it as tombstone.
-                panic!("applying snapshot to {} failed", region_id);
-            }
-            self.pending_raft_groups.insert(region_id);
-            storage.set_snap_state(SnapState::ApplyAborted);
-        }
-    }
 }
 
 
@@ -1576,9 +1559,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_unreachable(region_id, to_peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
-            Msg::SnapApplyRes { region_id, is_success, is_aborted } => {
-                self.on_snap_apply_res(region_id, is_success, is_aborted);
-            }
             Msg::SnapGenRes { region_id, snap } => {
                 self.on_snap_gen_res(region_id, snap);
             }

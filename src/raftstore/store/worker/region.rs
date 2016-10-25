@@ -29,7 +29,8 @@ use util::{escape, HandyRwLock, rocksdb};
 use util::transport::SendCh;
 use raftstore;
 use raftstore::store::engine::{Mutable, Snapshot, Iterable};
-use raftstore::store::peer_storage::{JOB_STATUS_CANCEL, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
+use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
+                                     JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
 use storage::CF_RAFT;
 
@@ -106,7 +107,7 @@ impl MsgSender for SendCh<Msg> {
 
 #[inline]
 fn check_abort(status: &AtomicUsize) -> Result<(), Error> {
-    if status.load(Ordering::Relaxed) == JOB_STATUS_CANCEL {
+    if status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING {
         return Err(Error::Abort);
     }
     Ok(())
@@ -290,35 +291,24 @@ impl<T: MsgSender> Runner<T> {
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_timer();
 
-        let (is_success, is_aborted) = match self.apply_snap(region_id, status) {
-            Ok(()) => (true, false),
+        match self.apply_snap(region_id, status.clone()) {
+            Ok(()) => {
+                status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
+                SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
+            }
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);
-                (false, true)
+                assert!(status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst) ==
+                        JOB_STATUS_CANCELLING);
+                SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"]).inc();
             }
             Err(e) => {
                 error!("failed to apply snap: {:?}!!!", e);
-                (false, false)
+                status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
+                SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
             }
-        };
-        let msg = Msg::SnapApplyRes {
-            region_id: region_id,
-            is_success: is_success,
-            is_aborted: is_aborted,
-        };
-        if let Err(e) = self.ch.send(msg) {
-            panic!("failed to notify snap apply result of {}: {:?}",
-                   region_id,
-                   e);
         }
 
-        if is_aborted {
-            SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"]).inc();
-        } else if is_success {
-            SNAP_COUNTER_VEC.with_label_values(&["apply", "success"]).inc();
-        } else {
-            SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
-        }
         timer.observe_duration();
     }
 
