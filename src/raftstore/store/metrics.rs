@@ -75,4 +75,11 @@ lazy_static! {
             "Total nanoseconds spent in raft processing.",
             &["type"]
         ).unwrap();
+
+    pub static ref ENGINE_STATISTICS_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "rocksdb_statistics_view",
+            "statistics of rocksdb",
+            &["type"]
+        ).unwrap();
 }

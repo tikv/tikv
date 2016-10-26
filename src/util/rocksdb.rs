@@ -133,6 +133,26 @@ fn db_exist(path: &str) -> bool {
     fs::read_dir(&path).unwrap().next().is_some()
 }
 
+pub struct Statistics {
+    pub block_cache_miss: u64,
+    pub block_cache_hit: u64,
+    pub memtable_miss: u64,
+    pub memtable_hit: u64,
+    pub l0_hit: u64,
+    pub l1_hit: u64,
+    pub l2andup_hit: u64,
+
+    pub stall_micros: u64,
+    pub get_micros: u64,
+    pub write_micros: u64,
+    pub seek_micros: u64,
+    pub compaction_micros: u64,
+}
+
+pub fn get_statistics(db: &DB) -> Option<Statistics> {
+
+}
+
 #[cfg(test)]
 mod tests {
     use rocksdb::{DB, Options};
