@@ -470,7 +470,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
     }
 
-    fn check_target_peer_valid(&mut self, region_id: u64, msg: &RaftMessage) -> Result<bool> {
+    /// If target peer doesn't exist, create one.
+    ///
+    /// return false to indicate that target peer is in invalid state or
+    /// doesn't exist and can't be created.
+    fn maybe_create_peer(&mut self, region_id: u64, msg: &RaftMessage) -> Result<bool> {
         let target = msg.get_to_peer();
         // we may encounter a message with larger peer id, which means
         // current peer is stale, then we should remove current peer
@@ -554,7 +558,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if !try!(self.check_target_peer_valid(region_id, &msg)) {
+        if !try!(self.maybe_create_peer(region_id, &msg)) {
             return Ok(());
         }
 
