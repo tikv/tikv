@@ -580,7 +580,7 @@ impl Peer {
             return false;
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
-                error!("{} there is a pending conf change, try later", self.tag);
+                info!("{} there is a pending conf change, try later", self.tag);
                 cmd_resp::bind_error(&mut err_resp,
                                      box_err!("{} there is a pending conf change, try later",
                                               self.tag));
