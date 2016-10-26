@@ -30,10 +30,10 @@ pub fn open(path: &str, cfs: &[&str]) -> Result<DB, String> {
     for _ in 0..cfs.len() {
         cfs_opts.push(Options::new());
     }
-    open_opt(&opts, path, cfs, cfs_opts)
+    open_opt(opts, path, cfs, cfs_opts)
 }
 
-pub fn open_opt(opts: &Options,
+pub fn open_opt(opts: Options,
                 path: &str,
                 cfs: &[&str],
                 cfs_opts: Vec<Options>)
@@ -51,8 +51,7 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     new_engine_opt(opts, path, cfs, cfs_opts)
 }
 
-fn check_column_families(opts: &mut Options,
-                         path: &str,
+fn check_column_families(path: &str,
                          needed_cfs: &[&str],
                          cfs_opts: &[&Options])
                          -> Result<(), String> {
@@ -60,8 +59,9 @@ fn check_column_families(opts: &mut Options,
     if !db_exist(path) {
         // opts is used as Rocksdb's Options(include DBOptions and ColumnFamilyOptions)
         // when call DB::open.
+        let mut opts = Options::new();
         opts.create_if_missing(true);
-        let mut db = try!(DB::open(&opts, path));
+        let mut db = try!(DB::open(opts, path));
         for (&cf, &cf_opts) in needed_cfs.iter().zip(cfs_opts) {
             if cf == "default" {
                 continue;
@@ -73,6 +73,7 @@ fn check_column_families(opts: &mut Options,
     }
 
     // List all column families in current db.
+    let mut opts = Options::new();
     opts.create_if_missing(false);
     let cfs_list = try!(DB::list_column_families(&opts, path));
     let existed: HashSet<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
@@ -88,6 +89,8 @@ fn check_column_families(opts: &mut Options,
     }
     let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
     let cfs_list_str: Vec<&str> = cfs_list.iter().map(|cf| cf.as_str()).collect();
+    let mut opts = Options::new();
+    opts.create_if_missing(false);
     let mut db = DB::open_cf(opts, path, &cfs_list_str, &cfs_ref_opts).unwrap();
 
     // Drop discarded column families.
@@ -99,6 +102,8 @@ fn check_column_families(opts: &mut Options,
     }
 
     // Create needed column families not existed yet.
+    let mut opts = Options::new();
+    opts.create_if_missing(false);
     for cf in needed.difference(&existed) {
         try!(db.create_cf(cf, &opts));
     }
@@ -114,11 +119,11 @@ pub fn new_engine_opt(mut opts: Options,
     // Drop discarded column families and create new needed column families not exist yet.
     // If db not exist check_column_families will create it.
     let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
-    try!(check_column_families(&mut opts, path, cfs, &cfs_ref_opts));
+    try!(check_column_families(path, cfs, &cfs_ref_opts));
 
     // opts is used as Rocksdb's DBOptions when call DB::open_cf
     opts.create_if_missing(false);
-    DB::open_cf(&opts, path, cfs, &cfs_ref_opts)
+    DB::open_cf(opts, path, cfs, &cfs_ref_opts)
 }
 
 fn db_exist(path: &str) -> bool {
@@ -133,24 +138,24 @@ fn db_exist(path: &str) -> bool {
     fs::read_dir(&path).unwrap().next().is_some()
 }
 
-pub struct Statistics {
-    pub block_cache_miss: u64,
-    pub block_cache_hit: u64,
-    pub memtable_miss: u64,
-    pub memtable_hit: u64,
-    pub l0_hit: u64,
-    pub l1_hit: u64,
-    pub l2andup_hit: u64,
+// pub struct Statistics {
+// pub block_cache_miss: u64,
+// pub block_cache_hit: u64,
+// pub memtable_miss: u64,
+// pub memtable_hit: u64,
+// pub l0_hit: u64,
+// pub l1_hit: u64,
+// pub l2andup_hit: u64,
+//
+// pub stall_micros: u64,
+// pub get_micros: u64,
+// pub write_micros: u64,
+// pub seek_micros: u64,
+// pub compaction_micros: u64,
+// }
 
-    pub stall_micros: u64,
-    pub get_micros: u64,
-    pub write_micros: u64,
-    pub seek_micros: u64,
-    pub compaction_micros: u64,
-}
-
-pub fn get_statistics(db: &DB) -> Option<Statistics> {
-
+pub fn get_statistics(db: &DB) -> Option<String> {
+    db.get_statistics()
 }
 
 #[cfg(test)]
@@ -163,29 +168,29 @@ mod tests {
     fn test_check_column_families() {
         let path = TempDir::new("_util_rocksdb_test_check_column_families").expect("");
         let path_str = path.path().to_str().unwrap();
-        let mut opts = Options::new();
         let cfs_opts = vec![Options::new(), Options::new()];
         let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
 
         // create db when db not exist
-        check_column_families(&mut opts, path_str, &["default"], &cfs_ref_opts[..1]).unwrap();
-        column_families_must_eq(&opts, path_str, &["default"]);
+        check_column_families(path_str, &["default"], &cfs_ref_opts[..1]).unwrap();
+        column_families_must_eq(path_str, &["default"]);
 
         // add cf1.
-        check_column_families(&mut opts, path_str, &["default", "cf1"], &cfs_ref_opts).unwrap();
-        column_families_must_eq(&opts, path_str, &["default", "cf1"]);
+        check_column_families(path_str, &["default", "cf1"], &cfs_ref_opts).unwrap();
+        column_families_must_eq(path_str, &["default", "cf1"]);
 
         // drop cf1.
-        check_column_families(&mut opts, path_str, &["default"], &cfs_ref_opts[..1]).unwrap();
-        column_families_must_eq(&opts, path_str, &["default"]);
+        check_column_families(path_str, &["default"], &cfs_ref_opts[..1]).unwrap();
+        column_families_must_eq(path_str, &["default"]);
 
         // never drop default cf
-        check_column_families(&mut opts, path_str, &[], &[]).unwrap();
-        column_families_must_eq(&opts, path_str, &["default"]);
+        check_column_families(path_str, &[], &[]).unwrap();
+        column_families_must_eq(path_str, &["default"]);
     }
 
-    fn column_families_must_eq(opts: &Options, path: &str, excepted: &[&str]) {
-        let cfs_list = DB::list_column_families(opts, path).unwrap();
+    fn column_families_must_eq(path: &str, excepted: &[&str]) {
+        let opts = Options::new();
+        let cfs_list = DB::list_column_families(&opts, path).unwrap();
 
         let mut cfs_existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
         let mut cfs_excepted: Vec<&str> = excepted.iter().map(|v| *v).collect();
