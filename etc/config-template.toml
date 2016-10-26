@@ -99,6 +99,16 @@ max-background-compactions = 6
 # Control maximum total data size for base level (level 1).
 max-bytes-for-level-base = "64MB"
 
+# Number of open files that can be used by the DB.  You may need to
+# increase this if your database has a large working set. Value -1 means
+# files opened are always kept open. You can estimate number of files based
+# on target_file_size_base and target_file_size_multiplier for level-based
+# compaction.
+# If max-open-files = -1, RocksDB will prefetch index and filter blocks into
+# block cache at startup, so if your database has a large working set, it will
+# take several minutes to open the db.
+max-open-files = 40960
+
 # Target file size for compaction.
 target-file-size-base = "16MB"
 
