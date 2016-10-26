@@ -361,6 +361,14 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                                            |v| v.as_integer());
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
+    let max_open_files = get_integer_value("",
+                                           "rocksdb.max-open-files",
+                                           matches,
+                                           config,
+                                           Some(40960),
+                                           |v| v.as_integer());
+    opts.set_max_open_files(max_open_files as i32);
+
     opts
 }
 
