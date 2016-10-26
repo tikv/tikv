@@ -147,9 +147,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, cmd: PendingCmd) {
            region_id,
            peer_id,
            cmd.uuid);
-    if let Err(e) = cmd.cb.call_box((resp,)) {
-        error!("failed to notify {}: {:?}", cmd.uuid, e);
-    }
+    cmd.cb.call_box((resp,));
 }
 
 pub struct Peer {
@@ -524,7 +522,8 @@ impl Peer {
                    -> Result<()> {
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
-            return cmd.cb.call_box((err_resp,));
+            cmd.cb.call_box((err_resp,));
+            return Ok(());
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
@@ -550,7 +549,8 @@ impl Peer {
 
             cmd_resp::bind_uuid(&mut resp, cmd.uuid);
             cmd_resp::bind_term(&mut resp, self.term());
-            return cmd.cb.call_box((resp,));
+            cmd.cb.call_box((resp,));
+            return Ok(());
         } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
@@ -565,7 +565,8 @@ impl Peer {
 
             // transfer leader command doesn't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
-            return cmd.cb.call_box((make_transfer_leader_response(),));
+            cmd.cb.call_box((make_transfer_leader_response(),));
+            return Ok(());
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
                 return Err(box_err!("there is a pending conf change, try later"));
@@ -580,13 +581,15 @@ impl Peer {
 
             if let Err(e) = self.propose_conf_change(req) {
                 cmd_resp::bind_error(&mut err_resp, e);
-                return cmd.cb.call_box((err_resp,));
+                cmd.cb.call_box((err_resp,));
+                return Ok(());
             }
 
             self.pending_cmds.set_conf_change(cmd);
         } else if let Err(e) = self.propose_normal(req) {
             cmd_resp::bind_error(&mut err_resp, e);
-            return cmd.cb.call_box((err_resp,));
+            cmd.cb.call_box((err_resp,));
+            return Ok(());
         } else {
             self.pending_cmds.append_normal(cmd);
         }
@@ -624,12 +627,7 @@ impl Peer {
         let not_leader = Error::NotLeader(self.region_id, leader);
         let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
         warn!("{} command {} is stale, skip", self.tag, cmd.uuid);
-        if let Err(e) = cmd.cb.call_box((resp,)) {
-            error!("{} failed to clean stale callback of {}: {:?}",
-                   self.tag,
-                   cmd.uuid,
-                   e);
-        }
+        cmd.cb.call_box((resp,));
     }
 
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
@@ -952,9 +950,7 @@ impl Peer {
         // Bind uuid here.
         cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term());
-        if let Err(e) = cb.call_box((resp,)) {
-            error!("{} callback err {:?}", self.tag, e);
-        }
+        cb.call_box((resp,));
 
         Ok(exec_result)
     }

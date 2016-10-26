@@ -286,7 +286,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             resp_msg.set_cmd_resp(resp);
 
             on_resp.call_box((resp_msg,));
-            Ok(())
         };
 
         try!(self.raft_router.send_command(msg, cb));

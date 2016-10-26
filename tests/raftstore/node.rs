@@ -15,6 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use std::boxed::FnBox;
 use std::ops::Deref;
 use std::fs;
 
@@ -204,14 +205,9 @@ impl Simulator for NodeCluster {
         }
 
         let router = self.trans.rl().routers.get(&node_id).cloned().unwrap();
-        wait_event!(|cb: Box<Fn(RaftCmdResponse) + 'static + Send>| {
-            router.send_command(request,
-                              box move |resp| {
-                                  cb(resp);
-                                  Ok(())
-                              })
-                .unwrap()
-        },
+        wait_event!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
+                        router.send_command(request, cb).unwrap()
+                    },
                     timeout)
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }

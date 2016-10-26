@@ -987,7 +987,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {
                 bind_error(&mut resp, Error::Other("missing request uuid".into()));
-                return cb.call_box((resp,));
+                cb.call_box((resp,));
+                return Ok(());
             }
             Some(uuid) => {
                 bind_uuid(&mut resp, uuid);
@@ -999,7 +1000,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if store_id != self.store.get_id() {
             bind_error(&mut resp,
                        box_err!("mismatch store id {} != {}", store_id, self.store.get_id()));
-            return cb.call_box((resp,));
+            cb.call_box((resp,));
+            return Ok(());
         }
 
         if msg.has_status_request() {
@@ -1008,12 +1010,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Err(e) => bind_error(&mut resp, e),
                 Ok(status_resp) => resp = status_resp,
             };
-            return cb.call_box((resp,));
+            cb.call_box((resp,));
+            return Ok(());
         }
 
         if let Err(e) = self.validate_region(&msg) {
             bind_error(&mut resp, e);
-            return cb.call_box((resp,));
+            cb.call_box((resp,));
+            return Ok(());
         }
 
         // Note:
@@ -1123,11 +1127,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Create a compact log request and notify directly.
             let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx);
 
-            let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
-
             if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
-                callback: cb,
+                callback: Box::new(|_| {}),
             }) {
                 error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
             }
