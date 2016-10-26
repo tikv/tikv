@@ -982,13 +982,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) -> Result<()> {
+    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
         let mut resp = RaftCmdResponse::new();
         let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {
                 bind_error(&mut resp, Error::Other("missing request uuid".into()));
-                cb.call_box((resp,));
-                return Ok(());
+                return cb.call_box((resp,));
             }
             Some(uuid) => {
                 bind_uuid(&mut resp, uuid);
@@ -1000,8 +999,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if store_id != self.store.get_id() {
             bind_error(&mut resp,
                        box_err!("mismatch store id {} != {}", store_id, self.store.get_id()));
-            cb.call_box((resp,));
-            return Ok(());
+            return cb.call_box((resp,));
         }
 
         if msg.has_status_request() {
@@ -1010,14 +1008,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Err(e) => bind_error(&mut resp, e),
                 Ok(status_resp) => resp = status_resp,
             };
-            cb.call_box((resp,));
-            return Ok(());
+            return cb.call_box((resp,));
         }
 
         if let Err(e) = self.validate_region(&msg) {
             bind_error(&mut resp, e);
-            cb.call_box((resp,));
-            return Ok(());
+            return cb.call_box((resp,));
         }
 
         // Note:
@@ -1032,16 +1028,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let pending_cmd = PendingCmd {
             uuid: uuid,
             term: term,
-            cb: cb,
+            cb: Some(cb),
         };
-        try!(peer.propose(pending_cmd, msg, resp));
-
-        self.pending_raft_groups.insert(region_id);
+        if peer.propose(pending_cmd, msg, resp) {
+            self.pending_raft_groups.insert(region_id);
+        }
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
-
-        Ok(())
     }
 
     fn validate_region(&self, msg: &RaftCmdRequest) -> Result<()> {
@@ -1541,11 +1535,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     error!("handle raft message err: {:?}", e);
                 }
             }
-            Msg::RaftCmd { request, callback } => {
-                if let Err(e) = self.propose_raft_command(request, callback) {
-                    error!("propose raft command err: {:?}", e);
-                }
-            }
+            Msg::RaftCmd { request, callback } => self.propose_raft_command(request, callback),
             Msg::Quit => {
                 info!("receive quit message");
                 event_loop.shutdown();

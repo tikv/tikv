@@ -60,7 +60,15 @@ pub enum StaleState {
 pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
-    pub cb: Callback,
+    pub cb: Option<Callback>,
+}
+
+impl Drop for PendingCmd {
+    fn drop(&mut self) {
+        if self.cb.is_some() {
+            panic!("callback of {} is leak.", self.uuid);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -139,7 +147,7 @@ impl PendingCmdQueue {
 }
 
 /// Call the callback of `cmd` that the region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, cmd: PendingCmd) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     let region_not_found = Error::RegionNotFound(region_id);
     let mut resp = cmd_resp::new_error(region_not_found);
     cmd_resp::bind_uuid(&mut resp, cmd.uuid);
@@ -147,7 +155,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, cmd: PendingCmd) {
            region_id,
            peer_id,
            cmd.uuid);
-    cmd.cb.call_box((resp,));
+    cmd.cb.take().unwrap().call_box((resp,));
 }
 
 pub struct Peer {
@@ -515,15 +523,18 @@ impl Peer {
         }))
     }
 
+    /// Propose a request.
+    ///
+    /// Return true means the request has been proposed successfully.
     pub fn propose(&mut self,
-                   cmd: PendingCmd,
+                   mut cmd: PendingCmd,
                    req: RaftCmdRequest,
                    mut err_resp: RaftCmdResponse)
-                   -> Result<()> {
+                   -> bool {
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
-            cmd.cb.call_box((err_resp,));
-            return Ok(());
+            cmd.cb.take().unwrap().call_box((err_resp,));
+            return false;
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
@@ -549,8 +560,8 @@ impl Peer {
 
             cmd_resp::bind_uuid(&mut resp, cmd.uuid);
             cmd_resp::bind_term(&mut resp, self.term());
-            cmd.cb.call_box((resp,));
-            return Ok(());
+            cmd.cb.take().unwrap().call_box((resp,));
+            return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
@@ -565,11 +576,16 @@ impl Peer {
 
             // transfer leader command doesn't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
-            cmd.cb.call_box((make_transfer_leader_response(),));
-            return Ok(());
+            cmd.cb.take().unwrap().call_box((make_transfer_leader_response(),));
+            return false;
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
-                return Err(box_err!("there is a pending conf change, try later"));
+                error!("{} there is a pending conf change, try later", self.tag);
+                cmd_resp::bind_error(&mut err_resp,
+                                     box_err!("{} there is a pending conf change, try later",
+                                              self.tag));
+                cmd.cb.take().unwrap().call_box((err_resp,));
+                return false;
             }
             if let Some(cmd) = self.pending_cmds.take_conf_change() {
                 // if it loses leadership before conf change is replicated, there may be
@@ -581,20 +597,20 @@ impl Peer {
 
             if let Err(e) = self.propose_conf_change(req) {
                 cmd_resp::bind_error(&mut err_resp, e);
-                cmd.cb.call_box((err_resp,));
-                return Ok(());
+                cmd.cb.take().unwrap().call_box((err_resp,));
+                return false;
             }
 
             self.pending_cmds.set_conf_change(cmd);
         } else if let Err(e) = self.propose_normal(req) {
             cmd_resp::bind_error(&mut err_resp, e);
-            cmd.cb.call_box((err_resp,));
-            return Ok(());
+            cmd.cb.take().unwrap().call_box((err_resp,));
+            return false;
         } else {
             self.pending_cmds.append_normal(cmd);
         }
 
-        Ok(())
+        true
     }
 
     fn is_local_read(&self, req: &RaftCmdRequest) -> bool {
@@ -622,12 +638,12 @@ impl Peer {
     ///
     /// Please note that, `NotLeader` here doesn't mean that currently this
     /// peer is not leader.
-    fn notify_not_leader(&self, cmd: PendingCmd) {
+    fn notify_not_leader(&self, mut cmd: PendingCmd) {
         let leader = self.get_peer_from_cache(self.leader_id());
         let not_leader = Error::NotLeader(self.region_id, leader);
         let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
         warn!("{} command {} is stale, skip", self.tag, cmd.uuid);
-        cmd.cb.call_box((resp,));
+        cmd.cb.take().unwrap().call_box((resp,));
     }
 
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
@@ -895,18 +911,18 @@ impl Peer {
 
     fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
         if get_change_peer_cmd(cmd).is_some() {
-            if let Some(cmd) = self.pending_cmds.take_conf_change() {
+            if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
-                    return Some(cmd.cb);
+                    return Some(cmd.cb.take().unwrap());
                 } else {
                     self.notify_not_leader(cmd);
                 }
             }
             return None;
         }
-        while let Some(head) = self.pending_cmds.pop_normal(term) {
+        while let Some(mut head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
-                return Some(head.cb);
+                return Some(head.cb.take().unwrap());
             }
             // because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
@@ -1402,6 +1418,17 @@ impl Peer {
         let mut resp = Response::new();
         resp.mut_snap().set_region(self.get_store().get_region().clone());
         Ok(resp)
+    }
+}
+
+impl Drop for Peer {
+    fn drop(&mut self) {
+        while let Some(mut cmd) = self.pending_cmds.normals.pop_front() {
+            cmd.cb.take();
+        }
+        if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            cmd.cb.take();
+        }
     }
 }
 
