@@ -1584,6 +1584,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     error!("failed to stop {}: {:?}", name, e);
                 }
             }
+            for peer in self.region_peers.values_mut() {
+                peer.clear_pending_command();
+            }
 
             return;
         }

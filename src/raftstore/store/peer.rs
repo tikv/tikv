@@ -1038,6 +1038,19 @@ impl Peer {
 
         Ok((resp, exec_result))
     }
+
+    /// Clear all the pending commands.
+    ///
+    /// Please note that all the pending callbacks will be lost.
+    /// Should not do this when dropping a peer in case of possible leak.
+    pub fn clear_pending_command(&mut self) {
+        while let Some(mut cmd) = self.pending_cmds.normals.pop_front() {
+            cmd.cb.take();
+        }
+        if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            cmd.cb.take();
+        }
+    }
 }
 
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
@@ -1418,17 +1431,6 @@ impl Peer {
         let mut resp = Response::new();
         resp.mut_snap().set_region(self.get_store().get_region().clone());
         Ok(resp)
-    }
-}
-
-impl Drop for Peer {
-    fn drop(&mut self) {
-        while let Some(mut cmd) = self.pending_cmds.normals.pop_front() {
-            cmd.cb.take();
-        }
-        if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
-            cmd.cb.take();
-        }
     }
 }
 
