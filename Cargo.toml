@@ -60,8 +60,7 @@ clap = "2"
 git = "https://github.com/rust-lang-nursery/getopts"
 
 [dependencies.rocksdb]
-git = "https://github.com/busyjay/rust-rocksdb.git"
-branch = "busyjay/use-feature-instead-env"
+git = "https://github.com/ngaut/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
