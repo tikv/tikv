@@ -14,37 +14,32 @@
 use std::thread;
 use std::time::Duration;
 use std::fmt::{self, Formatter, Display};
-use std::net::{TcpStream, SocketAddr};
-use std::sync::{Mutex, Arc};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::net::{SocketAddr};
+use std::sync::Arc;
 
 use uuid::Uuid;
 
 use kvproto::metapb::{Region, Peer};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, AdminRequest, AdminCmdType};
-use kvproto::msgpb::{Message, MessageType};
 
 use pd::PdClient;
 use server::ResolveTask;
 use util::worker::{Scheduler, Runnable};
-use util::codec::rpc;
-use util::make_std_tcp_conn;
+
 use util::transport::SendCh;
 use raftstore::store::Msg;
 use raftstore::store::util::ensure_schedule;
 use raftstore::Result;
 
-const MAX_RAFT_RPC_SEND_RETRY_COUNT: u64 = 2;
-const RAFT_RPC_RETRY_TIME_MILLIS: u64 = 50;
+use super::client::{Client, KVClient};
+
 const RESOLVE_ADDRESS_RETRY_TIME_MILLIS: u64 = 50;
 const GET_REGION_FROM_PD_RETRY_TIME_MILLIS: u64 = 50;
-const SOCKET_READ_TIMEOUT: u64 = 3;
-const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
 /// Client to communicate with TiKV region for region merge.
 /// It sends Raft command requests to the specified TiKV region and
 /// waits for the corresponding responses.
-pub trait RaftClient {
+pub trait RegionMergeClient {
     /// `suspend_region` suspends the region which is about to be merged.
     fn send_suspend_region(&self, region: Region, leader: Peer) -> Result<()>;
     /// `shutdown_region` shutdowns a region which is merged before.
@@ -123,7 +118,6 @@ pub enum Task {
     },
 }
 
-
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
@@ -165,113 +159,8 @@ impl Display for Task {
     }
 }
 
-#[derive(Debug)]
-struct RaftRpcClientCore {
-    address: SocketAddr,
-    stream: Option<TcpStream>,
-}
 
-fn send_request(stream: &mut TcpStream,
-                msg_id: u64,
-                request: &RaftCmdRequest)
-                -> Result<(u64, RaftCmdResponse)> {
-    let mut message = Message::new();
-    message.set_msg_type(MessageType::Cmd);
-    message.set_cmd_req(request.clone());
-
-    try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
-    try!(rpc::encode_msg(stream, msg_id, &message));
-
-    try!(stream.set_read_timeout(Some(Duration::from_secs(SOCKET_READ_TIMEOUT))));
-    let mut resp = Message::new();
-    let id = try!(rpc::decode_msg(stream, &mut resp));
-    if resp.get_msg_type() != MessageType::CmdResp {
-        return Err(box_err!("invalid cmd response type {:?}", resp.get_msg_type()));
-    }
-
-    Ok((id, resp.take_cmd_resp()))
-}
-
-fn rpc_connect(address: SocketAddr) -> Result<TcpStream> {
-    let stream = try!(make_std_tcp_conn(address));
-    try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
-    Ok(stream)
-}
-
-impl RaftRpcClientCore {
-    pub fn new(address: SocketAddr) -> RaftRpcClientCore {
-        RaftRpcClientCore {
-            address: address,
-            stream: None,
-        }
-    }
-
-    fn try_connect(&mut self) -> Result<()> {
-        let stream = try!(rpc_connect(self.address));
-        self.stream = Some(stream);
-        Ok(())
-    }
-
-    fn send(&mut self, msg_id: u64, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
-        for _ in 0..MAX_RAFT_RPC_SEND_RETRY_COUNT {
-            if self.stream.is_none() {
-                if let Err(e) = self.try_connect() {
-                    warn!("connect tikv failed {:?}", e);
-                    thread::sleep(Duration::from_millis(RAFT_RPC_RETRY_TIME_MILLIS));
-                    continue;
-                }
-            }
-
-            let mut stream = self.stream.take().unwrap();
-
-            let (id, resp) = match send_request(&mut stream, msg_id, req) {
-                Err(e) => {
-                    warn!("send message to tikv failed {:?}", e);
-                    thread::sleep(Duration::from_millis(RAFT_RPC_RETRY_TIME_MILLIS));
-                    continue;
-                }
-                Ok((id, resp)) => (id, resp),
-            };
-
-            if id != msg_id {
-                return Err(box_err!("tikv response msg_id not match, want {}, got {}",
-                                    msg_id,
-                                    id));
-            }
-
-            self.stream = Some(stream);
-
-            return Ok(resp);
-        }
-        Err(box_err!("send message to tikv failed, address: {}", self.address))
-    }
-}
-
-pub struct RaftRpcClient {
-    msg_id: AtomicUsize,
-    core: Mutex<RaftRpcClientCore>,
-}
-
-impl RaftRpcClient {
-    pub fn new(address: SocketAddr) -> RaftRpcClient {
-        RaftRpcClient {
-            msg_id: AtomicUsize::new(0),
-            core: Mutex::new(RaftRpcClientCore::new(address)),
-        }
-    }
-
-    pub fn send(&self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
-        let msg_id = self.alloc_msg_id();
-        let resp = try!(self.core.lock().unwrap().send(msg_id, req));
-        Ok(resp)
-    }
-
-    pub fn alloc_msg_id(&self) -> u64 {
-        self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
-    }
-}
-
-impl RaftClient for RaftRpcClient {
+impl RegionMergeClient for KVClient {
     fn send_suspend_region(&self, region: Region, peer: Peer) -> Result<()> {
         let mut req = RaftCmdRequest::new();
         req.mut_header().set_region_id(region.get_id());
@@ -283,7 +172,7 @@ impl RaftClient for RaftRpcClient {
         admin_req.mut_suspend_region().set_region(region);
         req.set_admin_request(admin_req);
 
-        let _ = try!(self.send(&req));
+        let _ = try!(self.send_cmd(&req));
         Ok(())
     }
 
@@ -298,10 +187,11 @@ impl RaftClient for RaftRpcClient {
         admin_req.mut_shutdown_region().set_region(region);
         req.set_admin_request(admin_req);
 
-        let _ = try!(self.send(&req));
+        let _ = try!(self.send_cmd(&req));
         Ok(())
     }
 }
+
 
 pub struct Runner<T: PdClient> {
     scheduler: Scheduler<Task>,
@@ -512,7 +402,7 @@ impl<T: PdClient> Runner<T> {
     fn handle_after_resolve(&self, context: TaskContext) {
         match context.task_type {
             TaskType::SuspendRegion => {
-                let client = RaftRpcClient::new(context.address);
+                let client = KVClient::new(context.address);
                 match client.send_suspend_region(context.from_region.clone(),
                                                  context.from_peer.clone()) {
                     Ok(()) => {
@@ -546,7 +436,7 @@ impl<T: PdClient> Runner<T> {
             }
             TaskType::ShutdownRegion => {
                 // send a shutdown region command to the specified region
-                let client = RaftRpcClient::new(context.address);
+                let client = KVClient::new(context.address);
                 match client.send_shutdown_region(context.from_region.clone(),
                                                   context.from_peer.clone()) {
                     Ok(()) => {

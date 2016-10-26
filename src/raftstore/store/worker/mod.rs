@@ -13,6 +13,7 @@
 
 mod region;
 pub mod region_check;
+pub mod client;
 pub mod region_merge;
 mod compact;
 mod pd;

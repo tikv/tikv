@@ -1379,13 +1379,16 @@ impl Peer {
             region_local_state.mut_region().set_region_merge(region_merge);
             try!(self.engine.put_msg(&state_key, &region_local_state));
 
-            let task = region_merge::Task::SuspendRegion {
-                from_region: merge_req.get_from_region().clone(),
-                from_leader: merge_req.get_from_leader().clone(),
-                into_region: region_local_state.get_region().clone(),
-                into_peer: self.peer.clone(),
-            };
-            util::ensure_schedule(self.merge_scheduler.clone(), task);
+            if self.is_leader() {
+                // schedule a task for the remaining region merge procedure
+                let task = region_merge::Task::SuspendRegion {
+                    from_region: merge_req.get_from_region().clone(),
+                    from_leader: merge_req.get_from_leader().clone(),
+                    into_region: region_local_state.get_region().clone(),
+                    into_peer: self.peer.clone(),
+                };
+                util::ensure_schedule(self.merge_scheduler.clone(), task);
+            }
 
             PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["merge", "success"]).inc();
 
@@ -1472,12 +1475,15 @@ impl Peer {
             region_local_state.set_region(new_region.clone());
             // persist peer local state
             try!(self.engine.put_msg(&state_key, &region_local_state));
-            // schedule a shutdown task for the region which is about to be shutdown
-            let shutdown_task = region_merge::Task::ShutdownRegion {
-                region: commit_merge.get_from_region().clone(),
-                leader: commit_merge.get_from_leader().clone(),
-            };
-            util::ensure_schedule(self.merge_scheduler.clone(), shutdown_task);
+
+            if self.is_leader() {
+                // schedule a shutdown task for the region which is about to be shutdown
+                let shutdown_task = region_merge::Task::ShutdownRegion {
+                    region: commit_merge.get_from_region().clone(),
+                    leader: commit_merge.get_from_leader().clone(),
+                };
+                util::ensure_schedule(self.merge_scheduler.clone(), shutdown_task);
+            }
 
             PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["commit merge", "success"]).inc();
 

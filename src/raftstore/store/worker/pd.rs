@@ -225,6 +225,15 @@ impl<T: PdClient> Runner<T> {
                     let req = new_region_merge_request(region_merge.take_from_region(),
                                                        region_merge.take_from_leader());
                     self.send_admin_request(region, peer, req);
+                } else if resp.has_region_shutdown() {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["region shutdown"]).inc();
+
+                    let mut region_shutdown = resp.take_region_shutdown();
+                    info!("[region {}] try to shutdown region {:?} after region merge",
+                          region.get_id(),
+                          region_shutdown.get_region());
+                    let req = new_region_shutdown_request(region_shutdown.take_region());
+                    self.send_admin_request(region, peer, req);
                 }
             }
             Err(e) => {
@@ -408,5 +417,12 @@ fn new_region_merge_request(from_region: metapb::Region,
     req.set_cmd_type(AdminCmdType::Merge);
     req.mut_merge().set_from_region(from_region);
     req.mut_merge().set_from_leader(from_leader);
+    req
+}
+
+fn new_region_shutdown_request(region: metapb::Region) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::ShutdownRegion);
+    req.mut_shutdown_region().set_region(region);
     req
 }
