@@ -15,6 +15,7 @@
 use std::{thread, error};
 use std::fmt::Debug;
 use std::time::Duration;
+use super::metrics::*;
 
 use mio::{Sender, NotifyError};
 
@@ -48,11 +49,15 @@ impl<T: Debug> From<NotifyError<T>> for Error {
 
 pub struct SendCh<T> {
     ch: Sender<T>,
+    name: &'static str,
 }
 
 impl<T: Debug> SendCh<T> {
-    pub fn new(ch: Sender<T>) -> SendCh<T> {
-        SendCh { ch: ch }
+    pub fn new(ch: Sender<T>, name: &'static str) -> SendCh<T> {
+        SendCh {
+            ch: ch,
+            name: name,
+        }
     }
 
     /// Try send t with default try times.
@@ -70,6 +75,7 @@ impl<T: Debug> SendCh<T> {
                 Ok(_) => return Ok(()),
                 Err(NotifyError::Full(m)) => {
                     if try_times <= 1 {
+                        CHANNEL_FULL_COUNTER_VEC.with_label_values(&[self.name]).inc();
                         return Err(NotifyError::Full(m).into());
                     }
                     try_times -= 1;
@@ -87,7 +93,10 @@ impl<T: Debug> SendCh<T> {
 
 impl<T> Clone for SendCh<T> {
     fn clone(&self) -> SendCh<T> {
-        SendCh { ch: self.ch.clone() }
+        SendCh {
+            ch: self.ch.clone(),
+            name: self.name,
+        }
     }
 }
 
@@ -127,7 +136,7 @@ mod tests {
     #[test]
     fn test_sendch() {
         let mut event_loop = EventLoop::new().unwrap();
-        let ch = SendCh::new(event_loop.channel());
+        let ch = SendCh::new(event_loop.channel(), "test");
         let _ch = ch.clone();
         let h = thread::spawn(move || {
             let mut sender = SenderHandler { ch: _ch };
@@ -144,7 +153,7 @@ mod tests {
         let mut builder = EventLoopBuilder::new();
         builder.notify_capacity(2);
         let mut event_loop = builder.build().unwrap();
-        let ch = SendCh::new(event_loop.channel());
+        let ch = SendCh::new(event_loop.channel(), "test");
         let _ch = ch.clone();
         let h = thread::spawn(move || {
             let mut sender = SenderHandler { ch: _ch };

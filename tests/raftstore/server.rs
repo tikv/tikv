@@ -147,7 +147,7 @@ impl Simulator for ServerCluster {
 
         // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop(&cfg).unwrap();
-        let sendch = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel(), "cluster-simulator");
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
         let trans = ServerTransport::new(sendch.clone());
 

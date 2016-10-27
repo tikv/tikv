@@ -788,7 +788,7 @@ fn handle_signal(ch: SendCh<Msg>) {}
 
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
     let mut event_loop = create_event_loop(cfg).unwrap();
-    let ch = SendCh::new(event_loop.channel());
+    let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_endpoints = get_string_value("pd",
                                         "pd.endpoints",
                                         matches,

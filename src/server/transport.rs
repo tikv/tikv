@@ -234,7 +234,7 @@ mod tests {
         let invalid_store_id = store_id + 1;
 
         let evloop = EventLoop::<FooHandler>::new().unwrap();
-        let sendch = SendCh::new(evloop.channel());
+        let sendch = SendCh::new(evloop.channel(), "test-store");
         let router = ServerRaftStoreRouter::new(sendch, store_id);
 
         let msg = new_raft_msg(store_id);
