@@ -837,13 +837,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_compact_log(&mut self, region_id: u64, state: RaftTruncatedState) {
-        let peer = self.region_peers.get(&region_id).unwrap();
+        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let task = CompactTask::CompactRaftLog {
             engine: peer.get_store().get_engine().clone(),
             region_id: peer.get_store().get_region_id(),
             start_idx: peer.last_compacted,
             compact_idx: state.get_index() + 1,
         };
+        peer.last_compacted = state.get_index() + 1;
         if let Err(e) = self.compact_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
