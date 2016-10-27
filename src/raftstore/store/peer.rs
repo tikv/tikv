@@ -786,6 +786,14 @@ impl Peer {
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
 
+        // There could be two cases:
+        // 1. Target peer already exists but has not established communication with leader yet
+        // 2. Target peer is added newly due to member change or region split, but it's not
+        //    created yet
+        // For both cases the region start key and end key are attached in RequestVote and
+        // Heartbeat message for the store of that peer to check whether to create a new peer
+        // when receiving these messages, or just to wait for a pending region split to perform
+        // later.
         if self.get_store().is_initialized() &&
            (msg_type == MessageType::MsgRequestVote ||
             // the peer has not been known to this leader, it may exist or not.

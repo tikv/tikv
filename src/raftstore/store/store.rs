@@ -470,7 +470,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
     }
 
-    /// If target peer doesn't exist, create one.
+    /// If target peer doesn't exist, create it.
     ///
     /// return false to indicate that target peer is in invalid state or
     /// doesn't exist and can't be created.
