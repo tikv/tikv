@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
@@ -70,11 +71,25 @@ quick_error! {
 
 pub struct Runner {
     engine: Arc<DB>,
+
+    // region_id -> last_compacted
+    raft_compacted_ctx: HashMap<u64, u64>,
 }
 
 impl Runner {
     pub fn new(engine: Arc<DB>) -> Runner {
-        Runner { engine: engine }
+        Runner {
+            engine: engine,
+            raft_compacted_ctx: HashMap::new(),
+        }
+    }
+
+    fn update_compacted(&mut self, region_id: u64, compacted: u64) {
+        if let Some(last_compacted) = self.raft_compacted_ctx.get_mut(&region_id) {
+            *last_compacted = compacted;
+            return;
+        }
+        self.raft_compacted_ctx.insert(region_id, compacted);
     }
 
     /// Do the compact job and return the count of log compacted.
@@ -83,11 +98,17 @@ impl Runner {
                         region_id: u64,
                         compact_idx: u64)
                         -> Result<u64, Error> {
-        let start_key = keys::raft_log_key(region_id, 0);
-        let mut first_idx = compact_idx;
-        if let Some((k, _)) = box_try!(engine.seek_cf(CF_RAFT, &start_key)) {
-            first_idx = box_try!(keys::raft_log_index(&k));
-        }
+        let first_idx = match self.raft_compacted_ctx.get(&region_id) {
+            None => {
+                let start_key = keys::raft_log_key(region_id, 0);
+                let mut first_idx = compact_idx;
+                if let Some((k, _)) = box_try!(engine.seek_cf(CF_RAFT, &start_key)) {
+                    first_idx = box_try!(keys::raft_log_index(&k));
+                }
+                first_idx
+            }
+            Some(last_compacted) => *last_compacted,
+        };
         if first_idx >= compact_idx {
             info!("[region {}] no need to compact", region_id);
             return Ok(0);
@@ -100,6 +121,7 @@ impl Runner {
         }
         // It's not safe to disable WAL here. We may lost data after crashed for unknown reason.
         box_try!(engine.write(wb));
+        self.update_compacted(region_id, compact_idx);
         Ok(compact_idx - first_idx)
     }
 
