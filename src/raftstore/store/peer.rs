@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -173,6 +173,8 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
 
     pub tag: String,
+
+    pub last_compacted: Arc<RwLock<u64>>,
 }
 
 impl Peer {
@@ -258,6 +260,7 @@ impl Peer {
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
+            last_compacted: Arc::new(RwLock::new(0)),
         };
 
         peer.load_all_coprocessors();

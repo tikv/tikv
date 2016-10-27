@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use raftstore::store::keys;
 use raftstore::store::engine::Iterable;
 use util::worker::Runnable;
@@ -19,7 +18,7 @@ use util::rocksdb;
 use storage::CF_RAFT;
 
 use rocksdb::{DB, WriteBatch, Writable};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::fmt::{self, Formatter, Display};
 use std::error;
 use super::metrics::COMPACT_RANGE_CF;
@@ -33,6 +32,7 @@ pub enum Task {
     CompactRaftLog {
         engine: Arc<DB>,
         region_id: u64,
+        last_compacted: Arc<RwLock<u64>>,
         compact_idx: u64,
     },
 }
@@ -71,35 +71,32 @@ quick_error! {
 
 pub struct Runner {
     engine: Arc<DB>,
-
-    // region_id -> last_compacted
-    raft_compacted_ctx: HashMap<u64, u64>,
 }
 
 impl Runner {
     pub fn new(engine: Arc<DB>) -> Runner {
-        Runner {
-            engine: engine,
-            raft_compacted_ctx: HashMap::new(),
-        }
+        Runner { engine: engine }
     }
 
     /// Do the compact job and return the count of log compacted.
     fn compact_raft_log(&mut self,
                         engine: Arc<DB>,
                         region_id: u64,
+                        last_compacted: Arc<RwLock<u64>>,
                         compact_idx: u64)
                         -> Result<u64, Error> {
-        let first_idx = match self.raft_compacted_ctx.get(&region_id) {
-            None => {
+        let first_idx = {
+            let last_compacted = *last_compacted.read().unwrap();
+            if last_compacted == 0 {
                 let start_key = keys::raft_log_key(region_id, 0);
                 let mut first_idx = compact_idx;
                 if let Some((k, _)) = box_try!(engine.seek_cf(CF_RAFT, &start_key)) {
                     first_idx = box_try!(keys::raft_log_index(&k));
                 }
                 first_idx
+            } else {
+                last_compacted
             }
-            Some(last_compacted) => *last_compacted,
         };
         if first_idx >= compact_idx {
             info!("[region {}] no need to compact", region_id);
@@ -113,7 +110,8 @@ impl Runner {
         }
         // It's not safe to disable WAL here. We may lost data after crashed for unknown reason.
         box_try!(engine.write(wb));
-        self.raft_compacted_ctx.insert(region_id, compact_idx);
+        let mut w = last_compacted.write().unwrap();
+        *w = compact_idx;
         Ok(compact_idx - first_idx)
     }
 
@@ -137,11 +135,11 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::CompactRaftLog { engine, region_id, compact_idx } => {
+            Task::CompactRaftLog { engine, region_id, last_compacted, compact_idx } => {
                 debug!("[region {}] execute compacting log to {}",
                        region_id,
                        compact_idx);
-                match self.compact_raft_log(engine, region_id, compact_idx) {
+                match self.compact_raft_log(engine, region_id, last_compacted, compact_idx) {
                     Err(e) => error!("[region {}] failed to compact: {:?}", region_id, e),
                     Ok(n) => info!("[region {}] compacted {} log entries", region_id, n),
                 }

@@ -841,6 +841,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let task = CompactTask::CompactRaftLog {
             engine: peer.get_store().get_engine().clone(),
             region_id: peer.get_store().get_region_id(),
+            last_compacted: peer.last_compacted.clone(),
             compact_idx: state.get_index() + 1,
         };
         if let Err(e) = self.compact_worker.schedule(task) {
