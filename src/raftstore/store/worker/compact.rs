@@ -85,18 +85,14 @@ impl Runner {
                         start_idx: u64,
                         compact_idx: u64)
                         -> Result<u64, Error> {
-        let first_idx = {
-            if start_idx == 0 {
-                let start_key = keys::raft_log_key(region_id, 0);
-                let mut first_idx = compact_idx;
-                if let Some((k, _)) = box_try!(engine.seek_cf(CF_RAFT, &start_key)) {
-                    first_idx = box_try!(keys::raft_log_index(&k));
-                }
-                first_idx
-            } else {
-                start_idx
+        let mut first_idx = start_idx;
+        if first_idx == 0 {
+            let start_key = keys::raft_log_key(region_id, 0);
+            first_idx = compact_idx;
+            if let Some((k, _)) = box_try!(engine.seek_cf(CF_RAFT, &start_key)) {
+                first_idx = box_try!(keys::raft_log_index(&k));
             }
-        };
+        }
         if first_idx >= compact_idx {
             info!("[region {}] no need to compact", region_id);
             return Ok(0);

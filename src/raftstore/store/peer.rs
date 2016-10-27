@@ -174,7 +174,7 @@ pub struct Peer {
 
     pub tag: String,
 
-    pub last_compacted: u64,
+    pub last_compacted_idx: u64,
 }
 
 impl Peer {
@@ -260,7 +260,7 @@ impl Peer {
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
-            last_compacted: 0,
+            last_compacted_idx: 0,
         };
 
         peer.load_all_coprocessors();

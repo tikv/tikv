@@ -841,10 +841,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let task = CompactTask::CompactRaftLog {
             engine: peer.get_store().get_engine().clone(),
             region_id: peer.get_store().get_region_id(),
-            start_idx: peer.last_compacted,
+            start_idx: peer.last_compacted_idx,
             compact_idx: state.get_index() + 1,
         };
-        peer.last_compacted = state.get_index() + 1;
+        peer.last_compacted_idx = state.get_index() + 1;
         if let Err(e) = self.compact_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
