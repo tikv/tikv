@@ -623,12 +623,29 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           config,
                           Some(80 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
+
     cfg.raft_store.region_check_size_diff =
         get_integer_value("",
                           "raftstore.region-split-check-diff",
                           matches,
                           config,
                           Some(8 * 1024 * 1024),
+                          |v| v.as_integer()) as u64;
+
+    cfg.raft_store.region_compact_check_tick_interval =
+        get_integer_value("",
+                          "raftstore.region-compact-check-tick-interval",
+                          matches,
+                          config,
+                          Some(300_000),
+                          |v| v.as_integer()) as u64;
+
+    cfg.raft_store.region_compact_delete_keys_count =
+        get_integer_value("",
+                          "raftstore.region-compact-delete-keys-count",
+                          matches,
+                          config,
+                          Some(200_000),
                           |v| v.as_integer()) as u64;
 
     let max_peer_down_millis =
