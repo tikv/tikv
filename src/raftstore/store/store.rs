@@ -1577,7 +1577,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_gc(&mut self, region_id: u64, peer_id: u64) {
+    fn on_storage_gc(&mut self, region_id: u64, peer_id: u64) {
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         if self.region_check_worker.is_busy() {
@@ -1713,8 +1713,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
             }
-            Msg::ReportGc { region_id, peer_id } => {
-                self.on_gc(region_id, peer_id);
+            Msg::ReportStorageGc { region_id, peer_id } => {
+                self.on_storage_gc(region_id, peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
             Msg::SnapApplyRes { region_id, is_success, is_aborted } => {

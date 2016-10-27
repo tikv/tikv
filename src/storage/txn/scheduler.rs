@@ -357,7 +357,7 @@ fn process_read<T: RaftStoreRouter>(cid: u64,
                     // Notify corresponding peer to check region size after GC is done.
                     let region_id = ctx.get_region_id();
                     let peer_id = ctx.get_peer().get_id();
-                    if let Err(e) = router.report_gc(region_id, peer_id) {
+                    if let Err(e) = router.report_storage_gc(region_id, peer_id) {
                         error!("report gc for region {}, peer {} failed {:?}",
                                region_id,
                                peer_id,
