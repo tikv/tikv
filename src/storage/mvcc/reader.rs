@@ -59,9 +59,14 @@ impl<'a> MvccReader<'a> {
                 error!("data of [key: {}, ts: {}] is empty!!!", key, ts);
                 return Ok(None);
             }
-            return Ok(v.map(|v| v.to_vec()));
+            Ok(v.map(|v| v.to_vec()))
         } else {
-            self.snapshot.get(&k).map_err(Error::from)
+            let v = try!(self.snapshot.get(&k));
+            if v.is_none() {
+                error!("data of [key: {}, ts: {}] is empty!!!", key, ts);
+                return Ok(None);
+            }
+            Ok(v)
         }
     }
 
