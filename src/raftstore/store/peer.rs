@@ -528,6 +528,7 @@ impl Peer {
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
+        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
 
         let local_read = self.is_local_read(&req);
         if local_read {
