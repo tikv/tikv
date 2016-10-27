@@ -143,6 +143,13 @@ impl NodeCluster {
     }
 }
 
+impl NodeCluster {
+    #[allow(dead_code)]
+    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<Msg, ServerRaftStoreRouter> {
+        self.trans.rl().routers.get(&node_id).cloned().unwrap()
+    }
+}
+
 impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));

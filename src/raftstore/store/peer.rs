@@ -869,6 +869,11 @@ impl Peer {
             try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
             self.mut_store().applied_index_term = term;
+            assert!(term > 0);
+            while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
+                // apprently, all the callbacks whose term is less than entry's term are stale.
+                self.notify_not_leader(cmd);
+            }
             return Ok(None);
         }
 
