@@ -69,7 +69,7 @@ impl<C> Node<C>
             store.set_address(cfg.advertise_addr.clone())
         }
 
-        let ch = SendCh::new(event_loop.channel());
+        let ch = SendCh::new(event_loop.channel(), "node");
         Node {
             cluster_id: cfg.cluster_id,
             store: store,

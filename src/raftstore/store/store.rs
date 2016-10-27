@@ -240,7 +240,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
-        let sendch = SendCh::new(sender);
+        let sendch = SendCh::new(sender, "raftstore");
         let peer_cache = HashMap::new();
 
         let mut s = Store {
