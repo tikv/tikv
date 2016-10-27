@@ -234,6 +234,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     Ok(event_loop)
 }
 
+#[allow(too_many_arguments)]
 impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn new(sender: Sender<Msg>,
                meta: metapb::Store,

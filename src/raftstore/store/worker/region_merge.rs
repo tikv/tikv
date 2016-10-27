@@ -14,7 +14,7 @@
 use std::thread;
 use std::time::Duration;
 use std::fmt::{self, Formatter, Display};
-use std::net::{SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -36,8 +36,8 @@ use super::client::{Client, KVClient};
 const RESOLVE_ADDRESS_RETRY_TIME_MILLIS: u64 = 50;
 const GET_REGION_FROM_PD_RETRY_TIME_MILLIS: u64 = 50;
 
-/// Client to communicate with TiKV region for region merge.
-/// It sends Raft command requests to the specified TiKV region and
+/// Client to communicate with tikv region for region merge.
+/// It sends Raft command requests to the specified tikv region and
 /// waits for the corresponding responses.
 pub trait RegionMergeClient {
     /// `suspend_region` suspends the region which is about to be merged.
@@ -305,7 +305,9 @@ impl<T: PdClient> Runner<T> {
                 }
             };
             if let Err(e) = self.resolve_scheduler.schedule(ResolveTask::new(store_id, cb)) {
-                error!("failed to schedule resolve task with store id {}, error {:?}", store_id, e);
+                error!("failed to schedule resolve task with store id {}, error {:?}",
+                       store_id,
+                       e);
                 thread::sleep(Duration::from_millis(RESOLVE_ADDRESS_RETRY_TIME_MILLIS));
             } else {
                 return;
@@ -321,6 +323,20 @@ impl<T: PdClient> Runner<T> {
             // try to get the specified region info from PD
             match self.pd_client.get_region_by_id(from_region_id) {
                 Ok((region, leader)) => {
+                    let leader = match leader {
+                        Some(p) => p,
+                        None => {
+                            if region.get_peers().len() == 0 {
+                                panic!("[region {}] region {} should not has no peers, region \
+                                        {:?}",
+                                       into_region.get_id(),
+                                       region.get_id(),
+                                       region);
+                            }
+                            // Simply choose the first peer in region as the leader.
+                            region.get_peers()[0].clone()
+                        }
+                    };
                     self.handle_suspend_region(region, leader, into_region, into_peer);
                     return;
                 }
@@ -390,7 +406,9 @@ impl<T: PdClient> Runner<T> {
                 }
             };
             if let Err(e) = self.resolve_scheduler.schedule(ResolveTask::new(store_id, cb)) {
-                error!("failed to schedule resolve task with store id {}, error {:?}", store_id, e);
+                error!("failed to schedule resolve task with store id {}, error {:?}",
+                       store_id,
+                       e);
                 thread::sleep(Duration::from_millis(RESOLVE_ADDRESS_RETRY_TIME_MILLIS))
             } else {
                 return;
@@ -450,9 +468,9 @@ impl<T: PdClient> Runner<T> {
                                context.address,
                                e);
                         // Abort this task if error happens.
-                        // Even though the control region fails to tell the merged region to shutdown,
-                        // the merged region would communication with PD in heartbeat, and then
-                        // know itself should be shutdown.
+                        // Even though the control region fails to tell the merged region
+                        // to shutdown, the merged region would communication with PD
+                        // in heartbeat, and then know itself should be shutdown.
                     }
                 }
             }

@@ -27,6 +27,7 @@ mod snap;
 mod worker;
 mod metrics;
 
+pub use self::worker::client;
 pub use self::msg::{Msg, Callback, Tick};
 pub use self::store::{Store, create_event_loop};
 pub use self::config::Config;

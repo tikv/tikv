@@ -91,7 +91,7 @@ impl super::PdClient for RpcClient {
         Ok(resp.take_get_region().take_region())
     }
 
-    fn get_region_by_id(&self, region_id: u64) -> Result<(metapb::Region, metapb::Peer)> {
+    fn get_region_by_id(&self, region_id: u64) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let mut get_region_by_id = pdpb::GetRegionByIDRequest::new();
         get_region_by_id.set_region_id(region_id);
 
@@ -101,7 +101,12 @@ impl super::PdClient for RpcClient {
         let mut resp = try!(self.send(&req));
         try!(check_resp(&resp));
         let mut get_region_resp = resp.take_get_region_by_id();
-        Ok((get_region_resp.take_region(), get_region_resp.take_leader()))
+        let leader = if get_region_resp.has_leader() {
+            Some(get_region_resp.take_leader())
+        } else {
+            None
+        };
+        Ok((get_region_resp.take_region(), leader))
     }
 
     fn region_heartbeat(&self,

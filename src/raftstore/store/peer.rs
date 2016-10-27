@@ -1071,20 +1071,18 @@ impl Peer {
 
                 if let Some(ref exec_result) = exec_result {
                     match *exec_result {
-                        ExecResult::ChangePeer { ref region, .. } => {
-                            storage.region = region.clone();
-                        }
-                        ExecResult::CompactLog { .. } => {}
-                        ExecResult::SplitRegion { ref left, .. } => {
-                            storage.region = left.clone();
-                        }
+                        ExecResult::ChangePeer { ref region, .. } |
                         ExecResult::MergeRegion { ref region } => {
                             storage.region = region.clone();
+                        }
+                        ExecResult::CompactLog { .. } |
+                        ExecResult::ShutdownRegion { .. } => {}
+                        ExecResult::SplitRegion { ref left, .. } => {
+                            storage.region = left.clone();
                         }
                         ExecResult::CommitMerge { ref new, .. } => {
                             storage.region = new.clone();
                         }
-                        _ => {}
                     }
                 };
             }
@@ -1424,7 +1422,7 @@ impl Peer {
 
         let mut resp = AdminResponse::new();
         resp.mut_suspend_region().set_region(suspend_region.get_region().clone());
-        return Ok((resp, None));
+        Ok((resp, None))
     }
 
     fn exec_commit_merge(&mut self,
@@ -1510,7 +1508,7 @@ impl Peer {
 
         // If this peer is in the region which is asked to shutdown, it will destroy itself.
         let peer_id = self.peer_id();
-        if region.get_peers().iter().find(|p| p.get_id() == peer_id).is_some() {
+        if region.get_peers().iter().any(|p| p.get_id() == peer_id) {
             Ok((resp,
                 Some(ExecResult::ShutdownRegion {
                 region: self.region().clone(),

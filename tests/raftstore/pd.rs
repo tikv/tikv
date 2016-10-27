@@ -46,6 +46,7 @@ struct Cluster {
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
     region_id_keys: HashMap<u64, Key>,
+    region_leaders: HashMap<u64, metapb::Peer>,
     base_id: AtomicUsize,
     rule: Option<Rule>,
 
@@ -53,6 +54,8 @@ struct Cluster {
     split_count: usize,
 
     down_peers: HashMap<u64, pdpb::PeerStats>,
+
+    merging_region_ids: HashSet<u64>,
 }
 
 impl Cluster {
@@ -66,6 +69,7 @@ impl Cluster {
             stores: HashMap::new(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
+            region_leaders: HashMap::new(),
             base_id: AtomicUsize::new(1000),
             rule: None,
             store_stats: HashMap::new(),
@@ -115,9 +119,11 @@ impl Cluster {
             .map(|(_, region)| region.clone())
     }
 
-    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
+    fn get_region_by_id(&self, region_id: u64) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let key = self.region_id_keys.get(&region_id).unwrap();
-        Ok(self.regions.get(key).cloned().unwrap())
+        let region = self.regions.get(key).cloned().unwrap();
+        let leader = self.region_leaders.get(&region_id);
+        Ok((region, leader))
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -363,6 +369,18 @@ impl TestPdClient {
         self.cluster.wl().rule = None;
     }
 
+    pub fn reset_region_leader(&mut self, region_id: u64) {
+        self.cluster.wl().region_leaders.remove(&region_id);
+    }
+
+    pub fn set_region_leader(&mut self, region_id: u64, peer: metapb::Peer) {
+        self.cluster.wl().region_leaders.insert(region_id, peer);
+    }
+
+    pub fn get_region_leader(&self, region_id: u64) -> Option<metapb::Peer> {
+        self.cluster.rl().region_leaders.get(&region_id).cloned()
+    }
+
     // Set an empty rule which nothing to do to disable default max peer count
     // check rule, we can use reset_rule to enable default again.
     pub fn disable_default_rule(&self) {
@@ -512,7 +530,7 @@ impl PdClient for TestPdClient {
         Err(box_err!("no region contains key {:?}", escape(key)))
     }
 
-    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
+    fn get_region_by_id(&self, region_id: u64) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         try!(self.check_bootstrap());
         self.cluster.rl().get_region_by_id(region_id)
     }
@@ -550,6 +568,14 @@ impl PdClient for TestPdClient {
         Ok(resp)
     }
 
+    fn ask_merge(&self, region: metapb::Region) -> Result<pdpb::AskMergeResponse> {
+        try!(self.check_bootstrap());
+        // TODO add impl
+        let resp = pdpb::AskMergeResponse::new();
+        resp.set_ok(false);
+        Ok(resp)
+    }
+
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
         try!(self.check_bootstrap());
 
@@ -564,6 +590,16 @@ impl PdClient for TestPdClient {
         // pd just uses this for history show, so here we just count it.
         try!(self.check_bootstrap());
         self.cluster.wl().split_count += 1;
+        Ok(())
+    }
+
+    fn report_merge(&self,
+                    new: metapb::Region,
+                    old: metapb::Region,
+                    to_shutdown: metapb::Region)
+                    -> Result<()> {
+        try!(self.check_bootstrap());
+        // TODO add impl
         Ok(())
     }
 }

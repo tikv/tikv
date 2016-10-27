@@ -70,7 +70,6 @@ pub trait Simulator {
 
 pub struct Cluster<T: Simulator> {
     pub cfg: ServerConfig,
-    leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
     dbs: Vec<Arc<DB>>,
 
@@ -91,7 +90,6 @@ impl<T: Simulator> Cluster<T> {
                -> Cluster<T> {
         let mut c = Cluster {
             cfg: new_server_config(id),
-            leaders: HashMap::new(),
             paths: vec![],
             dbs: vec![],
             engines: HashMap::new(),
@@ -231,10 +229,10 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn store_ids_of_region(&self, region_id: u64) -> Vec<u64> {
-        let peers = self.pd_client
+        let (mut region, _) = self.pd_client
             .get_region_by_id(region_id)
-            .unwrap()
-            .take_peers();
+            .unwrap();
+        let peers = region.take_peers();
         peers.iter().map(|peer| peer.get_store_id()).collect()
     }
 
@@ -254,7 +252,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
         let store_ids = self.store_ids_of_region(region_id);
-        if let Some(l) = self.leaders.get(&region_id) {
+        if let Some(l) = self.pd_client.get_region_leader(region_id) {
             // leader may be stopped in some tests.
             if self.valid_leader_id(region_id, l.get_store_id()) {
                 return Some(l.clone());
@@ -292,10 +290,10 @@ impl<T: Simulator> Cluster<T> {
         }
 
         if let Some(l) = leader {
-            self.leaders.insert(region_id, l);
+            self.pd_client.set_region_leader(region_id, l);
         }
 
-        self.leaders.get(&region_id).cloned()
+        self.pd_client.get_region_leader(region_id)
     }
 
     // Multiple nodes with fixed node id, like node 1, 2, .. 5,
@@ -360,7 +358,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn reset_leader_of_region(&mut self, region_id: u64) {
-        self.leaders.remove(&region_id);
+        self.pd_client.reset_region_leader(region_id);
     }
 
     pub fn check_quorum<F: FnMut(&&Arc<DB>) -> bool>(&self, condition: F) -> bool {
@@ -376,7 +374,6 @@ impl<T: Simulator> Cluster<T> {
         for id in keys {
             self.stop_node(id);
         }
-        self.leaders.clear();
         debug!("all nodes are shut down.");
     }
 
@@ -398,7 +395,7 @@ impl<T: Simulator> Cluster<T> {
             self.reset_leader_of_region(region_id);
             return true;
         }
-        self.leaders.insert(region_id, err.get_leader().clone());
+        self.pd_client.set_region_leader(region_id, err.get_leader().clone());
         true
     }
 
@@ -517,11 +514,10 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
-        self.pd_client
+        let (region, _) = self.pd_client
             .get_region_by_id(region_id)
-            .unwrap()
-            .get_region_epoch()
-            .clone()
+            .unwrap();
+        region.get_region_epoch().clone()
     }
 
     pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {
