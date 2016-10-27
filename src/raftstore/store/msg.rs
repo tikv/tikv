@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn test_sender() {
         let mut event_loop = EventLoop::new().unwrap();
-        let sendch = &SendCh::new(event_loop.channel());
+        let sendch = &SendCh::new(event_loop.channel(), "test-sender");
 
         let t = thread::spawn(move || {
             event_loop.run(&mut TestHandler).unwrap();
