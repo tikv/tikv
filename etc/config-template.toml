@@ -56,6 +56,12 @@ region-split-size = "64MB"
 # whether the region should be split or not. 
 region-split-check-diff = "8MB"
 
+# Interval to check whether start compaction for a region.
+region-compact-check-tick-interval = "300s"
+# When delete keys of a region exceeds the size, a compaction will
+# be started.
+region-compact-delete-keys-count = 200000
+
 # When a peer hasn't been active for max-peer-down-duration,
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
