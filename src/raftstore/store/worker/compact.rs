@@ -18,7 +18,7 @@ use util::rocksdb;
 use storage::CF_RAFT;
 
 use rocksdb::{DB, WriteBatch, Writable};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
 use super::metrics::COMPACT_RANGE_CF;
@@ -32,7 +32,7 @@ pub enum Task {
     CompactRaftLog {
         engine: Arc<DB>,
         region_id: u64,
-        last_compacted: Arc<RwLock<u64>>,
+        start_idx: u64,
         compact_idx: u64,
     },
 }
@@ -82,12 +82,11 @@ impl Runner {
     fn compact_raft_log(&mut self,
                         engine: Arc<DB>,
                         region_id: u64,
-                        last_compacted: Arc<RwLock<u64>>,
+                        start_idx: u64,
                         compact_idx: u64)
                         -> Result<u64, Error> {
         let first_idx = {
-            let last_compacted = *last_compacted.read().unwrap();
-            if last_compacted == 0 {
+            if start_idx == 0 {
                 let start_key = keys::raft_log_key(region_id, 0);
                 let mut first_idx = compact_idx;
                 if let Some((k, _)) = box_try!(engine.seek_cf(CF_RAFT, &start_key)) {
@@ -95,7 +94,7 @@ impl Runner {
                 }
                 first_idx
             } else {
-                last_compacted
+                start_idx
             }
         };
         if first_idx >= compact_idx {
@@ -109,9 +108,7 @@ impl Runner {
             box_try!(wb.delete_cf(handle, &key));
         }
         // It's not safe to disable WAL here. We may lost data after crashed for unknown reason.
-        box_try!(engine.write(wb));
-        let mut w = last_compacted.write().unwrap();
-        *w = compact_idx;
+        engine.write(wb).unwrap();
         Ok(compact_idx - first_idx)
     }
 
@@ -135,11 +132,11 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::CompactRaftLog { engine, region_id, last_compacted, compact_idx } => {
+            Task::CompactRaftLog { engine, region_id, start_idx, compact_idx } => {
                 debug!("[region {}] execute compacting log to {}",
                        region_id,
                        compact_idx);
-                match self.compact_raft_log(engine, region_id, last_compacted, compact_idx) {
+                match self.compact_raft_log(engine, region_id, start_idx, compact_idx) {
                     Err(e) => error!("[region {}] failed to compact: {:?}", region_id, e),
                     Ok(n) => info!("[region {}] compacted {} log entries", region_id, n),
                 }
