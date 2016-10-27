@@ -147,9 +147,8 @@ pub struct Statistics {
     pub get_micros: u64,
     pub write_micros: u64,
 
-    pub seek_micros_per_50: u64,
-    pub seek_micros_per_95: u64,
-    pub seek_micros_per_99: u64,
+    // percent 50/95/99
+    pub seek_micros: [u64; 3],
 
     pub compaction_micros: u64,
 }
@@ -179,8 +178,11 @@ pub fn get_statistics(db: &DB) -> Option<Statistics> {
         let cap = re.captrues(info).unwrap();
         stat.stall_micros = (cap[1].unwrap()).parse::<u64>();
 
-        let re =
+        let re = Regex::new("rocksdb\.db\.seek\.micros statistics Percentiles[ ]+:=>[ ]+50[ ]+:[ ]+([0-9\.]+)[ ]+95[ ]+:([ 0-9\.]+)[ ]+99[ ]+:[ ]+([0-9\.]+)").unwrap();
+        let cap = re.captrues(info).unwrap();
     }
+
+    None
 }
 
 #[cfg(test)]
