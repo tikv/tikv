@@ -358,7 +358,7 @@ fn process_read<T: RaftStoreRouter>(cid: u64,
                     let region_id = ctx.get_region_id();
                     let peer_id = ctx.get_peer().get_id();
                     if let Err(e) = router.report_storage_gc(region_id, peer_id) {
-                        error!("report gc for region {}, peer {} failed {:?}",
+                        error!("report storage gc for region {}, peer {} failed, err={:?}",
                                region_id,
                                peer_id,
                                e);
