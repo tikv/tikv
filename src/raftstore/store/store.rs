@@ -1585,7 +1585,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 }
             }
             for peer in self.region_peers.values_mut() {
-                peer.clear_pending_command();
+                peer.clear_pending_commands();
             }
 
             return;

@@ -63,6 +63,13 @@ pub struct PendingCmd {
     pub cb: Option<Callback>,
 }
 
+impl PendingCmd {
+    #[inline]
+    fn call(&mut self, resp: RaftCmdResponse) {
+        self.cb.take().unwrap().call_box((resp,));
+    }
+}
+
 impl Drop for PendingCmd {
     fn drop(&mut self) {
         if self.cb.is_some() {
@@ -155,7 +162,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
            region_id,
            peer_id,
            cmd.uuid);
-    cmd.cb.take().unwrap().call_box((resp,));
+    cmd.call(resp);
 }
 
 pub struct Peer {
@@ -533,7 +540,7 @@ impl Peer {
                    -> bool {
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
-            cmd.cb.take().unwrap().call_box((err_resp,));
+            cmd.call(err_resp);
             return false;
         }
 
@@ -560,7 +567,7 @@ impl Peer {
 
             cmd_resp::bind_uuid(&mut resp, cmd.uuid);
             cmd_resp::bind_term(&mut resp, self.term());
-            cmd.cb.take().unwrap().call_box((resp,));
+            cmd.call(resp);
             return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
@@ -576,7 +583,7 @@ impl Peer {
 
             // transfer leader command doesn't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
-            cmd.cb.take().unwrap().call_box((make_transfer_leader_response(),));
+            cmd.call(make_transfer_leader_response());
             return false;
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
@@ -584,7 +591,7 @@ impl Peer {
                 cmd_resp::bind_error(&mut err_resp,
                                      box_err!("{} there is a pending conf change, try later",
                                               self.tag));
-                cmd.cb.take().unwrap().call_box((err_resp,));
+                cmd.call(err_resp);
                 return false;
             }
             if let Some(cmd) = self.pending_cmds.take_conf_change() {
@@ -597,14 +604,14 @@ impl Peer {
 
             if let Err(e) = self.propose_conf_change(req) {
                 cmd_resp::bind_error(&mut err_resp, e);
-                cmd.cb.take().unwrap().call_box((err_resp,));
+                cmd.call(err_resp);
                 return false;
             }
 
             self.pending_cmds.set_conf_change(cmd);
         } else if let Err(e) = self.propose_normal(req) {
             cmd_resp::bind_error(&mut err_resp, e);
-            cmd.cb.take().unwrap().call_box((err_resp,));
+            cmd.call(err_resp);
             return false;
         } else {
             self.pending_cmds.append_normal(cmd);
@@ -643,7 +650,7 @@ impl Peer {
         let not_leader = Error::NotLeader(self.region_id, leader);
         let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
         warn!("{} command {} is stale, skip", self.tag, cmd.uuid);
-        cmd.cb.take().unwrap().call_box((resp,));
+        cmd.call(resp);
     }
 
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
@@ -1048,11 +1055,17 @@ impl Peer {
     ///
     /// Please note that all the pending callbacks will be lost.
     /// Should not do this when dropping a peer in case of possible leak.
-    pub fn clear_pending_command(&mut self) {
-        while let Some(mut cmd) = self.pending_cmds.normals.pop_front() {
-            cmd.cb.take();
+    pub fn clear_pending_commands(&mut self) {
+        if !self.pending_cmds.normals.is_empty() {
+            info!("{} clear {} commands",
+                  self.tag,
+                  self.pending_cmds.normals.len());
+            while let Some(mut cmd) = self.pending_cmds.normals.pop_front() {
+                cmd.cb.take();
+            }
         }
         if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            info!("{} clear pending conf change", self.tag);
             cmd.cb.take();
         }
     }
