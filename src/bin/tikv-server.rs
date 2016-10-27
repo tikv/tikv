@@ -28,6 +28,7 @@ extern crate signal;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
+extern crate regex;
 
 use std::{env, thread};
 use std::fs::{self, File};

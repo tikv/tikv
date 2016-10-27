@@ -17,6 +17,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::fs;
 use storage::CF_DEFAULT;
+use regex::Regex;
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
     db.cf_handle(cf)
@@ -138,24 +139,48 @@ fn db_exist(path: &str) -> bool {
     fs::read_dir(&path).unwrap().next().is_some()
 }
 
-// pub struct Statistics {
-// pub block_cache_miss: u64,
-// pub block_cache_hit: u64,
-// pub memtable_miss: u64,
-// pub memtable_hit: u64,
-// pub l0_hit: u64,
-// pub l1_hit: u64,
-// pub l2andup_hit: u64,
-//
-// pub stall_micros: u64,
-// pub get_micros: u64,
-// pub write_micros: u64,
-// pub seek_micros: u64,
-// pub compaction_micros: u64,
-// }
+pub struct Statistics {
+    pub block_cache_miss: u64,
+    pub block_cache_hit: u64,
 
-pub fn get_statistics(db: &DB) -> Option<String> {
-    db.get_statistics()
+    pub stall_micros: u64,
+    pub get_micros: u64,
+    pub write_micros: u64,
+
+    pub seek_micros_per_50: u64,
+    pub seek_micros_per_95: u64,
+    pub seek_micros_per_99: u64,
+
+    pub compaction_micros: u64,
+}
+
+impl Statistics {
+    pub fn new() {
+        Statistics {
+            block_cache_miss: 0,
+            block_cache_hit: 0,
+        }
+    }
+}
+
+pub fn get_statistics(db: &DB) -> Option<Statistics> {
+    let mut stat = Statistics::new();
+
+    if let Some(info) = db.get_statistics() {
+        let re = Regex::new("rocksdb\.block.cache\.miss[ ]+COUNT[ ]+:[ ]+([0-9]+)").unwrap();
+        let cap = re.captrues(info).unwrap();
+        stat.block_cache_miss = (cap[1].unwrap()).parse::<u64>();
+
+        let re = Regex::new("rocksdb\.block\.cache\.hit[ ]+COUNT[ ]+:[ ]+([0-9]+)").unwrap();
+        let cap = re.captrues(info).unwrap();
+        stat.block_cache_hit = (cap[1].unwrap()).parse::<u64>();
+
+        let re = Regex::new("rocksdb\.stall\.micros[ ]+COUNT[ ]+:[ ]+([0-9]+)").unwrap();
+        let cap = re.captrues(info).unwrap();
+        stat.stall_micros = (cap[1].unwrap()).parse::<u64>();
+
+        let re =
+    }
 }
 
 #[cfg(test)]
