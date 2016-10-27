@@ -84,14 +84,6 @@ impl Runner {
         }
     }
 
-    fn update_compacted(&mut self, region_id: u64, compacted: u64) {
-        if let Some(last_compacted) = self.raft_compacted_ctx.get_mut(&region_id) {
-            *last_compacted = compacted;
-            return;
-        }
-        self.raft_compacted_ctx.insert(region_id, compacted);
-    }
-
     /// Do the compact job and return the count of log compacted.
     fn compact_raft_log(&mut self,
                         engine: Arc<DB>,
@@ -121,7 +113,7 @@ impl Runner {
         }
         // It's not safe to disable WAL here. We may lost data after crashed for unknown reason.
         box_try!(engine.write(wb));
-        self.update_compacted(region_id, compact_idx);
+        self.raft_compacted_ctx.insert(region_id, compact_idx);
         Ok(compact_idx - first_idx)
     }
 
