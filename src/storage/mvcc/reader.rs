@@ -54,9 +54,15 @@ impl<'a> MvccReader<'a> {
 
         let k = key.append_ts(ts);
         if let Some(ref mut cursor) = self.data_cursor {
-            cursor.get(&k).map(|x| x.unwrap().to_vec()).map_err(Error::from)
+            match try!(cursor.get(&k)) {
+                None => panic!("key {} not found, ts {}", key, ts),
+                Some(v) => Ok(v.to_vec()),
+            }
         } else {
-            self.snapshot.get(&k).map(|x| x.unwrap()).map_err(Error::from)
+            match try!(self.snapshot.get(&k)) {
+                None => panic!("key {} not found, ts: {}", key, ts),
+                Some(v) => Ok(v),
+            }
         }
     }
 
