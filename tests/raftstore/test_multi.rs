@@ -12,6 +12,8 @@
 // limitations under the License.
 
 use tikv::raftstore::store::*;
+use tikv::util::HandyRwLock;
+use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result};
 use kvproto::eraftpb::MessageType;
 use kvproto::raft_cmdpb::RaftCmdResponse;
@@ -25,6 +27,8 @@ use super::transport_simulate::*;
 use rand;
 use rand::Rng;
 use std::time::Duration;
+use std::sync::*;
+use std::sync::atomic::*;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -369,15 +373,93 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 }
 
 #[test]
-fn test_node_read_leader_with_unapplied_log() {
+fn test_node_leader_change_with_uncommitted_log() {
     let mut cluster = new_node_cluster(0, 3);
-    test_read_leader_with_unapplied_log(&mut cluster);
+    test_leader_change_with_uncommitted_log(&mut cluster);
 }
 
 #[test]
-fn test_server_read_leader_with_unapplied_log() {
+fn test_server_leader_change_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 3);
-    test_read_leader_with_unapplied_log(&mut cluster);
+    test_leader_change_with_uncommitted_log(&mut cluster);
+}
+
+#[test]
+fn test_node_leader_change_with_log_overlap() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
+    // disable compact log to make test more stable.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    // We use three peers([1, 2, 3]) for this test.
+    cluster.run();
+
+    sleep_ms(500);
+
+    // guarantee peer 1 is leader
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // So peer 3 won't replicate any message of the region but still can vote.
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
+        .msg_type(MessageType::MsgAppend)));
+    cluster.must_put(b"k1", b"v1");
+
+    // peer 1 and peer 2 must have k1, but peer 3 must not.
+    for i in 1..3 {
+        let engine = cluster.get_engine(i);
+        must_get_equal(&engine, b"k1", b"v1");
+    }
+
+    let engine3 = cluster.get_engine(3);
+    must_get_none(&engine3, b"k1");
+
+    // now only peer 1 and peer 2 can step to leader.
+    // Make peer 1's msg won't be replicated,
+    // so the proposed entries won't be committed.
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
+        .msg_type(MessageType::MsgAppend)
+        .direction(Direction::Send)));
+    let put_msg = vec![new_put_cmd(b"k2", b"v2")];
+    let region = cluster.get_region(b"");
+    let mut put_req = new_request(region.get_id(),
+                                  region.get_region_epoch().clone(),
+                                  put_msg,
+                                  false);
+    put_req.mut_header().set_peer(new_peer(1, 1));
+    let called = Arc::new(AtomicBool::new(false));
+    let called_ = called.clone();
+    cluster.sim
+        .rl()
+        .get_node_router(1)
+        .send_command(put_req,
+                      box move |resp: RaftCmdResponse| {
+                          called_.store(true, Ordering::SeqCst);
+                          assert!(resp.get_header().has_error());
+                          assert!(resp.get_header().get_error().has_not_leader());
+                      })
+        .unwrap();
+
+    // Now let peer(1, 1) steps down. Can't use transfer leader here, because
+    // it still has pending proposed entries.
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
+        .msg_type(MessageType::MsgHeartbeat)
+        .direction(Direction::Send)));
+    // make sure k2 has not been committed.
+    must_get_none(&cluster.get_engine(1), b"k2");
+
+    // Here just use `must_transfer_leader` to wait for peer (2, 2) becomes leader.
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    must_get_none(&cluster.get_engine(2), b"k2");
+
+    cluster.clear_send_filters();
+
+    for _ in 0..50 {
+        sleep_ms(100);
+        if called.load(Ordering::SeqCst) {
+            return;
+        }
+    }
+    panic!("callback has not been called after 5s.");
 }
 
 fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -448,6 +530,18 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(k).unwrap(), v);
 }
 
+#[test]
+fn test_node_read_leader_with_unapplied_log() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_read_leader_with_unapplied_log(&mut cluster);
+}
+
+#[test]
+fn test_server_read_leader_with_unapplied_log() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_read_leader_with_unapplied_log(&mut cluster);
+}
+
 fn get_with_timeout<T: Simulator>(cluster: &mut Cluster<T>,
                                   key: &[u8],
                                   read_quorum: bool,
@@ -460,18 +554,6 @@ fn get_with_timeout<T: Simulator>(cluster: &mut Cluster<T>,
                           vec![new_get_cmd(key)],
                           read_quorum);
     cluster.call_command_on_leader(req, timeout)
-}
-
-#[test]
-fn test_node_leader_change_with_uncommitted_log() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_leader_change_with_uncommitted_log(&mut cluster);
-}
-
-#[test]
-fn test_server_leader_change_with_uncommitted_log() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_leader_change_with_uncommitted_log(&mut cluster);
 }
 
 fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
