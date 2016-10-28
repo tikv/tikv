@@ -240,11 +240,13 @@ mod tests {
         let msg = new_raft_msg(store_id);
         let cmd = new_raft_cmd(store_id);
         assert!(router.send_raft_msg(msg).is_ok());
-        assert!(router.send_command(cmd, box |_| Ok(())).is_ok());
+        let cb = |_| {};
+        assert!(router.send_command(cmd, box cb).is_ok());
 
         let msg = new_raft_msg(invalid_store_id);
         let cmd = new_raft_cmd(invalid_store_id);
         assert!(router.send_raft_msg(msg).is_err());
-        assert!(router.send_command(cmd, box |_| Ok(())).is_err());
+        let cb = |_| {};
+        assert!(router.send_command(cmd, box cb).is_err());
     }
 }
