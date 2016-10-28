@@ -18,6 +18,7 @@ use super::reader::MvccReader;
 use super::lock::{LockType, Lock};
 use super::write::{WriteType, Write};
 use super::{Error, Result};
+use super::metrics::*;
 
 pub struct MvccTxn<'a> {
     reader: MvccReader<'a>,
@@ -141,6 +142,7 @@ impl<'a> MvccTxn<'a> {
     pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
         let mut remove_older = false;
         let mut ts: u64 = u64::max_value();
+        let mut delete_versions = 0;
         while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
             if !remove_older {
                 if commit <= safe_point {
@@ -156,7 +158,8 @@ impl<'a> MvccTxn<'a> {
                     // Rollback or Lock.
                     match write.write_type {
                         WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
-                            self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)))
+                            self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
+                            delete_versions += 1;
                         }
                         WriteType::Put => {}
                     }
@@ -166,9 +169,11 @@ impl<'a> MvccTxn<'a> {
                 if write.write_type == WriteType::Put {
                     self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(write.start_ts)));
                 }
+                delete_versions += 1;
             }
             ts = commit - 1;
         }
+        GC_DELETE_VERSIONS_HISTOGRAM.observe(delete_versions as f64);
         Ok(())
     }
 }
