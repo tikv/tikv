@@ -881,10 +881,7 @@ fn main() {
                 "dsn",
                 "[deprecated] set which dsn to use, warning: now only support raftkv",
                 "dsn: raftkv");
-    opts.optopt("I",
-                "cluster-id",
-                "set cluster id",
-                "in raftkv, must greater than 0; in rocksdb, it will be ignored.");
+    opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
