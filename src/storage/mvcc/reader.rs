@@ -44,9 +44,9 @@ impl<'a> MvccReader<'a> {
         self.key_only = key_only;
     }
 
-    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
+    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
         if self.key_only {
-            return Ok(Some(vec![]));
+            return Ok(vec![]);
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
             self.data_cursor = Some(try!(self.snapshot.iter(None, self.scan_mode.unwrap())));
@@ -54,19 +54,15 @@ impl<'a> MvccReader<'a> {
 
         let k = key.append_ts(ts);
         if let Some(ref mut cursor) = self.data_cursor {
-            let v = try!(cursor.get(&k));
-            if v.is_none() {
-                error!("data of [key: {}, ts: {}] is empty!!!", key, ts);
-                return Ok(None);
+            match try!(cursor.get(&k)) {
+                None => panic!("data of [key: {}, ts {}] is missing!", key, ts),
+                Some(v) => Ok(v.to_vec()),
             }
-            Ok(v.map(|v| v.to_vec()))
         } else {
-            let v = try!(self.snapshot.get(&k));
-            if v.is_none() {
-                error!("data of [key: {}, ts: {}] is empty!!!", key, ts);
-                return Ok(None);
+            match try!(self.snapshot.get(&k)) {
+                None => panic!("data of [key: {}, ts: {}] is missing!", key, ts),
+                Some(v) => Ok(v),
             }
-            Ok(v)
         }
     }
 
@@ -149,7 +145,7 @@ impl<'a> MvccReader<'a> {
             match try!(self.seek_write(key, ts)) {
                 Some((commit_ts, write)) => {
                     match write.write_type {
-                        WriteType::Put => return self.load_data(key, write.start_ts),
+                        WriteType::Put => return self.load_data(key, write.start_ts).map(Some),
                         WriteType::Delete => return Ok(None),
                         WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
                     }
