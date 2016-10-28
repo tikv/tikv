@@ -202,7 +202,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
-    compact_worker: Worker<CompactTask>,
+    raft_compact_worker: Worker<CompactTask>,
+    manual_compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
 
     trans: T,
@@ -252,7 +253,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
-            compact_worker: Worker::new("compact worker"),
+            raft_compact_worker: Worker::new("raft compact worker"),
+            manual_compact_worker: Worker::new("manual compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
             pending_regions: vec![],
@@ -370,8 +372,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
-        let compact_runner = CompactRunner::new(self.engine.clone());
-        box_try!(self.compact_worker.start(compact_runner));
+        let raft_compact_runner = CompactRunner::new(self.engine.clone());
+        box_try!(self.raft_compact_worker.start(raft_compact_runner));
+
+        let manual_compact_runner = CompactRunner::new(self.engine.clone());
+        box_try!(self.manual_compact_worker.start(manual_compact_runner));
 
         let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
         box_try!(self.pd_worker.start(pd_runner));
@@ -845,7 +850,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             compact_idx: state.get_index() + 1,
         };
         peer.last_compacted_idx = state.get_index() + 1;
-        if let Err(e) = self.compact_worker.schedule(task) {
+        if let Err(e) = self.raft_compact_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
                    e);
@@ -1191,7 +1196,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     start_key: Some(keys::enc_start_key(peer.region())),
                     end_key: Some(keys::enc_end_key(peer.region())),
                 };
-                if let Err(e) = self.compact_worker.schedule(task) {
+                if let Err(e) = self.manual_compact_worker.schedule(task) {
                     error!("failed to schedule compact task: {}", e);
                 }
             }
@@ -1416,7 +1421,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             start_key: None,
             end_key: None,
         };
-        if let Err(e) = self.compact_worker.schedule(task) {
+        if let Err(e) = self.manual_compact_worker.schedule(task) {
             error!("failed to schedule compact lock cf task: {}", e);
         }
 
@@ -1580,7 +1585,10 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             for (handle, name) in vec![(self.split_check_worker.stop(),
                                         self.split_check_worker.name()),
                                        (self.region_worker.stop(), self.region_worker.name()),
-                                       (self.compact_worker.stop(), self.compact_worker.name()),
+                                       (self.raft_compact_worker.stop(),
+                                        self.raft_compact_worker.name()),
+                                       (self.manual_compact_worker.stop(),
+                                        self.manual_compact_worker.name()),
                                        (self.pd_worker.stop(), self.pd_worker.name())] {
                 if let Some(Err(e)) = handle.map(|h| h.join()) {
                     error!("failed to stop {}: {:?}", name, e);
