@@ -403,7 +403,7 @@ fn test_node_leader_change_with_log_overlap() {
         .msg_type(MessageType::MsgAppend)));
     cluster.must_put(b"k1", b"v1");
 
-    // peer 1 and peer 2 must have k2, but peer 3 must not.
+    // peer 1 and peer 2 must have k1, but peer 3 must not.
     for i in 1..3 {
         let engine = cluster.get_engine(i);
         must_get_equal(&engine, b"k1", b"v1");
@@ -443,10 +443,10 @@ fn test_node_leader_change_with_log_overlap() {
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
         .msg_type(MessageType::MsgHeartbeat)
         .direction(Direction::Send)));
-    // peer 1 must have committed, but peer 2 has not.
+    // make sure k2 has not been committed.
     must_get_none(&cluster.get_engine(1), b"k2");
 
-    // Here just use `must_transfer_leader` to check if peer (2, 2) becomes leader.
+    // Here just use `must_transfer_leader` to wait for peer (2, 2) becomes leader.
     cluster.must_transfer_leader(1, new_peer(2, 2));
 
     must_get_none(&cluster.get_engine(2), b"k2");
