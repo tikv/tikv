@@ -186,6 +186,8 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
 
     pub tag: String,
+
+    pub last_compacted_idx: u64,
 }
 
 impl Peer {
@@ -271,6 +273,7 @@ impl Peer {
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
+            last_compacted_idx: 0,
         };
 
         peer.load_all_coprocessors();
