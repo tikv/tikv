@@ -387,7 +387,7 @@ impl<L, R> Either<L, R> {
 }
 
 /// `build_info` returns a tuple of Strings that contains build utc time and commit hash.
-fn build_info() -> (String, String) {
+pub fn build_info() -> (String, String) {
     let raw = include_str!(concat!(env!("OUT_DIR"), "/build-info.txt"));
     let mut parts = raw.split('\n');
 
