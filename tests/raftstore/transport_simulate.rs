@@ -23,9 +23,7 @@ use tikv::util::transport;
 use rand;
 use std::sync::{Arc, RwLock, Mutex};
 use std::marker::PhantomData;
-use std::time;
-use std::usize;
-use std::thread;
+use std::{time, usize, thread};
 use std::vec::Vec;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -410,6 +408,22 @@ impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
         } else {
             res
         }
+    }
+}
+
+pub struct DropSnapshotFilter;
+
+impl Filter<StoreMsg> for DropSnapshotFilter {
+    fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
+        msgs.retain(|m| {
+            match *m {
+                StoreMsg::RaftMessage(ref msg) => {
+                    msg.get_message().get_msg_type() != MessageType::MsgSnapshot
+                }
+                _ => true,
+            }
+        });
+        Ok(())
     }
 }
 

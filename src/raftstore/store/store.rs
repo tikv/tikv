@@ -35,7 +35,7 @@ use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
-use raft::SnapshotStatus;
+use raft::{SnapshotStatus, INVALID_INDEX};
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
@@ -46,7 +46,7 @@ use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
-use super::keys::{self, enc_start_key, enc_end_key};
+use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState};
@@ -470,7 +470,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
     }
 
-    fn check_target_peer_valid(&mut self, region_id: u64, target: &metapb::Peer) -> Result<bool> {
+    /// If target peer doesn't exist, create it.
+    ///
+    /// return false to indicate that target peer is in invalid state or
+    /// doesn't exist and can't be created.
+    fn maybe_create_peer(&mut self, region_id: u64, msg: &RaftMessage) -> Result<bool> {
+        let target = msg.get_to_peer();
         // we may encounter a message with larger peer id, which means
         // current peer is stale, then we should remove current peer
         let mut has_peer = false;
@@ -500,12 +505,37 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             has_peer = false;
         }
 
-        if !has_peer {
-            let peer = try!(Peer::replicate(self, region_id, target.get_id()));
-            // We don't have start_key of the region, so there is no need to insert into
-            // region_ranges
-            self.region_peers.insert(region_id, peer);
+        if has_peer {
+            return Ok(true);
         }
+
+        let message = msg.get_message();
+        let msg_type = message.get_msg_type();
+        if msg_type != MessageType::MsgRequestVote &&
+           (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX) {
+            warn!("target peer {:?} doesn't exist, stale message {:?}.",
+                  target,
+                  msg_type);
+            return Ok(false);
+        }
+
+        let start_key = data_key(msg.get_start_key());
+        if let Some((_, &exist_region_id)) = self.region_ranges
+            .range(Excluded(&start_key), Unbounded::<&Key>)
+            .next() {
+            let exist_region = self.region_peers[&exist_region_id].region();
+            if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
+                debug!("msg {:?} is overlapped with region {:?}, ignored",
+                       msg,
+                       exist_region);
+                return Ok(false);
+            }
+        }
+
+        let peer = try!(Peer::replicate(self, region_id, target.get_id()));
+        // following snapshot may overlap, should insert into region_ranges after
+        // snapshot is applied.
+        self.region_peers.insert(region_id, peer);
         Ok(true)
     }
 
@@ -528,7 +558,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if !try!(self.check_target_peer_valid(region_id, msg.get_to_peer())) {
+        if !try!(self.maybe_create_peer(region_id, &msg)) {
             return Ok(());
         }
 
