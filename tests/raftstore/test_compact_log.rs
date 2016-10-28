@@ -158,7 +158,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     for (&id, engine) in &cluster.engines {
         must_get_equal(engine, b"k1", b"v1");
         let mut state: RaftApplyState =
-        get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -180,7 +180,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
     for (&id, engine) in &cluster.engines {
         let mut state: RaftApplyState =
-        get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
+            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = before_states.get(&id).unwrap();
