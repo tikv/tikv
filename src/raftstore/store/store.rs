@@ -30,7 +30,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer, duration_to_nanos};
+use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -335,7 +335,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            try!(delete_all_in_range(&self.engine, &last_start_key, &start_key));
+            if last_start_key < start_key {
+                info!("[store {}] cleanup [{}, {})",
+                      self.store_id(),
+                      escape(&last_start_key),
+                      escape(&start_key));
+                try!(delete_all_in_range(&self.engine, &last_start_key, &start_key));
+            }
             last_start_key = keys::enc_end_key(region);
         }
 
@@ -859,6 +865,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             if peer_id == peer.get_id() {
+                // when a peer can apply entry, it can't be applying snapshot.
                 self.destroy_peer(region_id, peer)
             } else {
                 panic!("trying to remove unknown peer {:?}", peer);
