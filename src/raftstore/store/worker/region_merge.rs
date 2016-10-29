@@ -30,6 +30,8 @@ use raftstore::store::{Msg, Client};
 use raftstore::store::util::ensure_schedule;
 use raftstore::Result;
 
+const RETRY_TIMES: isize = 3;
+
 const SEND_STORE_MESSAGE_RETRY_TIME_MS: u64 = 50;
 const GET_REGION_FROM_PD_RETRY_TIME_MS: u64 = 50;
 
@@ -145,14 +147,14 @@ impl<T: PdClient, S: Client> Runner<T, S> {
 
         req.set_admin_request(request);
 
-        loop {
+        for _ in 0..RETRY_TIMES {
             let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
             let cmd = Msg::RaftCmd {
                 request: req.clone(),
                 callback: cb,
             };
             if let Err(e) = self.ch.try_send(cmd) {
-                error!("[region {}] send {:?} request err {:?}",
+                error!("[region {}] fail to send request {:?} error {:?}",
                        region_id,
                        cmd_type,
                        e);
@@ -161,6 +163,7 @@ impl<T: PdClient, S: Client> Runner<T, S> {
                 return;
             }
         }
+        error!("[region {}] fail to send admin request to self", region_id);
     }
 
     fn handle_suspend_region(&self,
@@ -229,7 +232,7 @@ impl<T: PdClient, S: Client> Runner<T, S> {
                                    from_region_id: u64,
                                    into_region: Region,
                                    into_peer: Peer) {
-        loop {
+        for _ in 0..RETRY_TIMES {
             // try to get the specified region info from PD
             match self.pd_client.get_region_by_id(from_region_id) {
                 Ok((region, leader)) => {
@@ -260,6 +263,9 @@ impl<T: PdClient, S: Client> Runner<T, S> {
                 }
             }
         }
+        error!("[region {}] failed to retry to suspend region {}",
+               into_region.get_id(),
+               from_region_id);
     }
 
     fn handle_commit_merge(&self,
