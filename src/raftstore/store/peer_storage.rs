@@ -608,8 +608,7 @@ impl PeerStorage {
     #[inline]
     pub fn is_applying(&self) -> bool {
         match *self.snap_state.borrow() {
-            SnapState::Applying(_) |
-            SnapState::ApplyAborted => true,
+            SnapState::Applying(_) => true,
             _ => false,
         }
     }
@@ -649,21 +648,27 @@ impl PeerStorage {
 
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
-        match *self.snap_state.borrow() {
+        let is_cancelled = match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
                 if status.compare_and_swap(JOB_STATUS_PENDING,
                                            JOB_STATUS_CANCELLING,
                                            Ordering::SeqCst) ==
                    JOB_STATUS_PENDING {
-                    return true;
+                    true
                 } else if status.compare_and_swap(JOB_STATUS_RUNNING,
                                                   JOB_STATUS_CANCELLING,
                                                   Ordering::SeqCst) ==
                           JOB_STATUS_RUNNING {
                     return false;
+                } else {
+                    false
                 }
             }
             _ => return false,
+        };
+        if is_cancelled {
+            *self.snap_state.borrow_mut() = SnapState::ApplyAborted;
+            return true;
         }
         // now status can only be JOB_STATUS_CANCELLING, JOB_STATUS_CANCELLED,
         // JOB_STATUS_FAILED and JOB_STATUS_FINISHED.
@@ -1252,6 +1257,7 @@ mod test {
         s.snap_state =
             RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_PENDING))));
         assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
 
         // RUNNING can't be canceled directly.
         s.snap_state =
