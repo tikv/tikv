@@ -144,6 +144,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
 
+        info!("TiKV is ready to serve");
+
         try!(event_loop.run(self));
         Ok(())
     }
