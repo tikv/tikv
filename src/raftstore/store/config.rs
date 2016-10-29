@@ -42,6 +42,7 @@ const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
+const DEFAULT_RETRY_REGION_MERGE_DURATION_SECS: u64 = 1 * 60;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -96,6 +97,8 @@ pub struct Config {
     pub max_leader_missing_duration: Duration,
 
     pub snap_apply_batch_size: usize,
+
+    pub retry_region_merge_duration: Duration,
 }
 
 impl Default for Config {
@@ -120,11 +123,13 @@ impl Default for Config {
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
             snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL_MS,
             snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
+            lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
-            lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
+            retry_region_merge_duration:
+                Duration::from_secs(DEFAULT_RETRY_REGION_MERGE_DURATION_SECS),
         }
     }
 }

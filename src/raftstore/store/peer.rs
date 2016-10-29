@@ -185,6 +185,7 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
 
     state: PeerState,
+    start_merging_time: Option<Instant>,
     merge_scheduler: Scheduler<region_merge::Task>,
 
     pub tag: String,
@@ -279,6 +280,7 @@ impl Peer {
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             state: region_local_state.get_state(),
+            start_merging_time: None,
             merge_scheduler: merge_scheduler,
             tag: tag,
         };
@@ -488,6 +490,37 @@ impl Peer {
         StaleState::Valid
     }
 
+    pub fn maybe_retry_region_merge(&mut self, d: Duration) {
+        if self.is_leader() {
+            if let Some(t) = self.start_merging_time {
+                if t.elapsed() >= d {
+                    self.retry_region_merge()
+                }
+            }
+        }
+    }
+
+    fn retry_region_merge(&mut self) {
+        let mut retry = false;
+        {
+            // If this region is the control region of a region merge,
+            // schedule a task to retry the region merge procedure.
+            let region_merge = self.region().get_region_merge();
+            if region_merge.get_state() == metapb::MergeState::Merging {
+                let task = region_merge::Task::RetrySuspendRegion {
+                    from_region_id: region_merge.get_from_id(),
+                    into_region: self.region().clone(),
+                    into_peer: self.peer.clone(),
+                };
+                util::ensure_schedule(self.merge_scheduler.clone(), task);
+                retry = true;
+            }
+        }
+        if retry {
+            self.start_merging_time = Some(Instant::now());
+        }
+    }
+
     pub fn handle_raft_ready<T: Transport>(&mut self,
                                            trans: &T,
                                            metrics: &mut RaftMetrics)
@@ -548,17 +581,7 @@ impl Peer {
 
         if ready.ss.is_some() && ready.ss.as_ref().unwrap().leader_id == self.peer_id() {
             // This peer has been elected to be the raft leader just now.
-            // If this region is the control region of a region merge,
-            // schedule a task to retry the region merge procedure.
-            let region_merge = self.region().get_region_merge();
-            if region_merge.get_state() == metapb::MergeState::Merging {
-                let task = region_merge::Task::RetrySuspendRegion {
-                    from_region_id: region_merge.get_from_id(),
-                    into_region: self.region().clone(),
-                    into_peer: self.peer.clone(),
-                };
-                util::ensure_schedule(self.merge_scheduler.clone(), task);
-            }
+            self.retry_region_merge()
         }
 
         self.raft_group.advance(ready);
@@ -1389,6 +1412,8 @@ impl Peer {
                 util::ensure_schedule(self.merge_scheduler.clone(), task);
             }
 
+            self.start_merging_time = Some(Instant::now());
+
             PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["merge", "success"]).inc();
 
             Ok((resp,
@@ -1483,6 +1508,8 @@ impl Peer {
                 };
                 util::ensure_schedule(self.merge_scheduler.clone(), shutdown_task);
             }
+
+            self.start_merging_time = None;
 
             PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["commit merge", "success"]).inc();
 

@@ -499,6 +499,8 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
                         region_to_be_destroyed.push((region_id, peer.peer.clone()));
                     }
                 }
+
+                peer.maybe_retry_region_merge(self.cfg.retry_region_merge_duration);
             }
         }
 
