@@ -30,7 +30,8 @@ use raftstore::store::{Msg, Client};
 use raftstore::store::util::ensure_schedule;
 use raftstore::Result;
 
-const GET_REGION_FROM_PD_RETRY_TIME_MILLIS: u64 = 50;
+const SEND_STORE_MESSAGE_RETRY_TIME_MS: u64 = 50;
+const GET_REGION_FROM_PD_RETRY_TIME_MS: u64 = 50;
 
 #[derive(Clone)]
 pub enum Task {
@@ -155,6 +156,7 @@ impl<T: PdClient, S: Client> Runner<T, S> {
                        region_id,
                        cmd_type,
                        e);
+                thread::sleep(Duration::from_millis(SEND_STORE_MESSAGE_RETRY_TIME_MS));
             } else {
                 return;
             }
@@ -254,7 +256,7 @@ impl<T: PdClient, S: Client> Runner<T, S> {
                            from_region_id,
                            e);
                     // TODO abort this task if err == region not found
-                    thread::sleep(Duration::from_millis(GET_REGION_FROM_PD_RETRY_TIME_MILLIS));
+                    thread::sleep(Duration::from_millis(GET_REGION_FROM_PD_RETRY_TIME_MS));
                 }
             }
         }
