@@ -20,13 +20,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::msgpb::{Message, MessageType};
 
-use raftstore::Result;
-use util::make_std_tcp_conn;
-use util::codec::rpc;
+use super::make_std_tcp_conn;
+use super::codec::{rpc, Result};
 
 
-const MAX_RAFT_RPC_SEND_RETRY_COUNT: u64 = 2;
-const RAFT_RPC_RETRY_TIME_MILLIS: u64 = 50;
+const MAX_CLIENT_RETRY_COUNT: u64 = 2;
+const CLIENT_RETRY_TIME_MS: u64 = 50;
 const SOCKET_READ_TIMEOUT: u64 = 3;
 const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
@@ -68,14 +67,14 @@ pub trait Client {
 }
 
 #[derive(Debug)]
-struct KVClientCore {
+struct TikvClientCore {
     address: SocketAddr,
     stream: Option<TcpStream>,
 }
 
-impl KVClientCore {
-    pub fn new(address: SocketAddr) -> KVClientCore {
-        KVClientCore {
+impl TikvClientCore {
+    pub fn new(address: SocketAddr) -> TikvClientCore {
+        TikvClientCore {
             address: address,
             stream: None,
         }
@@ -88,11 +87,11 @@ impl KVClientCore {
     }
 
     fn send(&mut self, msg_id: u64, msg: &Message) -> Result<Message> {
-        for _ in 0..MAX_RAFT_RPC_SEND_RETRY_COUNT {
+        for _ in 0..MAX_CLIENT_RETRY_COUNT {
             if self.stream.is_none() {
                 if let Err(e) = self.try_connect() {
                     warn!("connect tikv failed {:?}", e);
-                    thread::sleep(Duration::from_millis(RAFT_RPC_RETRY_TIME_MILLIS));
+                    thread::sleep(Duration::from_millis(CLIENT_RETRY_TIME_MS));
                     continue;
                 }
             }
@@ -102,7 +101,7 @@ impl KVClientCore {
             let (id, resp) = match send_message(&mut stream, msg_id, msg) {
                 Err(e) => {
                     warn!("send message to tikv failed {:?}", e);
-                    thread::sleep(Duration::from_millis(RAFT_RPC_RETRY_TIME_MILLIS));
+                    thread::sleep(Duration::from_millis(CLIENT_RETRY_TIME_MS));
                     continue;
                 }
                 Ok((id, resp)) => (id, resp),
@@ -122,16 +121,16 @@ impl KVClientCore {
     }
 }
 
-pub struct KVClient {
+pub struct TikvClient {
     msg_id: AtomicUsize,
-    core: Mutex<KVClientCore>,
+    core: Mutex<TikvClientCore>,
 }
 
-impl KVClient {
-    pub fn new(address: SocketAddr) -> KVClient {
-        KVClient {
+impl TikvClient {
+    pub fn new(address: SocketAddr) -> TikvClient {
+        TikvClient {
             msg_id: AtomicUsize::new(0),
-            core: Mutex::new(KVClientCore::new(address)),
+            core: Mutex::new(TikvClientCore::new(address)),
         }
     }
 
@@ -141,7 +140,7 @@ impl KVClient {
     }
 }
 
-impl Client for KVClient {
+impl Client for TikvClient {
     fn send(&self, req: &Message) -> Result<Message> {
         let msg_id = self.alloc_msg_id();
         let resp = try!(self.core.lock().unwrap().send(msg_id, req));

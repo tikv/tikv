@@ -19,8 +19,10 @@ use std::io::Write;
 use mio::Token;
 
 use kvproto::msgpb::{self, MessageType};
-use util::codec::rpc;
 use kvproto::eraftpb::MessageType as RaftMessageType;
+
+use util::codec::rpc;
+
 mod conn;
 mod kv;
 mod metrics;
@@ -30,6 +32,7 @@ pub mod errors;
 pub mod server;
 pub mod coprocessor;
 pub mod transport;
+pub mod client;
 pub mod node;
 pub mod resolve;
 pub mod snap;
@@ -39,8 +42,8 @@ pub use self::errors::{Result, Error};
 pub use self::server::{Server, create_event_loop, bind};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
-pub use self::resolve::{Task as ResolveTask, StoreAddrResolver, PdStoreAddrResolver,
-                        MockStoreAddrResolver};
+pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver, MockStoreAddrResolver};
+pub use self::client::{TikvRpcWorker, SimpleClient};
 
 pub type OnResponse = Box<FnBox(msgpb::Message) + Send>;
 

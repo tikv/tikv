@@ -14,67 +14,23 @@
 use std::thread;
 use std::time::Duration;
 use std::fmt::{self, Formatter, Display};
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use uuid::Uuid;
 
 use kvproto::metapb::{Region, Peer};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, AdminRequest, AdminCmdType};
+use kvproto::msgpb::{Message, MessageType};
 
 use pd::PdClient;
-use server::ResolveTask;
 use util::worker::{Scheduler, Runnable};
 
 use util::transport::SendCh;
-use raftstore::store::Msg;
+use raftstore::store::{Msg, Client};
 use raftstore::store::util::ensure_schedule;
 use raftstore::Result;
 
-use super::client::{Client, KVClient};
-
-const RESOLVE_ADDRESS_RETRY_TIME_MILLIS: u64 = 50;
 const GET_REGION_FROM_PD_RETRY_TIME_MILLIS: u64 = 50;
-
-/// Client to communicate with tikv region for region merge.
-/// It sends Raft command requests to the specified tikv region and
-/// waits for the corresponding responses.
-pub trait RegionMergeClient {
-    /// `suspend_region` suspends the region which is about to be merged.
-    fn send_suspend_region(&self, region: Region, leader: Peer) -> Result<()>;
-    /// `shutdown_region` shutdowns a region which is merged before.
-    fn send_shutdown_region(&self, region: Region, leader: Peer) -> Result<()>;
-}
-
-#[derive(Debug, Clone)]
-enum TaskType {
-    SuspendRegion,
-    ShutdownRegion,
-}
-
-#[derive(Clone)]
-pub struct TaskContext {
-    task_type: TaskType,
-    from_region: Region,
-    from_peer: Peer,
-    into_region: Region,
-    into_peer: Peer,
-    address: SocketAddr,
-}
-
-impl Display for TaskContext {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f,
-               "task context, type {:?}, from region {:?}, from peer {:?}, into region: {:?}, \
-                into peer: {:?}, address: {}",
-               self.task_type,
-               self.from_region,
-               self.from_peer,
-               self.into_region,
-               self.into_peer,
-               self.address)
-    }
-}
 
 #[derive(Clone)]
 pub enum Task {
@@ -111,10 +67,6 @@ pub enum Task {
         region: Region,
         // a hint to start raft rpc with
         leader: Peer,
-    },
-    AfterResolve {
-        // a struct that passes the task context between callbacks
-        context: TaskContext,
     },
 }
 
@@ -154,74 +106,27 @@ impl Display for Task {
             Task::ShutdownRegion { ref region, ref leader } => {
                 write!(f, "shutdown region {:?}, leader {:?}", region, leader)
             }
-            Task::AfterResolve { ref context } => write!(f, "after resolve, context {}", context),
         }
     }
 }
 
 
-impl RegionMergeClient for KVClient {
-    fn send_suspend_region(&self, region: Region, peer: Peer) -> Result<()> {
-        let mut req = RaftCmdRequest::new();
-        req.mut_header().set_region_id(region.get_id());
-        req.mut_header().set_peer(peer);
-        req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-        let mut admin_req = AdminRequest::new();
-        admin_req.set_cmd_type(AdminCmdType::SuspendRegion);
-        admin_req.mut_suspend_region().set_region(region);
-        req.set_admin_request(admin_req);
-
-        let _ = try!(self.send_cmd(&req));
-        Ok(())
-    }
-
-    fn send_shutdown_region(&self, region: Region, peer: Peer) -> Result<()> {
-        let mut req = RaftCmdRequest::new();
-        req.mut_header().set_region_id(region.get_id());
-        req.mut_header().set_peer(peer);
-        req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-        let mut admin_req = AdminRequest::new();
-        admin_req.set_cmd_type(AdminCmdType::ShutdownRegion);
-        admin_req.mut_shutdown_region().set_region(region);
-        req.set_admin_request(admin_req);
-
-        let _ = try!(self.send_cmd(&req));
-        Ok(())
-    }
-}
-
-
-pub struct Runner<T: PdClient> {
+pub struct Runner<T: PdClient, S: Client> {
     scheduler: Scheduler<Task>,
-    resolve_scheduler: Scheduler<ResolveTask>,
+    client: S,
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
 }
 
-fn next_peer(region: &Region, last_peer: Peer) -> Peer {
-    let last_peer_id = last_peer.get_id();
-    let peers = region.get_peers();
-    if let Some(index) = peers.iter().position(|p| p.get_id() == last_peer_id) {
-        let next_index = (index + 1) % peers.len();
-        return peers[next_index].clone();
-    }
-    if peers.len() == 0 {
-        return last_peer;
-    }
-    peers[0].clone()
-}
-
-impl<T: PdClient> Runner<T> {
+impl<T: PdClient, S: Client> Runner<T, S> {
     pub fn new(scheduler: Scheduler<Task>,
-               resolve_scheduler: Scheduler<ResolveTask>,
+               client: S,
                pd_client: Arc<T>,
                ch: SendCh<Msg>)
-               -> Runner<T> {
+               -> Runner<T, S> {
         Runner {
             scheduler: scheduler,
-            resolve_scheduler: resolve_scheduler,
+            client: client,
             pd_client: pd_client,
             ch: ch,
         }
@@ -266,53 +171,56 @@ impl<T: PdClient> Runner<T> {
         // if network errors happen, try another peer
         // if get response "not leader", try another peer
         // if get response "leader is another peer", try the given peer
-        // if get response "succeed", send self a commit merge task
+        // if get response "succeed", schedule self a commit merge task
+        let store_id = from_leader.get_store_id();
+        let message = new_suspend_region_message(&from_region, &from_leader);
 
-        loop {
-            let store_id = from_leader.get_store_id();
-            let scheduler = self.scheduler.clone();
-            let from_region = from_region.clone();
-            let last_peer = from_leader.clone();
-            let into_region = into_region.clone();
-            let into_peer = into_peer.clone();
-            let cb = box move |r| {
-                match r {
-                    Ok(addr) => {
-                        let task = Task::AfterResolve {
-                            context: TaskContext {
-                                task_type: TaskType::SuspendRegion,
-                                from_region: from_region,
-                                from_peer: last_peer,
-                                into_region: into_region,
-                                into_peer: into_peer,
-                                address: addr,
-                            },
-                        };
-                        ensure_schedule(scheduler, task)
-                    }
-                    Err(e) => {
-                        error!("failed to resolve store id {}, error {:?}", store_id, e);
-                        // retry another peer
-                        let next_peer = next_peer(&from_region, last_peer);
-                        let task = Task::SuspendRegion {
-                            from_region: from_region,
-                            from_leader: next_peer,
-                            into_region: into_region,
-                            into_peer: into_peer,
-                        };
-                        ensure_schedule(scheduler, task);
-                    }
+        let scheduler = self.scheduler.clone();
+        let cb = box move |r| {
+            match r {
+                Ok(_resp) => {
+                    // TODO checking the response message type is correct,
+                    // and that the region info in response matches the request
+                    //
+                    // if resp.get_msg_type() != MessageType::CmdResp {
+                    //     error!("response type does not match");
+                    // }
+                    // let cmd_resp = resp.take_cmd_resp();
+                    // if cmd_resp.has_admin_response() {
+                    // }
+                    // let admin_resp = cmd_resp.take_admin_response();
+                    // if admin_resp.has_suspend_region() {
+                    // }
+                    // let suspend_region_resp = admin_resp.take_suspend_region();
+                    // if suspend_region_resp.get_region() != from_region {
+                    // }
+                    let task = Task::CommitMerge {
+                        from_region: from_region,
+                        from_leader: from_leader,
+                        into_region: into_region,
+                        into_peer: into_peer,
+                    };
+                    ensure_schedule(scheduler, task);
                 }
-            };
-            if let Err(e) = self.resolve_scheduler.schedule(ResolveTask::new(store_id, cb)) {
-                error!("failed to schedule resolve task with store id {}, error {:?}",
-                       store_id,
-                       e);
-                thread::sleep(Duration::from_millis(RESOLVE_ADDRESS_RETRY_TIME_MILLIS));
-            } else {
-                return;
+                Err(e) => {
+                    error!("failed to send message to store id {}, error {:?}",
+                           store_id,
+                           e);
+                    // TODO what are all the possible errors returned here?
+                    // Try another peer in the specified region
+                    let next_peer = next_peer(&from_region, from_leader);
+                    let task = Task::SuspendRegion {
+                        from_region: from_region,
+                        from_leader: next_peer,
+                        into_region: into_region,
+                        into_peer: into_peer,
+                    };
+                    ensure_schedule(scheduler, task);
+                }
             }
-        }
+        };
+
+        self.client.send(store_id, message, cb);
     }
 
     fn handle_retry_suspend_region(&self,
@@ -345,6 +253,7 @@ impl<T: PdClient> Runner<T> {
                            into_region.get_id(),
                            from_region_id,
                            e);
+                    // TODO abort this task if err == region not found
                     thread::sleep(Duration::from_millis(GET_REGION_FROM_PD_RETRY_TIME_MILLIS));
                 }
             }
@@ -356,10 +265,14 @@ impl<T: PdClient> Runner<T> {
                            from_leader: Peer,
                            into_region: Region,
                            into_peer: Peer) {
-        // TODO add impl
-        // send a raft cmd "commit merge" to the specified peer
-        // if it times out on waiting for response, retry
-        // make sure get one response "ok"
+        // Send a raft command "commit merge" to the specified local region/leader peer.
+        // Once this command is sent, it will enter raft log and be committed as long as
+        // the local peer is still leader of the corresponding raft group.
+        // If there is a leader change in the raft group, this command could be lost and committed,
+        // In either case, the new leader will detect it's region merge state as 'Merging',
+        // and retry the "suspend region, commit merge" procedure once again.
+        // In summary, it's not neccessary to wait for the response of "commit merge" command
+        // here.
         let req = new_commit_merge_request(from_region, from_leader, into_region.clone());
         self.send_admin_request(into_region, into_peer, req)
     }
@@ -372,113 +285,43 @@ impl<T: PdClient> Runner<T> {
         // if network errors happen, abort this task.
         // PD will tell the specified region to shutdown in heartbeat communication
 
-        loop {
-            let store_id = leader.get_store_id();
-            let scheduler = self.scheduler.clone();
-            let region = region.clone();
-            let last_peer = leader.clone();
-            let cb = box move |r| {
-                match r {
-                    Ok(addr) => {
-                        let task = Task::AfterResolve {
-                            context: TaskContext {
-                                task_type: TaskType::ShutdownRegion,
-                                from_region: region,
-                                from_peer: last_peer,
-                                address: addr,
-                                // TODO better way to initialize these dummy fields
-                                into_region: Region::new(),
-                                into_peer: Peer::new(),
-                            },
-                        };
-                        ensure_schedule(scheduler, task);
-                    }
-                    Err(e) => {
-                        error!("failed to resolve store id {}, error {:?}", store_id, e);
-                        // retry another peer
-                        let next_peer = next_peer(&region, last_peer);
-                        let task = Task::ShutdownRegion {
-                            region: region,
-                            leader: next_peer,
-                        };
-                        ensure_schedule(scheduler, task);
-                    }
-                }
-            };
-            if let Err(e) = self.resolve_scheduler.schedule(ResolveTask::new(store_id, cb)) {
-                error!("failed to schedule resolve task with store id {}, error {:?}",
-                       store_id,
-                       e);
-                thread::sleep(Duration::from_millis(RESOLVE_ADDRESS_RETRY_TIME_MILLIS))
-            } else {
-                return;
-            }
+        let store_id = leader.get_store_id();
+        let message = new_shutdown_region_message(&region, &leader);
 
-        }
-    }
+        let cb = box move |r| {
+            match r {
+                Ok(_resp) => {
+                    // TODO checking the response message is correct,
+                    // and that the region info in response matches the request
 
-    fn handle_after_resolve(&self, context: TaskContext) {
-        match context.task_type {
-            TaskType::SuspendRegion => {
-                let client = KVClient::new(context.address);
-                match client.send_suspend_region(context.from_region.clone(),
-                                                 context.from_peer.clone()) {
-                    Ok(()) => {
-                        // TODO check that the region info in response matches the request
-                        // Succeed to suspend the specified region, and then go to next step
-                        let task = Task::CommitMerge {
-                            from_region: context.from_region,
-                            from_leader: context.from_peer,
-                            into_region: context.into_region,
-                            into_peer: context.into_peer,
-                        };
-                        ensure_schedule(self.scheduler.clone(), task);
-                    }
-                    Err(e) => {
-                        error!("failed to send raft rpc to peer {:?}, address: {}, error {:?}",
-                               context.from_peer,
-                               context.address,
-                               e);
-                        // TODO what are all the possible errors returned here?
-                        // Try another peer in the specified region
-                        let next_peer = next_peer(&context.from_region, context.from_peer);
-                        let task = Task::SuspendRegion {
-                            from_region: context.from_region,
-                            from_leader: next_peer,
-                            into_region: context.into_region,
-                            into_peer: context.into_peer,
-                        };
-                        ensure_schedule(self.scheduler.clone(), task);
-                    }
+                    // Succeed to shutdown the specified region.
+                }
+                Err(e) => {
+                    error!("failed to shutdown region {:?}, peer {:?}, error {:?}",
+                           region,
+                           leader,
+                           e);
+                    // Abort this task if error happens.
+                    // Even though the control region fails to tell the merged region
+                    // to shutdown, the merged region would communication with PD
+                    // in heartbeat, and then know itself should be shutdown.
+
+                    // try another peer when it's apropiate
+                    // let next_peer = next_peer(&region, last_peer);
+                    // let task = Task::ShutdownRegion {
+                    //     region: region,
+                    //     leader: next_peer,
+                    // };
+                    // ensure_schedule(scheduler, task);
                 }
             }
-            TaskType::ShutdownRegion => {
-                // send a shutdown region command to the specified region
-                let client = KVClient::new(context.address);
-                match client.send_shutdown_region(context.from_region.clone(),
-                                                  context.from_peer.clone()) {
-                    Ok(()) => {
-                        // TODO check that the region info in response matches the request
-                        // Succeed to shutdown the specified region.
-                        return;
-                    }
-                    Err(e) => {
-                        error!("failed to send raft rpc to peer {:?}, address: {}, error {:?}",
-                               context.from_peer,
-                               context.address,
-                               e);
-                        // Abort this task if error happens.
-                        // Even though the control region fails to tell the merged region
-                        // to shutdown, the merged region would communication with PD
-                        // in heartbeat, and then know itself should be shutdown.
-                    }
-                }
-            }
-        }
+        };
+
+        self.client.send(store_id, message, cb);
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient, S: Client> Runnable<Task> for Runner<T, S> {
     fn run(&mut self, task: Task) {
         debug!("executing task {}", task);
 
@@ -493,9 +336,21 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 self.handle_commit_merge(from_region, from_leader, into_region, into_peer)
             }
             Task::ShutdownRegion { region, leader } => self.handle_shutdown_region(region, leader),
-            Task::AfterResolve { context } => self.handle_after_resolve(context),
         };
     }
+}
+
+fn next_peer(region: &Region, last_peer: Peer) -> Peer {
+    let last_peer_id = last_peer.get_id();
+    let peers = region.get_peers();
+    if let Some(index) = peers.iter().position(|p| p.get_id() == last_peer_id) {
+        let next_index = (index + 1) % peers.len();
+        return peers[next_index].clone();
+    }
+    if peers.len() == 0 {
+        return last_peer;
+    }
+    peers[0].clone()
 }
 
 fn new_commit_merge_request(from_region: Region,
@@ -508,4 +363,41 @@ fn new_commit_merge_request(from_region: Region,
     req.mut_commit_merge().set_from_leader(from_leader);
     req.mut_commit_merge().set_into_region(into_region);
     req
+}
+
+fn new_raft_cmd_message(req: RaftCmdRequest) -> Message {
+    let mut message = Message::new();
+    message.set_msg_type(MessageType::Cmd);
+    message.set_cmd_req(req);
+    message
+}
+
+fn new_suspend_region_message(region: &Region, peer: &Peer) -> Message {
+    let mut admin_req = AdminRequest::new();
+    admin_req.set_cmd_type(AdminCmdType::SuspendRegion);
+    admin_req.mut_suspend_region().set_region(region.clone());
+
+    let mut cmd_req = RaftCmdRequest::new();
+    cmd_req.mut_header().set_region_id(region.get_id());
+    cmd_req.mut_header().set_region_epoch(region.get_region_epoch().clone());
+    cmd_req.mut_header().set_peer(peer.clone());
+    cmd_req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    cmd_req.set_admin_request(admin_req);
+
+    new_raft_cmd_message(cmd_req)
+}
+
+fn new_shutdown_region_message(region: &Region, peer: &Peer) -> Message {
+    let mut admin_req = AdminRequest::new();
+    admin_req.set_cmd_type(AdminCmdType::ShutdownRegion);
+    admin_req.mut_shutdown_region().set_region(region.clone());
+
+    let mut cmd_req = RaftCmdRequest::new();
+    cmd_req.mut_header().set_region_id(region.get_id());
+    cmd_req.mut_header().set_region_epoch(region.get_region_epoch().clone());
+    cmd_req.mut_header().set_peer(peer.clone());
+    cmd_req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    cmd_req.set_admin_request(admin_req);
+
+    new_raft_cmd_message(cmd_req)
 }

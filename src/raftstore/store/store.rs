@@ -55,8 +55,8 @@ use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
+use super::client::Client;
 use super::metrics::*;
-use server::ResolveTask;
 
 type Key = Vec<u8>;
 
@@ -190,7 +190,7 @@ impl RaftMetrics {
     }
 }
 
-pub struct Store<T: Transport, C: PdClient + 'static> {
+pub struct Store<T: Transport, C: PdClient + 'static, S: Client + 'static> {
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
@@ -216,14 +216,15 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
 
     snap_mgr: SnapManager,
 
-    resolve_scheduler: Scheduler<ResolveTask>,
+    tikv_client: S,
 
     raft_metrics: RaftMetrics,
 }
 
-pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
+pub fn create_event_loop<T, C, S>(cfg: &Config) -> Result<EventLoop<Store<T, C, S>>>
     where T: Transport,
-          C: PdClient
+          C: PdClient,
+          S: Client
 {
     // We use base raft tick as the event loop timer tick.
     let mut builder = EventLoopBuilder::new();
@@ -235,7 +236,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 }
 
 #[allow(too_many_arguments)]
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
     pub fn new(sender: Sender<Msg>,
                meta: metapb::Store,
                cfg: Config,
@@ -243,8 +244,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                trans: T,
                pd_client: Arc<C>,
                mgr: SnapManager,
-               resolve_scheduler: Scheduler<ResolveTask>)
-               -> Result<Store<T, C>> {
+               tikv_client: S)
+               -> Result<Store<T, C, S>> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
@@ -270,7 +271,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_client: pd_client,
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
-            resolve_scheduler: resolve_scheduler,
+            tikv_client: tikv_client,
             raft_metrics: RaftMetrics::default(),
         };
         try!(s.init());
@@ -383,7 +384,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.region_check_worker.start(region_check_runner));
 
         let merge_runner = MergeRunner::new(self.merge_worker.scheduler(),
-                                            self.resolve_scheduler.clone(),
+                                            self.tikv_client.clone(),
                                             self.pd_client.clone(),
                                             self.sendch.clone());
 
@@ -1651,10 +1652,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 }
 
 
-fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
-                                             tick: Tick,
-                                             delay: u64)
-                                             -> Result<mio::Timeout> {
+fn register_timer<T: Transport, C: PdClient, S: Client>(event_loop: &mut EventLoop<Store<T,
+                                                                                         C,
+                                                                                         S>>,
+                                                        tick: Tick,
+                                                        delay: u64)
+                                                        -> Result<mio::Timeout> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
     event_loop.timeout(tick, Duration::from_millis(delay))
@@ -1677,7 +1680,7 @@ fn new_compact_log_request(region_id: u64,
     request
 }
 
-impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
+impl<T: Transport, C: PdClient, S: Client> mio::Handler for Store<T, C, S> {
     type Timeout = Tick;
     type Message = Msg;
 
@@ -1765,7 +1768,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
     /// load the target peer of request as mutable borrow.
     fn mut_target_peer(&mut self, request: &RaftCmdRequest) -> Result<&mut Peer> {
         let region_id = request.get_header().get_region_id();

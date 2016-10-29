@@ -11,15 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod region;
-pub mod region_check;
-pub mod region_merge;
-mod compact;
-mod pd;
-mod metrics;
+use std::boxed::{Box, FnBox};
 
-pub use self::region::{Task as RegionTask, Runner as RegionRunner, MsgSender};
-pub use self::region_check::Runner as RegionCheckRunner;
-pub use self::region_merge::Runner as MergeRunner;
-pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
-pub use self::pd::{Task as PdTask, Runner as PdRunner};
+use kvproto::msgpb::Message;
+
+use raftstore::Result;
+
+// Sends messages to specified tikv store and call callback on responses.
+
+pub type Callback = Box<FnBox(Result<Message>) + Send>;
+
+// TikvClient sends requests to tikv and receives responses.
+pub trait Client: Send + Clone {
+    fn send(&self, store_id: u64, msg: Message, cb: Callback);
+}

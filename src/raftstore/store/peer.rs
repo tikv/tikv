@@ -45,6 +45,7 @@ use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
 use super::transport::Transport;
+use super::client::Client;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
@@ -193,7 +194,7 @@ impl Peer {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
-    pub fn create<T: Transport, C: PdClient>(store: &mut Store<T, C>,
+    pub fn create<T: Transport, C: PdClient, S: Client>(store: &mut Store<T, C, S>,
                                              region: &metapb::Region,
                                              merge_scheduler: Scheduler<region_merge::Task>)
                                              -> Result<Peer> {
@@ -214,7 +215,7 @@ impl Peer {
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after applying snapshot.
-    pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
+    pub fn replicate<T: Transport, C: PdClient, S: Client>(store: &mut Store<T, C, S>,
                                                 region_id: u64,
                                                 peer_id: u64,
                                                 merge_scheduler: Scheduler<region_merge::Task>)
@@ -227,11 +228,11 @@ impl Peer {
         Peer::new(store, &region, peer_id, merge_scheduler)
     }
 
-    fn new<T: Transport, C: PdClient>(store: &mut Store<T, C>,
-                                      region: &metapb::Region,
-                                      peer_id: u64,
-                                      merge_scheduler: Scheduler<region_merge::Task>)
-                                      -> Result<Peer> {
+    fn new<T: Transport, C: PdClient, S: Client>(store: &mut Store<T, C, S>,
+                                                 region: &metapb::Region,
+                                                 peer_id: u64,
+                                                 merge_scheduler: Scheduler<region_merge::Task>)
+                                                 -> Result<Peer> {
         if peer_id == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
         }

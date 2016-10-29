@@ -22,14 +22,12 @@ use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use util::transport::SendCh;
-use util::worker::Scheduler;
 use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
-                       SnapManager};
+                       Client as StoreClient, SnapManager};
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::RaftStoreRouter;
-use super::resolve::Task as ResolveTask;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -57,11 +55,12 @@ pub struct Node<C: PdClient + 'static> {
 impl<C> Node<C>
     where C: PdClient
 {
-    pub fn new<T>(event_loop: &mut EventLoop<Store<T, C>>,
-                  cfg: &Config,
-                  pd_client: Arc<C>)
-                  -> Node<C>
-        where T: Transport + 'static
+    pub fn new<T, S>(event_loop: &mut EventLoop<Store<T, C, S>>,
+                     cfg: &Config,
+                     pd_client: Arc<C>)
+                     -> Node<C>
+        where T: Transport + 'static,
+              S: StoreClient
     {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
@@ -82,14 +81,15 @@ impl<C> Node<C>
         }
     }
 
-    pub fn start<T>(&mut self,
-                    event_loop: EventLoop<Store<T, C>>,
-                    engine: Arc<DB>,
-                    trans: T,
-                    snap_mgr: SnapManager,
-                    resolve_scheduler: Scheduler<ResolveTask>)
-                    -> Result<()>
-        where T: Transport + 'static
+    pub fn start<T, S>(&mut self,
+                       event_loop: EventLoop<Store<T, C, S>>,
+                       engine: Arc<DB>,
+                       trans: T,
+                       snap_mgr: SnapManager,
+                       client: S)
+                       -> Result<()>
+        where T: Transport + 'static,
+              S: StoreClient
     {
         let bootstrapped = try!(self.check_cluster_bootstrapped());
         let mut store_id = try!(self.check_store(&engine));
@@ -114,12 +114,7 @@ impl<C> Node<C>
         }
 
         // inform pd.
-        try!(self.start_store(event_loop,
-                              store_id,
-                              engine,
-                              trans,
-                              snap_mgr,
-                              resolve_scheduler));
+        try!(self.start_store(event_loop, store_id, engine, trans, snap_mgr, client));
         try!(self.pd_client
             .put_store(self.store.clone()));
         Ok(())
@@ -215,15 +210,16 @@ impl<C> Node<C>
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    fn start_store<T>(&mut self,
-                      mut event_loop: EventLoop<Store<T, C>>,
-                      store_id: u64,
-                      db: Arc<DB>,
-                      trans: T,
-                      snap_mgr: SnapManager,
-                      resolve_scheduler: Scheduler<ResolveTask>)
-                      -> Result<()>
-        where T: Transport + 'static
+    fn start_store<T, S>(&mut self,
+                         mut event_loop: EventLoop<Store<T, C, S>>,
+                         store_id: u64,
+                         db: Arc<DB>,
+                         trans: T,
+                         snap_mgr: SnapManager,
+                         client: S)
+                         -> Result<()>
+        where T: Transport + 'static,
+              S: StoreClient
     {
         info!("start raft store {} thread", store_id);
 
@@ -239,17 +235,11 @@ impl<C> Node<C>
         let (tx, rx) = mpsc::channel();
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
-            let mut store = match Store::new(ch,
-                                             store,
-                                             cfg,
-                                             db,
-                                             trans,
-                                             pd_client,
-                                             snap_mgr,
-                                             resolve_scheduler) {
-                Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                Ok(s) => s,
-            };
+            let mut store =
+                match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr, client) {
+                    Err(e) => panic!("construct store {} err {:?}", store_id, e),
+                    Ok(s) => s,
+                };
             tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);

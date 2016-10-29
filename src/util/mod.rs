@@ -41,6 +41,7 @@ pub mod fs;
 pub mod buf;
 pub mod sockopt;
 pub mod transport;
+pub mod client;
 pub mod time_monitor;
 pub mod file_log;
 

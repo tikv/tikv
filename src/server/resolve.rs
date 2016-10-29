@@ -18,10 +18,9 @@ use std::fmt::{self, Formatter, Display};
 use std::collections::HashMap;
 use std::time::Instant;
 
-use super::Result;
 use util;
 use util::worker::{Runnable, Worker, Scheduler};
-use pd::PdClient;
+use pd::{PdClient, Result};
 use kvproto::metapb;
 use super::metrics::*;
 
