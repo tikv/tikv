@@ -867,6 +867,7 @@ fn main() {
                 "log-file",
                 "set log file",
                 "if not set, output log to stdout");
+    opts.optflag("v", "version", "print version information");
     opts.optflag("h", "help", "print this help menu");
     opts.optopt("C", "config", "set configuration file", "file path");
     opts.optopt("s",
@@ -889,7 +890,12 @@ fn main() {
         print_usage(&program, opts);
         return;
     }
-
+    if matches.opt_present("v") {
+        let (hash, date) = util::build_info();
+        println!("Git Commit Hash: {}", hash);
+        println!("UTC Build Time:  {}", date);
+        return;
+    }
     let config = match matches.opt_str("C") {
         Some(path) => {
             let mut config_file = fs::File::open(&path).expect("config open failed");
