@@ -142,6 +142,7 @@ impl<'a> MvccTxn<'a> {
     pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
         let mut remove_older = false;
         let mut ts: u64 = u64::max_value();
+        let mut versions = 0;
         let mut delete_versions = 0;
         while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
             if !remove_older {
@@ -172,7 +173,9 @@ impl<'a> MvccTxn<'a> {
                 delete_versions += 1;
             }
             ts = commit - 1;
+            versions += 1;
         }
+        MVCC_VERSIONS_HISTOGRAM.observe(versions as f64);
         GC_DELETE_VERSIONS_HISTOGRAM.observe(delete_versions as f64);
         Ok(())
     }
