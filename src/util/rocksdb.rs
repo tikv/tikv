@@ -17,7 +17,6 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::fs;
 use storage::CF_DEFAULT;
-use regex::Regex;
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
     db.cf_handle(cf)
@@ -137,52 +136,6 @@ fn db_exist(path: &str) -> bool {
     // but db has not been created, DB::list_column_families will failed and we can cleanup
     // the directory by this indication.
     fs::read_dir(&path).unwrap().next().is_some()
-}
-
-pub struct Statistics {
-    pub block_cache_miss: u64,
-    pub block_cache_hit: u64,
-
-    pub stall_micros: u64,
-    pub get_micros: u64,
-    pub write_micros: u64,
-
-    // percent 50/95/99
-    pub seek_micros: [u64; 3],
-
-    pub compaction_micros: u64,
-}
-
-impl Statistics {
-    pub fn new() {
-        Statistics {
-            block_cache_miss: 0,
-            block_cache_hit: 0,
-        }
-    }
-}
-
-pub fn get_statistics(db: &DB) -> Option<Statistics> {
-    let mut stat = Statistics::new();
-
-    if let Some(info) = db.get_statistics() {
-        let re = Regex::new("rocksdb\.block.cache\.miss[ ]+COUNT[ ]+:[ ]+([0-9]+)").unwrap();
-        let cap = re.captrues(info).unwrap();
-        stat.block_cache_miss = (cap[1].unwrap()).parse::<u64>();
-
-        let re = Regex::new("rocksdb\.block\.cache\.hit[ ]+COUNT[ ]+:[ ]+([0-9]+)").unwrap();
-        let cap = re.captrues(info).unwrap();
-        stat.block_cache_hit = (cap[1].unwrap()).parse::<u64>();
-
-        let re = Regex::new("rocksdb\.stall\.micros[ ]+COUNT[ ]+:[ ]+([0-9]+)").unwrap();
-        let cap = re.captrues(info).unwrap();
-        stat.stall_micros = (cap[1].unwrap()).parse::<u64>();
-
-        let re = Regex::new("rocksdb\.db\.seek\.micros statistics Percentiles[ ]+:=>[ ]+50[ ]+:[ ]+([0-9\.]+)[ ]+95[ ]+:([ 0-9\.]+)[ ]+99[ ]+:[ ]+([0-9\.]+)").unwrap();
-        let cap = re.captrues(info).unwrap();
-    }
-
-    None
 }
 
 #[cfg(test)]

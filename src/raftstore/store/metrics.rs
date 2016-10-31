@@ -78,7 +78,7 @@ lazy_static! {
 
     pub static ref ENGINE_STATISTICS_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
-            "rocksdb_statistics_view",
+            "rocksdb_internal_statistics",
             "statistics of rocksdb",
             &["type"]
         ).unwrap();

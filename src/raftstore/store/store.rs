@@ -1455,9 +1455,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_dump_rocksdb_metrics(&mut self, event_loop: &mut EventLoop<Self>) {
-        if let Some(metrics) = self.engine.get_statistics() {
-            info!("rocksdb metrics [{}]", metrics);
+        for cf in ALL_CFS {
+            let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
+            let cf_used_size = self.engine
+                .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
+                .expect("rocksdb is too old, missing total-sst-files-size property");
+
+            ENGINE_STATISTICS_GAUGE_VEC.with_label_values(&[cf])
+                .set(cf_used_size as f64);
         }
+
+        // Todo: We will add more rocksdb internal statistics after rocksdb supply more C api.
 
         self.register_rocksdb_metrics_tick(event_loop);
     }
