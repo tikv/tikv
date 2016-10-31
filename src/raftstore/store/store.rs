@@ -44,7 +44,7 @@ use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
-                    CompactRunner, PdRunner, PdTask};
+                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
@@ -202,8 +202,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
-    raft_compact_worker: Worker<CompactTask>,
-    manual_compact_worker: Worker<CompactTask>,
+    raftlog_gc_worker: Worker<RaftlogGcTask>,
+    compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
 
     trans: T,
@@ -253,8 +253,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
-            raft_compact_worker: Worker::new("raft compact worker"),
-            manual_compact_worker: Worker::new("manual compact worker"),
+            raftlog_gc_worker: Worker::new("raft gc worker"),
+            compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
             pending_regions: vec![],
@@ -372,11 +372,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
-        let raft_compact_runner = CompactRunner::new(self.engine.clone());
-        box_try!(self.raft_compact_worker.start(raft_compact_runner));
+        let raftlog_gc_runner = RaftlogGcRunner;
+        box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let manual_compact_runner = CompactRunner::new(self.engine.clone());
-        box_try!(self.manual_compact_worker.start(manual_compact_runner));
+        let compact_runner = CompactRunner::new(self.engine.clone());
+        box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
         box_try!(self.pd_worker.start(pd_runner));
@@ -843,14 +843,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_ready_compact_log(&mut self, region_id: u64, state: RaftTruncatedState) {
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
-        let task = CompactTask::CompactRaftLog {
+        let task = RaftlogGcTask {
             engine: peer.get_store().get_engine().clone(),
             region_id: peer.get_store().get_region_id(),
             start_idx: peer.last_compacted_idx,
-            compact_idx: state.get_index() + 1,
+            end_idx: state.get_index() + 1,
         };
         peer.last_compacted_idx = state.get_index() + 1;
-        if let Err(e) = self.raft_compact_worker.schedule(task) {
+        if let Err(e) = self.raftlog_gc_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
                    e);
@@ -1191,12 +1191,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
             for &cf in &[CF_DEFAULT, CF_WRITE] {
-                let task = CompactTask::CompactRangeCF {
+                let task = CompactTask {
                     cf_name: String::from(cf),
                     start_key: Some(keys::enc_start_key(peer.region())),
                     end_key: Some(keys::enc_end_key(peer.region())),
                 };
-                if let Err(e) = self.manual_compact_worker.schedule(task) {
+                if let Err(e) = self.compact_worker.schedule(task) {
                     error!("failed to schedule compact task: {}", e);
                 }
             }
@@ -1416,12 +1416,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
-        let task = CompactTask::CompactRangeCF {
+        let task = CompactTask {
             cf_name: String::from(CF_LOCK),
             start_key: None,
             end_key: None,
         };
-        if let Err(e) = self.manual_compact_worker.schedule(task) {
+        if let Err(e) = self.compact_worker.schedule(task) {
             error!("failed to schedule compact lock cf task: {}", e);
         }
 
@@ -1585,10 +1585,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             for (handle, name) in vec![(self.split_check_worker.stop(),
                                         self.split_check_worker.name()),
                                        (self.region_worker.stop(), self.region_worker.name()),
-                                       (self.raft_compact_worker.stop(),
-                                        self.raft_compact_worker.name()),
-                                       (self.manual_compact_worker.stop(),
-                                        self.manual_compact_worker.name()),
+                                       (self.raftlog_gc_worker.stop(),
+                                        self.raftlog_gc_worker.name()),
+                                       (self.compact_worker.stop(), self.compact_worker.name()),
                                        (self.pd_worker.stop(), self.pd_worker.name())] {
                 if let Some(Err(e)) = handle.map(|h| h.join()) {
                     error!("failed to stop {}: {:?}", name, e);
