@@ -175,7 +175,7 @@ pub fn gen_mvcc_default_iter(db: &DB, key_prefix: &str) -> Vec<MVCCDefaultKV> {
         println!("No such Default record!");
         return Vec::new();
     }
-    let kvs: Vec<MVCCDefaultKV> = iter.map(|s| {
+    iter.map(|s| {
             let key = &keys::origin_key(&s.0);
             let len = key.len();
             let (raw, mut ts) = key.split_at(len - number::U64_SIZE);
@@ -186,8 +186,7 @@ pub fn gen_mvcc_default_iter(db: &DB, key_prefix: &str) -> Vec<MVCCDefaultKV> {
             kv.key = kv.key.append_ts(ts.decode_u64_desc().unwrap());
             kv
         })
-        .collect();
-    kvs
+        .collect()
 }
 
 pub struct MVCCLockKV {
@@ -203,15 +202,14 @@ pub fn gen_mvcc_lock_iter(db: &DB, key_prefix: &str) -> Vec<MVCCLockKV> {
         println!("No such Lock record!");
         return Vec::new();
     }
-    let kvs: Vec<MVCCLockKV> = iter.map(|s| {
+    iter.map(|s| {
             let key = s.0;
             MVCCLockKV {
                 key: Key::from_raw(keys::origin_key(&key)),
                 value: Lock::parse(s.1.clone().as_mut_slice()).unwrap(),
             }
         })
-        .collect();
-    kvs
+        .collect()
 }
 
 pub struct MVCCWriteKV {
@@ -227,7 +225,7 @@ pub fn gen_mvcc_write_iter(db: &DB, key_prefix: &str) -> Vec<MVCCWriteKV> {
         println!("No such Write record!");
         return Vec::new();
     }
-    let kvs: Vec<MVCCWriteKV> = iter.map(|s| {
+    iter.map(|s| {
             let key = &keys::origin_key(&s.0);
             let len = key.len();
             let (raw, mut ts) = key.split_at(len - number::U64_SIZE);
@@ -238,8 +236,7 @@ pub fn gen_mvcc_write_iter(db: &DB, key_prefix: &str) -> Vec<MVCCWriteKV> {
             kv.key = kv.key.append_ts(ts.decode_u64_desc().unwrap());
             kv
         })
-        .collect();
-    kvs
+        .collect()
 }
 
 fn dump_mvcc_default(db: DB, key: &str) {
