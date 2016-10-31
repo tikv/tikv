@@ -1339,7 +1339,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             // It is important to monitor each cf's size, especially the "raft" and "lock" column
             // families.
-            STORE_SIZE_GAUGE_VEC.with_label_values(&[cf]).set(cf_used_size as f64);
+            STORE_ENGINE_SIZE_GAUGE_VEC.with_label_values(&[cf]).set(cf_used_size as f64);
 
             used_size += cf_used_size;
         }
