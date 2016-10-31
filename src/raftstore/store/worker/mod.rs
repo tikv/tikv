@@ -14,10 +14,12 @@
 mod region;
 mod split_check;
 mod compact;
+mod raftlog_gc;
 mod pd;
 mod metrics;
 
 pub use self::region::{Task as RegionTask, Runner as RegionRunner, MsgSender};
 pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
 pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
+pub use self::raftlog_gc::{Task as RaftlogGcTask, Runner as RaftlogGcRunner};
 pub use self::pd::{Task as PdTask, Runner as PdRunner};
