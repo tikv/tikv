@@ -75,4 +75,11 @@ lazy_static! {
             "Total nanoseconds spent in raft processing.",
             &["type"]
         ).unwrap();
+
+    pub static ref STORE_ENGINE_SIZE_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_size_bytes",
+            "Sizes of each column families.",
+            &["type"]
+        ).unwrap();
 }

@@ -1342,6 +1342,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
                 .expect("rocksdb is too old, missing total-sst-files-size property");
 
+            // It is important to monitor each cf's size, especially the "raft" and "lock" column
+            // families.
+            STORE_ENGINE_SIZE_GAUGE_VEC.with_label_values(&[cf]).set(cf_used_size as f64);
+
             used_size += cf_used_size;
         }
 
