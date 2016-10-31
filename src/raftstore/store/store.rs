@@ -35,7 +35,7 @@ use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
-use raft::SnapshotStatus;
+use raft::{SnapshotStatus, INVALID_INDEX};
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
@@ -44,9 +44,9 @@ use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
-                    CompactRunner, PdRunner, PdTask};
+                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
-use super::keys::{self, enc_start_key, enc_end_key};
+use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState};
@@ -202,6 +202,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
+    raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
 
@@ -240,7 +241,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
-        let sendch = SendCh::new(sender);
+        let sendch = SendCh::new(sender, "raftstore");
         let peer_cache = HashMap::new();
 
         let mut s = Store {
@@ -252,6 +253,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
+            raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
             region_ranges: BTreeMap::new(),
@@ -370,6 +372,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
+        let raftlog_gc_runner = RaftlogGcRunner;
+        box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
+
         let compact_runner = CompactRunner::new(self.engine.clone());
         box_try!(self.compact_worker.start(compact_runner));
 
@@ -470,7 +475,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
     }
 
-    fn check_target_peer_valid(&mut self, region_id: u64, target: &metapb::Peer) -> Result<bool> {
+    /// If target peer doesn't exist, create it.
+    ///
+    /// return false to indicate that target peer is in invalid state or
+    /// doesn't exist and can't be created.
+    fn maybe_create_peer(&mut self, region_id: u64, msg: &RaftMessage) -> Result<bool> {
+        let target = msg.get_to_peer();
         // we may encounter a message with larger peer id, which means
         // current peer is stale, then we should remove current peer
         let mut has_peer = false;
@@ -500,12 +510,37 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             has_peer = false;
         }
 
-        if !has_peer {
-            let peer = try!(Peer::replicate(self, region_id, target.get_id()));
-            // We don't have start_key of the region, so there is no need to insert into
-            // region_ranges
-            self.region_peers.insert(region_id, peer);
+        if has_peer {
+            return Ok(true);
         }
+
+        let message = msg.get_message();
+        let msg_type = message.get_msg_type();
+        if msg_type != MessageType::MsgRequestVote &&
+           (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX) {
+            warn!("target peer {:?} doesn't exist, stale message {:?}.",
+                  target,
+                  msg_type);
+            return Ok(false);
+        }
+
+        let start_key = data_key(msg.get_start_key());
+        if let Some((_, &exist_region_id)) = self.region_ranges
+            .range(Excluded(&start_key), Unbounded::<&Key>)
+            .next() {
+            let exist_region = self.region_peers[&exist_region_id].region();
+            if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
+                debug!("msg {:?} is overlapped with region {:?}, ignored",
+                       msg,
+                       exist_region);
+                return Ok(false);
+            }
+        }
+
+        let peer = try!(Peer::replicate(self, region_id, target.get_id()));
+        // following snapshot may overlap, should insert into region_ranges after
+        // snapshot is applied.
+        self.region_peers.insert(region_id, peer);
         Ok(true)
     }
 
@@ -528,7 +563,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if !try!(self.check_target_peer_valid(region_id, msg.get_to_peer())) {
+        if !try!(self.maybe_create_peer(region_id, &msg)) {
             return Ok(());
         }
 
@@ -837,13 +872,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_compact_log(&mut self, region_id: u64, state: RaftTruncatedState) {
-        let peer = self.region_peers.get(&region_id).unwrap();
-        let task = CompactTask::CompactRaftLog {
+        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+        let task = RaftlogGcTask {
             engine: peer.get_store().get_engine().clone(),
             region_id: peer.get_store().get_region_id(),
-            compact_idx: state.get_index() + 1,
+            start_idx: peer.last_compacted_idx,
+            end_idx: state.get_index() + 1,
         };
-        if let Err(e) = self.compact_worker.schedule(task) {
+        peer.last_compacted_idx = state.get_index() + 1;
+        if let Err(e) = self.raftlog_gc_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
                    e);
@@ -982,7 +1019,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) -> Result<()> {
+    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
         let mut resp = RaftCmdResponse::new();
         let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {
@@ -1028,16 +1065,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let pending_cmd = PendingCmd {
             uuid: uuid,
             term: term,
-            cb: cb,
+            cb: Some(cb),
         };
-        try!(peer.propose(pending_cmd, msg, resp));
-
-        self.pending_raft_groups.insert(region_id);
+        if peer.propose(pending_cmd, msg, resp) {
+            self.pending_raft_groups.insert(region_id);
+        }
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
-
-        Ok(())
     }
 
     fn validate_region(&self, msg: &RaftCmdRequest) -> Result<()> {
@@ -1123,11 +1158,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Create a compact log request and notify directly.
             let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx);
 
-            let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
-
             if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
-                callback: cb,
+                callback: Box::new(|_| {}),
             }) {
                 error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
             }
@@ -1188,7 +1221,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
             for &cf in &[CF_DEFAULT, CF_WRITE] {
-                let task = CompactTask::CompactRangeCF {
+                let task = CompactTask {
                     cf_name: String::from(cf),
                     start_key: Some(keys::enc_start_key(peer.region())),
                     end_key: Some(keys::enc_end_key(peer.region())),
@@ -1413,7 +1446,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
-        let task = CompactTask::CompactRangeCF {
+        let task = CompactTask {
             cf_name: String::from(CF_LOCK),
             start_key: None,
             end_key: None,
@@ -1539,11 +1572,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     error!("handle raft message err: {:?}", e);
                 }
             }
-            Msg::RaftCmd { request, callback } => {
-                if let Err(e) = self.propose_raft_command(request, callback) {
-                    error!("propose raft command err: {:?}", e);
-                }
-            }
+            Msg::RaftCmd { request, callback } => self.propose_raft_command(request, callback),
             Msg::Quit => {
                 info!("receive quit message");
                 event_loop.shutdown();
@@ -1586,11 +1615,16 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             for (handle, name) in vec![(self.split_check_worker.stop(),
                                         self.split_check_worker.name()),
                                        (self.region_worker.stop(), self.region_worker.name()),
+                                       (self.raftlog_gc_worker.stop(),
+                                        self.raftlog_gc_worker.name()),
                                        (self.compact_worker.stop(), self.compact_worker.name()),
                                        (self.pd_worker.stop(), self.pd_worker.name())] {
                 if let Some(Err(e)) = handle.map(|h| h.join()) {
                     error!("failed to stop {}: {:?}", name, e);
                 }
+            }
+            for peer in self.region_peers.values_mut() {
+                peer.clear_pending_commands();
             }
 
             return;

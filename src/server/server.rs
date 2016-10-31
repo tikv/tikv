@@ -110,7 +110,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  EventSet::readable(),
                                  PollOpt::edge()));
 
-        let sendch = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel(), "raft-server");
         let store_handler = StoreHandler::new(storage);
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
@@ -143,6 +143,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let ch = self.get_sendch();
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
+
+        info!("TiKV is ready to serve");
 
         try!(event_loop.run(self));
         Ok(())
@@ -286,7 +288,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             resp_msg.set_cmd_resp(resp);
 
             on_resp.call_box((resp_msg,));
-            Ok(())
         };
 
         try!(self.raft_router.send_command(msg, cb));

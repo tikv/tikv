@@ -10,6 +10,8 @@ time = "0.1"
 [features]
 default = []
 dev = ["clippy"]
+static-link = ["rocksdb/static-link"]
+portable = ["rocksdb/portable"]
 
 [lib]
 name = "tikv"

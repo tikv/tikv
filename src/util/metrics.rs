@@ -11,15 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod region;
-mod split_check;
-mod compact;
-mod raftlog_gc;
-mod pd;
-mod metrics;
+use prometheus::CounterVec;
 
-pub use self::region::{Task as RegionTask, Runner as RegionRunner, MsgSender};
-pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
-pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
-pub use self::raftlog_gc::{Task as RaftlogGcTask, Runner as RaftlogGcRunner};
-pub use self::pd::{Task as PdTask, Runner as PdRunner};
+lazy_static! {
+    pub static ref CHANNEL_FULL_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_channel_full_total",
+            "Total number of channel full errors.",
+            &["type"]
+        ).unwrap();
+}

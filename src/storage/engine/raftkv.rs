@@ -138,7 +138,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         try!(self.router.send_command(req,
                                       box move |resp| {
                                           cb(on_result(resp, l, &uuid, db).map_err(Error::into));
-                                          Ok(())
                                       }));
         Ok(())
     }

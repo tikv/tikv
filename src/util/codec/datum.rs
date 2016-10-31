@@ -433,12 +433,12 @@ impl Datum {
 
     /// Keep compatible with TiDB's `ComputePlus` function.
     pub fn checked_add(self, d: Datum) -> Result<Datum> {
-        let res: Datum = match (self, d) {
-            (Datum::I64(l), Datum::I64(r)) => l.checked_add(r).into(),
-            (Datum::I64(l), Datum::U64(r)) |
-            (Datum::U64(r), Datum::I64(l)) => checked_add_i64(r, l).into(),
-            (Datum::U64(l), Datum::U64(r)) => l.checked_add(r).into(),
-            (Datum::F64(l), Datum::F64(r)) => {
+        let res: Datum = match (&self, &d) {
+            (&Datum::I64(l), &Datum::I64(r)) => l.checked_add(r).into(),
+            (&Datum::I64(l), &Datum::U64(r)) |
+            (&Datum::U64(r), &Datum::I64(l)) => checked_add_i64(r, l).into(),
+            (&Datum::U64(l), &Datum::U64(r)) => l.checked_add(r).into(),
+            (&Datum::F64(l), &Datum::F64(r)) => {
                 let res = l + r;
                 if !res.is_finite() {
                     Datum::Null
@@ -446,46 +446,69 @@ impl Datum {
                     Datum::F64(res)
                 }
             }
-            (Datum::Dec(l), Datum::Dec(r)) => {
+            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
                 let dec = try!((l + r).into_result());
                 return Ok(Datum::Dec(dec));
             }
             (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
         };
         if let Datum::Null = res {
-            return Err(box_err!("overflow"));
+            return Err(box_err!("{:?} + {:?} overflow", self, d));
         }
         Ok(res)
     }
 
     /// `checked_minus` computes the result of `self - d`.
     pub fn checked_minus(self, d: Datum) -> Result<Datum> {
-        let res = match (self, d) {
-            (Datum::I64(l), Datum::I64(r)) => l.checked_sub(r).into(),
-            (Datum::I64(l), Datum::U64(r)) => {
+        let res = match (&self, &d) {
+            (&Datum::I64(l), &Datum::I64(r)) => l.checked_sub(r).into(),
+            (&Datum::I64(l), &Datum::U64(r)) => {
                 if l < 0 {
                     Datum::Null
                 } else {
                     (l as u64).checked_sub(r).into()
                 }
             }
-            (Datum::U64(l), Datum::I64(r)) => {
+            (&Datum::U64(l), &Datum::I64(r)) => {
                 if r < 0 {
                     l.checked_add(opp_neg!(r)).into()
                 } else {
                     l.checked_sub(r as u64).into()
                 }
             }
-            (Datum::U64(l), Datum::U64(r)) => l.checked_sub(r).into(),
-            (Datum::F64(l), Datum::F64(r)) => return Ok(Datum::F64(l - r)),
-            (Datum::Dec(l), Datum::Dec(r)) => {
+            (&Datum::U64(l), &Datum::U64(r)) => l.checked_sub(r).into(),
+            (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l - r)),
+            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
                 let dec = try!((l - r).into_result());
                 return Ok(Datum::Dec(dec));
             }
             (l, r) => return Err(invalid_type!("{:?} can't minus {:?}", l, r)),
         };
         if let Datum::Null = res {
-            return Err(box_err!("overflow"));
+            return Err(box_err!("{:?} - {:?} overflow", self, d));
+        }
+        Ok(res)
+    }
+
+    // `checked_mul` computes the result of a * b.
+    pub fn checked_mul(self, d: Datum) -> Result<Datum> {
+        let res = match (&self, &d) {
+            (&Datum::I64(l), &Datum::I64(r)) => l.checked_mul(r).into(),
+            (&Datum::I64(l), &Datum::U64(r)) |
+            (&Datum::U64(r), &Datum::I64(l)) => {
+                if l < 0 {
+                    return Err(box_err!("{} * {} overflow.", l, r));
+                }
+                r.checked_mul(l as u64).into()
+            }
+            (&Datum::U64(l), &Datum::U64(r)) => l.checked_mul(r).into(),
+            (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l * r)),
+            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => return Ok(Datum::Dec((l * r).unwrap())),
+            (l, r) => return Err(invalid_type!("{:?} can't multiply {:?}", l, r)),
+        };
+
+        if let Datum::Null = res {
+            return Err(box_err!("{} * {} overflow", self, d));
         }
         Ok(res)
     }
