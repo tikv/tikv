@@ -49,7 +49,7 @@ fn test_rpc_client() {
     let tmp_store = client.get_store(store_id).unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
-    let tmp_region = client.get_region_by_id(region_id).unwrap();
+    let (tmp_region, _) = client.get_region_by_id(region_id).unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
     let mut prev_id = 0;

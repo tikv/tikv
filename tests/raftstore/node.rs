@@ -27,6 +27,7 @@ use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::eraftpb::MessageType;
+use kvproto::msgpb::{MessageType as MsgType, Message};
 use tikv::raftstore::{store, Result, Error};
 use tikv::util::HandyRwLock;
 use tikv::util::transport::SendCh;
@@ -122,6 +123,33 @@ impl Channel<RaftMessage> for ChannelTransport {
     }
 }
 
+impl Client for ChannelTransport {
+    fn send(&self, store_id: u64, mut msg: Message, cb: ClientCallback) {
+        match self.core.rl().routers.get(&store_id) {
+            Some(h) => {
+                let msg_type = msg.get_msg_type();
+                if msg_type != MsgType::Cmd {
+                    cb.call_box((Err(Error::Other(box_err!("unsupported message type rather \
+                                                            than MessageType::Cmd"))),));
+                } else {
+                    let cmd_req = msg.take_cmd_req();
+                    let callback = box move |r| {
+                        let mut resp = Message::new();
+                        resp.set_msg_type(MsgType::CmdResp);
+                        resp.set_cmd_resp(r);
+                        cb.call_box((Ok(resp),));
+                        Ok(())
+                    };
+                    h.send_command(cmd_req, callback).unwrap()
+                }
+            }
+            _ => {
+                cb.call_box((Err(Error::Other(box_err!("invalid store id {}", store_id))),));
+            }
+        }
+    }
+}
+
 type SimulateChannelTransport = SimulateTransport<RaftMessage, ChannelTransport>;
 
 pub struct NodeCluster {
@@ -163,7 +191,12 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone()).unwrap();
+        node.start(event_loop,
+                   engine,
+                   simulate_trans.clone(),
+                   snap_mgr.clone(),
+                   self.trans.clone())
+            .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         debug!("node_id: {} tmp: {:?}",
                node_id,
@@ -217,7 +250,7 @@ impl Simulator for NodeCluster {
     }
 
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        self.trans.send(msg)
+        Channel::send(&self.trans, msg)
     }
 
     fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {

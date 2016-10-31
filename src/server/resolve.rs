@@ -213,7 +213,7 @@ mod tests {
         fn get_region(&self, _: &[u8]) -> Result<metapb::Region> {
             unimplemented!();
         }
-        fn get_region_by_id(&self, _: u64) -> Result<metapb::Region> {
+        fn get_region_by_id(&self, _: u64) -> Result<(metapb::Region, Option<metapb::Peer>)> {
             unimplemented!();
         }
         fn region_heartbeat(&self,
@@ -226,10 +226,20 @@ mod tests {
         fn ask_split(&self, _: metapb::Region) -> Result<pdpb::AskSplitResponse> {
             unimplemented!();
         }
+        fn ask_merge(&self, _: metapb::Region) -> Result<pdpb::AskMergeResponse> {
+            unimplemented!();
+        }
         fn store_heartbeat(&self, _: pdpb::StoreStats) -> Result<()> {
             unimplemented!();
         }
         fn report_split(&self, _: metapb::Region, _: metapb::Region) -> Result<()> {
+            unimplemented!();
+        }
+        fn report_merge(&self,
+                        _: metapb::Region,
+                        _: metapb::Region,
+                        _: metapb::Region)
+                        -> Result<()> {
             unimplemented!();
         }
     }

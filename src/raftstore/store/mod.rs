@@ -32,7 +32,7 @@ pub use self::msg::{Msg, Callback, Tick};
 pub use self::store::{Store, create_event_loop};
 pub use self::config::Config;
 pub use self::transport::Transport;
-pub use self::client::Client;
+pub use self::client::{Client, Callback as ClientCallback};
 pub use self::peer::Peer;
 pub use self::bootstrap::{bootstrap_store, bootstrap_region, write_region, clear_region};
 pub use self::engine::{Peekable, Iterable, Mutable};

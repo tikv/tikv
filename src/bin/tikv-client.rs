@@ -12,7 +12,7 @@ use uuid::Uuid;
 use getopts::{Matches, Options};
 use kvproto::metapb::Peer;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusRequest, StatusCmdType};
-use tikv::raftstore::store::client::{Client, KVClient};
+use tikv::util::client::{Client, TikvClient};
 
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -54,7 +54,7 @@ fn main() {
     let store_id: u64 = get_opt(&matches, "s", "1").parse().expect("invalid store id");
 
     let addr: SocketAddr = address.parse().expect("ip error");
-    let c = KVClient::new(addr);
+    let c = TikvClient::new(addr);
 
     let mut peer = Peer::new();
     peer.set_id(peer_id);

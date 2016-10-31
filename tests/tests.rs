@@ -17,6 +17,7 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
 #![feature(box_syntax)]
+#![feature(fnbox)]
 #![allow(new_without_default)]
 #![feature(const_fn)]
 

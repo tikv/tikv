@@ -55,7 +55,7 @@ struct Cluster {
 
     down_peers: HashMap<u64, pdpb::PeerStats>,
 
-    merging_region_ids: HashSet<u64>,
+    merging_region_ids: HashSet<(u64, u64)>,
 }
 
 impl Cluster {
@@ -75,6 +75,7 @@ impl Cluster {
             store_stats: HashMap::new(),
             split_count: 0,
             down_peers: HashMap::new(),
+            merging_region_ids: HashSet::new(),
         }
     }
 
@@ -122,7 +123,10 @@ impl Cluster {
     fn get_region_by_id(&self, region_id: u64) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let key = self.region_id_keys.get(&region_id).unwrap();
         let region = self.regions.get(key).cloned().unwrap();
-        let leader = self.region_leaders.get(&region_id);
+        let leader = match self.region_leaders.get(&region_id) {
+            Some(peer) => Some(peer.clone()),
+            None => None,
+        };
         Ok((region, leader))
     }
 
@@ -199,7 +203,7 @@ impl Cluster {
         let conf_ver = region.get_region_epoch().get_conf_ver();
         let end_key = enc_end_key(&region);
 
-        let cur_region = self.get_region_by_id(region.get_id()).unwrap();
+        let (cur_region, _) = self.get_region_by_id(region.get_id()).unwrap();
 
         let cur_conf_ver = cur_region.get_region_epoch().get_conf_ver();
         try!(check_stale_region(&cur_region, &region));
@@ -369,11 +373,11 @@ impl TestPdClient {
         self.cluster.wl().rule = None;
     }
 
-    pub fn reset_region_leader(&mut self, region_id: u64) {
+    pub fn reset_region_leader(&self, region_id: u64) {
         self.cluster.wl().region_leaders.remove(&region_id);
     }
 
-    pub fn set_region_leader(&mut self, region_id: u64, peer: metapb::Peer) {
+    pub fn set_region_leader(&self, region_id: u64, peer: metapb::Peer) {
         self.cluster.wl().region_leaders.insert(region_id, peer);
     }
 
@@ -391,7 +395,7 @@ impl TestPdClient {
         for _ in 1..500 {
             sleep_ms(10);
 
-            let region = self.get_region_by_id(region_id)
+            let (region, _) = self.get_region_by_id(region_id)
                 .unwrap();
 
             if let Some(p) = find_peer(&region, peer.get_store_id()) {
@@ -410,7 +414,7 @@ impl TestPdClient {
         for _ in 1..500 {
             sleep_ms(10);
 
-            let region = self.get_region_by_id(region_id)
+            let (region, _) = self.get_region_by_id(region_id)
                 .unwrap();
 
             if find_peer(&region, peer.get_store_id()).is_none() {
@@ -554,7 +558,7 @@ impl PdClient for TestPdClient {
         try!(self.check_bootstrap());
 
         // Must ConfVer and Version be same?
-        let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap();
+        let (cur_region, _) = self.cluster.rl().get_region_by_id(region.get_id()).unwrap();
         try!(check_stale_region(&cur_region, &region));
 
         let mut resp = pdpb::AskSplitResponse::new();
@@ -568,10 +572,10 @@ impl PdClient for TestPdClient {
         Ok(resp)
     }
 
-    fn ask_merge(&self, region: metapb::Region) -> Result<pdpb::AskMergeResponse> {
+    fn ask_merge(&self, _region: metapb::Region) -> Result<pdpb::AskMergeResponse> {
         try!(self.check_bootstrap());
         // TODO add impl
-        let resp = pdpb::AskMergeResponse::new();
+        let mut resp = pdpb::AskMergeResponse::new();
         resp.set_ok(false);
         Ok(resp)
     }
@@ -594,9 +598,9 @@ impl PdClient for TestPdClient {
     }
 
     fn report_merge(&self,
-                    new: metapb::Region,
-                    old: metapb::Region,
-                    to_shutdown: metapb::Region)
+                    _new: metapb::Region,
+                    _old: metapb::Region,
+                    _to_shutdown: metapb::Region)
                     -> Result<()> {
         try!(self.check_bootstrap());
         // TODO add impl
