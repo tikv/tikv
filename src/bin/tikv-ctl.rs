@@ -364,7 +364,7 @@ mod tests {
                 d
             })
             .collect();
-        let default_value: Vec<_> = test_data.iter().map(|data| data.1.clone()).collect();
+        let default_value: Vec<_> = test_data.iter().map(|data| *data.1).collect();
         let kvs = keys.iter().zip(default_value.iter());
         for (k, v) in kvs.clone() {
             db.put(k.as_slice(), v).unwrap();
