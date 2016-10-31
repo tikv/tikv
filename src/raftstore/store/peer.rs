@@ -247,8 +247,11 @@ impl Peer {
         let ps = try!(PeerStorage::new(store.engine(), &region, sched, tag.clone()));
 
         let region_local_state = try!(store.engine()
-                .get_msg::<RegionLocalState>(&keys::region_state_key(region.get_id())))
-            .unwrap();
+            .get_msg::<RegionLocalState>(&keys::region_state_key(region.get_id())));
+        let state = match region_local_state {
+            Some(s) => s.get_state(),
+            None => PeerState::Normal,
+        };
 
         let applied_index = ps.applied_index();
 
@@ -279,7 +282,7 @@ impl Peer {
             size_diff_hint: 0,
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
-            state: region_local_state.get_state(),
+            state: state,
             start_merging_time: None,
             merge_scheduler: merge_scheduler,
             tag: tag,

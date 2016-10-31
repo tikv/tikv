@@ -850,15 +850,16 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
             return;
         }
 
-        let end_key = enc_end_key(p.region());
-        if is_initialized &&
-           (self.region_ranges.remove(&end_key).is_none() ||
-            self.region_ranges_to_shutdown.remove(&end_key).is_none()) {
-            panic!("[region {}] remove peer {:?} in store {}",
-                   region_id,
-                   peer,
-                   self.store_id());
 
+        if is_initialized {
+            let end_key = enc_end_key(p.region());
+            if self.region_ranges.remove(&end_key).is_none() &&
+               self.region_ranges_to_shutdown.remove(&end_key).is_none() {
+                panic!("[region {}] remove peer {:?} in store {}",
+                       region_id,
+                       peer,
+                       self.store_id());
+            }
         }
     }
 
@@ -1033,13 +1034,12 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
                   region);
             // we have already initialized the peer, so it must exist in region_ranges.
             let mut exist = false;
-            let end_key = enc_end_key(&prev_region);
-            if self.region_ranges.remove(&end_key).is_some() {
+            if self.region_ranges.remove(&enc_end_key(&prev_region)).is_some() {
                 exist = true;
-                self.region_ranges.insert(end_key, region.get_id());
-            } else if self.region_ranges_to_shutdown.remove(&end_key).is_some() {
+                self.region_ranges.insert(enc_end_key(&region), region.get_id());
+            } else if self.region_ranges_to_shutdown.remove(&enc_end_key(&prev_region)).is_some() {
                 exist = true;
-                self.region_ranges_to_shutdown.insert(end_key, region.get_id());
+                self.region_ranges_to_shutdown.insert(enc_end_key(&region), region.get_id());
             }
             if !exist {
                 panic!("[region {}] region should exist {:?}",
