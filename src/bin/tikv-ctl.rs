@@ -225,16 +225,17 @@ pub fn gen_mvcc_write_iter(db: &DB, key_prefix: &str) -> Vec<MVCCWriteKV> {
         panic!("No such record");
     }
     let kvs: Vec<MVCCWriteKV> = iter.map(|s| {
-        let key = &keys::origin_key(&s.0);
-        let len = key.len();
-        let (raw, mut ts) = key.split_at(len - number::U64_SIZE);
-        let mut kv = MVCCWriteKV {
-            key: Key::from_encoded(raw.to_vec()),
-            value: Write::parse(&s.1).unwrap()
-        };
-        kv.key = kv.key.append_ts(ts.decode_u64_desc().unwrap());
-        kv
-    }).collect();
+            let key = &keys::origin_key(&s.0);
+            let len = key.len();
+            let (raw, mut ts) = key.split_at(len - number::U64_SIZE);
+            let mut kv = MVCCWriteKV {
+                key: Key::from_encoded(raw.to_vec()),
+                value: Write::parse(&s.1).unwrap(),
+            };
+            kv.key = kv.key.append_ts(ts.decode_u64_desc().unwrap());
+            kv
+        })
+        .collect();
     kvs
 }
 
@@ -340,7 +341,7 @@ mod tests {
     use std::str;
     use rocksdb::Writable;
     use tikv::util::codec::bytes::encode_bytes;
-    use tikv::util::codec::number:: NumberEncoder;
+    use tikv::util::codec::number::NumberEncoder;
     use tikv::raftstore::store::keys;
     use tikv::storage::{ALL_CFS, CF_LOCK, CF_WRITE};
     use tikv::storage::mvcc::{Lock, Write, LockType, WriteType};
@@ -355,12 +356,14 @@ mod tests {
         let file_path = tmp_dir.path().join("tmp_db");
         let db = new_engine(file_path.to_str().unwrap(), ALL_CFS).unwrap();
         let test_data = vec![(PREFIX, b"v", 5), (PREFIX, b"x", 10), (PREFIX, b"y", 15)];
-        let keys: Vec<_> = test_data.iter().map(|data| {
-            let encoded = encode_bytes(&data.0[..]);
-            let mut d = keys::data_key(encoded.as_slice());
-            let _ = d.encode_u64_desc(data.2);
-            d
-        }).collect();
+        let keys: Vec<_> = test_data.iter()
+            .map(|data| {
+                let encoded = encode_bytes(&data.0[..]);
+                let mut d = keys::data_key(encoded.as_slice());
+                let _ = d.encode_u64_desc(data.2);
+                d
+            })
+            .collect();
         let default_value: Vec<_> = test_data.iter().map(|data| data.1.clone()).collect();
         let kvs = keys.iter().zip(default_value.iter());
         for (k, v) in kvs.clone() {
@@ -378,15 +381,17 @@ mod tests {
 
 
         let test_data_lock = vec![(PREFIX, LockType::Put, b"v", 5),
-                                  (PREFIX, LockType::Lock, b"x",10),
+                                  (PREFIX, LockType::Lock, b"x", 10),
                                   (PREFIX, LockType::Delete, b"y", 15)];
-        let keys: Vec<_> = test_data_lock.iter().map(|data| {
-            let encoded = encode_bytes(&data.0[..]);
-            keys::data_key(encoded.as_slice())
-        }).collect();
-        let lock_value: Vec<_> = test_data_lock.iter().map(|data| {
-            Lock::new(data.1, data.2.to_vec(), data.3).to_bytes()
-        }).collect();
+        let keys: Vec<_> = test_data_lock.iter()
+            .map(|data| {
+                let encoded = encode_bytes(&data.0[..]);
+                keys::data_key(encoded.as_slice())
+            })
+            .collect();
+        let lock_value: Vec<_> = test_data_lock.iter()
+            .map(|data| Lock::new(data.1, data.2.to_vec(), data.3).to_bytes())
+            .collect();
         let kvs = keys.iter().zip(lock_value.iter());
         let lock_cf = db.cf_handle(CF_LOCK).unwrap();
         for (k, v) in kvs.clone() {
@@ -397,7 +402,10 @@ mod tests {
         for kv in kvs_gen {
             let lock = &kv.value;
             let key = kv.key.raw().unwrap();
-            test_iter.retain(|&s| &s.0[..] == key.as_slice() && s.1 == lock.lock_type && &s.2[..] == &lock.primary[..] && s.3 == lock.ts);
+            test_iter.retain(|&s| {
+                &s.0[..] == key.as_slice() && s.1 == lock.lock_type &&
+                &s.2[..] == &lock.primary[..] && s.3 == lock.ts
+            });
         }
         assert_eq!(test_iter.len(), 0);
 
@@ -406,15 +414,17 @@ mod tests {
                                    (PREFIX, WriteType::Lock, 15, 20),
                                    (PREFIX, WriteType::Put, 25, 30),
                                    (PREFIX, WriteType::Rollback, 35, 40)];
-        let keys: Vec<_> = test_data_write.iter().map(|data| {
-            let encoded = encode_bytes(&data.0[..]);
-            let mut d = keys::data_key(encoded.as_slice());
-            let _ = d.encode_u64_desc(data.3);
-            d
-        }).collect();
-        let write_value: Vec<_> = test_data_write.iter().map(|data| {
-            Write::new(data.1, data.2).to_bytes()
-        }).collect();
+        let keys: Vec<_> = test_data_write.iter()
+            .map(|data| {
+                let encoded = encode_bytes(&data.0[..]);
+                let mut d = keys::data_key(encoded.as_slice());
+                let _ = d.encode_u64_desc(data.3);
+                d
+            })
+            .collect();
+        let write_value: Vec<_> = test_data_write.iter()
+            .map(|data| Write::new(data.1, data.2).to_bytes())
+            .collect();
         let kvs = keys.iter().zip(write_value.iter());
         let write_cf = db.cf_handle(CF_WRITE).unwrap();
         for (k, v) in kvs.clone() {
@@ -426,7 +436,10 @@ mod tests {
             let write = &kv.value;
             let ts = kv.key.decode_ts().unwrap();
             let key = kv.key.truncate_ts().unwrap().raw().unwrap();
-            test_iter.retain(|&s| &s.0[..] == key.as_slice() && s.1 == write.write_type && s.2 == write.start_ts && s.3 == ts);
+            test_iter.retain(|&s| {
+                &s.0[..] == key.as_slice() && s.1 == write.write_type && s.2 == write.start_ts &&
+                s.3 == ts
+            });
         }
         assert_eq!(test_iter.len(), 0);
     }
