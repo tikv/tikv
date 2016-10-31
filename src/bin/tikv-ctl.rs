@@ -156,7 +156,7 @@ fn main() {
 }
 
 fn gen_key_prefix(key: &str) -> Vec<u8> {
-    let mut prefix = b"t".to_vec();
+    let mut prefix = keys::DATA_PREFIX_KEY.to_vec();
     let mut encoded = encode_bytes(key.as_bytes());
     prefix.append(&mut encoded);
     prefix
@@ -172,7 +172,8 @@ pub fn gen_mvcc_default_iter(db: &DB, key_prefix: &str) -> Vec<MVCCDefaultKV> {
     let mut iter = db.new_iterator(None);
     iter.seek(prefix.as_slice().into());
     if !iter.valid() {
-        panic!("No such record");
+        println!("No such Default record!");
+        return Vec::new();
     }
     let kvs: Vec<MVCCDefaultKV> = iter.map(|s| {
             let key = &keys::origin_key(&s.0);
@@ -199,7 +200,8 @@ pub fn gen_mvcc_lock_iter(db: &DB, key_prefix: &str) -> Vec<MVCCLockKV> {
     let mut iter = db.new_iterator_cf(CF_LOCK, None).unwrap();
     iter.seek(prefix.as_slice().into());
     if !iter.valid() {
-        panic!("No such record");
+        println!("No such Lock record!");
+        return Vec::new();
     }
     let kvs: Vec<MVCCLockKV> = iter.map(|s| {
             let key = s.0;
@@ -222,7 +224,8 @@ pub fn gen_mvcc_write_iter(db: &DB, key_prefix: &str) -> Vec<MVCCWriteKV> {
     let mut iter = db.new_iterator_cf(CF_WRITE, None).unwrap();
     iter.seek(prefix.as_slice().into());
     if !iter.valid() {
-        panic!("No such record");
+        println!("No such Write record!");
+        return Vec::new();
     }
     let kvs: Vec<MVCCWriteKV> = iter.map(|s| {
             let key = &keys::origin_key(&s.0);
@@ -244,8 +247,8 @@ fn dump_mvcc_default(db: DB, key: &str) {
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        println!("Key: {:?}", key.raw().unwrap());
-        println!("Value: {:?}", kv.value);
+        println!("Key: {:?}", escape(key.raw().unwrap().as_slice()));
+        println!("Value: {:?}", escape(kv.value.as_slice()));
         println!("Start_ts: {:?}", ts);
     }
 }
@@ -254,8 +257,8 @@ fn dump_mvcc_lock(db: DB, key: &str) {
     let kvs = gen_mvcc_lock_iter(&db, key);
     for kv in kvs {
         let lock = &kv.value;
-        println!("Key: {:?}", kv.key.raw().unwrap());
-        println!("Value: {:?}", lock.primary);
+        println!("Key: {:?}", escape(kv.key.raw().unwrap().as_slice()));
+        println!("Value: {:?}", escape(lock.primary.as_slice()));
         println!("Type: {:?}", lock.lock_type);
         println!("Start_ts: {:?}", lock.ts);
     }
@@ -267,7 +270,7 @@ fn dump_mvcc_write(db: DB, key: &str) {
         let write = &kv.value;
         let commit_ts = kv.key.decode_ts();
         let key = kv.key.truncate_ts().unwrap();
-        println!("Key: {:?}", key.raw().unwrap());
+        println!("Key: {:?}", escape(key.raw().unwrap().as_slice()));
         println!("Type: {:?}", write.write_type);
         println!("Start_ts: {:?}", write.start_ts);
         println!("Commit_ts: {:?}", commit_ts);
