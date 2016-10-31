@@ -69,7 +69,7 @@ impl<'a> MvccReader<'a> {
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
             self.lock_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_LOCK, None, false, self.scan_mode.unwrap())));
+                .iter_cf(CF_LOCK, None, true, self.scan_mode.unwrap())));
         }
 
         if let Some(ref mut cursor) = self.lock_cursor {
