@@ -25,7 +25,7 @@ pub mod engine;
 pub mod mvcc;
 pub mod txn;
 pub mod config;
-mod types;
+pub mod types;
 mod metrics;
 
 pub use self::config::Config;
