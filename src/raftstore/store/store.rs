@@ -358,7 +358,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_store_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
-        self.register_rocksdb_metrics_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -1338,6 +1337,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
                 .expect("rocksdb is too old, missing total-sst-files-size property");
 
+            // It is import to monitor each cf's size, especially the "raft" and "lock" column
+            // families.
+            STORE_SIZE_GAUGE_VEC.with_label_values(&[cf]).set(cf_used_size as f64);
+
             used_size += cf_used_size;
         }
 
@@ -1454,22 +1457,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
     }
 
-    fn on_dump_rocksdb_metrics(&mut self, event_loop: &mut EventLoop<Self>) {
-        for cf in ALL_CFS {
-            let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
-            let cf_used_size = self.engine
-                .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
-                .expect("rocksdb is too old, missing total-sst-files-size property");
-
-            ENGINE_STATISTICS_GAUGE_VEC.with_label_values(&[cf])
-                .set(cf_used_size as f64);
-        }
-
-        // Todo: We will add more rocksdb internal statistics after rocksdb supply more C api.
-
-        self.register_rocksdb_metrics_tick(event_loop);
-    }
-
     fn register_pd_store_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::PdStoreHeartbeat,
@@ -1491,14 +1478,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        Tick::CompactLockCf,
                                        self.cfg.lock_cf_compact_interval_secs * 1000) {
             error!("register compact cf-lock tick err: {:?}", e);
-        }
-    }
-
-    fn register_rocksdb_metrics_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(event_loop,
-                                       Tick::DumpRocksDBMetrics,
-                                       self.cfg.dump_rocksdb_metrics_interval) {
-            error!("register dump rocksdb metrics err: {:?}", e);
         }
     }
 
@@ -1626,7 +1605,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
-            Tick::DumpRocksDBMetrics => self.on_dump_rocksdb_metrics(event_loop),
         }
         slow_log!(t, "handle timeout {:?}", timeout);
     }

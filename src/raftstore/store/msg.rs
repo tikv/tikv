@@ -32,7 +32,6 @@ pub enum Tick {
     PdStoreHeartbeat,
     SnapGc,
     CompactLockCf,
-    DumpRocksDBMetrics,
 }
 
 pub enum Msg {
