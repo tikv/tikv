@@ -641,7 +641,7 @@ impl<'a> SelectContext<'a> {
                 range.get_start().to_vec()
             };
             let mut scanner = try!(self.snap.scanner(if desc {
-                                                         ScanMode::Mixed
+                                                         ScanMode::Backward
                                                      } else {
                                                          ScanMode::Forward
                                                      },
@@ -702,7 +702,7 @@ impl<'a> SelectContext<'a> {
             r.get_start().to_vec()
         };
         let mut scanner = try!(self.snap.scanner(if desc {
-                                                     ScanMode::Mixed
+                                                     ScanMode::Backward
                                                  } else {
                                                      ScanMode::Forward
                                                  },
