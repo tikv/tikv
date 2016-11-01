@@ -179,10 +179,10 @@ impl SnapFile {
         if let Some((mut f, path)) = self.tmp_file.take() {
             try!(f.write_u32::<BigEndian>(self.digest.sum32()));
             try!(f.flush());
-            let file_len = try!(f.seek(SeekFrom::End(0)));
+            let file_len = try!(fs::metadata(&path)).len();
             let mut size_track = self.size_track.wl();
-            *size_track = size_track.saturating_add(file_len);
             try!(fs::rename(path, self.file.as_path()));
+            *size_track = size_track.saturating_add(file_len);
         }
         Ok(())
     }
