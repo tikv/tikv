@@ -174,6 +174,7 @@ fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: 
     db.scan_cf(cf,
                  &from,
                  &to,
+                 true,
                  &mut |k, v| {
                      println!("key: {}, value: {}", escape(k), escape(v));
                      cnt += 1;

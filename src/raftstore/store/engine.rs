@@ -119,34 +119,42 @@ pub trait Peekable {
 
 // TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
-    fn new_iterator(&self, Option<&[u8]>) -> DBIterator;
-    fn new_iterator_cf(&self, &str, Option<&[u8]>) -> Result<DBIterator>;
+    fn new_iterator(&self, Option<&[u8]>, fill_cache: bool) -> DBIterator;
+    fn new_iterator_cf(&self, &str, Option<&[u8]>, fill_cache: bool) -> Result<DBIterator>;
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
-    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
+    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(self.new_iterator(Some(end_key)), start_key, f)
+        scan_impl(self.new_iterator(Some(end_key), fill_cache), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
-    fn scan_cf<F>(&self, cf: &str, start_key: &[u8], end_key: &[u8], f: &mut F) -> Result<()>
+    fn scan_cf<F>(&self,
+                  cf: &str,
+                  start_key: &[u8],
+                  end_key: &[u8],
+                  fill_cache: bool,
+                  f: &mut F)
+                  -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(try!(self.new_iterator_cf(cf, Some(end_key))), start_key, f)
+        scan_impl(try!(self.new_iterator_cf(cf, Some(end_key), fill_cache)),
+                  start_key,
+                  f)
     }
 
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = self.new_iterator(None);
+        let mut iter = self.new_iterator(None, true);
         iter.seek(key.into());
         Ok(iter.kv())
     }
 
     // Seek the first key >= given key, if no found, return None.
     fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = try!(self.new_iterator_cf(cf, None));
+        let mut iter = try!(self.new_iterator_cf(cf, None, true));
         iter.seek(key.into());
         Ok(iter.kv())
     }
@@ -181,27 +189,27 @@ impl Peekable for DB {
 }
 
 impl Iterable for DB {
-    fn new_iterator(&self, upper_bound: Option<&[u8]>) -> DBIterator {
-        match upper_bound {
-            Some(key) => {
-                let mut readopts = ReadOptions::new();
-                readopts.set_iterate_upper_bound(key);
-                self.iter_opt(readopts)
-            }
-            None => self.iter(),
+    fn new_iterator(&self, upper_bound: Option<&[u8]>, fill_cache: bool) -> DBIterator {
+        let mut readopts = ReadOptions::new();
+        readopts.fill_cache(fill_cache);
+        if let Some(key) = upper_bound {
+            readopts.set_iterate_upper_bound(key);
         }
+        self.iter_opt(readopts)
     }
 
-    fn new_iterator_cf(&self, cf: &str, upper_bound: Option<&[u8]>) -> Result<DBIterator> {
-        let handle = try!(rocksdb::get_cf_handle(self, cf));
-        match upper_bound {
-            Some(key) => {
-                let mut readopts = ReadOptions::new();
-                readopts.set_iterate_upper_bound(key);
-                Ok(DBIterator::new_cf(self, handle, readopts))
-            }
-            None => Ok(self.iter_cf(handle)),
+    fn new_iterator_cf(&self,
+                       cf: &str,
+                       upper_bound: Option<&[u8]>,
+                       fill_cache: bool)
+                       -> Result<DBIterator> {
+        let mut readopts = ReadOptions::new();
+        readopts.fill_cache(fill_cache);
+        if let Some(key) = upper_bound {
+            readopts.set_iterate_upper_bound(key);
         }
+        let handle = try!(rocksdb::get_cf_handle(self, cf));
+        Ok(DBIterator::new_cf(self, handle, readopts))
     }
 }
 
@@ -227,8 +235,9 @@ impl Peekable for Snapshot {
 }
 
 impl Iterable for Snapshot {
-    fn new_iterator(&self, upper_bound: Option<&[u8]>) -> DBIterator {
+    fn new_iterator(&self, upper_bound: Option<&[u8]>, fill_cache: bool) -> DBIterator {
         let mut opt = ReadOptions::new();
+        opt.fill_cache(fill_cache);
         if let Some(key) = upper_bound {
             opt.set_iterate_upper_bound(key);
         }
@@ -238,9 +247,14 @@ impl Iterable for Snapshot {
         DBIterator::new(&self.db, opt)
     }
 
-    fn new_iterator_cf(&self, cf: &str, upper_bound: Option<&[u8]>) -> Result<DBIterator> {
+    fn new_iterator_cf(&self,
+                       cf: &str,
+                       upper_bound: Option<&[u8]>,
+                       fill_cache: bool)
+                       -> Result<DBIterator> {
         let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
         let mut opt = ReadOptions::new();
+        opt.fill_cache(fill_cache);
         if let Some(key) = upper_bound {
             opt.set_iterate_upper_bound(key);
         }
@@ -308,7 +322,7 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
     let handle = try!(rocksdb::get_cf_handle(db, cf));
     try!(db.delete_file_in_range_cf(handle, start_key, end_key));
 
-    let mut it = try!(db.new_iterator_cf(cf, Some(end_key)));
+    let mut it = try!(db.new_iterator_cf(cf, Some(end_key), false));
 
     let mut wb = WriteBatch::new();
     it.seek(start_key.into());
@@ -428,6 +442,7 @@ mod tests {
         let mut data = vec![];
         engine.scan(b"",
                   &[0xFF, 0xFF],
+                  false,
                   &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       Ok(true)
@@ -440,6 +455,7 @@ mod tests {
         engine.scan_cf(cf,
                      b"",
                      &[0xFF, 0xFF],
+                     false,
                      &mut |key, value| {
                          data.push((key.to_vec(), value.to_vec()));
                          Ok(true)
@@ -459,6 +475,7 @@ mod tests {
         let mut index = 0;
         engine.scan(b"",
                   &[0xFF, 0xFF],
+                  false,
                   &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       index += 1;
@@ -481,6 +498,7 @@ mod tests {
 
         snap.scan(b"",
                   &[0xFF, 0xFF],
+                  false,
                   &mut |key, value| {
                       data.push((key.to_vec(), value.to_vec()));
                       Ok(true)
