@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
-use std::collections::Bound::{Excluded, Unbounded};
+use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -55,7 +55,8 @@ struct Cluster {
 
     down_peers: HashMap<u64, pdpb::PeerStats>,
 
-    merging_region_ids: HashSet<(u64, u64)>,
+    merging_region_ids: HashSet<u64>,
+    shutdown_region_ids: HashSet<u64>,
 }
 
 impl Cluster {
@@ -76,6 +77,7 @@ impl Cluster {
             split_count: 0,
             down_peers: HashMap::new(),
             merging_region_ids: HashSet::new(),
+            shutdown_region_ids: HashSet::new(),
         }
     }
 
@@ -120,6 +122,32 @@ impl Cluster {
             .map(|(_, region)| region.clone())
     }
 
+    fn check_idle_for_region_merge(&self, region_id: u64) -> bool {
+        !self.merging_region_ids.contains(&region_id)
+    }
+
+    fn get_idle_neighbour_region(&self, region: &metapb::Region) -> Option<metapb::Region> {
+        let end_key = enc_end_key(region);
+        if let Some(r) = self.regions
+            .range::<Key, Key>(Included(&end_key), Unbounded)
+            .next()
+            .map(|(_, region)| region.clone()) {
+            if self.check_idle_for_region_merge(r.get_id()) {
+                return Some(r);
+            }
+        }
+        let start_key = enc_start_key(region);
+        if let Some(r) = self.regions
+            .range::<Key, Key>(Unbounded, Excluded(&start_key))
+            .last()
+            .map(|(_, region)| region.clone()) {
+            if self.check_idle_for_region_merge(r.get_id()) {
+                return Some(r);
+            }
+        }
+        None
+    }
+
     fn get_region_by_id(&self, region_id: u64) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let key = self.region_id_keys.get(&region_id).unwrap();
         let region = self.regions.get(key).cloned().unwrap();
@@ -144,6 +172,102 @@ impl Cluster {
         let end_key = enc_end_key(region);
         assert!(self.regions.remove(&end_key).is_some());
         assert!(self.region_id_keys.remove(&region.get_id()).is_some());
+        let _ = self.region_leaders.remove(&region.get_id());
+    }
+
+    fn add_region_merge(&mut self, into_region: &metapb::Region, from_region: &metapb::Region) {
+        let into_region_id = into_region.get_id();
+        let from_region_id = from_region.get_id();
+        self.merging_region_ids.insert(into_region_id);
+        self.merging_region_ids.insert(from_region_id);
+
+        let mut region_merge = metapb::RegionMerge::new();
+        region_merge.set_state(metapb::MergeState::Prepare);
+        region_merge.set_into_id(into_region_id);
+        region_merge.set_from_id(from_region_id);
+
+        let into_end_key = enc_end_key(into_region);
+        let from_end_key = enc_end_key(from_region);
+        let mut r = self.regions.remove(&into_end_key).unwrap();
+        r.set_region_merge(region_merge.clone());
+        self.regions.insert(into_end_key, r);
+        let mut r = self.regions.remove(&from_end_key).unwrap();
+        r.set_region_merge(region_merge);
+        self.regions.insert(from_end_key, r);
+    }
+
+    fn is_merging_region(&self, region: &metapb::Region) -> bool {
+        self.merging_region_ids.contains(&region.get_id())
+    }
+
+    fn handle_region_merge_done(&mut self,
+                                new: metapb::Region,
+                                old: metapb::Region,
+                                to_shutdown: metapb::Region) {
+        self.remove_region(&old);
+        self.remove_region(&to_shutdown);
+        self.merging_region_ids.remove(&old.get_id());
+        self.merging_region_ids.remove(&to_shutdown.get_id());
+        // clear down_peers
+        for peer in to_shutdown.get_peers() {
+            self.down_peers.remove(&peer.get_id());
+        }
+        // mark from region as shutdown
+        self.shutdown_region_ids.insert(to_shutdown.get_id());
+        // add a new region after regions are merged
+        self.add_region(&new);
+    }
+
+    fn handle_heartbeat_merge(&mut self,
+                              region: metapb::Region,
+                              leader: metapb::Peer)
+                              -> Result<pdpb::RegionHeartbeatResponse> {
+        let end_key = enc_end_key(&region);
+        let cur_region = self.regions.get(&end_key).cloned().unwrap();
+        let cur_region_merge = cur_region.get_region_merge().clone();
+        let mut resp = pdpb::RegionHeartbeatResponse::new();
+        let region_id = region.get_id();
+        if region_id == cur_region_merge.get_from_id() {
+            return Ok(resp);
+        }
+        assert_eq!(region.get_id(), cur_region_merge.get_into_id());
+        assert_eq!(cur_region_merge.get_state(), metapb::MergeState::Prepare);
+        match region.get_region_merge().get_state() {
+            metapb::MergeState::None => {
+                let version = region.get_region_epoch().get_version();
+                let cur_version = cur_region.get_region_epoch().get_version();
+                if version > cur_version {
+                    // region merge is done, remove the merged regions and add new one
+                    let (from_region, _) = self.get_region_by_id(cur_region_merge.get_from_id())
+                        .unwrap();
+                    self.handle_region_merge_done(region, cur_region, from_region);
+                    self.region_leaders.insert(region_id, leader);
+                    return Ok(resp);
+                } else {
+                    // send region merge command
+                    let mut merge = pdpb::RegionMerge::new();
+                    let (from_region, from_leader) =
+                        self.get_region_by_id(cur_region_merge.get_from_id()).unwrap();
+                    merge.set_from_region(from_region);
+                    if let Some(leader) = from_leader {
+                        merge.set_from_leader(leader);
+                    }
+                    resp.set_region_merge(merge);
+                    return Ok(resp);
+                }
+            }
+            metapb::MergeState::Prepare => {
+                // do nothing here
+            }
+            metapb::MergeState::Merging => {
+                // update region merge state
+                let mut cur_region = self.regions.remove(&end_key).unwrap();
+                cur_region.mut_region_merge().set_state(metapb::MergeState::Merging);
+                self.regions.insert(end_key, cur_region);
+                return Ok(resp);
+            }
+        }
+        Ok(resp)
     }
 
     fn handle_heartbeat_version(&mut self, region: metapb::Region) -> Result<()> {
@@ -287,6 +411,13 @@ impl Cluster {
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
+        if self.shutdown_region_ids.contains(&region.get_id()) {
+            let mut resp = pdpb::RegionHeartbeatResponse::new();
+            let mut region_shutdown = pdpb::RegionShutdown::new();
+            region_shutdown.set_region(region);
+            resp.set_region_shutdown(region_shutdown);
+            return Ok(resp);
+        }
         for peer in &down_peers {
             self.down_peers.insert(peer.get_peer().get_id(), peer.clone());
         }
@@ -299,8 +430,15 @@ impl Cluster {
             self.down_peers.remove(&peer.get_id());
         }
 
-        try!(self.handle_heartbeat_version(region.clone()));
-        self.handle_heartbeat_conf_ver(region, leader)
+        // update region leader
+        let _ = self.region_leaders.insert(region.get_id(), leader.clone());
+
+        if self.is_merging_region(&region) {
+            self.handle_heartbeat_merge(region, leader)
+        } else {
+            try!(self.handle_heartbeat_version(region.clone()));
+            self.handle_heartbeat_conf_ver(region, leader)
+        }
     }
 }
 
@@ -572,11 +710,20 @@ impl PdClient for TestPdClient {
         Ok(resp)
     }
 
-    fn ask_merge(&self, _region: metapb::Region) -> Result<pdpb::AskMergeResponse> {
+    fn ask_merge(&self, region: metapb::Region) -> Result<pdpb::AskMergeResponse> {
         try!(self.check_bootstrap());
-        // TODO add impl
         let mut resp = pdpb::AskMergeResponse::new();
-        resp.set_ok(false);
+        let neighbour = self.cluster.rl().get_idle_neighbour_region(&region);
+        match neighbour {
+            Some(into_region) => {
+                self.cluster.wl().add_region_merge(&into_region, &region);
+                resp.set_ok(true);
+                resp.set_into_region(into_region);
+            }
+            None => {
+                resp.set_ok(false);
+            }
+        }
         Ok(resp)
     }
 
@@ -598,12 +745,24 @@ impl PdClient for TestPdClient {
     }
 
     fn report_merge(&self,
-                    _new: metapb::Region,
-                    _old: metapb::Region,
-                    _to_shutdown: metapb::Region)
+                    new: metapb::Region,
+                    old: metapb::Region,
+                    to_shutdown: metapb::Region)
                     -> Result<()> {
         try!(self.check_bootstrap());
-        // TODO add impl
+
+        assert!(self.cluster.rl().is_merging_region(&old));
+        assert!(self.cluster.rl().is_merging_region(&to_shutdown));
+        let (cur_old, _) = try!(self.get_region_by_id(old.get_id()));
+        let cur_old_region_merge = cur_old.get_region_merge();
+        assert_eq!(old.get_id(), cur_old_region_merge.get_into_id());
+        assert_eq!(to_shutdown.get_id(), cur_old_region_merge.get_from_id());
+        assert!(cur_old_region_merge.get_state() != metapb::MergeState::None);
+        let cur_old_version = cur_old.get_region_epoch().get_version();
+        let new_version = new.get_region_epoch().get_version();
+        assert!(new_version > cur_old_version);
+        // TODO check the range of `new` is merged by `old` and `to_shutdown`
+        self.cluster.wl().handle_region_merge_done(new, old, to_shutdown);
         Ok(())
     }
 }
