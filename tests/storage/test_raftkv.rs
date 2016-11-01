@@ -142,6 +142,14 @@ fn assert_seek(ctx: &Context, engine: &Engine, key: &[u8], pair: (&[u8], &[u8]))
                (&*bytes::encode_bytes(pair.0), pair.1));
 }
 
+fn assert_seek_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8], pair: (&[u8], &[u8])) {
+    let snapshot = engine.snapshot(ctx).unwrap();
+    let mut iter = snapshot.iter_cf(cf, None, ScanMode::Mixed).unwrap();
+    iter.seek(&make_key(key)).unwrap();
+    assert_eq!((iter.key(), iter.value()),
+               (&*bytes::encode_bytes(pair.0), pair.1));
+}
+
 fn assert_near_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
     assert!(cursor.near_seek(&make_key(key)).unwrap(), escape(key));
     assert_eq!((cursor.key(), cursor.value()),
@@ -213,6 +221,7 @@ fn cf(ctx: &Context, engine: &Engine) {
     assert_none_cf(ctx, engine, "cf", b"key");
     must_put_cf(ctx, engine, "cf", b"key", b"value");
     assert_has_cf(ctx, engine, "cf", b"key", b"value");
+    assert_seek_cf(ctx, engine, "cf", b"k", (b"key", b"value"));
     must_delete_cf(ctx, engine, "cf", b"key");
     assert_none_cf(ctx, engine, "cf", b"key");
 }
