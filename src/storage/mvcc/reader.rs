@@ -49,7 +49,7 @@ impl<'a> MvccReader<'a> {
             return Ok(vec![]);
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
-            self.data_cursor = Some(try!(self.snapshot.iter(None, self.scan_mode.unwrap())));
+            self.data_cursor = Some(try!(self.snapshot.iter(None, false, self.scan_mode.unwrap())));
         }
 
         let k = key.append_ts(ts);
@@ -69,7 +69,7 @@ impl<'a> MvccReader<'a> {
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
             self.lock_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_LOCK, None, self.scan_mode.unwrap())));
+                .iter_cf(CF_LOCK, None, true, self.scan_mode.unwrap())));
         }
 
         if let Some(ref mut cursor) = self.lock_cursor {
@@ -101,13 +101,13 @@ impl<'a> MvccReader<'a> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
                 self.write_cursor = Some(try!(self.snapshot
-                    .iter_cf(CF_WRITE, None, self.scan_mode.unwrap())));
+                    .iter_cf(CF_WRITE, None, false, self.scan_mode.unwrap())));
             }
         } else {
             let upper_bound_key = key.append_ts(0u64);
             let upper_bound = upper_bound_key.encoded().as_slice();
             self.write_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_WRITE, Some(upper_bound), ScanMode::Mixed)));
+                .iter_cf(CF_WRITE, Some(upper_bound), true, ScanMode::Mixed)));
         }
 
         let mut cursor = self.write_cursor.as_mut().unwrap();
@@ -171,16 +171,32 @@ impl<'a> MvccReader<'a> {
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            self.write_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_WRITE, None, self.scan_mode.unwrap_or(ScanMode::Mixed))));
+            self.write_cursor = match self.scan_mode {
+                Some(mode) => {
+                    Some(try!(self.snapshot
+                        .iter_cf(CF_WRITE, None, false, mode)))
+                }
+                None => {
+                    Some(try!(self.snapshot
+                        .iter_cf(CF_WRITE, None, true, ScanMode::Mixed)))
+                }
+            };
         }
         Ok(())
     }
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            self.lock_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_LOCK, None, self.scan_mode.unwrap_or(ScanMode::Mixed))));
+            self.lock_cursor = match self.scan_mode {
+                Some(mode) => {
+                    Some(try!(self.snapshot
+                        .iter_cf(CF_LOCK, None, false, mode)))
+                }
+                None => {
+                    Some(try!(self.snapshot
+                        .iter_cf(CF_LOCK, None, true, ScanMode::Mixed)))
+                }
+            };
         }
         Ok(())
     }
@@ -302,8 +318,16 @@ impl<'a> MvccReader<'a> {
                      mut start: Option<Key>,
                      limit: usize)
                      -> Result<(Vec<Key>, Option<Key>)> {
-        let mut cursor = try!(self.snapshot
-            .iter_cf(CF_WRITE, None, self.scan_mode.unwrap_or(ScanMode::Mixed)));
+        let mut cursor = match self.scan_mode {
+            Some(mode) => {
+                try!(self.snapshot
+                    .iter_cf(CF_WRITE, None, false, mode))
+            }
+            None => {
+                try!(self.snapshot
+                    .iter_cf(CF_WRITE, None, true, ScanMode::Mixed))
+            }
+        };
         let mut keys = vec![];
         loop {
             let ok = match start {

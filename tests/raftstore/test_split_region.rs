@@ -162,6 +162,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.engines[&store_id]
         .scan(&data_key(b""),
               &data_key(middle_key),
+              false,
               &mut |k, v| {
                   size += k.len() as u64;
                   size += v.len() as u64;

@@ -177,7 +177,7 @@ impl<T: MsgSender> Runner<T> {
             try!(check_abort(&abort));
             let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
 
-            let mut it = box_try!(self.db.new_iterator_cf(cf, Some(end_key)));
+            let mut it = box_try!(self.db.new_iterator_cf(cf, Some(end_key), false));
 
             try!(check_abort(&abort));
             it.seek(start_key.into());

@@ -283,6 +283,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let t = Instant::now();
         try!(engine.scan(start_key,
                          end_key,
+                         false,
                          &mut |key, value| {
             let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {

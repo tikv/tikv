@@ -29,6 +29,7 @@ pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()
     let mut count: u32 = 0;
     try!(engine.scan(keys::MIN_KEY,
                      keys::MAX_KEY,
+                     false,
                      &mut |_, _| {
                          count += 1;
                          Ok(false)
